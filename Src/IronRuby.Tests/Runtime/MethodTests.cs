@@ -1216,5 +1216,29 @@ end
 1
 ");
         }
+
+        /// <summary>
+        /// A method body is skimmed past at load time and bridged when first called. Since prism cd76b0d1
+        /// a SymbolNode's content location is no longer optional; the skimmer still read it as optional,
+        /// so every node after a symbol in a method body was read from the wrong offset ("Unknown prism
+        /// node type", IndexOutOfRangeException) - mspec, for one, could not start.
+        /// </summary>
+        [Options(Prism = true)]
+        public void MethodDef_SymbolInBody1() {
+            TestOutput(@"
+def sym = :start
+def syms
+  [:a, :""b c"", %s(d), :e]
+end
+def call(x)
+  [x, :after]
+end
+p sym, syms, call(:before)
+", @"
+:start
+[:a, :""b c"", :d, :e]
+[:before, :after]
+");
+        }
     }
 }
