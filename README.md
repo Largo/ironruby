@@ -112,6 +112,47 @@ def connect(host:, port: 5432, **opts) = Client.new(host, port, **opts)
 users&.filter_map { it.name if it.active? }
 ```
 
+## Calling .NET
+
+The interop IronRuby always had still works: CLR namespaces are modules, `List[String]`
+instantiates a generic, `Method#of` a generic method, `include ILivingCreature` implements an
+interface, a Ruby subclass overrides virtual members, out parameters come back with the result.
+On top of that, .NET APIs now take the Ruby you would write today:
+
+```ruby
+System::Console.WriteLine "hi"     # platform assemblies load on demand, no load_assembly
+
+list = System::Collections::Generic::List[Integer].new([3, 1, 4])   # an Array for IEnumerable<int>
+list.Sort { |a, b| b <=> a }       # a block goes to the trailing delegate parameter
+list.ForEach { |x| break if x < 3 } # break ends the CLR call, as it does a Ruby one
+
+using_clr_extensions System::Linq
+list.where { it > 1 }.order_by { -it }.to_a      # => [4, 3]
+
+Widget.new(title: "Hi", width: 300) # keywords bind parameters by name, or set properties
+Greeter.greet("Ann", greeting: "Hello", times: 2)
+
+func = Funcs.Doubler               # a Func<int, int>
+[1, 2].map(&func)                  # delegates are callable like lambdas: call, to_proc, >>, curry
+ok, n = System::Int32.TryParse("42")
+
+case Point.new(1, 2)               # a C# record
+in {x: 1, y:} then y               # members by their Ruby or CLR name
+end
+min, max = Stats.MinMax(values)    # a ValueTuple destructures like an Array
+System::Threading::Tasks::Task.Run { 6 * 7 }.value   # => 42
+System::Runtime::CompilerServices::RuntimeHelpers.GetSubArray(array, 1..-2)  # a Ruby range for System.Range
+```
+
+Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`,
+`IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for
+Ruby implementations, `include System::IComparable` works although the name is also a generic,
+and `Method#parameters` names a CLR method's parameters. See
+[`Src/IronRuby.Tests/Runtime/ClrBinderTests.cs`](Src/IronRuby.Tests/Runtime/ClrBinderTests.cs),
+[`ClrProtocolTests.cs`](Src/IronRuby.Tests/Runtime/ClrProtocolTests.cs) and
+[`ClrRuntimeInteropTests.cs`](Src/IronRuby.Tests/Runtime/ClrRuntimeInteropTests.cs) for the
+exact behaviour.
+
 ## Version numbers
 
 IronRuby's version follows the Ruby version it implements: **IronRuby 4.0 is Ruby 4.0**,
