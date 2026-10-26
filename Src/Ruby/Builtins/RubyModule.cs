@@ -1988,7 +1988,9 @@ namespace IronRuby.Builtins {
 
             if (_namespaceTracker != null) {
                 object value;
-                if (_namespaceTracker.TryGetValue(name, out value)) {
+                // the member can live in a platform assembly nothing has loaded yet:
+                if (_namespaceTracker.TryGetValue(name, out value) ||
+                    _context.TryLoadNamespaceMemberAssembly(_namespaceTracker, name) && _namespaceTracker.TryGetValue(name, out value)) {
                     storage = new ConstantStorage( _context.TrackerToModule(value));
                     return true;
                 }
