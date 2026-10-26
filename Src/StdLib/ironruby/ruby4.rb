@@ -6608,7 +6608,7 @@ class Enumerator
       n = source.size
       return Enumerator.new(n) { |y|
         i = offset
-        source.each { |*a| y << [a.size <= 1 ? a.first : a, i]; i += 1 }
+        source.each { |*a| y.yield(a.size <= 1 ? a.first : a, i); i += 1 }
       }.__set_inspect__(self, :with_index, args)
     end
     i = offset
@@ -6636,7 +6636,7 @@ class Enumerator
     unless block_given?
       source = self
       n = source.size
-      return Enumerator.new(n) { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
+      return Enumerator.new(n) { |y| source.each { |*a| y.yield(a.size <= 1 ? a.first : a, memo) } }
         .__set_inspect__(self, :with_object, [memo])
     end
     each do |*args|
@@ -7197,10 +7197,12 @@ class Enumerator
       offset = offset.nil? ? 0 : __to_int__(offset)
       source = self
       if block
+        # the block sees (value, index); the values themselves go on unchanged
         __chain__(size) do |y|
           i = offset
           source.each do |*values|
-            y << block.call(values.size <= 1 ? values[0] : values, i)
+            block.call(values.size <= 1 ? values[0] : values, i)
+            y.yield(*values)
             i += 1
           end
         end
@@ -7225,7 +7227,13 @@ class Enumerator
         source.each { |*values| y << [values.size <= 1 ? values[0] : values, memo] }
       end
     end
-    alias_method :each_with_object, :with_object
+
+    # Enumerable's, and eager: it runs the pipeline and answers the memo.
+    def each_with_object(memo, &block)
+      return to_enum(:each_with_object, memo) { size } unless block
+      each { |*values| block.call(values.size <= 1 ? values[0] : values, memo) }
+      memo
+    end
 
     def zip(*others, &block)
       # Only the block form falls back to the eager Enumerable#zip. Everything
@@ -7399,7 +7407,7 @@ class Enumerator
         else
           source.send(method, *args) { |*values| y.yield(*values) }
         end
-      end
+      end.__set_inspect__(self, method, args)
     end
     alias_method :enum_for, :to_enum
 
@@ -7665,7 +7673,12 @@ class Enumerator
     initial = args[0]
     size = options.key?(:size) ? options[:size] : ::Float::INFINITY
     enum = Enumerator.new(size) do |y|
-      value = has_initial ? initial : block.call(nil)
+      begin
+        value = has_initial ? initial : block.call(nil)
+      rescue ::StopIteration
+        # the block may refuse to produce even a first value
+        next
+      end
       loop do
         y << value
         value = block.call(value)
@@ -8350,7 +8363,7 @@ class Enumerator
       end
       inf = true if unit == 0
 
-      if from.is_a?(::Integer) && unit.is_a?(::Integer) && (inf || to.is_a?(::Integer))
+      if from.is_a?(::Integer) && unit.is_a?(::Integer) && (to.nil? || to.is_a?(::Integer))
         i = from
         if inf
           loop { block.call(i); i += unit }
@@ -8439,7 +8452,8 @@ class Enumerator
 
     def first(n = nil)
       return __arith_each__ { |v| return v } if n.nil?
-      return [] if n <= 0
+      ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
+      return [] if n == 0
       result = []
       __arith_each__ do |v|
         result << v
@@ -8474,6 +8488,9 @@ class Enumerator
     end
 
     def last(n = nil)
+      if @end.nil?
+        ::Kernel.raise(::RangeError, "cannot get the last element of endless arithmetic sequence")
+      end
       values = to_a
       n.nil? ? values.last : values.last(n)
     end
@@ -13790,10 +13807,17 @@ class Range
   # The old version just handed every stepping job to the 1.9 built-in, which
   # knows only #succ, so a Float step, a negative step, a String step and a
   # step given as an object answering #coerce were all wrong or raised.
-  def step(n = nil, &block)
+  def step(*args, &block)
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    n = args[0]
     b = self.begin
     e = self.end
-    unit = n.nil? ? 1 : n
+    # Ruby 3.4: a step that is not a number is not converted up front; iterating adds it
+    # with #+ (so an object answering #coerce works), and without a block the Enumerator is
+    # built regardless.
+    unit = args.empty? ? 1 : n
     numeric = b.is_a?(::Numeric) && (e.nil? || e.is_a?(::Numeric)) && unit.is_a?(::Numeric)
 
     if b.nil?
@@ -13817,7 +13841,7 @@ class Range
         return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
       end
       range = self
-      return ::Enumerator.new { |y| range.step(n) { |x| y << x } }
+      return ::Enumerator.new { |y| range.step(*args) { |x| y << x } }.__set_inspect__(self, :step, args)
     end
 
     if numeric
@@ -14310,6 +14334,23 @@ class Encoding
       convpath == other.convpath
     end
   end
+end
+
+class Enumerator
+  # MRI's Enumerator::Generator: the block of Enumerator.new, as an Enumerable of its own.
+  class Generator
+    include ::Enumerable
+
+    def initialize(&block)
+      ::Kernel.raise(::ArgumentError, "no block given") unless block
+      @__block__ = block
+    end
+
+    def each(*args, &block)
+      producer = @__block__
+      ::Enumerator.new { |y| producer.call(y, *args) }.each(&block)
+    end
+  end unless const_defined?(:Generator, false)
 end
 
 # A Method comes from #method, an UnboundMethod from #instance_method or #unbind.
