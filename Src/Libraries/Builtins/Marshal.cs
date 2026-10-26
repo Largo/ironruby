@@ -1413,13 +1413,34 @@ namespace IronRuby.Builtins {
             /// variables named after them, and the result is frozen - every Data is.
             /// </summary>
             private object/*!*/ ReadData(object/*!*/ instance) {
+                RubyClass dataClass = Context.GetClassOf(instance);
+                RubyArray members = GetDataMembers(dataClass);
                 int count = ReadInt32();
+                if (members != null && count != members.Count) {
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", dataClass.Name);
+                }
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
+                    if (members != null && name != members[i].ToString()) {
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", dataClass.Name, name, members[i]);
+                    }
                     Context.SetInstanceVariable(instance, RubyUtils.GetHiddenInstanceVariableName(name), ReadAnObject(false));
                 }
                 Context.FreezeObject(instance);
                 return instance;
+            }
+
+            // The member list Data.define recorded on the class (or on the Data class a plain
+            // subclass derives from), in a hidden instance variable; null when there is none.
+            private RubyArray GetDataMembers(RubyClass/*!*/ dataClass) {
+                string ivar = RubyUtils.GetHiddenInstanceVariableName("data_members");
+                for (RubyClass cls = dataClass; cls != null; cls = cls.SuperClass) {
+                    object names;
+                    if (Context.TryGetInstanceVariable(cls, ivar, out names) && names is RubyArray) {
+                        return (RubyArray)names;
+                    }
+                }
+                return null;
             }
 
             private object/*!*/ ReadInstanced(int objectRef) {

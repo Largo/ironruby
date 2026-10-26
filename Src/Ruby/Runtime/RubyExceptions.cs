@@ -347,9 +347,14 @@ namespace IronRuby.Runtime {
             //   1 < "a"   => "comparison of Integer with String failed"
             //   [1,:b].max => "comparison of Integer with :b failed"
             // An anonymous class has no name; MRI prints it the way #inspect does (#<Class:0x...>).
-            string selfClass = MessageTypeName(context.GetClassOf(self).GetNonNullName(context));
+            // the receiver is always named by class, so nil <=> 1 is "comparison of NilClass with 1 failed"
+            string selfClass = context.GetClassOf(self).GetNonNullName(context);
+            // An Integer is immediate in MRI only while it is a Fixnum (62 bits); a Bignum is
+            // spelled by class like any other object.
             string otherClass;
-            if (other == null || other is bool || other is int || other is long || other is BigInteger || other is double || other is RubySymbol) {
+            if (other == null || other is bool || other is int || other is double || other is RubySymbol
+                || (other is long && IsFixnumRange((long)other))
+                || (other is BigInteger && IsFixnumRange((BigInteger)other))) {
                 try {
                     otherClass = context.Inspect(other).ToString();
                 } catch (Exception) {
@@ -359,6 +364,17 @@ namespace IronRuby.Runtime {
                 otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
             }
             return CreateArgumentError("comparison of {0} with {1} failed", selfClass, otherClass);
+        }
+
+        private static readonly BigInteger FixnumMax = BigInteger.Pow(2, 62) - 1;
+        private static readonly BigInteger FixnumMin = -BigInteger.Pow(2, 62);
+
+        private static bool IsFixnumRange(BigInteger value) {
+            return value >= FixnumMin && value <= FixnumMax;
+        }
+
+        private static bool IsFixnumRange(long value) {
+            return value >= -(1L << 62) && value <= (1L << 62) - 1;
         }
 
         #endregion

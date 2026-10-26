@@ -402,9 +402,10 @@ namespace IronRuby.Builtins {
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                // Take from the right only when it is strictly smaller, which keeps equal
-                // elements in their original order.
-                buffer[target++] = comparison(items[right], items[left]) < 0 ? items[right++] : items[left++];
+                // Take from the left unless the right is strictly smaller, which keeps equal
+                // elements in their original order. The earlier element is the receiver of
+                // the comparison, as in MRI: [1, "a"].sort asks 1 <=> "a", not "a" <=> 1.
+                buffer[target++] = comparison(items[left], items[right]) <= 0 ? items[left++] : items[right++];
             }
             while (left < leftEnd) {
                 buffer[target++] = items[left++];

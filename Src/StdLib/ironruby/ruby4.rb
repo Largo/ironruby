@@ -422,7 +422,7 @@ module Enumerable
     alias_method :inject_without_name_check, :inject
 
     def inject(*args, &block)
-      if args.size > 2
+      if args.size > 2 || (args.empty? && !block)
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
       end
       if args.size == 2 || (args.size == 1 && !block)
@@ -483,37 +483,42 @@ module Enumerable
     return to_enum(:min_by, *args) { size if respond_to?(:size) } unless block
     args = [] if args.size == 1 && args[0].nil?
     if args.empty?
-      best = nil
-      best_key = nil
-      each do |*values|
-        item = __enum_item__(values)
-        key = block.call(item)
-        if best_key.nil? || (key <=> best_key) < 0
-          best_key = key
-          best = item
-        end
-      end
-      best
+      __extreme_by__(-1, &block)
     else
       __sort_by_key__(block).first(__count_arg__(args[0]))
     end
   end unless method_defined?(:min_by)
 
+  # The first element whose key compares best: a later equal key does not replace it, a
+  # nil key is a key like any other (nil <=> nil is 0), and a key that will not compare -
+  # NaN, say - is the "comparison of X with Y failed" MRI raises from rb_cmpint.
+  def __extreme_by__(direction, &block)
+    best = nil
+    best_key = nil
+    found = false
+    each do |*values|
+      item = __enum_item__(values)
+      key = block.call(item)
+      if found
+        c = (key <=> best_key)
+        if c.nil?
+          raise ArgumentError, "comparison of #{key.class} with #{::Comparable.__cmp_operand__(best_key)} failed"
+        end
+        next unless (direction < 0) ? c < 0 : c > 0
+      end
+      found = true
+      best_key = key
+      best = item
+    end
+    best
+  end
+  private :__extreme_by__
+
   def max_by(*args, &block)
     return to_enum(:max_by, *args) { size if respond_to?(:size) } unless block
     args = [] if args.size == 1 && args[0].nil?
     if args.empty?
-      best = nil
-      best_key = nil
-      each do |*values|
-        item = __enum_item__(values)
-        key = block.call(item)
-        if best_key.nil? || (key <=> best_key) > 0
-          best_key = key
-          best = item
-        end
-      end
-      best
+      __extreme_by__(1, &block)
     else
       __sort_by_key__(block).reverse.first(__count_arg__(args[0]))
     end
@@ -981,7 +986,9 @@ module Kernel
       pair = pair.to_ary if pair.respond_to?(:to_ary)
     end
     unless pair.is_a?(Array)
-      raise TypeError, "wrong element type #{pair.class} (expected array)"
+      # rb_builtin_class_name: nil, true and false by value
+      name = case pair when nil then "nil" when true then "true" when false then "false" else pair.class end
+      raise TypeError, "wrong element type #{name} (expected array)"
     end
     unless pair.size == 2
       raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})"
@@ -1501,8 +1508,10 @@ module Comparable
     case args.size
     when 1
       range = args[0]
-      unless range.is_a?(Range)
-        raise TypeError, "wrong argument type #{range.class} (expected Range)"
+      # anything with #begin, #end and #exclude_end? passes for a Range (MRI: rb_range_values)
+      unless range.is_a?(Range) ||
+             (range.respond_to?(:begin) && range.respond_to?(:end) && range.respond_to?(:exclude_end?))
+        raise TypeError, "wrong argument type #{range.nil? ? 'nil' : range.class} (expected Range)"
       end
       min, max = range.begin, range.end
       if range.exclude_end? && !max.nil?
@@ -6197,9 +6206,10 @@ class Array
         other.to_ary
       elsif other.respond_to?(:each)
         collected = []
-        other.each do |element|
+        # several yielded values make one element, as Enumerator#next would pack them
+        other.each do |*element|
           break if collected.size >= length
-          collected << element
+          collected << (element.size <= 1 ? element[0] : element)
         end
         collected
       else
@@ -8526,6 +8536,13 @@ end
 # psych's Data.instance_method(:initialize).bind_call trick worked.
 class Data
   class << self
+    # Only the classes Data.define makes have instances.
+    alias_method :__ir_allocate__, :allocate
+    def allocate
+      ::Kernel.raise(::TypeError, "allocator undefined for Data") if equal?(::Data)
+      __ir_allocate__
+    end
+
     def define(*names, &block)
       names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)
@@ -8557,7 +8574,8 @@ class Data
               end
               members = __data_members__
               if args.size > members.size
-                ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{members.size})")
+                expected = members.empty? ? "0" : "0..#{members.size}"
+                ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected #{expected})")
               end
               args.each_with_index { |value, i| kwargs[members[i]] = value }
             end
@@ -8571,6 +8589,9 @@ class Data
           def inspect
             ::Module.instance_method(:to_s).bind(self).call
           end
+
+          # only Data itself defines classes
+          undef_method :define
         end
       end
       klass.__send__(:__ir_set_hidden_ivar__, :data_members, names)
@@ -8599,7 +8620,18 @@ class Data
     undef_method :new
   end
 
-  def initialize(**kwargs)
+  def initialize(*args, **kwargs)
+    # frozen is checked before the arguments are (MRI: rb_data_initialize_m)
+    if frozen?
+      ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+    end
+    # one positional Hash passes for the keywords, as MRI's rb_scan_args still allows here
+    if args.size == 1 && kwargs.empty? && ::Hash === args[0]
+      kwargs = args.pop
+    end
+    unless args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
+    end
     names = __data_members__
     given = {}
     unknown = []
@@ -8632,10 +8664,32 @@ class Data
     __data_members__.dup
   end
 
+  # Every copy of a Data is frozen too (MRI's rb_data_initialize_copy), whatever
+  # clone(freeze: false) asked for. The members are read off the original directly,
+  # not through its readers.
+  def initialize_copy(other)
+    unless other.class == self.class
+      ::Kernel.raise(::TypeError, "initialize_copy should take same class object")
+    end
+    __data_members__.each do |name|
+      __ir_set_hidden_ivar__(name, other.__send__(:__ir_hidden_ivar__, name))
+    end
+    freeze
+    self
+  end
+  private :initialize_copy
+
+  # The members as stored, not as the reader methods answer: #inspect, #to_h and #==
+  # work on a Data whose reader was overridden (struct.c reads the slots directly).
+  def __data_value__(name)
+    __ir_hidden_ivar__(name)
+  end
+  private :__data_value__
+
   def to_h(&block)
     result = {}
     __data_members__.each do |name|
-      key, value = name, __send__(name)
+      key, value = name, __data_value__(name)
       if block
         pair = block.call(key, value)
         unless ::Array === pair
@@ -8656,7 +8710,7 @@ class Data
   end
 
   def deconstruct
-    __data_members__.map { |name| __send__(name) }
+    __data_members__.map { |name| __data_value__(name) }
   end
 
   def deconstruct_keys(keys)
@@ -8670,7 +8724,7 @@ class Data
     keys.each do |key|
       key = __data_key__(key)
       return result unless names.include?(key.to_sym)
-      result[key] = __send__(key.to_sym)
+      result[key] = __data_value__(key.to_sym)
     end
     result
   end
@@ -8704,7 +8758,7 @@ class Data
     return true if equal?(other)
     return false unless other.class == self.class
     __data_paired__(:==, other) do
-      __data_members__.all? { |name| __send__(name) == other.__send__(name) }
+      __data_members__.all? { |name| __data_value__(name) == other.__send__(:__data_value__, name) }
     end
   end
 
@@ -8712,7 +8766,7 @@ class Data
     return true if equal?(other)
     return false unless other.class == self.class
     __data_paired__(:eql?, other) do
-      __data_members__.all? { |name| __send__(name).eql?(other.__send__(name)) }
+      __data_members__.all? { |name| __data_value__(name).eql?(other.__send__(:__data_value__, name)) }
     end
   end
 
@@ -8742,7 +8796,7 @@ class Data
       out << path if named
       __data_members__.each_with_index do |name, i|
         out << (i > 0 ? ", " : (named ? " " : ""))
-        out << "#{name}=#{__send__(name).inspect}"
+        out << "#{name}=#{__data_value__(name).inspect}"
       end
       out << ">"
     ensure

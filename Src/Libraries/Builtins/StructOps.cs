@@ -96,18 +96,29 @@ namespace IronRuby.Builtins {
         // Reinitialization. Called only from derived struct's initializer.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static void Reinitialize(RubyStruct/*!*/ self, params object[]/*!*/ items) {
+            // re-initializing a frozen struct is a FrozenError, as in MRI
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
             self.SetValues(items);
         }
 
         // Copies data from one Struct instance into another:
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static RubyStruct/*!*/ InitializeCopy(RubyStruct/*!*/ self, [NotNull]RubyStruct/*!*/ source) {
-            // TODO: compare non-singleton classes?
-            if (self.ImmediateClass.GetNonSingletonClass() != source.ImmediateClass.GetNonSingletonClass()) {
-                throw RubyExceptions.CreateTypeError("wrong argument class");
+        public static RubyStruct/*!*/ InitializeCopy(RubyStruct/*!*/ self, object source) {
+            if (ReferenceEquals(self, source)) {
+                return self;
+            }
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
+            // MRI: anything but an instance of this very struct class is rejected with this message
+            var other = source as RubyStruct;
+            if (other == null || self.ImmediateClass.GetNonSingletonClass() != other.ImmediateClass.GetNonSingletonClass()) {
+                throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
             }
 
-            self.SetValues(source.Values);
+            self.SetValues(other.Values);
             return self;
         }
 
@@ -241,6 +252,10 @@ namespace IronRuby.Builtins {
                 }
 
                 if (handle == null) {
+                    // the recursion marker always names the class, an anonymous one as #<Class:0x...>
+                    if (anonymous) {
+                        result.Append(context.Inspect(context.GetClassOf(self)));
+                    }
                     return result.Append(":...>");
                 }
                 if (!anonymous) {

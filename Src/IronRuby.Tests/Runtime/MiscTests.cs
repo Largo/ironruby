@@ -1482,5 +1482,62 @@ incompatible character encodings: UTF-8 and ASCII-8BIT
 invalid value for Float(): ""\xC2\xBD.5""
 ");
         }
+
+        public void Array_Struct_Misc1() {
+            TestOutput(@"
+begin; [1, 'a'].sort; rescue ArgumentError => e; puts e.message; end
+begin; [nil, 1].sort; rescue ArgumentError => e; puts e.message; end
+begin; [1, nil].max; rescue ArgumentError => e; puts e.message; end
+begin; [2**70, 0.0/0].max; rescue ArgumentError => e; puts e.message; end
+o = Object.new; def o.<=>(x); 0; end
+p [o, 1].sort.size
+begin; [1, 2, 3].fill; rescue ArgumentError => e; puts e.message; end
+begin; [1, 2, 3].fill(0, 1, 2) { |i| i }; rescue ArgumentError => e; puts e.message; end
+begin; [1, 2, 3].fill(0, 1, 2, 3); rescue ArgumentError => e; puts e.message; end
+p [1, 2, 3].fill(0), [1, 2, 3].fill(9, 1), [1, 2, 3].fill(9, 1, 1), [1, 2, 3].fill(9, 1..nil), [1, 2, 3].fill { |i| i * 2 }, [1, 2, 3].fill(1) { |i| i * 2 }, [1, 2, 3].fill(1, 1) { |i| i * 2 }
+begin; [1, 2].freeze.fill(0); rescue => e; puts e.class; end
+begin; [1, 2, 3].combination; rescue ArgumentError => e; puts e.message; end
+begin; a = [1]; a[2**31 - 1] = 1; rescue IndexError => e; puts e.message; end
+begin; a = [1]; a[2**31 - 2] = 1; rescue NoMemoryError => e; puts e.class; end
+begin; (a = [1, 2, 3])[-5..nil] = 9; rescue RangeError => e; puts e.message; end
+a = [1, 2, 3]; a.zip([1]) { |x| a.pop }; p a
+begin; a = [1, 2].freeze; a.replace(a); rescue => e; puts e.class; end
+k = Struct.new(:a); s = k.new(1)
+begin; s.send(:initialize_copy, Struct.new(:a).new(2)); rescue TypeError => e; puts e.message; end
+begin; s.send(:initialize_copy, 1); rescue TypeError => e; puts e.message; end
+begin; s.freeze.send(:initialize, 2); rescue => e; puts e.class; end
+p k.new(1).method(:a).arity, k.new(1).method(:a=).arity
+r = k.new; r.a = r; puts r.inspect.sub(/0x\h+/, 'X')
+", @"
+comparison of Integer with String failed
+comparison of NilClass with 1 failed
+comparison of Integer with nil failed
+comparison of Integer with NaN failed
+2
+wrong number of arguments (given 0, expected 1..3)
+wrong number of arguments (given 3, expected 0..2)
+wrong number of arguments (given 4, expected 1..3)
+[0, 0, 0]
+[1, 9, 9]
+[1, 9, 3]
+[1, 9, 9]
+[0, 2, 4]
+[1, 2, 4]
+[1, 2, 3]
+FrozenError
+wrong number of arguments (given 0, expected 1)
+index 2147483647 too big
+NoMemoryError
+-5.. out of range
+[1]
+FrozenError
+initialize_copy should take same class object
+initialize_copy should take same class object
+FrozenError
+0
+1
+#<struct a=#<struct #<Class:X>:...>>
+");
+        }
     }
 }

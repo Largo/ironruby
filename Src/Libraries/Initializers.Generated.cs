@@ -208,7 +208,7 @@ namespace IronRuby.Builtins {
             );
             DefineGlobalClass("Float", typeof(System.Double), 0x00000007, def72, LoadFloat_Instance, LoadFloat_Class, LoadFloat_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def71 = DefineGlobalClass("Integer", typeof(System.Int32), 0x00000007, def72, LoadInteger_Instance, LoadInteger_Class, LoadInteger_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
-            DefineGlobalClass("NoMemoryError", typeof(IronRuby.Builtins.NoMemoryError), 0x0000000F, def68, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            DefineGlobalClass("NoMemoryError", typeof(System.OutOfMemoryException), 0x00000007, def68, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NoMemoryError));
             DefineGlobalClass("Refinement", typeof(IronRuby.Builtins.RefinementOps), 0x0000000F, Context.ModuleClass, LoadRefinement_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def66 = DefineGlobalClass("ScriptError", typeof(IronRuby.Builtins.ScriptError), 0x00000007, def68, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -8492,8 +8492,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.RubyStruct, IronRuby.Builtins.RubyStruct, IronRuby.Builtins.RubyStruct>(IronRuby.Builtins.RubyStructOps.InitializeCopy)
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyStruct, System.Object, IronRuby.Builtins.RubyStruct>(IronRuby.Builtins.RubyStructOps.InitializeCopy)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 
@@ -9192,15 +9192,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "fill", 0x51, 
-                new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x00000008U, 0x00000001U, 0x00000001U, 0x00000002U, 0x0000000aU}, 
-                new Func<System.Collections.IList, System.Object, System.Int32, System.Collections.IList>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<System.Collections.IList, System.Object, System.Int32, System.Int32, System.Collections.IList>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Object, System.Object, System.Collections.IList>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Object, IronRuby.Builtins.Range, System.Collections.IList>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Int32, System.Object>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Object, System.Object>(IronRuby.Builtins.IListOps.Fill), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, System.Collections.IList, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.IListOps.Fill)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object[], System.Object>(IronRuby.Builtins.IListOps.Fill)
             );
             
             DefineLibraryMethod(module, "find_index", 0x51, 
@@ -10894,10 +10887,6 @@ namespace IronRuby.Builtins {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.Builtins.LocalJumpError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
-        public static System.Exception/*!*/ ExceptionFactory__NoMemoryError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
-            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.Builtins.NoMemoryError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
-        }
-        
         public static System.Exception/*!*/ ExceptionFactory__NotImplementedError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.Builtins.NotImplementedError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
@@ -10978,6 +10967,10 @@ namespace IronRuby.Builtins {
         
         public static System.Exception/*!*/ ExceptionFactory__NoMethodError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new System.MissingMethodException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__NoMemoryError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new System.OutOfMemoryException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
         public static System.Exception/*!*/ ExceptionFactory__SystemCallError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {

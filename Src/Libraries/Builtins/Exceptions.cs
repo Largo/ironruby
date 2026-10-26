@@ -25,11 +25,11 @@ using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
 
-    [RubyException("NoMemoryError")]
-    public class NoMemoryError : Exception {
-        public NoMemoryError() : this(null, null) { }
-        public NoMemoryError(string message): this(message, null) { }
-        public NoMemoryError(string message, Exception inner) : base(message ?? "NoMemoryError", inner) { }
+    // The CLR's own allocation failure is Ruby's NoMemoryError, so an array or string that
+    // cannot be allocated raises something `rescue NoMemoryError` sees, rather than a
+    // System::OutOfMemoryException that no Ruby code expects.
+    [RubyException("NoMemoryError", Extends = typeof(OutOfMemoryException), Inherits = typeof(Exception))]
+    public static class NoMemoryErrorOps {
     }
 
     [RubyException("EOFError")]
