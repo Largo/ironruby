@@ -478,6 +478,11 @@ internal class LibraryDef {
                 def.Id = "__Singleton_" + def.QualifiedName;
             } else {
                 def.Id = def.QualifiedName.Replace(':', '_');
+                // System::IComparable is the name of both IComparable and IComparable<T>: the generic arity keeps
+                // the initializer methods of the two apart
+                if (def.IsExtension && def.Extends.IsGenericTypeDefinition) {
+                    def.Id += "_" + def.Extends.GetGenericArguments().Length;
+                }
             }
         }
 

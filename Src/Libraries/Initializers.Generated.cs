@@ -96,7 +96,7 @@ namespace IronRuby.Builtins {
             #endif
             DefineGlobalModule("Signal", typeof(IronRuby.Builtins.Signal), 0x0000000F, null, LoadSignal_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Collections.DictionaryEntry), 0x00000000, null, LoadSystem__Collections__DictionaryEntry_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            ExtendModule(typeof(System.Collections.Generic.KeyValuePair<,>), 0x00000000, LoadSystem__Collections__Generic__KeyValuePair_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendModule(typeof(System.Collections.Generic.KeyValuePair<,>), 0x00000000, LoadSystem__Collections__Generic__KeyValuePair_2_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Runtime.CompilerServices.ITuple), 0x00000000, LoadSystem__Runtime__CompilerServices__ITuple_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Type), 0x00000000, null, LoadSystem__Type_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -114,6 +114,7 @@ namespace IronRuby.Builtins {
             ExtendModule(typeof(System.Collections.Generic.IDictionary<System.Object, System.Object>), 0x00000000, LoadSystem__Collections__Generic__IDictionary_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.IEnumerable), 0x00000000, LoadSystem__Collections__IEnumerable_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.IList), 0x00000000, LoadSystem__Collections__IList_Instance, null, null, def62);
+            ExtendModule(typeof(System.IComparable<>), 0x00000000, LoadSystem__IComparable_1_Instance, null, null, def68);
             ExtendModule(typeof(System.IComparable), 0x00000000, LoadSystem__IComparable_Instance, null, null, def68);
             ExtendClass(typeof(System.String), 0x00000000, null, LoadSystem__String_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def7, def62, def68}, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.String>(IronRuby.Builtins.ClrStringOps.Create), 
@@ -9105,7 +9106,7 @@ namespace IronRuby.Builtins {
             
         }
         
-        private static void LoadSystem__Collections__Generic__KeyValuePair_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadSystem__Collections__Generic__KeyValuePair_2_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "deconstruct_keys", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Hash>(IronRuby.Builtins.KeyValuePairOps.DeconstructKeys)
@@ -9695,7 +9696,15 @@ namespace IronRuby.Builtins {
         private static void LoadSystem__IComparable_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "<=>", 0x51, 
                 0x00000000U, 
-                new Func<System.IComparable, System.Object, System.Int32>(IronRuby.Builtins.IComparableOps.Compare)
+                new Func<System.IComparable, System.Object, System.Object>(IronRuby.Builtins.IComparableOps.Compare)
+            );
+            
+        }
+        
+        private static void LoadSystem__IComparable_1_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "<=>", 0x51, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Object>(IronRuby.Builtins.GenericIComparableOps.Compare)
             );
             
         }

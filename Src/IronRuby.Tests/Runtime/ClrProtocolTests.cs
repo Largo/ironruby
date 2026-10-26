@@ -715,5 +715,147 @@ IronRuby::Clr::PatternMatching
         }
 
         #endregion
+
+        #region IComparable<T>
+
+        public class ProtocolVersion1 : IComparable<ProtocolVersion1> {
+            public readonly int Major, Minor;
+            public ProtocolVersion1(int major, int minor) { Major = major; Minor = minor; }
+
+            public int CompareTo(ProtocolVersion1 other) {
+                return Major != other.Major ? Major.CompareTo(other.Major) : Minor.CompareTo(other.Minor);
+            }
+
+            public override string ToString() { return Major + "." + Minor; }
+        }
+
+        public struct ProtocolMeters1 : IComparable<ProtocolMeters1> {
+            public readonly double Value;
+            public ProtocolMeters1(double value) { Value = value; }
+            public int CompareTo(ProtocolMeters1 other) { return Value.CompareTo(other.Value); }
+        }
+
+        // compares its length with an int or with a string's length
+        public class ProtocolLength1 : IComparable<int>, IComparable<string> {
+            public readonly int Length;
+            public ProtocolLength1(int length) { Length = length; }
+            public int CompareTo(int other) { return Length.CompareTo(other); }
+            public int CompareTo(string other) { return Length.CompareTo(other.Length); }
+        }
+
+        public class ProtocolAnimal1 : IComparable<ProtocolAnimal1> {
+            public int Rank;
+            public int CompareTo(ProtocolAnimal1 other) { return Rank.CompareTo(other.Rank); }
+        }
+
+        public class ProtocolDog1 : ProtocolAnimal1 { }
+
+        public class ProtocolBothComparable1 : IComparable, IComparable<ProtocolBothComparable1> {
+            public int Value;
+            public int CompareTo(ProtocolBothComparable1 other) { return Value.CompareTo(other.Value); }
+
+            public int CompareTo(object other) {
+                var typed = other as ProtocolBothComparable1;
+                if (typed == null) {
+                    throw new ArgumentException("Object must be of type ProtocolBothComparable1.");
+                }
+                return CompareTo(typed);
+            }
+        }
+
+        /// <summary>
+        /// A type implementing only IComparable&lt;T&gt; is Comparable: &lt;=&gt; calls CompareTo, and everything Comparable
+        /// and Array build on it works.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrGenericComparable1() {
+            Context.ObjectClass.SetConstant("V", Context.GetClass(typeof(ProtocolVersion1)));
+            TestOutput(@"
+require 'ruby4'
+v1, v2, v3 = V.new(1, 2), V.new(1, 10), V.new(2, 0)
+p v1 <=> v2, v2 <=> v1, v1 <=> V.new(1, 2)
+p v1 < v2, v1 > v3, v1 <= v1, v3 >= v2, v1 == V.new(1, 2), v1 != v2
+p v2.between?(v1, v3), v1.between?(v2, v3), v3.clamp(v1, v2).to_s
+p [v3, v1, v2].max.to_s, [v3, v1, v2].min.to_s, [v3, v1, v2].sort.map(&:to_s), [v3, v1, v2].minmax.map(&:to_s)
+p V.ancestors.include?(Comparable), V.include?(System::IComparable[V])
+", @"
+-1
+1
+0
+true
+false
+true
+true
+true
+true
+true
+false
+""1.10""
+""2.0""
+""1.2""
+[""1.2"", ""1.10"", ""2.0""]
+[""1.2"", ""2.0""]
+true
+true
+");
+        }
+
+        /// <summary>
+        /// &lt;=&gt; is nil for what cannot be compared - nil, an object that is no IComparable&lt;T&gt;'s T - and then the
+        /// Comparable operators raise. The T is picked by the argument; a subclass instance is a T too.
+        /// </summary>
+        public void ClrGenericComparable2() {
+            Context.ObjectClass.SetConstant("V", Context.GetClass(typeof(ProtocolVersion1)));
+            Context.ObjectClass.SetConstant("Meters", Context.GetClass(typeof(ProtocolMeters1)));
+            Context.ObjectClass.SetConstant("Len", Context.GetClass(typeof(ProtocolLength1)));
+            Context.ObjectClass.SetConstant("Animal", Context.GetClass(typeof(ProtocolAnimal1)));
+            Context.ObjectClass.SetConstant("Dog", Context.GetClass(typeof(ProtocolDog1)));
+            Context.ObjectClass.SetConstant("Both", Context.GetClass(typeof(ProtocolBothComparable1)));
+            TestOutput(@"
+v = V.new(1, 2)
+p v <=> nil, v <=> 1, v <=> 'x', v <=> Object.new
+p((v < 1 rescue $!.class))
+p(([v, 1].max rescue $!.class))
+
+p Meters.new(1.5) <=> Meters.new(2.5), Meters.new(2.5) > Meters.new(1.5), [Meters.new(3), Meters.new(1)].min.value
+
+len = Len.new(3)
+p len <=> 2, len <=> 3, len <=> 'abcd', len <=> 1.5
+
+a = Animal.new
+a.rank = 2
+d = Dog.new
+d.rank = 1
+p d <=> a, a <=> d, d < a
+
+b1 = Both.new
+b1.value = 1
+b2 = Both.new
+b2.value = 2
+p b1 <=> b2, b1 <=> 1, b1 <=> nil
+", @"
+nil
+nil
+nil
+nil
+ArgumentError
+ArgumentError
+-1
+true
+1.0
+1
+0
+-1
+nil
+-1
+1
+true
+-1
+nil
+nil
+");
+        }
+
+        #endregion
     }
 }

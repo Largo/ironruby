@@ -572,6 +572,8 @@ namespace IronRuby.Tests {
                 ClrHashPatterns1,
                 ClrHashPatternKeys1,
                 ClrHashPatternScope1,
+                ClrGenericComparable1,
+                ClrGenericComparable2,
                 HostingDefaultOptions1,
                 Interactive1,
                 Interactive2,
