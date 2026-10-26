@@ -603,6 +603,8 @@ namespace IronRuby.Tests {
                 ClrTaskValue1,
                 ClrTaskValue2,
                 ClrAsyncEnumerable1,
+                ClrClosedInterfaceExtensions1,
+                ClrClosedInterfaceExtensions2,
                 HostingDefaultOptions1,
                 Interactive1,
                 Interactive2,

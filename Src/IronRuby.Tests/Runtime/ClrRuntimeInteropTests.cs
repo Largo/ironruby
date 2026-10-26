@@ -578,5 +578,89 @@ UTF8 ""ut_f8"" nil
         }
 
         #endregion
+
+        #region Extension methods of instantiated generic interfaces
+
+        /// <summary>
+        /// An extension of an instantiated interface (Sum(this IEnumerable&lt;int&gt;)) applies to every type implementing it,
+        /// next to the generic extensions of the interface definition (Sum&lt;T&gt;(this IEnumerable&lt;T&gt;, Func&lt;T, int&gt;)).
+        /// </summary>
+        public void ClrClosedInterfaceExtensions1() {
+            TestOutput(@"
+L = System::Collections::Generic::List
+l = L[Integer].new
+l.add(3)
+l.add(4)
+p l.respond_to?(:average)
+
+using_clr_extensions System::Linq
+p l.method(:sum).owner
+p l.sum, l.Sum, l.max, l.min, l.average
+p l.sum(System::Func[Integer, Integer].new { |x| x * 2 })
+
+p System::Array[Integer].new([5, 6]).sum
+s = System::Collections::Generic::HashSet[Integer].new
+s.add(1)
+s.add(9)
+p s.max
+d = L[System::Double].new
+d.add(1.5)
+d.add(2.0)
+p d.average
+", @"
+false
+System::Collections::Generic::List[Integer]
+7
+7
+4
+3
+3.5
+14
+11
+9
+1.75
+");
+        }
+
+        /// <summary>
+        /// Overloads of an extension spread over several interfaces are one group; an extension of an instantiation the
+        /// type doesn't implement is not in it.
+        /// </summary>
+        public void ClrClosedInterfaceExtensions2() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ClosedInterfaceExtensions.Extensions).Assembly);
+            TestOutput(@"
+using_clr_extensions IronRubyTests::ClosedInterfaceExtensions
+L = System::Collections::Generic::List
+ints = L[Integer].new
+ints.add(1)
+strs = L[System::String].new
+strs.add('a'.to_clr_string)
+
+p ints.describe, strs.describe, System::Array[Integer].new(2).describe
+p ints.describe(System::Func[Integer, System::String].new { |x| x.to_s })
+p ints.total
+strs.total rescue p $!.class
+p L[Object].new.describe(System::Func[Object, System::String].new { |x| x.to_s })
+", @"
+'ints'
+'strings'
+'ints'
+'generic 1'
+1
+NoMethodError
+'generic 0'
+");
+        }
+
+        #endregion
+    }
+}
+
+namespace IronRubyTests.ClosedInterfaceExtensions {
+    public static class Extensions {
+        public static string Describe(this System.Collections.Generic.IEnumerable<int> xs) => "ints";
+        public static string Describe(this System.Collections.Generic.IEnumerable<string> xs) => "strings";
+        public static string Describe<T>(this System.Collections.Generic.IEnumerable<T> xs, Func<T, string> f) => "generic " + xs.Count();
+        public static int Total(this System.Collections.Generic.IEnumerable<int> xs) => xs.Sum();
     }
 }
