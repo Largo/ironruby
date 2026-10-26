@@ -565,6 +565,7 @@ namespace IronRuby.Tests {
                 ClrBlockToDelegate2,
                 ClrMethodToDelegate1,
                 ClrMethodParameters1,
+                ClrTypeGroupAsModule1,
                 ClrOutParameters1,
                 ClrCollectionArguments1,
                 HostingDefaultOptions1,

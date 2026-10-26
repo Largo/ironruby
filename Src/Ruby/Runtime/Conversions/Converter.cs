@@ -29,6 +29,7 @@ using IronRuby.Builtins;
 using System.Reflection;
 using IronRuby.Compiler;
 using IronRuby.Runtime.Calls;
+using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
 using System.Numerics;
@@ -160,6 +161,10 @@ namespace IronRuby.Runtime.Conversions {
                 return Convertibility.AlwaysConvertible;
             }
 
+            if (IsTypeGroupConversion(fromType, toType)) {
+                return Convertibility.AlwaysConvertible;
+            }
+
             if (toType == typeof(bool)) {
                 return Convertibility.AlwaysConvertible;
             }
@@ -276,6 +281,28 @@ namespace IronRuby.Runtime.Conversions {
             var siteType = typeof(CallSite<>).MakeGenericType(typeof(Func<,,>).MakeGenericType(typeof(CallSite), typeof(object), itemType));
             var binder = ProtocolConversionAction.GetConversionAction(context, itemType, implicitProtocolConversions);
             return AstUtils.Constant(siteType.GetMethod("Create", new[] { typeof(CallSiteBinder) }).Invoke(null, new object[] { binder }), siteType);
+        }
+
+        #endregion
+
+        #region Type group to module
+
+        // A constant naming both a generic and a non-generic CLR type (System::IComparable is IComparable and
+        // IComparable<T>) is a type group. Where a module or class is expected - include System::IComparable,
+        // x.is_a?(System::IComparable) - it stands for its non-generic member.
+
+        private static bool IsTypeGroupConversion(Type/*!*/ fromType, Type/*!*/ toType) {
+            return typeof(TypeGroup).IsAssignableFrom(fromType) && (toType == typeof(RubyModule) || toType == typeof(RubyClass));
+        }
+
+        internal static Expression TryConvertTypeGroup(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType, Expression/*!*/ contextExpression) {
+            if (!IsTypeGroupConversion(fromType, toType)) {
+                return null;
+            }
+            return AstUtils.Convert(
+                Ast.Call(RubyOps.ConvertTypeGroupToModuleMethod, AstUtils.Convert(contextExpression, typeof(RubyContext)), AstUtils.Convert(expr, typeof(TypeGroup))),
+                toType
+            );
         }
 
         #endregion

@@ -4453,6 +4453,20 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// The module or class of a type group's non-generic member, where a type group is passed for a module
+        /// (see Converter.TryConvertTypeGroup).
+        /// </summary>
+        public static RubyModule/*!*/ ConvertTypeGroupToModule(RubyContext/*!*/ context, Microsoft.Scripting.Actions.TypeGroup/*!*/ typeGroup) {
+            Type type;
+            if (!typeGroup.TryGetNonGenericType(out type)) {
+                throw RubyExceptions.CreateTypeError(String.Format("{0} has no non-generic type to stand for a module; use {0}[...] or {0}.of(...)",
+                    typeGroup.Name));
+            }
+            return context.GetModule(type);
+        }
+
+        internal static readonly MethodInfo/*!*/ ConvertTypeGroupToModuleMethod = typeof(RubyOps).GetMethod(nameof(ConvertTypeGroupToModule));
         internal static readonly MethodInfo/*!*/ ConvertToVectorMethod = typeof(RubyOps).GetMethod(nameof(ConvertToVector));
         internal static readonly MethodInfo/*!*/ ConvertToListMethod = typeof(RubyOps).GetMethod(nameof(ConvertToList));
         internal static readonly MethodInfo/*!*/ ConvertToDictionaryMethod = typeof(RubyOps).GetMethod(nameof(ConvertToDictionary));

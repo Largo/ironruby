@@ -319,6 +319,41 @@ p S.instance_method(:WithOut).parameters
 ");
         }
 
+        /// <summary>
+        /// A type group (System::IComparable names IComparable and IComparable&lt;T&gt;) stands for its non-generic
+        /// member where a module is expected.
+        /// </summary>
+        public void ClrTypeGroupAsModule1() {
+            TestOutput(@"
+class Ver
+  include System::IComparable
+  attr_reader :n
+  def initialize(n); @n = n; end
+  def compare_to(other); n <=> other.n; end
+end
+
+p Ver.ancestors.include?(Ver.ancestors[1])
+list = System::Collections::ArrayList.new
+[3, 1, 2].each { |n| list.add(Ver.new(n)) }
+list.sort
+p list.map { |v| v.n }
+p Ver.new(1).is_a?(System::IComparable)
+p Ver.include?(System::IComparable)
+
+begin
+  Class.new { include System::Func }
+rescue TypeError => e
+  puts e.class
+end
+", @"
+true
+[1, 2, 3]
+true
+true
+TypeError
+");
+        }
+
         public class BinderOut {
             public string Split(string value, out string head, out string tail) {
                 head = value.Substring(0, 1);
