@@ -4780,7 +4780,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "format", 0x52, 
-                0x80020004U, 
+                0x00000000U, 0x80020004U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf), 
                 new Func<IronRuby.Builtins.StringFormatterSiteStorage, System.Object, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf)
             );
             
@@ -5082,7 +5083,8 @@ namespace IronRuby.Builtins {
             
             #endif
             DefineLibraryMethod(module, "sprintf", 0x52, 
-                0x80020004U, 
+                0x00000000U, 0x80020004U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf), 
                 new Func<IronRuby.Builtins.StringFormatterSiteStorage, System.Object, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf)
             );
             
@@ -5264,7 +5266,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "format", 0x61, 
-                0x80020004U, 
+                0x00000000U, 0x80020004U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf), 
                 new Func<IronRuby.Builtins.StringFormatterSiteStorage, System.Object, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf)
             );
             
@@ -5408,7 +5411,8 @@ namespace IronRuby.Builtins {
             
             #endif
             DefineLibraryMethod(module, "sprintf", 0x61, 
-                0x80020004U, 
+                0x00000000U, 0x80020004U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf), 
                 new Func<IronRuby.Builtins.StringFormatterSiteStorage, System.Object, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf)
             );
             

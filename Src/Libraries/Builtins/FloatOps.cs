@@ -63,13 +63,13 @@ namespace IronRuby.Builtins {
         /// The maximum size of the exponent (base 10)
         /// </summary>
         [RubyConstant]
-        public const double MAX_10_EXP = 308;
+        public const int MAX_10_EXP = 308;
 
         /// <summary>
         /// The minimum size the the exponent (base 10)
         /// </summary>
         [RubyConstant]
-        public const double MIN_10_EXP = -307;
+        public const int MIN_10_EXP = -307;
 
         /// <summary>
         /// The maximum size of the exponent (base 2)

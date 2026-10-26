@@ -264,6 +264,13 @@ namespace IronRuby.Builtins {
                 char c = _format[_index];
 
                 if (c == '#' || c == '-' || c == '+' || c == ' ' || c == '0') {
+                    // MRI: flags belong before the width ("%5 d" is an error, "% 5d" is not)
+                    if (widthSeen) {
+                        throw RubyExceptions.CreateArgumentError("flag after width");
+                    }
+                    if (precisionSeen) {
+                        throw RubyExceptions.CreateArgumentError("flag after precision");
+                    }
                     _index++;
                     flagSeen = true;
                     switch (c) {
@@ -329,10 +336,19 @@ namespace IronRuby.Builtins {
                         end++;
                     }
                     if (end < _format.Length && _format[end] == '$') {
+                        string digits = _format.Substring(_index, end - _index);
                         if (_opts.ArgIndex.HasValue) {
-                            throw RubyExceptions.CreateArgumentError("value given twice");
+                            throw RubyExceptions.CreateArgumentError("value given twice - {0}$", digits);
                         }
-                        _opts.ArgIndex = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                        if (_useNamed) {
+                            throw RubyExceptions.CreateArgumentError("numbered({0}) after named", digits);
+                        }
+                        if (_useAbsolute.HasValue && !_useAbsolute.Value) {
+                            throw RubyExceptions.CreateArgumentError("numbered({0}) after unnumbered({1})", digits, _relativeIndex.ToString());
+                        }
+                        // numbered from here on: a "*" width in this directive may not be unnumbered
+                        _useAbsolute = true;
+                        _opts.ArgIndex = int.Parse(digits, CultureInfo.InvariantCulture);
                         _index = end + 1;
                         argumentSeen = true;
                     } else {
@@ -357,14 +373,22 @@ namespace IronRuby.Builtins {
                     if (end < 0) {
                         throw RubyExceptions.CreateArgumentError("malformed name - unmatched parenthesis");
                     }
+                    string spelled = _format.Substring(_index, end - _index + 1); // with its brackets, as MRI quotes it
                     if (_opts.Name != null) {
-                        throw RubyExceptions.CreateArgumentError("name{0}{1}{2} after <{3}>",
-                            c.ToString(), _format.Substring(_index + 1, end - _index - 1), close.ToString(), _opts.Name);
+                        throw RubyExceptions.CreateArgumentError("named{0} after <{1}>", spelled, _opts.Name);
+                    }
+                    if (_opts.ArgIndex.HasValue || (_useAbsolute.HasValue && _useAbsolute.Value)) {
+                        throw RubyExceptions.CreateArgumentError("named{0} after numbered", spelled);
+                    }
+                    if (_useAbsolute.HasValue) {
+                        throw RubyExceptions.CreateArgumentError("named{0} after unnumbered({1})", spelled, _relativeIndex.ToString());
                     }
                     _opts.Name = _format.Substring(_index + 1, end - _index - 1);
                     _opts.NameStyle = c;
                     _index = end + 1;
                     argumentSeen = true;
+                    // a "*" width in this very directive is already "mixed with named"
+                    _useNamed = true;
                     if (c == '{') {
                         // %{name} is a complete directive; it formats the value with to_s
                         conversion = 's';
@@ -445,6 +469,9 @@ namespace IronRuby.Builtins {
             }
 
             if (_useNamed) {
+                if (absoluteIndex.HasValue) {
+                    throw RubyExceptions.CreateArgumentError("numbered({0}) after named", absoluteIndex.Value.ToString());
+                }
                 throw RubyExceptions.CreateArgumentError("unnumbered({0}) mixed with named", (_relativeIndex + 1).ToString());
             }
 
@@ -471,8 +498,9 @@ namespace IronRuby.Builtins {
 
         private object GetNamedData(string/*!*/ name) {
             if (_useAbsolute.HasValue) {
-                throw RubyExceptions.CreateArgumentError("named<{0}> after {1}({2})", name,
-                    _useAbsolute.Value ? "numbered" : "unnumbered", (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
+                throw _useAbsolute.Value
+                    ? RubyExceptions.CreateArgumentError("named<{0}> after numbered", name)
+                    : RubyExceptions.CreateArgumentError("named<{0}> after unnumbered({1})", name, (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
             }
             _useNamed = true;
 
@@ -592,6 +620,9 @@ namespace IronRuby.Builtins {
                 str = _siteStorage.TryConvertToStr(value);
             }
             if (str != null) {
+                if (!str.Encoding.IsAsciiIdentity) {
+                    throw RubyExceptions.CreateAsciiIncompatibleEncodingError(str.Encoding);
+                }
                 object parsed = KernelOps.ToInteger(null, str);
                 return (parsed is BigInteger) ? (BigInteger)parsed : (parsed is long ? (BigInteger)(long)parsed : (BigInteger)(int)parsed);
             }
@@ -1452,6 +1483,11 @@ namespace IronRuby.Builtins {
                 return character.ToString();
             }
 
+            // a binary format has single-byte characters only (MRI: rb_enc_uint_chr)
+            if (encoding == RubyEncoding.Binary && codepoint > 0xFF) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            }
+
             // MRI: rb_enc_codelen fails for a code point the encoding has no character for
             if (codepoint < 0 || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
                 throw RubyExceptions.CreateArgumentError("invalid character");
@@ -1511,13 +1547,25 @@ namespace IronRuby.Builtins {
                 return;
             }
 
-            if (encoding == null || encoding == _resultEncoding) {
+            if (encoding == null) {
                 return;
             }
 
-            if (_formatIsAscii && encoding.IsAsciiIdentity && (_argEncoding == null || _argEncoding == encoding)) {
-                _argEncoding = encoding;
-                _resultEncoding = encoding;
+            // The first non-ASCII argument fixes the encoding of the result, whether it agrees
+            // with the format's or (an all-ASCII format) replaces it; every later one has to be
+            // in the same encoding. Forgetting to record the first one when it merely agreed let
+            // "%s %s" % ["\u3042", "\xFF".b] come out as a binary string holding U+3042.
+            if (_argEncoding == null) {
+                if (encoding == _resultEncoding) {
+                    _argEncoding = encoding;
+                    return;
+                }
+                if (_formatIsAscii && encoding.IsAsciiIdentity) {
+                    _argEncoding = encoding;
+                    _resultEncoding = encoding;
+                    return;
+                }
+            } else if (encoding == _argEncoding) {
                 return;
             }
 

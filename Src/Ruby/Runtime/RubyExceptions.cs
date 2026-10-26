@@ -724,6 +724,14 @@ namespace IronRuby.Runtime {
             return new EncodingCompatibilityError(FormatMessage("incompatible character encodings: {0} and {1}", encoding1.Name, encoding2.Name));
         }
 
+        /// <summary>
+        /// MRI's rb_must_asciicompat: a string that is to be read as a number (or a format) has to
+        /// be in an ASCII-compatible encoding.
+        /// </summary>
+        public static Exception/*!*/ CreateAsciiIncompatibleEncodingError(RubyEncoding/*!*/ encoding) {
+            return new EncodingCompatibilityError(FormatMessage("ASCII incompatible encoding: {0}", encoding.Name));
+        }
+
         #region Errno
 
         // TODO: initialize errno property

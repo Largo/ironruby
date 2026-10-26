@@ -1433,5 +1433,54 @@ false
 $-W is a read-only variable
 ");
         }
+
+        public void Float_Format1() {
+            TestOutput(@"
+p 1e-20.round(25), 1e-20.round(30), 1e-20.round(19), 1.5.round(16), 0.1.round(20), 5e-324.round(324)
+p((-1e-10).ceil(1), 1e-10.floor(1), (-1e-10).floor(1), 2.1.floor(1), 1.1.ceil(1), (-2.5).truncate(1))
+p Float::MAX_10_EXP, Float::MIN_10_EXP
+begin; '%5 5d' % 3; rescue ArgumentError => e; puts e.message; end
+begin; '%.5+d' % 3; rescue ArgumentError => e; puts e.message; end
+begin; '%1$1$d' % 3; rescue ArgumentError => e; puts e.message; end
+begin; '%1$<a>d' % [1]; rescue ArgumentError => e; puts e.message; end
+begin; '%<a>d %1$d' % { :a => 1 }; rescue ArgumentError => e; puts e.message; end
+begin; '%<a>*d' % { :a => 1 }; rescue ArgumentError => e; puts e.message; end
+begin; '%<a>{b}' % { :a => 1 }; rescue ArgumentError => e; puts e.message; end
+begin; '%1$*d' % [5, 1]; rescue ArgumentError => e; puts e.message; end
+begin; sprintf; rescue ArgumentError => e; puts e.message; end
+begin; '%d' % '1'.encode('UTF-16LE'); rescue Encoding::CompatibilityError => e; puts e.message; end
+begin; '%c'.force_encoding('ASCII-8BIT') % 0x3042; rescue RangeError => e; puts e.message; end
+begin; '%s %s' % [""あ"", ""ÿ"".force_encoding('ASCII-8BIT')]; rescue Encoding::CompatibilityError => e; puts e.message; end
+begin; Float(""½.5""); rescue ArgumentError => e; puts e.message; end
+", @"
+1.0e-20
+1.0e-20
+0.0
+1.5
+0.1
+5.0e-324
+0.0
+0.0
+-0.1
+2.1
+1.1
+-2.5
+308
+-307
+flag after width
+flag after precision
+value given twice - 1$
+named<a> after numbered
+numbered(1) after named
+unnumbered(1) mixed with named
+named{b} after <a>
+unnumbered(1) mixed with numbered
+too few arguments
+ASCII incompatible encoding: UTF-16LE
+12354 out of char range
+incompatible character encodings: UTF-8 and ASCII-8BIT
+invalid value for Float(): ""\xC2\xBD.5""
+");
+        }
     }
 }

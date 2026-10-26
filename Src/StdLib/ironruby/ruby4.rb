@@ -3030,7 +3030,7 @@ module Kernel
   # A String has to be readable as a number at all: ASCII-compatible, no NUL.
   def __ir_check_numeric_string__(text, what = "Integer")
     unless text.encoding.ascii_compatible?
-      raise ::ArgumentError, "ASCII incompatible encoding: #{text.encoding}"
+      raise ::Encoding::CompatibilityError, "ASCII incompatible encoding: #{text.encoding}"
     end
     if text.include?("\0")
       raise ::ArgumentError, "string for #{what} contains null byte" if what == "Float"

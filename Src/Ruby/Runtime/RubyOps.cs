@@ -3357,7 +3357,7 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(value));
+            throw InvalidFloatValue(value.ToByteArray());
         }
 
         [Emitted]
@@ -3367,8 +3367,37 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}",
-                context.Inspect(MutableString.CreateMutable(value, RubyEncoding.UTF8)));
+            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
+        }
+
+        /// <summary>
+        /// MRI quotes the string byte by byte, as a binary string's inspect would: every byte
+        /// outside printable ASCII shows as \xNN, so a non-ASCII character is spelled out in its bytes.
+        /// </summary>
+        private static Exception/*!*/ InvalidFloatValue(byte[]/*!*/ bytes) {
+            var text = new StringBuilder(bytes.Length + 8);
+            foreach (byte b in bytes) {
+                switch (b) {
+                    case (byte)'\n': text.Append("\\n"); break;
+                    case (byte)'\t': text.Append("\\t"); break;
+                    case (byte)'\r': text.Append("\\r"); break;
+                    case (byte)'\f': text.Append("\\f"); break;
+                    case (byte)'\v': text.Append("\\v"); break;
+                    case (byte)'\a': text.Append("\\a"); break;
+                    case (byte)'\b': text.Append("\\b"); break;
+                    case 27: text.Append("\\e"); break;
+                    case (byte)'"': text.Append("\\\""); break;
+                    case (byte)'\\': text.Append("\\\\"); break;
+                    default:
+                        if (b < 0x20 || b >= 0x7f) {
+                            text.Append("\\x").Append(b.ToString("X2", CultureInfo.InvariantCulture));
+                        } else {
+                            text.Append((char)b);
+                        }
+                        break;
+                }
+            }
+            return RubyExceptions.CreateArgumentError("invalid value for Float(): \"{0}\"", text.ToString());
         }
 
         #region Kernel#Float string grammar

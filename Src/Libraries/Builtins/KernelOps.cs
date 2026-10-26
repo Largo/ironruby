@@ -2654,6 +2654,15 @@ namespace IronRuby.Builtins {
         //sub
         //sub!
 
+        // MRI: a missing format string is "too few arguments", not an arity error.
+        [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ Sprintf(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]

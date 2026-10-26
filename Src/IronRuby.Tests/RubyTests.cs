@@ -725,6 +725,7 @@ namespace IronRuby.Tests {
                 Hash_SelfKey1,
                 Thread_JoinSelf1,
                 Reflection_Misc1,
+                Float_Format1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,
