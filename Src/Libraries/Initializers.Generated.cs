@@ -94,7 +94,10 @@ namespace IronRuby.Builtins {
             IronRuby.Builtins.RubyModule def46 = DefineGlobalModule("Process", typeof(IronRuby.Builtins.RubyProcess), 0x0000000F, LoadProcess_Instance, LoadProcess_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             DefineGlobalModule("Signal", typeof(IronRuby.Builtins.Signal), 0x0000000F, null, LoadSignal_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendClass(typeof(System.Collections.DictionaryEntry), 0x00000000, null, LoadSystem__Collections__DictionaryEntry_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendModule(typeof(System.Collections.Generic.KeyValuePair<,>), 0x00000000, LoadSystem__Collections__Generic__KeyValuePair_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendModule(typeof(System.Runtime.CompilerServices.ITuple), 0x00000000, LoadSystem__Runtime__CompilerServices__ITuple_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Type), 0x00000000, null, LoadSystem__Type_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalModule("Warning", typeof(IronRuby.Builtins.WarningOps), 0x0000000F, LoadWarning_Instance, LoadWarning_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             object def11 = DefineSingleton(Load__Singleton_EnvironmentSingletonOps_Instance, null, null, def61);
@@ -8840,6 +8843,29 @@ namespace IronRuby.Builtins {
             
         }
         
+        private static void LoadSystem__Collections__DictionaryEntry_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "deconstruct", 0x51, 
+                0x00000000U, 
+                new Func<System.Collections.DictionaryEntry, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.DictionaryEntryOps.Deconstruct)
+            );
+            
+            DefineLibraryMethod(module, "deconstruct_keys", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Collections.DictionaryEntry, System.Object, IronRuby.Builtins.Hash>(IronRuby.Builtins.DictionaryEntryOps.DeconstructKeys)
+            );
+            
+            DefineLibraryMethod(module, "to_a", 0x51, 
+                0x00000000U, 
+                new Func<System.Collections.DictionaryEntry, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.DictionaryEntryOps.ToArray)
+            );
+            
+            DefineLibraryMethod(module, "to_ary", 0x51, 
+                0x00000000U, 
+                new Func<System.Collections.DictionaryEntry, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.DictionaryEntryOps.ToArray)
+            );
+            
+        }
+        
         private static void LoadSystem__Collections__Generic__IDictionary_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x51, 
                 0x00000000U, 
@@ -9065,6 +9091,24 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "values_at", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.IDictionaryOps.ValuesAt)
+            );
+            
+        }
+        
+        private static void LoadSystem__Collections__Generic__KeyValuePair_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "deconstruct_keys", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Hash>(IronRuby.Builtins.KeyValuePairOps.DeconstructKeys)
+            );
+            
+            DefineLibraryMethod(module, "to_a", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KeyValuePairOps.ToArray)
+            );
+            
+            DefineLibraryMethod(module, "to_ary", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KeyValuePairOps.ToArray)
             );
             
         }
@@ -9732,6 +9776,39 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Double, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom)
+            );
+            
+        }
+        
+        private static void LoadSystem__Runtime__CompilerServices__ITuple_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "[]", 0x51, 
+                0x00010000U, 
+                new Func<System.Runtime.CompilerServices.ITuple, System.Int32, System.Object>(IronRuby.Builtins.ITupleOps.GetItem)
+            );
+            
+            DefineLibraryMethod(module, "deconstruct", 0x51, 
+                0x00000000U, 
+                new Func<System.Runtime.CompilerServices.ITuple, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ITupleOps.Deconstruct)
+            );
+            
+            DefineLibraryMethod(module, "length", 0x51, 
+                0x00000000U, 
+                new Func<System.Runtime.CompilerServices.ITuple, System.Int32>(IronRuby.Builtins.ITupleOps.GetLength)
+            );
+            
+            DefineLibraryMethod(module, "size", 0x51, 
+                0x00000000U, 
+                new Func<System.Runtime.CompilerServices.ITuple, System.Int32>(IronRuby.Builtins.ITupleOps.GetLength)
+            );
+            
+            DefineLibraryMethod(module, "to_a", 0x51, 
+                0x00000000U, 
+                new Func<System.Runtime.CompilerServices.ITuple, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ITupleOps.ToArray)
+            );
+            
+            DefineLibraryMethod(module, "to_ary", 0x51, 
+                0x00000000U, 
+                new Func<System.Runtime.CompilerServices.ITuple, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ITupleOps.ToArray)
             );
             
         }

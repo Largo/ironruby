@@ -271,5 +271,216 @@ false
         }
 
         #endregion
+
+        #region Tuples and pairs
+
+        public static class ProtocolTuples1 {
+            public static (int Min, int Max) MinMax(int[] xs) {
+                return (System.Linq.Enumerable.Min(xs), System.Linq.Enumerable.Max(xs));
+            }
+
+            public static (string, int, bool) Triple() { return ("a", 1, true); }
+            public static Tuple<string, int> RefPair() { return Tuple.Create("b", 2); }
+            public static (int, int, int, int, int, int, int, int, int) Nine() { return (1, 2, 3, 4, 5, 6, 7, 8, 9); }
+
+            public static Dictionary<string, int> Dict() {
+                return new Dictionary<string, int> { { "a", 1 }, { "b", 2 } };
+            }
+
+            public static Hashtable Table() {
+                var result = new Hashtable();
+                result["x"] = 10;
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// Every ValueTuple/Tuple converts to an Array (to_a, to_ary), so multiple assignment and a block's |a, b| take
+        /// it apart.
+        /// </summary>
+        public void ClrTupleDestructuring1() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTuples1)));
+            TestOutput(@"
+mm = T.min_max(System::Array[Integer].new([3, 1, 2]))
+min, max = mm
+p [min, max]
+p mm.to_a, mm.to_ary, mm.size, mm.length
+p mm[0], mm[1], mm[-1], mm[-2], mm[2], mm[-3]
+p [*mm], Array(mm)
+[mm].each { |a, b| p a + b }
+p [mm, mm].map { |a, b| a * b }
+
+t = T.triple
+p t.to_a, t.size
+s, i, b = t
+p s, i, b
+
+p T.ref_pair.to_a
+x, y = T.ref_pair
+p x, y
+
+nine = T.nine
+p nine.size, nine.to_a, nine[8], nine[-9]
+", @"
+[1, 3]
+[1, 3]
+[1, 3]
+2
+2
+1
+3
+3
+1
+nil
+nil
+[1, 3]
+[1, 3]
+4
+[3, 3]
+['a', 1, true]
+3
+'a'
+1
+true
+['b', 2]
+'b'
+2
+9
+[1, 2, 3, 4, 5, 6, 7, 8, 9]
+9
+1
+");
+        }
+
+        /// <summary>
+        /// Array patterns go through #deconstruct, which hands CLR strings over as Ruby strings so that String matches them.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrTuplePatterns1() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTuples1)));
+            TestOutput(@"
+mm = T.min_max(System::Array[Integer].new([3, 1, 2]))
+case mm
+in [a, b] then p [a, b]
+end
+p mm.deconstruct, T.triple.deconstruct
+
+case T.triple
+in [String => s, Integer => i, true] then p [s, i]
+end
+
+p((T.triple in [String, Integer]))
+p((T.triple in [*, true]))
+
+case T.nine
+in [1, *rest, 9] then p rest
+end
+
+T.ref_pair => [name, count]
+p [name, count]
+", @"
+[1, 3]
+[1, 3]
+[""a"", 1, true]
+[""a"", 1]
+false
+true
+[2, 3, 4, 5, 6, 7, 8]
+[""b"", 2]
+");
+        }
+
+        /// <summary>
+        /// A dictionary enumerates KeyValuePairs (or DictionaryEntries), which convert to [key, value], so a block
+        /// with |k, v| gets the key and the value.
+        /// </summary>
+        public void ClrKeyValuePair1() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTuples1)));
+            TestOutput(@"
+d = T.dict
+r = []
+d.each { |k, v| r << [k, v] }
+p r
+p d.map { |k, v| k.to_s + v.to_s }
+p d.inject(0) { |sum, (k, v)| sum + v }
+p d.sort_by { |k, v| -v }.map { |k, v| k.to_s }
+
+pair = d.first
+k, v = pair
+p [k, v], pair.to_a, pair.to_ary
+
+h = T.table
+h.each { |k, v| p [k, v] }
+e = h.first
+p e.class, e.to_a
+k, v = e
+p [k, v]
+", @"
+[['a', 1], ['b', 2]]
+[""a1"", ""b2""]
+3
+[""b"", ""a""]
+['a', 1]
+['a', 1]
+['a', 1]
+['x', 10]
+System::Collections::DictionaryEntry
+['x', 10]
+['x', 10]
+");
+        }
+
+        /// <summary>
+        /// deconstruct_keys of a pair: {key:, value:}, with the keys asked for (the CLR names Key/Value included), or
+        /// all of them for nil.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrKeyValuePairPatterns1() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTuples1)));
+            TestOutput(@"
+require 'ruby4'
+p T.dict.to_h
+
+pair = T.dict.first
+p pair.deconstruct_keys(nil), pair.deconstruct_keys([:key]), pair.deconstruct_keys([:Value, :nope, 1])
+p pair.deconstruct_keys([]), pair.deconstruct_keys(['key'])
+p((pair.deconstruct_keys(1) rescue $!))
+
+case pair
+in {key: String => key, value: Integer => value} then p [key, value]
+end
+case pair
+in {key: 'a', **rest} then p rest
+end
+p((pair in {key: 'b'}))
+
+e = T.table.first
+p e.deconstruct, e.deconstruct_keys(nil), e.deconstruct_keys([:Key])
+case e
+in [String => k, v] then p [k, v]
+end
+case e
+in {key:, value:} then p [key, value]
+end
+", @"
+{'a' => 1, 'b' => 2}
+{key: ""a"", value: 1}
+{key: ""a""}
+{Value: 1}
+{}
+{""key"" => ""a""}
+#<TypeError: wrong argument type Integer (expected Array or nil)>
+[""a"", 1]
+{value: 1}
+false
+[""x"", 10]
+{key: ""x"", value: 10}
+{Key: ""x""}
+[""x"", 10]
+[""x"", 10]
+");
+        }
+
+        #endregion
     }
 }
