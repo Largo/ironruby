@@ -94,6 +94,7 @@ namespace IronRuby.Builtins {
             IronRuby.Builtins.RubyModule def46 = DefineGlobalModule("Process", typeof(IronRuby.Builtins.RubyProcess), 0x0000000F, LoadProcess_Instance, LoadProcess_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             DefineGlobalModule("Signal", typeof(IronRuby.Builtins.Signal), 0x0000000F, null, LoadSignal_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Type), 0x00000000, null, LoadSystem__Type_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalModule("Warning", typeof(IronRuby.Builtins.WarningOps), 0x0000000F, LoadWarning_Instance, LoadWarning_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             object def11 = DefineSingleton(Load__Singleton_EnvironmentSingletonOps_Instance, null, null, def61);
@@ -9564,6 +9565,65 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Decimal>(IronRuby.Builtins.DecimalOps.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyModule, System.Numerics.BigInteger, System.Decimal>(IronRuby.Builtins.DecimalOps.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyModule, System.Object, System.Double>(IronRuby.Builtins.DecimalOps.InducedFrom)
+            );
+            
+        }
+        
+        private static void LoadSystem__Delegate_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "[]", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, System.Delegate, System.Object[], System.Object>(IronRuby.Builtins.DelegateOps.Call)
+            );
+            
+            DefineLibraryMethod(module, "<<", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, System.Delegate, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.DelegateOps.ComposeBackward)
+            );
+            
+            DefineLibraryMethod(module, "===", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, System.Delegate, System.Object[], System.Object>(IronRuby.Builtins.DelegateOps.Call)
+            );
+            
+            DefineLibraryMethod(module, ">>", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Delegate, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.DelegateOps.ComposeForward)
+            );
+            
+            DefineLibraryMethod(module, "arity", 0x51, 
+                0x00000000U, 
+                new Func<System.Delegate, System.Int32>(IronRuby.Builtins.DelegateOps.GetArity)
+            );
+            
+            DefineLibraryMethod(module, "call", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, System.Delegate, System.Object[], System.Object>(IronRuby.Builtins.DelegateOps.Call)
+            );
+            
+            DefineLibraryMethod(module, "curry", 0x51, 
+                0x00000000U, 0x00020000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, System.Delegate, IronRuby.Builtins.Proc>(IronRuby.Builtins.DelegateOps.Curry), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, System.Delegate, System.Int32, IronRuby.Builtins.Proc>(IronRuby.Builtins.DelegateOps.Curry)
+            );
+            
+            DefineLibraryMethod(module, "lambda?", 0x51, 
+                0x00000000U, 
+                new Func<System.Delegate, System.Boolean>(IronRuby.Builtins.DelegateOps.IsLambda)
+            );
+            
+            DefineLibraryMethod(module, "parameters", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Delegate, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.DelegateOps.GetParameters)
+            );
+            
+            DefineLibraryMethod(module, "to_proc", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, System.Delegate, IronRuby.Builtins.Proc>(IronRuby.Builtins.DelegateOps.ToProc)
+            );
+            
+            DefineLibraryMethod(module, "yield", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, System.Delegate, System.Object[], System.Object>(IronRuby.Builtins.DelegateOps.Call)
             );
             
         }
