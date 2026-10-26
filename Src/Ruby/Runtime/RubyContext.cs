@@ -737,6 +737,7 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("VERBOSE", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-v", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-w", Runtime.GlobalVariables.Verbose);
+            DefineGlobalVariableNoLock("-W", Runtime.GlobalVariables.WarningLevel);
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
@@ -1999,9 +2000,14 @@ namespace IronRuby.Runtime {
             }
 
             // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
-            // "uninitialized constant Math::Nope".
+            // "uninitialized constant Math::Nope".  The test is on rb_class_real(owner), so the
+            // singleton class of a plain Object counts as Object.
+            RubyModule realOwner = owner;
+            while (realOwner is RubyClass && ((RubyClass)realOwner).IsSingletonClass && ((RubyClass)realOwner).SuperClass != null) {
+                realOwner = ((RubyClass)realOwner).SuperClass;
+            }
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
-                owner == ObjectClass
+                realOwner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
                     : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
             ), name, owner);

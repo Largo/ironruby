@@ -711,6 +711,9 @@ namespace IronRuby.Builtins {
                 exception = MakeException(respondToStorage, storage0, storage1, args);
 
                 if (args.Length >= 3 && args[2] != null) {
+                    if (!(args[2] is MutableString || args[2] is RubyArray)) {
+                        throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+                    }
                     var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
                     site.Target(site, exception, args[2]);
                 }

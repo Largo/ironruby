@@ -1251,7 +1251,7 @@ namespace IronRuby.Builtins {
 
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
             }
 
@@ -1297,7 +1297,7 @@ namespace IronRuby.Builtins {
 
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
             }
 
@@ -1322,7 +1322,9 @@ namespace IronRuby.Builtins {
 
             object value;
             if (!self.TryRemoveConstant(constantName, out value)) {
-                RubyUtils.CheckConstantName(constantName);
+                if (!Tokenizer.IsConstantName(constantName)) {
+                    throw RubyExceptions.CreateNameError("'{0}' is not allowed as a constant variable name", constantName);
+                }
                 throw RubyExceptions.CreateNameError("constant {0}::{1} not defined", self.Name, constantName);
             }
 
@@ -1400,7 +1402,10 @@ namespace IronRuby.Builtins {
 
             string[] parts = (symbol == null) ? str.Split(new[] { "::" }, StringSplitOptions.None) : new[] { str };
             foreach (string part in parts) {
-                RubyUtils.CheckConstantName(part);
+                if (!Tokenizer.IsConstantName(part)) {
+                    // MRI names the whole path: "wrong constant name Foo::".
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", (isTopLevel ? "::" : "") + str));
+                }
             }
             return parts;
         }
@@ -1441,7 +1446,7 @@ namespace IronRuby.Builtins {
                 }
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
                 inherit = true;
             }

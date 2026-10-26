@@ -712,6 +712,13 @@ namespace IronRuby.Tests {
                 Float_Eql1,
                 ComparisonError_AnonymousClass1,
                 Array_FlattenNil1,
+                Hash_ValuesAtDefault1,
+                Lambda_ArityMessages1,
+                ErrorMessages_Receivers1,
+                Time_StringParsing1,
+                Struct_IndexMessages1,
+                Backtrace_RaiseInRescue1,
+                Enumerator_Copy1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

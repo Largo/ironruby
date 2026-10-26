@@ -20,7 +20,7 @@ using IronRuby.Runtime;
 using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
-    [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true), Includes(typeof(Precision))]
+    [RubyClass("Float", Extends = typeof(double), Inherits = typeof(Numeric)), Includes(typeof(ClrFloat), Copy = true)]
     [UndefineMethod("new", IsStatic = true)]
     public static class FloatOps {
         #region Constants

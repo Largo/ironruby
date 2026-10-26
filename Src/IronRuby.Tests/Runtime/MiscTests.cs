@@ -1088,5 +1088,173 @@ nil
 [255]
 ");
         }
+
+        public void Hash_ValuesAtDefault1() {
+            TestOutput(@"
+p Hash.new(5).values_at(:x, :y), Hash.new { |h, k| k.to_s }.values_at(:a), {a: 1}.values_at(:a, :b)
+h = {a: 1}
+begin; h.each { h.rehash }; rescue RuntimeError => e; p e.message; end
+begin; Hash.new(&lambda { |k| k }); rescue TypeError => e; p e.message; end
+p Hash.new(&lambda { |h, k| k })[:z], Hash.new(&lambda { |*a| a.size })[:z]
+", @"
+[5, 5]
+[""a""]
+[1, nil]
+""rehash during iteration""
+""default_proc takes two arguments (2 for 1)""
+:z
+2
+");
+        }
+
+        public void Lambda_ArityMessages1() {
+            TestOutput(@"
+begin; ->(a, *b) { }.call; rescue ArgumentError => e; p e.message; end
+begin; ->(a) { }.call(1, 2); rescue ArgumentError => e; p e.message; end
+begin; :to_s.to_proc.call; rescue ArgumentError => e; p e.message; end
+p :to_s.to_proc.call(1)
+", @"
+""wrong number of arguments (given 0, expected 1+)""
+""wrong number of arguments (given 2, expected 1)""
+""no receiver given""
+""1""
+");
+        }
+
+        public void ErrorMessages_Receivers1() {
+            TestOutput(@"
+o = Object.new
+def o.inspect; 'INSPECTED'; end
+begin; o.foo; rescue NoMethodError => e; puts e.message.sub(/0x[0-9a-f]+/, 'ID'); end
+begin; self.foo; rescue NoMethodError => e; puts e.message; end
+c = Class.new { def self.inspect; 'INS'; end }
+begin; c.new.foo; rescue NoMethodError => e; puts e.message; end
+begin; Class.new { def m; end }.instance_method(:m).bind(1); rescue TypeError => e; puts e.message.sub(/0x[0-9a-f]+/, 'ID'); end
+begin; Object.const_get('Foo::'); rescue NameError => e; puts e.message; end
+begin; Object.const_get('Math::PI::X'); rescue TypeError => e; puts e.message; end
+begin; Object.send(:remove_const, :foo); rescue NameError => e; puts e.message; end
+begin; Object.new.singleton_class::Foo; rescue NameError => e; puts e.message; end
+begin; Math::Foo; rescue NameError => e; puts e.message; end
+", @"
+undefined method `foo' for #<Object:ID>
+undefined method `foo' for main
+undefined method `foo' for an instance of INS
+bind argument must be an instance of #<Class:ID>
+wrong constant name Foo::
+Math::PI::X does not refer to class/module
+'foo' is not allowed as a constant variable name
+uninitialized constant Foo
+uninitialized constant Math::Foo
+");
+        }
+
+        public void Time_StringParsing1() {
+            TestOutput(@"
+p Time.new('2024-01-02 03:04:05 UTC').utc?, Time.new('2024-01-02 03:04:05.5 Z').usec, Time.new('2024-01-02T03:04:05+09:00').utc_offset
+['2024-01-02 03:04', '2024-01-02 03', '2024-01-02 03:04:05.', '24-01-02', '2024-1-2', '2024-01-02 03:04:05 +09:00 x', ""2024-01-02 03:04:05\n"", 'x'].each do |s|
+  begin; Time.new(s); rescue ArgumentError => e; puts e.message; end
+end
+begin; Time.new(2024, 1, 1, 24, 1); rescue ArgumentError => e; puts e.message; end
+begin; Time.new(2024, 0, 1); rescue ArgumentError => e; puts e.message; end
+begin; Time.new(2024, 1, 0); rescue ArgumentError => e; puts e.message; end
+begin; Time.new(2024, 1, 1, 1, 1, '1.5'); rescue ArgumentError => e; puts e.message; end
+begin; Time.at(1.5).round(-1); rescue ArgumentError => e; puts e.message; end
+begin; Time.at(2**62); rescue RangeError => e; puts e.class; end
+begin; Time.at(0) + (0.0 / 0.0); rescue FloatDomainError => e; puts e.message; end
+p Time.at(-1.5).round.to_i, Time.at(2.5).round.to_i
+", @"
+true
+500000
+32400
+missing sec part: 03:04
+missing min part: 03
+subsecond expected after dot: 03:04:05.
+year must be 4 or more digits: 24
+two digits mon is expected after '-': -1-2
+can't parse at: x
+can't parse: ""2024-01-02 03:04:05\n""
+can't parse: ""x""
+min out of range
+mon out of range
+mday out of range
+invalid value for Integer(): ""1.5""
+negative ndigits given
+RangeError
+NaN
+-1
+3
+");
+        }
+
+        public void Struct_IndexMessages1() {
+            TestOutput(@"
+s = Struct.new(:a).new(1)
+begin; s[1]; rescue IndexError => e; puts e.message; end
+begin; s[-2]; rescue IndexError => e; puts e.message; end
+", @"
+offset 1 too large for struct(size:1)
+offset -2 too small for struct(size:1)
+");
+        }
+
+        public void Backtrace_RaiseInRescue1() {
+            // an exception raised inside a rescue clause keeps the frames of the rescuing method and its callers
+            TestOutput(@"
+def m
+  begin; raise 'inner'; rescue; raise 'outer'; end
+end
+def n
+  m
+end
+begin
+  n
+rescue => e
+  puts e.backtrace.first(2).map { |l| l[/in [`'](.*)'/, 1] }
+  puts e.cause.message
+end
+begin
+  begin; raise 'a'; rescue; raise 'b'; end
+rescue => e
+  puts(e.backtrace[0] =~ /Compiler|Test/ ? 'host' : 'ruby')
+end
+begin; raise ArgumentError, 'x', 1; rescue TypeError => e; puts e.message; end
+e = RuntimeError.new('u')
+begin; e.set_backtrace(1); rescue TypeError => t; puts t.message; end
+puts UncaughtThrowError.new(:t, 1, 'tag').tag.inspect
+begin; throw :zz; rescue UncaughtThrowError => u; puts u.message, u.tag.inspect; end
+", @"
+m
+n
+inner
+ruby
+backtrace must be Array of String
+backtrace must be Array of String
+:t
+uncaught throw :zz
+:zz
+");
+        }
+
+        public void Enumerator_Copy1() {
+            TestOutput(@"
+e = [1, 2].each
+p e.dup.to_a, e.clone.to_a, [1, 2, 3].each_slice(2).dup.to_a
+p Float.ancestors.include?(Precision), Float.ancestors[0, 3].map(&:to_s)
+$VERBOSE = nil; p $-W
+$VERBOSE = false; p $-W
+$VERBOSE = true; p $-W
+begin; $-W = 1; rescue NameError => x; puts x.message; end
+", @"
+[1, 2]
+[1, 2]
+[[1, 2], [3]]
+false
+[""Float"", ""Numeric"", ""Comparable""]
+0
+1
+2
+$-W is a read-only variable
+");
+        }
     }
 }

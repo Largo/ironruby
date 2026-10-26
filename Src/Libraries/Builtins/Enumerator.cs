@@ -121,6 +121,21 @@ namespace IronRuby.Builtins {
             return Reinitialize(new Enumerator(), targetObject, targetName, targetArguments);
         }
 
+        /// <summary>
+        /// #dup and #clone: the copy iterates the same target with the same arguments (the
+        /// instance variables a prelude-built enumerator keeps its generator in are copied by
+        /// the runtime). Without this a copy had no target and failed with "undefined method
+        /// `each' for nil".
+        /// </summary>
+        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator/*!*/ InitializeCopy(Enumerator/*!*/ self, [NotNull]Enumerator/*!*/ other) {
+            self._impl = other._impl;
+            self.SizeSource = other.SizeSource;
+            self.SizeOp = other.SizeOp;
+            self.SizeArg = other.SizeArg;
+            return self;
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static Enumerator/*!*/ Reinitialize(Enumerator/*!*/ self, object targetObject, [DefaultProtocol, Optional]string targetName,
             params object[] targetArguments) {

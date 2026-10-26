@@ -150,6 +150,12 @@ namespace IronRuby.Builtins {
             return RubyExceptionData.GetInstance(self).Backtrace = backtrace;
         }
 
+        [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
+        public static RubyArray SetBacktrace(Exception/*!*/ self, object backtrace) {
+            // anything but nil, a String or an Array of Strings
+            throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+        }
+
         /// <summary>
         /// MRI's Exception#exception: self when called with no argument or with self, otherwise a
         /// *clone* of self carrying the new message. Cloning rather than allocating a fresh

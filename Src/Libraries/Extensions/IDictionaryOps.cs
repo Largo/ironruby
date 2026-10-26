@@ -512,6 +512,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("rehash")]
         public static IDictionary<object, object> Rehash(Hash/*!*/ self) {
             self.RequireNotFrozen();
+            if (self.IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("rehash during iteration");
+            }
             return Rehash((IDictionary<object, object>)self);
         }
 
@@ -709,10 +712,11 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("values_at")]
-        public static RubyArray/*!*/ ValuesAt(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self, params object[]/*!*/ keys) {
+        public static RubyArray/*!*/ ValuesAt(BinaryOpStorage/*!*/ storage, IDictionary<object, object>/*!*/ self, params object[]/*!*/ keys) {
             RubyArray values = new RubyArray();
             foreach (object key in keys) {
-                values.Add(GetElement(context, self, key));
+                // A missing key answers the default, as #[] does: Hash.new(5).values_at(:x) is [5].
+                values.Add(HashOps.GetElement(storage, self, key));
             }
             return values;
         }

@@ -377,6 +377,33 @@ namespace IronRuby.Builtins {
 
     [RubyException("UncaughtThrowError", Extends = typeof(UncaughtThrowError), Inherits = typeof(ArgumentException))]
     public static class UncaughtThrowErrorOps {
+        /// <summary>UncaughtThrowError.new(tag, value, message = nil)</summary>
+        [RubyConstructor]
+        public static UncaughtThrowError/*!*/ Create(RubyClass/*!*/ self, object tag, object value, params object[]/*!*/ rest) {
+            if (rest.Length > 1) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..1)", rest.Length);
+            }
+            object message = rest.Length == 1 ? rest[0] : null;
+            if (message != null && !(message is MutableString)) {
+                throw RubyExceptions.CreateImplicitConversionError(self.Context.GetClassDisplayName(message), "String");
+            }
+            var result = new UncaughtThrowError(message != null ? ((MutableString)message).ConvertToString() : null, tag, value);
+            result.FormatsTag = true;
+            result.HasMessage = message != null;
+            RubyExceptionData.InitializeException(result, message);
+            return result;
+        }
+
+        [RubyMethod("__ir_formats_tag__")]
+        public static bool FormatsTag(UncaughtThrowError/*!*/ self) {
+            return self.FormatsTag;
+        }
+
+        [RubyMethod("__ir_has_message__")]
+        public static bool HasMessage(UncaughtThrowError/*!*/ self) {
+            return self.HasMessage;
+        }
+
         [RubyMethod("tag")]
         public static object Tag(UncaughtThrowError/*!*/ self) {
             return self.Tag;

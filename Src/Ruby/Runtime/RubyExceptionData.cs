@@ -350,9 +350,11 @@ namespace IronRuby.Runtime {
 
             RubyClass exceptionClass = context.GetClass(exception.GetType());
 
-            // new resolves to Class#new built-in method:
+            // new resolves to Class#new built-in method, or to a library constructor (a C#-thrown
+            // exception of such a class already carries whatever that constructor would set):
             var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
-            if (newMethod.Found && newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo) {
+            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
+                || newMethod.Info is RubyLibraryMethodInfo)) {
                 // initialize resolves to a built-in method:
                 var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
                 if (initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo) {

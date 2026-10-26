@@ -588,18 +588,24 @@ namespace IronRuby.Runtime {
                 return kind + (String.IsNullOrEmpty(moduleName) ? SafeInspect(context, obj) : moduleName);
             }
 
-            // An object that carries a singleton class is spelled by inspect (that is how MRI keeps
-            // "main" and "#<Object:0x...>" for objects with singleton methods).
+            // An object that carries a singleton class is spelled the way the default #to_s would
+            // (rb_any_to_s: "#<Object:0x...>"), whatever #inspect it defines; the top-level object
+            // is "main".
             RubyClass immediate = context.GetImmediateClassOf(obj);
             if (immediate != null && immediate.IsSingletonClass) {
-                return SafeInspect(context, obj);
+                var globalScope = context.MainGlobalScope;
+                if (globalScope != null && ReferenceEquals(globalScope.MainObject, obj)) {
+                    return "main";
+                }
+                return RubyUtils.ObjectToMutableString(context, obj).ToString();
             }
 
-            // GetClassDisplayName is empty for an anonymous class; MRI prints "#<Class:0x...>".
+            // An anonymous class has no name; MRI then shows how the class inspects
+            // ("#<Class:0x...>", or whatever inspect it defines).
             var cls = context.GetClassOf(obj);
             string className = RubyName(context, cls);
             if (String.IsNullOrEmpty(className)) {
-                className = RubyExceptionData.GetDefaultMessage(cls).ToString();
+                className = SafeInspect(context, cls);
             }
             return "an instance of " + MessageTypeName(className);
         }

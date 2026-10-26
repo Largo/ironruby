@@ -4321,6 +4321,7 @@ class Numeric
       end
       recv = self
       e = ::Enumerator.new { |y| recv.step(*args, **kw) { |v| y << v } }
+      e.__set_inspect__(recv, :step, kw.empty? ? args : args + [kw])
       e.__set_size__(lambda do
         t, u = recv.__send__(:__step_scan_args__, args, kw)
         t = (u < 0 ? -::Float::INFINITY : ::Float::INFINITY) if t.nil?
@@ -5587,6 +5588,16 @@ unless defined?(KeyError)
 end
 class StopIteration < IndexError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
+
+class UncaughtThrowError
+  # UncaughtThrowError.new(tag, value, message = nil): the message is a format
+  # string for the tag, as MRI's uncaught_throw_to_s applies it (nil included,
+  # which is a TypeError there).
+  def to_s
+    return super unless __ir_formats_tag__
+    ::Kernel.format(__ir_has_message__ ? super : nil, tag)
+  end
+end
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 
 class IO
@@ -8420,9 +8431,12 @@ class Data
     def define(*names, &block)
       names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)
-          ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol nor a string")
+          ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol")
         end
-        m.to_sym
+        m = m.to_sym
+        # a member cannot look like a setter
+        ::Kernel.raise(::ArgumentError, "invalid data member: #{m}") if m.to_s.end_with?("=")
+        m
       end
       duplicate = names.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
       ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}") if duplicate
@@ -8482,6 +8496,9 @@ class Data
       end
       ::Kernel.raise(::NoMethodError, "undefined method `members' for #{self}")
     end
+
+    # Only a class made by Data.define can be instantiated: Data.new is undefined.
+    undef_method :new
   end
 
   def initialize(**kwargs)
@@ -8496,18 +8513,20 @@ class Data
         unknown << key.inspect
       end
     end
+    # MRI: fewer keywords than members is a "missing" error, otherwise an unknown one
+    # (and a member named twice, as a String and a Symbol, still leaves one missing).
     missing = names.reject { |name| given.key?(name) }
-    unless missing.empty?
+    if kwargs.size < names.size || (unknown.empty? && !missing.empty?)
       ::Kernel.raise(::ArgumentError,
         "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map { |n| n.inspect }.join(', ')}")
     end
-    # CRuby keeps the members out of the ivar table: #instance_variables is empty
-    given.each { |name, value| __ir_set_hidden_ivar__(name, value) }
-    freeze
     unless unknown.empty?
       ::Kernel.raise(::ArgumentError,
         "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.join(', ')}")
     end
+    # CRuby keeps the members out of the ivar table: #instance_variables is empty
+    given.each { |name, value| __ir_set_hidden_ivar__(name, value) }
+    freeze
     nil
   end
 
@@ -12777,7 +12796,8 @@ class Hash
       end
       proc = converted
     end
-    if proc.lambda? && proc.arity != 2 && proc.arity >= 0
+    # MRI accepts arity 2 and any negative arity down to -3 (|a, b, *c|).
+    if proc.lambda? && proc.arity != 2 && (proc.arity >= 0 || proc.arity < -3)
       raise TypeError, "default_proc takes two arguments (2 for #{proc.arity})"
     end
     self.DefaultProc = proc
@@ -13149,13 +13169,13 @@ end
 class << Struct
   alias_method :__struct_new__, :new
 
-  def new(*args, &block)
+  def new(*args, **options, &block)
     keyword_init = nil
-    if args.last.is_a?(Hash)
-      options = args.pop
-      unless (options.keys - [:keyword_init]).empty?
-        # CRuby would go on to use the Hash as a member name
-        raise TypeError, "no implicit conversion of Hash into Symbol"
+    # keywords proper; a Hash passed as an argument is a (bad) member name
+    unless options.empty?
+      unknown = options.keys - [:keyword_init]
+      unless unknown.empty?
+        raise ArgumentError, "unknown keyword#{'s' if unknown.size > 1}: #{unknown.map(&:inspect).join(', ')}"
       end
       value = options[:keyword_init]
       keyword_init = value.nil? ? value : !!value
@@ -13173,6 +13193,10 @@ class << Struct
     klass.instance_variable_set(:@__keyword_init__, keyword_init)
     # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
     klass.define_singleton_method(:keyword_init?) { @__keyword_init__ }
+    if keyword_init
+      # MRI: #<Class:0x...>(keyword_init: true)
+      klass.define_singleton_method(:inspect) { "#{super()}(keyword_init: true)" }
+    end
     klass.module_eval(&block) if block
     klass
   end
@@ -13181,40 +13205,40 @@ end
 class Struct
   alias_method :__struct_initialize__, :initialize
 
-  def initialize(*args)
+  def initialize(*args, **kwargs)
     # self.class.members, not members: a struct may have a member called "members"
     klass = self.class
     names = klass.members
     keyword_init = klass.respond_to?(:keyword_init?) ? klass.keyword_init? : nil
 
-    # The overwhelmingly common call: one positional value per member, none of them a
-    # Hash that could be keywords. Everything below is about the forms that are not
-    # that, and doing none of it is what makes Struct.new(1, 2) cheap.
-    if keyword_init.nil? && args.size == names.size && !args.last.is_a?(Hash)
+    # The overwhelmingly common call: one positional value per member.
+    if kwargs.empty? && !keyword_init && args.size == names.size
       return __struct_initialize__(*args)
     end
 
-    args.pop if args.size > 0 && args.last.is_a?(Hash) && args.last.empty? && !keyword_init
-
     # Since 3.2 a struct built without keyword_init: takes keywords as well as
-    # positional values. Keywords reach this method as a trailing Hash, so the
-    # only thing that distinguishes them from a Hash meant as a member value is
-    # that every key names a member.
-    if keyword_init.nil? && args.size == 1 && args[0].is_a?(Hash) &&
-       !args[0].empty? && (args[0].keys - names).empty?
+    # positional values - keywords proper, that is: a Hash passed as an argument,
+    # or keywords beside positional values, is a member value (MRI's rb_struct_initialize_m).
+    if keyword_init.nil? && !kwargs.empty? && args.empty?
       keyword_init = true
+    elsif !keyword_init && !kwargs.empty?
+      args << kwargs
+      kwargs = {}
+    elsif keyword_init && kwargs.empty? && args.size == 1 && args[0].is_a?(::Hash)
+      # keyword_init: true also takes the keywords as one Hash argument
+      kwargs = args.pop
     end
 
     if keyword_init
-      unless args.size <= 1 && (args.empty? || args[0].is_a?(Hash))
-        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)"
+      unless args.empty?
+        raise ArgumentError, "wrong number of arguments (given #{args.size + (kwargs.empty? ? 0 : 1)}, expected 0)"
       end
-      given = args[0] || {}
-      unknown = given.keys - names
+      unknown = kwargs.keys - names
       unless unknown.empty?
-        raise ArgumentError, "unknown keyword#{'s' if unknown.size > 1}: #{unknown.join(', ')}"
+        # MRI's wording is plural whatever the count
+        raise ArgumentError, "unknown keywords: #{unknown.join(', ')}"
       end
-      __struct_initialize__(*names.map { |name| given[name] })
+      __struct_initialize__(*names.map { |name| kwargs[name] })
     else
       # pad with nil so that a partial re-initialize clears the remaining members
       values = args.dup
@@ -13284,15 +13308,14 @@ class Exception
   def detailed_message(highlight: false, **)
     Exception.send(:__check_highlight__, highlight)
 
-    text = begin
-      s = to_s
-      s.nil? ? "" : s.to_s
-    rescue NoMethodError, TypeError
-      ""
-    end
+    # rb_get_message: what #message answers (a subclass may override it); an
+    # exception that has no #message at all has no text.
+    text = respond_to?(:message, true) ? message : nil
+    text = text.nil? ? "" : text.to_s unless text.is_a?(::String)
 
-    # nil for an anonymous class, in which case MRI leaves the class out
-    name = self.class.name
+    # nil for an anonymous class, in which case MRI leaves the class out (the
+    # class's own #name override is not consulted: rb_class_name)
+    name = ::Module.instance_method(:name).bind_call(self.class)
 
     if text.empty?
       # MRI singles out RuntimeError: it is what a bare `raise "..."` produces,
@@ -13301,12 +13324,14 @@ class Exception
       return highlight ? "\e[1;4m#{plain}\e[m" : plain
     end
 
-    # a multi-line message carries the class on its first line only
+    # a multi-line message carries the class on its first line only; a message
+    # that ends right after its first line's newline loses that newline
     lines = text.split("\n", -1)
     first = lines.shift
+    lines = [] if lines == [""]
     if highlight
       first = name ? "\e[1m#{first} (\e[1;4m#{name}\e[m\e[1m)\e[m" : "\e[1m#{first}"
-      lines = lines.map { |line| "\e[1m#{line}\e[m" }
+      lines = lines.map { |line| line.empty? ? line : "\e[1m#{line}\e[m" }
     elsif name
       first = "#{first} (#{name})"
     end
@@ -13325,7 +13350,11 @@ class Exception
     end
     # `order` is ours; every other keyword (plus the resolved highlight) is
     # handed on to #detailed_message, which the user may have overridden.
-    Exception.send(:__append_full_message__, result, self, highlight, order, options, caller)
+    # An exception that was never raised has no backtrace; MRI then shows the
+    # position of the #full_message call itself.
+    here = caller(1, 1)[0]
+    fallback = here ? [here.sub(/:in .*\z/, ":in 'full_message'")] : nil
+    Exception.send(:__append_full_message__, result, self, highlight, order, options, fallback, [])
     result
   end
 
@@ -13349,22 +13378,23 @@ class Exception
 
   # `fallback` is the caller of #full_message, which MRI shows when the
   # exception was never raised and so has no backtrace of its own.
-  def self.__append_full_message__(out, exc, highlight, order, options, fallback)
-    backtrace = begin
-      exc.backtrace
-    rescue StandardError
-      nil
+  def self.__append_full_message__(out, exc, highlight, order, options, fallback, shown)
+    # rb_get_backtrace: whatever #backtrace answers, which has to be nil or an Array of Strings
+    backtrace = exc.backtrace
+    unless backtrace.nil? || (backtrace.is_a?(::Array) && backtrace.all? { |line| line.is_a?(::String) })
+      ::Kernel.raise(::TypeError, "backtrace must be Array of String")
     end
     backtrace = fallback if backtrace.nil? || backtrace.empty?
     backtrace = [] if backtrace.nil?
     head = backtrace[0]
     rest = backtrace[1..-1] || []
     detailed = __detailed__(exc, highlight, options)
-    cause = begin
-      exc.cause
-    rescue StandardError, NoMethodError
-      nil
-    end
+    # The cause MRI prints is the one raise recorded, not whatever a #cause
+    # override answers; a cause already printed (a cycle) is not printed again.
+    cause = exc.is_a?(::Exception) ? ::Exception.instance_method(:cause).bind_call(exc) : nil
+    cause = nil unless cause.is_a?(::Exception)
+    shown = shown + [exc]
+    cause = nil if cause && shown.any? { |e| e.equal?(cause) }
 
     # --backtrace-limit=N keeps N "from" lines and counts the rest - when there are at
     # least two of them to leave out (MRI's print_backtrace)
@@ -13379,9 +13409,9 @@ class Exception
       out << (head ? "#{head}: #{detailed}\n" : "#{detailed}\n")
       rest.each { |line| out << "\tfrom #{line}\n" }
       out << "\t ... #{skipped} levels...\n" if skipped > 0
-      __append_full_message__(out, cause, highlight, order, options, nil) if cause
+      __append_full_message__(out, cause, highlight, order, options, fallback, shown) if cause
     else
-      __append_full_message__(out, cause, highlight, order, options, nil) if cause
+      __append_full_message__(out, cause, highlight, order, options, fallback, shown) if cause
       (rest.size - 1).downto(0) { |i| out << "\t#{i + 1}: from #{rest[i]}\n" }
       out << (head ? "#{head}: #{detailed}\n" : "#{detailed}\n")
     end
@@ -13714,12 +13744,12 @@ class Range
     if numeric
       ::Enumerator::ArithmeticSequence.__step_each__(b, e, unit, exclude_end?, &block)
     elsif unit.is_a?(::Integer) && b.respond_to?(:succ)
-      if unit > 0
-        i = 0
-        each do |x|
-          block.call(x) if i % unit == 0
-          i += 1
-        end
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      ::Kernel.raise(::ArgumentError, "step can't be negative") if unit < 0
+      i = 0
+      each do |x|
+        block.call(x) if i % unit == 0
+        i += 1
       end
     else
       __step_by_plus__(b, e, unit, &block)
