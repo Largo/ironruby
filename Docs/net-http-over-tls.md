@@ -106,12 +106,23 @@ As built:
   `ca_path` and `cert_store` are the roots, the others go in `ExtraStore`, as in
   `X509::Store#verify`. `system` (a `cert_store` that had `set_default_paths` called) also
   accepts a chain the system store trusts.
+  The chain has to be good for TLS server authentication (`ApplicationPolicy` serverAuth), as
+  SslStream's own check requires.
 - `Transport__#verify_callback=` gets the chain and the `SslPolicyErrors`; `SSLSocket` calls
-  `verify_callback` once per certificate, root first, with an `X509::StoreContext`. It runs on
-  the thread that finishes the handshake.
+  `verify_callback` for each certificate, root first, once per error (or once with
+  `preverify_ok` true), with an `X509::StoreContext`, following CRuby's `ossl_verify_cb_call`:
+  only `true` accepts and clears the error, the first rejection ends it, and an exception in
+  the callback is a rejection with a warning. It runs on the thread that finishes the handshake.
+- `Thread#raise` or `Timeout.timeout` during the handshake cancels it, marks the transport
+  broken, and raises the interrupting exception rather than an `SSLError`.
+- Not covered: RubyGems' vendored copy of net-protocol (`Gem::Net`, under
+  `Src/StdLib/ruby/4.0/rubygems/vendor/net-protocol`) gets none of this, so `gem` over HTTPS
+  still has no read, write or handshake timeout.
 - With no SNI name (net/http connecting to an IP address) the handshake ignores
   `RemoteCertificateNameMismatch`, and `post_connection_check` checks the name against the
-  certificate (`X509Certificate2.MatchesHostname`, IP SANs included). Before, it checked nothing.
+  certificate (`X509Certificate2.MatchesHostname`, IP SANs included; without a subjectAltName
+  the common name, for an IP address too, as MRI's `verify_certificate_identity`). Before, it
+  checked nothing.
 
 Risk: small. Blocking I/O stays as it is, only bounded. What it does not give is real
 non-blocking `read_nonblock`, so `IO.select([ssl_socket])` still says "readable" only

@@ -14,9 +14,10 @@ require File.expand_path("../../ruby/4.0/net/protocol", File.dirname(__FILE__))
 
 module Net
   module IronRubyTLS__ # :nodoc: all
+    # The method comes first: naming ::OpenSSL::SSL would run net/http's
+    # `autoload :OpenSSL`, and a plain TCP connection has no business loading openssl.
     def self.applies?(io)
-      defined?(::OpenSSL::SSL::SSLSocket) && io.is_a?(::OpenSSL::SSL::SSLSocket) &&
-        io.respond_to?(:__connect)
+      io.respond_to?(:__connect) && io.is_a?(::OpenSSL::SSL::SSLSocket)
     end
 
     module Protocol

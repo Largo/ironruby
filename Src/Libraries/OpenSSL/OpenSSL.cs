@@ -21,6 +21,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.IO;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -630,9 +631,16 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 self._verifyCallback = callback;
             }
 
+            // What a server certificate has to be good for: TLS server authentication.
+            private static readonly Oid ServerAuthentication = new Oid("1.3.6.1.5.5.7.3.1");
+
             private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
                 if (!_verify) {
                     return true;
+                }
+                // #connect gave up on this handshake (Thread#raise, Timeout); nothing waits for an answer.
+                if (_broken != null) {
+                    return false;
                 }
 
                 // No SNI name means net/http connected to an IP address: it checks the
@@ -641,39 +649,49 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     errors &= ~SslPolicyErrors.RemoteCertificateNameMismatch;
                 }
 
-                if (_roots != null && certificate != null) {
-                    var custom = new X509Chain();
-                    var policy = custom.ChainPolicy;
-                    policy.RevocationMode = X509RevocationMode.NoCheck;
-                    policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-                    policy.CustomTrustStore.AddRange(_roots);
-                    policy.ExtraStore.AddRange(_intermediates);
-                    // The intermediates the server sent.
-                    if (chain != null) {
-                        policy.ExtraStore.AddRange(chain.ChainPolicy.ExtraStore);
-                    }
-                    bool trusted = custom.Build(new X509Certificate2(certificate));
-                    if (_systemTrust && (errors & SslPolicyErrors.RemoteCertificateChainErrors) == 0) {
-                        trusted = true;
-                    } else {
-                        chain = custom;
-                    }
-                    errors = trusted
-                        ? errors & ~SslPolicyErrors.RemoteCertificateChainErrors
-                        : errors | SslPolicyErrors.RemoteCertificateChainErrors;
-                }
-
-                if (_verifyCallback == null) {
-                    return errors == SslPolicyErrors.None;
-                }
-
-                // SslStream runs this on whichever thread finished reading the server's
-                // certificate; an exception from Ruby code is carried back to #connect.
+                X509Chain custom = null;
+                X509Certificate2 leaf = null;
                 try {
-                    return RubyOps.IsTrue(_verifyCallback.Call(null, chain, (int)errors));
-                } catch (Exception error) {
-                    _callbackError = error;
-                    return false;
+                    if (_roots != null && certificate != null) {
+                        custom = new X509Chain();
+                        var policy = custom.ChainPolicy;
+                        policy.RevocationMode = X509RevocationMode.NoCheck;
+                        policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                        policy.ApplicationPolicy.Add(ServerAuthentication);
+                        policy.CustomTrustStore.AddRange(_roots);
+                        policy.ExtraStore.AddRange(_intermediates);
+                        // The intermediates the server sent.
+                        if (chain != null) {
+                            policy.ExtraStore.AddRange(chain.ChainPolicy.ExtraStore);
+                        }
+                        leaf = new X509Certificate2(certificate);
+                        bool trusted = custom.Build(leaf);
+                        if (_systemTrust && (errors & SslPolicyErrors.RemoteCertificateChainErrors) == 0) {
+                            trusted = true;
+                        } else {
+                            chain = custom;
+                        }
+                        errors = trusted
+                            ? errors & ~SslPolicyErrors.RemoteCertificateChainErrors
+                            : errors | SslPolicyErrors.RemoteCertificateChainErrors;
+                    }
+
+                    if (_verifyCallback == null) {
+                        return errors == SslPolicyErrors.None;
+                    }
+
+                    // SslStream runs this on whichever thread finished reading the server's
+                    // certificate.  SSLSocket's callback handles the exceptions of
+                    // SSLContext#verify_callback itself; anything else is carried back to #connect.
+                    try {
+                        return _verifyCallback.Call(null, chain, (int)errors) is bool accepted && accepted;
+                    } catch (Exception error) {
+                        _callbackError = error;
+                        return false;
+                    }
+                } finally {
+                    custom?.Dispose();
+                    leaf?.Dispose();
                 }
             }
 
@@ -692,7 +710,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 self._hostname = hostname == null ? "" : hostname.ConvertToString();
                 self._callbackError = null;
                 self.CheckUsable();
-                bool timedOut = false;
+                bool timedOut = false, interrupted = false;
                 try {
                     self._ssl = new SslStream(new NetworkStream(self._socket, false), false,
                         new RemoteCertificateValidationCallback(self.Validate));
@@ -703,12 +721,24 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     using (var cancel = timeout < 0 ? new CancellationTokenSource() : new CancellationTokenSource(timeout)) {
                         try {
                             self._ssl.AuthenticateAsClientAsync(options, cancel.Token).GetAwaiter().GetResult();
+                        } catch (ThreadInterruptedException) {
+                            // Thread#raise or Thread#kill (Timeout.timeout among them) woke this
+                            // thread up.  The handshake goes on without it: stop it, make sure a
+                            // late certificate check does not call into Ruby, and let the
+                            // exception that was raised into this thread through.
+                            interrupted = true;
+                            self._broken = "the TLS handshake was interrupted";
+                            cancel.Cancel();
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+                            RubyUtils.TranslateThreadInterrupt();
+#endif
+                            throw;
                         } catch (Exception) when (cancel.IsCancellationRequested) {
                             // An OperationCanceledException, or an IOException from the cancelled read.
                             timedOut = true;
                         }
                     }
-                } catch (Exception error) {
+                } catch (Exception error) when (!interrupted) {
                     if (self._callbackError != null) {
                         throw self._callbackError;
                     }
@@ -745,16 +775,29 @@ namespace IronRuby.StandardLibrary.OpenSsl {
 
             /// <summary>
             /// Whether the server's certificate is valid for name, a host name or an IP
-            /// address: SSLSocket#post_connection_check.
+            /// address: SSLSocket#post_connection_check.  As MRI's
+            /// verify_certificate_identity, a certificate without a subjectAltName is
+            /// matched on its common name, for an IP address too.
             /// </summary>
             [RubyMethod("matches_hostname?")]
             public static bool MatchesHostname(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ name) {
                 var certificate = self._ssl?.RemoteCertificate;
-                if (certificate == null) {
+                string host = name.ConvertToString();
+                if (certificate == null || host.Length == 0) {
                     return false;
                 }
                 using (var certificate2 = new X509Certificate2(certificate)) {
-                    return certificate2.MatchesHostname(name.ConvertToString(), true, true);
+                    IPAddress address, commonNameAddress;
+                    if (certificate2.Extensions["2.5.29.17"] == null && IPAddress.TryParse(host, out address)) {
+                        string commonName = certificate2.GetNameInfo(X509NameType.SimpleName, false);
+                        return IPAddress.TryParse(commonName, out commonNameAddress) && commonNameAddress.Equals(address);
+                    }
+                    try {
+                        return certificate2.MatchesHostname(host, true, true);
+                    } catch (ArgumentException) {
+                        // not a host name at all
+                        return false;
+                    }
                 }
             }
 

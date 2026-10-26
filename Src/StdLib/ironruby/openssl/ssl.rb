@@ -16,8 +16,10 @@
 #   * the chain is built by .NET: against the system trust store, or, when the
 #     context has #ca_file, #ca_path or #cert_store, against the self-signed
 #     certificates in those (and the system store as well for a cert_store that
-#     had set_default_paths called on it).  #verify_callback is called for
-#     each certificate of the chain, root first, and has the last word.
+#     had set_default_paths called on it); a certificate also has to be good for
+#     TLS server authentication.  #verify_callback is called for each
+#     certificate of the chain, root first, once per error (or once with
+#     preverify_ok true), and has the last word.
 #   * server sockets (SSLServer, #accept) are not implemented.
 
 module OpenSSL
@@ -197,7 +199,8 @@ module OpenSSL
         @transport.pending
       end
 
-      # V_OK unless a verify_callback accepted a certificate with an error.
+      # V_OK for a connection that stands: a verify_callback that accepts a
+      # certificate with an error clears the error, as on MRI.
       def verify_result
         @verify_result
       end
@@ -370,35 +373,55 @@ module OpenSSL
         [certificates.map(&:__clr).compact, system]
       end
 
-      # The transport's callback for SSLContext#verify_callback.  MRI calls it once per
-      # certificate, from the root down to the server's own, with whether that
-      # certificate passed and an X509::StoreContext saying why not; the connection
-      # stands only if every call returns true.  .NET has checked the whole chain by
-      # the time this runs, so the per-certificate answer comes from its
-      # X509ChainElement statuses.  It runs on the thread that finished the handshake.
+      # The transport's callback for SSLContext#verify_callback.  OpenSSL calls it for
+      # each certificate, from the root down to the server's own: once with
+      # preverify_ok true if the certificate passed, otherwise once per error, false
+      # and an X509::StoreContext saying which.  .NET has checked the whole chain by
+      # the time this runs, so the errors come from its X509ChainElement statuses.  It
+      # runs on the thread that finished the handshake.
       def __verifier(callback)
         lambda do |chain, policy_errors|
           elements = chain.nil? ? [] : chain.ChainElements.to_a
           certificates = elements.map do |element|
             OpenSSL::X509::Certificate.new(IronRubyOpenSSL__.bytes(element.Certificate.RawData))
           end
-          errors = elements.map { |element| IronRubyOpenSSL__.x509_error(element.ChainElementStatus) }
+          errors = elements.each_with_index.map do |element, depth|
+            IronRubyOpenSSL__.x509_errors(element.ChainElementStatus, certificates[depth], depth, certificates.size)
+          end
+          next false if certificates.empty?
           # A chain that does not reach a trusted root says so on the chain, not on an element.
-          if policy_errors & 4 != 0 && errors.all? { |code, _| code == OpenSSL::X509::V_OK }
-            errors[-1] = IronRubyOpenSSL__.x509_error(chain.ChainStatus, true) unless errors.empty?
+          if policy_errors & 4 != 0 && errors.all?(&:empty?)
+            errors[-1] = [IronRubyOpenSSL__.x509_error(chain.ChainStatus, true)]
           end
-          if policy_errors & 2 != 0 && !errors.empty? && errors[0][0] == OpenSSL::X509::V_OK
-            errors[0] = [OpenSSL::X509::V_ERR_HOSTNAME_MISMATCH, "hostname mismatch"]
+          if policy_errors & 2 != 0
+            errors[0] += [[OpenSSL::X509::V_ERR_HOSTNAME_MISMATCH, "hostname mismatch"]]
           end
-          accepted = true
-          (certificates.size - 1).downto(0) do |depth|
-            code, message = errors[depth]
-            context = OpenSSL::X509::StoreContext.__for_callback(certificates, depth, code, message)
-            accepted = false unless callback.call(code == OpenSSL::X509::V_OK, context)
-            @verify_result = context.error unless context.error == OpenSSL::X509::V_OK
+          (certificates.size - 1).downto(0).all? do |depth|
+            (errors[depth].empty? ? [[OpenSSL::X509::V_OK, "ok"]] : errors[depth]).all? do |code, message|
+              __verify_call(callback, OpenSSL::X509::StoreContext.__for_callback(certificates, depth, code, message))
+            end
           end
-          accepted && !certificates.empty?
         end
+      end
+
+      # One call of the verify_callback, as CRuby's ossl_verify_cb_call: only true
+      # accepts, and clears the error; anything else rejects, with
+      # V_ERR_CERT_REJECTED if there was no error.  An exception in the callback is a
+      # rejection too, not an exception out of #connect.
+      def __verify_call(callback, context)
+        accepted = begin
+          callback.call(context.error == OpenSSL::X509::V_OK, context) == true
+        rescue Exception
+          warn "exception in verify_callback is ignored"
+          false
+        end
+        if accepted
+          context.error = OpenSSL::X509::V_OK
+        else
+          context.error = OpenSSL::X509::V_ERR_CERT_REJECTED if context.error == OpenSSL::X509::V_OK
+          @verify_result = context.error
+        end
+        accepted
       end
     end
 
@@ -410,10 +433,5 @@ module OpenSSL
               "OpenSSL::SSL::SSLServer is not implemented: only the client side of SslStream is wired up"
       end
     end
-  end
-
-  module X509
-    V_OK = 0 unless const_defined?(:V_OK, false)
-    V_ERR_HOSTNAME_MISMATCH = 62 unless const_defined?(:V_ERR_HOSTNAME_MISMATCH, false)
   end
 end

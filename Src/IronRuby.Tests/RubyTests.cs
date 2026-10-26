@@ -706,6 +706,8 @@ namespace IronRuby.Tests {
                 Process_SpawnKill1,
                 Json_ControlCharacters1,
                 NetHttp_Tls1,
+                NetHttp_TlsVerifyCallback1,
+                NetHttp_PlainNoOpenSsl1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,
