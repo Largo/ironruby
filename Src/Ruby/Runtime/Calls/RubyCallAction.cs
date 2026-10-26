@@ -392,7 +392,7 @@ namespace IronRuby.Runtime.Calls {
                     return true;    
                 }
                 
-                if (args.Signature.IsVirtualCall && !method.Info.IsRubyMember) {
+                if (args.Signature.IsVirtualCall && (!method.Info.IsRubyMember || IsOverriddenOverloadMismatch(args, methodName, method.Info))) {
                     metaBuilder.Result = Ast.Field(null, Fields.ForwardToBase);
                     return true;
                 }
@@ -435,6 +435,104 @@ namespace IronRuby.Runtime.Calls {
             } else {
                 return BuildMethodMissingCall(metaBuilder, args, methodName, methodMissing, method.IncompatibleVisibility, false, defaultFallback);
             }
+        }
+
+        /// <summary>
+        /// A Ruby method overriding a CLR virtual method takes the name of every overload, but overloads call each other
+        /// (Sleep() => Sleep(8) => Sleep(8, "bed")) and the Ruby method usually takes the arguments of just one of them.
+        /// A virtual call with an argument count the Ruby method cannot take goes to the CLR implementation of that
+        /// overload instead, as if the Ruby method overrode only the overloads it can take. An overload without an
+        /// implementation (abstract) has nothing to go to, so it still gets the ArgumentError.
+        /// </summary>
+        private static bool IsOverriddenOverloadMismatch(CallArguments/*!*/ args, string/*!*/ methodName, RubyMemberInfo/*!*/ method) {
+            int min, max;
+            int count = args.Signature.ArgumentCount;
+            if (!TryGetPositionalArgumentRange(method, out min, out max) || count >= min && (max < 0 || count <= max)) {
+                return false;
+            }
+
+            return args.Target is IRubyType && HasClrImplementation(args.Target.GetType(), methodName, count);
+        }
+
+        // The number of positional arguments a Ruby method accepts; max is -1 if unbounded.
+        private static bool TryGetPositionalArgumentRange(RubyMemberInfo/*!*/ method, out int min, out int max) {
+            var signature = method.GetParameterSignature();
+            if (signature != null) {
+                min = signature.MinPositionalCount;
+                max = signature.MaxPositionalCount;
+                return true;
+            }
+
+            RubyMethodInfo rubyMethod;
+            RubyLambdaMethodInfo lambdaMethod;
+            if ((rubyMethod = method as RubyMethodInfo) != null) {
+                var parameters = rubyMethod.Parameters;
+                min = parameters.Mandatory.Length;
+                max = (parameters.Unsplat != null) ? -1 : min + parameters.Optional.Length;
+            } else if ((lambdaMethod = method as RubyLambdaMethodInfo) != null) {
+                int arity = lambdaMethod.GetArity();
+                min = (arity < 0) ? -arity - 1 : arity;
+                max = (arity < 0) ? -1 : arity;
+            } else if (method is RubyAttributeReaderInfo) {
+                min = max = 0;
+            } else if (method is RubyAttributeWriterInfo) {
+                min = max = 1;
+            } else {
+                min = max = 0;
+                return false;
+            }
+            return true;
+        }
+
+        // Whether the base class or an interface (a default method) of the type emitted for a Ruby class implements a
+        // virtual method of the given override-site name taking the given number of arguments.
+        private static bool HasClrImplementation(Type/*!*/ emittedType, string/*!*/ methodName, int argumentCount) {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+            for (Type type = emittedType.BaseType; type != null; type = type.BaseType) {
+                foreach (MethodInfo method in type.GetMethods(flags | BindingFlags.DeclaredOnly)) {
+                    if (IsClrImplementation(method, methodName, argumentCount)) {
+                        return true;
+                    }
+                }
+            }
+
+            foreach (Type interfaceType in emittedType.GetInterfaces()) {
+                foreach (MethodInfo method in interfaceType.GetMethods(flags)) {
+                    if (IsClrImplementation(method, methodName, argumentCount)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static bool IsClrImplementation(MethodInfo/*!*/ method, string/*!*/ methodName, int argumentCount) {
+            if (!method.IsVirtual || method.IsAbstract || method.IsFinal || method.IsPrivate || method.IsAssembly) {
+                return false;
+            }
+
+            var parameters = method.GetParameters();
+            int count = (parameters.Length > 0 && parameters[0].ParameterType == typeof(RubyContext)) ? parameters.Length - 1 : parameters.Length;
+            return count == argumentCount && GetVirtualSiteName(method) == methodName;
+        }
+
+        // The name ClsTypeEmitter gives the dynamic site of an override of the method.
+        private static string/*!*/ GetVirtualSiteName(MethodInfo/*!*/ method) {
+            string name = method.Name;
+            if (method.IsSpecialName) {
+                var defaultMember = (DefaultMemberAttribute)Attribute.GetCustomAttribute(method.DeclaringType, typeof(DefaultMemberAttribute), false);
+                if (defaultMember != null && name == "get_" + defaultMember.MemberName) {
+                    return "[]";
+                } else if (defaultMember != null && name == "set_" + defaultMember.MemberName) {
+                    return "[]=";
+                } else if (name.StartsWith("get_", StringComparison.Ordinal)) {
+                    return name.Substring(4);
+                } else if (name.StartsWith("set_", StringComparison.Ordinal)) {
+                    return name.Substring(4) + "=";
+                }
+            }
+            return name;
         }
 
         // Returns true if the call was bound (with success or failure), false if fallback should be performed.

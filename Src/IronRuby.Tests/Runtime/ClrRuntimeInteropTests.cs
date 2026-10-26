@@ -288,5 +288,131 @@ Explicit hi
         }
 
         #endregion
+
+        #region Overriding one overload of an overloaded virtual method
+
+        public class Human {
+            public string Log = "";
+            public virtual void Sleep() { Sleep(8); }
+            public virtual void Sleep(int hours) { Sleep(hours, "bed"); }
+            public virtual void Sleep(int hours, string where) { Log += "Sleeping " + hours + " hours in " + where + ";"; }
+
+            public virtual string Eat(string food) => "eat " + food;
+            public virtual string Eat(string food, int count) => "eat " + count + " " + food;
+            public string EatOne() => Eat("apple");
+            public string EatTwo() => Eat("pear", 2);
+        }
+
+        public interface IAbstractOverloads {
+            string Run(int a);
+            string Run(int a, int b);
+        }
+
+        public static class AbstractOverloadsUser {
+            public static string Run1(IAbstractOverloads x) => x.Run(1);
+            public static string Run2(IAbstractOverloads x) => x.Run(1, 2);
+        }
+
+        /// <summary>
+        /// A Ruby method that overrides an overloaded virtual method receives the virtual calls it can take; one it can't
+        /// take by argument count goes to the CLR implementation of that overload.
+        /// </summary>
+        public void ClrOverloadOverride1() {
+            Context.ObjectClass.SetConstant("Human", Context.GetClass(typeof(Human)));
+            TestOutput(@"
+class RubyDeveloper < Human
+  def sleep
+    super(14)
+  end
+end
+
+d = RubyDeveloper.new
+d.sleep
+puts d.log
+
+# called from Ruby the Ruby method replaced the name:
+d.sleep(14) rescue p $!
+
+class Napper < Human
+  def sleep(hours)
+    super(hours + 1)
+  end
+end
+
+n = Napper.new
+n.Sleep
+puts n.log
+", @"
+Sleeping 14 hours in bed;
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
+Sleeping 9 hours in bed;
+");
+        }
+
+        /// <summary>
+        /// Optional and rest parameters count; an ArgumentError raised by a matching override propagates.
+        /// </summary>
+        public void ClrOverloadOverride2() {
+            Context.ObjectClass.SetConstant("Human", Context.GetClass(typeof(Human)));
+            TestOutput(@"
+class A < Human
+  def eat(food); ""A eats #{food}""; end
+end
+puts A.new.eat_one, A.new.eat_two
+
+class B < Human
+  def eat(*args); ""B eats #{args.inspect}""; end
+end
+puts B.new.eat_one, B.new.eat_two
+
+class C < Human
+  def eat(food, count = 1, extra = nil); ""C eats #{count} #{food}""; end
+end
+puts C.new.eat_one, C.new.eat_two
+
+class D < Human
+  def eat(food, count); raise ArgumentError, 'inner'; end
+end
+puts D.new.eat_one
+D.new.eat_two rescue p $!
+
+class E < Human
+  define_method(:eat) { |food| ""E eats #{food}"" }
+end
+puts E.new.eat_one, E.new.eat_two
+", @"
+A eats apple
+eat 2 pear
+B eats ['apple']
+B eats ['pear', 2]
+C eats 1 apple
+C eats 2 pear
+eat apple
+#<ArgumentError: inner>
+E eats apple
+eat 2 pear
+");
+        }
+
+        /// <summary>
+        /// An overload without an implementation has nothing to fall back to.
+        /// </summary>
+        public void ClrOverloadOverride3() {
+            Context.ObjectClass.SetConstant("I", Context.GetModule(typeof(IAbstractOverloads)));
+            Context.ObjectClass.SetConstant("User", Context.GetClass(typeof(AbstractOverloadsUser)));
+            TestOutput(@"
+class R
+  include I
+  def run(a); ""run #{a}""; end
+end
+puts User.run1(R.new)
+User.run2(R.new) rescue p $!
+", @"
+run 1
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+");
+        }
+
+        #endregion
     }
 }
