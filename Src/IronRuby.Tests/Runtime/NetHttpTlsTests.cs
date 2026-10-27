@@ -112,6 +112,20 @@ rescue Exception => e
   p [e.class, Time.now - t < 5]
 end
 
+# a refused handshake stays refused: a second connect does not call the socket connected
+ctx = OpenSSL::SSL::SSLContext.new
+ctx.set_params({})
+s = OpenSSL::SSL::SSLSocket.new(TCPSocket.new('127.0.0.1', PORTS[:self]), ctx)
+2.times do
+  begin
+    s.connect
+    p :connected
+  rescue OpenSSL::SSL::SSLError
+    p :refused
+  end
+end
+s.close
+
 # the socket itself: the name check, and no use after a timeout
 ctx = OpenSSL::SSL::SSLContext.new
 ctx.set_params(ca_file: CA[:self])
@@ -163,6 +177,8 @@ true
 [:write_timeout, true]
 [:open_timeout, true]
 [Timeout::Error, true]
+:refused
+:refused
 true
 [:name_mismatch, ""example.com""]
 [:name_mismatch, """"]
@@ -328,7 +344,12 @@ written = 0
 result = nil
 2000.times do
   result = s.write_nonblock(chunk, exception: false)
-  break if result == :wait_writable
+  if result == :wait_writable
+    # A write in flight is not a full buffer (on Windows one is in flight almost always):
+    # only a wait that runs out means the peer stopped reading.
+    break unless IO.select(nil, [s.to_io], nil, 0.5)
+    next
+  end
   written += result
 end
 p [result, written > 0, written <= 16384 * 2000]

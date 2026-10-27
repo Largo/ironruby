@@ -820,6 +820,11 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 try {
                     task.GetAwaiter().GetResult();
                 } catch (Exception error) {
+                    // The stream never authenticated: a second #connect must not find it and
+                    // call the connection made.
+                    lock (_sync) {
+                        _broken = "the TLS handshake failed";
+                    }
                     if (_callbackError != null) {
                         throw _callbackError;
                     }
