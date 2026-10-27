@@ -1,7 +1,10 @@
 # net/http over TLS: diagnosis and proposed fix
 
-Status: diagnosed, not fixed. Measured on IronRuby 4.0.1, Windows 11, .NET 10.0.12,
-2026-10-23.
+Status: both stages below are implemented; stage 2 replaced stage 1's net/protocol
+overrides, so upstream's `net/protocol` runs unmodified. Measured on IronRuby 4.0.1,
+Windows 11, .NET 10.0.12, 2026-10-23. The tables and "Why" describe the state before
+stage 1; afterwards `Util/net-http-tls-check.rb` reports no failures for https either,
+with or without `CA=1`.
 
 ## The suspicion
 
@@ -90,6 +93,37 @@ gives real non-blocking I/O.
    `verify_callback`, when set, is called with the result and an `X509StoreContext`
    holding the chain, and it has the last word, as in MRI.
 
+As built:
+
+- `Transport__#read_timeout=`/`#write_timeout=` (ms, -1 for none) and
+  `#connect(hostname, verify, timeout_ms)`, which runs `AuthenticateAsClientAsync` under a
+  `CancellationTokenSource`. A timeout raises `IO::TimeoutError` and marks the transport
+  broken; every later read or write raises `SSLError` ("SSL connection is unusable").
+  Since stage 2 these bound the blocking calls only (`SSLSocket#connect`, `#sysread`,
+  `#syswrite`, through `#__connect`, `#__read_timeout=`, `#__write_timeout=`).
+- Stage 1 also had `Src/StdLib/ironruby/net/protocol.rb` prepend overrides of
+  `ssl_socket_connect`, `rbuf_fill` and `write0` that handed net/protocol's timeouts to
+  those blocking calls, for `Net` and RubyGems' `Gem::Net`. Stage 2 made them unnecessary
+  and they are gone: see below.
+- `Transport__#trust(certificates, system)`: the self-signed certificates from `ca_file`,
+  `ca_path` and `cert_store` are the roots, the others go in `ExtraStore`, as in
+  `X509::Store#verify`. `system` (a `cert_store` that had `set_default_paths` called) also
+  accepts a chain the system store trusts.
+  The chain has to be good for TLS server authentication (`ApplicationPolicy` serverAuth), as
+  SslStream's own check requires.
+- `Transport__#verify_callback=` gets the chain and the `SslPolicyErrors`; `SSLSocket` calls
+  `verify_callback` for each certificate, root first, once per error (or once with
+  `preverify_ok` true), with an `X509::StoreContext`, following CRuby's `ossl_verify_cb_call`:
+  only `true` accepts and clears the error, the first rejection ends it, and an exception in
+  the callback is a rejection with a warning. It runs on the thread that finishes the handshake.
+- `Thread#raise` or `Timeout.timeout` during the handshake cancels it, marks the transport
+  broken, and raises the interrupting exception rather than an `SSLError`.
+- With no SNI name (net/http connecting to an IP address) the handshake ignores
+  `RemoteCertificateNameMismatch`, and `post_connection_check` checks the name against the
+  certificate (`X509Certificate2.MatchesHostname`, IP SANs included; without a subjectAltName
+  the common name, for an IP address too, as MRI's `verify_certificate_identity`). Before, it
+  checked nothing.
+
 Risk: small. Blocking I/O stays as it is, only bounded. What it does not give is real
 non-blocking `read_nonblock`, so `IO.select([ssl_socket])` still says "readable" only
 when the TCP socket is. A reader that selects first and then reads can block in the
@@ -114,6 +148,32 @@ Risk: medium. It touches `IO.select` for every caller, and the in-flight task ha
 cancelled cleanly on `close`. It is worth doing for servers and event loops (nio4r,
 puma over TLS), not for a client.
 
+As built:
+
+- `IReadinessHook` (`Src/Libraries/Builtins/IoReadiness.cs`): `IsReady(kind)` answers true,
+  false, or null ("ask the socket"), and the hook signals the `ReadinessWaiter`s registered
+  with it when that answer may have changed. `IoReadiness.SetHook` keeps hooks per `RubyIO`
+  in a `ConditionalWeakTable`; with no hook set, the cost is one field read. `IO.select`,
+  `IO#wait*` (`IoOps.IsReady`, `WaitUntilReady`) and `NIO::Selector` ask the hook first and
+  register their waiter with it. nio4r masks off the kernel's answer for what a hook owns.
+- `Transport__` is the hook of the TCP socket it runs on. Every read, write and handshake is
+  one of SslStream's asynchronous operations, at most one of each kind in flight:
+  `#read_nonblock`, `#write_nonblock` (at most 16 KB handed over at a time, so what it reports
+  written is about what a kernel buffer holds) and `#connect_nonblock` start one and answer
+  `:wait_readable`/`:wait_writable` while it runs; `#read`, `#write` and `#connect` start one
+  or take over the one in flight, and wait for it.
+- Asking the hook whether a read would return starts that read. SslStream may hold bytes,
+  encrypted or decrypted, that the TCP socket no longer shows, and only a read finds them. What a
+  finished read brings beyond what was asked for waits in a read-ahead, which `#pending` counts.
+- `SSLSocket#read_nonblock`, `#write_nonblock` and `#connect_nonblock` raise
+  `SSLErrorWaitReadable`/`SSLErrorWaitWritable` ("read would block", "write would block"), or
+  answer the symbol with `exception: false`, as on MRI. net/protocol's `rbuf_fill`, `write0`
+  and `ssl_socket_connect` then wait on `#to_io` with their own timeouts, so `open_timeout`,
+  `read_timeout` and `write_timeout` work without any IronRuby code in net/protocol, for
+  RubyGems' vendored `Gem::Net` as well.
+- Not done: the server side (`SSLServer`, `#accept`) is still not implemented, so puma over
+  TLS still cannot run.
+
 ## How to test it
 
 - `Util/net-http-tls-check.rb` (needs CRuby for the server): after stage 1 the
@@ -125,8 +185,13 @@ puma over TLS), not for a client.
   exported certificate and `read_timeout: 1` (the test needs `[Options(Prism = true)]`
   to load `net/http`).
 
-## Until then
+  That is `Src/IronRuby.Tests/Runtime/NetHttpTlsTests.cs`: `NetHttp_Tls1` (trust, the three
+  timeouts, the name check), `NetHttp_TlsVerifyCallback1`, `NetHttp_GemNetTls1`,
+  `NetHttp_PlainNoOpenSsl1` and `Ssl_NonBlocking1` (stage 2: `connect_nonblock`,
+  `read_nonblock`, `write_nonblock`, `IO.select` and `NIO::Selector` over TLS).
 
-An application that needs timeouts or its own CA over HTTPS is better served by .NET's
-`HttpClient` until stage 1 lands. The reason is not `IO.select` being `poll(2)`; it is
-that `net/http` over TLS has no timeouts and ignores `ca_file`.
+## Before this
+
+An application that needed timeouts or its own CA over HTTPS was better served by .NET's
+`HttpClient`. The reason was never `IO.select` being `poll(2)`; it was that `net/http` over
+TLS had no timeouts and ignored `ca_file`.
