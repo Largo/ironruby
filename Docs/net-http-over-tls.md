@@ -171,8 +171,19 @@ As built:
   and `ssl_socket_connect` then wait on `#to_io` with their own timeouts, so `open_timeout`,
   `read_timeout` and `write_timeout` work without any IronRuby code in net/protocol, for
   RubyGems' vendored `Gem::Net` as well.
-- Not done: the server side (`SSLServer`, `#accept`) is still not implemented, so puma over
-  TLS still cannot run.
+- puma over TLS runs, on its own engine rather than `SSLServer`: puma never uses
+  `OpenSSL::SSL::SSLServer`, it drives its C extension's `Puma::MiniSSL::Engine`, OpenSSL over
+  memory BIOs. `Src/Libraries/Puma/MiniSsl.cs` is that engine on a server `SslStream` over an
+  in-memory stream: `#inject` fills its inbound side, `#extract` drains its outbound side, the
+  handshake and the reads run as SslStream's asynchronous operations, and `#read`, `#write` and
+  `#extract` first wait until SslStream has used up its input, as OpenSSL would have by the time
+  `SSL_read` returns. puma's own `Puma::MiniSSL::Socket` (minissl.rb) does the socket I/O, so
+  the TCP socket stays an ordinary one for puma's reactor. `ssl://` binds take `cert`/`key`
+  files or `cert_pem`/`key_pem`, `key_password_command`, `ca` with `verify_mode` none, peer or
+  force_peer (`puma.peercert` in the env), and `no_tlsv1`/`no_tlsv1_1`. Ignored:
+  `ssl_cipher_filter`, `ssl_ciphersuites`, `verification_flags`, `reuse`.
+- Not done: `OpenSSL::SSL::SSLServer` and `SSLSocket#accept` (server-side TLS for Ruby code
+  other than puma) still raise NotImplementedError.
 
 ## How to test it
 
@@ -189,6 +200,10 @@ As built:
   timeouts, the name check), `NetHttp_TlsVerifyCallback1`, `NetHttp_GemNetTls1`,
   `NetHttp_PlainNoOpenSsl1` and `Ssl_NonBlocking1` (stage 2: `connect_nonblock`,
   `read_nonblock`, `write_nonblock`, `IO.select` and `NIO::Selector` over TLS).
+- puma over TLS: `Src/IronRuby.Tests/Runtime/PumaTlsTests.cs`, `Puma_Tls1`: puma in single mode
+  on three `ssl://` binds (cert files, `cert_pem`/`key_pem`, `force_peer` with a `ca`), with
+  `Net::HTTP` and `ca_file:`, keep-alive, pipelining, plain HTTP on the TLS port, and client
+  certificates presented through .NET's `SslStream`.
 
 ## Before this
 

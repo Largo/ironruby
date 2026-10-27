@@ -155,11 +155,11 @@ GEMS = {
   # nio4r and puma: both C extensions (over libev, and a Ragel HTTP parser plus OpenSSL
   # glue), so neither installs here.  nio4r's Ruby half is vendored with its native half
   # in Src/Libraries/Nio4r; puma's Ruby half is vendored unchanged and its HTTP parser is
-  # Src/Libraries/Puma.  puma's MiniSSL (TLS) is not implemented: Puma.ssl? is false, as it
-  # is for a puma built without OpenSSL.  puma depends on nio4r, and says so here too.
+  # Src/Libraries/Puma, as is its MiniSSL engine (TLS, on SslStream).  puma depends on
+  # nio4r, and says so here too.
   "nio4r" => ["2.7.5", "NIO::Selector, Monitor and ByteBuffer, on epoll, poll(2) or Socket.Select",
               ["nio", "nio/", "nio4r", "nio4r_ext"], require: "nio", check: "NIO::VERSION", pinned: true],
-  "puma" => ["8.0.2", "Puma, with its HTTP parser in C#; single mode only, no TLS",
+  "puma" => ["8.0.2", "Puma, with its HTTP parser and TLS engine in C#; single mode only",
              ["puma", "puma/", "rack/handler/puma"], require: "puma/const",
              check: "Puma::Const::PUMA_VERSION", pinned: true, bin: ["puma", "pumactl"],
              deps: [["nio4r", "~> 2.0"]]],
