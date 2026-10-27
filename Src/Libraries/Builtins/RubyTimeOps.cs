@@ -72,7 +72,7 @@ namespace IronRuby.Builtins {
         internal static object MakeRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, ExactNum value) {
 
-            return KernelOps.ToRational(storage, scope, scope.SelfObject,
+            return KernelOps.ToRational(storage, scope,
                 Protocols.Normalize(value.Numerator), Protocols.Normalize(value.Denominator));
         }
 

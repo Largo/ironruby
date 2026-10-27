@@ -11,7 +11,7 @@ module Gem
   ##
   # IronRuby ships the Ruby 4.0 standard library, so its gems live under
   # <libdir>/ruby/gems/4.0.0 - not under RbConfig's "ruby_version", which is
-  # still the 1.9.1 the load path and the C# Loader use for the legacy tree.
+  # still the 1.9.1 that names the site_ruby directory.
 
   def self.default_dir
     @default_dir ||= File.join(RbConfig::CONFIG["rubylibprefix"], "gems", ruby_api_version)
@@ -19,8 +19,8 @@ module Gem
 
   ##
   # The API version gems are installed under.  RbConfig::CONFIG["ruby_version"]
-  # is "1.9.1" for the legacy standard library directory; the gem tree follows
-  # RUBY_VERSION instead, as it does on CRuby.
+  # is "1.9.1" for the site_ruby directory; the gem tree follows RUBY_VERSION
+  # instead, as it does on CRuby.
 
   def self.ruby_api_version
     @ruby_api_version ||= RUBY_VERSION.split(".").first(2).push(0).join(".")
@@ -124,16 +124,15 @@ module Gem
   ##
   # The standard library directories this interpreter was started with, in
   # $LOAD_PATH order.  -X:StdLib puts them at the front (behind -I, RUBYLIB and
-  # RUBYOPT's -I, which come first), which is where the Ruby 4.0 tree, the
-  # IronRuby tree and the legacy 1.9 tree all live.
+  # RUBYOPT's -I, which come first), which is where the Ruby 4.0 tree and the
+  # IronRuby tree live.
 
   def self.ironruby_stdlib_dirs # :nodoc:
     @ironruby_stdlib_dirs ||= begin
       lib = ironruby_lib_dir                                # <root>/Src/StdLib/ruby/4.0
       stdlib = File.expand_path("../..", lib)               # <root>/Src/StdLib
       [lib,
-       File.join(stdlib, "ironruby"),
-       File.join(stdlib, "ruby", RbConfig::CONFIG["ruby_version"])].select {|d| Dir.exist?(d) }
+       File.join(stdlib, "ironruby")].select {|d| Dir.exist?(d) }
     end
   end
 

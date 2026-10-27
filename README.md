@@ -186,12 +186,14 @@ program can observe is a bug worth a report, specs or not.
 The same tree **runs on Windows**, where `spec/language` and `spec/security` are also at
 zero; see [Windows](#windows) for how to build it and what is still missing there.
 
-The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
-load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
-extensions. A compatibility prelude
+The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0`; `Src/StdLib/ironruby`
+holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or Ruby, and is
+the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
 natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x. `Ripper` is implemented
+pattern-matching support classes and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
+are Ruby ports of CRuby 4.0's `rational.c` and `complex.c`, and `Pathname` is CRuby 4.0's own
+`pathname_builtin.rb`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
 **irb** and **reline** run unmodified.
 
