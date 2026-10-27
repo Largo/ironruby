@@ -4501,6 +4501,79 @@ namespace IronRuby.Runtime {
                 value == null ? "nil" : value.GetType().Name));
         }
 
+        #region Constructing instances of Ruby classes derived from CLR classes
+
+        // Instances new allocated without running a constructor - their CLR base class has no parameterless one -
+        // that initialize has yet to construct by calling super.
+        private static readonly ConditionalWeakTable<object, object>/*!*/ _unconstructedInstances = new ConditionalWeakTable<object, object>();
+
+        /// <summary>
+        /// Allocates an instance of the CLR type emitted for a Ruby class derived from a CLR class that has no
+        /// parameterless constructor, without running any constructor. The Ruby class's initialize constructs it:
+        /// its super goes to the base class's constructor (see InvokeClrConstructor).
+        /// </summary>
+        public static object/*!*/ AllocateUnconstructed(RubyClass/*!*/ rubyClass, Type/*!*/ type) {
+            var instance = (IRubyObject)RuntimeHelpers.GetUninitializedObject(type);
+            instance.ImmediateClass = rubyClass;
+            _unconstructedInstances.AddOrUpdate(instance, null);
+            return instance;
+        }
+
+        /// <summary>
+        /// The result of new for an instance allocated by AllocateUnconstructed, once initialize has returned: an
+        /// error if initialize did not construct it, which C# would not have compiled.
+        /// </summary>
+        public static object EnsureConstructed(object result, Type/*!*/ baseType) {
+            object unused;
+            if (result != null && _unconstructedInstances.TryGetValue(result, out unused)) {
+                _unconstructedInstances.Remove(result);
+                throw RubyExceptions.CreateTypeError(String.Format(
+                    "{0}.new: initialize did not call super, and {1} has no parameterless constructor to construct the instance with",
+                    ((IRubyObject)result).ImmediateClass.NominalClass.Name, baseType.Name));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// super in initialize of a Ruby class derived from a CLR class: runs the base class's constructor on the
+        /// instance new has allocated. The parameterless constructor has already run if there is one, as allocation
+        /// uses it, so calling it again does nothing.
+        /// </summary>
+        public static object/*!*/ InvokeClrConstructor(ConstructorInfo/*!*/ constructor, object/*!*/ instance, object[]/*!*/ args) {
+            object unused;
+            bool unconstructed = _unconstructedInstances.TryGetValue(instance, out unused);
+            if (args.Length == 0 && !unconstructed) {
+                return instance;
+            }
+
+            try {
+                constructor.Invoke(instance, args);
+            } catch (TargetInvocationException e) {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.InnerException ?? e).Throw();
+            }
+
+            if (unconstructed) {
+                _unconstructedInstances.Remove(instance);
+            }
+            return instance;
+        }
+
+        /// <summary>
+        /// An argument passed for a CLR method's Object parameter: a Ruby String as a System.String (see
+        /// RubyOverloadResolver.Convert), anything else as it is.
+        /// </summary>
+        public static object ToClrArgument(object value) {
+            var str = value as MutableString;
+            return (str != null) ? str.ConvertToString() : value;
+        }
+
+        internal static readonly MethodInfo/*!*/ ToClrArgumentMethod = typeof(RubyOps).GetMethod(nameof(ToClrArgument));
+        internal static readonly MethodInfo/*!*/ AllocateUnconstructedMethod = typeof(RubyOps).GetMethod(nameof(AllocateUnconstructed));
+        internal static readonly MethodInfo/*!*/ EnsureConstructedMethod = typeof(RubyOps).GetMethod(nameof(EnsureConstructed));
+        internal static readonly MethodInfo/*!*/ InvokeClrConstructorMethod = typeof(RubyOps).GetMethod(nameof(InvokeClrConstructor));
+
+        #endregion
+
         internal static readonly MethodInfo/*!*/ ConvertToIndexMethod = typeof(RubyOps).GetMethod(nameof(ConvertToIndex));
         internal static readonly MethodInfo/*!*/ ConvertToRangeMethod = typeof(RubyOps).GetMethod(nameof(ConvertToRange));
         internal static readonly MethodInfo/*!*/ ConvertTypeGroupToModuleMethod = typeof(RubyOps).GetMethod(nameof(ConvertTypeGroupToModule));

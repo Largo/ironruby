@@ -1578,6 +1578,22 @@ namespace IronRuby.Builtins {
                     return;
                 }
 
+                Type clrBase;
+                if (!allocatorFound && isRubyInitializer && _isRubyClass && (clrBase = GetClrBaseType(type)) != null && !type.IsAbstract
+                    && (Context.GetModule(clrBase).Restrictions & ModuleRestrictions.NoNameMapping) == 0) {
+                    // The CLR base class has no parameterless constructor: initialize constructs the instance, with super
+                    // (see SuperCallAction), and it is an error if it does not.
+                    metaBuilder.Result = AstUtils.Convert(
+                        Ast.Call(RubyOps.AllocateUnconstructedMethod, Ast.Convert(args.TargetExpression, typeof(RubyClass)), AstUtils.Constant(type)),
+                        type
+                    );
+                    BuildOverriddenInitializerCall(metaBuilder, args, initializer);
+                    if (!metaBuilder.Error) {
+                        metaBuilder.Result = Ast.Call(RubyOps.EnsureConstructedMethod, AstUtils.Box(metaBuilder.Result), AstUtils.Constant(clrBase));
+                    }
+                    return;
+                }
+
                 if (!allocatorFound) {
                     metaBuilder.SetError(Methods.MakeMissingDefaultConstructorError.OpCall(
                         Ast.Convert(args.TargetExpression, typeof(RubyClass)),
@@ -1692,6 +1708,20 @@ namespace IronRuby.Builtins {
                     metaBuilder.ControlFlowBuilder = RubyMethodInfo.RuleControlFlowBuilder;
                 }
             }
+        }
+
+        /// <summary>
+        /// The CLR class a type emitted for a Ruby class derives from, or null if it derives from no CLR class
+        /// (only from Object, through RubyObject).
+        /// </summary>
+        internal static Type GetClrBaseType(Type/*!*/ type) {
+            if (!typeof(IRubyObject).IsAssignableFrom(type)) {
+                return null;
+            }
+            while (type != null && typeof(IRubyObject).IsAssignableFrom(type)) {
+                type = type.BaseType;
+            }
+            return (type == null || type == typeof(object)) ? null : type;
         }
 
         public bool BuildAllocatorCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, Func<Expression>/*!*/ defaultExceptionMessage) {

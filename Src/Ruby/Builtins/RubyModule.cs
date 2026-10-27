@@ -1997,8 +1997,38 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            object fieldValue;
+            if (_typeTracker != null && TryGetClrConstantField(name, out fieldValue)) {
+                storage = new ConstantStorage(fieldValue);
+                return true;
+            }
+
             storage = default(ConstantStorage);
             return false;
+        }
+
+        /// <summary>
+        /// A CLR class's const and static readonly fields are its constants - System::Math::PI, Int32::MaxValue,
+        /// String::Empty, an enum's values - as a Java class's static final fields are in JRuby. Other static members,
+        /// mutable fields and properties included, are methods: Math.Max, Task.Factory, DateTime.Now.
+        /// </summary>
+        private bool TryGetClrConstantField(string/*!*/ name, out object value) {
+            value = null;
+            Type type = _typeTracker.Type;
+            if ((Restrictions & ModuleRestrictions.NoNameMapping) != 0 || type.ContainsGenericParameters || !Tokenizer.IsConstantName(name)) {
+                return false;
+            }
+
+            var flags = BindingFlags.Static | BindingFlags.DeclaredOnly | BindingFlags.Public |
+                (_context.DomainManager.Configuration.PrivateBinding ? BindingFlags.NonPublic : 0);
+
+            FieldInfo field = type.GetField(name, flags);
+            if (field == null || !(field.IsLiteral || field.IsInitOnly)) {
+                return false;
+            }
+
+            value = field.GetValue(null);
+            return true;
         }
 
         // Direct lookup into the constant table (if it exists).

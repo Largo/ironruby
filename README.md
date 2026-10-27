@@ -142,6 +142,14 @@ end
 min, max = Stats.MinMax(values)    # a ValueTuple destructures like an Array
 System::Threading::Tasks::Task.Run { 6 * 7 }.value   # => 42
 System::Runtime::CompilerServices::RuntimeHelpers.GetSubArray(array, 1..-2)  # a Ruby range for System.Range
+
+class Doctor < Human                # a CLR class without a parameterless constructor
+  def initialize(name)
+    super("Dr. #{name}")            # super runs the CLR base constructor
+  end
+end
+System::Math::PI                    # const and static readonly fields are constants
+command.Parameters.AddWithValue("$name", "Ann")   # a Ruby String for an Object parameter is a System.String
 ```
 
 Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`,

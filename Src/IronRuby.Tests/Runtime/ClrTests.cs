@@ -3136,7 +3136,8 @@ puts F.new('hello', 'world').p
             }, @"
 init
 test
-#<TypeError: can't allocate class `E' that derives from type `*::ClassWithNoDefaultConstructor' with no default constructor; define E#new singleton method instead of I#initialize>
+init
+#<TypeError: E.new: initialize did not call super, and ClassWithNoDefaultConstructor has no parameterless constructor to construct the instance with>
 ctor
 hello world
 ", OutputFlags.Match);

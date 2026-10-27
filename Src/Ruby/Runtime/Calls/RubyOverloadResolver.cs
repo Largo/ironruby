@@ -836,6 +836,19 @@ namespace IronRuby.Runtime.Calls {
                 // The semantics should be to use DP if available for the current instantiation and ignore it otherwise.
             }
 
+            // A Ruby String passed for a CLR method's Object parameter arrives as a System.String: CLR code looks at what
+            // it gets - ADO.NET's AddWithValue, serializers, String.Format's format items, data binding - and knows
+            // System.String, not IronRuby's MutableString. JRuby passes a java.lang.String for an Object parameter too.
+            // (An argument for an Object parameter has no type restriction, so whether it is a String is decided as the call runs.)
+            if (_implicitProtocolConversions && toType == typeof(object)) {
+                if (restrictedType != null && typeof(MutableString).IsAssignableFrom(restrictedType)) {
+                    return Methods.ConvertMutableStringToClrString.OpCall(AstUtils.Convert(expr, typeof(MutableString)));
+                }
+                if (restrictedType == null || restrictedType == typeof(object)) {
+                    return Ast.Call(RubyOps.ToClrArgumentMethod, AstUtils.Box(expr));
+                }
+            }
+
             if (restrictedType != null) {
                 if (restrictedType == typeof(DynamicNull)) {
                     if (!toType.IsValueType || toType.IsGenericType && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {

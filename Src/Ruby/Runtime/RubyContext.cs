@@ -2138,6 +2138,24 @@ namespace IronRuby.Runtime {
         }
 
         // thread-safe:
+        // Task::Factory is a static property, not a constant: say how to get it (Task.Factory). Only CLR const and
+        // static readonly fields are constants (RubyModule.TryGetClrConstantField) - a constant is cached where it is
+        // used, which a property like DateTime.Now must not be.
+        private static string/*!*/ GetClrStaticMemberHint(RubyModule/*!*/ owner, string/*!*/ name) {
+            Type type = (owner.TypeTracker != null) ? owner.TypeTracker.Type : null;
+            if (type == null || type.ContainsGenericParameters || (owner.Restrictions & ModuleRestrictions.NoNameMapping) != 0) {
+                return String.Empty;
+            }
+
+            foreach (var member in type.GetMember(name, BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)) {
+                if (member is PropertyInfo || member is FieldInfo || member is MethodInfo) {
+                    return String.Format(" ({1} is a static {2} of the CLR type, called as a method: {0}.{1})",
+                        owner.Name, name, member is MethodInfo ? "method" : member is PropertyInfo ? "property" : "field");
+                }
+            }
+            return String.Empty;
+        }
+
         public object ResolveMissingConstant(RubyModule/*!*/ owner, string/*!*/ name) {
             var privateReference = _privateConstantReference;
             _privateConstantReference = null;
@@ -2168,7 +2186,7 @@ namespace IronRuby.Runtime {
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
                 realOwner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
-                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
+                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name) + GetClrStaticMemberHint(owner, name)
             ), name, owner);
         }
 
