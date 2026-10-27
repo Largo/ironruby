@@ -277,7 +277,8 @@ module OpenSSL
         data.inject(0) { |total, item| total + syswrite(item.to_s) }
       end
 
-      # How much of +data+ went out - at most 16 KB at a time - or SSLErrorWaitWritable
+      # How much of +data+ went out - 16 KB records while they go out at once, at most
+      # 1 MB - or SSLErrorWaitWritable
       # (:wait_writable with exception: false) while the last part is still going.
       def write_nonblock(data, exception: true)
         connect unless @connected
