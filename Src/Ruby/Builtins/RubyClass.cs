@@ -1579,7 +1579,8 @@ namespace IronRuby.Builtins {
                 }
 
                 Type clrBase;
-                if (!allocatorFound && isRubyInitializer && _isRubyClass && (clrBase = GetClrBaseType(type)) != null && !type.IsAbstract) {
+                if (!allocatorFound && isRubyInitializer && _isRubyClass && (clrBase = GetClrBaseType(type)) != null && !type.IsAbstract
+                    && (Context.GetModule(clrBase).Restrictions & ModuleRestrictions.NoNameMapping) == 0) {
                     // The CLR base class has no parameterless constructor: initialize constructs the instance, with super
                     // (see SuperCallAction), and it is an error if it does not.
                     metaBuilder.Result = AstUtils.Convert(

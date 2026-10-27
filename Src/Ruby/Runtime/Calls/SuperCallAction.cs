@@ -183,7 +183,9 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         private static bool TryBuildClrConstructorCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, object target) {
             Type clrBase = (target != null) ? RubyClass.GetClrBaseType(target.GetType()) : null;
-            if (clrBase == null) {
+
+            // A Ruby builtin backed by a CLR type (Proc, Array, Hash) keeps Ruby's initialize chain:
+            if (clrBase == null || (args.RubyContext.GetModule(clrBase).Restrictions & ModuleRestrictions.NoNameMapping) != 0) {
                 return false;
             }
 
