@@ -235,12 +235,14 @@ program can observe is a bug worth a report, specs or not.
 The same tree **runs on Windows**, where `spec/language` and `spec/security` are also at
 zero; see [Windows](#windows) for how to build it and what is still missing there.
 
-The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
-load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
-extensions. A compatibility prelude
+The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0`; `Src/StdLib/ironruby`
+holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or Ruby, and is
+the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
 natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x. `Ripper` is implemented
+pattern-matching support classes and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
+are Ruby ports of CRuby 4.0's `rational.c` and `complex.c`, and `Pathname` is CRuby 4.0's own
+`pathname_builtin.rb`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
 **irb** and **reline** run unmodified.
 
@@ -517,6 +519,8 @@ Requires the .NET SDK, plus Ruby and a C compiler to build prism.
 
 ```console
 $ git clone https://github.com/IronLanguages/dlr ../dlr          # modern DLR, referenced as source
+$ git -C ../dlr checkout <DLR_REF from .github/workflows/ci.yml>
+$ for p in Build/dlr-patches/*.patch; do git -C ../dlr apply "$PWD/$p"; done
 $ git clone https://github.com/ruby/prism ../prism
 $ (cd ../prism && ruby templates/template.rb && make shared)     # libprism.so
 $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + loader
@@ -547,7 +551,7 @@ that has only the **runtime** installed. Build prism with the RubyInstaller DevK
 
 ```
 C:\> git clone https://github.com/ruby/prism C:\prism
-C:\> cd C:\prism && git checkout cd76b0d1
+C:\> cd C:\prism && git checkout 30a25553
 C:\prism> ruby templates\template.rb
 C:\prism> ridk exec make shared -j4          :: -> C:\prism\build\libprism.dll
 ```

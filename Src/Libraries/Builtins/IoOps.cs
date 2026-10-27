@@ -806,16 +806,14 @@ namespace IronRuby.Builtins {
             var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             bool wasBlocked = info.Blocked;
             ReadinessWaiter waiter = null;
-            List<RubyPipe> pipes = null;
+            List<object> pipes = null;
             try {
                 info.Blocked = true;
 
-                // In-process pipes have no descriptor to poll; they signal the waiter instead.
-                for (int i = 0; i < watched.Count; i++) {
-                    if (!watched[i].Closed && IoReadiness.GetPipe(watched[i]) != null) {
-                        waiter = ReadinessWaiter.Current;
-                        break;
-                    }
+                // In-process pipes have no descriptor to poll, and an IO with a readiness hook
+                // (a TLS socket) may be ready when its descriptor is not; they signal the waiter.
+                if (IoReadiness.NeedsWaiter(watched)) {
+                    waiter = ReadinessWaiter.Current;
                 }
                 if (waiter != null) {
                     pipes = IoReadiness.Register(waiter, watched);
@@ -882,6 +880,14 @@ namespace IronRuby.Builtins {
             var stream = io.GetStream();
             if (kind == Readiness.Read && stream.DataBuffered) {
                 return true;
+            }
+
+            var hook = IoReadiness.GetHook(io);
+            if (hook != null && kind != Readiness.Error) {
+                bool? ready = hook.IsReady(kind == Readiness.Read ? IoReadiness.Read : IoReadiness.Write);
+                if (ready.HasValue) {
+                    return ready.Value;
+                }
             }
 
             var pipe = stream.BaseStream as RubyPipe;

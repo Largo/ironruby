@@ -1693,7 +1693,7 @@ class TCPSocket
         else
           __ir_raw_new(remote_host, remote_port, local_host, local_port || 0)
         end
-      rescue Errno::ETIMEDOUT => e
+      rescue Errno::ETIMEDOUT
         raise IO::TimeoutError, "Connection timed out" if timeout
         raise
       end

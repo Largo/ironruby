@@ -607,7 +607,8 @@ namespace IronRuby.Runtime {
 #endif
         }
 #endif
-        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb" };
+        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
+            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
 
         /// <summary>
         /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in

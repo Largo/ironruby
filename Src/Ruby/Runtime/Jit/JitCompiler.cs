@@ -574,6 +574,8 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
             if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
+            // Deep enough to run this thread out of stack: the method stays interpreted (see StackGuard).
+            if (!StackGuard.IsSufficient) { throw Bail("nested too deeply for the stack"); }
 
             var literal = node as Literal;
             if (literal != null) { return EmitLiteral(literal, out type); }
@@ -1379,6 +1381,8 @@ namespace IronRuby.Runtime.Jit {
             // Emit gives up past MaxNodes. The screen's count is not exactly Emit's, so it only
             // rules out a body that is too big by any counting - the walk stays bounded either way.
             if (++_nodes > 2 * JitCompiler.MaxNodes) { return No(node); }
+            // Nor one nested deeper than this thread's stack goes: interpreting it is fine (see StackGuard).
+            if (!StackGuard.IsSufficient) { return No(node); }
 
             var literal = node as Literal;
             if (literal != null) {

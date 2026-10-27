@@ -44,7 +44,6 @@ STDLIB = File.join(ROOT, "Src", "StdLib")
 ROOTS = [
   File.join(STDLIB, "ironruby"),
   File.join(STDLIB, "ruby", "4.0"),
-  File.join(STDLIB, "ruby", "1.9.1"),
 ].freeze
 
 OUT_DIR = File.join(STDLIB, "ruby", "gems", "4.0.0", "specifications", "default")
@@ -113,7 +112,7 @@ GEMS = {
                 ["strscan"], check: "StringScanner::Version", pinned: true],
   "zlib" => ["3.2.3", "Deflate/inflate, on System.IO.Compression",
              ["zlib"], check: "Zlib::VERSION", pinned: true],
-  "prism" => ["1.9.0", "The Prism Ruby parser - IronRuby's own front end",
+  "prism" => ["2.0.0", "The Prism Ruby parser - IronRuby's own front end",
               ["prism", "prism/"], check: "Prism::VERSION", pinned: true],
   "sqlite3" => ["2.9.6", "SQLite3, on the native library Microsoft.Data.Sqlite carries",
                 ["sqlite3", "sqlite3/"], check: "SQLite3::VERSION", pinned: true],
