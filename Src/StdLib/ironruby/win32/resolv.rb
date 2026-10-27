@@ -1,64 +1,52 @@
-# Win32::Resolv over System.Net.NetworkInformation: the two things resolv.rb asks
-# for on Windows, the hosts file (Resolv::Hosts) and the DNS servers and search
-# suffixes (Resolv::DNS::Config).  CRuby reads them from the registry and
-# GetNetworkParams; the 1.9 version did the same over dl, which IronRuby never had,
-# so its require failed and resolv ran with no hosts file and no nameservers.
+# Win32::Resolv, which resolv.rb asks for on Windows: where the hosts file is, and the
+# DNS servers and search domains.  CRuby's reads them through a C extension
+# (win32/resolv.so) and the registry; there is no copy of it under ruby/4.0, so the
+# lookup used to fall through to the 1.9.1 version, built on the long-gone DL
+# library.  .NET's System.Net.NetworkInformation answers the same questions.
+
+load_assembly 'System.Net.NetworkInformation'
+load_assembly 'System.Net.Primitives'
+
 module Win32
   module Resolv
-    load_assembly 'System.Net.NetworkInformation'
+    # CRuby raises this for a failed Win32 call; nothing here makes one.
+    class Error < StandardError
+      def initialize(code, message)
+        super(message)
+        @code = code
+      end
 
-    def self.get_hosts_path
-      dir = File.join(System::Environment.system_directory.to_s, "drivers", "etc")
-      path = File.expand_path("hosts", dir)
-      File.exist?(path) ? path : nil
-    rescue Exception
-      nil
+      attr_reader :code
     end
 
-    # [search, nameserver] the way CRuby returns them: each an Array, or nil when empty.
+    def self.get_hosts_path
+      path = ::File.join(::System::Environment.SystemDirectory.to_s.tr("\\", "/"), "drivers/etc/hosts")
+      ::File.exist?(path) ? path : nil
+    end
+
+    # [search domains, name servers], each nil when there are none.
     def self.get_resolv_info
-      search, nameserver = get_info
-      search.delete("")
+      search = []
+      nameserver = []
+      information = ::System::Net::NetworkInformation
+      domain = information::IPGlobalProperties.GetIPGlobalProperties.DomainName.to_s
+      search << domain unless domain.empty?
+      information::NetworkInterface.GetAllNetworkInterfaces.each do |interface|
+        next unless interface.OperationalStatus == information::OperationalStatus.Up
+        next if interface.NetworkInterfaceType == information::NetworkInterfaceType.Loopback
+        properties = interface.GetIPProperties
+        suffix = properties.DnsSuffix.to_s
+        search << suffix unless suffix.empty?
+        properties.DnsAddresses.each do |address|
+          # fec0:0:0:ffff::1-3 are Windows' placeholders for "no IPv6 DNS server configured"
+          next if address.IsIPv6SiteLocal
+          nameserver << address.ToString.to_s.sub(/%\d+\z/, "")
+        end
+      end
       search.uniq!
-      nameserver.delete("")
       nameserver.delete("0.0.0.0")
       nameserver.uniq!
       [search.empty? ? nil : search, nameserver.empty? ? nil : nameserver]
     end
-
-    def self.get_info # :nodoc:
-      search = []
-      nameserver = []
-      ni = System::Net::NetworkInformation
-      begin
-        domain = ni::IPGlobalProperties.get_ip_global_properties.domain_name.to_s
-        search << domain unless domain.empty?
-      rescue Exception
-      end
-      interfaces = begin
-        ni::NetworkInterface.get_all_network_interfaces.to_a
-      rescue Exception
-        []
-      end
-      interfaces.each do |nic|
-        next unless nic.operational_status.to_s == "Up"
-        next if nic.network_interface_type.to_s == "Loopback"
-        props = begin
-          nic.get_ip_properties
-        rescue Exception
-          next
-        end
-        suffix = props.dns_suffix.to_s
-        search << suffix unless suffix.empty?
-        props.dns_addresses.each do |address|
-          # A scoped (link-local) address is only reachable through its own
-          # interface, which Resolv::DNS has no way to name; skip it.
-          text = address.to_s
-          nameserver << text unless text.include?("%")
-        end
-      end
-      [search, nameserver]
-    end
-    private_class_method :get_info
   end
 end

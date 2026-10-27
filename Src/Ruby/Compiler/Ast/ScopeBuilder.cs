@@ -200,7 +200,7 @@ namespace IronRuby.Compiler.Ast {
             // TODO: use a factory instead of Ast.New to improve interpreter perf:
             MSA.Expression result = Ast.Assign(
                 _localsTuple, 
-                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : Ast.New(_localsTuple.Type)
+                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : NewLocalsTuple()
             );
             
             if (_parameters != null) {
@@ -216,6 +216,25 @@ namespace IronRuby.Compiler.Ast {
                 result = Ast.Block(initializers);
             }
 
+            return result;
+        }
+
+        /// <summary>
+        /// A new locals tuple. One of more than <see cref="MutableTuple.MaxSize"/> fields holds its fields in nested
+        /// tuples, which Ast.New would leave null - the first local stored into one of them threw a
+        /// NullReferenceException - so it is built with every nested tuple in place.
+        /// </summary>
+        private MSA.Expression/*!*/ NewLocalsTuple() {
+            int count = LiftedVisibleVariableCount;
+            if (count <= MutableTuple.MaxSize) {
+                return Ast.New(_localsTuple.Type);
+            }
+            var values = new MSA.Expression[count];
+            for (int i = 0; i < values.Length; i++) {
+                values[i] = AstUtils.Constant(null, typeof(object));
+            }
+            MSA.Expression result = MutableTuple.Create(values);
+            Debug.Assert(result.Type == _localsTuple.Type);
             return result;
         }
 

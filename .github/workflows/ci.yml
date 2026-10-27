@@ -17,7 +17,7 @@ env:
   # The prism revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one
   # the vendored Ruby half of prism in Src/StdLib belongs to; release.yml builds from the same
   # one. Move both together with Src/Prism/Generated when following prism.
-  PRISM_REF: cd76b0d130a6f0311d168a69618197f15a912c69
+  PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
   # The DLR revision Build/dlr-patches applies to; release.yml builds from the same one, so a
   # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
   # Move both together, after checking the patches still apply.
@@ -83,8 +83,8 @@ jobs:
           path: dlr
 
       # Pinned to the revision Src/Prism/Generated was generated from (Src/Prism/README.md), as
-      # release.yml pins it: prism's main has since moved to a post-order serialization that
-      # the C# loader does not read yet.
+      # release.yml pins it: a libprism from any other revision may serialize differently from
+      # what the C# loader and the vendored Prism::Serialize read.
       - name: Check out prism
         uses: actions/checkout@v7
         with:
