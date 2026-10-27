@@ -17632,6 +17632,7 @@ namespace IronRuby.StandardLibrary.Puma {
         protected override void LoadModules() {
             IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
             IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.SystemException));
+            IronRuby.Builtins.RubyClass classRef2 = GetClass(typeof(System.Object));
             
             
             IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Puma", typeof(IronRuby.StandardLibrary.Puma.PumaModule), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -17640,8 +17641,19 @@ namespace IronRuby.StandardLibrary.Puma {
             );
             IronRuby.Builtins.RubyClass def3 = DefineClass("Puma::HttpParserError", typeof(IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(PumaLibraryInitializer.ExceptionFactory__Puma__HttpParserError));
+            IronRuby.Builtins.RubyModule def4 = DefineModule("Puma::MiniSSL", typeof(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl), 0x00000008, null, LoadPuma__MiniSSL_Class, LoadPuma__MiniSSL_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def5 = DefineClass("Puma::MiniSSL::Engine", typeof(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine), 0x00000008, classRef2, LoadPuma__MiniSSL__Engine_Instance, LoadPuma__MiniSSL__Engine_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def6 = DefineClass("Puma::MiniSSL::SSLContext", typeof(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLContext), 0x00000008, classRef2, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLContext>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLContext.Create)
+            );
+            IronRuby.Builtins.RubyClass def7 = DefineClass("Puma::MiniSSL::SSLError", typeof(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(PumaLibraryInitializer.ExceptionFactory__Puma__MiniSSL__SSLError));
             SetConstant(def1, "HttpParser", def2);
             SetConstant(def1, "HttpParserError", def3);
+            SetConstant(def1, "MiniSSL", def4);
+            SetConstant(def4, "Engine", def5);
+            SetConstant(def4, "SSLContext", def6);
+            SetConstant(def4, "SSLError", def7);
         }
         
         private static void LoadPuma__HttpParser_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -17687,8 +17699,80 @@ namespace IronRuby.StandardLibrary.Puma {
             
         }
         
+        private static void LoadPuma__MiniSSL_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "OPENSSL_LIBRARY_VERSION", IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.OPENSSL_LIBRARY_VERSION);
+            SetConstant(module, "OPENSSL_NO_SSL3", IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.OPENSSL_NO_SSL3);
+            SetConstant(module, "OPENSSL_NO_TLS1", IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.OPENSSL_NO_TLS1);
+            SetConstant(module, "OPENSSL_NO_TLS1_1", IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.OPENSSL_NO_TLS1_1);
+            SetConstant(module, "OPENSSL_VERSION", IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.OPENSSL_VERSION);
+            
+        }
+        
+        private static void LoadPuma__MiniSSL_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "check", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Check)
+            );
+            
+        }
+        
+        private static void LoadPuma__MiniSSL__Engine_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "extract", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.Extract)
+            );
+            
+            DefineLibraryMethod(module, "init?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, System.Boolean>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.InHandshake)
+            );
+            
+            DefineLibraryMethod(module, "inject", 0x11, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.Inject)
+            );
+            
+            DefineLibraryMethod(module, "peercert", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.GetPeerCertificate)
+            );
+            
+            DefineLibraryMethod(module, "read", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.Read)
+            );
+            
+            DefineLibraryMethod(module, "shutdown", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, System.Boolean>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.Shutdown)
+            );
+            
+            DefineLibraryMethod(module, "ssl_vers_st", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.GetVersionState)
+            );
+            
+            DefineLibraryMethod(module, "write", 0x11, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.Write)
+            );
+            
+        }
+        
+        private static void LoadPuma__MiniSSL__Engine_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "server", 0x21, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLContext, IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine>(IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.Engine.Server)
+            );
+            
+        }
+        
         public static System.Exception/*!*/ ExceptionFactory__Puma__HttpParserError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Puma__MiniSSL__SSLError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.MiniSsl.SSLError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }
