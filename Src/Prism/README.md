@@ -70,8 +70,8 @@ not the other way round, so that the Ripper library can call in here.
   block that calls a block...), and forced IL compilation
   (`-X:CompilationThreshold 0`, `-X:NoAdaptiveCompilation`) of trees
   thousands of levels deep, which reaches limits of IL and the JIT itself.
-- **100% of the bundled 1.9 stdlib maps through the bridge**
-  (571/571 files in `ruby/1.9.1`, 39/39 in `ironruby/`; measure with
+- **100% of the then-bundled 1.9 stdlib mapped through the bridge**
+  (571/571 files in the former `ruby/1.9.1`, 39/39 in `ironruby/`; measure with
   `IronRuby.Prism --sweep <dir>`). Coverage includes rescue/ensure/retry,
   case/when, regexps (incl. named-capture writes), multiple/attribute/
   index assignment and op-assigns, for loops, alias/undef, singleton

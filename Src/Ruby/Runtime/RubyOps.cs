@@ -4330,8 +4330,10 @@ namespace IronRuby.Runtime {
             if (proc == null) {
                 throw RubyExceptions.NoBlockGiven();
             }
-            BlockParam bp = CreateBfcForProcCall(proc);
-            return proc.LocalScope.RubyContext.DelegateCreator.GetDelegate(bp, type);
+            // Each invocation calls the proc the way Proc#call does, with its own flow-control frame, so
+            // a break in a block passed to a CLR method as a delegate unwinds to that call, and a
+            // return in a lambda returns from the lambda.
+            return proc.LocalScope.RubyContext.DelegateCreator.GetDelegate(proc, type);
         }
 
         [Emitted]
@@ -4411,10 +4413,172 @@ namespace IronRuby.Runtime {
         public static void X(string marker) {
         }
         
-        [Emitted]
-        public static object CreateDefaultInstance() {
-            // nop (stub)
-            return null;
+        /// <summary>
+        /// The constructor of a value type that declares no parameterless one: T.new is default(T).
+        /// Instantiated for the type, it returns T, so keywords passed to new can set the new value's
+        /// fields and properties like those passed to a real constructor.
+        /// </summary>
+        public static T CreateDefaultValue<T>() where T : struct {
+            return default(T);
         }
+
+        internal static readonly MethodInfo/*!*/ CreateDefaultValueMethod = typeof(RubyOps).GetMethod(nameof(CreateDefaultValue));
+
+        // A Ruby Array or Hash passed where a CLR method takes a typed collection (see Converter.TryConvertToCollection):
+        // a copy, each item converted by the site the binder made for the item type.
+
+        public static T[]/*!*/ ConvertToVector<T>(IList/*!*/ list, CallSite<Func<CallSite, object, T>>/*!*/ itemConversion) {
+            var result = new T[list.Count];
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = itemConversion.Target(itemConversion, list[i]);
+            }
+            return result;
+        }
+
+        public static List<T>/*!*/ ConvertToList<T>(IList/*!*/ list, CallSite<Func<CallSite, object, T>>/*!*/ itemConversion) {
+            var result = new List<T>(list.Count);
+            for (int i = 0; i < list.Count; i++) {
+                result.Add(itemConversion.Target(itemConversion, list[i]));
+            }
+            return result;
+        }
+
+        public static Dictionary<TKey, TValue>/*!*/ ConvertToDictionary<TKey, TValue>(IDictionary<object, object>/*!*/ hash,
+            CallSite<Func<CallSite, object, TKey>>/*!*/ keyConversion, CallSite<Func<CallSite, object, TValue>>/*!*/ valueConversion) {
+
+            var result = new Dictionary<TKey, TValue>(hash.Count);
+            foreach (var entry in hash) {
+                result[keyConversion.Target(keyConversion, entry.Key)] = valueConversion.Target(valueConversion, entry.Value);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The module or class of a type group's non-generic member, where a type group is passed for a module
+        /// (see Converter.TryConvertTypeGroup).
+        /// </summary>
+        public static RubyModule/*!*/ ConvertTypeGroupToModule(RubyContext/*!*/ context, Microsoft.Scripting.Actions.TypeGroup/*!*/ typeGroup) {
+            Type type;
+            if (!typeGroup.TryGetNonGenericType(out type)) {
+                throw RubyExceptions.CreateTypeError(String.Format("{0} has no non-generic type to stand for a module; use {0}[...] or {0}.of(...)",
+                    typeGroup.Name));
+            }
+            return context.GetModule(type);
+        }
+
+        /// <summary>
+        /// A Ruby index passed for a System.Index: a negative one counts from the end, -1 is ^1.
+        /// </summary>
+        public static System.Index ConvertToIndex(int index) {
+            return index < 0 ? System.Index.FromEnd(-index) : System.Index.FromStart(index);
+        }
+
+        /// <summary>
+        /// A Ruby Range of Integers passed for a System.Range. Ruby's end is inclusive unless the range excludes it,
+        /// and either end may be nil (beginless, endless): 1..3 is 1..4, 1...-1 is 1..^1, -3..-1 is ^3..^0.
+        /// </summary>
+        public static System.Range ConvertToRange(Range/*!*/ range) {
+            System.Index start = range.Begin == null ? System.Index.Start : ConvertToIndex(GetRangeEndpoint(range.Begin));
+            System.Index end;
+            if (range.End == null) {
+                end = System.Index.End;
+            } else {
+                int last = GetRangeEndpoint(range.End);
+                if (range.ExcludeEnd) {
+                    end = ConvertToIndex(last);
+                } else {
+                    end = last >= 0 ? System.Index.FromStart(last + 1) : System.Index.FromEnd(-last - 1);
+                }
+            }
+            return new System.Range(start, end);
+        }
+
+        private static int GetRangeEndpoint(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            throw RubyExceptions.CreateTypeError(String.Format("no implicit conversion of {0} into System::Range (Integer endpoints expected)",
+                value == null ? "nil" : value.GetType().Name));
+        }
+
+        #region Constructing instances of Ruby classes derived from CLR classes
+
+        // Instances new allocated without running a constructor - their CLR base class has no parameterless one -
+        // that initialize has yet to construct by calling super.
+        private static readonly ConditionalWeakTable<object, object>/*!*/ _unconstructedInstances = new ConditionalWeakTable<object, object>();
+
+        /// <summary>
+        /// Allocates an instance of the CLR type emitted for a Ruby class derived from a CLR class that has no
+        /// parameterless constructor, without running any constructor. The Ruby class's initialize constructs it:
+        /// its super goes to the base class's constructor (see InvokeClrConstructor).
+        /// </summary>
+        public static object/*!*/ AllocateUnconstructed(RubyClass/*!*/ rubyClass, Type/*!*/ type) {
+            var instance = (IRubyObject)RuntimeHelpers.GetUninitializedObject(type);
+            instance.ImmediateClass = rubyClass;
+            _unconstructedInstances.AddOrUpdate(instance, null);
+            return instance;
+        }
+
+        /// <summary>
+        /// The result of new for an instance allocated by AllocateUnconstructed, once initialize has returned: an
+        /// error if initialize did not construct it, which C# would not have compiled.
+        /// </summary>
+        public static object EnsureConstructed(object result, Type/*!*/ baseType) {
+            object unused;
+            if (result != null && _unconstructedInstances.TryGetValue(result, out unused)) {
+                _unconstructedInstances.Remove(result);
+                throw RubyExceptions.CreateTypeError(String.Format(
+                    "{0}.new: initialize did not call super, and {1} has no parameterless constructor to construct the instance with",
+                    ((IRubyObject)result).ImmediateClass.NominalClass.Name, baseType.Name));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// super in initialize of a Ruby class derived from a CLR class: runs the base class's constructor on the
+        /// instance new has allocated. The parameterless constructor has already run if there is one, as allocation
+        /// uses it, so calling it again does nothing.
+        /// </summary>
+        public static object/*!*/ InvokeClrConstructor(ConstructorInfo/*!*/ constructor, object/*!*/ instance, object[]/*!*/ args) {
+            object unused;
+            bool unconstructed = _unconstructedInstances.TryGetValue(instance, out unused);
+            if (args.Length == 0 && !unconstructed) {
+                return instance;
+            }
+
+            try {
+                constructor.Invoke(instance, args);
+            } catch (TargetInvocationException e) {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.InnerException ?? e).Throw();
+            }
+
+            if (unconstructed) {
+                _unconstructedInstances.Remove(instance);
+            }
+            return instance;
+        }
+
+        /// <summary>
+        /// An argument passed for a CLR method's Object parameter: a Ruby String as a System.String (see
+        /// RubyOverloadResolver.Convert), anything else as it is.
+        /// </summary>
+        public static object ToClrArgument(object value) {
+            var str = value as MutableString;
+            return (str != null) ? str.ConvertToString() : value;
+        }
+
+        internal static readonly MethodInfo/*!*/ ToClrArgumentMethod = typeof(RubyOps).GetMethod(nameof(ToClrArgument));
+        internal static readonly MethodInfo/*!*/ AllocateUnconstructedMethod = typeof(RubyOps).GetMethod(nameof(AllocateUnconstructed));
+        internal static readonly MethodInfo/*!*/ EnsureConstructedMethod = typeof(RubyOps).GetMethod(nameof(EnsureConstructed));
+        internal static readonly MethodInfo/*!*/ InvokeClrConstructorMethod = typeof(RubyOps).GetMethod(nameof(InvokeClrConstructor));
+
+        #endregion
+
+        internal static readonly MethodInfo/*!*/ ConvertToIndexMethod = typeof(RubyOps).GetMethod(nameof(ConvertToIndex));
+        internal static readonly MethodInfo/*!*/ ConvertToRangeMethod = typeof(RubyOps).GetMethod(nameof(ConvertToRange));
+        internal static readonly MethodInfo/*!*/ ConvertTypeGroupToModuleMethod = typeof(RubyOps).GetMethod(nameof(ConvertTypeGroupToModule));
+        internal static readonly MethodInfo/*!*/ ConvertToVectorMethod = typeof(RubyOps).GetMethod(nameof(ConvertToVector));
+        internal static readonly MethodInfo/*!*/ ConvertToListMethod = typeof(RubyOps).GetMethod(nameof(ConvertToList));
+        internal static readonly MethodInfo/*!*/ ConvertToDictionaryMethod = typeof(RubyOps).GetMethod(nameof(ConvertToDictionary));
     }
 }

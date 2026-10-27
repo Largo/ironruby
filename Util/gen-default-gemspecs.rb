@@ -44,7 +44,6 @@ STDLIB = File.join(ROOT, "Src", "StdLib")
 ROOTS = [
   File.join(STDLIB, "ironruby"),
   File.join(STDLIB, "ruby", "4.0"),
-  File.join(STDLIB, "ruby", "1.9.1"),
 ].freeze
 
 OUT_DIR = File.join(STDLIB, "ruby", "gems", "4.0.0", "specifications", "default")

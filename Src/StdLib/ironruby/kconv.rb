@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 # kconv.rb - Kanji Converter.
 #
@@ -21,32 +22,28 @@ module Kconv
 
   #Constant of Encoding
 
-  # These name encodings: #kconv passes them to nkf as --oc=/--ic= and #iseuc and its
-  # neighbours hand them to String#force_encoding. The NKF::* integers this used to read
-  # are nkf's own internal numbering and mean nothing to either.
-
   # Auto-Detect
   AUTO = NKF::AUTO
   # ISO-2022-JP
-  JIS = Encoding::ISO_2022_JP
+  JIS = NKF::JIS
   # EUC-JP
-  EUC = Encoding::EUC_JP
+  EUC = NKF::EUC
   # Shift_JIS
-  SJIS = Encoding::Shift_JIS
+  SJIS = NKF::SJIS
   # BINARY
-  BINARY = Encoding::ASCII_8BIT
+  BINARY = NKF::BINARY
   # NOCONV
-  NOCONV = Encoding::ASCII_8BIT
+  NOCONV = NKF::NOCONV
   # ASCII
-  ASCII = Encoding::US_ASCII
+  ASCII = NKF::ASCII
   # UTF-8
-  UTF8 = Encoding::UTF_8
+  UTF8 = NKF::UTF8
   # UTF-16
-  UTF16 = Encoding::UTF_16BE
+  UTF16 = NKF::UTF16
   # UTF-32
-  UTF32 = Encoding::UTF_32BE
+  UTF32 = NKF::UTF32
   # UNKNOWN
-  UNKNOWN = Encoding::ASCII_8BIT
+  UNKNOWN = NKF::UNKNOWN
 
   #
   # Public Methods

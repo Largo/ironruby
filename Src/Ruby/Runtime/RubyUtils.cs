@@ -35,6 +35,7 @@ using Microsoft.Scripting;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
+using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Actions.Calls;
 using IronRuby.Runtime.Conversions;
 
@@ -1050,6 +1051,12 @@ namespace IronRuby.Runtime {
         internal static RubyModule/*!*/ GetModuleFromObject(RubyScope/*!*/ scope, object obj) {
             RubyModule module = obj as RubyModule;
             if (module == null) {
+                // a type group (System::Nullable is Nullable and Nullable<T>) qualifies a constant as its non-generic member:
+                var typeGroup = obj as TypeGroup;
+                Type nonGenericType;
+                if (typeGroup != null && typeGroup.TryGetNonGenericType(out nonGenericType)) {
+                    return scope.RubyContext.GetModule(nonGenericType);
+                }
                 throw CreateNotModuleException(scope, obj);
             }
             return module;
