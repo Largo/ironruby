@@ -58,7 +58,7 @@ namespace IronRuby.Compiler.Ast {
             _converted = converted;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             return Ast.Coalesce(
                 Methods.MergeKeywordSplat.OpCall(gen.CurrentScopeVariable,
                     AstUtils.Box(_hash.TransformRead(gen)), AstUtils.Box(_splatted.TransformRead(gen))),
