@@ -740,10 +740,14 @@ namespace IronRuby.StandardLibrary.Zlib {
                         if (z.avail_out > 0) {
                             break;
                         }
-                        if (z.avail_in == 0 && _isInflate) {
+                        if (z.avail_in == 0 && _isInflate && !LibZ.UseClrZlib) {
                             // inflate() answers Z_BUF_ERROR once it is out of input; deflate()
                             // can still have output pending in its own state, so only inflate
-                            // gets to stop here.
+                            // gets to stop here. Not on .NET's zlib: Intel's fork in .NET 8
+                            // reads all the input ahead into its bit buffer, so with the output
+                            // full and nothing left to read it can still have output to give.
+                            // It is asked again, and when it really is done it leaves the fresh
+                            // buffer untouched, which the avail_out check above ends on.
                             break;
                         }
                     }

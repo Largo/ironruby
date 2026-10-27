@@ -313,8 +313,16 @@ namespace IronRuby.Runtime.Calls {
             
             // At runtime the BlockParam is created with a new RFC instance that identifies the library method frame as 
             // a proc-converter target of a method unwinder triggered by break from a block.
-            if (args.Signature.HasBlock && calleeHasBlockParam) {
-                metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+            if (args.Signature.HasBlock) {
+                if (calleeHasBlockParam) {
+                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                } else if (args.GetMetaBlock().Value == null) {
+                    // The block argument was nil when this rule was built (x.count(&b) with b nil), and
+                    // that is why an overload without a BlockParam was chosen. The rule must say so:
+                    // without this test the same call site would keep that overload, and ignore the
+                    // block, once a real one came through it.
+                    metaBuilder.AddRestriction(Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null)));
+                }
             }
 
             // add restrictions used for overload resolution:

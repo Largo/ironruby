@@ -196,7 +196,7 @@ p a.method(:data) rescue p $!
 p a.method(:Data)
 ", @"
 #<NameError: undefined method `data' for class `Exception'>
-#<Method: Exception#Data>
+#<Method: Exception#Data()>
 ");
         }
 
@@ -210,9 +210,9 @@ p m = a.clr_member(:index_of)
 p m.clr_members.size
 p m.overload(Object).clr_members
 ", @"
-#<Method: Array#count>
+#<Method: Array#count()>
 3
-#<Method: Array#index_of>
+#<Method: Array#index_of(_, *)>
 3
 [Int32 IndexOf(System.Object)]
 ");
@@ -928,7 +928,7 @@ f1
 f2
 f2
 !f2
-#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3>
+#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3(_)>
 f3
 f3
 !f3
@@ -1071,10 +1071,10 @@ p Obj.method(:bar)
 p Obj.method(:middle)
 p Obj.method(:skip)
 "), @"
-#<Method: *C#foo>
-#<Method: *C#bar>
-#<Method: *C(*B)#middle>
-#<Method: *C#skip>
+#<Method: *C#foo(_, *)>
+#<Method: *C#bar(_, *)>
+#<Method: *C(*B)#middle(_)>
+#<Method: *C#skip(*)>
 ", OutputFlags.Match);
 
             // hides Hidden method when called using mangled name "hidden":
@@ -2101,7 +2101,7 @@ p C[Integer].new.method(:Arity)
 C[1].new rescue p $!
 C[1].instance_method(:Arity) rescue p $!
 ", @"
-#<Method: InteropTests::Generics1::C[Integer]#Arity>
+#<Method: InteropTests::Generics1::C[Integer]#Arity()>
 #<NoMethodError: undefined method `new' for module InteropTests::Generics1::C[T]>
 #<NameError: undefined method `Arity' for module `InteropTests::Generics1::C[T]'>
 ");
@@ -2980,7 +2980,7 @@ puts c = Thread.clr_ctor
 puts c.overload(System::Threading::ThreadStart).call(lambda { puts 'hello' }).status
 puts Thread.clr_new(System::Threading::ThreadStart.new(lambda { puts 'hello' })).status
 ", @"
-#<Method: #<Class:Thread>(Thread)#.ctor>
+#<Method: #<Class:Thread>(Thread)#.ctor(_, *)>
 unstarted
 unstarted
 ");

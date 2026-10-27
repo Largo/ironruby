@@ -13,6 +13,13 @@ Ruby 1.9 grammar it shipped with in 2011.
 **IronRuby 4.0 is the first stable release since 1.1.3 in 2011**, and 4.0.1 is its latest.
 The downloads are self-contained: unpack one and run it, there is no .NET to install.
 
+**The compatibility target is Ruby 4.0.** IronRuby aims to run what CRuby 4.0 runs, with
+the same results: the language, the core classes and the standard library are checked
+against [ruby/spec](#status) and against CRuby 4.0 itself, and where IronRuby's behaviour
+differs from CRuby 4.0's, that is a bug in IronRuby. Ruby 3.x behaviour that 4.0 changed
+(`Set` as a core class, `Hash#inspect`, frozen string literals, the error messages) is
+not kept.
+
 | | Download | |
 |---|---|---|
 | **Windows** x64 | [ironruby-4.0.1-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.1/ironruby-4.0.1-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
@@ -172,7 +179,9 @@ Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/pa
 | IronRuby's own C# test suite | ~1470 | 19 known |
 
 CRuby 4.0.6 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
-against `ruby` and IronRuby is changed, not the spec.
+against `ruby` and IronRuby is changed, not the spec. The aim is Ruby 4.0 compatibility
+rather than compatibility with any earlier Ruby: a difference from CRuby 4.0 that a
+program can observe is a bug worth a report, specs or not.
 
 The same tree **runs on Windows**, where `spec/language` and `spec/security` are also at
 zero; see [Windows](#windows) for how to build it and what is still missing there.
@@ -535,13 +544,13 @@ Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are syml
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
 `fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
 (25) are libraries IronRuby does not implement and whose specs only run on Windows;
-`library/zlib` (2 failures, 3 errors) is the zlib below. `core/objectspace` needs
+`library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
 `-X:ObjectSpace`, as on Linux.
 
 **`zlib`** on Windows runs on the zlib inside .NET itself (`System.IO.Compression.Native`:
 zlib-ng from .NET 9 on, Intel's zlib in .NET 8), since there is no libz to bind to. It
-inflates and deflates, gzip included, but its compressed bytes are that compressor's, not
-classic zlib's (the 2 `library/zlib` failures compare exact bytes), and what .NET does not
+inflates and deflates, gzip included, but its compressed bytes are that compressor's: zlib-ng's
+differ from classic zlib's (the 2 `library/zlib` failures on .NET 10 compare exact bytes), and what .NET does not
 export raises `NotImplementedError`: `set_dictionary`, `Deflate#params` once data has gone in,
 and `Inflate#sync_point?` (the 3 errors).
 

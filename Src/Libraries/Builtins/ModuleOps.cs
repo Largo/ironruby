@@ -1251,7 +1251,7 @@ namespace IronRuby.Builtins {
 
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
             }
 
@@ -1297,7 +1297,7 @@ namespace IronRuby.Builtins {
 
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
             }
 
@@ -1322,7 +1322,9 @@ namespace IronRuby.Builtins {
 
             object value;
             if (!self.TryRemoveConstant(constantName, out value)) {
-                RubyUtils.CheckConstantName(constantName);
+                if (!Tokenizer.IsConstantName(constantName)) {
+                    throw RubyExceptions.CreateNameError("'{0}' is not allowed as a constant variable name", constantName);
+                }
                 throw RubyExceptions.CreateNameError("constant {0}::{1} not defined", self.Name, constantName);
             }
 
@@ -1400,7 +1402,10 @@ namespace IronRuby.Builtins {
 
             string[] parts = (symbol == null) ? str.Split(new[] { "::" }, StringSplitOptions.None) : new[] { str };
             foreach (string part in parts) {
-                RubyUtils.CheckConstantName(part);
+                if (!Tokenizer.IsConstantName(part)) {
+                    // MRI names the whole path: "wrong constant name Foo::".
+                    throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", (isTopLevel ? "::" : "") + str));
+                }
             }
             return parts;
         }
@@ -1441,7 +1446,7 @@ namespace IronRuby.Builtins {
                 }
                 owner = value as RubyModule;
                 if (owner == null) {
-                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", String.Join("::", parts));
                 }
                 inherit = true;
             }
@@ -1617,10 +1622,16 @@ namespace IronRuby.Builtins {
 
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
             IEnumerable<string> foreignMembers) {
+            return GetMethods(self, inherited, attributes, foreignMembers, false);
+        }
+
+        // objectMethods: see RubyModule.ForEachMember
+        internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
+            IEnumerable<string> foreignMembers, bool objectMethods) {
 
             var result = new RubyArray();
             using (self.Context.ClassHierarchyLocker()) {
-                self.ForEachMember(inherited, attributes, foreignMembers, (name, module, member) => {
+                self.ForEachMember(inherited, attributes, foreignMembers, objectMethods, (name, module, member) => {
                     if (member.IsInteropMember && (module.Restrictions & ModuleRestrictions.NoNameMapping) == 0 && RubyUtils.HasMangledName(name)) {
                         if (Tokenizer.IsMethodName(name) || Tokenizer.IsOperatorName(name)) {
                             result.Add(new ClrName(name));
@@ -1635,7 +1646,7 @@ namespace IronRuby.Builtins {
             // is listed after the refinement's own methods.
             if (inherited && self.IsRefinement) {
                 var seen = new HashSet<object>(result);
-                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers)) {
+                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers, objectMethods)) {
                     if (seen.Add(name)) {
                         result.Add(name);
                     }
@@ -1726,8 +1737,14 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
-            if (method == null || method.Visibility != RubyMethodVisibility.Public) {
+            if (method == null) {
                 throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+            }
+            if (method.Visibility != RubyMethodVisibility.Public) {
+                // the method is there, just not public - which is what MRI says
+                throw RubyExceptions.CreateNameError("method `{0}' for {1} `{2}' is {3}", methodName,
+                    self.IsClass ? "class" : "module", self.GetDisplayName(scope.RubyContext, false),
+                    method.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
 
             return GetInstanceMethod(scope, self, methodName);

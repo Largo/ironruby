@@ -620,24 +620,32 @@ namespace IronRuby.Runtime {
 
         private static void CheckLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
             var signature = proc.Dispatcher.ParameterSignature;
-            // = signature != null && (signature.TakesKeywords || signature.RefusesKeywords), cached
-            if (proc.Dispatcher.ChecksKeywords) {
-                var keywords = argCount > 0 ? lastArg as Hash : null;
-                if (keywords != null && !keywords.IsKeywordArguments) {
-                    keywords = null;
-                }
-                if (keywords != null && keywords.Count > 0 && signature.RefusesKeywords) {
-                    throw RubyExceptions.CreateArgumentError("no keywords accepted");
+            // A symbol proc reports [[:req], [:rest]] but checks for its receiver itself
+            // ("no receiver given").
+            if (signature != null && proc.SymbolName == null) {
+                Hash keywords = null;
+                // = signature.TakesKeywords || signature.RefusesKeywords, cached
+                if (proc.Dispatcher.ChecksKeywords) {
+                    keywords = argCount > 0 ? lastArg as Hash : null;
+                    if (keywords != null && !keywords.IsKeywordArguments) {
+                        keywords = null;
+                    }
+                    if (keywords != null && keywords.Count > 0 && signature.RefusesKeywords) {
+                        throw RubyExceptions.CreateArgumentError("no keywords accepted");
+                    }
                 }
                 if (proc.Kind != ProcKind.Lambda) {
                     return;
                 }
+                // The signature knows the positional bounds exactly ("1..2" for |a, b = 1|), where
+                // the arity alone would only say "1+".
                 int positional = argCount - (keywords != null ? 1 : 0);
                 int min = signature.MinPositionalCount, max = signature.MaxPositionalCount;
                 if (positional < min || (max >= 0 && positional > max)) {
                     var inv = System.Globalization.CultureInfo.InvariantCulture;
-                    throw (min == max) ? MakeWrongNumberOfArgumentsError(positional, min)
-                        : MakeWrongNumberOfArgumentsErrorN(positional, min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv)));
+                    string expected = (min == max) ? min.ToString(inv)
+                        : min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv));
+                    throw MakeWrongNumberOfArgumentsErrorN(positional, expected + MissingRequiredKeywordsNote(signature, keywords));
                 }
                 return;
             }
@@ -659,6 +667,18 @@ namespace IronRuby.Runtime {
                 throw MakeWrongNumberOfArgumentsErrorN(argCount,
                     (-arity - 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + "+");
             }
+        }
+
+        /// <summary>
+        /// MRI's argument_arity_error names every required keyword, given or not:
+        /// "wrong number of arguments (given 2, expected 1; required keyword: b)".
+        /// </summary>
+        private static string/*!*/ MissingRequiredKeywordsNote(RubyParameterSignature/*!*/ signature, Hash keywords) {
+            string[] required = signature.RequiredKeywordNames;
+            if (required.Length == 0) {
+                return "";
+            }
+            return (required.Length == 1 ? "; required keyword: " : "; required keywords: ") + String.Join(", ", required);
         }
 
         [Emitted]
@@ -3208,8 +3228,24 @@ namespace IronRuby.Runtime {
             return RubyExceptions.CreateMethodMissing(context, self, methodName);
         }
 
+        // MRI's method_missing_reason: whether the call that is about to reach a user-defined
+        // method_missing had an implicit receiver, read back by BasicObject#method_missing when
+        // that definition calls super, so that NoMethodError#private_call? can answer.
+        [ThreadStatic]
+        private static bool _methodMissingPrivateCall;
+
+        public static bool MethodMissingPrivateCall {
+            get { return _methodMissingPrivateCall; }
+            set { _methodMissingPrivateCall = value; }
+        }
+
         [Emitted]
-        public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs) {
+        public static void SetMethodMissingReason(bool privateCall) {
+            _methodMissingPrivateCall = privateCall;
+        }
+
+        [Emitted]
+        public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs, bool privateCall) {
             var list = new RubyArray(args);
             if (splat != null) {
                 list.AddRange(splat);
@@ -3217,7 +3253,9 @@ namespace IronRuby.Runtime {
             if (hasRhs) {
                 list.Add(rhs);
             }
-            RubyExceptionData.GetInstance(error).Arguments = list;
+            var data = RubyExceptionData.GetInstance(error);
+            data.Arguments = list;
+            data.PrivateCall = privateCall;
             return error;
         }
 
@@ -3710,7 +3748,7 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(value));
+            throw InvalidFloatValue(value.ToByteArray());
         }
 
         [Emitted]
@@ -3720,8 +3758,37 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}",
-                context.Inspect(MutableString.CreateMutable(value, RubyEncoding.UTF8)));
+            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
+        }
+
+        /// <summary>
+        /// MRI quotes the string byte by byte, as a binary string's inspect would: every byte
+        /// outside printable ASCII shows as \xNN, so a non-ASCII character is spelled out in its bytes.
+        /// </summary>
+        private static Exception/*!*/ InvalidFloatValue(byte[]/*!*/ bytes) {
+            var text = new StringBuilder(bytes.Length + 8);
+            foreach (byte b in bytes) {
+                switch (b) {
+                    case (byte)'\n': text.Append("\\n"); break;
+                    case (byte)'\t': text.Append("\\t"); break;
+                    case (byte)'\r': text.Append("\\r"); break;
+                    case (byte)'\f': text.Append("\\f"); break;
+                    case (byte)'\v': text.Append("\\v"); break;
+                    case (byte)'\a': text.Append("\\a"); break;
+                    case (byte)'\b': text.Append("\\b"); break;
+                    case 27: text.Append("\\e"); break;
+                    case (byte)'"': text.Append("\\\""); break;
+                    case (byte)'\\': text.Append("\\\\"); break;
+                    default:
+                        if (b < 0x20 || b >= 0x7f) {
+                            text.Append("\\x").Append(b.ToString("X2", CultureInfo.InvariantCulture));
+                        } else {
+                            text.Append((char)b);
+                        }
+                        break;
+                }
+            }
+            return RubyExceptions.CreateArgumentError("invalid value for Float(): \"{0}\"", text.ToString());
         }
 
         #region Kernel#Float string grammar

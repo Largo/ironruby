@@ -192,7 +192,19 @@ namespace IronRuby.Builtins {
                     case '\r': text.Append("\\r"); break;
                     case '\f': text.Append("\\f"); break;
                     case '\v': text.Append("\\v"); break;
-                    default: text.Append(c); break;
+                    case '\a': text.Append("\\a"); break;
+                    case '\b': text.Append("\\b"); break;
+                    case (char)27: text.Append("\\e"); break;
+                    case '"': text.Append("\\\""); break;
+                    case '\\': text.Append("\\\\"); break;
+                    default:
+                        // the other control characters the way #inspect spells them
+                        if (c < 0x20 || c == 0x7f) {
+                            text.Append("\\u").Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+                        } else {
+                            text.Append(c);
+                        }
+                        break;
                 }
             }
             return RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", text.ToString());
@@ -711,6 +723,9 @@ namespace IronRuby.Builtins {
                 exception = MakeException(respondToStorage, storage0, storage1, args);
 
                 if (args.Length >= 3 && args[2] != null) {
+                    if (!(args[2] is MutableString || args[2] is RubyArray)) {
+                        throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+                    }
                     var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
                     site.Target(site, exception, args[2]);
                 }
@@ -1978,7 +1993,7 @@ namespace IronRuby.Builtins {
 
         private static RubyArray/*!*/ GetMethods(RubyContext/*!*/ context, object self, bool inherited, RubyMethodAttributes attributes) {
             RubyClass immediateClass = context.GetImmediateClassOf(self);
-            return ModuleOps.GetMethods(immediateClass, inherited, attributes);
+            return ModuleOps.GetMethods(immediateClass, inherited, attributes, null, true);
         }
 
         #endregion
@@ -2580,6 +2595,11 @@ namespace IronRuby.Builtins {
             Protocols.Write(writeStorage, writeStorage.Context.StandardOutput, self);
         }
 
+        [RubyMethod("display")]
+        public static void Display(BinaryOpStorage/*!*/ writeStorage, object self, object port) {
+            Protocols.Write(writeStorage, port, self);
+        }
+
         [RubyMethod("warn", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("warn", RubyMethodAttributes.PublicSingleton)]
         public static void ReportWarning(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
@@ -2680,6 +2700,15 @@ namespace IronRuby.Builtins {
         //sub
         //sub!
 
+        // MRI: a missing format string is "too few arguments", not an arity error.
+        [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("sprintf", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ Sprintf(object self) {
+            throw RubyExceptions.CreateArgumentError("too few arguments");
+        }
+
         [RubyMethod("format", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("format", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("sprintf", RubyMethodAttributes.PrivateInstance)]
@@ -2687,6 +2716,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage,
             object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
 
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+            }
             return new StringFormatter(storage, format.ConvertToString(), format.Encoding, args).Format();
         }
 

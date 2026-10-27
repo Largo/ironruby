@@ -1194,9 +1194,9 @@ m[1,2]
 n[1,2]
 ");
             }, @"
-#<Method: C#foo Methods1.rb:3>
-#<UnboundMethod: C#foo Methods1.rb:3>
-#<Method: D(C)#foo Methods1.rb:3>
+#<Method: C#foo(a, b) Methods1.rb:3>
+#<UnboundMethod: C#foo(a, b) Methods1.rb:3>
+#<Method: D(C)#foo(a, b) Methods1.rb:3>
 3
 3
 ");
@@ -1214,6 +1214,54 @@ end
 ", @"
 0
 1
+");
+        }
+
+        /// <summary>
+        /// Method#inspect shows the parameter list for library methods and attribute accessors
+        /// too, as MRI does ("_" for a required parameter with no name); a rule-generator method
+        /// such as Class#new takes any arguments and says so in its arity.
+        /// </summary>
+        public void MethodInspect_LibraryParameters1() {
+            TestOutput(@"
+class Foo; attr_accessor :a; end
+puts 1.method(:+).inspect, [].method(:push).inspect, Foo.method(:new).inspect
+puts Foo.new.method(:a).inspect.sub(/ \S+:\d+>/, '>'), Foo.new.method(:a=).inspect.sub(/ \S+:\d+>/, '>')
+p Foo.method(:new).arity, Foo.method(:new).parameters, 1.method(:send).arity, Foo.method(:allocate).arity
+", @"
+#<Method: Integer#+(_)>
+#<Method: Array#push(*)>
+#<Method: #<Class:Foo>(Class)#new(*)>
+#<Method: Foo#a()>
+#<Method: Foo#a=(_)>
+-1
+[[:rest]]
+-1
+0
+");
+        }
+
+        /// <summary>
+        /// A method body is skimmed past at load time and bridged when first called. Since prism cd76b0d1
+        /// a SymbolNode's content location is no longer optional; the skimmer still read it as optional,
+        /// so every node after a symbol in a method body was read from the wrong offset ("Unknown prism
+        /// node type", IndexOutOfRangeException) - mspec, for one, could not start.
+        /// </summary>
+        [Options(Prism = true)]
+        public void MethodDef_SymbolInBody1() {
+            TestOutput(@"
+def sym = :start
+def syms
+  [:a, :""b c"", %s(d), :e]
+end
+def call(x)
+  [x, :after]
+end
+p sym, syms, call(:before)
+", @"
+:start
+[:a, :""b c"", :d, :e]
+[:before, :after]
 ");
         }
     }

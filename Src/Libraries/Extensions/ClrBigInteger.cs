@@ -92,7 +92,7 @@ namespace IronRuby.Builtins {
         /// <returns>self + other as Float</returns>
         [RubyMethod("+")]
         public static object Add(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() + other;
+            return Protocols.ToDouble(self) + other;
         }
 
         /// <summary>
@@ -135,7 +135,7 @@ namespace IronRuby.Builtins {
         /// <returns>self - other as Float</returns>
         [RubyMethod("-")]
         public static object Subtract(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() - other;
+            return Protocols.ToDouble(self) - other;
         }
 
         /// <summary>
@@ -178,7 +178,7 @@ namespace IronRuby.Builtins {
         /// <returns>self * other as Float</returns>
         [RubyMethod("*")]
         public static object Multiply(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() * other;
+            return Protocols.ToDouble(self) * other;
         }
 
         /// <summary>
@@ -221,7 +221,7 @@ namespace IronRuby.Builtins {
         /// <returns>self / other as Float</returns>
         [RubyMethod("/")]
         public static object DivideOp(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
+            return Protocols.ToDouble(self) / other;
         }
 
         /// <summary>
@@ -315,7 +315,7 @@ namespace IronRuby.Builtins {
         /// <remarks>Converts self and other to Float and then divides.</remarks>
         [RubyMethod("quo")]
         public static object Quotient(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return Quotient(self, other.ToFloat64());
+            return Quotient(self, Protocols.ToDouble(other));
         }
 
         /// <summary>
@@ -335,7 +335,7 @@ namespace IronRuby.Builtins {
         /// <remarks>Converts self to Float and then divides.</remarks>
         [RubyMethod("quo")]
         public static object Quotient(BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
+            return Protocols.ToDouble(self) / other;
         }
 
         /// <summary>
@@ -359,7 +359,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("**")]
         public static object Power(RubyContext/*!*/ context, BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ exponent) {
             if (exponent.Sign < 0) {
-                return Math.Pow(self.ToFloat64(), exponent.ToFloat64());
+                return Math.Pow(Protocols.ToDouble(self), Protocols.ToDouble(exponent));
             }
             return PowerNonNegative(self, exponent);
         }
@@ -439,7 +439,7 @@ namespace IronRuby.Builtins {
         /// <remarks>Converts self to Float (directly) then calls System.Math.Pow</remarks>
         [RubyMethod("**")]
         public static object Power(BigInteger/*!*/ self, double exponent) {
-            return Math.Pow(self.ToFloat64(), exponent);
+            return Math.Pow(Protocols.ToDouble(self), exponent);
         }
 
         /// <summary>
@@ -557,7 +557,7 @@ namespace IronRuby.Builtins {
                 throw new DivideByZeroException("divided by 0");
             }
 
-            double selfFloat = self.ToFloat64();
+            double selfFloat = Protocols.ToDouble(self);
             // Ruby floors the quotient and gives the remainder the sign of the divisor;
             // C#'s % takes the sign of the dividend and truncates towards zero.  Derive
             // the remainder from % rather than from div * other, which loses every
@@ -628,7 +628,7 @@ namespace IronRuby.Builtins {
             if (other == 0.0) {
                 throw new DivideByZeroException("divided by 0");
             }
-            return self.ToFloat64() % other;
+            return Protocols.ToDouble(self) % other;
         }
 
         /// <summary>
