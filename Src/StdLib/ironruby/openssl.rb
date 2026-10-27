@@ -1016,6 +1016,9 @@ module IronRubyOpenSSL__ # :nodoc: all
       when "InvalidBasicConstraints"
         [x509::V_ERR_INVALID_CA, "invalid CA certificate"]
       when "NotValidForUsage", "CtlNotValidForUsage"
+        # Linux's .NET flags every certificate of a chain whose leaf has the wrong
+        # purpose; OpenSSL reports the one that does not allow server authentication.
+        next nil if certificate && server_authentication?(certificate)
         [x509::V_ERR_INVALID_PURPOSE, "unsupported certificate purpose"]
       when "HasNotPermittedNameConstraint"
         [x509::V_ERR_PERMITTED_VIOLATION, "permitted subtree violation"]
@@ -1035,12 +1038,26 @@ module IronRubyOpenSSL__ # :nodoc: all
 
   X509_ERROR_ORDER = [2, 18, 19, 20, 21, 23, 28, 24, 26, 41, 47, 48, 7, 9, 10].freeze
 
+  SERVER_AUTHENTICATION = ["1.3.6.1.5.5.7.3.1", "2.5.29.37.0"].freeze # serverAuth, anyExtendedKeyUsage
+
+  # Whether the certificate's own extendedKeyUsage allows TLS server
+  # authentication; a certificate without one allows every purpose.
+  def self.server_authentication?(certificate)
+    clr = certificate.__clr
+    return true if clr.nil?
+    usage = clr.Extensions.to_a.find { |extension| extension.Oid.Value.to_s == "2.5.29.37" }
+    return true if usage.nil?
+    usage.EnhancedKeyUsages.to_a.any? { |oid| SERVER_AUTHENTICATION.include?(oid.Value.to_s) }
+  end
+
   # The first of those, for Store#verify; with +failed+ the chain is known to be
-  # bad, so no flag still means "no trusted root".
+  # bad, so no flag still means "no trusted root".  A flag without an OpenSSL
+  # equivalent also counts as that, as Store#verify has always reported it.
   def self.x509_error(statuses, failed = false)
-    error = x509_errors(statuses).first
+    errors = x509_errors(statuses)
+    error = errors.find { |code, _| code != ::OpenSSL::X509::V_ERR_UNSPECIFIED }
     return error if error
-    failed ? [20, "unable to get local issuer certificate"] : [0, "ok"]
+    failed || !errors.empty? ? [20, "unable to get local issuer certificate"] : [0, "ok"]
   end
 end
 

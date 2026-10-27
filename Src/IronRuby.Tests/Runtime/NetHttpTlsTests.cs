@@ -27,15 +27,13 @@ using System.Threading;
 namespace IronRuby.Tests {
 
     public partial class Tests {
-        // What every script below starts with: net/http and openssl, quietly (their own parse
-        // warnings are not what these tests are about), and the server's ports and CA files.
+        // What every script below starts with: net/http (and openssl), which load without a
+        // warning, and the server's ports and CA files.
         private static string NetHttpPrelude(TlsTestServer/*!*/ server, bool openssl) {
             return @"
-verbose, $VERBOSE = $VERBOSE, nil
 require 'ruby4'
 require 'net/http'
 " + (openssl ? "require 'openssl'\n" : "") + @"
-$VERBOSE = verbose
 PORTS = " + server.RubyPorts + @"
 CA = " + server.RubyCertificatePaths + @"
 
@@ -240,6 +238,55 @@ s.close
 [:refused, [[true, 1, 0]]]
 true
 0
+");
+            }
+        }
+
+        /// <summary>
+        /// RubyGems' vendored copy of net-http and net-protocol (Gem::Net, what `gem install`
+        /// fetches with) gets the same timeouts over TLS as the standard library's, and raises
+        /// its own Gem::Net errors. It is loaded with require_relative, so the override is put in
+        /// when the first SSLSocket is made.
+        /// </summary>
+        [Options(Prism = true)]
+        public void NetHttp_GemNetTls1() {
+            using (var server = new TlsTestServer()) {
+                TestOutput(@"
+require 'ruby4'
+module Gem; end unless defined?(Gem)
+require 'rubygems/vendored_net_http'
+require 'openssl'
+PORTS = " + server.RubyPorts + @"
+CA = " + server.RubyCertificatePaths + @"
+
+def gem_http(at, **opts)
+  h = Gem::Net::HTTP.new('127.0.0.1', PORTS[at])
+  h.use_ssl = true
+  h.ca_file = CA[:self]
+  h.max_retries = 0
+  opts.each { |name, value| h.__send__(""#{name}="", value) }
+  h
+end
+
+p gem_http(:self).start { |h| h.get('/data?size=5').body }
+t = Time.now
+begin
+  gem_http(:self, read_timeout: 1).start { |h| h.get('/stall') }
+rescue Gem::Net::ReadTimeout
+  p [:read_timeout, Time.now - t < 5]
+end
+t = Time.now
+begin
+  gem_http(:stall, open_timeout: 1).start { |h| h.get('/') }
+rescue Gem::Net::OpenTimeout
+  p [:open_timeout, Time.now - t < 5]
+end
+p defined?(::Net::HTTP)
+", @"
+""xxxxx""
+[:read_timeout, true]
+[:open_timeout, true]
+nil
 ");
             }
         }

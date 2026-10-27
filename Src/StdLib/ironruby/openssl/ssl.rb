@@ -9,8 +9,8 @@
 #     They never return :wait_readable, which the callers (net/protocol's
 #     BufferedIO, net/http) treat as "the data is here", so they work.  The
 #     timeouts those callers would apply while waiting are applied to the
-#     blocking calls instead: IronRuby's net/protocol
-#     (Src/StdLib/ironruby/net/protocol.rb) hands them to #__connect,
+#     blocking calls instead: IronRuby's override of net/protocol, for Net and
+#     RubyGems' Gem::Net (ironruby/net_tls.rb), hands them to #__connect,
 #     #__read_timeout= and #__write_timeout=, and a call that runs out of time
 #     raises IO::TimeoutError and leaves the connection unusable.
 #   * the chain is built by .NET: against the system trust store, or, when the
@@ -21,6 +21,8 @@
 #     certificate of the chain, root first, once per error (or once with
 #     preverify_ok true), and has the last word.
 #   * server sockets (SSLServer, #accept) are not implemented.
+
+require "ironruby/net_tls"
 
 module OpenSSL
   module SSL
@@ -100,6 +102,8 @@ module OpenSSL
         @io = io
         @context = context || SSLContext.new
         @transport = Transport__.new(io)
+        # RubyGems' vendored net-protocol, if loaded by now, gets the TLS timeouts too.
+        IronRuby::NetTLS.install_vendored
         @hostname = nil
         @sync_close = false
         @session = nil

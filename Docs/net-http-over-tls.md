@@ -98,7 +98,8 @@ As built:
   `#connect(hostname, verify, timeout_ms)`, which runs `AuthenticateAsClientAsync` under a
   `CancellationTokenSource`. A timeout raises `IO::TimeoutError` and marks the transport
   broken; every later read or write raises `SSLError` ("SSL connection is unusable").
-- `Src/StdLib/ironruby/net/protocol.rb` loads upstream's file and prepends two modules:
+- `Src/StdLib/ironruby/net/protocol.rb` loads upstream's file and prepends two modules
+  (from `ironruby/net_tls.rb`):
   `Net::Protocol#ssl_socket_connect` calls `SSLSocket#__connect(open_timeout)` and raises
   `Net::OpenTimeout`; `Net::BufferedIO#rbuf_fill`/`#write0` set
   `SSLSocket#__read_timeout=`/`#__write_timeout=` and raise `Net::ReadTimeout`/`Net::WriteTimeout`.
@@ -115,9 +116,11 @@ As built:
   the callback is a rejection with a warning. It runs on the thread that finishes the handshake.
 - `Thread#raise` or `Timeout.timeout` during the handshake cancels it, marks the transport
   broken, and raises the interrupting exception rather than an `SSLError`.
-- Not covered: RubyGems' vendored copy of net-protocol (`Gem::Net`, under
-  `Src/StdLib/ruby/4.0/rubygems/vendor/net-protocol`) gets none of this, so `gem` over HTTPS
-  still has no read, write or handshake timeout.
+- The overrides live in `ironruby/net_tls.rb` and work for any copy of net/protocol: the
+  standard library's `Net`, installed by `net/protocol.rb`, and RubyGems' vendored `Gem::Net`.
+  RubyGems loads its copy with `require_relative`, which nothing can hook, so
+  `SSLSocket#initialize` installs it once `Gem::Net` exists. `Gem::Net::HTTP#connect` makes the
+  socket before it calls `ssl_socket_connect`, so even the first handshake is covered.
 - With no SNI name (net/http connecting to an IP address) the handshake ignores
   `RemoteCertificateNameMismatch`, and `post_connection_check` checks the name against the
   certificate (`X509Certificate2.MatchesHostname`, IP SANs included; without a subjectAltName
