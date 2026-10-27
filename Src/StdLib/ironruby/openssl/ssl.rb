@@ -3,16 +3,18 @@
 #
 # What that costs, compared with MRI:
 #
-#   * there is no non-blocking handshake or non-blocking IO.  SslStream drives
-#     the socket itself and has no "would block" answer, so #connect_nonblock
-#     does the whole handshake and #read_nonblock / #write_nonblock block.
-#     They never return :wait_readable, which the callers (net/protocol's
-#     BufferedIO, net/http) treat as "the data is here", so they work.  The
-#     timeouts those callers would apply while waiting are applied to the
-#     blocking calls instead: IronRuby's override of net/protocol, for Net and
-#     RubyGems' Gem::Net (ironruby/net_tls.rb), hands them to #__connect,
-#     #__read_timeout= and #__write_timeout=, and a call that runs out of time
-#     raises IO::TimeoutError and leaves the connection unusable.
+#   * SslStream drives the socket itself, so "would block" is about SslStream's
+#     operations, not the socket: #connect_nonblock, #read_nonblock and
+#     #write_nonblock start one and answer :wait_readable / :wait_writable (or
+#     raise SSLErrorWaitReadable / SSLErrorWaitWritable) while it runs.
+#     IO.select, IO#wait_readable on #to_io and NIO::Selector ask the transport,
+#     which is the TCP socket's readiness hook, so they see it finish - which is
+#     how net/protocol applies open_timeout, read_timeout and write_timeout, for
+#     the standard library's Net and RubyGems' Gem::Net alike.
+#   * the blocking calls (#connect, #sysread, #syswrite) wait for such an
+#     operation; #__connect(timeout), #__read_timeout= and #__write_timeout=
+#     bound the wait, and running out raises IO::TimeoutError and leaves the
+#     connection unusable.
 #   * the chain is built by .NET: against the system trust store, or, when the
 #     context has #ca_file, #ca_path or #cert_store, against the self-signed
 #     certificates in those (and the system store as well for a cert_store that
@@ -21,8 +23,6 @@
 #     certificate of the chain, root first, once per error (or once with
 #     preverify_ok true), and has the last word.
 #   * server sockets (SSLServer, #accept) are not implemented.
-
-require "ironruby/net_tls"
 
 module OpenSSL
   module SSL
@@ -102,8 +102,6 @@ module OpenSSL
         @io = io
         @context = context || SSLContext.new
         @transport = Transport__.new(io)
-        # RubyGems' vendored net-protocol, if loaded by now, gets the TLS timeouts too.
-        IronRuby::NetTLS.install_vendored
         @hostname = nil
         @sync_close = false
         @session = nil
@@ -119,32 +117,29 @@ module OpenSSL
       end
 
       # The handshake, given at most +timeout+ seconds (nil: no limit); running out
-      # raises IO::TimeoutError.  net/protocol's ssl_socket_connect calls this with
-      # open_timeout.
+      # raises IO::TimeoutError.
       def __connect(timeout) # :nodoc:
         return self if @connected
-        verify = @context.respond_to?(:verify_mode) &&
-                 @context.verify_mode != OpenSSL::SSL::VERIFY_NONE
-        if verify
-          anchors, system = __trust_anchors
-          @transport.trust(anchors, system) unless anchors.nil?
-          callback = @context.respond_to?(:verify_callback) && @context.verify_callback
-          @transport.verify_callback = callback ? __verifier(callback) : nil
-        end
-        @transport.connect(@hostname.to_s, verify, __milliseconds(timeout))
+        @transport.connect(@hostname.to_s, __verification, __milliseconds(timeout))
         @connected = true
         self
       end
 
-      # There is no partial handshake here, so this is #connect; the argument is
-      # accepted because net/protocol's ssl_socket_connect passes exception: false.
-      def connect_nonblock(options = nil)
-        connect
+      # Starts the handshake, or looks at the one in flight: self once it is done,
+      # else SSLErrorWaitReadable, or :wait_readable with exception: false.
+      # IO.select on #to_io says when to ask again.
+      def connect_nonblock(exception: true)
+        return self if @connected
+        if @transport.connect_nonblock(@hostname.to_s, __verification) == :wait_readable
+          raise SSLErrorWaitReadable, "read would block" if exception
+          return :wait_readable
+        end
+        @connected = true
+        self
       end
 
-      # How long one read or write may wait, in seconds, nil for ever.  Not MRI API:
-      # IronRuby's net/protocol sets them from BufferedIO's read_timeout and
-      # write_timeout, which MRI applies while waiting for :wait_readable.
+      # How long one blocking read or write may wait, in seconds, nil for ever.
+      # Not MRI API; the non-blocking calls are bounded by whoever waits for them.
       def __read_timeout=(seconds) # :nodoc:
         milliseconds = __milliseconds(seconds)
         @transport.read_timeout = @read_timeout = milliseconds unless milliseconds == @read_timeout
@@ -220,10 +215,18 @@ module OpenSSL
       end
 
       def read_nonblock(length, buffer = nil, exception: true)
-        sysread(length, buffer)
-      rescue EOFError
-        raise if exception
-        nil
+        connect unless @connected
+        case data = @transport.read_nonblock(length)
+        when :wait_readable
+          raise SSLErrorWaitReadable, "read would block" if exception
+          :wait_readable
+        when nil
+          @eof = true
+          raise EOFError, "end of file reached" if exception
+          nil
+        else
+          buffer.nil? ? data : buffer.replace(data)
+        end
       end
 
       def readpartial(length, buffer = nil)
@@ -274,8 +277,16 @@ module OpenSSL
         data.inject(0) { |total, item| total + syswrite(item.to_s) }
       end
 
+      # How much of +data+ went out - at most 16 KB at a time - or SSLErrorWaitWritable
+      # (:wait_writable with exception: false) while the last part is still going.
       def write_nonblock(data, exception: true)
-        syswrite(data)
+        connect unless @connected
+        written = @transport.write_nonblock(data.to_s)
+        if written == :wait_writable
+          raise SSLErrorWaitWritable, "write would block" if exception
+          return :wait_writable
+        end
+        written
       end
 
       def <<(data)
@@ -347,6 +358,21 @@ module OpenSSL
       end
 
       private
+
+      # Whether the certificate is checked at all, with the transport told what to
+      # check it against.  Once per socket: a handshake in flight reads it.
+      def __verification
+        return @verify unless @verify.nil?
+        @verify = @context.respond_to?(:verify_mode) &&
+                  @context.verify_mode != OpenSSL::SSL::VERIFY_NONE
+        if @verify
+          anchors, system = __trust_anchors
+          @transport.trust(anchors, system) unless anchors.nil?
+          callback = @context.respond_to?(:verify_callback) && @context.verify_callback
+          @transport.verify_callback = callback ? __verifier(callback) : nil
+        end
+        @verify
+      end
 
       # Seconds as the transport's milliseconds: -1 for nil (no limit), and at least 1,
       # since 0 would mean "no limit" to the socket underneath.

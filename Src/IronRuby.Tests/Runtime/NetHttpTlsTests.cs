@@ -243,10 +243,123 @@ true
         }
 
         /// <summary>
+        /// Non-blocking TLS, the way an event loop drives it: connect_nonblock, read_nonblock and
+        /// write_nonblock answer :wait_readable / :wait_writable while SslStream's operation runs,
+        /// and IO.select on #to_io and NIO::Selector see it finish. Bytes SslStream has already
+        /// decrypted make the socket readable although the TCP socket under it is empty.
+        /// </summary>
+        [Options(Prism = true)]
+        public void Ssl_NonBlocking1() {
+            using (var server = new TlsTestServer()) {
+                TestOutput(@"
+require 'ruby4'
+require 'socket'
+require 'openssl'
+# nio.rb asks RubyGems what platform this is; the test runtime has no RubyGems
+module Gem
+  def self.win_platform?
+    File::ALT_SEPARATOR == '\\'
+  end
+end unless defined?(Gem)
+require 'nio'
+PORTS = " + server.RubyPorts + @"
+CA = " + server.RubyCertificatePaths + @"
+
+def tls(at = :self)
+  ctx = OpenSSL::SSL::SSLContext.new
+  ctx.set_params(ca_file: CA[:self])
+  OpenSSL::SSL::SSLSocket.new(TCPSocket.new('127.0.0.1', PORTS[at]), ctx)
+end
+
+def read_response(s)
+  buf = ''.b
+  until (head = buf.index(""\r\n\r\n"")) && buf.bytesize >= head + 4 + buf[/Content-Length: (\d+)/, 1].to_i
+    case data = s.read_nonblock(4096, exception: false)
+    when :wait_readable then IO.select([s.to_io], nil, nil, 5) or raise 'read stalled'
+    else buf << data
+    end
+  end
+  buf[(head + 4)..-1]
+end
+
+s = tls
+until (r = s.connect_nonblock(exception: false)) == s
+  raise r.inspect unless r == :wait_readable
+  IO.select([s.to_io], nil, nil, 5) or raise 'handshake stalled'
+end
+p [s.state, s.post_connection_check('127.0.0.1')]
+
+# nothing to read yet
+p s.read_nonblock(10, exception: false)
+begin
+  s.read_nonblock(10)
+rescue OpenSSL::SSL::SSLErrorWaitReadable => e
+  p [e.is_a?(IO::WaitReadable), e.message]
+end
+p IO.select([s.to_io], nil, nil, 0.2)
+
+s.write ""GET /data?size=100000 HTTP/1.1\r\nHost: x\r\n\r\n""
+p read_response(s).bytesize
+
+# one byte of a response: the rest is decrypted and waiting, and select says so
+s.write ""GET /data?size=10 HTTP/1.1\r\nHost: x\r\n\r\n""
+IO.select([s.to_io], nil, nil, 5)
+first = s.read_nonblock(1)
+p [first, s.pending > 0, IO.select([s.to_io], nil, nil, 0) ? :readable : :not_readable]
+read_response(s) rescue nil
+s.read_nonblock(4096, exception: false) while s.pending > 0
+
+# NIO::Selector over the TLS socket
+selector = NIO::Selector.new
+monitor = selector.register(s.to_io, :r)
+p selector.select(0.2)
+s.write_nonblock(""GET /data?size=7 HTTP/1.1\r\nHost: x\r\n\r\n"")
+ready = selector.select(5)
+p [ready.size, monitor.readable?]
+selector.deregister(s.to_io)
+s.close
+
+# a server that reads nothing: write_nonblock runs into :wait_writable, and select agrees
+s = tls
+s.connect
+s.write ""POST /sink HTTP/1.1\r\nHost: x\r\nContent-Length: 100000000\r\n\r\n""
+chunk = 'z' * 65536
+written = 0
+result = nil
+2000.times do
+  result = s.write_nonblock(chunk, exception: false)
+  break if result == :wait_writable
+  written += result
+end
+p [result, written > 0, written <= 16384 * 2000]
+p IO.select(nil, [s.to_io], nil, 0.2)
+begin
+  s.write_nonblock(chunk)
+rescue OpenSSL::SSL::SSLErrorWaitWritable => e
+  p e.is_a?(IO::WaitWritable)
+end
+s.close
+", @"
+[""SSLOK "", true]
+:wait_readable
+[true, ""read would block""]
+nil
+100000
+[""H"", true, :readable]
+nil
+[1, true]
+[:wait_writable, true, true]
+nil
+true
+");
+            }
+        }
+
+        /// <summary>
         /// RubyGems' vendored copy of net-http and net-protocol (Gem::Net, what `gem install`
         /// fetches with) gets the same timeouts over TLS as the standard library's, and raises
-        /// its own Gem::Net errors. It is loaded with require_relative, so the override is put in
-        /// when the first SSLSocket is made.
+        /// its own Gem::Net errors. Nothing of it is patched: SSLSocket's non-blocking calls are
+        /// what upstream's timeouts wait on.
         /// </summary>
         [Options(Prism = true)]
         public void NetHttp_GemNetTls1() {

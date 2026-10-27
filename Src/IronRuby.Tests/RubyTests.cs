@@ -712,6 +712,7 @@ namespace IronRuby.Tests {
                 NetHttp_TlsVerifyCallback1,
                 NetHttp_PlainNoOpenSsl1,
                 NetHttp_GemNetTls1,
+                Ssl_NonBlocking1,
                 Sprintf_MriTieRounding1,
                 Float_NegativeZero1,
                 Math_CLibrary1,
