@@ -160,8 +160,8 @@ namespace IronRuby.Builtins {
 
                 // any symbol is a legal member name; the accessors are defined for all of them,
                 // even when the resulting name is not writable as a literal method call
-                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls));
-                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls));
+                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls, 0));
+                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls, 1));
             }
         }
 
@@ -332,6 +332,19 @@ namespace IronRuby.Builtins {
 
         public int ItemCount {
             get { return _data.Length; }
+        }
+
+        /// <summary>
+        /// Whether the struct's class was built by Struct.new(..., keyword_init: true): ruby4.rb's
+        /// Struct.new keeps the option in the class's @__keyword_init__, which is what the class's
+        /// #keyword_init? answers. A subclass has none of its own.
+        /// </summary>
+        public bool IsKeywordInit {
+            get {
+                var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
+                object value;
+                return data != null && data.TryGetInstanceVariable("@__keyword_init__", out value) && RubyOps.IsTrue(value);
+            }
         }
     }
 }

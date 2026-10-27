@@ -73,14 +73,14 @@ module RbConfig
   CONFIG["sitearch"] = arch.dup
 
   # std lib
-  CONFIG["ruby_version"] = stdlib_version = "1.9.1"               # std library version
+  # Still 1.9.1: the version names the site directory, and site_ruby/1.9.1 is where
+  # IronRuby's readline (rb-readline) lives. The standard library itself is ruby/4.0
+  # (rubylibdir below) and gems go under gems/4.0.0 (rubygems/defaults/ironruby.rb).
+  CONFIG["ruby_version"] = stdlib_version = "1.9.1"
   CONFIG["RUBY_BASE_NAME"] = ruby_base_name = "ruby"              # directory name
   CONFIG["datadir"] = datadir = "#{prefix}/share"
   CONFIG["rubylibprefix"] = rubylibprefix = "#{libdir}/#{ruby_base_name}"
-  # The 4.0 library comes first on the load path; the 1.9 tree only backs it up.
-  rubylibdir = "#{rubylibprefix}/4.0"
-  rubylibdir = "#{rubylibprefix}/#{stdlib_version}" unless File.directory?(rubylibdir)
-  CONFIG["rubylibdir"] = rubylibdir
+  CONFIG["rubylibdir"] = "#{rubylibprefix}/4.0"
   # What MRI keeps in its arch dir as C extensions IronRuby implements in ironruby/.
   CONFIG["rubyarchdir"] = CONFIG["archdir"] = "#{libdir}/ironruby"
 

@@ -58,6 +58,9 @@ namespace IronRuby.Builtins {
         private const int ERROR_FILE_NOT_FOUND = 2;
         private const int ERROR_PATH_NOT_FOUND = 3;
         private const int ERROR_ACCESS_DENIED = 5;
+        private const int ERROR_SHARING_VIOLATION = 32;
+        private const int ERROR_LOCK_VIOLATION = 33;
+        private const int ERROR_INVALID_NAME = 123;
         private const int ERROR_BAD_EXE_FORMAT = 193;
         private const int ERROR_BROKEN_PIPE = 109;
 
@@ -182,12 +185,6 @@ namespace IronRuby.Builtins {
                     return true;
                 }
                 return false;
-            }
-        }
-
-        private static bool TryGetChild(int pid, out IntPtr handle) {
-            lock (_children) {
-                return _children.TryGetValue(pid, out handle);
             }
         }
 
@@ -534,11 +531,15 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // the nearest errno, as MRI's map_errno gives it
         private static int Errno(int win32Error) {
             switch (win32Error) {
                 case ERROR_FILE_NOT_FOUND:
-                case ERROR_PATH_NOT_FOUND: return ENOENT;
-                case ERROR_ACCESS_DENIED: return EACCES;
+                case ERROR_PATH_NOT_FOUND:
+                case ERROR_INVALID_NAME: return ENOENT;
+                case ERROR_ACCESS_DENIED:
+                case ERROR_SHARING_VIOLATION:
+                case ERROR_LOCK_VIOLATION: return EACCES;
                 case ERROR_BAD_EXE_FORMAT: return ENOEXEC;
                 default: return EINVAL;
             }
@@ -636,7 +637,7 @@ namespace IronRuby.Builtins {
         private const int ESRCH = 3;
         private const uint STILL_ACTIVE = 259;
         private const uint PROCESS_TERMINATE = 0x0001;
-        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
         private const int ERROR_INVALID_PARAMETER = 87;
         private const uint CTRL_C_EVENT = 0;
         private const uint CTRL_BREAK_EVENT = 1;
@@ -664,35 +665,46 @@ namespace IronRuby.Builtins {
 
                 case 0:
                 case SIGKILL:
-                    IntPtr handle;
-                    bool child = TryGetChild(pid, out handle);
-                    if (!child) {
-                        handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, false, pid);
-                        if (handle == IntPtr.Zero) {
-                            return (Marshal.GetLastWin32Error() == ERROR_INVALID_PARAMETER) ? -ESRCH : -EPERM;
+                    // A child's handle is the one __waitpid__ reaps and closes, so it is used with the
+                    // table locked: otherwise another thread could close it between the lookup and the
+                    // call, and a child started meanwhile could be handed the same handle value.
+                    lock (_children) {
+                        IntPtr child;
+                        if (_children.TryGetValue(pid, out child)) {
+                            return Signal(child, signal);
                         }
                     }
+
+                    // signal 0 only asks, so it needs no right to end the process
+                    uint access = PROCESS_QUERY_LIMITED_INFORMATION | (signal == SIGKILL ? PROCESS_TERMINATE : 0);
+                    IntPtr handle = OpenProcess(access, false, pid);
+                    if (handle == IntPtr.Zero) {
+                        return (Marshal.GetLastWin32Error() == ERROR_INVALID_PARAMETER) ? -ESRCH : -EPERM;
+                    }
                     try {
-                        uint status;
-                        if (!GetExitCodeProcess(handle, out status)) {
-                            return -Errno(Marshal.GetLastWin32Error());
-                        }
-                        if (status != STILL_ACTIVE) {
-                            return -ESRCH;
-                        }
-                        if (signal == SIGKILL && !TerminateProcess(handle, 0)) {
-                            return -EPERM;
-                        }
-                        return 0;
+                        return Signal(handle, signal);
                     } finally {
-                        if (!child) {
-                            CloseHandle(handle);
-                        }
+                        CloseHandle(handle);
                     }
 
                 default:
                     return -EINVAL;
             }
+        }
+
+        /// <summary>KILL or 0 to an open process handle: 0, or -errno.</summary>
+        private static int Signal(IntPtr handle, int signal) {
+            uint status;
+            if (!GetExitCodeProcess(handle, out status)) {
+                return -Errno(Marshal.GetLastWin32Error());
+            }
+            if (status != STILL_ACTIVE) {
+                return -ESRCH;
+            }
+            if (signal == SIGKILL && !TerminateProcess(handle, 0)) {
+                return -EPERM;
+            }
+            return 0;
         }
 
         #endregion

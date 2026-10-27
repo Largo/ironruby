@@ -110,6 +110,15 @@ namespace IronRuby.Compiler.Ast {
             get { return _lexicalScope.Depth; }
         }
 
+        // whether anything in the scope reads an outer scope's locals (see GetClosure)
+        internal bool HasClosures {
+            get { return _closures != null; }
+        }
+
+        internal MSA.ParameterExpression/*!*/ LocalsTupleVariable {
+            get { return _localsTuple; }
+        }
+
         internal ScopeBuilder Parent {
             get { return _parent; }
         }
@@ -191,7 +200,7 @@ namespace IronRuby.Compiler.Ast {
             // TODO: use a factory instead of Ast.New to improve interpreter perf:
             MSA.Expression result = Ast.Assign(
                 _localsTuple, 
-                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : Ast.New(_localsTuple.Type)
+                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : NewLocalsTuple()
             );
             
             if (_parameters != null) {
@@ -208,6 +217,71 @@ namespace IronRuby.Compiler.Ast {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// A new locals tuple. One of more than <see cref="MutableTuple.MaxSize"/> fields holds its fields in nested
+        /// tuples, which Ast.New would leave null - the first local stored into one of them threw a
+        /// NullReferenceException - so it is built with every nested tuple in place.
+        /// </summary>
+        private MSA.Expression/*!*/ NewLocalsTuple() {
+            int count = LiftedVisibleVariableCount;
+            if (count <= MutableTuple.MaxSize) {
+                return Ast.New(_localsTuple.Type);
+            }
+            var values = new MSA.Expression[count];
+            for (int i = 0; i < values.Length; i++) {
+                values[i] = AstUtils.Constant(null, typeof(object));
+            }
+            MSA.Expression result = MutableTuple.Create(values);
+            Debug.Assert(result.Type == _localsTuple.Type);
+            return result;
+        }
+
+        /// <summary>
+        /// Whether a block that reuses its scope (see RubyOps.TakeReusableBlockScope) reuses the
+        /// scope's locals tuple too: one of up to 8 locals, cleared when the call finishes.
+        /// </summary>
+        internal bool HasReusableLocals {
+            get {
+                int count = LiftedVisibleVariableCount;
+                return count > 0 && count <= 8 && _parameters == null;
+            }
+        }
+
+        /// <summary>
+        /// Takes the scope the last call of the block kept (into <paramref name="reusableScope"/>, null if there is
+        /// none) and then makes the locals storage: the taken scope's tuple, if the block reuses it, or a new one.
+        /// A tuple is only ever reused together with the scope it came from.
+        /// </summary>
+        public MSA.Expression/*!*/ MakeReusableLocalsStorage(MSA.Expression/*!*/ blockParameter, MSA.ParameterExpression/*!*/ reusableScope) {
+            var take = Ast.Assign(reusableScope, Methods.TakeReusableBlockScope.OpCall(blockParameter));
+            if (!HasReusableLocals) {
+                return Ast.Block(take, MakeLocalsStorage());
+            }
+            // (the type test only when there is a tuple to reuse: a block called once has none)
+            return Ast.Block(
+                take,
+                Ast.Assign(_localsTuple, Ast.Coalesce(
+                    Ast.Condition(
+                        Ast.Equal(reusableScope, AstUtils.Constant(null)),
+                        AstUtils.Constant(null, _localsTuple.Type),
+                        Ast.TypeAs(Methods.GetReusableLocals.OpCall(reusableScope), _localsTuple.Type)
+                    ),
+                    Ast.New(_localsTuple.Type)
+                ))
+            );
+        }
+
+        public MSA.Expression/*!*/ MakeClearLocals() {
+            Debug.Assert(HasReusableLocals);
+            int count = LiftedVisibleVariableCount;
+            var result = new AstExpressions(count + 1);
+            for (int i = 0; i < count; i++) {
+                result.Add(Ast.Assign(GetVariableAccessor(_localsTuple, i), AstUtils.Constant(null)));
+            }
+            result.Add(AstUtils.Empty());
+            return Ast.Block(result);
         }
 
         public MSA.Expression/*!*/ GetVariableNamesExpression() {

@@ -806,16 +806,14 @@ namespace IronRuby.Builtins {
             var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             bool wasBlocked = info.Blocked;
             ReadinessWaiter waiter = null;
-            List<RubyPipe> pipes = null;
+            List<object> pipes = null;
             try {
                 info.Blocked = true;
 
-                // In-process pipes have no descriptor to poll; they signal the waiter instead.
-                for (int i = 0; i < watched.Count; i++) {
-                    if (!watched[i].Closed && IoReadiness.GetPipe(watched[i]) != null) {
-                        waiter = ReadinessWaiter.Current;
-                        break;
-                    }
+                // In-process pipes have no descriptor to poll, and an IO with a readiness hook
+                // (a TLS socket) may be ready when its descriptor is not; they signal the waiter.
+                if (IoReadiness.NeedsWaiter(watched)) {
+                    waiter = ReadinessWaiter.Current;
                 }
                 if (waiter != null) {
                     pipes = IoReadiness.Register(waiter, watched);
@@ -882,6 +880,14 @@ namespace IronRuby.Builtins {
             var stream = io.GetStream();
             if (kind == Readiness.Read && stream.DataBuffered) {
                 return true;
+            }
+
+            var hook = IoReadiness.GetHook(io);
+            if (hook != null && kind != Readiness.Error) {
+                bool? ready = hook.IsReady(kind == Readiness.Read ? IoReadiness.Read : IoReadiness.Write);
+                if (ready.HasValue) {
+                    return ready.Value;
+                }
             }
 
             var pipe = stream.BaseStream as RubyPipe;
@@ -1476,12 +1482,13 @@ namespace IronRuby.Builtins {
         public static RubyIO/*!*/ SetEncodings(ConversionStorage<IDictionary<object, object>>/*!*/ toHash, ConversionStorage<MutableString>/*!*/ toStr,
             RubyIO/*!*/ self, object external, [Optional]object @internal, [Optional]IDictionary<object, object> options) {
 
+            self.RequireOpen();
             Protocols.TryConvertToOptions(toHash, ref options, ref external, ref @internal);
             self.ConversionOptions = options;
 
             RubyEncoding externalEncoding = null, internalEncoding = null;
             if (external != Missing.Value && external != null) {
-                externalEncoding = Protocols.ConvertToEncoding(toStr, external);
+                externalEncoding = ToEncodingOrWarn(toStr, external);
             }
             if (@internal != Missing.Value && @internal != null) {
                 if (external == null) {
@@ -1489,9 +1496,22 @@ namespace IronRuby.Builtins {
                     // the internal encoding of a pair" path and tries to coerce nil to a String.
                     throw RubyExceptions.CreateTypeConversionError("nil", "String");
                 }
-                internalEncoding = Protocols.ConvertToEncoding(toStr, @internal);
+                internalEncoding = ToEncodingOrWarn(toStr, @internal);
             }
             return SetEncodings(self, externalEncoding, internalEncoding);
+        }
+
+        // An unknown encoding name is warned about and ignored, as it is in a mode string.
+        private static RubyEncoding ToEncodingOrWarn(ConversionStorage<MutableString>/*!*/ toStr, object/*!*/ value) {
+            var encoding = value as RubyEncoding;
+            if (encoding != null) {
+                return encoding;
+            }
+            string name = Protocols.CastToString(toStr, value).ToString();
+            if (name.IndexOf('\0') >= 0) {
+                throw RubyExceptions.CreateArgumentError("string contains null byte");
+            }
+            return IOInfo.TryParseEncoding(toStr.Context, name);
         }
 
         /// <summary>
@@ -1505,6 +1525,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("set_encoding")]
         public static RubyIO/*!*/ SetEncodings(RubyIO/*!*/ self, RubyEncoding external, [DefaultParameterValue(null)]RubyEncoding @internal) {
+            self.RequireOpen();
             self.SetEncodings(external, @internal);
             return self;
         }
@@ -1522,7 +1543,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("seek")]
         public static int Seek(RubyIO/*!*/ self, [DefaultProtocol]IntegerValue pos, [DefaultProtocol, DefaultParameterValue(SEEK_SET)]int seekOrigin) {
-            self.Seek(pos.ToInt64(), RubyIO.ToSeekOrigin(seekOrigin));
+            self.Seek(pos.ToInt64(), self.CheckSeekOrigin(seekOrigin));
             return 0;
         }
 
@@ -1539,7 +1560,7 @@ namespace IronRuby.Builtins {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("sysseek for buffered IO"));
             }
             self.Flush();
-            self.Seek(pos.ToInt64(), RubyIO.ToSeekOrigin(seekOrigin));
+            self.Seek(pos.ToInt64(), self.CheckSeekOrigin(seekOrigin));
             return Pos(self);
         }
 
@@ -1791,6 +1812,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("sysread")]
         public static MutableString/*!*/ SystemRead(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
+            if (bytes < 0) {
+                throw RubyExceptions.CreateArgumentError("negative string size (or size too big)");
+            }
             if (bytes == 0) {
                 // MRI answers a zero-length read before it looks at the stream or the buffer.
                 return buffer ?? MutableString.CreateBinary();
@@ -2040,6 +2064,18 @@ namespace IronRuby.Builtins {
             return RequireLine(Gets(transcode, scope, self, separator, limit, options));
         }
 
+        [RubyMethod("readline")]
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return RequireLine(Gets(transcode, scope, self, separator, -1, false));
+        }
+
+        [RubyMethod("readline")]
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, DynamicNull limit, object options) {
+            return RequireLine(Gets(transcode, scope, self, separator, -1, TakeChomp(scope.RubyContext, options)));
+        }
+
         private static MutableString/*!*/ RequireLine(MutableString line) {
             if (line == null) {
                 throw new EOFError("end of file reached");
@@ -2074,6 +2110,11 @@ namespace IronRuby.Builtins {
             if (limit == 0) {
                 throw RubyExceptions.CreateArgumentError("invalid limit: 0 for {0}", methodName);
             }
+        }
+
+        [RubyMethod("readlines")]
+        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return ReadLines(context, self, separator, -1);
         }
 
         [RubyMethod("readlines")]
@@ -2184,6 +2225,19 @@ namespace IronRuby.Builtins {
         public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
             [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit, object options) {
             return Gets(transcode, scope, self, separator, limit, TakeChomp(scope.RubyContext, options));
+        }
+
+        // A nil limit is no limit: gets(nil, nil) reads the rest and gets("", nil) a paragraph.
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return Gets(transcode, scope, self, separator, -1, false);
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, DynamicNull limit, object options) {
+            return Gets(transcode, scope, self, separator, -1, TakeChomp(scope.RubyContext, options));
         }
 
         private static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
@@ -2343,6 +2397,12 @@ namespace IronRuby.Builtins {
             } else {
                 return Each(context, block, self, separatorOrLimit.String(), -1);
             }
+        }
+
+        [RubyMethod("each")]
+        [RubyMethod("each_line")]
+        public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, DynamicNull limit) {
+            return Each(context, block, self, separator, -1);
         }
 
         [RubyMethod("each")]

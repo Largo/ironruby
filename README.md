@@ -13,6 +13,13 @@ Ruby 1.9 grammar it shipped with in 2011.
 **IronRuby 4.0 is the first stable release since 1.1.3 in 2011**, and 4.0.1 is its latest.
 The downloads are self-contained: unpack one and run it, there is no .NET to install.
 
+**The compatibility target is Ruby 4.0.** IronRuby aims to run what CRuby 4.0 runs, with
+the same results: the language, the core classes and the standard library are checked
+against [ruby/spec](#status) and against CRuby 4.0 itself, and where IronRuby's behaviour
+differs from CRuby 4.0's, that is a bug in IronRuby. Ruby 3.x behaviour that 4.0 changed
+(`Set` as a core class, `Hash#inspect`, frozen string literals, the error messages) is
+not kept.
+
 | | Download | |
 |---|---|---|
 | **Windows** x64 | [ironruby-4.0.1-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.1/ironruby-4.0.1-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
@@ -105,6 +112,55 @@ def connect(host:, port: 5432, **opts) = Client.new(host, port, **opts)
 users&.filter_map { it.name if it.active? }
 ```
 
+## Calling .NET
+
+The interop IronRuby always had still works: CLR namespaces are modules, `List[String]`
+instantiates a generic, `Method#of` a generic method, `include ILivingCreature` implements an
+interface, a Ruby subclass overrides virtual members, out parameters come back with the result.
+On top of that, .NET APIs now take the Ruby you would write today:
+
+```ruby
+System::Console.WriteLine "hi"     # platform assemblies load on demand, no load_assembly
+
+list = System::Collections::Generic::List[Integer].new([3, 1, 4])   # an Array for IEnumerable<int>
+list.Sort { |a, b| b <=> a }       # a block goes to the trailing delegate parameter
+list.ForEach { |x| break if x < 3 } # break ends the CLR call, as it does a Ruby one
+
+using_clr_extensions System::Linq
+list.where { it > 1 }.order_by { -it }.to_a      # => [4, 3]
+
+Widget.new(title: "Hi", width: 300) # keywords bind parameters by name, or set properties
+Greeter.greet("Ann", greeting: "Hello", times: 2)
+
+func = Funcs.Doubler               # a Func<int, int>
+[1, 2].map(&func)                  # delegates are callable like lambdas: call, to_proc, >>, curry
+ok, n = System::Int32.TryParse("42")
+
+case Point.new(1, 2)               # a C# record
+in {x: 1, y:} then y               # members by their Ruby or CLR name
+end
+min, max = Stats.MinMax(values)    # a ValueTuple destructures like an Array
+System::Threading::Tasks::Task.Run { 6 * 7 }.value   # => 42
+System::Runtime::CompilerServices::RuntimeHelpers.GetSubArray(array, 1..-2)  # a Ruby range for System.Range
+
+class Doctor < Human                # a CLR class without a parameterless constructor
+  def initialize(name)
+    super("Dr. #{name}")            # super runs the CLR base constructor
+  end
+end
+System::Math::PI                    # const and static readonly fields are constants
+command.Parameters.AddWithValue("$name", "Ann")   # a Ruby String for an Object parameter is a System.String
+```
+
+Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`,
+`IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for
+Ruby implementations, `include System::IComparable` works although the name is also a generic,
+and `Method#parameters` names a CLR method's parameters. See
+[`Src/IronRuby.Tests/Runtime/ClrBinderTests.cs`](Src/IronRuby.Tests/Runtime/ClrBinderTests.cs),
+[`ClrProtocolTests.cs`](Src/IronRuby.Tests/Runtime/ClrProtocolTests.cs) and
+[`ClrRuntimeInteropTests.cs`](Src/IronRuby.Tests/Runtime/ClrRuntimeInteropTests.cs) for the
+exact behaviour.
+
 ## Version numbers
 
 IronRuby's version follows the Ruby version it implements: **IronRuby 4.0 is Ruby 4.0**,
@@ -172,17 +228,21 @@ Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/pa
 | IronRuby's own C# test suite | ~1470 | 19 known |
 
 CRuby 4.0.6 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
-against `ruby` and IronRuby is changed, not the spec.
+against `ruby` and IronRuby is changed, not the spec. The aim is Ruby 4.0 compatibility
+rather than compatibility with any earlier Ruby: a difference from CRuby 4.0 that a
+program can observe is a bug worth a report, specs or not.
 
 The same tree **runs on Windows**, where `spec/language` and `spec/security` are also at
 zero; see [Windows](#windows) for how to build it and what is still missing there.
 
-The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
-load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
-extensions. A compatibility prelude
+The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0`; `Src/StdLib/ironruby`
+holds what CRuby implements as C extensions, written in C# (`Src/Libraries`) or Ruby, and is
+the only other library directory on the load path. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
 natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x. `Ripper` is implemented
+pattern-matching support classes and core methods from Ruby 2.x-4.x; `Rational` and `Complex`
+are Ruby ports of CRuby 4.0's `rational.c` and `complex.c`, and `Pathname` is CRuby 4.0's own
+`pathname_builtin.rb`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
 **irb** and **reline** run unmodified.
 
@@ -459,6 +519,8 @@ Requires the .NET SDK, plus Ruby and a C compiler to build prism.
 
 ```console
 $ git clone https://github.com/IronLanguages/dlr ../dlr          # modern DLR, referenced as source
+$ git -C ../dlr checkout <DLR_REF from .github/workflows/ci.yml>
+$ for p in Build/dlr-patches/*.patch; do git -C ../dlr apply "$PWD/$p"; done
 $ git clone https://github.com/ruby/prism ../prism
 $ (cd ../prism && ruby templates/template.rb && make shared)     # libprism.so
 $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + loader
@@ -489,7 +551,7 @@ that has only the **runtime** installed. Build prism with the RubyInstaller DevK
 
 ```
 C:\> git clone https://github.com/ruby/prism C:\prism
-C:\> cd C:\prism && git checkout 531cd5e~1
+C:\> cd C:\prism && git checkout 30a25553
 C:\prism> ruby templates\template.rb
 C:\prism> ridk exec make shared -j4          :: -> C:\prism\build\libprism.dll
 ```
@@ -535,13 +597,13 @@ Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are syml
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
 `fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
 (25) are libraries IronRuby does not implement and whose specs only run on Windows;
-`library/zlib` (2 failures, 3 errors) is the zlib below. `core/objectspace` needs
+`library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
 `-X:ObjectSpace`, as on Linux.
 
 **`zlib`** on Windows runs on the zlib inside .NET itself (`System.IO.Compression.Native`:
 zlib-ng from .NET 9 on, Intel's zlib in .NET 8), since there is no libz to bind to. It
-inflates and deflates, gzip included, but its compressed bytes are that compressor's, not
-classic zlib's (the 2 `library/zlib` failures compare exact bytes), and what .NET does not
+inflates and deflates, gzip included, but its compressed bytes are that compressor's: zlib-ng's
+differ from classic zlib's (the 2 `library/zlib` failures on .NET 10 compare exact bytes), and what .NET does not
 export raises `NotImplementedError`: `set_dictionary`, `Deflate#params` once data has gone in,
 and `Inflate#sync_point?` (the 3 errors).
 

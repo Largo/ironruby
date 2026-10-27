@@ -60,9 +60,23 @@ namespace IronRuby.Runtime {
 
         // if this is set to null we need to initialize it
         private object _message; 
+        private static readonly string _DefaultDivideByZeroMessage = new DivideByZeroException().Message;
         
         // can be set explicitly by the user (even to nil):
         private RubyArray _backtrace;
+
+#if FEATURE_STACK_TRACE
+        // The backtrace the runtime captured when the exception was raised, until someone asks for
+        // it (see CaptureExceptionTrace). Only ever set while _backtrace is null.
+        [NonSerialized]
+        private RubyStackTraceBuilder.CapturedTrace _capturedTrace;
+
+        // The catch-site walk of the interpreted frame that last caught an exception on this thread.
+        [ThreadStatic]
+        private static WeakReference<InterpretedFrame> _lastCatchFrame;
+        [ThreadStatic]
+        private static StackTrace _lastCatchSiteTrace;
+#endif
 
         // Exception#cause; _hasCause tells "decided" from "not raised yet", see TrySetCause.
         private Exception _cause;
@@ -136,16 +150,68 @@ namespace IronRuby.Runtime {
         /// Called from compiled code.
         /// </summary>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
-            if (_backtrace == null) {
+            if (!HasBacktrace) {
+                var context = scope.RubyContext;
 #if FEATURE_STACK_TRACE
-                StackTrace catchSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(null,
-                    scope.RubyContext.DomainManager.Configuration.DebugMode);
-                _backtrace = new RubyStackTraceBuilder(scope.RubyContext, _exception, catchSiteTrace, scope.InterpretedFrame != null).RubyTrace;
+                bool debugMode = context.DomainManager.Configuration.DebugMode;
+
+                // The catch-site walk is the expensive part of a raise: the whole CLR stack, every frame's
+                // method resolved. All but its top - the frames this one sees the exception from - lies
+                // below the catching frame, and nothing below a frame changes while the frame lives. So an
+                // interpreted frame that keeps catching (a loop around begin/rescue) reuses the walk it
+                // took the first time. Interpreted frames because their identity is that of a single
+                // invocation (a scope is not: eval code runs in the scope of its binding); not in the modes
+                // that report CLR frames, which would show the top of the walk too.
+                StackTrace catchSiteTrace = null;
+                InterpretedFrame frame = scope.InterpretedFrame;
+                WeakReference<InterpretedFrame> lastFrame = _lastCatchFrame;
+                bool reusable = frame != null && !debugMode && !context.Options.ExceptionDetail &&
+                    frame == InterpretedFrame.CurrentFrame.Value;
+
+                InterpretedFrame last;
+                if (reusable && lastFrame != null && lastFrame.TryGetTarget(out last) && last == frame) {
+                    catchSiteTrace = _lastCatchSiteTrace;
+                }
+
+                if (catchSiteTrace == null) {
+                    catchSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(null, debugMode);
+                    if (reusable && RubyStackTraceBuilder.IsReusableCatchSiteTrace(catchSiteTrace)) {
+                        _lastCatchSiteTrace = catchSiteTrace;
+                        if (lastFrame != null) {
+                            lastFrame.SetTarget(frame);
+                        } else {
+                            _lastCatchFrame = new WeakReference<InterpretedFrame>(frame);
+                        }
+                    }
+                }
+
+                // formatted on first use, see Backtrace:
+                _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, catchSiteTrace, scope.InterpretedFrame != null);
 #else
                 _backtrace = new RubyArray();
 #endif
-                DynamicSetBacktrace(scope.RubyContext, _backtrace);
+                // MRI (setup_exception) only calls #set_backtrace when it has been redefined:
+                if (!HasBuiltinSetBacktrace(context)) {
+                    DynamicSetBacktrace(context, Backtrace);
+                }
             }
+        }
+
+        /// <summary>
+        /// Whether #set_backtrace of the exception is IronRuby's own: the library method, or the
+        /// prelude's (Src/StdLib/ironruby/ruby4.rb) which keeps Thread::Backtrace::Locations around
+        /// and passes strings on to the library method. Called with the backtrace the runtime has just
+        /// captured, the prelude's would only parse the strings into Locations eagerly - which its
+        /// #backtrace_locations does on demand all the same.
+        /// </summary>
+        private bool HasBuiltinSetBacktrace(RubyContext/*!*/ context) {
+            var method = context.GetImmediateClassOf(_exception).ResolveMethod("set_backtrace", VisibilityContext.AllVisible).Info;
+            if (method is RubyLibraryMethodInfo) {
+                return true;
+            }
+
+            var rubyMethod = method as RubyMethodInfo;
+            return rubyMethod != null && rubyMethod.Document != null && RubyStackTraceBuilder.IsInternalFile(rubyMethod.Document.FileName);
         }
 
         /// <summary>
@@ -215,7 +281,13 @@ namespace IronRuby.Runtime {
                             return _message = GetDefaultMessage(immediateClass.NominalClass);
                         }
                     }
-                    _message = MutableString.Create(_visibleException.Message, RubyEncoding.UTF8);
+                    string clrMessage = _visibleException.Message;
+                    if (_visibleException is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
+                        // Integer division by zero raises the CLR's own exception, whose message is
+                        // "Attempted to divide by zero."; MRI says "divided by 0".
+                        clrMessage = "divided by 0";
+                    }
+                    _message = MutableString.Create(clrMessage, RubyEncoding.UTF8);
                 }
                 return _message;
             }
@@ -227,12 +299,50 @@ namespace IronRuby.Runtime {
 
         public RubyArray Backtrace {
             get {
+#if FEATURE_STACK_TRACE
+                if (_capturedTrace != null) {
+                    FormatCapturedTrace();
+                }
+#endif
                 return _backtrace;
             }
             set {
+#if FEATURE_STACK_TRACE
+                _capturedTrace = null;
+#endif
                 _backtrace = value;
             }
         }
+
+        /// <summary>
+        /// Whether the exception has a backtrace, without formatting a captured one.
+        /// </summary>
+        public bool HasBacktrace {
+            get {
+#if FEATURE_STACK_TRACE
+                return _backtrace != null || _capturedTrace != null;
+#else
+                return _backtrace != null;
+#endif
+            }
+        }
+
+#if FEATURE_STACK_TRACE
+        private void FormatCapturedTrace() {
+            var captured = _capturedTrace;
+            if (captured == null) {
+                return;
+            }
+
+            // another thread may ask for the same exception's backtrace (Thread#value, #join)
+            lock (captured) {
+                if (_capturedTrace == captured) {
+                    _backtrace = captured.Build();
+                    _capturedTrace = null;
+                }
+            }
+        }
+#endif
 
         /// <summary>
         /// Exception#cause. MRI fixes the cause the first time an exception is raised and never
@@ -279,6 +389,15 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// NoMethodError#args. MRI records the arguments of the failed call on the error.
         /// </summary>
+        // NoMethodError#private_call?: the call that went missing had an implicit receiver
+        // (or `self.`), so a private method would have been reachable.
+        private bool _privateCall;
+
+        public bool PrivateCall {
+            get { return _privateCall; }
+            set { _privateCall = value; }
+        }
+
         public object Arguments {
             get { return _arguments; }
             set { _arguments = value; }
@@ -343,9 +462,11 @@ namespace IronRuby.Runtime {
 
             RubyClass exceptionClass = context.GetClass(exception.GetType());
 
-            // new resolves to Class#new built-in method:
+            // new resolves to Class#new built-in method, or to a library constructor (a C#-thrown
+            // exception of such a class already carries whatever that constructor would set):
             var newMethod = exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible);
-            if (newMethod.Found && newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo) {
+            if (newMethod.Found && ((newMethod.Info.DeclaringModule == context.ClassClass && newMethod.Info is RubyCustomMethodInfo)
+                || newMethod.Info is RubyLibraryMethodInfo)) {
                 // initialize resolves to a built-in method:
                 var initializeMethod = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible);
                 if (initializeMethod.Found && initializeMethod.Info is RubyLibraryMethodInfo) {
@@ -354,10 +475,17 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            object message = instanceData.Message;
+            // Errno classes extend CLR exceptions of several roots (ExternalException,
+            // IOException, ...), so SystemCallError membership is decided on the Ruby side.
+            if (exceptionClass.IsSubclassOf(context.GetClass(typeof(System.Runtime.InteropServices.ExternalException)))) {
+                message = StripSystemCallErrorPrefix(exceptionClass, message);
+            }
+
             var site = exceptionClass.NewSite;
             Exception newException;
             try {
-                newException = site.Target(site, exceptionClass, instanceData.Message) as Exception;
+                newException = site.Target(site, exceptionClass, message) as Exception;
             } catch (Exception e) {
                 // MRI: this can lead to stack overflow:
                 return HandleException(context, e);
@@ -372,7 +500,43 @@ namespace IronRuby.Runtime {
             
             newInstanceData.Handled = true;
             newInstanceData._backtrace = instanceData._backtrace;
+#if FEATURE_STACK_TRACE
+            newInstanceData._capturedTrace = instanceData._capturedTrace;
+#endif
             return newException;
+        }
+
+        /// <summary>
+        /// A SystemCallError thrown from C# already says "&lt;strerror&gt; - &lt;detail&gt;"
+        /// (RubyExceptions.MakeMessage). The Ruby-level initialize it is about to be handed to -
+        /// the prelude's SystemCallError#initialize - builds that same form from the detail, so it
+        /// gets the detail alone, or the error would name itself twice: "No such file or directory
+        /// - No such file or directory - path". The class's strerror text is its Message constant.
+        /// </summary>
+        private static object StripSystemCallErrorPrefix(RubyClass/*!*/ exceptionClass, object message) {
+            var text = message as MutableString;
+            if (text == null) {
+                return message;
+            }
+            for (RubyClass c = exceptionClass; c != null; c = c.SuperClass) {
+                object constant;
+                if (c.TryGetConstant(null, "Message", out constant)) {
+                    var prefix = constant as MutableString;
+                    if (prefix == null) {
+                        return message;
+                    }
+                    string s = text.ConvertToString();
+                    string p = prefix.ConvertToString();
+                    if (s == p) {
+                        return null;
+                    }
+                    if (s.StartsWith(p + " - ", StringComparison.Ordinal)) {
+                        return MutableString.Create(s.Substring(p.Length + 3), text.Encoding);
+                    }
+                    return message;
+                }
+            }
+            return message;
         }
 
         // A handled exception used to leave a pending Thread.Abort behind when Thread#raise had delivered it

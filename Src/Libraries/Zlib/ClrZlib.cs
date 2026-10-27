@@ -62,7 +62,12 @@ namespace IronRuby.StandardLibrary.Zlib {
         [DllImport(Lib, EntryPoint = "CompressionNative_InflateEnd", CallingConvention = CallingConvention.Cdecl)]
         private static extern int InflateEnd(ref PalZStream stream);
 
+        private const int Z_BINARY = 0;
+        private const int Z_TEXT = 1;
         private const int Z_UNKNOWN = 2;
+        private const int Z_DEFAULT_COMPRESSION = -1;
+        private const int Z_FIXED = 4;
+        private const int GzipHeaderSize = 10;
 
         /// <summary>Which checksum libz would keep in strm->adler for the stream's wrapper.</summary>
         private enum Check { None, Adler32, Crc32, Detect }
@@ -74,14 +79,21 @@ namespace IronRuby.StandardLibrary.Zlib {
             public Check Check;
             public uint Sum;
 
-            // the first bytes of a zlib stream, for the dictionary id Z_NEED_DICT reports
-            public readonly byte[]/*!*/ Header = new byte[6];
+            // The first bytes of the stream: a zlib header's dictionary id, which Z_NEED_DICT reports,
+            // and the fixed part of a gzip header, until which libz keeps adler at 1 when it detects gzip.
+            public readonly byte[]/*!*/ Header = new byte[GzipHeaderSize];
             public int HeaderLength;
+            public bool GzipHeaderPending;
+
+            // deflate's data_type: libz guesses it from the first block it flushes (detect_data_type)
+            public bool DataTypeDecided, SawBinary, SawText;
 
             public int Init() {
                 Pal = default(PalZStream);
                 Sum = 0;
                 HeaderLength = 0;
+                GzipHeaderPending = false;
+                DataTypeDecided = SawBinary = SawText = false;
                 if (IsInflate) {
                     // inflateReset: strm->adler = state->wrap & 1
                     Check = (WindowBits < 0) ? Check.None : (WindowBits >= 32) ? Check.Detect : (WindowBits >= 16) ? Check.Crc32 : Check.Adler32;
@@ -127,10 +139,19 @@ namespace IronRuby.StandardLibrary.Zlib {
                 rec.opaque = GCHandle.ToIntPtr(GCHandle.Alloc(s));
                 rec.adler = (UIntPtr)s.Sum;
                 rec.total_in = rec.total_out = UIntPtr.Zero;
-                rec.data_type = Z_UNKNOWN;
+                rec.data_type = InitialDataType(s);
+            } else {
+                // The PAL allocated its z_stream before zlib refused the parameters, and only End
+                // frees it; nothing will call End for a stream that never got a handle.
+                s.End();
             }
             Write(strm, rec);
             return err;
+        }
+
+        // deflateReset sets Z_UNKNOWN; inflate leaves the zeroed field alone until it runs
+        private static int InitialDataType(Stream/*!*/ s) {
+            return s.IsInflate ? Z_BINARY : Z_UNKNOWN;
         }
 
         internal static int End(IntPtr strm) {
@@ -160,7 +181,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             rec.msg = s.Pal.msg;
             rec.adler = (UIntPtr)s.Sum;
             rec.total_in = rec.total_out = UIntPtr.Zero;
-            rec.data_type = Z_UNKNOWN;
+            rec.data_type = InitialDataType(s);
             Write(strm, rec);
             return err;
         }
@@ -198,8 +219,13 @@ namespace IronRuby.StandardLibrary.Zlib {
                     s.HeaderLength += n;
                 }
                 if (s.Check == Check.Detect && s.HeaderLength > 0) {
+                    // libz keeps adler at 1 (the zlib start) until it has read a whole gzip header
                     s.Check = (s.Header[0] == 0x1f) ? Check.Crc32 : Check.Adler32;
-                    s.Sum = (s.Check == Check.Crc32) ? 0u : 1u;
+                    s.GzipHeaderPending = s.Check == Check.Crc32;
+                }
+                if (s.GzipHeaderPending && s.HeaderLength >= GzipHeaderSize) {
+                    s.GzipHeaderPending = false;
+                    s.Sum = 0;
                 }
                 // the checksum covers what comes out of inflate and what goes into deflate
                 Update(s, outStart, produced);
@@ -209,6 +235,15 @@ namespace IronRuby.StandardLibrary.Zlib {
                 }
             } else {
                 Update(s, inStart, consumed);
+                if (!s.DataTypeDecided) {
+                    ScanDataType(s, inStart, consumed);
+                    // libz decides when it flushes its first block; a flush here is where that
+                    // happens for all but very long input, and the guess covers everything so far
+                    if (flush != LibZ.Z_NO_FLUSH) {
+                        s.DataTypeDecided = true;
+                        rec.data_type = (!s.SawBinary && s.SawText) ? Z_TEXT : Z_BINARY;
+                    }
+                }
             }
             rec.adler = (UIntPtr)s.Sum;
 
@@ -226,9 +261,32 @@ namespace IronRuby.StandardLibrary.Zlib {
         }
 
         /// <summary>
+        /// zlib's detect_data_type: a byte from the block list (0-6, 14-25, 28-31) makes the data
+        /// binary, otherwise one from the allow list (tab, line feed, carriage return, 32-255) makes
+        /// it text.
+        /// </summary>
+        private static void ScanDataType(Stream/*!*/ s, IntPtr data, int length) {
+            if (length <= 0 || s.SawBinary) {
+                return;
+            }
+            const uint blockMask = 0xf3ffc07f;
+            var bytes = new byte[length];
+            Marshal.Copy(data, bytes, 0, length);
+            foreach (byte b in bytes) {
+                if (b < 32 && (blockMask & (1u << b)) != 0) {
+                    s.SawBinary = true;
+                    return;
+                }
+                if (b >= 32 || b == 9 || b == 10 || b == 13) {
+                    s.SawText = true;
+                }
+            }
+        }
+
+        /// <summary>
         /// deflateParams. Until anything has gone in the stream can simply begin again with the new
         /// level and strategy, which is all deflateParams does then; after that the exports have
-        /// nothing that changes them.
+        /// nothing that changes them. Bad values are refused before anything changes, as in libz.
         /// </summary>
         internal static int Params(IntPtr strm, int level, int strategy) {
             var rec = Read(strm);
@@ -236,7 +294,10 @@ namespace IronRuby.StandardLibrary.Zlib {
             if (s == null) {
                 return LibZ.Z_STREAM_ERROR;
             }
-            if (level == s.Level && strategy == s.Strategy) {
+            if (level < Z_DEFAULT_COMPRESSION || level > 9 || strategy < 0 || strategy > Z_FIXED) {
+                return LibZ.Z_STREAM_ERROR;
+            }
+            if (NormalLevel(level) == NormalLevel(s.Level) && strategy == s.Strategy) {
                 return LibZ.Z_OK;
             }
             if ((ulong)rec.total_in != 0 || (ulong)rec.total_out != 0) {
@@ -245,6 +306,11 @@ namespace IronRuby.StandardLibrary.Zlib {
             s.Level = level;
             s.Strategy = strategy;
             return Reset(strm);
+        }
+
+        // Z_DEFAULT_COMPRESSION is level 6
+        private static int NormalLevel(int level) {
+            return (level == Z_DEFAULT_COMPRESSION) ? 6 : level;
         }
 
         internal static Exception/*!*/ Unavailable(string/*!*/ what, string/*!*/ function) {

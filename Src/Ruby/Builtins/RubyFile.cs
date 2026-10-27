@@ -86,7 +86,19 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateENOENT(String.Format("No such file or directory - {0}", path));
 #if FEATURE_FILESYSTEM
                 } catch (DirectoryNotFoundException e) {
-                    throw RubyExceptions.CreateENOENT(e.Message, e);
+                    // The CLR says this for a missing directory on the way to the file and for a
+                    // file standing where a directory should be alike; MRI names the path, and
+                    // tells the two apart: ENOENT, and ENOTDIR (which is what a CLR
+                    // DirectoryNotFoundException surfaces as in Ruby, so it is rethrown as one).
+                    for (string parent = System.IO.Path.GetDirectoryName(path); !String.IsNullOrEmpty(parent); parent = System.IO.Path.GetDirectoryName(parent)) {
+                        if (File.Exists(parent)) {
+                            throw new DirectoryNotFoundException(String.Format("Not a directory - {0}", path), e);
+                        }
+                        if (Directory.Exists(parent)) {
+                            break;
+                        }
+                    }
+                    throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", path);
                 } catch (PathTooLongException e) {
                     throw RubyExceptions.CreateENOENT(e.Message, e);
 #endif

@@ -60,7 +60,6 @@ BIN_DIR = File.join(STDLIB, "bin")
 LOAD_PATH_DIRS = [
   File.join(STDLIB, "ironruby"),
   File.join(STDLIB, "ruby", "4.0"),
-  File.join(STDLIB, "ruby", "1.9.1"),
   File.join(STDLIB, "ruby", "site_ruby", "1.9.1"),
   File.join(STDLIB, "ruby", "site_ruby"),
 ].freeze

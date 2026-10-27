@@ -1,0 +1,261 @@
+/* ****************************************************************************
+ *
+ * -X:JIT - an experimental ZJIT-style method JIT for IronRuby.
+ *
+ * Keyword calls straight into a specialized body.
+ *
+ * A keyword call builds a Hash for its keywords, and the entry of a specialized keyword
+ * method (see JitKeywords) only reads the values back out of it. For the common shape -
+ * a receiverless call, Symbol-literal keywords, a few positional arguments and nothing
+ * else - the call is compiled with an inline cache in front of the dynamic call site:
+ *
+ *   r = JitKeywordCall.Invoke(cache, self, p0, p1, k0, k1, k2)
+ *   r != JitKeywordCall.NoDirect ? r : <the call as it always was, keyword Hash and all>
+ *
+ * The cache remembers, per receiver class and global method version, which method the
+ * name resolves to. When that is a method the JIT has specialized, and the keywords the
+ * call passes are ones its prologue would bind without complaint, the values go straight
+ * into the specialized body's "direct" entry (JitStub.Direct) in declaration order, with
+ * the defaults of the keywords the call leaves out. Anything else - another kind of method,
+ * a method not specialized (yet), a type guard or the method version failing, a deopt -
+ * answers NoDirect and the call runs exactly as it did before, so the generic body raises
+ * whatever ArgumentError there is to raise.
+ *
+ * A receiverless call may call a method of any visibility, so resolving the name on the
+ * receiver's class with every visibility allowed is what the call site does too. Calls
+ * where refinements could be in play are never sent this way (JitRuntime.Disabled,
+ * RubyContext.HasRefinements), and neither is anything once tracing is on.
+ *
+ * ***************************************************************************/
+
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using IronRuby.Builtins;
+using IronRuby.Compiler;
+using IronRuby.Compiler.Ast;
+using IronRuby.Runtime.Calls;
+using AstUtils = Microsoft.Scripting.Ast.Utils;
+
+namespace IronRuby.Runtime.Jit {
+    using MSA = System.Linq.Expressions;
+    using Ast = System.Linq.Expressions.Expression;
+    using RExpr = IronRuby.Compiler.Ast.Expression;
+
+    public sealed class JitKeywordCall {
+        internal const int MaxPositional = 2;
+        internal const int MaxKeywords = 3;
+
+        // A site whose receiver keeps changing class (or that keeps meeting new method versions)
+        // stops looking: resolving a name is far dearer than the hash it would save.
+        private const int MaxMisses = 8;
+
+        /// <summary>"Not called here: make the call the ordinary way."</summary>
+        public static readonly object NoDirect = new object();
+
+        private readonly RubyContext/*!*/ _context;
+        private readonly string/*!*/ _name;
+        private readonly int _positional;
+        private readonly RubySymbol/*!*/[]/*!*/ _keys;      // in the order the call passes them
+
+        private sealed class State {
+            internal RubyClass Class;
+            internal int Version;
+            internal JitStub Stub;          // null: the name does not resolve to a method this site can call directly
+            internal int[] Slots;           // per declared keyword: the call's argument holding it, or -1 for its default
+        }
+
+        private volatile State _state;
+        private int _misses;
+        private volatile bool _megamorphic;
+
+        private JitKeywordCall(RubyContext/*!*/ context, string/*!*/ name, int positional, RubySymbol/*!*/[]/*!*/ keys) {
+            _context = context;
+            _name = name;
+            _positional = positional;
+            _keys = keys;
+        }
+
+        private static readonly MethodInfo/*!*/ InvokeMethod = typeof(JitKeywordCall).GetMethod("Invoke");
+        private static readonly FieldInfo/*!*/ NoDirectField = typeof(JitKeywordCall).GetField("NoDirect");
+
+        public static object Invoke(object/*!*/ site, object self, object p0, object p1, object k0, object k1, object k2) {
+            return ((JitKeywordCall)site).Call(self, p0, p1, k0, k1, k2);
+        }
+
+        private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
+            if (_megamorphic || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
+
+            RubyClass cls = JitRuntime.ClassOf(_context, self);
+            int version = RubyModule.GlobalMethodVersion;
+            State state = _state;
+            if (state == null || state.Class != cls || state.Version != version) {
+                if (++_misses > MaxMisses) {
+                    _megamorphic = true;
+                    return NoDirect;
+                }
+                _state = state = Resolve(cls, version);
+            }
+
+            JitStub stub = state.Stub;
+            if (stub == null) { return NoDirect; }
+            var direct = stub.Direct;
+            if (direct == null) { return NoDirect; }
+
+            int[] slots = state.Slots;
+            object d0 = null, d1 = null, d2 = null;
+            switch (slots.Length) {
+                case 3: d2 = Pick(stub, 2, slots[2], k0, k1, k2); goto case 2;
+                case 2: d1 = Pick(stub, 1, slots[1], k0, k1, k2); goto case 1;
+                case 1: d0 = Pick(stub, 0, slots[0], k0, k1, k2); break;
+            }
+            return direct(self, p0, p1, d0, d1, d2);
+        }
+
+        private static object Pick(JitStub/*!*/ stub, int declared, int slot, object k0, object k1, object k2) {
+            switch (slot) {
+                case 0: return k0;
+                case 1: return k1;
+                case 2: return k2;
+                default: return stub.Keywords.Defaults[declared];
+            }
+        }
+
+        /// <summary>
+        /// What <see cref="_name"/> means on an instance of <paramref name="cls"/>, under method
+        /// version <paramref name="version"/>, for this site.
+        /// </summary>
+        private State/*!*/ Resolve(RubyClass/*!*/ cls, int version) {
+            var state = new State { Class = cls, Version = version };
+            try {
+                var resolved = cls.ResolveMethod(_name, VisibilityContext.AllVisible);
+                var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
+                if (info == null) { return state; }
+
+                var stub = info.GetDelegate().Target as JitStub;
+                if (stub == null || stub.Keywords == null || stub.Positional != _positional) { return state; }
+
+                // The keywords this call passes must be ones the method's prologue binds without
+                // raising: each a declared one, and every required one among them.
+                var keywords = stub.Keywords;
+                var slots = new int[keywords.Count];
+                int matched = 0;
+                for (int j = 0; j < slots.Length; j++) {
+                    slots[j] = Array.IndexOf(_keys, keywords.Symbols[j]);
+                    if (slots[j] >= 0) {
+                        matched++;
+                    } else if (keywords.Required[j]) {
+                        return state;
+                    }
+                }
+                if (matched != _keys.Length) { return state; }
+
+                state.Stub = stub;
+                state.Slots = slots;
+            } catch (Exception) {
+                state.Stub = null;
+            }
+            return state;
+        }
+
+        // ---- compilation of the call ---------------------------------------------------------
+
+        /// <summary>
+        /// The call `name(p0, p1, k: v, ...)' with the inline cache in front of it, or null when the
+        /// call does not have that shape.
+        /// </summary>
+        internal static MSA.Expression TryTransform(AstGenerator/*!*/ gen, string/*!*/ methodName, MSA.Expression/*!*/ self,
+            Arguments arguments) {
+
+            var options = gen.Context.RubyOptions;
+            if (!options.Jit || options.EnableTracing || options.Profile || JitRuntime.Disabled) { return null; }
+            if (arguments == null) { return null; }
+
+            var exprs = arguments.Expressions;
+            int count = exprs.Length;
+            if (count == 0 || count - 1 > MaxPositional) { return null; }
+            var hash = exprs[count - 1] as HashConstructor;
+            if (hash == null || !hash.IsKeywordArguments) { return null; }
+            var maplets = hash.Maplets;
+            if (maplets.Length == 0 || maplets.Length > MaxKeywords) { return null; }
+
+            var keys = new RubySymbol[maplets.Length];
+            for (int i = 0; i < maplets.Length; i++) {
+                var key = maplets[i].Key as SymbolLiteral;
+                if (key == null || !(key.Value is string)) { return null; }
+                keys[i] = gen.Context.CreateSymbol((string)key.Value, key.Encoding);
+                // a repeated key is the hash's business
+                if (Array.IndexOf(keys, keys[i], 0, i) >= 0) { return null; }
+            }
+            int positional = count - 1;
+            for (int i = 0; i < positional; i++) {
+                if (exprs[i] is SplattedArgument || exprs[i] is HashConstructor) { return null; }
+            }
+
+            var site = new JitKeywordCall(gen.Context, methodName, positional, keys);
+
+            // The arguments are evaluated once, in source order, into temporaries both paths share.
+            var temps = new List<MSA.ParameterExpression>();
+            var body = new List<MSA.Expression>();
+            var selfTemp = Ast.Variable(typeof(object), "#kwself");
+            temps.Add(selfTemp);
+            body.Add(Ast.Assign(selfTemp, AstUtils.Box(self)));
+
+            var p = new MSA.Expression[MaxPositional];
+            for (int i = 0; i < MaxPositional; i++) {
+                if (i < positional) {
+                    var t = Ast.Variable(typeof(object), "#kwp" + i);
+                    temps.Add(t);
+                    body.Add(Ast.Assign(t, AstUtils.Box(exprs[i].TransformRead(gen))));
+                    p[i] = t;
+                } else {
+                    p[i] = Ast.Constant(null, typeof(object));
+                }
+            }
+            var k = new MSA.Expression[MaxKeywords];
+            for (int i = 0; i < MaxKeywords; i++) {
+                if (i < maplets.Length) {
+                    var t = Ast.Variable(typeof(object), "#kwv" + i);
+                    temps.Add(t);
+                    body.Add(Ast.Assign(t, AstUtils.Box(maplets[i].Value.TransformRead(gen))));
+                    k[i] = t;
+                } else {
+                    k[i] = Ast.Constant(null, typeof(object));
+                }
+            }
+
+            // the ordinary call: the keyword hash, then the dynamic site
+            var hashArgs = new List<MSA.Expression>(1 + 2 * maplets.Length);
+            hashArgs.Add(gen.CurrentScopeVariable);
+            for (int i = 0; i < maplets.Length; i++) {
+                hashArgs.Add(AstUtils.Box(Ast.Constant(keys[i])));
+                hashArgs.Add(k[i]);
+            }
+            MethodInfo make;
+            switch (maplets.Length) {
+                case 1: make = Methods.MakeKeywordArgumentsHash1; break;
+                case 2: make = Methods.MakeKeywordArgumentsHash2; break;
+                default: make = Methods.MakeKeywordArgumentsHash3; break;
+            }
+            var makeHash = Ast.Call(make, hashArgs);
+            var siteBuilder = new CallSiteBuilder(gen, selfTemp, null);
+            for (int i = 0; i < positional; i++) {
+                siteBuilder.Add(p[i]);
+            }
+            siteBuilder.Add(makeHash);
+            var ordinary = siteBuilder.MakeCallAction(methodName, true);
+
+            var result = Ast.Variable(typeof(object), "#kwresult");
+            temps.Add(result);
+            body.Add(Ast.Assign(result, Ast.Call(InvokeMethod,
+                Ast.Constant(site, typeof(object)), selfTemp, p[0], p[1], k[0], k[1], k[2])));
+            body.Add(Ast.Condition(
+                Ast.ReferenceNotEqual(result, Ast.Field(null, NoDirectField)),
+                result,
+                AstUtils.Convert(ordinary, typeof(object)),
+                typeof(object)
+            ));
+            return Ast.Block(typeof(object), temps, body);
+        }
+    }
+}

@@ -75,7 +75,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/While-Until
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#loop-result", typeof(object));
             MSA.Expression redoVariable = gen.CurrentScope.DefineHiddenVariable("#skip-condition", typeof(bool));
             MSA.ParameterExpression unwinder;
@@ -130,6 +130,9 @@ namespace IronRuby.Compiler.Ast {
                     }
                 }
                 osrSite.TupleArgIndex = tupleArgIndex;
+                // and self, which the instance variables the loop reads belong to
+                osrSite.SelfArgIndex = tupleArguments.Count;
+                tupleArguments.Add(AstUtils.Box(gen.CurrentSelfVariable));
                 osrArguments = Ast.NewArrayInit(typeof(object), tupleArguments);
             }
 

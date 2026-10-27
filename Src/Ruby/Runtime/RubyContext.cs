@@ -20,6 +20,7 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -72,13 +73,14 @@ namespace IronRuby.Runtime {
         private static int _RuntimeIdGenerator = 0;
 
         // MRI compliance: language level targeted by the prism front end.
-        // The bundled standard library is still the 1.9 snapshot.
         public string/*!*/ MriVersion {
             get { return MriVersionString; }
         }
 
         private const string MriVersionString = "4.0.0";
 
+        // Names the site directory (ruby/site_ruby/1.9.1, where rb-readline lives), as
+        // RbConfig's ruby_version does. The standard library itself is ruby/4.0.
         public string/*!*/ StandardLibraryVersion {
             get { return "1.9.1"; }
         }
@@ -160,6 +162,19 @@ namespace IronRuby.Runtime {
 
         private readonly Dictionary<string/*!*/, GlobalVariable>/*!*/ _globalVariables;
         public object/*!*/ GlobalVariablesLock { get { return _globalVariables; } }
+
+        /// <summary>
+        /// Changes whenever a name starts or stops denoting a GlobalVariable object - a define,
+        /// an alias, a delete, the first assignment of a new global - but not when a value is
+        /// assigned. A GlobalVariableSite keeps the object it found until this moves.
+        /// Written under GlobalVariablesLock (or before any Ruby code runs).
+        /// </summary>
+        private volatile int _globalVariablesVersion = GlobalVariableSite.NextVersion();
+        internal int GlobalVariablesVersion { get { return _globalVariablesVersion; } }
+
+        private void GlobalVariablesChanged() {
+            _globalVariablesVersion = GlobalVariableSite.NextVersion();
+        }
 
         // not thread safe: use GlobalVariablesLock to synchronize access to the variables:
         public IEnumerable<KeyValuePair<string, GlobalVariable>>/*!*/ GlobalVariables {
@@ -257,6 +272,11 @@ namespace IronRuby.Runtime {
         // Entries cannot be ever freed since anytime in future one may create a new object whose value has already been mapped to InstanceData.
         private readonly Dictionary<object, RubyInstanceData>/*!*/ _valueTypeInstanceData;
         private object/*!*/ ValueTypeInstanceDataLock { get { return _valueTypeInstanceData; } }
+
+        // The number of entries in _valueTypeInstanceData, published after each add. Entries are
+        // never removed, so zero means there is nothing to find: then a lookup - every
+        // `1.is_a?(Hash)` asks for the immediate class of an Integer - takes no lock.
+        private int _valueTypeInstanceDataCount;
 
         // not thread-safe: 
         private readonly RubyInstanceData/*!*/ _nilInstanceData = new RubyInstanceData(RubyUtils.NilObjectId);
@@ -737,6 +757,7 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("VERBOSE", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-v", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-w", Runtime.GlobalVariables.Verbose);
+            DefineGlobalVariableNoLock("-W", Runtime.GlobalVariables.WarningLevel);
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
@@ -811,6 +832,7 @@ namespace IronRuby.Runtime {
                 } else {
                     _globalVariables["-i"] = new GlobalVariableInfo(null);
                 }
+                GlobalVariablesChanged();
 
                 // Hash
                 // SCRIPT_LINES__
@@ -1020,6 +1042,97 @@ namespace IronRuby.Runtime {
         private void AssemblyLoaded(Assembly/*!*/ assembly) {
             _namespaces.LoadAssembly(assembly);
             AddExtensionAssembly(assembly);
+
+            // The assembly can add types to namespaces whose misses are already cached (defined?
+            // and constant sites keep their answer per constant version).
+            using (ClassHierarchyLocker()) {
+                ConstantAccessVersion++;
+            }
+        }
+
+        // Simple names of the assemblies the host was started with that the on-demand loading below
+        // has not tried yet; built on the first miss.
+        private HashSet<string> _untriedPlatformAssemblies;
+
+        // Namespace members the on-demand loading below has already looked for.
+        private HashSet<string> _platformAssemblyProbes;
+
+        /// <summary>
+        /// On .NET Core the class library is split into many assemblies that are loaded only when
+        /// referenced, so `System::Console` misses until System.Console.dll has been loaded. When a
+        /// constant lookup in a CLR namespace misses, this loads the platform assemblies that could
+        /// define <paramref name="name"/> in that namespace: A.B.Name, A.B, A (for a miss in A.B),
+        /// then the netstandard facade, which forwards the whole .NET Standard surface. Only
+        /// assemblies on the runtime's trusted platform assembly list are considered and each name is
+        /// tried once, so a repeated miss costs a set lookup. Returns true if the namespace may now
+        /// contain <paramref name="name"/>.
+        /// </summary>
+        internal bool TryLoadNamespaceMemberAssembly(NamespaceTracker/*!*/ ns, string/*!*/ name) {
+            RequiresClassHierarchyLock();
+
+            string nsName = ns.Name;
+            if (nsName == null || name.IndexOf('.') >= 0) {
+                return false;
+            }
+
+            if (_platformAssemblyProbes == null) {
+                _untriedPlatformAssemblies = GetPlatformAssemblyNames();
+                _platformAssemblyProbes = new HashSet<string>();
+            }
+
+            if (_untriedPlatformAssemblies.Count == 0 || !_platformAssemblyProbes.Add(nsName + "." + name)) {
+                return false;
+            }
+
+            string candidate = nsName + "." + name;
+            while (true) {
+                if (TryLoadPlatformAssembly(candidate) && ns.ContainsKey(name)) {
+                    return true;
+                }
+                int dot = candidate.LastIndexOf('.');
+                if (dot < 0) {
+                    break;
+                }
+                candidate = candidate.Substring(0, dot);
+            }
+
+            // The netstandard facade forwards the whole .NET Standard surface. Only for the BCL's own
+            // namespaces, though: a namespace included into Object (include Modern) has every top-level
+            // constant looked up in it, and a miss there is no reason to load a hundred assemblies.
+            return (nsName == "System" || nsName.StartsWith("System.", StringComparison.Ordinal) ||
+                    nsName == "Microsoft" || nsName.StartsWith("Microsoft.", StringComparison.Ordinal))
+                && TryLoadPlatformAssembly("netstandard") && ns.ContainsKey(name);
+        }
+
+        // Loads a platform assembly that has not been tried yet. Returns true if it is now loaded.
+        private bool TryLoadPlatformAssembly(string/*!*/ simpleName) {
+            if (!_untriedPlatformAssemblies.Remove(simpleName)) {
+                return false;
+            }
+
+            Assembly assembly;
+            try {
+                assembly = DomainManager.Platform.LoadAssembly(simpleName);
+            } catch (Exception e) {
+                Utils.Log(String.Format("Loading platform assembly '{0}' failed: {1}", simpleName, e.Message), "LOADER");
+                return false;
+            }
+
+            DomainManager.LoadAssembly(assembly);
+            return true;
+        }
+
+        private static HashSet<string>/*!*/ GetPlatformAssemblyNames() {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var paths = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+            if (paths != null) {
+                foreach (var path in paths.Split(new[] { Path.PathSeparator }, StringSplitOptions.RemoveEmptyEntries)) {
+                    if (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) {
+                        result.Add(Path.GetFileNameWithoutExtension(path));
+                    }
+                }
+            }
+            return result;
         }
 
         internal void AddModuleToCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
@@ -1035,6 +1148,7 @@ namespace IronRuby.Runtime {
         internal void ReplaceModuleInCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
             Assert.NotNull(type, module);
             _moduleCache[type] = module;
+            _classReadCache.TryRemove(type, out _);
         }
 
         internal void AddNamespaceToCacheNoLock(NamespaceTracker/*!*/ namespaceTracker, RubyModule/*!*/ module) {
@@ -1089,9 +1203,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Lock-free read side of GetOrCreateClass. Every call on an Integer, Float or other CLR value
+        // asks for its class (GetClassOf), and taking ModuleCacheLock for a dictionary probe each time
+        // was a third or more of numeric code. A CLR type's class, once created, is only replaced by
+        // ReplaceModuleInCacheNoLock, which evicts the type here; entries are written under the lock.
+        private readonly ConcurrentDictionary<Type, RubyClass>/*!*/ _classReadCache = new ConcurrentDictionary<Type, RubyClass>();
+
         internal RubyClass/*!*/ GetOrCreateClass(Type/*!*/ type) {
+            RubyClass result;
+            if (_classReadCache.TryGetValue(type, out result)) {
+                return result;
+            }
             lock (ModuleCacheLock) {
-                return GetOrCreateClassNoLock(type);
+                result = GetOrCreateClassNoLock(type);
+                _classReadCache[type] = result;
+                return result;
             }
         }
 
@@ -1206,6 +1332,15 @@ namespace IronRuby.Runtime {
                 modules.Add(GetOrCreateModuleNoLock(iface));
             }
 
+            // Hash patterns match a CLR object's public members. Last, so that an interface or a generic type
+            // definition can define its own #deconstruct_keys; a subclass finds the module on its base class.
+            // An abstract class has no instances of its own, and leaving it out keeps the library classes that
+            // derive from one (System::Char from ValueType, ...) as they are.
+            RubyModule patternMatching;
+            if (!type.IsAbstract && TryGetModuleNoLock(typeof(ClrPatternMatching), out patternMatching)) {
+                modules.Add(patternMatching);
+            }
+
             return modules.Count > 0 ? modules.ToArray() : null;
         }
 
@@ -1223,7 +1358,16 @@ namespace IronRuby.Runtime {
         // Value is null if the namepsace has been activated.
         private Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>> _availableExtensions;
 
+        // Assemblies whose extension methods have been registered (or are queued to be, in _potentialExtensionAssemblies).
+        private readonly HashSet<Assembly>/*!*/ _extensionAssemblies = new HashSet<Assembly>();
+
         private void AddExtensionAssembly(Assembly/*!*/ assembly) {
+            lock (ExtensionsLock) {
+                if (!_extensionAssemblies.Add(assembly)) {
+                    return;
+                }
+            }
+
             if (_potentialExtensionAssemblies != null) {
                 lock (ExtensionsLock) {
                     if (_potentialExtensionAssemblies != null) {
@@ -1268,6 +1412,23 @@ namespace IronRuby.Runtime {
 
         public void ActivateExtensions(string/*!*/ @namespace) {
             ContractUtils.RequiresNotNull(@namespace, "namespace");
+
+            // The types of a namespace can be known through a facade's type forwarders (netstandard, System.Xml),
+            // which loads the assemblies that define them without them ever being reported loaded: their extension
+            // methods (System.Linq.Enumerable's) would never be seen. Look at where the namespace's types really live.
+            NamespaceTracker tracker = _namespaces;
+            foreach (string part in @namespace.Length > 0 ? @namespace.Split('.') : ArrayUtils.EmptyStrings) {
+                MemberTracker member;
+                tracker = (tracker != null && tracker.TryGetValue(part, out member)) ? member as NamespaceTracker : null;
+            }
+            if (tracker != null) {
+                foreach (var member in tracker) {
+                    var typeTracker = member.Value as TypeTracker;
+                    if (typeTracker != null && !(typeTracker is TypeGroup)) {
+                        AddExtensionAssembly(typeTracker.Type.Assembly);
+                    }
+                }
+            }
 
             Assembly[] assemblies = null;
             if (_potentialExtensionAssemblies != null) {
@@ -1978,6 +2139,24 @@ namespace IronRuby.Runtime {
         }
 
         // thread-safe:
+        // Task::Factory is a static property, not a constant: say how to get it (Task.Factory). Only CLR const and
+        // static readonly fields are constants (RubyModule.TryGetClrConstantField) - a constant is cached where it is
+        // used, which a property like DateTime.Now must not be.
+        private static string/*!*/ GetClrStaticMemberHint(RubyModule/*!*/ owner, string/*!*/ name) {
+            Type type = (owner.TypeTracker != null) ? owner.TypeTracker.Type : null;
+            if (type == null || type.ContainsGenericParameters || (owner.Restrictions & ModuleRestrictions.NoNameMapping) != 0) {
+                return String.Empty;
+            }
+
+            foreach (var member in type.GetMember(name, BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)) {
+                if (member is PropertyInfo || member is FieldInfo || member is MethodInfo) {
+                    return String.Format(" ({1} is a static {2} of the CLR type, called as a method: {0}.{1})",
+                        owner.Name, name, member is MethodInfo ? "method" : member is PropertyInfo ? "property" : "field");
+                }
+            }
+            return String.Empty;
+        }
+
         public object ResolveMissingConstant(RubyModule/*!*/ owner, string/*!*/ name) {
             var privateReference = _privateConstantReference;
             _privateConstantReference = null;
@@ -1999,11 +2178,16 @@ namespace IronRuby.Runtime {
             }
 
             // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
-            // "uninitialized constant Math::Nope".
+            // "uninitialized constant Math::Nope".  The test is on rb_class_real(owner), so the
+            // singleton class of a plain Object counts as Object.
+            RubyModule realOwner = owner;
+            while (realOwner is RubyClass && ((RubyClass)realOwner).IsSingletonClass && ((RubyClass)realOwner).SuperClass != null) {
+                realOwner = ((RubyClass)realOwner).SuperClass;
+            }
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
-                owner == ObjectClass
+                realOwner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
-                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
+                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name) + GetClrStaticMemberHint(owner, name)
             ), name, owner);
         }
 
@@ -2018,7 +2202,10 @@ namespace IronRuby.Runtime {
         /// calling #new on it. Null when there is no such constant, or when what is there is not
         /// an exception class.
         /// </summary>
-        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string/*!*/ message) {
+        /// <summary>
+        /// A null message leaves the exception with its class's default one (an Errno's strerror text).
+        /// </summary>
+        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string message) {
             object exceptionClass;
             if (!owner.TryGetConstant(null, className, out exceptionClass)) {
                 return null;
@@ -2031,7 +2218,7 @@ namespace IronRuby.Runtime {
                     null
                 );
             }
-            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, MutableString.Create(message, RubyEncoding.UTF8)) as Exception;
+            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, message != null ? MutableString.Create(message, RubyEncoding.UTF8) : null) as Exception;
         }
 
         /// <summary>
@@ -2110,6 +2297,9 @@ namespace IronRuby.Runtime {
 
             RubyInstanceData result;
             if (!RubyUtils.HasObjectState(obj) && !(obj is BigInteger)) {
+                if (Volatile.Read(ref _valueTypeInstanceDataCount) == 0) {
+                    return null;
+                }
                 lock (ValueTypeInstanceDataLock) {
                     _valueTypeInstanceData.TryGetValue(obj, out result);
                 }
@@ -2176,6 +2366,7 @@ namespace IronRuby.Runtime {
                 lock (ValueTypeInstanceDataLock) {
                     if (!_valueTypeInstanceData.TryGetValue(obj, out result)) {
                         _valueTypeInstanceData.Add(obj, result = new RubyInstanceData());
+                        Volatile.Write(ref _valueTypeInstanceDataCount, _valueTypeInstanceData.Count);
                     }
                 }
                 return result;
@@ -2499,12 +2690,14 @@ namespace IronRuby.Runtime {
         public void DefineGlobalVariable(string/*!*/ name, object value) {
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = new GlobalVariableInfo(value);
+                GlobalVariablesChanged();
             }
         }
 
         public void DefineReadOnlyGlobalVariable(string/*!*/ name, object value) {
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = new ReadOnlyGlobalVariableInfo(value);
+                GlobalVariablesChanged();
             }
         }
 
@@ -2512,15 +2705,18 @@ namespace IronRuby.Runtime {
             ContractUtils.RequiresNotNull(variable, "variable");
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = variable;
+                GlobalVariablesChanged();
             }
         }
 
         internal void DefineGlobalVariableNoLock(string/*!*/ name, GlobalVariable/*!*/ variable) {
             _globalVariables[name] = variable;
+            GlobalVariablesChanged();
         }
 
         public bool DeleteGlobalVariable(string/*!*/ name) {
             lock (GlobalVariablesLock) {
+                GlobalVariablesChanged();
                 return _globalVariables.Remove(name);
             }
         }
@@ -2532,6 +2728,7 @@ namespace IronRuby.Runtime {
                     DefineGlobalVariableNoLock(oldName, existing = new GlobalVariableInfo(null, false));
                 }
                 _globalVariables[newName] = existing;
+                GlobalVariablesChanged();
             }
         }
 
@@ -2544,6 +2741,7 @@ namespace IronRuby.Runtime {
                     global.SetValue(this, scope, name, value);
                 } else {
                     _globalVariables[name] = new GlobalVariableInfo(value);
+                    GlobalVariablesChanged();
                 }
             }
 
@@ -2575,6 +2773,36 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>The variable the name denotes and the version of the name table it was found at.</summary>
+        internal bool TryGetGlobalVariable(string/*!*/ name, out GlobalVariable variable, out int version) {
+            lock (GlobalVariablesLock) {
+                version = _globalVariablesVersion;
+                return _globalVariables.TryGetValue(name, out variable);
+            }
+        }
+
+        /// <summary>
+        /// The value of a variable a GlobalVariableSite found: what TryGetGlobalVariable would
+        /// answer for its name, minus the lookup. An ordinary global is a field read; anything
+        /// else (a special or read-only variable, or one a library defined) keeps running under
+        /// the lock.
+        /// </summary>
+        internal object GetGlobalVariableValue(GlobalVariable/*!*/ variable, RubyScope scope) {
+            lock (GlobalVariablesLock) {
+                return variable.GetValue(this, scope);
+            }
+        }
+
+        /// <summary>
+        /// Runs the Kernel#trace_var handlers of a global that has just been assigned outside
+        /// SetGlobalVariable (which runs them itself).
+        /// </summary>
+        internal void GlobalVariableAssigned(RubyScope scope, string/*!*/ name, object value) {
+            if (_anyGlobalVariableTraced) {
+                FireGlobalVariableTraces(scope, name, value);
+            }
+        }
+
         #endregion
 
         #region Global Variables: Kernel#trace_var handlers (thread-safe)
@@ -2596,6 +2824,9 @@ namespace IronRuby.Runtime {
             public GlobalVariableTraceCommand(MutableString/*!*/ code, RubyScope scope, object self) {
                 Code = code;
                 Scope = scope;
+                if (scope != null) {
+                    scope.MarkCaptured();
+                }
                 Self = self;
             }
         }

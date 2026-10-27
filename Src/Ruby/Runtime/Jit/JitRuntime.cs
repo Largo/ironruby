@@ -278,6 +278,17 @@ namespace IronRuby.Runtime.Jit {
             return !Disabled && RubyModule.GlobalMethodVersion == snapshot;
         }
 
+        /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
+        public static void EntryStale(object/*!*/ stub) {
+            ((JitStub)stub).VersionChanged();
+        }
+
+        /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>
+        public static object OsrVersionStale() {
+            if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: method version"); }
+            return Osr.OsrLoopSite.Retype;
+        }
+
         /// <summary>An entry guard of an outlined loop did not hold; hand the loop back.</summary>
         public static object OsrGuardFailed(string/*!*/ what) {
             if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: {0}", what); }
@@ -300,6 +311,32 @@ namespace IronRuby.Runtime.Jit {
             return Deopt();
         }
 
+        // ---- keyword parameters (see JitKeywords) ---------------------------------------
+
+        /// <summary>The entry guard of a method with keywords: the prologue would bind them without raising.</summary>
+        public static bool KeywordsMatch(object/*!*/ keywords, object kw) {
+            return ((JitKeywords)keywords).Matches(kw);
+        }
+
+        /// <summary>The value the prologue binds keyword number <paramref name="index"/> to.</summary>
+        public static object KeywordValue(object/*!*/ keywords, object kw, int index) {
+            return ((JitKeywords)keywords).Value(kw, index);
+        }
+
+        // KeywordsMatch and KeywordValue in one call, for a method with up to three keywords.
+
+        public static bool KeywordsRead1(object/*!*/ keywords, object kw, out object v0) {
+            return ((JitKeywords)keywords).Read(kw, out v0);
+        }
+
+        public static bool KeywordsRead2(object/*!*/ keywords, object kw, out object v0, out object v1) {
+            return ((JitKeywords)keywords).Read(kw, out v0, out v1);
+        }
+
+        public static bool KeywordsRead3(object/*!*/ keywords, object kw, out object v0, out object v1, out object v2) {
+            return ((JitKeywords)keywords).Read(kw, out v0, out v1, out v2);
+        }
+
         public static RubyClass/*!*/ ClassOf(RubyContext/*!*/ context, object self) {
             IRubyObject obj = self as IRubyObject;
             return obj != null ? obj.ImmediateClass : context.GetImmediateClassOf(self);
@@ -314,7 +351,101 @@ namespace IronRuby.Runtime.Jit {
         }
 
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
-            return RubyOps.WriteInstanceVariable(context, self, value, site);
+            var obj = self as RubyObject;
+            if (obj != null) {
+                var data = obj._instanceData ?? RubyOps.GetInstanceData(ref obj._instanceData);
+                if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
+                    return value;
+                }
+            }
+            // A frozen receiver raises FrozenError, and a typed body has no frame to raise it from:
+            // let the generic body run instead (see JitCompiler._ivarWrite).
+            if (context.IsObjectFrozen(self)) {
+                throw Deopt();
+            }
+            context.SetInstanceVariable(self, value, site);
+            return value;
+        }
+
+        /// <summary>
+        /// The opening run of instance variable writes of a specialized method (JitCompiler.
+        /// EmitInitialIVars): the shape a fresh object has after all of them.
+        /// </summary>
+        public sealed class InitialIVarsSite {
+            internal readonly InstanceVariableShape/*!*/ Shape;
+
+            private InitialIVarsSite(InstanceVariableShape/*!*/ shape) {
+                Shape = shape;
+            }
+
+            /// <summary>Null if the variables would make an object too complex for shapes.</summary>
+            internal static InitialIVarsSite TryCreate(string/*!*/[]/*!*/ names) {
+                var shape = InstanceVariableShape.Root;
+                foreach (var name in names) {
+                    shape = shape.GetChild(name);
+                    if (shape == null) { return null; }
+                }
+                return new InitialIVarsSite(shape);
+            }
+        }
+
+        /// <summary>
+        /// The slot array a fresh object would get the run's variables in - element 0 already the
+        /// final shape, the values to be stored by the caller - or null if self is not a RubyObject
+        /// without instance variables, or is frozen: then the writes are made one by one.
+        /// </summary>
+        public static object[] BeginInitialIVars(object self, InitialIVarsSite/*!*/ site) {
+            var obj = self as RubyObject;
+            if (obj == null) { return null; }
+            var data = obj._instanceData;
+            if (data != null && (data._frozen || data._ivars != InstanceVariableShape.EmptySlots)) { return null; }
+            int count = site.Shape.Count;
+            var result = new object[Math.Max(count, obj.ImmediateClass.InstanceVariableCapacity) + 1];
+            result[0] = site.Shape;
+            return result;
+        }
+
+        /// <summary>
+        /// Publishes the array BeginInitialIVars made and the caller filled. False if the object
+        /// got variables, or was frozen, in the meantime: the caller then makes the writes one by one.
+        /// </summary>
+        public static bool CommitInitialIVars(object self, object[]/*!*/ slots) {
+            var obj = (RubyObject)self;
+            var data = obj._instanceData;
+            if (data == null) {
+                var fresh = new RubyInstanceData();
+                fresh._ivars = slots;
+                if (System.Threading.Interlocked.CompareExchange(ref obj._instanceData, fresh, null) == null) {
+                    RubyInstanceData.UpdateCapacityHint(obj.ImmediateClass, ((InstanceVariableShape)slots[0]).Count);
+                    return true;
+                }
+                data = obj._instanceData;
+            }
+            if (data._frozen) { return false; }
+            if (System.Threading.Interlocked.CompareExchange(ref data._ivars, slots, InstanceVariableShape.EmptySlots) == InstanceVariableShape.EmptySlots) {
+                RubyInstanceData.UpdateCapacityHint(obj.ImmediateClass, ((InstanceVariableShape)slots[0]).Count);
+                return true;
+            }
+            return false;
+        }
+
+        // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
+        // unboxed while it holds the type it held when the loop was compiled, a deopt once it does not.
+
+        public static int GuardInt(object value) {
+            if (value is int) { return (int)value; }
+            throw Deopt();
+        }
+
+        public static long GuardLong(object value) {
+            if (value is int) { return (int)value; }
+            if (value is long) { return (long)value; }
+            throw Deopt();
+        }
+
+        public static double GuardDouble(object value) {
+            if (value is double) { return (double)value; }
+            throw Deopt();
         }
 
         // ---- reflection handles the compiler emits ---------------------------------------

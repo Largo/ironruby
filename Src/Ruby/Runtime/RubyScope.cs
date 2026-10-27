@@ -91,9 +91,19 @@ namespace IronRuby.Runtime {
         internal bool InLoop;
         internal bool InRescue;
 
+        // Set once something may hold on to this scope after the call it belongs to has returned: a
+        // Proc, Binding, method or nested scope made in it, a TracePoint event. A block scope that is
+        // not captured is reused for the next call of its block (see RubyOps.TakeReusableBlockScope).
+        internal bool IsCaptured;
+
+        // Libraries call this for a scope they keep after returning.
+        public void MarkCaptured() {
+            if (!IsCaptured) {
+                IsCaptured = true;
+            }
+        }
+
         // closure:
-        private Dictionary<string, int> _staticLocalMapping;
-        private Dictionary<string, object> _dynamicLocals;
         internal /*and protected*/ MutableTuple _locals; // null if there are no variables
         internal /*and protected*/ string/*!*/[] _variableNames; // empty if there are no variables
 
@@ -108,15 +118,57 @@ namespace IronRuby.Runtime {
         // set by private/public/protected/module_function
         internal /*and protected*/ RubyMethodAttributes _methodAttributes;
 
-        // Refinements activated by `using' in this scope, in activation order; null until `using' runs here.
-        private List<RubyModule> _usedModules;
-        // Parallel to _usedModules: what each `using' saw of the module's refinements (null = all, live).
-        private List<HashSet<RubyModule>> _usedModuleSnapshots;
+        /// <summary>
+        /// The state only eval, Binding and refinements need, out of line: a scope is allocated for
+        /// every method call and every block call that needs one, and each field here would be paid
+        /// for by all of them. Null until one of these is first set.
+        /// </summary>
+        internal sealed class RareState {
+            // closure: name -> slot of the compiled locals, built for eval and Binding on demand
+            public Dictionary<string, int> StaticLocalMapping;
+            // closure: locals an eval or Binding#local_variable_set introduced
+            public Dictionary<string, object> DynamicLocals;
 
-        // Memoized effective activation table for this scope (own + everything lexically enclosing),
-        // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
-        private RefinementActivation _refinements;
-        private int _refinementsVersion;
+            // Refinements activated by `using' in this scope, in activation order; null until `using' runs here.
+            public List<RubyModule> UsedModules;
+            // Parallel to UsedModules: what each `using' saw of the module's refinements (null = all, live).
+            public List<HashSet<RubyModule>> UsedModuleSnapshots;
+
+            // Memoized effective activation table for this scope (own + everything lexically enclosing),
+            // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
+            public RefinementActivation Refinements;
+            public int RefinementsVersion;
+
+            // see RubyMethodScope.DefinitionRefinements
+            public StrongBox<RefinementActivation> MethodDefinitionRefinements;
+        }
+
+        private RareState _rare;
+
+        internal RareState/*!*/ Rare {
+            get { return _rare ?? Interlocked.CompareExchange(ref _rare, new RareState(), null) ?? _rare; }
+        }
+
+        internal RareState RareOrNull {
+            get { return _rare; }
+        }
+
+        private Dictionary<string, int> StaticLocalMapping {
+            get { var r = _rare; return (r != null) ? r.StaticLocalMapping : null; }
+            set { Rare.StaticLocalMapping = value; }
+        }
+
+        private Dictionary<string, object> DynamicLocals {
+            get { var r = _rare; return (r != null) ? r.DynamicLocals : null; }
+        }
+
+        private List<RubyModule> UsedModules {
+            get { var r = _rare; return (r != null) ? r.UsedModules : null; }
+        }
+
+        private List<HashSet<RubyModule>> UsedModuleSnapshots {
+            get { var r = _rare; return (r != null) ? r.UsedModuleSnapshots : null; }
+        }
 
         internal InterpretedFrame InterpretedFrame { get; set; }
 
@@ -185,6 +237,19 @@ namespace IronRuby.Runtime {
 
         internal RubyScope() {
             // Perf note: Initialization is performed completely in the most derived scope classes to improve perf.
+        }
+
+        // The per-call state of a scope reused for another call of its block, as a new scope has it.
+        internal void ResetForReuse(MutableTuple locals, object selfObject, InterpretedFrame interpretedFrame) {
+            _activeFlowControlScope = _parent.FlowControlScope;
+            InLoop = false;
+            InRescue = false;
+            _locals = locals;
+            _selfObject = selfObject;
+            _selfImmediateClass = null;
+            _methodAttributes = RubyMethodAttributes.PublicInstance;
+            _rare = null;
+            InterpretedFrame = interpretedFrame;
         }
 
         public virtual RubyModule Module {
@@ -270,7 +335,7 @@ namespace IronRuby.Runtime {
         }
 
         private void EnsureBoxes() {
-            if (_staticLocalMapping == null) {
+            if (StaticLocalMapping == null) {
                 if (_variableNames == null) {
                     // Locals not installed yet (see GetDeclaredLocalVariables). Don't cache an
                     // empty mapping - it would permanently hide the real locals once SetLocals runs.
@@ -281,7 +346,7 @@ namespace IronRuby.Runtime {
                 for (int i = 0; i < count; i++) {
                     boxes[_variableNames[i]] = i;
                 }
-                _staticLocalMapping = boxes;
+                StaticLocalMapping = boxes;
             }
         }
 
@@ -297,7 +362,7 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
+            if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index)) {
                 return _locals.GetValue(index);
             }
             return null;
@@ -307,19 +372,19 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
+            if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
                 value = _locals.GetValue(index);
                 return true;
             }
 
-            if (_dynamicLocals == null) {
+            if (DynamicLocals == null) {
                 value = null;
                 return false;
             }
 
-            lock (_dynamicLocals) {
-                return _dynamicLocals.TryGetValue(name, out value);
+            lock (DynamicLocals) {
+                return DynamicLocals.TryGetValue(name, out value);
             }
         }
 
@@ -327,22 +392,22 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
+            if (StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
                 _locals.SetValue(index, value);
                 return true;
             }
 
-            if (_dynamicLocals == null) {
+            if (DynamicLocals == null) {
                 return false;
             }
 
-            lock (_dynamicLocals) {
-                if (!_dynamicLocals.ContainsKey(name)) {
+            lock (DynamicLocals) {
+                if (!DynamicLocals.ContainsKey(name)) {
                     return false;
                 }
 
-                _dynamicLocals[name] = value;
+                DynamicLocals[name] = value;
             }
             return true;
         }
@@ -357,9 +422,9 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            if (_dynamicLocals != null) {
-                lock (_dynamicLocals) {
-                    foreach (var entry in _dynamicLocals) {
+            if (DynamicLocals != null) {
+                lock (DynamicLocals) {
+                    foreach (var entry in DynamicLocals) {
                         yield return entry;
                     }
                 }
@@ -369,9 +434,9 @@ namespace IronRuby.Runtime {
         private IEnumerable<string>/*!*/ GetDeclaredLocalSymbols() {
             // a variable an eval or Binding#local_variable_set introduced is newer than the ones
             // the scope was compiled with, and MRI lists it first
-            if (_dynamicLocals != null) {
-                lock (_dynamicLocals) {
-                    foreach (string name in _dynamicLocals.Keys) {
+            if (DynamicLocals != null) {
+                lock (DynamicLocals) {
+                    foreach (string name in DynamicLocals.Keys) {
                         yield return name;
                     }
                 }
@@ -478,12 +543,12 @@ namespace IronRuby.Runtime {
         /// module-eval scopes need to override this since they should set the variable in their parent scope.
         /// </summary>
         internal virtual void DefineDynamicVariable(string/*!*/ name, object value) {
-            if (_dynamicLocals == null) {
-                Interlocked.CompareExchange(ref _dynamicLocals, new Dictionary<string, object>(), null);
+            if (DynamicLocals == null) {
+                Interlocked.CompareExchange(ref Rare.DynamicLocals, new Dictionary<string, object>(), null);
             }
 
-            lock (_dynamicLocals) {
-                _dynamicLocals[name] = value;
+            lock (DynamicLocals) {
+                DynamicLocals[name] = value;
             }
         }
 
@@ -514,19 +579,20 @@ namespace IronRuby.Runtime {
                 refinements = new HashSet<RubyModule>(list);
             }
 
-            if (_usedModules == null) {
-                _usedModules = new List<RubyModule>();
-                _usedModuleSnapshots = new List<HashSet<RubyModule>>();
+            if (UsedModules == null) {
+                var rare = Rare;
+                rare.UsedModules = new List<RubyModule>();
+                rare.UsedModuleSnapshots = new List<HashSet<RubyModule>>();
             } else {
                 // re-activating moves it to the front of this scope's precedence order
-                int index = _usedModules.IndexOf(module);
+                int index = UsedModules.IndexOf(module);
                 if (index >= 0) {
-                    _usedModules.RemoveAt(index);
-                    _usedModuleSnapshots.RemoveAt(index);
+                    UsedModules.RemoveAt(index);
+                    UsedModuleSnapshots.RemoveAt(index);
                 }
             }
-            _usedModules.Add(module);
-            _usedModuleSnapshots.Add(refinements);
+            UsedModules.Add(module);
+            UsedModuleSnapshots.Add(refinements);
 
             // Invalidate every memoized table and, through the rule guards built on them, every cached
             // call site that could be affected.
@@ -546,8 +612,9 @@ namespace IronRuby.Runtime {
             }
 
             int version = context.RefinementVersion;
-            if (_refinements != null && _refinementsVersion == version) {
-                return _refinements;
+            var cached = _rare;
+            if (cached != null && cached.Refinements != null && cached.RefinementsVersion == version) {
+                return cached.Refinements;
             }
 
             RefinementActivation outer;
@@ -572,10 +639,11 @@ namespace IronRuby.Runtime {
             } else {
                 outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
             }
-            RefinementActivation result = (_usedModules != null) ? RefinementActivation.Create(outer, _usedModules, _usedModuleSnapshots) : outer;
+            RefinementActivation result = (UsedModules != null) ? RefinementActivation.Create(outer, UsedModules, UsedModuleSnapshots) : outer;
 
-            _refinements = result;
-            _refinementsVersion = version;
+            var rare = Rare;
+            rare.Refinements = result;
+            rare.RefinementsVersion = version;
             return result;
         }
 
@@ -998,8 +1066,8 @@ namespace IronRuby.Runtime {
         internal MutableString GetCurrentMatchLastGroup() {
             var match = _currentMatch;
             if (match != null) {
-                // TODO: cache the last successful group index?
-                for (int i = match.GroupCount - 1; i >= 0; i--) {
+                // the last capture group that matched; a pattern without groups has none ($+ is nil)
+                for (int i = match.GroupCount - 1; i >= 1; i--) {
                     MutableString result = match.GetGroupValue(i);
                     if (result != null) {
                         return result;
@@ -1097,7 +1165,10 @@ var closureScope = scope as RubyClosureScope;
         /// it creates this scope; null for a body compiled before anything was refined.  Public because
         /// the method body assigns it directly.
         /// </summary>
-        public StrongBox<RefinementActivation> DefinitionRefinements;
+        public StrongBox<RefinementActivation> DefinitionRefinements {
+            get { var r = RareOrNull; return (r != null) ? r.MethodDefinitionRefinements : null; }
+            set { Rare.MethodDefinitionRefinements = value; }
+        }
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,
             RubyScope/*!*/ parent, RubyModule/*!*/ declaringModule, string/*!*/ definitionName,
@@ -1156,6 +1227,7 @@ var closureScope = scope as RubyClosureScope;
 
         internal RubyModuleScope(RubyScope/*!*/ parent, RubyModule/*!*/ module) {
             Assert.NotNull(parent, module);
+            parent.MarkCaptured();
 
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
@@ -1211,6 +1283,7 @@ var closureScope = scope as RubyClosureScope;
 
         internal RubyModuleEvalScope(RubyScope/*!*/ parent, RubyModule module, object selfObject) {
             Assert.NotNull(parent);
+            parent.MarkCaptured();
 
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
@@ -1238,6 +1311,8 @@ var closureScope = scope as RubyClosureScope;
         public override bool InheritsLocalVariables { get { return false; } }
 
         internal RubyFileInitializerScope(MutableTuple locals, string[]/*!*/ variableNames, RubyScope/*!*/ parent) {
+            parent.MarkCaptured();
+
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
 
@@ -1258,7 +1333,7 @@ var closureScope = scope as RubyClosureScope;
     }
 
     public sealed class RubyBlockScope : RubyClosureScope {
-        private readonly BlockParam/*!*/ _blockFlowControl;
+        private BlockParam/*!*/ _blockFlowControl;
 
         // The block a thread runs keeps its own $~ and $_, as MRI's thread root frame does; any
         // other block shares them with the method it is in.
@@ -1318,6 +1393,15 @@ var closureScope = scope as RubyClosureScope;
             // RubyBlockScope:
             _blockFlowControl = blockFlowControl;
         }
+
+        // Makes this scope, which nothing has captured, the scope of another call of its block.
+        internal void Reinitialize(MutableTuple locals, BlockParam/*!*/ blockFlowControl, object selfObject, InterpretedFrame interpretedFrame) {
+            _blockFlowControl = blockFlowControl;
+            ResetForReuse(locals, selfObject, interpretedFrame);
+            CurrentMatch = null;
+            LastInputLine = null;
+            LambdaReturnState = 0;
+        }
     }
 
     /// <summary>
@@ -1334,6 +1418,8 @@ var closureScope = scope as RubyClosureScope;
         // No module of its own: lexical walks (Module.nesting, constant lookup) pass through to the parent.
 
         public RubyBindingCopyScope(RubyScope/*!*/ parent, object selfObject) {
+            parent.MarkCaptured();
+
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
 
@@ -1445,10 +1531,11 @@ var closureScope = scope as RubyClosureScope;
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
                     foreach (var path in context.RubyOptions.RequirePaths) {
-                        context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
                         // the first is the core prelude (gem_prelude.rb or ruby4.rb)
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
-                            context.Loader.ProvideCoreFeatures();
+                            context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);
+                        } else {
+                            RequireLibrary(context, globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8));
                         }
                         first = false;
                     }
@@ -1458,6 +1545,22 @@ var closureScope = scope as RubyClosureScope;
             }
 
             return scope;
+        }
+
+        /// <summary>
+        /// -r library: MRI calls #require on main, so once the prelude has loaded RubyGems its #require
+        /// activates gems - ruby -r csv finds the bundled csv gem. Without RubyGems it is the builtin.
+        /// </summary>
+        private static void RequireLibrary(RubyContext/*!*/ context, Scope/*!*/ globalScope, object main, MutableString/*!*/ path) {
+            var method = context.ResolveMethod(main, "require", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo) {
+                context.Loader.LoadFile(globalScope, main, path, LoadFlags.Require);
+            } else {
+                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                    RubyCallAction.Make(context, "require", RubyCallSignature.WithImplicitSelf(1))
+                );
+                site.Target(site, main, path);
+            }
         }
 
         internal static RubyTopLevelScope/*!*/ CreateHostedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool bindGlobals) {

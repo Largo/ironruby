@@ -227,7 +227,6 @@ namespace IronRuby.Runtime {
             if (Directory.Exists(rubyLib4)) {
                 loadPaths.Add(_context.EncodePath(rubyLib4));
             }
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/" + _context.StandardLibraryVersion)));
 
             for (int i = firstDefault; i < loadPaths.Count; i++) {
                 var entry = (MutableString)loadPaths[i];
@@ -683,9 +682,8 @@ namespace IronRuby.Runtime {
                         _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
                     }
 
-                    // MRI warns under -w. Only for a require the program made: Kernel#Complex and
-                    // #Rational are autoloaded constants pointing at complex18.rb and rational18.rb,
-                    // and those files reopen the very class whose autoload is running - a circularity
+                    // MRI warns under -w. Only for a require the program made: an autoloaded
+                    // constant whose file reopens the very class being autoloaded is a circularity
                     // the user did not write.
                     if (circular && (flags & LoadFlags.WarnCircular) != 0) {
                         _context.ReportWarning("loading in progress, circular require considered harmful - " + file.Path, true);
@@ -1208,12 +1206,44 @@ namespace IronRuby.Runtime {
 
         #endregion
 
+        // The thread running ruby4.rb as the host's core prelude (--disable-gems), while it does. The
+        // only Ruby code on its stack then is the prelude's own, which backtraces leave out.
+        private Thread _corePreludeThread;
+
+        /// <summary>
+        /// True while this thread runs ruby4.rb as the core prelude, loaded by the host itself: a
+        /// backtrace taken now has no frame in it (they are all the prelude's, which backtraces
+        /// skip), so a caller that only wants the innermost location need not walk the CLR stack.
+        /// </summary>
+        internal bool IsLoadingCorePrelude {
+            get { return _corePreludeThread == Thread.CurrentThread; }
+        }
+
+        /// <summary>
+        /// Requires the core prelude - gem_prelude.rb, or ruby4.rb under --disable-gems - and then
+        /// lists the features MRI has in $" from the start.
+        /// </summary>
+        internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
+            bool direct = path == "ruby4.rb";
+            if (direct) {
+                _corePreludeThread = Thread.CurrentThread;
+            }
+            try {
+                LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+            } finally {
+                if (direct) {
+                    _corePreludeThread = null;
+                }
+            }
+            ProvideCoreFeatures();
+        }
+
         // Features the core prelude loaded: kept out of $" (MRI's own Ruby-defined core is not in
         // it either) but still loaded, so that requiring one again does nothing.
         private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
 
         private static readonly string[]/*!*/ _CorePreludeFiles = {
-            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb",
+            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "rational.rb", "complex.rb",
             "gem_compat.rb"
         };
 
@@ -1336,12 +1366,19 @@ namespace IronRuby.Runtime {
             // An extensionless entry in $" says nothing about a file that was found: MRI only
             // counts "foo" as loaded when no foo.rb (or library) could be found at all.
             // A feature listed by name ("set.rb", "complex.so" - what MRI provides) is loaded for
-            // a require of that name, with or without the extension.
+            // a require of that name, with or without the extension. Except that a library
+            // ("foo.so") does not stand in for a Ruby file found on the path: MRI's
+            // search_required goes on to look for foo.rb when only foo.so is in $", which is how
+            // `require "pathname"` loads lib/pathname.rb over the core's "pathname.so".
             IEnumerable<MutableString> requested;
             if (RubyUtils.GetExtension(path).Length != 0) {
                 requested = new[] { _context.EncodePath(path) };
             } else if (!Platform.IsAbsolutePath(path) && !path.StartsWith(".", StringComparison.Ordinal)) {
-                requested = new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
+                var found = files.FirstOrDefault();
+                bool foundSource = found != null && found.SourceUnit != null;
+                requested = foundSource
+                    ? new[] { _context.EncodePath(path + ".rb") }
+                    : new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
             } else {
                 requested = Enumerable.Empty<MutableString>();
             }

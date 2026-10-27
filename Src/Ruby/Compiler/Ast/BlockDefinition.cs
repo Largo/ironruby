@@ -190,6 +190,27 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
             bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
 
+            // A body that never uses its scope - { }, { |x| x } - has no use for the RubyBlockScope
+            // every invocation would allocate, except to hand to the TracePoint hooks, which only
+            // evaluate their scope while a TracePoint listens: there it is made on demand.
+            MSA.Expression lazyScope = null, filterScope = scopeVariable;
+            if (!hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval && !scope.HasClosures && IsScopeFreeBody()) {
+                var names = scope.GetVariableNamesExpression();
+                Func<MSA.Expression> makeScope = () => Methods.CreateBlockScopeLazy.OpCall(
+                    scope.LocalsTupleVariable, names, blockParameter, selfParameter, EnterInterpretedFrameExpression.Instance
+                );
+                var lazy = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, makeScope()));
+                var rewriter = new LazyScopeRewriter(scopeVariable, lazy);
+                var lazyParamInit = rewriter.Visit(paramInit);
+                var lazyStatements = rewriter.Visit(statements);
+                if (!rewriter.NeedsScope) {
+                    paramInit = lazyParamInit;
+                    statements = lazyStatements;
+                    lazyScope = lazy;
+                    filterScope = Ast.Coalesce(scopeVariable, makeScope());
+                }
+            }
+
             var bodyTry = AstUtils.Try(
                 statements
             ).Catch(blockUnwinder = Ast.Parameter(typeof(BlockUnwinder), "#u"),
@@ -221,25 +242,64 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Label(redoLabel),
                 bodyTry
             ).Filter(filterVariable = Ast.Parameter(typeof(Exception), "#e"),
-                Methods.FilterBlockException.OpCall(scopeVariable, filterVariable)
+                Methods.FilterBlockException.OpCall(filterScope, filterVariable)
             ).Finally(
                 traceReturn,
                 leaveNestedReturn,
                 Ast.Empty()
             );
 
-            body = scope.CreateScope(
-                scopeVariable,
-                Methods.CreateBlockScope.OpCall(new AstExpressions {
+            // A body that needs its scope but defines no closure over it can reuse the scope of the
+            // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
+            // A nested block literal is a Proc over the scope on every call: nothing to reuse.
+            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+
+            body = gen.Traceable
+                ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
+                : gen.AddReturnTarget(body);
+
+            if (reuseScope) {
+                // the body stays in statement position: as a call argument it would have to be spilled
+                var result = scope.DefineHiddenVariable("#result", typeof(object));
+                bool keepLocals = scope.HasReusableLocals;
+                MSA.Expression leave = Methods.LeaveReusableBlockScope.OpCall(scopeVariable, AstUtils.Constant(keepLocals));
+                if (keepLocals) {
+                    leave = Ast.IfThen(leave, scope.MakeClearLocals());
+                }
+                body = Ast.Block(
+                    Ast.Assign(result, AstUtils.Convert(body, typeof(object))),
+                    leave,
+                    result
+                );
+            }
+
+            MSA.Expression enterScope;
+            if (reuseScope) {
+                // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
+                var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
+                enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {
+                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope),
+                    scope.GetVariableNamesExpression(),
+                    blockParameter,
+                    selfParameter,
+                    EnterInterpretedFrameExpression.Instance,
+                    reusableScope
+                });
+            } else {
+                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     blockParameter, 
                     selfParameter,
                     EnterInterpretedFrameExpression.Instance
-                }),
-                gen.Traceable
-                    ? new TraceReturnExpression(scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
-                    : gen.AddReturnTarget(body)
+                });
+            }
+
+            body = scope.CreateScope(
+                scopeVariable,
+                enterScope,
+                body
             );
 
             gen.LeaveBlockDefinition();
@@ -293,6 +353,82 @@ namespace IronRuby.Compiler.Ast {
             }
 
             return AstGenerator.FormatBlockLabel(enclosing, levels);
+        }
+
+        /// <summary>
+        /// Nothing in the parameters or the body needs the block's scope at runtime: plain
+        /// parameters, and statements that only read and assign the block's own locals, literals and
+        /// self. Every call site takes the scope, and so do constants, instance and global variables,
+        /// so this is the call-free body: { }, { |x| x }, { |a, b| a }.
+        /// The transformed body is still checked (LazyScopeRewriter); this is the cheap filter.
+        /// </summary>
+        private bool IsScopeFreeBody() {
+            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.Block != null || HasPostParameters) {
+                return false;
+            }
+            var signature = _parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                return false;
+            }
+            foreach (var parameter in _parameters.Mandatory) {
+                if (!(parameter is LocalVariable) && !(parameter is Placeholder)) {
+                    return false;
+                }
+            }
+            foreach (var statement in _body) {
+                if (!IsScopeFree(statement)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool IsScopeFree(Expression/*!*/ node) {
+            if (node is LocalVariable || node is Literal || node is SelfReference) {
+                return true;
+            }
+            var assignment = node as SimpleAssignmentExpression;
+            return assignment != null && assignment.Operation == null && assignment.Left is LocalVariable && IsScopeFree(assignment.Right);
+        }
+
+        /// <summary>
+        /// Points the TracePoint hooks of a scope-free body at the scope made on demand. Any other use
+        /// of the scope, or a node it cannot look into, means the body needs its scope after all.
+        /// </summary>
+        private sealed class LazyScopeRewriter : MSA.ExpressionVisitor {
+            private readonly MSA.ParameterExpression/*!*/ _scope;
+            private readonly MSA.Expression/*!*/ _lazyScope;
+            private int _inTraceHook;
+
+            internal bool NeedsScope;
+
+            internal LazyScopeRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope) {
+                _scope = scope;
+                _lazyScope = lazyScope;
+            }
+
+            protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
+                if (node == _scope) {
+                    if (_inTraceHook > 0) {
+                        return _lazyScope;
+                    }
+                    NeedsScope = true;
+                }
+                return node;
+            }
+
+            protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
+                if (node is TraceLineExpression) {
+                    _inTraceHook++;
+                    try {
+                        return base.VisitExtension(node);
+                    } finally {
+                        _inTraceHook--;
+                    }
+                }
+                NeedsScope = true;
+                return node;
+            }
         }
 
         private MSA.Expression/*!*/ GetParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i) {

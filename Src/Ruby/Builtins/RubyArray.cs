@@ -281,6 +281,10 @@ namespace IronRuby.Builtins {
         /// <returns>The index of the first slot that will contain the new elements.</returns>
         private int ResizeForAppend(int additionalCount, bool clear) {
             int oldCount = _count;
+            if (additionalCount < 0 || additionalCount > Int32.MaxValue - oldCount) {
+                // the count would overflow: no such array can be allocated (Ruby: NoMemoryError)
+                throw new OutOfMemoryException();
+            }
             _count += additionalCount;
 
             if (_start + oldCount > _content.Length - additionalCount) {
@@ -571,6 +575,50 @@ namespace IronRuby.Builtins {
 
         public void RemoveAt(int index) {
             RemoveRange(index, 1);
+        }
+
+        // Taking an array apart from the ends without RemoveRange's reallocation, which it does to
+        // shrink a small array on nearly every removal. For the splat of a lowered parameter list,
+        // which is consumed and then dropped (RubyOps.ShiftSplatArgument and its neighbours).
+
+        /// <summary>Removes and returns the first element; nil if there is none.</summary>
+        internal object TakeFirst() {
+            if (_count == 0) {
+                return null;
+            }
+            Mutate();
+            object result = _content[_start];
+            _content[_start] = null;
+            _start++;
+            _count--;
+            ObjectInvariant();
+            return result;
+        }
+
+        /// <summary>Removes the first <paramref name="count"/> elements and returns them as a new array.</summary>
+        internal RubyArray/*!*/ TakeFirst(int count) {
+            ContractUtils.RequiresArrayRange(_count, 0, count, "index", "count");
+            var result = new RubyArray(this, 0, count);
+            if (count > 0) {
+                Mutate();
+                Utils.Fill(_content, _start, null, count);
+                _start += count;
+                _count -= count;
+                ObjectInvariant();
+            }
+            return result;
+        }
+
+        /// <summary>Removes and returns the last element, of which there must be one.</summary>
+        internal object TakeLast() {
+            Debug.Assert(_count > 0);
+            Mutate();
+            int last = _start + _count - 1;
+            object result = _content[last];
+            _content[last] = null;
+            _count--;
+            ObjectInvariant();
+            return result;
         }
 
         public bool Remove(object item) {

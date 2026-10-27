@@ -441,8 +441,18 @@ namespace IronRuby.Runtime.Conversions {
     public abstract class ProtocolConversionAction<TSelf> : ProtocolConversionAction
         where TSelf : ProtocolConversionAction<TSelf>, new() {
         
+        // The action Make handed out last. Library methods ask for their conversion on every
+        // call (Protocols.CastToFixnum and friends), and the factory's locked, type-keyed lookup
+        // costs far more than the conversion itself. One action per runtime, so a single slot
+        // answers every call of a process that has one runtime; a second runtime just misses.
+        private static TSelf _lastMade;
+
         public static TSelf/*!*/ Make(RubyContext/*!*/ context) {
-            return context.MetaBinderFactory.Conversion<TSelf>();
+            TSelf last = _lastMade;
+            if (last != null && ReferenceEquals(last.Context, context)) {
+                return last;
+            }
+            return _lastMade = context.MetaBinderFactory.Conversion<TSelf>();
         }
 
         [Emitted]
@@ -818,6 +828,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToFixnumAction : ConvertToIntegerAction<ConvertToFixnumAction> {
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
+
     }
 
     public sealed class ConvertToByteAction : ConvertToIntegerAction<ConvertToByteAction> {
