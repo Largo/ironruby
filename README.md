@@ -468,6 +468,8 @@ Requires the .NET SDK, plus Ruby and a C compiler to build prism.
 
 ```console
 $ git clone https://github.com/IronLanguages/dlr ../dlr          # modern DLR, referenced as source
+$ git -C ../dlr checkout <DLR_REF from .github/workflows/ci.yml>
+$ for p in Build/dlr-patches/*.patch; do git -C ../dlr apply "$PWD/$p"; done
 $ git clone https://github.com/ruby/prism ../prism
 $ (cd ../prism && ruby templates/template.rb && make shared)     # libprism.so
 $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + loader

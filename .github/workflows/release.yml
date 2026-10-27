@@ -32,6 +32,10 @@ env:
   # The prism revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one
   # the vendored Ruby half of prism in Src/StdLib belongs to; ci.yml builds from the same one.
   PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  # The DLR revision Build/dlr-patches applies to; ci.yml builds from the same one, so a
+  # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
+  # Move both together, after checking the patches still apply.
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
 
 jobs:
   package:
@@ -63,6 +67,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
 
       - uses: actions/checkout@v7
@@ -159,7 +164,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
 
