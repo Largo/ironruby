@@ -22,6 +22,10 @@ env:
   # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
   # Move both together, after checking the patches still apply.
   DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
+  # ruby/spec and mspec for the spec job, pinned so a result moves only with IronRuby's own
+  # changes, not with whatever lands upstream on the day.
+  SPEC_REF: dda28d049100033a8b7050eacbb35957a2eb0c00
+  MSPEC_REF: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
 
 jobs:
   build-and-test:
@@ -388,10 +392,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ruby/spec
+          ref: ${{ env.SPEC_REF }}
           path: ironruby/spec
       - uses: actions/checkout@v7
         with:
           repository: ruby/mspec
+          ref: ${{ env.MSPEC_REF }}
           path: ironruby/mspec
 
       - name: Patch the DLR
