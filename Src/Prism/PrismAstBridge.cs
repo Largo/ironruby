@@ -2976,10 +2976,13 @@ namespace IronRuby.Prism {
                 knownKeys.Add(LiteralText(((Pm.SymbolNode)((Pm.AssocNode)element).Key).Unescaped));
             }
 
-            // MRI hands #deconstruct_keys the keys the pattern is interested in, or nil when a
-            // named **rest means the pattern needs every key.
+            // MRI hands #deconstruct_keys the keys the pattern is interested in, or nil when the
+            // pattern needs every key: a **rest or **nil looks at the keys it does not name, and
+            // `in {}` demands that there be none. A bare ** needs nothing beyond the named keys.
+            bool hasRest = node.Rest != null && !(node.Rest is Pm.AssocSplatNode anonymous && anonymous.Value == null);
+            bool hasKeys = node.Elements.Length > 0 || node.Rest != null;
             Expression keyList;
-            if (node.Rest is Pm.AssocSplatNode named && named.Value != null) {
+            if (!hasKeys || hasRest) {
                 keyList = Literal.Nil(span);
             } else {
                 var symbols = new List<Expression>();

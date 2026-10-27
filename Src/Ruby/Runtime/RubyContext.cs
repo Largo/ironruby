@@ -1042,6 +1042,97 @@ namespace IronRuby.Runtime {
         private void AssemblyLoaded(Assembly/*!*/ assembly) {
             _namespaces.LoadAssembly(assembly);
             AddExtensionAssembly(assembly);
+
+            // The assembly can add types to namespaces whose misses are already cached (defined?
+            // and constant sites keep their answer per constant version).
+            using (ClassHierarchyLocker()) {
+                ConstantAccessVersion++;
+            }
+        }
+
+        // Simple names of the assemblies the host was started with that the on-demand loading below
+        // has not tried yet; built on the first miss.
+        private HashSet<string> _untriedPlatformAssemblies;
+
+        // Namespace members the on-demand loading below has already looked for.
+        private HashSet<string> _platformAssemblyProbes;
+
+        /// <summary>
+        /// On .NET Core the class library is split into many assemblies that are loaded only when
+        /// referenced, so `System::Console` misses until System.Console.dll has been loaded. When a
+        /// constant lookup in a CLR namespace misses, this loads the platform assemblies that could
+        /// define <paramref name="name"/> in that namespace: A.B.Name, A.B, A (for a miss in A.B),
+        /// then the netstandard facade, which forwards the whole .NET Standard surface. Only
+        /// assemblies on the runtime's trusted platform assembly list are considered and each name is
+        /// tried once, so a repeated miss costs a set lookup. Returns true if the namespace may now
+        /// contain <paramref name="name"/>.
+        /// </summary>
+        internal bool TryLoadNamespaceMemberAssembly(NamespaceTracker/*!*/ ns, string/*!*/ name) {
+            RequiresClassHierarchyLock();
+
+            string nsName = ns.Name;
+            if (nsName == null || name.IndexOf('.') >= 0) {
+                return false;
+            }
+
+            if (_platformAssemblyProbes == null) {
+                _untriedPlatformAssemblies = GetPlatformAssemblyNames();
+                _platformAssemblyProbes = new HashSet<string>();
+            }
+
+            if (_untriedPlatformAssemblies.Count == 0 || !_platformAssemblyProbes.Add(nsName + "." + name)) {
+                return false;
+            }
+
+            string candidate = nsName + "." + name;
+            while (true) {
+                if (TryLoadPlatformAssembly(candidate) && ns.ContainsKey(name)) {
+                    return true;
+                }
+                int dot = candidate.LastIndexOf('.');
+                if (dot < 0) {
+                    break;
+                }
+                candidate = candidate.Substring(0, dot);
+            }
+
+            // The netstandard facade forwards the whole .NET Standard surface. Only for the BCL's own
+            // namespaces, though: a namespace included into Object (include Modern) has every top-level
+            // constant looked up in it, and a miss there is no reason to load a hundred assemblies.
+            return (nsName == "System" || nsName.StartsWith("System.", StringComparison.Ordinal) ||
+                    nsName == "Microsoft" || nsName.StartsWith("Microsoft.", StringComparison.Ordinal))
+                && TryLoadPlatformAssembly("netstandard") && ns.ContainsKey(name);
+        }
+
+        // Loads a platform assembly that has not been tried yet. Returns true if it is now loaded.
+        private bool TryLoadPlatformAssembly(string/*!*/ simpleName) {
+            if (!_untriedPlatformAssemblies.Remove(simpleName)) {
+                return false;
+            }
+
+            Assembly assembly;
+            try {
+                assembly = DomainManager.Platform.LoadAssembly(simpleName);
+            } catch (Exception e) {
+                Utils.Log(String.Format("Loading platform assembly '{0}' failed: {1}", simpleName, e.Message), "LOADER");
+                return false;
+            }
+
+            DomainManager.LoadAssembly(assembly);
+            return true;
+        }
+
+        private static HashSet<string>/*!*/ GetPlatformAssemblyNames() {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var paths = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+            if (paths != null) {
+                foreach (var path in paths.Split(new[] { Path.PathSeparator }, StringSplitOptions.RemoveEmptyEntries)) {
+                    if (path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) {
+                        result.Add(Path.GetFileNameWithoutExtension(path));
+                    }
+                }
+            }
+            return result;
         }
 
         internal void AddModuleToCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
@@ -1241,6 +1332,15 @@ namespace IronRuby.Runtime {
                 modules.Add(GetOrCreateModuleNoLock(iface));
             }
 
+            // Hash patterns match a CLR object's public members. Last, so that an interface or a generic type
+            // definition can define its own #deconstruct_keys; a subclass finds the module on its base class.
+            // An abstract class has no instances of its own, and leaving it out keeps the library classes that
+            // derive from one (System::Char from ValueType, ...) as they are.
+            RubyModule patternMatching;
+            if (!type.IsAbstract && TryGetModuleNoLock(typeof(ClrPatternMatching), out patternMatching)) {
+                modules.Add(patternMatching);
+            }
+
             return modules.Count > 0 ? modules.ToArray() : null;
         }
 
@@ -1258,7 +1358,16 @@ namespace IronRuby.Runtime {
         // Value is null if the namepsace has been activated.
         private Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>> _availableExtensions;
 
+        // Assemblies whose extension methods have been registered (or are queued to be, in _potentialExtensionAssemblies).
+        private readonly HashSet<Assembly>/*!*/ _extensionAssemblies = new HashSet<Assembly>();
+
         private void AddExtensionAssembly(Assembly/*!*/ assembly) {
+            lock (ExtensionsLock) {
+                if (!_extensionAssemblies.Add(assembly)) {
+                    return;
+                }
+            }
+
             if (_potentialExtensionAssemblies != null) {
                 lock (ExtensionsLock) {
                     if (_potentialExtensionAssemblies != null) {
@@ -1303,6 +1412,23 @@ namespace IronRuby.Runtime {
 
         public void ActivateExtensions(string/*!*/ @namespace) {
             ContractUtils.RequiresNotNull(@namespace, "namespace");
+
+            // The types of a namespace can be known through a facade's type forwarders (netstandard, System.Xml),
+            // which loads the assemblies that define them without them ever being reported loaded: their extension
+            // methods (System.Linq.Enumerable's) would never be seen. Look at where the namespace's types really live.
+            NamespaceTracker tracker = _namespaces;
+            foreach (string part in @namespace.Length > 0 ? @namespace.Split('.') : ArrayUtils.EmptyStrings) {
+                MemberTracker member;
+                tracker = (tracker != null && tracker.TryGetValue(part, out member)) ? member as NamespaceTracker : null;
+            }
+            if (tracker != null) {
+                foreach (var member in tracker) {
+                    var typeTracker = member.Value as TypeTracker;
+                    if (typeTracker != null && !(typeTracker is TypeGroup)) {
+                        AddExtensionAssembly(typeTracker.Type.Assembly);
+                    }
+                }
+            }
 
             Assembly[] assemblies = null;
             if (_potentialExtensionAssemblies != null) {
@@ -2013,6 +2139,24 @@ namespace IronRuby.Runtime {
         }
 
         // thread-safe:
+        // Task::Factory is a static property, not a constant: say how to get it (Task.Factory). Only CLR const and
+        // static readonly fields are constants (RubyModule.TryGetClrConstantField) - a constant is cached where it is
+        // used, which a property like DateTime.Now must not be.
+        private static string/*!*/ GetClrStaticMemberHint(RubyModule/*!*/ owner, string/*!*/ name) {
+            Type type = (owner.TypeTracker != null) ? owner.TypeTracker.Type : null;
+            if (type == null || type.ContainsGenericParameters || (owner.Restrictions & ModuleRestrictions.NoNameMapping) != 0) {
+                return String.Empty;
+            }
+
+            foreach (var member in type.GetMember(name, BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)) {
+                if (member is PropertyInfo || member is FieldInfo || member is MethodInfo) {
+                    return String.Format(" ({1} is a static {2} of the CLR type, called as a method: {0}.{1})",
+                        owner.Name, name, member is MethodInfo ? "method" : member is PropertyInfo ? "property" : "field");
+                }
+            }
+            return String.Empty;
+        }
+
         public object ResolveMissingConstant(RubyModule/*!*/ owner, string/*!*/ name) {
             var privateReference = _privateConstantReference;
             _privateConstantReference = null;
@@ -2043,7 +2187,7 @@ namespace IronRuby.Runtime {
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
                 realOwner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
-                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
+                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name) + GetClrStaticMemberHint(owner, name)
             ), name, owner);
         }
 

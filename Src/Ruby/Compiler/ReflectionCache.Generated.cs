@@ -112,8 +112,6 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateBoundMember;
         public static MethodInfo/*!*/ CreateBoundMissingMember { get { return _CreateBoundMissingMember ?? (_CreateBoundMissingMember = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.Calls.RubyMemberInfo, System.String, IronRuby.Builtins.RubyMethod>(RubyOps.CreateBoundMissingMember)); } }
         private static MethodInfo _CreateBoundMissingMember;
-        public static MethodInfo/*!*/ CreateDefaultInstance { get { return _CreateDefaultInstance ?? (_CreateDefaultInstance = CallInstruction.CacheFunc<System.Object>(RubyOps.CreateDefaultInstance)); } }
-        private static MethodInfo _CreateDefaultInstance;
         public static MethodInfo/*!*/ CreateDelegateFromMethod { get { return _CreateDelegateFromMethod ?? (_CreateDelegateFromMethod = CallInstruction.CacheFunc<System.Type, IronRuby.Builtins.RubyMethod, System.Delegate>(RubyOps.CreateDelegateFromMethod)); } }
         private static MethodInfo _CreateDelegateFromMethod;
         public static MethodInfo/*!*/ CreateDelegateFromProc { get { return _CreateDelegateFromProc ?? (_CreateDelegateFromProc = CallInstruction.CacheFunc<System.Type, IronRuby.Builtins.Proc, System.Delegate>(RubyOps.CreateDelegateFromProc)); } }

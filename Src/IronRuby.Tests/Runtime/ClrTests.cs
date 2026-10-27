@@ -928,7 +928,7 @@ f1
 f2
 f2
 !f2
-#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3(_)>
+#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3(t)>
 f3
 f3
 !f3
@@ -1073,7 +1073,7 @@ p Obj.method(:skip)
 "), @"
 #<Method: *C#foo(_, *)>
 #<Method: *C#bar(_, *)>
-#<Method: *C(*B)#middle(_)>
+#<Method: *C(*B)#middle(a)>
 #<Method: *C#skip(*)>
 ", OutputFlags.Match);
 
@@ -2067,7 +2067,7 @@ p C[Float].ancestors[0..2]
 ", @"
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[String]
-[InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], Object]
+[InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], IronRuby::Clr::PatternMatching]
 ");
 
             // It is possible to include a generic type definition into another class. It behaves like a Ruby module.
@@ -3136,7 +3136,8 @@ puts F.new('hello', 'world').p
             }, @"
 init
 test
-#<TypeError: can't allocate class `E' that derives from type `*::ClassWithNoDefaultConstructor' with no default constructor; define E#new singleton method instead of I#initialize>
+init
+#<TypeError: E.new: initialize did not call super, and ClassWithNoDefaultConstructor has no parameterless constructor to construct the instance with>
 ctor
 hello world
 ", OutputFlags.Match);

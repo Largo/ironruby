@@ -124,6 +124,12 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
+
+            // Kernel#caller and #caller_locations: -X:ExceptionDetail adds the CLR frames to exception
+            // backtraces, not here, where code reads the frames - require_relative takes its directory
+            // from the first one, and would get a .cs file of the runtime instead of the caller's.
+            _exceptionDetail = false;
+
             var trace = GetClrStackTrace(null, _needsClrFileInfo);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
