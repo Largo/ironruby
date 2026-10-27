@@ -426,7 +426,7 @@ Linux is the primary target and the one the numbers above are measured on. **Win
 `ir.cmd` and `irb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
 **0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
 `core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
-`poll(2)`, so `core/io` and the socket suites hang rather than fail). `zlib`, Win32OLE and
+`poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE and
 readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
 input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
 come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
@@ -544,12 +544,17 @@ Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are syml
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
 `fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
 (25) are libraries IronRuby does not implement and whose specs only run on Windows;
-`library/zlib` (42) is the `LoadError` below. `core/objectspace` needs `-X:ObjectSpace`, as
-on Linux.
+`library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
+`-X:ObjectSpace`, as on Linux.
 
-What Windows does not have yet: **`zlib`** (`require "zlib"` is a clean `LoadError` — there
-is no libz to bind to, and the `z_stream` binding is laid out for an LP64 C compiler, so a
-stray `zlib1.dll` would be read through the wrong struct), **`io/console`** (`IO.console` is
+**`zlib`** on Windows runs on the zlib inside .NET itself (`System.IO.Compression.Native`:
+zlib-ng from .NET 9 on, Intel's zlib in .NET 8), since there is no libz to bind to. It
+inflates and deflates, gzip included, but its compressed bytes are that compressor's: zlib-ng's
+differ from classic zlib's (the 2 `library/zlib` failures on .NET 10 compare exact bytes), and what .NET does not
+export raises `NotImplementedError`: `set_dictionary`, `Deflate#params` once data has gone in,
+and `Inflate#sync_point?` (the 3 errors).
+
+What Windows does not have yet: **`io/console`** (`IO.console` is
 `nil`, the termios binding being Unix-only by construction; irb and reline fall back to
 their ANSI path and start fine — `Src/Libraries/Termios` would need a Win32 console-API
 twin), **`IO#wait`/`IO.select` on a pipe** (they are `poll(2)`, which is why `io-wait`,
