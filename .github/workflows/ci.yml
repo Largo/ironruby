@@ -18,6 +18,14 @@ env:
   # the vendored Ruby half of prism in Src/StdLib belongs to; release.yml builds from the same
   # one. Move both together with Src/Prism/Generated when following prism.
   PRISM_REF: 30a255539e81842b2b7f12b4fd3c62a7b4d64165
+  # The DLR revision Build/dlr-patches applies to; release.yml builds from the same one, so a
+  # release can be rebuilt and an upstream change only arrives when this is moved on purpose.
+  # Move both together, after checking the patches still apply.
+  DLR_REF: 922753f8ccbf5186c15899116d5a407b6b1723fb
+  # ruby/spec and mspec for the spec job, pinned so a result moves only with IronRuby's own
+  # changes, not with whatever lands upstream on the day.
+  SPEC_REF: dda28d049100033a8b7050eacbb35957a2eb0c00
+  MSPEC_REF: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
 
 jobs:
   build-and-test:
@@ -71,6 +79,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
 
       # Pinned to the revision Src/Prism/Generated was generated from (Src/Prism/README.md), as
@@ -371,6 +380,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
+          ref: ${{ env.DLR_REF }}
           path: dlr
       - uses: actions/checkout@v7
         with:
@@ -380,10 +390,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ruby/spec
+          ref: ${{ env.SPEC_REF }}
           path: ironruby/spec
       - uses: actions/checkout@v7
         with:
           repository: ruby/mspec
+          ref: ${{ env.MSPEC_REF }}
           path: ironruby/mspec
 
       - name: Patch the DLR
