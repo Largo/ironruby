@@ -592,9 +592,15 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             private bool _closed;
             private readonly List<ReadinessWaiter>/*!*/ _waiters = new List<ReadinessWaiter>();
 
-            // A TLS record carries at most 16 KB; a non-blocking write hands over no more than
-            // that at a time, so that what it reports as written is about what a kernel buffer holds.
+            // A TLS record carries at most 16 KB; a non-blocking write hands over one at a time,
+            // and goes on with the next only while the last one went out at once, so that what it
+            // reports as written is about what a kernel buffer holds.
             private const int ChunkSize = 16 * 1024;
+
+            // How much a non-blocking write hands over at most. net/protocol slices off what was
+            // written and passes the rest back, a copy of the rest every time: 16 KB a call made
+            // a 64 MB body cost gigabytes of copying before the kernel buffers were even full.
+            private const int NonBlockingWriteLimit = 1024 * 1024;
 
             // The context's own CAs (ca_file, ca_path, cert_store): the self-signed ones
             // are the roots, the others may complete the chain.  Null means the system
@@ -1140,8 +1146,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             }
 
             /// <summary>
-            /// How much of data was handed over - at most 16 KB, which may still be on its way,
-            /// as bytes in a kernel buffer are - or :wait_writable while the last one is.
+            /// How much of data was handed over - 16 KB records for as long as they go out at once,
+            /// up to 1 MB; the last may still be on its way, as bytes in a kernel buffer are - or
+            /// :wait_writable while the last one is.
             /// </summary>
             [RubyMethod("write_nonblock")]
             public static object WriteNonBlocking(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
@@ -1156,24 +1163,29 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 if (pending != null) {
                     self.FinishWrite(pending);
                 }
-                byte[] bytes = data.ConvertToBytes();
-                int count = Math.Min(bytes.Length, ChunkSize);
-                Task task;
-                lock (self._sync) {
-                    var stream = self.Stream;
-                    try {
-                        task = stream.WriteAsync(bytes, 0, count);
-                    } catch (Exception error) {
-                        throw self.Translate(error);
+                // only what may go out: converting all of a large body on every call is a copy of it
+                byte[] bytes = data.GetBinarySlice(0, Math.Min(data.GetByteCount(), NonBlockingWriteLimit));
+                int written = 0;
+                while (written < bytes.Length) {
+                    int count = Math.Min(bytes.Length - written, ChunkSize);
+                    Task task;
+                    lock (self._sync) {
+                        var stream = self.Stream;
+                        try {
+                            task = stream.WriteAsync(bytes, written, count);
+                        } catch (Exception error) {
+                            throw self.Translate(error);
+                        }
+                        if (!task.IsCompleted) {
+                            self._pendingWrite = task;
+                            self.NotifyOnCompletion(task);
+                            return written + count;
+                        }
                     }
-                    if (!task.IsCompleted) {
-                        self._pendingWrite = task;
-                        self.NotifyOnCompletion(task);
-                        return count;
-                    }
+                    self.FinishWrite(task);
+                    written += count;
                 }
-                self.FinishWrite(task);
-                return count;
+                return written;
             }
 
             [RubyMethod("close")]

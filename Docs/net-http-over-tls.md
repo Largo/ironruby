@@ -158,8 +158,10 @@ As built:
   register their waiter with it. nio4r masks off the kernel's answer for what a hook owns.
 - `Transport__` is the hook of the TCP socket it runs on. Every read, write and handshake is
   one of SslStream's asynchronous operations, at most one of each kind in flight:
-  `#read_nonblock`, `#write_nonblock` (at most 16 KB handed over at a time, so what it reports
-  written is about what a kernel buffer holds) and `#connect_nonblock` start one and answer
+  `#read_nonblock`, `#write_nonblock` (16 KB records handed over for as long as each goes out
+  at once, up to 1 MB, so what it reports written is about what a kernel buffer holds; net/protocol
+  copies the rest of the body after every partial write, so 16 KB a call made a 64 MB body cost
+  gigabytes of copying) and `#connect_nonblock` start one and answer
   `:wait_readable`/`:wait_writable` while it runs; `#read`, `#write` and `#connect` start one
   or take over the one in flight, and wait for it.
 - Asking the hook whether a read would return starts that read. SslStream may hold bytes,
