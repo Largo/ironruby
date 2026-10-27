@@ -56,7 +56,7 @@ namespace IronRuby.Compiler.Ast {
             _isKeywordArguments = isKeywordArguments;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             if (_isKeywordArguments && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
                 return TransformKeywordArguments(gen);
             }

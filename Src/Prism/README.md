@@ -17,7 +17,14 @@ Architecture (the JRuby approach):
    version at runtime.
 2. `PrismLoader.cs` implements the primitives of prism's binary
    serialization (varuint/varsint, constant pool, integers, locations)
-   per prism's `docs/serialization.md`.
+   per prism's `docs/serialization.md`. prism writes the tree in
+   post-order - a node's children come before its own record - so the
+   loader builds it bottom-up on an explicit stack, and no tree is too
+   deep to load. A `DefNode`'s children are preceded by a marker and the
+   byte lengths of its subtrees: with lazy method bodies on (every file
+   but eval'd code) the body is skimmed for what the bridge has to see
+   at parse time and left in the buffer until the method is first
+   called.
 3. `PrismParser.cs` calls `pm_serialize_parse`, passing filepath, line
    and outer-scope locals (for `eval`) through the serialized
    `pm_options_t` data blob.
@@ -47,6 +54,22 @@ not the other way round, so that the Ripper library can call in here.
   hash shorthand `{x:}`, `it` and numbered block params, lambdas
   (`->`, `.()`), `**` splats — verified byte-identical against CRuby 3.3
   output (and `it` runs here even though CRuby 3.3 rejects it).
+- **Deep nesting runs** as deep as prism accepts it (10000 levels; a call
+  chain like `a.b.c...` has no limit at all), on any thread, the 1 MB main
+  thread on Windows included. prism's parser is recursive C needing about
+  half a KB of native stack per level, so every source longer than 128
+  bytes is parsed on a long-lived thread with a 64 MB stack
+  (`PrismNative.WithParserStack`). The bridge, IronRuby's AST
+  transformation and the DLR's interpreter compiler and compiled-code
+  rewriter recurse per level, so each checks the stack and, when it is
+  nearly used up, carries on on a fresh thread (`IronRuby.Runtime.StackGuard`,
+  the DLR patch `Build/dlr-patches/0101-stack-guard.patch`); IronRuby's own
+  JIT leaves such a method interpreted. Nesting deeper than prism allows is
+  a "nesting too deep" SyntaxError, as in CRuby. What remains bounded by the
+  stack is running code whose calls nest as deeply (a block that calls a
+  block that calls a block...), and forced IL compilation
+  (`-X:CompilationThreshold 0`, `-X:NoAdaptiveCompilation`) of trees
+  thousands of levels deep, which reaches limits of IL and the JIT itself.
 - **100% of the bundled 1.9 stdlib maps through the bridge**
   (571/571 files in `ruby/1.9.1`, 39/39 in `ironruby/`; measure with
   `IronRuby.Prism --sweep <dir>`). Coverage includes rescue/ensure/retry,
@@ -79,7 +102,7 @@ Build the native library first:
 
 ```sh
 git clone https://github.com/ruby/prism ../../../prism
-cd ../../../prism && git checkout cd76b0d1
+cd ../../../prism && git checkout 30a25553
 ruby templates/template.rb && make shared        # -> build/libprism.so
 ```
 
@@ -90,12 +113,15 @@ buffer - the symptom is a mid-parse `ArgumentError: Offset and length were
 out of bounds` or `TypeError: Unknown prism node type: 0` in whichever
 stdlib file trips over the changed node first, not a clean version error.
 The tree as it stands matches prism
-[`cd76b0d1`](https://github.com/ruby/prism/commit/cd76b0d1), v1.9.0 plus the
-commits up to 2026-10-12 - including `attach_comments`, which added a byte to
-the options blob and a comment-attachment list to the serialized header
-without changing the serialization version, so `PrismParser.BuildOptionsData`
-and `PrismLoader.Load` had to follow by hand. `release.yml`'s `PRISM_REF`
-names the same commit.
+[`30a25553`](https://github.com/ruby/prism/commit/30a255539e81842b2b7f12b4fd3c62a7b4d64165),
+v2.0.0 plus the commits up to 2026-10-24. Two changes on the way there
+altered the serialized layout rather than just `config.yml`, so
+`generate.rb` and `PrismLoader.cs` had to follow by hand: the tree is
+serialized in post-order with lazy-subtree headers on `DefNode` (ruby/prism
+`ab92f0eb4`), and the header carries an 8-byte checksum of the source after
+the start line (`01c1960e8`). The earlier `attach_comments` change (a byte
+in the options blob, a comment-attachment list in the header) is still
+there too. `PRISM_REF` in `ci.yml` and `release.yml` names the same commit.
 To check a checkout instead of guessing, regenerate into a scratch
 directory and diff - identical output means the shared library from that
 checkout is safe:

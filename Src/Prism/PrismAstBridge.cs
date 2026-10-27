@@ -475,6 +475,10 @@ namespace IronRuby.Prism {
         // ---- expression dispatch ----
 
         private Expression/*!*/ Expr(Pm.PmNode/*!*/ node) {
+            // Nesting recurses through here; prism accepts it deeper than a thread's stack goes.
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => Expr(node));
+            }
             var span = Span(node);
             switch (node) {
                 case Pm.IntegerNode integer:
@@ -1611,6 +1615,10 @@ namespace IronRuby.Prism {
         /// against the right hand side.
         /// </summary>
         private LeftValue/*!*/ Target(Pm.PmNode/*!*/ node, Statements hoist) {
+            // Nested targets ((a, b), c) recurse through here rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => Target(node, hoist));
+            }
             var span = Span(node);
             switch (node) {
                 case Pm.LocalVariableTargetNode local:
@@ -2846,6 +2854,10 @@ namespace IronRuby.Prism {
         /// deconstruct/deconstruct_keys for array/hash patterns.
         /// </summary>
         private Expression/*!*/ PatternTest(Pm.PmNode/*!*/ pattern, Expression/*!*/ subject, SourceSpan span) {
+            // Nested patterns recurse through here rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => PatternTest(pattern, subject, span));
+            }
             switch (pattern) {
                 case Pm.LocalVariableTargetNode target: {
                     var local = CurrentScope.ResolveOrAddVariable(target.Name, Span(target));
