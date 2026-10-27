@@ -10,4 +10,4 @@ S="$IR_ROOT/Src/StdLib"
 : "${IR_NATIVE_BIN:=$HERE/bin/Release/net10.0/linux-x64/publish/ir}"
 export DOTNET_ROOT="${DOTNET_ROOT:-/usr/local/dotnet}"
 exec "$IR_NATIVE_BIN" -X:UsePrism \
-  "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"
+  "-X:StdLib=$S/ironruby:$S/ruby/4.0" "$@"

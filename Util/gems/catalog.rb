@@ -294,7 +294,7 @@ module GemCatalog
 
   # The pure-Ruby default/bundled gems that go on $LOAD_PATH for every run, so
   # that a gem's dependencies (net-protocol, prettyprint, ...) resolve to the
-  # modern copy rather than IronRuby's 1.9 tree.  Native gems are excluded:
+  # modern copy rather than to nothing at all.  Native gems are excluded:
   # their lib/ is a stub that only requires a .so.  test-unit is excluded too -
   # its lib/test/unit.rb would shadow the one the suites are run with.
   PATH_GEMS = %w[

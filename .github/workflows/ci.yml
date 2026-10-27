@@ -330,8 +330,6 @@ jobs:
           SWEEP="Src/Prism/bin/Debug/$TFM/IronRuby.Prism$EXE"
           "$SWEEP" --sweep Src/StdLib/ruby/4.0 | tee sweep40.txt
           grep -q '0 failed' sweep40.txt
-          "$SWEEP" --sweep Src/StdLib/ruby/1.9.1 | tee sweep19.txt
-          grep -q '0 failed' sweep19.txt
           "$SWEEP" --sweep Src/StdLib/ruby/gems | tee sweepgems.txt
           grep -q '0 failed' sweepgems.txt
 

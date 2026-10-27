@@ -569,30 +569,6 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region quo
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Fixnum. 
-        /// </summary>
-        /// <returns>Float</returns>
-        [RubyMethod("quo")]
-        public static double Quotient(int self, int other) {
-            return (double)self / (double)other;
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is not Fixnum. 
-        /// </summary>
-        /// <remarks>
-        /// Self is first coerced by other and then the quo method is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, int self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
-        }
-
-        #endregion
-
         #region zero?
 
         /// <summary>

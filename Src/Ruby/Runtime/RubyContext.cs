@@ -73,13 +73,14 @@ namespace IronRuby.Runtime {
         private static int _RuntimeIdGenerator = 0;
 
         // MRI compliance: language level targeted by the prism front end.
-        // The bundled standard library is still the 1.9 snapshot.
         public string/*!*/ MriVersion {
             get { return MriVersionString; }
         }
 
         private const string MriVersionString = "4.0.0";
 
+        // Names the site directory (ruby/site_ruby/1.9.1, where rb-readline lives), as
+        // RbConfig's ruby_version does. The standard library itself is ruby/4.0.
         public string/*!*/ StandardLibraryVersion {
             get { return "1.9.1"; }
         }

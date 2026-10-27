@@ -12,10 +12,10 @@ if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
   export DOTNET_ROOT
 fi
 
-# Ruby 4.0's standard library comes first; the 1.9 tree is still on the path
-# behind it for the libraries 4.0 gemified or implements as C extensions.
-# -X:StdLib puts them on $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where
-# MRI keeps its own library directories.
+# IronRuby's own library (the core prelude and what MRI implements as C
+# extensions) comes first, then Ruby 4.0's standard library. -X:StdLib puts them
+# on $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where MRI keeps its own
+# library directories.
 S="$IR_ROOT/Src/StdLib"
 # IR_CONFIG=Release runs the optimized build instead (build it with
 # `dotnet build Src/Console/Ruby.Console.csproj -c Release ...`).  It is about 1.8x
@@ -71,4 +71,4 @@ RUBYPATH="$S/bin:$(dirname "$IR_BIN")${RUBYPATH:+:$RUBYPATH}"
 export RUBYPATH
 
 exec "$IR_BIN" -X:UsePrism \
-  "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"
+  "-X:StdLib=$S/ironruby:$S/ruby/4.0" "$@"

@@ -102,7 +102,25 @@ namespace IronRuby.Builtins {
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes +</remarks>
         [RubyMethod("+")]
         public static object Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
+            if (IsFixnumWithComplex(coercionStorage.Context, self, other)) {
+                var site = binaryOpSite.GetCallSite("+");
+                return site.Target(site, other, self);
+            }
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "+", self, other);
+        }
+
+        /// <summary>
+        /// numeric.c's fix_plus and fix_mul hand a Complex operand straight to Complex#+ and
+        /// Complex#* (with the Fixnum as the argument) instead of coercing, which keeps an exact
+        /// part exact: 7 * Complex(1/2r, 3) is ((7/2)+21i), where the coerced product
+        /// Complex(7, 0) * Complex(1/2r, 3) is ((7/2)+(21/1)*i). A Bignum coerces as usual.
+        /// </summary>
+        private static bool IsFixnumWithComplex(RubyContext/*!*/ context, object self, object other) {
+            const long FixnumMax = (1L << 62) - 1, FixnumMin = -(1L << 62);
+            if (other == null || !(self is int || (self is long && (long)self >= FixnumMin && (long)self <= FixnumMax))) {
+                return false;
+            }
+            return context.GetClassOf(other).Name == "Complex";
         }
 
         #endregion
@@ -188,6 +206,10 @@ namespace IronRuby.Builtins {
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes *</remarks>
         [RubyMethod("*")]
         public static object Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
+            if (IsFixnumWithComplex(coercionStorage.Context, self, other)) {
+                var site = binaryOpSite.GetCallSite("*");
+                return site.Target(site, other, self);
+            }
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "*", self, other);
         }
 
@@ -302,50 +324,6 @@ namespace IronRuby.Builtins {
 
             double result = Protocols.ScaleToDouble(quotient, -shift);
             return (self.Sign == other.Sign) ? result : -result;
-        }
-
-        #endregion
-
-        #region quo
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Bignum or Fixnum. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Converts self and other to Float and then divides.</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return Quotient(self, Protocols.ToDouble(other));
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Bignum or Fixnum. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Converts self and other to Float and then divides.</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BigInteger/*!*/ self, int other) {
-            return Quotient(self, (double)other);
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is Float. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Converts self to Float and then divides.</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BigInteger/*!*/ self, double other) {
-            return Protocols.ToDouble(self) / other;
-        }
-
-        /// <summary>
-        /// Returns the floating point result of dividing self by other, where other is not Bignum, Fixnum or Float. 
-        /// </summary>
-        /// <returns>self divided by other as Float</returns>
-        /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes quo</remarks>
-        [RubyMethod("quo")]
-        public static object Quotient(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
         }
 
         #endregion
