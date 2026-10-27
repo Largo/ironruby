@@ -451,6 +451,99 @@ TypeError
 ");
         }
 
+        public class BinderConstants {
+            public const int Answer = 42;
+            public static readonly string Greeting = "hello";
+            public static string Mutable = "mutable";
+            public static int Counter { get { return 7; } }
+            public enum Color { Red, Green }
+        }
+
+        /// <summary>
+        /// CLR const and static readonly fields are constants of their class; properties and other static members are
+        /// methods, and naming one as a constant says how to call it.
+        /// </summary>
+        public void ClrConstantFields1() {
+            Context.ObjectClass.SetConstant("K", Context.GetClass(typeof(BinderConstants)));
+            TestOutput(@"
+p K::Answer
+puts K::Greeting
+p K::Color::Green == K::Color.Green
+p K.Counter
+p K.Mutable.to_s
+['Mutable', 'Counter'].each do |name|
+  begin
+    K.const_get(name)
+  rescue NameError => e
+    puts e.message.end_with?(""BinderConstants.#{name})"")
+  end
+end
+p System::Math::PI.round(2)
+p System::String::Empty.to_s
+
+# a type group qualifies a constant as its non-generic member:
+p System::Nullable::GetUnderlyingType(System::Nullable[Integer].to_clr_type).Name.to_s
+", @"
+42
+hello
+true
+7
+""mutable""
+true
+true
+3.14
+""""
+""Int32""
+");
+        }
+
+        public static class BinderObjects {
+            public static string TypeName(object value) { return value == null ? "null" : value.GetType().Name; }
+            public static string TypeNames(params object[] values) { return String.Join(",", Array.ConvertAll(values, v => v == null ? "null" : v.GetType().Name)); }
+            public static object Echo(object value) { return value; }
+        }
+
+        /// <summary>
+        /// A Ruby String passed for a CLR method's Object parameter arrives as a System.String; other values as they are.
+        /// </summary>
+        public void ClrStringObjectArguments1() {
+            Context.ObjectClass.SetConstant("O", Context.GetClass(typeof(BinderObjects)));
+            TestOutput(@"
+puts O.type_name('s')
+puts O.type_name(:s)
+puts O.type_name(1)
+puts O.type_name([1])
+puts O.type_names('a', 1, nil)
+
+class MyString < String; end
+puts O.type_name(MyString.new('x'))
+
+list = System::Collections::ArrayList.new
+list.add('x')
+p list.contains('x'), list[0] == 'x', list.index_of('x')
+p O.echo('abc') == 'abc'
+p({'abc' => 1}[O.echo('abc')])
+
+# Ruby library methods keep Ruby strings:
+a = []
+a.push('y')
+p a[0].class
+", @"
+String
+RubySymbol
+Int32
+RubyArray
+String,Int32,null
+String
+true
+true
+0
+true
+1
+String
+");
+        }
+
         public class BinderOut {
             public string Split(string value, out string head, out string tail) {
                 head = value.Substring(0, 1);
