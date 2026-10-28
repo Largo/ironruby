@@ -358,7 +358,6 @@ true
         /// <summary>
         /// Array patterns go through #deconstruct, which hands CLR strings over as Ruby strings so that String matches them.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrTuplePatterns1() {
             Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTuples1)));
             TestOutput(@"
@@ -437,7 +436,6 @@ System::Collections::DictionaryEntry
         /// deconstruct_keys of a pair: {key:, value:}, with the keys asked for (the CLR names Key/Value included), or
         /// all of them for nil.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrKeyValuePairPatterns1() {
             Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTuples1)));
             TestOutput(@"
@@ -523,7 +521,6 @@ false
         /// What a hash pattern passes to #deconstruct_keys, as MRI compiles it: the keys it names, or nil when it needs
         /// every key - for a **rest or **nil, and for `in {}`, which only matches when there are no keys at all.
         /// </summary>
-        [Options(Prism = true)]
         public void HashPatternKeyList1() {
             TestOutput(@"
 class Recorder
@@ -574,7 +571,6 @@ false
         /// A hash pattern matches a CLR object's public readable instance properties and fields, by CLR name or by
         /// Ruby (mangled) name.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrHashPatterns1() {
             DefineHashPatternTypes();
             TestOutput(@"
@@ -675,7 +671,6 @@ p((Throws.new.deconstruct_keys(nil) rescue $!.message))
         /// Only CLR classes that no library defines get #deconstruct_keys this way: Ruby objects and the built-in
         /// classes do not, and a Ruby definition (in the class or in a module included into it) takes precedence.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrHashPatternScope1() {
             DefineHashPatternTypes();
             TestOutput(@"
@@ -770,7 +765,6 @@ IronRuby::Clr::PatternMatching
         /// A type implementing only IComparable&lt;T&gt; is Comparable: &lt;=&gt; calls CompareTo, and everything Comparable
         /// and Array build on it works.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrGenericComparable1() {
             Context.ObjectClass.SetConstant("V", Context.GetClass(typeof(ProtocolVersion1)));
             TestOutput(@"

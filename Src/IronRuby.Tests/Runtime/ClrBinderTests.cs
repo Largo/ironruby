@@ -53,7 +53,6 @@ namespace IronRuby.Tests {
             public override string ToString() { return X + "," + Y; }
         }
 
-        [Options(Prism = true)]
         public void ClrKeywordArguments1() {
             Context.ObjectClass.SetConstant("N", Context.GetClass(typeof(BinderNamed)));
             TestOutput(@"
@@ -118,7 +117,6 @@ TypeError
         /// <summary>
         /// Keywords passed to new set what no constructor parameter takes, like a C# object initializer.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrKeywordArguments2() {
             Context.ObjectClass.SetConstant("W", Context.GetClass(typeof(BinderWidget)));
             Context.ObjectClass.SetConstant("P", Context.GetClass(typeof(BinderPoint)));
@@ -171,7 +169,6 @@ read-only
             public static void Each(IEnumerable<int> items, Action<int> action) { foreach (var item in items) action(item); }
         }
 
-        [Options(Prism = true)]
         public void ClrBlockToDelegate1() {
             Context.ObjectClass.SetConstant("CB", Context.GetClass(typeof(BinderCallbacks)));
             TestOutput(@"
@@ -235,7 +232,6 @@ o
         /// <summary>
         /// break, next and exceptions in a block that a CLR method calls back as a delegate.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrBlockToDelegate2() {
             Context.ObjectClass.SetConstant("CB", Context.GetClass(typeof(BinderCallbacks)));
             TestOutput(@"
@@ -282,7 +278,6 @@ int
 ");
         }
 
-        [Options(Prism = true)]
         public void ClrMethodToDelegate1() {
             Context.ObjectClass.SetConstant("CB", Context.GetClass(typeof(BinderCallbacks)));
             TestOutput(@"
@@ -380,7 +375,6 @@ TypeError
         /// A block passed for a delegate whose parameters use a type parameter leaves the type parameter to the other
         /// arguments: Filter&lt;T&gt;(List&lt;int&gt;, Func&lt;T, bool&gt;) infers T = int, not Object.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrGenericDelegateInference1() {
             Context.ObjectClass.SetConstant("G", Context.GetClass(typeof(BinderGenerics)));
             TestOutput(@"
@@ -421,7 +415,6 @@ nil
         /// A Ruby Range of Integers passes for a System.Range and a negative index for one counted from the end,
         /// with Ruby's meaning: an inclusive end unless excluded, -1 the last element.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrRangeIndexArguments1() {
             Context.ObjectClass.SetConstant("R", Context.GetClass(typeof(BinderRanges)));
             TestOutput(@"
@@ -566,7 +559,6 @@ String
         /// <summary>
         /// Out and ref parameters come back as a Ruby Array, so a C# Deconstruct method makes array patterns match.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrOutParameters1() {
             Context.ObjectClass.SetConstant("O", Context.GetClass(typeof(BinderOut)));
             Context.ObjectClass.SetConstant("Pair", Context.GetClass(typeof(BinderPair)));
@@ -613,7 +605,6 @@ true
         /// <summary>
         /// A Ruby Array or Hash passed where a CLR method takes a typed collection is copied into one.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrCollectionArguments1() {
             Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(BinderCollections)));
             TestOutput(@"

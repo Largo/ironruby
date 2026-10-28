@@ -34,7 +34,6 @@ namespace IronRuby.Tests {
         /// port is turned away and puma serves on. The client certificates are presented by
         /// PumaTlsClient (.NET's SslStream), as IronRuby's SSLSocket has no client certificates.
         /// </summary>
-        [Options(Prism = true)]
         public void Puma_Tls1() {
             using (var files = new PumaTlsFiles()) {
                 Runtime.Globals.SetVariable("MtlsClient", new PumaTlsClient(files.ClientPfx, files.RoguePfx));

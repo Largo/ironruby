@@ -4463,13 +4463,23 @@ class << Dir
   def home(user = nil)
     if user.nil?
       dir = ENV['HOME']
+      if dir.nil? && File::ALT_SEPARATOR
+        # MRI's rb_w32_home_dir: HOME, then USERPROFILE, then HOMEDRIVE + HOMEPATH, then the
+        # profile folder Windows reports.
+        dir = ENV['USERPROFILE']
+        dir ||= ENV['HOMEDRIVE'] + ENV['HOMEPATH'] if ENV['HOMEDRIVE'] && ENV['HOMEPATH']
+        dir ||= System::Environment.GetFolderPath(System::Environment::SpecialFolder.UserProfile).to_s
+        dir = nil if dir.empty?
+      end
       unless dir
         require 'etc'
         pw = (Etc.getpwuid(Process.uid) rescue nil)
         dir = pw && pw.dir
       end
       raise ArgumentError, "couldn't find HOME environment -- expanding `~'" unless dir
-      return dir.dup
+      # MRI on Windows: the home directory is written with forward slashes, like every path it
+      # makes, whatever HOME holds ("C:\Users\x" from Git Bash, for one). ENV keeps its value.
+      return File::ALT_SEPARATOR ? dir.tr("\\", "/") : dir.dup
     end
 
     raise TypeError, "no implicit conversion of #{user.class} into String" unless user.is_a?(String)
@@ -8590,13 +8600,19 @@ module Process
   # passing them to a syscall later gets the right value.
   {
     WNOHANG: 1, WUNTRACED: 2,
+  }.each { |name, value| const_set(name, value) unless const_defined?(name) }
+
+  # CRuby on Windows has neither priorities nor resource limits, and portable code asks
+  # for the constant before it calls the function: net-http-persistent, which Bundler
+  # vendors, calls getrlimit whenever RLIMIT_NOFILE is defined.
+  {
     PRIO_PROCESS: 0, PRIO_PGRP: 1, PRIO_USER: 2,
     RLIMIT_CPU: 0, RLIMIT_FSIZE: 1, RLIMIT_DATA: 2, RLIMIT_STACK: 3,
     RLIMIT_CORE: 4, RLIMIT_RSS: 5, RLIMIT_NPROC: 6, RLIMIT_NOFILE: 7,
     RLIMIT_MEMLOCK: 8, RLIMIT_AS: 9, RLIMIT_LOCKS: 10, RLIMIT_SIGPENDING: 11,
     RLIMIT_MSGQUEUE: 12, RLIMIT_NICE: 13, RLIMIT_RTPRIO: 14, RLIMIT_RTTIME: 15,
     RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
-  }.each { |name, value| const_set(name, value) unless const_defined?(name) }
+  }.each { |name, value| const_set(name, value) unless const_defined?(name) } unless ::File::ALT_SEPARATOR == "\\"
 
   # Process.times returns this; MRI names the struct under Process as well as Struct.
   Tms = Struct::Tms unless const_defined?(:Tms)
@@ -9439,7 +9455,20 @@ module Process
   # on platforms that cannot do it too, as the function that raises NotImplementedError,
   # and that function is exactly the case respond_to? answers false for - so portable
   # code asks whether the feature is there rather than whether the name is.
-  NOT_IMPLEMENTED_METHODS = [:daemon, :fork, :_fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+  # On Windows the resource-limit and priority functions are the same kind of stub in
+  # MRI; the libc behind ours is not there to call.
+  WINDOWS_NOT_IMPLEMENTED_METHODS__ = [:getrlimit, :setrlimit, :getpriority, :setpriority].freeze unless const_defined?(:WINDOWS_NOT_IMPLEMENTED_METHODS__)
+  unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+    NOT_IMPLEMENTED_METHODS = (::File::ALT_SEPARATOR == "\\" ?
+      [:daemon, :fork, :_fork] + WINDOWS_NOT_IMPLEMENTED_METHODS__ : [:daemon, :fork, :_fork]).freeze
+  end
+
+  if ::File::ALT_SEPARATOR == "\\"
+    WINDOWS_NOT_IMPLEMENTED_METHODS__.each do |name|
+      define_method(name) { |*| raise NotImplementedError, "#{name}() function is unimplemented on this machine" }
+      module_function name
+    end
+  end
 
   unless respond_to?(:daemon)
     def daemon(nochdir = nil, noclose = nil)

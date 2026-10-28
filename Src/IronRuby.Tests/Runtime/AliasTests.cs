@@ -262,7 +262,7 @@ false
                 CompilerTest(@"
 def b; end
 p ((alias a b))
-", 1, 0);
+", 0, 0);
             }, "nil");
         }
 

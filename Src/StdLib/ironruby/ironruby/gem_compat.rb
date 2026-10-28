@@ -130,6 +130,27 @@ IronRuby::GemCompat.on_require("concurrent/collection/map/synchronized_map_backe
   end
 end
 
+# bindex (skiptrace): it gives every exception the Bindings of the frames it
+# was raised through, from a C extension on CRuby and from VM internals on JRuby
+# and Rubinius; for any other engine it defines nothing, and Exception#bindings
+# is a NoMethodError.  web-console, in every `rails new` Gemfile, asks for it
+# while rendering the development error page - so on IronRuby each error page,
+# a plain 404 for a missing record included, became a 500.
+#
+# The bindings themselves need the runtime to capture them at raise time, which
+# IronRuby does not do yet.  Until it does, Exception#bindings answers what it
+# answers on those engines for an exception nobody captured bindings for, and
+# the error page renders; its console has no frame to evaluate in.
+IronRuby::GemCompat.on_require("bindex") do
+  unless ::Exception.method_defined?(:bindings)
+    ::Exception.class_eval do
+      def bindings
+        @bindings || []
+      end
+    end
+  end
+end
+
 # power_assert: Parser#valid_syntax? checks a line with
 # RubyVM::InstructionSequence.compile, and PowerAssert::Parser builds one at
 # load time, so on an engine without RubyVM the require dies with a NameError.
@@ -236,5 +257,40 @@ IronRuby::GemCompat.on_require("bundler") do
       end
     end
     ::Bundler.singleton_class.prepend(rubypath_which)
+  end
+
+  # `gem "tzinfo-data", platforms: %i[windows jruby]`, which every `rails new`
+  # Gemfile has: Bundler keeps a platform-restricted gem only for the lockfile
+  # platforms whose *generic* platform the restriction names, and to it
+  # IronRuby's universal-dotnet is generic `ruby` - on Windows as everywhere.
+  # So tzinfo-data was never installed, and a Rails app on Windows, which has
+  # no zoneinfo, died in its first initializer with TZInfo::DataSourceNotFound.
+  #
+  # The .NET platform is the same on every OS, so for it the restriction is
+  # answered the way `current_platform?` answers it - by the Ruby running now.
+  if ::Bundler::Dependency.method_defined?(:gem_platforms) &&
+     !::Bundler::Dependency.method_defined?(:ironruby_dotnet_platforms)
+    dotnet_platforms = Module.new do
+      # The dotnet platforms, and - since Bundler filters what it installs and
+      # loads by the *generic* local platform, which for dotnet is `ruby` - that
+      # one too when it stands for the dotnet platform this process runs on.
+      def ironruby_dotnet_platforms(valid_platforms) # :nodoc:
+        dotnet = ->(p) { p.respond_to?(:os) && p.os == "dotnet" }
+        local_is_dotnet = dotnet.call(::Bundler.local_platform)
+        valid_platforms.select do |p|
+          dotnet.call(p) || (local_is_dotnet && p == ::Bundler.generic_local_platform)
+        end
+      end
+
+      # Same order as valid_platforms, which is what Bundler's comment promises.
+      def gem_platforms(valid_platforms)
+        found = super
+        return found if platforms.empty? || force_ruby_platform || !current_platform?
+        dotnet = ironruby_dotnet_platforms(valid_platforms)
+        return found if dotnet.empty?
+        valid_platforms.select { |p| found.include?(p) || dotnet.include?(p) }
+      end
+    end
+    ::Bundler::Dependency.prepend(dotnet_platforms)
   end
 end

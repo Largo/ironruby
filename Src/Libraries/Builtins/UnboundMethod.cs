@@ -342,13 +342,28 @@ namespace IronRuby.Builtins {
             return self.Info.GetRubyParameterArray();
         }
 
+        // "Kernel#tap", "Dir.glob": how InternalMethods.SourceFiles names a method.
+        private static string/*!*/ InternalMethodKey(RubyMethodInfo/*!*/ info) {
+            RubyModule owner = info.DeclaringModule;
+            var singleton = owner.IsSingletonClass ? ((RubyClass)owner).SingletonClassOf as RubyModule : null;
+            return (singleton != null)
+                ? singleton.Name + "." + info.DefinitionName
+                : owner.Name + "#" + info.DefinitionName;
+        }
+
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
             if (rubyInfo != null) {
                 string file = rubyInfo.Document.FileName;
-                // a core method written in Ruby is where MRI's are: <internal:kernel> and the like
-                if (RubyStackTraceBuilder.IsInternalFile(file) && rubyInfo.DeclaringModule.Name != null) {
-                    file = "<internal:" + rubyInfo.DeclaringModule.Name.ToLowerInvariant() + ">";
+                // A core method IronRuby writes in Ruby is located where MRI's is when MRI writes it
+                // in Ruby too (<internal:kernel> for Kernel#tap); where MRI's is C, it has no
+                // location at all, as a C method has none - method_source and pry rely on that.
+                if (RubyStackTraceBuilder.IsInternalFile(file)) {
+                    string mriFile;
+                    if (!InternalMethods.SourceFiles.TryGetValue(InternalMethodKey(rubyInfo), out mriFile)) {
+                        return null;
+                    }
+                    file = mriFile;
                 }
                 return new RubyArray(2) {
                     rubyInfo.DeclaringModule.Context.EncodePath(file),

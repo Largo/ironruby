@@ -75,6 +75,45 @@ namespace IronRuby.Hosting {
             public override Stream OpenInputFileStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize) {
                 return base.OpenInputFileStream(path, mode, access, share | FileShare.ReadWrite | FileShare.Delete, bufferSize);
             }
+
+            /// <summary>
+            /// MRI's Dir.pwd is getcwd(): the directory as it was set. .NET's GetCurrentDirectory
+            /// expands an 8.3 short name ("C:\Users\ABCDEF~1") to the long one, so after
+            /// Dir.chdir(Dir.tmpdir) Dir.pwd was not the directory just changed into, and a path
+            /// built from the one did not start with the other - rubocop, for one, then cannot
+            /// show a file relative to the current directory.
+            /// </summary>
+            public override string CurrentDirectory {
+                get {
+                    if (Path.DirectorySeparatorChar == '\\') {
+                        var buffer = new System.Text.StringBuilder(260);
+                        uint length = GetCurrentDirectoryW((uint)buffer.Capacity, buffer);
+                        if (length > buffer.Capacity) {
+                            buffer = new System.Text.StringBuilder((int)length);
+                            length = GetCurrentDirectoryW(length, buffer);
+                        }
+                        if (length > 0 && length <= buffer.Capacity) {
+                            return buffer.ToString();
+                        }
+                    }
+                    return base.CurrentDirectory;
+                }
+                set {
+                    // .NET checks the directory - its errors are what Dir.chdir turns into Errno -
+                    // but sets it through Path.GetFullPath, which expands short names too; MRI's
+                    // SetCurrentDirectory takes the path as given.
+                    base.CurrentDirectory = value;
+                    if (Path.DirectorySeparatorChar == '\\') {
+                        SetCurrentDirectoryW(value);
+                    }
+                }
+            }
+
+            [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+            private static extern uint GetCurrentDirectoryW(uint bufferLength, System.Text.StringBuilder buffer);
+
+            [System.Runtime.InteropServices.DllImport("kernel32", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+            private static extern bool SetCurrentDirectoryW(string path);
         }
 
         private static void SetHomeEnvironmentVariable() {

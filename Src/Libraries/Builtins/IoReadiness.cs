@@ -193,6 +193,7 @@ namespace IronRuby.Builtins {
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]
         private static extern int GetFileType(Microsoft.Win32.SafeHandles.SafeFileHandle handle);
 
+        private const int FILE_TYPE_DISK = 1;
         private const int FILE_TYPE_PIPE = 3;
 
         /// <summary>
@@ -230,6 +231,32 @@ namespace IronRuby.Builtins {
         }
 
         #endregion
+
+        /// <summary>
+        /// Whether a read from the IO's stream would return at once. Asked where a read already
+        /// has bytes in hand and must not risk blocking with them. poll(2) on Unix; on Windows,
+        /// where there is no libc to poll with, the socket, the pipe or the disk file is asked
+        /// itself - a disk file is always readable, as poll(2) says of a regular file.
+        /// </summary>
+        internal static bool IsReadableNow(RubyIO/*!*/ io, System.IO.Stream/*!*/ baseStream) {
+            if (_isUnix) {
+                return DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(baseStream));
+            }
+            var socketStream = baseStream as SocketStream;
+            if (socketStream != null) {
+                return socketStream.Socket.Poll(0, SelectMode.SelectRead);
+            }
+            var pipe = GetWindowsPipe(io);
+            if (pipe != null) {
+                return IsWindowsPipeReadable(pipe);
+            }
+            var file = baseStream as System.IO.FileStream;
+            try {
+                return file != null && GetFileType(file.SafeFileHandle) == FILE_TYPE_DISK;
+            } catch (Exception) {
+                return false;
+            }
+        }
 
         /// <summary>
         /// Whether any of <paramref name="ios"/> can only tell the waiter about a change - an

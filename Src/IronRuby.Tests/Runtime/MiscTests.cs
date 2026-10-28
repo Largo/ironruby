@@ -189,8 +189,10 @@ puts Math.acos(1)
                 end
             ", SourceCodeKind.File);
 
-            p = new Parser().Parse(unit, new RubyCompilerOptions(), log);
-            Assert(p == null && log.FatalErrorCount == 1);
+            // the three errors `ruby -c` reports: the class name (twice, as prism gives it), and the <<
+            p = RubyContext.EffectiveParser(unit, new RubyCompilerOptions(), log);
+            Assert(p == null && log.FatalErrorCount == 3, String.Format("tree: {0}, fatal errors: {1}, errors: {2}",
+                p != null, log.FatalErrorCount, log.ErrorCount));
             log.ClearCounters();
 
             unit = Context.CreateSnippet(@"
@@ -216,7 +218,7 @@ puts Math.acos(1)
                 END { goo2() { } } 
             ", SourceCodeKind.File);
 
-            p = new Parser().Parse(unit, new RubyCompilerOptions(), ErrorSink.Null);
+            p = RubyContext.EffectiveParser(unit, new RubyCompilerOptions(), ErrorSink.Null);
             Assert(p != null && !log.AnyError);
             log.ClearCounters();
 
@@ -226,7 +228,7 @@ puts Math.acos(1)
                 end
             ", SourceCodeKind.File);
 
-            p = new Parser().Parse(unit, new RubyCompilerOptions(), ErrorSink.Null);
+            p = RubyContext.EffectiveParser(unit, new RubyCompilerOptions(), ErrorSink.Null);
             Assert(p != null && !log.AnyError);
             log.ClearCounters();
         }
@@ -293,7 +295,7 @@ def y; 'method'; end
 
 puts x
 puts y
-");
+", 1, 0);
             }, @"
 method
 var");
@@ -348,7 +350,7 @@ M::Z
     end
   end
 }
-");
+", 1, 0);
         }
 
         public void NumericLiterals1() {
@@ -518,7 +520,7 @@ end
 
 x = ('E'; 'F')
 puts x
-");
+", 1, 0);
             }, @"
 A
 bar
@@ -872,7 +874,6 @@ end
         /// kill() and raised DllNotFoundException. The child reads a pipe nobody writes to, so it runs
         /// until it is killed. File::NULL and Process.spawn are the prelude's (ruby4.rb), which needs prism.
         /// </summary>
-        [Options(Prism = true)]
         public void Process_SpawnKill1() {
             TestOutput(@"
 require 'ruby4'
@@ -920,6 +921,63 @@ true
 :gone
 true
 :handled
+");
+        }
+
+        /// <summary>
+        /// What RubyGems and Bundler need from the file system on Windows, where each of these
+        /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
+        /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that
+        /// way), and Process's resource limits, which MRI does not define on Windows at all -
+        /// net-http-persistent calls getrlimit whenever RLIMIT_NOFILE is defined.
+        /// </summary>
+        public void File_DriveLetters1() {
+            TestOutput(@"
+require 'ruby4'
+require 'pathname'
+windows = File::ALT_SEPARATOR == '\\'
+p File.dirname('A:') == (windows ? 'A:.' : '.')
+p File.dirname('C:x') == (windows ? 'C:.' : '.'), File.basename('C:x') == (windows ? 'x' : 'C:x')
+p Pathname.new('C:/x/y').absolute? == windows, Pathname.new('/x').absolute?
+", @"
+true
+true
+true
+true
+true
+");
+        }
+
+        public void File_FlockReadpartialRlimit1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+windows = File::ALT_SEPARATOR == '\\'
+path = File.join(Dir.tmpdir, ""ir-flock-#{Process.pid}.lock"")
+
+a = File.open(path, 'w')
+b = File.open(path, 'r')
+p a.flock(File::LOCK_EX), b.flock(File::LOCK_SH | File::LOCK_NB)
+p a.flock(File::LOCK_UN), b.flock(File::LOCK_SH | File::LOCK_NB), b.flock(File::LOCK_UN)
+a.close
+b.close
+
+File.binwrite(path, 'x' * 100_000)
+total = 0
+File.open(path, 'rb') { |io| total += io.readpartial(16384).bytesize until io.eof? }
+p total
+File.delete(path)
+
+p Process.const_defined?(:RLIMIT_NOFILE) == !windows, Process.respond_to?(:getrlimit) == !windows
+", @"
+0
+false
+0
+0
+0
+100000
+true
+true
 ");
         }
 
@@ -1275,7 +1333,7 @@ true
 1
 true
 false
-");
+", 1);
         }
 
         public void Numeric_BignumExponent1() {
@@ -1904,7 +1962,6 @@ Proc
         /// A safe navigation call (a&amp;.b) is lowered to a temporary local each, so a chain of 200 needs a scope of more
         /// than 128 locals (see ManyLocals1); the legacy parser cannot read the syntax.
         /// </summary>
-        [Options(Prism = true)]
         public void ManyLocals2() {
             TestOutput("p 1" + new System.Text.StringBuilder().Insert(0, "&.to_i", 200) + "\n", @"
 1
@@ -1919,7 +1976,6 @@ Proc
         /// runs on a thread with the 1 MB stack of a Windows main thread, so every one of those overflowed at these
         /// depths before; lambdas and procs are made but not called, as calling them nests calls just as deep.
         /// </summary>
-        [Options(Prism = true)]
         public void DeepNesting1() {
             Func<string, int, string> times = (str, n) => new System.Text.StringBuilder().Insert(0, str, n).ToString();
             var code = new System.Text.StringBuilder();

@@ -1,9 +1,12 @@
 # IronRuby.Prism — CRuby's parser as an IronRuby front end
 
 Binding of [ruby/prism](https://github.com/ruby/prism), the parser CRuby
-uses, via P/Invoke to `libprism.so`. Replaces the hand-ported 1.9-era
-`Tokenizer.cs` + gppg `Parser.y` front end with the same parser CRuby,
-JRuby and TruffleRuby use, targeting current (4.x-level) Ruby syntax.
+uses, via P/Invoke to `libprism.so`. It is IronRuby's only parser: it replaced the
+hand-ported 1.9-era `Tokenizer.cs` + gppg `Parser.y` front end, which has been
+removed, with the same parser CRuby, JRuby and TruffleRuby use, targeting current
+(4.x-level) Ruby syntax. Of the old `Tokenizer` only its static helpers remain - the
+rules for Ruby names, number literals and the encoding magic comment, which the
+runtime asks about at run time.
 
 Architecture (the JRuby approach):
 
@@ -35,8 +38,7 @@ Architecture (the JRuby approach):
    `**rest` extraction), `it`/numbered params become explicit block
    params, `**` splats in literals/calls become `Hash#merge` chains,
    `2r`/`2i` become `Rational`/`Complex` calls.
-5. Syntax errors from prism are reported through the DLR `ErrorSink`
-   like the legacy parser's.
+5. Syntax errors from prism are reported through the DLR `ErrorSink`.
 6. `PrismLex.cs` decodes `pm_serialize_lex` - prism's token stream with
    the MRI lexer state each token left behind. Ripper is built on it
    (`Src/Libraries/Ripper/RipperOps.cs`, `Src/StdLib/ironruby/ripper.rb`).
@@ -46,9 +48,10 @@ not the other way round, so that the Ripper library can call in here.
 
 ## Status
 
-- **`ir -X:UsePrism file.rb` works**: the console flag swaps the front end
-  for everything, including `require`d stdlib and `eval` (outer eval
-  locals are passed to prism as a scope via the options blob).
+- **Prism parses everything**: the main program, `require`d files and
+  `eval` (outer eval locals are passed to prism as a scope via the
+  options blob). `-X:UsePrism`, which once chose it over the legacy
+  parser, is still accepted and does nothing.
 - **Modern syntax runs**: keyword arguments (required/optional/`**rest`,
   correct missing-keyword errors), safe navigation, endless methods,
   hash shorthand `{x:}`, `it` and numbered block params, lambdas
@@ -151,14 +154,11 @@ platform - so a tree holding both can publish for either.
   patterns (`[*, x, *]` via the __pm_find_index__ prelude helper),
   `{**nil}` exact matches, pins, alternations, standalone `=>` and `in`.
   The NoMatchingPatternError message is shorter than MRI's.
-- IronRuby.Tests can run under prism: `IR_USE_PRISM=1 IronRuby.Tests`.
-  Score: 52 distinct failures vs the 16-failure legacy baseline, out of
-  ~1470 tests. Roughly half the delta is prism being *correct for
-  Ruby 4* where the 1.9-era tests expect old behavior (retry/redo/break
-  outside rescue now SyntaxError, keywords in index assignment removed
-  in 3.4); the rest is niche (flip-flop state in the secondary test
-  mode, BEGIN hoisting, encoding magic comments, exact compile-error
-  counts, block-arity corner cases).
+- IronRuby.Tests runs every test on prism. The tests that only held for
+  the 1.9 grammar (retry/redo/break outside rescue, now a SyntaxError)
+  were removed when the legacy parser was; the rest expect what CRuby 4
+  does, warning counts included (the suite runs with warnings on, so a
+  test expects the parse warnings `ruby -wc` gives).
 - `...` argument forwarding is lowered to `*?fwd?, &?fwdblk?` (keywords
   ride along as the trailing hash, consistent with the kwargs lowering).
 - Keyword-argument lowering is restricted to signatures without optional
@@ -167,9 +167,6 @@ platform - so a tree holding both can publish for either.
 - String literals round-trip through UTF-16; binary string literals with
   invalid UTF-8 may lose bytes (needs byte[]-based MutableString
   literals).
-- Switchover plan: run the IronRuby.Tests parser suites under
-  `-X:UsePrism`, then flip the default and keep the legacy parser as
-  fallback.
 
 Line/column info: prism gives byte offsets + a line-offset table
 (`pm_parser_line_offsets`); IronRuby's `SourceSpan`s are built from the

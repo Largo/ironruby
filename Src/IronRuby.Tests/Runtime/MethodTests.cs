@@ -1050,7 +1050,49 @@ true
 true
 ");
         }
-        
+
+        /// <summary>
+        /// The scope's default visibility applies only where the calling frame's self is the
+        /// module itself (MRI's rb_vm_cref_in_context). importmap-rails sends attr_accessor to
+        /// Rails::Application from the top level of a file, whose default is private.
+        /// </summary>
+        public void AttributeAccessorsVisibility2() {
+            TestOutput(@"
+class Box; end
+Box.send(:attr_accessor, :a)
+
+class Box
+  private
+  Box.send(:attr_reader, :c)
+end
+
+class Other
+  private
+  Box.send(:attr_writer, :d)
+end
+
+Box.class_eval { private; attr_reader :f }
+
+module Helper
+  def self.define(klass)
+    klass.send(:attr_reader, :g)
+  end
+end
+Helper.define(Box)
+
+[:a, :a=, :c, :d=, :f, :g].each do |m|
+  puts ""#{m} #{Box.public_method_defined?(m) ? 'public' : 'private'}""
+end
+", @"
+a public
+a= public
+c private
+d= public
+f private
+g public
+");
+        }
+
         private string MethodDefinitionInDefineMethodCode1 = @"
 class A
   $p = lambda { def foo; end }
@@ -1247,7 +1289,6 @@ p Foo.method(:new).arity, Foo.method(:new).parameters, 1.method(:send).arity, Fo
         /// so every node after a symbol in a method body was read from the wrong offset ("Unknown prism
         /// node type", IndexOutOfRangeException) - mspec, for one, could not start.
         /// </summary>
-        [Options(Prism = true)]
         public void MethodDef_SymbolInBody1() {
             TestOutput(@"
 def sym = :start

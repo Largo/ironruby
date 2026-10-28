@@ -79,7 +79,13 @@ namespace IronRuby.Prism {
                 commandLine = CommandLineFlags(context.RubyOptions, sourceUnit.Path);
                 mainScript = sourceUnit.Path != "-e";
             }
-            return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
+            string code = sourceUnit.GetCode();
+            // Prism, told this is the main script, would skip a #! line without "ruby" in it to
+            // look for one that has; a binstub that names IronRuby's launcher is already Ruby.
+            if (mainScript && (commandLine & 0x20) == 0 && RubyUtils.ShebangNamesIronRuby(code)) {
+                mainScript = false;
+            }
+            return ParseText(code, sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
                 options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
                 options.EvalSourceEncoding, commandLine, mainScript);
         }
@@ -388,7 +394,11 @@ namespace IronRuby.Prism {
                 var hoisted = new List<Pm.PmNode>();
                 var rest = new List<Pm.PmNode>();
                 foreach (var n in loopBody.Body) {
-                    (n is Pm.PreExecutionNode ? hoisted : rest).Add(n);
+                    if (n is Pm.PreExecutionNode preExec) {
+                        CollectPreExecution(preExec, hoisted);
+                    } else {
+                        rest.Add(n);
+                    }
                 }
                 loop.Statements = new Pm.StatementsNode {
                     Body = rest.ToArray(), StartOffset = loopBody.StartOffset, Length = loopBody.Length, Flags = loopBody.Flags
@@ -404,7 +414,7 @@ namespace IronRuby.Prism {
             }
             var reordered = new List<Pm.PmNode>();
             foreach (var n in statements.Body) {
-                if (n is Pm.PreExecutionNode) reordered.Add(n);
+                if (n is Pm.PreExecutionNode preExec) CollectPreExecution(preExec, reordered);
             }
             foreach (var n in statements.Body) {
                 if (!(n is Pm.PreExecutionNode)) reordered.Add(n);
@@ -412,6 +422,28 @@ namespace IronRuby.Prism {
             return new Pm.StatementsNode {
                 Body = reordered.ToArray(), StartOffset = statements.StartOffset, Length = statements.Length, Flags = statements.Flags
             };
+        }
+
+        /// <summary>
+        /// Adds a BEGIN block to <paramref name="into"/>, after the BEGIN blocks written inside it:
+        /// MRI's parser registers a BEGIN when it is closed, so `BEGIN { a; BEGIN { b } }` runs b
+        /// first, and then a without the inner block.
+        /// </summary>
+        private static void CollectPreExecution(Pm.PreExecutionNode/*!*/ node, List<Pm.PmNode>/*!*/ into) {
+            if (node.Statements is Pm.StatementsNode body && Array.Exists(body.Body, n => n is Pm.PreExecutionNode)) {
+                var rest = new List<Pm.PmNode>();
+                foreach (var n in body.Body) {
+                    if (n is Pm.PreExecutionNode inner) {
+                        CollectPreExecution(inner, into);
+                    } else {
+                        rest.Add(n);
+                    }
+                }
+                node.Statements = new Pm.StatementsNode {
+                    Body = rest.ToArray(), StartOffset = body.StartOffset, Length = body.Length, Flags = body.Flags
+                };
+            }
+            into.Add(node);
         }
 
         private Statements/*!*/ BuildStatements(Pm.PmNode statementsNode) {

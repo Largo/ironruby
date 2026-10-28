@@ -346,7 +346,7 @@ $_ = 'foo'
 if /(foo)/ then
   puts $1
 end
-");
+", 1, 0);
             }, @"
 foo
 ");
@@ -367,12 +367,12 @@ end
 z = /foo/
 puts(z =~ 'foo')
 
-puts(/foo/ =~ 'xxxfoo')
+puts(/foo/ =~ 'xxxfoo')     # a literal calls a redefined Regexp#=~ too (MRI 1.9+)
 ");
             }, @"
 3
 =~
-3
+=~
 ");
         }
         

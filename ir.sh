@@ -70,5 +70,5 @@ fi
 RUBYPATH="$S/bin:$(dirname "$IR_BIN")${RUBYPATH:+:$RUBYPATH}"
 export RUBYPATH
 
-exec "$IR_BIN" -X:UsePrism \
+exec "$IR_BIN" \
   "-X:StdLib=$S/ironruby:$S/ruby/4.0" "$@"

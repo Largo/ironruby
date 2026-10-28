@@ -1219,12 +1219,19 @@ namespace IronRuby.Builtins {
         // 0, true passes 1, an Integer passes itself, and a String is the buffer the call reads
         // and writes - grown first to the size the request encodes, 256 bytes at least (MRI's
         // DEFAULT_IOCTL_NARG_LEN), and left at that size.
+        //
+        // Windows has no ioctl(2): there MRI defines the method as rb_f_notimplement, so it raises
+        // NotImplementedError and #respond_to? denies it - tty-screen, for one, asks before it calls.
         [RubyMethod("ioctl")]
+        [RubyNotImplemented(OnWindowsOnly = true)]
         public static int IoControl(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ newStorage,
             RubyIO/*!*/ self, [DefaultProtocol]IntegerValue request, [Optional]object arg) {
             self.GetStream();
+            if (!Posix.IsAvailable) {
+                throw new IronRuby.Builtins.NotImplementedError("ioctl() function is unimplemented on this machine");
+            }
             int fd = self.KernelDescriptor;
-            if (fd < 0 || !Posix.IsAvailable) {
+            if (fd < 0) {
                 throw new NotSupportedException();
             }
 
@@ -1934,7 +1941,7 @@ namespace IronRuby.Builtins {
                 // for more: an ordinary read that would block raises EAGAIN out of here, and the
                 // bytes taken out of the buffer would go with it and not be in the descriptor to
                 // be read again.
-                if (buffered > 0 && !DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(stream.BaseStream))) {
+                if (buffered > 0 && !IoReadiness.IsReadableNow(io, stream.BaseStream)) {
                     return buffer;
                 }
                 int more = io.AppendBytes(buffer, count);

@@ -349,7 +349,6 @@ nil
         /// first keyword parameter ("syntax error, unexpected label") - the require failed that
         /// way before it could touch the frozen Object. CRuby 4.0.6 prints the same three lines.
         /// </summary>
-        [Options(Prism = true)]
         public void ModuleFreezing1() {
             if (_driver.PartialTrust) return;
 
