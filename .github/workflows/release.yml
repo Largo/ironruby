@@ -5,6 +5,8 @@ name: Release
 # pre-release while the version has a suffix such as -preview1), with
 # Docs/releases/<tag>.md as the notes when there is one; running the workflow by hand, or
 # a pull request that changes the packaging, only keeps them as workflow artifacts.
+# Each published file gets a signed build provenance attestation (actions/attest) in the
+# job that built it; `gh attestation verify <file> --repo Largo/ironruby` checks it.
 # The launch video, rendered from media/launch, is only rendered when asked for by hand -
 # it takes about 7 minutes of every run otherwise: with render_video it is kept as an
 # artifact, and with video_for set to a tag it alone is rendered and replaces the video,
@@ -50,6 +52,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     # macOS is untested (README, Platforms): a failure there does not hold the release back.
     continue-on-error: ${{ matrix.experimental }}
+    # id-token, attestations and artifact-metadata: for the build provenance below.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +159,17 @@ jobs:
         working-directory: dist
         run: cd ironruby-*-win-x64 && cmd //c ir.cmd Samples/Notepad/test_notepad.rb
 
+      # Signed SLSA build provenance for the archive a tag publishes, with GitHub's own
+      # actions/attest, pinned to the commit of its v4.2.2 tag: `gh attestation verify
+      # <archive> --repo Largo/ironruby` shows that this workflow built it, from which
+      # commit and in which run. dist/ironruby-<version>-<rid>.* is the archive alone, not
+      # the directory it was packed from.
+      - name: Attest build provenance
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ironruby-*-${{ matrix.rid }}.*
+
       - uses: actions/upload-artifact@v7
         with:
           name: ironruby-${{ matrix.rid }}
@@ -168,6 +187,11 @@ jobs:
     continue-on-error: true
     # A render takes about 7 minutes; a failed one can leave hyperframes waiting.
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
 
@@ -197,6 +221,14 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           $hf render --fps 60 --quality high --output "$GITHUB_WORKSPACE/dist/ironruby-4-launch.mp4"
           $hf snapshot --frames 12
+
+      # As the archives: the film that video_for puts on a release gets its provenance here,
+      # in the job that rendered it.
+      - name: Attest build provenance
+        if: inputs.video_for != ''
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/ironruby-4-launch.mp4
 
       - uses: actions/upload-artifact@v7
         with:
