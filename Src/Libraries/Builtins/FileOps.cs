@@ -1141,7 +1141,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("flock", BuildConfig = "FEATURE_FILESYSTEM")]
         public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
-            if (Path.DirectorySeparatorChar == '\\') {
+            if (OperatingSystem.IsWindows()) {
                 return WindowsFileLock(self, operation);
             }
             if (!Posix.IsFlockAvailable) {
@@ -1195,6 +1195,7 @@ namespace IronRuby.Builtins {
         /// the reason the Posix path above does. RubyGems takes one for every binstub it
         /// writes, so without it `gem install` of any gem with an executable failed.
         /// </summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         private static object WindowsFileLock(RubyFile/*!*/ self, int operation) {
             var fs = self.GetStream().BaseStream as FileStream;
             if (fs == null) {

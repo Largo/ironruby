@@ -194,11 +194,12 @@ namespace IronRuby.StandardLibrary.Puma {
 
                     // SChannel cannot serve with an ephemeral key: round-trip the certificate through PFX.
                     if (OperatingSystem.IsWindows()) {
-                        using (leaf) {
+                        // the ephemeral one is disposed once the PFX copy has replaced it
+                        using (X509Certificate2 ephemeral = leaf) {
 #if NET9_0_OR_GREATER
-                            leaf = X509CertificateLoader.LoadPkcs12(leaf.Export(X509ContentType.Pfx), null);
+                            leaf = X509CertificateLoader.LoadPkcs12(ephemeral.Export(X509ContentType.Pfx), null);
 #else
-                            leaf = new X509Certificate2(leaf.Export(X509ContentType.Pfx));
+                            leaf = new X509Certificate2(ephemeral.Export(X509ContentType.Pfx));
 #endif
                         }
                     }
