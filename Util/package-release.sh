@@ -37,8 +37,8 @@ dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
 rm -f "$STAGE/Src/Console/bin/Release/$IR_TFM"/*.pdb
 
 case "$RID" in
-  win-*) launchers=(ir.cmd irb.cmd igem.cmd iirb.cmd irubyc.cmd) ;;
-  *)     launchers=(ir.sh irb.sh igem.sh iirb.sh irubyc.sh) ;;
+  win-*) launchers=(ironruby.cmd ir.cmd irb.cmd igem.cmd iirb.cmd irubyc.cmd) ;;
+  *)     launchers=(ironruby ir.sh irb.sh igem.sh iirb.sh irubyc.sh) ;;
 esac
 for f in "${launchers[@]}" README.md; do
   cp "$IR_ROOT/$f" "$STAGE/"
@@ -112,9 +112,9 @@ esac
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
 # without breaking anything else.
 case "$RID" in
-  win-*) (cd "$STAGE" && cmd //c ir.cmd -e 'puts RUBY_DESCRIPTION' &&
+  win-*) (cd "$STAGE" && cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION' && cmd //c ir.cmd -e 'puts RUBY_ENGINE' &&
           cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")") ;;
-  *)     "$STAGE/ir.sh" -e 'puts RUBY_DESCRIPTION' ;;
+  *)     "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION' && "$STAGE/ir.sh" -e 'puts RUBY_ENGINE' ;;
 esac
 
 cd "$OUT"

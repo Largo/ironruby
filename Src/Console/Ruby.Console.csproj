@@ -32,6 +32,19 @@
          file this process has LOCK_EX'd. Turn the emulation off. -->
     <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" />
   </ItemGroup>
+  <!-- RbConfig's ruby_install_name is "ironruby", as JRuby's is "jruby", so RbConfig.ruby is
+       <bindir>/ironruby(.exe): a copy of the apphost under that name. An apphost starts the
+       ir.dll whose name is written into it, whatever the file itself is called. -->
+  <Target Name="CopyIronRubyAppHost" AfterTargets="Build" Condition="'$(UseAppHost)' != 'false'">
+    <Copy SourceFiles="$(OutDir)$(AssemblyName)$(_NativeExecutableExtension)"
+          DestinationFiles="$(OutDir)ironruby$(_NativeExecutableExtension)"
+          Condition="Exists('$(OutDir)$(AssemblyName)$(_NativeExecutableExtension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishIronRubyAppHost" AfterTargets="Publish" Condition="'$(UseAppHost)' != 'false'">
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_NativeExecutableExtension)"
+          DestinationFiles="$(PublishDir)ironruby$(_NativeExecutableExtension)"
+          Condition="Exists('$(PublishDir)$(AssemblyName)$(_NativeExecutableExtension)')" SkipUnchangedFiles="true" />
+  </Target>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />

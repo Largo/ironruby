@@ -90,15 +90,18 @@ IronRuby. `io/console` is a C extension in CRuby, so IronRuby implements it over
 Scripts run the same way, and gems install with real TLS:
 
 ```console
-$ ./ir.sh script.rb          # prism front end, vendored stdlib, JIT and OSR on
-$ ./igem.sh install rack     # or: ./ir.sh -S gem install rack
-$ ./ir.sh -S bundle install
+$ ./ironruby script.rb       # prism front end, vendored stdlib, JIT and OSR on
+$ ./igem.sh install rack     # or: ./ironruby -S gem install rack
+$ ./ironruby -S bundle install
 ```
 
-`ir` / `igem` / `iirb` / `irubyc` are the i-prefixed names IronRuby has used since 1.x, so
-they can sit on `PATH` beside CRuby's `ruby` and `gem` — the same reason JRuby ships
-`jruby`, `jgem`, `jirb` and `jrubyc`. The unprefixed `gem`, `irb`, `bundle`, `bundler` and
-`irubyc` live in `Src/StdLib/bin` and are what `ir -S <name>` finds.
+The interpreter is `ironruby` (`ironruby.cmd` on Windows), as JRuby's is `jruby`: it is
+RbConfig's `ruby_install_name`, so the binstubs RubyGems, Bundler and Rails write start
+`#!/usr/bin/env ironruby` - a `#!` line with "ruby" in it, which Ruby runs as Ruby. `ir.sh`
+and `ir.cmd` are its short name, the one IronRuby has used since 1.x, and run the same thing.
+`igem` / `iirb` / `irubyc` keep the i-prefix so they can sit on `PATH` beside CRuby's `gem`
+and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do. The unprefixed `gem`, `irb`, `bundle`,
+`bundler` and `irubyc` live in `Src/StdLib/bin` and are what `ironruby -S <name>` finds.
 
 ```ruby
 # all of this runs today
@@ -497,12 +500,12 @@ one and run the launchers in it:
 
 ```console
 $ tar xzf ironruby-4.0.1-linux-x64.tar.gz && cd ironruby-4.0.1-linux-x64
-$ ./ir.sh -e 'puts RUBY_DESCRIPTION'
+$ ./ironruby -e 'puts RUBY_DESCRIPTION'
 $ ./irb.sh
 $ ./igem.sh install rack
 ```
 
-On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`, or double-click
+On Windows, unzip it and use `ironruby.cmd`, `irb.cmd` and `igem.cmd`, or double-click
 `Samples\Notepad\notepad.cmd`. The archive has the same layout as a checkout, with the
 Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
 unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.

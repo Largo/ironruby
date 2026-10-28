@@ -1971,8 +1971,9 @@ namespace IronRuby.Runtime {
         /// Whether the first line of a script is a #! line that runs IronRuby's own launcher. MRI
         /// and prism take a #! line without "ruby" in it as the start of some other program and
         /// look further down for the Ruby one; but RubyGems and Rails write binstubs from
-        /// RbConfig's ruby_install_name, which is "ir", so `rails new` starts bin/rails with
-        /// "#!/usr/bin/env ir.exe" - a Ruby script that does not say "ruby".
+        /// RbConfig's ruby_install_name, which was "ir", so `rails new` started bin/rails with
+        /// "#!/usr/bin/env ir.exe" - a Ruby script that does not say "ruby". It is "ironruby"
+        /// now, which does; this keeps the binstubs written before that running.
         /// </summary>
         public static bool ShebangNamesIronRuby(string/*!*/ code) {
             if (code == null || !code.StartsWith("#!", StringComparison.Ordinal)) {

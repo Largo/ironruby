@@ -190,11 +190,22 @@ jobs:
           require "rake"
           puts "rexml #{REXML::VERSION}, csv #{CSV::VERSION}, rake #{Rake::VERSION}"
           RUBY
+          # ironruby is the launcher, as jruby is JRuby's; RbConfig.ruby has to be a file,
+          # since libraries spawn it, and ir is the short name, which has to keep working.
+          cat > names.rb <<'RUBY'
+          abort "ruby_install_name: #{RbConfig::CONFIG["ruby_install_name"]}" unless RbConfig::CONFIG["ruby_install_name"] == "ironruby"
+          abort "no #{RbConfig.ruby}" unless File.file?(RbConfig.ruby)
+          puts "#{RbConfig.ruby} exists"
+          RUBY
           if [ "$RUNNER_OS" = Windows ]; then
-            cmd //c ir.cmd smoke.rb
-            cmd //c ir.cmd Util/windows-desktop-check.rb
+            cmd //c ironruby.cmd smoke.rb
+            cmd //c ironruby.cmd names.rb
+            cmd //c ir.cmd -e "puts RUBY_ENGINE"
+            cmd //c ironruby.cmd Util/windows-desktop-check.rb
           else
-            ./ir.sh smoke.rb
+            ./ironruby smoke.rb
+            ./ironruby names.rb
+            ./ir.sh -e 'puts RUBY_ENGINE'
           fi
 
       # IO#write_nonblock on a socket claims only what the kernel took (#14). On Linux the

@@ -43,7 +43,9 @@ CRuby, the CSRF meta tags are there, and a POST without a token is refused with 
    `ruby_install_name`, which is `ir`, so they start `#!/usr/bin/env ir.exe"`; like MRI, the
    command line and prism skip a `#!` line without "ruby" in it. A `#!` line naming IronRuby's
    own launcher now counts as Ruby. `RubyUtils.ShebangNamesIronRuby`, `RubyCommandLine.cs`,
-   `PrismAstBridge.cs`.
+   `PrismAstBridge.cs`. Since then the launcher is called `ironruby`, as JRuby's is `jruby`,
+   and so is `ruby_install_name`: new binstubs say `#!/usr/bin/env ironruby` and need no
+   special case; this one keeps those written with `ir` running.
 5. **`TZInfo::DataSourceNotFound` in the first initializer.** Windows has no zoneinfo, so the
    Gemfile has `gem "tzinfo-data", platforms: %i[windows jruby]`; Bundler filters such gems by the
    *generic* platform, and IronRuby's `universal-dotnet` is generic `ruby`. For the dotnet
