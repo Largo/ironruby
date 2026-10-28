@@ -525,7 +525,8 @@ bundles, Microsoft's license and third-party notices.
 pushed; the [launch video](media/launch) is rendered and added by hand.
 
 Releases after 4.0.1 carry a signed [build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
-for each archive, made by GitHub's `actions/attest` in the job that built it. It says
+for each archive and for `SHA256SUMS`, made by GitHub's `actions/attest` in the job that
+built the file. It says
 which workflow built the file, from which commit, in which run, and that the file is
 the one it built. Check one with the GitHub CLI:
 
@@ -533,12 +534,15 @@ the one it built. Check one with the GitHub CLI:
 $ gh attestation verify ironruby-<version>-linux-x64.tar.gz --repo Largo/ironruby
 ```
 
-What is in an archive comes from three places, none of them a binary in this repository:
+What is in an archive comes from these places, none of them a binary in this repository:
 IronRuby, the DLR and prism (libprism too) are compiled in the job from source, at the
 revisions `release.yml` pins; the NuGet packages the projects name, at the versions they
 pin - AngleSharp, AngleSharp.Xml, Microsoft.Data.Sqlite, System.Text.Encoding.CodePages
 and SQLitePCLRaw.bundle_e_sqlite3, whose native `e_sqlite3` is SQLite as that package
-builds it; and the .NET runtime. The repository itself holds no programs - no `.exe`,
+builds it on Windows and macOS; on Linux, SQLite's own amalgamation source, downloaded
+from sqlite.org and checked against the SHA-256 `Util/build-e_sqlite3.sh` pins, which
+that script compiles in the job instead (the package's library crashes beside another
+SQLite); and the .NET runtime. The repository itself holds no programs - no `.exe`,
 `.dll`, `.so` or any other binary that runs - and CI keeps it so with
 `Util/check-no-executables.rb`, which looks at what each tracked file is, not at its name.
 

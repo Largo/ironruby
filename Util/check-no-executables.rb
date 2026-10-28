@@ -13,16 +13,22 @@
 # being called notes.txt, and an extension-only placeholder such as
 # Tests/Experiments/Loader/Extensions/fcntl.so - which is text - is not flagged.
 
-def kind_of(head, size)
+def kind_of(file, size)
+  head = file.read(4096) || "".b
   return "ELF" if head.start_with?("\x7FELF".b)
   return "WebAssembly" if head.start_with?("\0asm".b)
   if head.start_with?("MZ".b) && head.bytesize >= 0x40
+    # The PE signature is where e_lfanew says, which may be past what was read.
     pe = head.byteslice(0x3c, 4).unpack1("V")
-    return "PE (Windows program or .NET assembly)" if pe + 4 <= size && head.byteslice(pe, 4) == "PE\0\0".b
+    if pe + 4 <= size
+      signature = pe + 4 <= head.bytesize ? head.byteslice(pe, 4) : (file.seek(pe) && file.read(4))
+      return "PE (Windows program or .NET assembly)" if signature == "PE\0\0".b
+    end
   end
   case head.byteslice(0, 4)&.unpack1("N")
   when 0xFEEDFACE, 0xFEEDFACF, 0xCEFAEDFE, 0xCFFAEDFE then "Mach-O"
   when 0xCAFEBABE then "Mach-O universal binary or Java class"
+  when 0xCAFEBABF then "Mach-O universal binary (64-bit offsets)"
   end
 end
 
@@ -31,8 +37,8 @@ abort "check-no-executables: git ls-files failed" if ARGV.empty? && !$?.success?
 
 found = paths.filter_map do |path|
   next unless File.file?(path)
-  head = File.open(path, "rb") { |f| f.read(4096) } || "".b
-  kind = kind_of(head, File.size(path))
+  size = File.size(path)
+  kind = File.open(path, "rb") { |file| kind_of(file, size) }
   "#{path}: #{kind}" if kind
 end
 
