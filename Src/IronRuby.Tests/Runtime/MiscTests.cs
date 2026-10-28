@@ -974,6 +974,79 @@ true
         }
 
         /// <summary>
+        /// [str].pack("p") is a real address, as in CRuby: C reads the String there, and what C
+        /// writes there through Fiddle lands in the String. It used to be an index into the
+        /// packed string's list of Strings, and C reading it crashed the process.
+        /// </summary>
+        public void PackPointer_RealAddress1() {
+            TestOutput(@"
+require 'fiddle'
+lib = case RUBY_PLATFORM
+      when /mswin|mingw/ then 'msvcrt.dll'
+      when /darwin/ then '/usr/lib/libSystem.B.dylib'
+      else 'libc.so.6'
+      end
+libc = Fiddle.dlopen(lib)
+strlen = Fiddle::Function.new(libc['strlen'], [Fiddle::TYPE_VOIDP], Fiddle::TYPE_SIZE_T)
+memset = Fiddle::Function.new(libc['memset'], [Fiddle::TYPE_VOIDP, Fiddle::TYPE_INT, Fiddle::TYPE_SIZE_T], Fiddle::TYPE_VOIDP)
+
+# C only gets an address that can be one: what pack wrote before was an index, and C reading
+# or writing there kills the process, which no test can report.
+s = 'hello'.dup
+addr = [s].pack('p').unpack1('J')
+buf = ""\0"" * 6
+buf_addr = [buf].pack('p').unpack1('J')
+if addr > 0x10000 && buf_addr > 0x10000
+  p Fiddle::Pointer.new(addr).to_s, strlen.call(addr)
+  memset.call(buf_addr, 0x41, 3)
+  p buf
+else
+  p [:not_an_address, addr, buf_addr]
+end
+p [s].pack('p').unpack1('p'), [nil].pack('p').unpack1('J')
+begin
+  [addr].pack('J').unpack1('p')
+rescue ArgumentError => e
+  p e.message
+end
+", @"
+""hello""
+5
+""AAA\u0000\u0000\u0000""
+""hello""
+0
+""no associated pointer""
+");
+        }
+
+        /// <summary>
+        /// reline's own Win32API, unmodified, hands the console API its buffers as
+        /// [str].pack(""p"").unpack(""q*"") and reads what the call wrote from str - which is
+        /// what irb does at startup in a Windows console, and what crashed there.
+        /// </summary>
+        public void PackPointer_RelineWin32Api1() {
+            TestOutput(@"
+if File::ALT_SEPARATOR == '\\'
+  require 'ruby4'
+  require 'reline'
+  api = Reline::Windows::Win32API.new('kernel32', 'GetModuleFileNameA', ['L', 'P', 'L'], 'L')
+  path = ""\0"" * 260
+  if [path].pack('p').unpack1('J') > 0x10000
+    n = api.call(0, path, 260)
+    p n > 0, path[0, n].downcase.end_with?('.exe')
+  else
+    p :not_an_address
+  end
+else
+  p true, true
+end
+", @"
+true
+true
+");
+        }
+
+        /// <summary>
         /// A relative Dir.chdir is resolved once, from the directory in force - Dir.pwd keeping
         /// 8.3 short names once made it twice, so ".." went up two levels.
         /// </summary>

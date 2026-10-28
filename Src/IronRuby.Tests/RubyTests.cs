@@ -731,6 +731,8 @@ namespace IronRuby.Tests {
                 Process_SpawnKill1,
                 File_DriveLetters1,
                 Fiddle_AnsiSuffix1,
+                PackPointer_RealAddress1,
+                PackPointer_RelineWin32Api1,
                 Dir_ChdirRelative1,
                 File_ExpandTildeOrder1,
                 File_FlockReadpartialRlimit1,
