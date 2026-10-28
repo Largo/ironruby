@@ -31,7 +31,8 @@ internal sealed class Host : RubyConsoleHost {
             Environment.CurrentDirectory = rubyOptions.ChangeDirectory;
         }
 
-        if (rubyOptions.Introspection || rubyOptions.Command == null && rubyOptions.FileName == null) {
+        // without a script there is no console to read one from
+        if (rubyOptions.Introspection || rubyOptions.Command == null && (rubyOptions.FileName == null || rubyOptions.ProgramFromStdinByDefault)) {
             PrintHelp();
             return null;
         }
