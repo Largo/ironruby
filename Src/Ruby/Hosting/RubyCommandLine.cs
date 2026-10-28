@@ -84,9 +84,9 @@ namespace IronRuby.Hosting {
 
             // A script argument of "-" says to read the program from stdin, and is how the CRuby
             // test suite runs a program in a child process; ARGV is what follows it. The options
-            // parser gives "-" when there is neither -e nor a script, so `ironruby` alone reads
-            // stdin as `ruby` does - at a terminal too, until EOF. A host that skips the parser
-            // and gives neither still gets stdin when it is redirected.
+            // parser gives "-" when there is neither -e nor a script and stdin is not a terminal
+            // (at one it gives irb), so `ironruby` alone reads a piped program as `ruby` does. A
+            // host that skips the parser and gives neither still gets stdin when it is redirected.
             if (Options.Command == null &&
                 (Options.FileName == "-" || (Options.FileName == null && System.Console.IsInputRedirected))) {
                 // The program is read as bytes: a magic comment may say they are not UTF-8, and

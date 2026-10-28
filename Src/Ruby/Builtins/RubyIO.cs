@@ -218,8 +218,15 @@ namespace IronRuby.Builtins {
                 if (Closed) {
                     return null;
                 }
-                var stream = GetStream();
-                var console = stream.BaseStream as ConsoleStream;
+                // A copy that could not dup(2) the descriptor - #dup of a console stream on
+                // Windows - wraps the original's buffered stream in one of its own, so the
+                // console may be more than one buffer down.
+                Stream stream = GetStream().BaseStream;
+                RubyBufferedStream buffered;
+                while ((buffered = stream as RubyBufferedStream) != null) {
+                    stream = buffered.BaseStream;
+                }
+                var console = stream as ConsoleStream;
                 return console != null ? console.StreamType : (ConsoleStreamType?)null;
             } 
         }

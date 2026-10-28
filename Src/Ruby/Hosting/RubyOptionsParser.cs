@@ -843,13 +843,40 @@ namespace IronRuby.Hosting {
                 ConsoleOptions.Exit = true;
             }
 
-            // `ruby` with neither -e nor a script reads the program from stdin until EOF - at a
-            // terminal too - as if "-" had been given, and $0 is "-" (MRI, JRuby). IronRuby used to
-            // start the DLR's interactive console there; irb is `irb` / `iirb`. ironrubyw, which has
-            // no console, then reads nothing and exits, as rubyw does.
+            // `ruby` with neither -e nor a script reads the program from stdin until EOF, as if "-"
+            // had been given, and $0 is "-" (MRI, JRuby); so does `ironruby` when stdin is a pipe
+            // or a file. At a terminal it starts irb instead, as `python` starts its interactive
+            // interpreter there: `ironruby` alone is then `iirb`, the -S irb that ironruby.cmd and
+            // ironruby find in RUBYPATH. An explicit "-", and -n, -p, -c and -x, which are about
+            // stdin, still read it. ironrubyw, which has no console, reads nothing and exits, as
+            // rubyw does. Only an irb found in RUBYPATH or PATH runs: FindMainFileFromPath hands
+            // back a name it did not find unchanged, and that would be a file called irb in the
+            // current directory.
             if (!ConsoleOptions.Exit && ConsoleOptions.Command == null && ConsoleOptions.FileName == null) {
-                ConsoleOptions.FileName = "-";
-                LanguageSetup.Options["MainFile"] = "-";
+                string irb = StartsInteractive() ? FindMainFileFromPath("irb") : null;
+                if (irb != null && irb != "irb" && Platform.FileExists(irb)) {
+                    ConsoleOptions.FileName = irb;
+                    SetupOptionsForMainFile();
+                } else {
+                    ConsoleOptions.FileName = "-";
+                    LanguageSetup.Options["MainFile"] = "-";
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether `ironruby` with no program should be interactive: stdin is a terminal (a
+        /// console on Windows, which .NET tells apart from NUL), and no option asked for stdin.
+        /// </summary>
+        private bool StartsInteractive() {
+            if (LanguageSetup.Options.ContainsKey("LoopOverInput") || LanguageSetup.Options.ContainsKey("CheckSyntaxOnly") ||
+                LanguageSetup.Options.ContainsKey("SkipToRubyShebang")) {
+                return false;
+            }
+            try {
+                return !Console.IsInputRedirected;
+            } catch (IOException) {
+                return false;
             }
         }
 

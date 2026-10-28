@@ -1094,6 +1094,57 @@ true
         }
 
         /// <summary>
+        /// IO#winsize off a terminal raises what MRI raises: ENOTTY from ioctl on Linux and macOS,
+        /// EBADF from the console API on Windows, where IronRuby used to have no winsize at all -
+        /// irb asks $stdout for it before showing each result, and died after the first one.
+        /// A console's own size needs a console, which a test run does not have.
+        /// </summary>
+        public void IoConsole_WinsizeOffTerminal1() {
+            TestOutput(@"
+require 'ruby4'
+require 'io/console'
+require 'tmpdir'
+windows = File::ALT_SEPARATOR == '\\'
+path = File.join(Dir.tmpdir, ""ir-winsize-#{Process.pid}.txt"")
+File.open(path, 'w') do |f|
+  begin
+    f.winsize
+  rescue SystemCallError => e
+    p e.class == (windows ? Errno::EBADF : Errno::ENOTTY)
+  end
+end
+File.delete(path)
+", @"
+true
+");
+        }
+
+        /// <summary>
+        /// require 'ripper' gives Ripper::Filter, as MRI's ripper.rb does: rdoc's Ruby parser
+        /// subclasses it, and `gem install` generating documentation died on the NameError.
+        /// </summary>
+        public void Ripper_Filter1() {
+            TestOutput(@"
+require 'ruby4'
+require 'ripper'
+class Words < Ripper::Filter
+  def on_default(event, tok, data)
+    data << [lineno, column, event, tok]
+  end
+end
+Words.new(""x = 1 # one\n"").parse([]).each { |t| p t }
+", @"
+[1, 0, :on_ident, ""x""]
+[1, 1, :on_sp, "" ""]
+[1, 2, :on_op, ""=""]
+[1, 3, :on_sp, "" ""]
+[1, 4, :on_int, ""1""]
+[1, 5, :on_sp, "" ""]
+[1, 6, :on_comment, ""# one\n""]
+");
+        }
+
+        /// <summary>
         /// What RubyGems and Bundler need from the file system on Windows, where each of these
         /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
         /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that
