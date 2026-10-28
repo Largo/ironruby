@@ -513,7 +513,16 @@ $ ./igem.sh install rack
 From 4.0.2 on, the archives have `ironruby` and `ironruby.cmd` (see above), and `ir.sh` /
 `ir.cmd` keep working; 4.0.1 and earlier have only those.
 On Windows, unzip it and use `ironruby.cmd`, `irb.cmd` and `igem.cmd`, or double-click
-`Samples\Notepad\notepad.cmd`. The archive has the same layout as a checkout, with the
+`Samples\Notepad\notepad.cmd`. From 4.0.3 on there is also an installer,
+`ironruby-<version>-win-x64-setup.exe`, in the style of RubyInstaller: it installs the same
+tree into `C:\IronRuby40-x64` (or a directory you choose), for you or for all users, puts
+that directory first on your PATH so `ironruby`, `ir`, `irb` and `igem` work from a new
+terminal, and its uninstaller removes it all again, installed gems included. It needs no
+admin rights for you alone, and keeps the default path free of spaces, which Bundler, the
+Rails templates and mspec do not handle. IronRuby's `irb` then comes before CRuby's on the
+PATH; CRuby's `ruby` and `gem` are not affected. `Util/installer/build-installer.sh` makes
+it from the zip with [Inno Setup](https://jrsoftware.org/isinfo.php), from
+`Util/installer/ironruby.iss`. The archive has the same layout as a checkout, with the
 Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
 unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.
 The Windows archive also carries the Windows Desktop runtime, for Windows Forms and WPF, and
@@ -521,11 +530,13 @@ The Windows archive also carries the Windows Desktop runtime, for Windows Forms 
 bundles, Microsoft's license and third-party notices.
 
 `Util/package-release.sh <rid>` builds such an archive from a checkout, and
-`.github/workflows/release.yml` builds all three and publishes them when a `v*` tag is
-pushed; the [launch video](media/launch) is rendered and added by hand.
+`.github/workflows/release.yml` builds all three, and the Windows installer from the zip,
+installs and uninstalls it once for the current user and once for all users, and
+publishes them when a `v*` tag is pushed; the [launch video](media/launch) is rendered and
+added by hand.
 
 Releases from 4.0.2 on carry a signed [build provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
-for each archive and for `SHA256SUMS`, made by GitHub's `actions/attest` in the job that
+for each archive (from 4.0.3 on, the installer too) and for `SHA256SUMS`, made by GitHub's `actions/attest` in the job that
 built the file. It says
 which workflow built the file, from which commit, in which run, and that the file is
 the one it built. Check one with the GitHub CLI:
