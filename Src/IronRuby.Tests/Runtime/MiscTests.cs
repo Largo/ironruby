@@ -1094,6 +1094,32 @@ true
         }
 
         /// <summary>
+        /// IO#winsize off a terminal raises what MRI raises: ENOTTY from ioctl on Linux and macOS,
+        /// EBADF from the console API on Windows, where IronRuby used to have no winsize at all -
+        /// irb asks $stdout for it before showing each result, and died after the first one.
+        /// A console's own size needs a console, which a test run does not have.
+        /// </summary>
+        public void IoConsole_WinsizeOffTerminal1() {
+            TestOutput(@"
+require 'ruby4'
+require 'io/console'
+require 'tmpdir'
+windows = File::ALT_SEPARATOR == '\\'
+path = File.join(Dir.tmpdir, ""ir-winsize-#{Process.pid}.txt"")
+File.open(path, 'w') do |f|
+  begin
+    f.winsize
+  rescue SystemCallError => e
+    p e.class == (windows ? Errno::EBADF : Errno::ENOTTY)
+  end
+end
+File.delete(path)
+", @"
+true
+");
+        }
+
+        /// <summary>
         /// What RubyGems and Bundler need from the file system on Windows, where each of these
         /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
         /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that
