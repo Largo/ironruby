@@ -280,12 +280,11 @@ versions CRuby 4.0.6 bundles, so `require "rexml/document"` and `ir -S rake` wor
 every machine, with or without a CRuby next to IronRuby.
 [`Util/install-bundled-gems.rb`](Util/install-bundled-gems.rb) installs them from a CRuby
 source tarball's `gems/*.gem` and lists the ones left out and why (the C extensions IronRuby
-implements itself, and the ones that need `rbs`).  A host CRuby 4.0's gem directory is still
-offered for third-party gems, but never for a gem IronRuby ships, and its RubyGems plugins
-are not loaded; `IRONRUBY_NO_HOST_GEMS=1` turns it off entirely.
+implements itself, and the ones that need `rbs`).  IronRuby never uses the gems of a CRuby
+installed on the same machine: a gem it needs is installed for IronRuby, with `igem install`
+or Bundler.
 
-A C extension is never built: there is no `ruby.h` to compile against, and the gem whose
-extension is missing is often in a read-only host CRuby tree.  Such a gem is left alone -
+A C extension is never built: there is no `ruby.h` to compile against.  Such a gem is left alone -
 its `.rb` files load, a real `require` of the `.so` raises `LoadError`, and the pure-Ruby
 fallback most of them carry is used instead.
 
