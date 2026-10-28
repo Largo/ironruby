@@ -3769,8 +3769,12 @@ namespace IronRuby.Runtime {
             Debug.Assert(sourceUnit.LanguageContext == this);
 
             long traceStart = StartupTrace.Now();
-            SourceUnitTree ast = EffectiveParser(sourceUnit, options, errorSink);
-            StartupTrace.Parsed(traceStart);
+            SourceUnitTree ast;
+            try {
+                ast = EffectiveParser(sourceUnit, options, errorSink);
+            } finally {
+                StartupTrace.Parsed(traceStart);
+            }
 
             if (ast == null) {
                 return null;
@@ -3784,8 +3788,11 @@ namespace IronRuby.Runtime {
                 try {
 #endif
             traceStart = StartupTrace.Now();
-            lambda = TransformTree<T>(ast, sourceUnit, options);
-            StartupTrace.Transformed(traceStart);
+            try {
+                lambda = TransformTree<T>(ast, sourceUnit, options);
+            } finally {
+                StartupTrace.Transformed(traceStart);
+            }
 #if MEASURE_AST
                 } finally {
                     System.Linq.Expressions.Expression.Histogram = oldHistogram;

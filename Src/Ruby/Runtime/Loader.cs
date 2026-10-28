@@ -195,7 +195,7 @@ namespace IronRuby.Runtime {
             } catch (Exception) {
                 // as FindFile: the path as given
             }
-            return RubyUtils.CanonicalizePath(dir).TrimEnd('/');
+            return RubyUtils.CanonicalizePath(ResolveDirectoryLinks(dir)).TrimEnd('/');
         }
 
         private void AddStandardLibraryPath(RubyArray/*!*/ loadPaths, string path, string applicationBaseDir) {

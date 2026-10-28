@@ -1154,12 +1154,17 @@ Words.new(""x = 1 # one\n"").parse([]).each { |t| p t }
         public void Require_ExtensionByLibraryName1() {
             TestOutput(@"
 p require('etc.so'), defined?(Etc.systmpdir), require('etc')
-p Etc.systmpdir.include?('\\')
+if File::ALT_SEPARATOR == '\\'
+  base = [ENV['LOCALAPPDATA'], ENV['SystemRoot'], ENV['windir']].find { |d| d && !d.empty? } || 'C:/Windows'
+  p Etc.systmpdir == base.tr('\\', '/') + '/temp'
+else
+  p Etc.systmpdir == '/tmp'
+end
 ", @"
 true
 ""method""
 false
-false
+true
 ");
         }
 

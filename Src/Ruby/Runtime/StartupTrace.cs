@@ -65,6 +65,11 @@ namespace IronRuby.Runtime {
                 long[] own = _open.Pop();
                 own[3] = ticks;
                 if (_open.Count > 0) _open.Peek()[4] += ticks;
+                // a file loaded more than once (Kernel#load) counts every time
+                long[] earlier;
+                if (_files.TryGetValue(path ?? "?", out earlier)) {
+                    for (int i = 0; i < own.Length; i++) own[i] += earlier[i];
+                }
                 _files[path ?? "?"] = own;
             }
         }
