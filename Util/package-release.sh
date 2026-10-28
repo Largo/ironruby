@@ -110,7 +110,8 @@ esac
 
 # A quick check that the unpacked tree starts, before it is archived - and on Windows
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
-# without breaking anything else.
+# without breaking anything else. irb has to start too: it loads reline, which on Windows
+# looks up Win32 functions through Fiddle, and 4.0.2's died there.
 # One command per line: set -e does not stop at a failure on the left of && - nor at a
 # case whose last && list failed that way - so a chain would let a broken tree through.
 case "$RID" in
@@ -119,11 +120,13 @@ case "$RID" in
     (cd "$STAGE"
      cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION'
      cmd //c ir.cmd -e 'puts RUBY_ENGINE'
+     printf 'puts 6 * 7\n' | cmd //c irb.cmd | grep -x 42
      cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")")
     ;;
   *)
     "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION'
     "$STAGE/ir.sh" -e 'puts RUBY_ENGINE'
+    printf 'puts 6 * 7\n' | "$STAGE/irb.sh" | grep -x 42
     ;;
 esac
 
