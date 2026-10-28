@@ -117,10 +117,7 @@ class Reline::Windows < Reline::IO
       def call(*args)
         import = @proto.split("")
         args.each_with_index do |x, i|
-          # IronRuby: pack("p") holds no real address (a String has none on .NET's heap),
-          # so the String goes to Fiddle itself, which hands C its bytes and copies back
-          # what C wrote into them - the buffer CRuby's address points at.
-          args[i] = (x == 0 ? nil : +x) if import[i] == "S"
+          args[i], = [x == 0 ? nil : +x].pack("p").unpack(POINTER_TYPE) if import[i] == "S"
           args[i], = [x].pack("I").unpack("i") if import[i] == "I"
         end
         ret, = @func.call(*args)
