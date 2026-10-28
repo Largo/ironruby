@@ -842,6 +842,15 @@ namespace IronRuby.Hosting {
                 ConsoleOptions.PrintVersion = true;
                 ConsoleOptions.Exit = true;
             }
+
+            // `ruby` with neither -e nor a script reads the program from stdin until EOF - at a
+            // terminal too - as if "-" had been given, and $0 is "-" (MRI, JRuby). IronRuby used to
+            // start the DLR's interactive console there; irb is `irb` / `iirb`. ironrubyw, which has
+            // no console, then reads nothing and exits, as rubyw does.
+            if (!ConsoleOptions.Exit && ConsoleOptions.Command == null && ConsoleOptions.FileName == null) {
+                ConsoleOptions.FileName = "-";
+                LanguageSetup.Options["MainFile"] = "-";
+            }
         }
 
         /// <summary>

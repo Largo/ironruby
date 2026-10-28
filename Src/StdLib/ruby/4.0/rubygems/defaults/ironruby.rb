@@ -227,11 +227,12 @@ module Gem
   end
 
   ##
-  # RbConfig.ruby names the `ir` apphost, which starts without the -X:StdLib
+  # RbConfig.ruby names the `ironruby` apphost, which starts without the -X:StdLib
   # argument that gives it Ruby 4's standard library.  RubyGems and
   # Bundler shell out to Gem.ruby to run binstubs and extconf.rb, so point it
-  # at the ir.sh (ir.cmd on Windows) wrapper next to the source tree when there
-  # is one.
+  # at the ironruby (ironruby.cmd on Windows) launcher next to the source tree
+  # when there is one - or at ir.sh (ir.cmd), its short name, in a tree from
+  # before the launcher was called ironruby.
 
   def self.ruby
     @ruby ||= begin
@@ -239,9 +240,8 @@ module Gem
       begin
         # <root>/Src/StdLib/ruby/4.0/rubygems/defaults/ironruby.rb -> <root>
         root = File.expand_path("../../../../../..", __dir__)
-        name = Gem.win_platform? ? "ir.cmd" : "ir.sh"
-        candidate = File.join(root, name)
-        wrapper = candidate if File.file?(candidate)
+        names = Gem.win_platform? ? %w[ironruby.cmd ir.cmd] : %w[ironruby ir.sh]
+        wrapper = names.map { |name| File.join(root, name) }.find { |candidate| File.file?(candidate) }
       rescue StandardError
         wrapper = nil
       end
@@ -254,10 +254,11 @@ module Gem
 
   ##
   # A binstub RubyGems writes gets `#!/usr/bin/env <ruby_install_name>` by
-  # default, and RbConfig's ruby_install_name here is "ir" - the apphost, which
-  # is not on PATH and which would start without the arguments that make it a
-  # Ruby 4 interpreter anyway.  Turn the env shebang off for every install, so
-  # the line becomes `#!<Gem.ruby>`, the ir.sh wrapper.  That also makes
+  # default, and RbConfig's ruby_install_name here is "ironruby" - which is the
+  # launcher only where its directory is on PATH, and otherwise the apphost,
+  # which would start without the arguments that make it a Ruby 4 interpreter.
+  # Turn the env shebang off for every install, so the line becomes
+  # `#!<Gem.ruby>`, the ironruby launcher.  That also makes
   # Bundler's CLI::Exec#ruby_shebang? recognise the binstub - it matches
   # "#!#{Gem.ruby}" - so `bundle exec <gem executable>` loads it in this process
   # instead of exec'ing it into whatever `ruby` is on PATH.

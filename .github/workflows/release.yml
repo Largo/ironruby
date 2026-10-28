@@ -1,12 +1,14 @@
 name: Release
 
 # Binary builds: a self-contained IronRuby for each platform, made by
-# Util/package-release.sh, and the launch video, rendered from media/launch. Pushing a
-# tag v* publishes them as a GitHub release (a pre-release while the version has a
-# suffix such as -preview1), with Docs/releases/<tag>.md as the notes when there is one;
-# running the workflow by hand, or a pull request that changes the packaging or the
-# video, only keeps them as workflow artifacts. Run by hand with video_for set to a tag,
-# it renders only the video and replaces it, and its SHA256SUMS line, on that release.
+# Util/package-release.sh. Pushing a tag v* publishes them as a GitHub release (a
+# pre-release while the version has a suffix such as -preview1), with
+# Docs/releases/<tag>.md as the notes when there is one; running the workflow by hand, or
+# a pull request that changes the packaging, only keeps them as workflow artifacts.
+# The launch video, rendered from media/launch, is only rendered when asked for by hand -
+# it takes about 7 minutes of every run otherwise: with render_video it is kept as an
+# artifact, and with video_for set to a tag it alone is rendered and replaces the video,
+# and its SHA256SUMS line, on that release (or adds them to one published without).
 on:
   push:
     tags: ['v*']
@@ -14,9 +16,13 @@ on:
     paths:
       - .github/workflows/release.yml
       - Util/package-release.sh
-      - media/launch/**
   workflow_dispatch:
     inputs:
+      render_video:
+        description: Render the launch video as well, as a workflow artifact
+        type: boolean
+        required: false
+        default: false
       video_for:
         description: Render only the launch video and replace it on this release (a tag, such as v4.0.0)
         required: false
@@ -157,6 +163,7 @@ jobs:
   # does not render does not hold the archives back.
   video:
     name: launch video
+    if: github.event_name == 'workflow_dispatch' && (inputs.render_video || inputs.video_for != '')
     runs-on: ubuntu-latest
     continue-on-error: true
     # A render takes about 7 minutes; a failed one can leave hyperframes waiting.
@@ -207,8 +214,9 @@ jobs:
 
   release:
     name: GitHub release
-    if: github.ref_type == 'tag'
-    needs: [package, video]
+    # A pushed tag only: a run by hand keeps its archives as artifacts, even on a tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: package
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -217,7 +225,7 @@ jobs:
         with:
           sparse-checkout: Docs/releases
 
-      # ironruby-* only: the archives and the video, not the review stills.
+      # ironruby-* only: the archives, not the review stills (the video is not rendered here).
       - uses: actions/download-artifact@v8
         with:
           path: dist

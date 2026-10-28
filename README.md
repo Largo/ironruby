@@ -90,15 +90,23 @@ IronRuby. `io/console` is a C extension in CRuby, so IronRuby implements it over
 Scripts run the same way, and gems install with real TLS:
 
 ```console
-$ ./ir.sh script.rb          # prism front end, vendored stdlib, JIT and OSR on
-$ ./igem.sh install rack     # or: ./ir.sh -S gem install rack
-$ ./ir.sh -S bundle install
+$ ./ironruby script.rb       # prism front end, vendored stdlib, JIT and OSR on
+$ ./igem.sh install rack     # or: ./ironruby -S gem install rack
+$ ./ironruby -S bundle install
 ```
 
-`ir` / `igem` / `iirb` / `irubyc` are the i-prefixed names IronRuby has used since 1.x, so
-they can sit on `PATH` beside CRuby's `ruby` and `gem` — the same reason JRuby ships
-`jruby`, `jgem`, `jirb` and `jrubyc`. The unprefixed `gem`, `irb`, `bundle`, `bundler` and
-`irubyc` live in `Src/StdLib/bin` and are what `ir -S <name>` finds.
+The interpreter is `ironruby` (`ironruby.cmd` on Windows), as JRuby's is `jruby`: it is
+RbConfig's `ruby_install_name`, so the binstubs Bundler and Rails write start
+`#!/usr/bin/env ironruby` - a `#!` line with "ruby" in it, which Ruby runs as Ruby. (Those
+RubyGems writes for an installed gem name the launcher by its path instead, `#!<root>/ironruby`,
+so they only work where that path still does.) `ir.sh` and `ir.cmd` are its short name, the
+one IronRuby has used since 1.x, and run the same thing.
+`igem` / `iirb` / `irubyc` keep the i-prefix so they can sit on `PATH` beside CRuby's `gem`
+and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do. The unprefixed `gem`, `irb`, `bundle`,
+`bundler` and `irubyc` live in `Src/StdLib/bin` and are what `ironruby -S <name>` finds.
+On Windows the build also has `ironrubyw.exe` next to `ir.exe`, as CRuby has `rubyw.exe` and
+JRuby `jrubyw.exe`: the same interpreter as a Windows GUI program, which gets no console
+window - for Windows Forms and WPF programs; `Samples\Notepad\notepad.cmd` starts it.
 
 ```ruby
 # all of this runs today
@@ -502,6 +510,8 @@ $ ./irb.sh
 $ ./igem.sh install rack
 ```
 
+4.0.1 has `ir.sh` and `ir.cmd`; releases after it also have `ironruby` and `ironruby.cmd`
+(see above), and `ir.sh` / `ir.cmd` keep working there.
 On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`, or double-click
 `Samples\Notepad\notepad.cmd`. The archive has the same layout as a checkout, with the
 Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it

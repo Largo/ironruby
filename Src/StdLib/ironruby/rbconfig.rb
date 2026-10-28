@@ -39,9 +39,13 @@ module RbConfig
   CONFIG["RUBY_PROGRAM_VERSION"] = RUBY_VERSION.dup
   CONFIG["RUBY_API_VERSION"] = "#{CONFIG["MAJOR"]}.#{CONFIG["MINOR"]}"
   CONFIG["EXEEXT"] = windows ? ".exe" : ""
-  # This value is used by libraries to spawn new processes to run Ruby scripts. Hence it needs to match the ir.exe name
-  CONFIG["ruby_install_name"] = "ir"
-  CONFIG["RUBY_INSTALL_NAME"] = "ir"
+  # Libraries spawn RbConfig.ruby to run Ruby scripts, so this has to be a file in bindir:
+  # the build puts an ironruby apphost beside ir (Ruby.Console.csproj). And Bundler and
+  # Rails write it into binstubs as `#!/usr/bin/env ironruby`, which the ironruby launcher
+  # answers - a #! line with "ruby" in it, as JRuby's "jruby" is. (RubyGems' own binstubs
+  # name the launcher by its path: rubygems/defaults/ironruby.rb.)
+  CONFIG["ruby_install_name"] = "ironruby"
+  CONFIG["RUBY_INSTALL_NAME"] = "ironruby"
   CONFIG["RUBY_SO_NAME"] = "IronRuby"
   CONFIG["PATH_SEPARATOR"] = File::PATH_SEPARATOR.dup
 
