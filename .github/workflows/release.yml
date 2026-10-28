@@ -214,7 +214,8 @@ jobs:
 
   release:
     name: GitHub release
-    if: github.ref_type == 'tag'
+    # A pushed tag only: a run by hand keeps its archives as artifacts, even on a tag.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: package
     runs-on: ubuntu-latest
     permissions:

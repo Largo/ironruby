@@ -25,8 +25,9 @@ rem A tree built on Windows puts ir.exe straight in %IR_TFM%; one cross-publishe
 rem Linux with -r win-x64 puts it in %IR_TFM%\win-x64. Take whichever exists.
 set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\win-x64\ir.exe"
 if not exist "%IR_BIN%" set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\ir.exe"
+rem The path is quoted below: a ")" in it, as in "Program Files (x86)", would end the block.
 if not exist "%IR_BIN%" (
-  echo ironruby.cmd: no %IR_CONFIG% build at %IR_BIN% 1>&2
+  echo ironruby.cmd: no %IR_CONFIG% build at "%IR_BIN%" 1>&2
   echo ironruby.cmd: build it with: dotnet build Src\Console\Ruby.Console.csproj -c %IR_CONFIG% -r win-x64 --self-contained false 1>&2
   exit /b 127
 )

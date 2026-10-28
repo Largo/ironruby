@@ -111,11 +111,20 @@ esac
 # A quick check that the unpacked tree starts, before it is archived - and on Windows
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
 # without breaking anything else.
+# One command per line: set -e does not stop at a failure on the left of && - nor at a
+# case whose last && list failed that way - so a chain would let a broken tree through.
 case "$RID" in
-  win-*) test -f "$STAGE/Src/Console/bin/Release/$IR_TFM/ironrubyw.exe" &&
-         (cd "$STAGE" && cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION' && cmd //c ir.cmd -e 'puts RUBY_ENGINE' &&
-          cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")") ;;
-  *)     "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION' && "$STAGE/ir.sh" -e 'puts RUBY_ENGINE' ;;
+  win-*)
+    test -f "$STAGE/Src/Console/bin/Release/$IR_TFM/ironrubyw.exe"
+    (cd "$STAGE"
+     cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION'
+     cmd //c ir.cmd -e 'puts RUBY_ENGINE'
+     cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")")
+    ;;
+  *)
+    "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION'
+    "$STAGE/ir.sh" -e 'puts RUBY_ENGINE'
+    ;;
 esac
 
 cd "$OUT"

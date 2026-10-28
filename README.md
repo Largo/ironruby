@@ -96,9 +96,11 @@ $ ./ironruby -S bundle install
 ```
 
 The interpreter is `ironruby` (`ironruby.cmd` on Windows), as JRuby's is `jruby`: it is
-RbConfig's `ruby_install_name`, so the binstubs RubyGems, Bundler and Rails write start
-`#!/usr/bin/env ironruby` - a `#!` line with "ruby" in it, which Ruby runs as Ruby. `ir.sh`
-and `ir.cmd` are its short name, the one IronRuby has used since 1.x, and run the same thing.
+RbConfig's `ruby_install_name`, so the binstubs Bundler and Rails write start
+`#!/usr/bin/env ironruby` - a `#!` line with "ruby" in it, which Ruby runs as Ruby. (Those
+RubyGems writes for an installed gem name the launcher by its path instead, `#!<root>/ironruby`,
+so they only work where that path still does.) `ir.sh` and `ir.cmd` are its short name, the
+one IronRuby has used since 1.x, and run the same thing.
 `igem` / `iirb` / `irubyc` keep the i-prefix so they can sit on `PATH` beside CRuby's `gem`
 and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do. The unprefixed `gem`, `irb`, `bundle`,
 `bundler` and `irubyc` live in `Src/StdLib/bin` and are what `ironruby -S <name>` finds.
@@ -503,12 +505,14 @@ one and run the launchers in it:
 
 ```console
 $ tar xzf ironruby-4.0.1-linux-x64.tar.gz && cd ironruby-4.0.1-linux-x64
-$ ./ironruby -e 'puts RUBY_DESCRIPTION'
+$ ./ir.sh -e 'puts RUBY_DESCRIPTION'
 $ ./irb.sh
 $ ./igem.sh install rack
 ```
 
-On Windows, unzip it and use `ironruby.cmd`, `irb.cmd` and `igem.cmd`, or double-click
+4.0.1 has `ir.sh` and `ir.cmd`; releases after it also have `ironruby` and `ironruby.cmd`
+(see above), and `ir.sh` / `ir.cmd` keep working there.
+On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`, or double-click
 `Samples\Notepad\notepad.cmd`. The archive has the same layout as a checkout, with the
 Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
 unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.

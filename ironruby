@@ -1,8 +1,9 @@
 #!/bin/sh
 # Runs the built ir with the prism front end and the bundled standard library.
 # It is called ironruby as JRuby's is called jruby: RbConfig's ruby_install_name, and so
-# the `#!/usr/bin/env ironruby` of every binstub RubyGems and Bundler write, names it, and
-# a #! line with "ruby" in it is one Ruby runs. ir.sh is the short name for it.
+# the `#!/usr/bin/env ironruby` of the binstubs Bundler and Rails write, names it, and a #!
+# line with "ruby" in it is one Ruby runs. (RubyGems writes this file's path instead, see
+# rubygems/defaults/ironruby.rb.) ir.sh is the short name for it.
 # Used as RUBY_EXE when running ruby/spec:
 #
 #   RUBY_EXE=./ironruby ./ironruby -Imspec/lib mspec/bin/mspec-run spec/language

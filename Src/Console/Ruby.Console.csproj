@@ -49,7 +49,10 @@
        apphost marked as a Windows GUI program, so Windows gives it no console window - for
        Windows Forms and WPF programs such as Samples/Notepad. It is the SDK's own
        CreateAppHost, as for a WinExe project. Only a Windows apphost has the flag. -->
+  <!-- Inputs and Outputs as the SDK's own _CreateAppHost has them: CreateAppHost rewrites its
+       file every time, and a build while Notepad runs under ironrubyw.exe could not. -->
   <Target Name="CreateIronRubyWAppHost" AfterTargets="Build"
+          Inputs="@(IntermediateAssembly);$(AppHostSourcePath)" Outputs="$(OutDir)ironrubyw.exe"
           Condition="'$(UseAppHost)' != 'false' and '$(_NativeExecutableExtension)' == '.exe' and '$(AppHostSourcePath)' != '' and Exists('$(AppHostSourcePath)')">
     <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
                    AppHostDestinationPath="$(OutDir)ironrubyw.exe"
