@@ -847,12 +847,14 @@ namespace IronRuby.Hosting {
             // had been given, and $0 is "-" (MRI, JRuby); so does `ironruby` when stdin is a pipe
             // or a file. At a terminal it starts irb instead, as `python` starts its interactive
             // interpreter there: `ironruby` alone is then `iirb`, the -S irb that ironruby.cmd and
-            // ironruby find in RUBYPATH. An explicit "-", and -n, -p and -c, which are about
+            // ironruby find in RUBYPATH. An explicit "-", and -n, -p, -c and -x, which are about
             // stdin, still read it. ironrubyw, which has no console, reads nothing and exits, as
-            // rubyw does.
+            // rubyw does. Only an irb found in RUBYPATH or PATH runs: FindMainFileFromPath hands
+            // back a name it did not find unchanged, and that would be a file called irb in the
+            // current directory.
             if (!ConsoleOptions.Exit && ConsoleOptions.Command == null && ConsoleOptions.FileName == null) {
                 string irb = StartsInteractive() ? FindMainFileFromPath("irb") : null;
-                if (irb != null && Platform.FileExists(irb)) {
+                if (irb != null && irb != "irb" && Platform.FileExists(irb)) {
                     ConsoleOptions.FileName = irb;
                     SetupOptionsForMainFile();
                 } else {
@@ -867,7 +869,8 @@ namespace IronRuby.Hosting {
         /// console on Windows, which .NET tells apart from NUL), and no option asked for stdin.
         /// </summary>
         private bool StartsInteractive() {
-            if (LanguageSetup.Options.ContainsKey("LoopOverInput") || LanguageSetup.Options.ContainsKey("CheckSyntaxOnly")) {
+            if (LanguageSetup.Options.ContainsKey("LoopOverInput") || LanguageSetup.Options.ContainsKey("CheckSyntaxOnly") ||
+                LanguageSetup.Options.ContainsKey("SkipToRubyShebang")) {
                 return false;
             }
             try {
