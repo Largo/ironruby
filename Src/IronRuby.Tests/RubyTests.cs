@@ -730,6 +730,7 @@ namespace IronRuby.Tests {
                 Zlib_Streams1,
                 Process_SpawnKill1,
                 File_DriveLetters1,
+                Fiddle_AnsiSuffix1,
                 Dir_ChdirRelative1,
                 File_ExpandTildeOrder1,
                 File_FlockReadpartialRlimit1,

@@ -946,6 +946,34 @@ true
         }
 
         /// <summary>
+        /// Fiddle::Handle finds a Win32 function by the name without its A/W suffix, as CRuby's
+        /// fiddle does (it tries "A" next): kernel32 exports FillConsoleOutputCharacterA and ...W
+        /// but no FillConsoleOutputCharacter, and reline asks for that one - irb died at startup
+        /// on Windows without it. Elsewhere there is no suffix to try; the answers are the same.
+        /// </summary>
+        public void Fiddle_AnsiSuffix1() {
+            TestOutput(@"
+require 'fiddle'
+if File::ALT_SEPARATOR == '\\'
+  k = Fiddle::Handle.new('kernel32')
+  p k['GetModuleHandle'] == k['GetModuleHandleA'], !k.sym_defined?('FillConsoleOutputCharacter').nil?
+  begin
+    k['NoSuchFunction']
+  rescue Fiddle::DLError => e
+    p e.message
+  end
+else
+  p true, true
+  p 'unknown symbol ""NoSuchFunction""'
+end
+", @"
+true
+true
+""unknown symbol \""NoSuchFunction\""""
+");
+        }
+
+        /// <summary>
         /// A relative Dir.chdir is resolved once, from the directory in force - Dir.pwd keeping
         /// 8.3 short names once made it twice, so ".." went up two levels.
         /// </summary>

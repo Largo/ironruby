@@ -227,10 +227,11 @@ namespace IronRuby.StandardLibrary.Fiddle {
             #region Symbols
 
             /// <summary>
-            /// On Windows a name that is not exported is looked up again with "A" appended, as
-            /// CRuby's fiddle does: the Win32 API exports FillConsoleOutputCharacterA and
-            /// FillConsoleOutputCharacterW, not FillConsoleOutputCharacter, and reline asks for
-            /// the bare name. (CRuby also tries 32-bit stdcall decorations, name@N; x64 has none.)
+            /// The address of an export, or zero.  On Windows a name is tried as CRuby's fiddle
+            /// tries it (fiddle_handle_find_func): as given, then with the ANSI "A" suffix - the
+            /// Win32 API exports FillConsoleOutputCharacterA and ...W but no
+            /// FillConsoleOutputCharacter, which reline asks for - then with the stdcall
+            /// decorations "@0" to "@252", plain and after the "A".
             /// </summary>
             private IntPtr Lookup(string/*!*/ name) {
                 if (!_open) {
@@ -240,22 +241,29 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     throw new DLError("RTLD_NEXT is not supported on this platform");
                 }
                 IntPtr address = Export(name);
-                if (address == IntPtr.Zero && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
-                    address = Export(name + "A");
+                if (address != IntPtr.Zero || !OperatingSystem.IsWindows()) {
+                    return address;
                 }
-                return address;
+                if ((address = Export(name + "A")) != IntPtr.Zero) {
+                    return address;
+                }
+                foreach (string stem in new[] { name, name + "A" }) {
+                    for (int i = 0; i < 256; i += 4) {
+                        if ((address = Export(stem + "@" + i.ToString(System.Globalization.CultureInfo.InvariantCulture))) != IntPtr.Zero) {
+                            return address;
+                        }
+                    }
+                }
+                return IntPtr.Zero;
             }
 
             private IntPtr Export(string/*!*/ name) {
-                IntPtr address;
                 try {
-                    if (!NativeLibrary.TryGetExport(_address, name, out address)) {
-                        return IntPtr.Zero;
-                    }
+                    IntPtr address;
+                    return NativeLibrary.TryGetExport(_address, name, out address) ? address : IntPtr.Zero;
                 } catch (Exception) {
                     return IntPtr.Zero;
                 }
-                return address;
             }
 
             [RubyMethod("sym")]
