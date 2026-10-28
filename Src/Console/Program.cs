@@ -82,10 +82,12 @@ internal sealed class Host : RubyConsoleHost {
     [STAThread]
     [RubyStackTraceHidden]
     static int Main(string[] args) {
+        // -X:UsePrism chose prism over the legacy parser. Prism is the only parser now; the switch
+        // is still accepted, and ignored, so that scripts and older launchers that pass it work.
         if (Array.IndexOf(args, "-X:UsePrism") >= 0) {
             args = Array.FindAll(args, a => a != "-X:UsePrism");
-            RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
         }
+        RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
         return new Host().Run(args);
     }
 }

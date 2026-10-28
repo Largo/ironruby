@@ -1547,10 +1547,16 @@ namespace IronRuby.Runtime {
                 missingConstantOwner = topModule;
             }
 
+            // defined?(A::B::C) never calls const_missing (MRI): a name that is not there makes the
+            // whole path undefined. Only the get does what evaluating A::B would.
             object result;
             if (missingConstantOwner == null) {
                 result = storage.Value;
                 anyMissing = ReportConstantDeprecation(context, firstOwner, name);
+            } else if (!isGet) {
+                anyMissing = true;
+                RubyContext.ClearPrivateConstantReference();
+                return null;
             } else {
                 anyMissing = true;
                 using (context.ClassHierarchyUnlocker()) {
@@ -1575,6 +1581,10 @@ namespace IronRuby.Runtime {
                     }
 
                     result = storage.Value;
+                } else if (!isGet) {
+                    anyMissing = true;
+                    RubyContext.ClearPrivateConstantReference();
+                    return null;
                 } else {
                     anyMissing = true;
                     using (context.ClassHierarchyUnlocker()) {
@@ -2823,27 +2833,40 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubySymbol/*!*/ CreateSymbolM(MutableString str1, RubyEncoding/*!*/ encoding, RubyScope/*!*/ scope) {
-            return scope.RubyContext.CreateSymbol(CreateMutableStringM(str1, encoding), false);
+            return CreateInterpolatedSymbol(scope.RubyContext, CreateMutableStringM(str1, encoding));
         }
 
         [Emitted]
         public static RubySymbol/*!*/ CreateSymbolLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyScope/*!*/ scope) {
-            return scope.RubyContext.CreateSymbol(CreateMutableStringLM(str1, str2, encoding), false);
+            return CreateInterpolatedSymbol(scope.RubyContext, CreateMutableStringLM(str1, str2, encoding));
         }
 
         [Emitted]
         public static RubySymbol/*!*/ CreateSymbolML(MutableString str1, string/*!*/ str2, RubyEncoding/*!*/ encoding, RubyScope/*!*/ scope) {
-            return scope.RubyContext.CreateSymbol(CreateMutableStringML(str1, str2, encoding), false);
+            return CreateInterpolatedSymbol(scope.RubyContext, CreateMutableStringML(str1, str2, encoding));
         }
-        
+
         [Emitted]
         public static RubySymbol/*!*/ CreateSymbolMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyScope/*!*/ scope) {
-            return scope.RubyContext.CreateSymbol(CreateMutableStringMM(str1, str2, encoding), false);
+            return CreateInterpolatedSymbol(scope.RubyContext, CreateMutableStringMM(str1, str2, encoding));
         }
 
         [Emitted]
         public static RubySymbol/*!*/ CreateSymbolN(MutableString[]/*!*/ strings, RubyScope/*!*/ scope) {
-            return scope.RubyContext.CreateSymbol(CreateMutableStringN(strings), false);
+            return CreateInterpolatedSymbol(scope.RubyContext, CreateMutableStringN(strings));
+        }
+
+        /// <summary>
+        /// :"#{...}" and %I[#{...}] are String#to_sym of what was interpolated: bytes that are not
+        /// valid in the string's encoding cannot name a symbol (MRI's rb_str_intern), where an
+        /// ASCII byte means itself.
+        /// </summary>
+        private static RubySymbol/*!*/ CreateInterpolatedSymbol(RubyContext/*!*/ context, MutableString/*!*/ str) {
+            if (str.Encoding.IsAsciiIdentity && str.ContainsInvalidCharacters()) {
+                throw new EncodingError(RubyExceptions.FormatMessage("invalid symbol in encoding {0} :{1}",
+                    str.Encoding.Name, context.Inspect(str).ToString()));
+            }
+            return context.CreateSymbol(str, false);
         }
 
         #endregion

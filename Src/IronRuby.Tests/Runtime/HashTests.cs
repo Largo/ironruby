@@ -78,7 +78,7 @@ class C
     end
 end
 
-C.new[1 => 'a', 2 => 'b'] = 'c'
+C.new[{1 => 'a', 2 => 'b'}] = 'c'    # Ruby 3.4+: without braces they are keywords, not allowed here
 ");
             }, @"abc");
         }

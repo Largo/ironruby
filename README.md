@@ -191,7 +191,8 @@ version (`4.0.0`).
 
 Ruby source is parsed by `libprism.so` through P/Invoke, decoded from prism's binary
 serialization by a **generated** C# loader, and mapped onto IronRuby's existing AST — so the
-whole AstGenerator/DLR compilation pipeline works unchanged. This is the same architecture
+whole AstGenerator/DLR compilation pipeline works unchanged. It is the only parser: the
+hand-ported 1.9 grammar and its lexer have been removed. This is the same architecture
 JRuby uses for its Java loader:
 
 ```

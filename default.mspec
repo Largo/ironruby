@@ -1,6 +1,6 @@
 # MSpec configuration for running ruby/spec against IronRuby.
 #
-#   ir -X:UsePrism -X:StdLib=<stdlib paths> -Imspec/lib mspec/bin/mspec-run spec/language
+#   ir -X:StdLib=<stdlib paths> -Imspec/lib mspec/bin/mspec-run spec/language
 #
 class MSpecScript
   ir_root = File.expand_path(File.dirname(__FILE__))
@@ -20,7 +20,6 @@ class MSpecScript
 
   set :target, File.join(bin, exe)
   set :flags, [
-    "-X:UsePrism",
     # -X:StdLib rather than -I: the library goes on $LOAD_PATH after the -I paths a spec
     # passes, as MRI's does
     "-X:StdLib=#{stdlib}",

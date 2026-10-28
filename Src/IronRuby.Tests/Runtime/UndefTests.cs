@@ -101,7 +101,7 @@ d.d1
 d.d2
 d.u
 d.w
-");
+", 1, 0);
             }, @"
 undefined method `d2' for class `C'
 M::m1
@@ -137,7 +137,7 @@ end
                 CompilerTest(@"
 def u; end
 p ((undef u))
-", 1, 0); 
+", 0, 0); 
             }, "nil");
         }
 

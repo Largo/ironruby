@@ -13,4 +13,4 @@ if "%IR_TFM%"=="" set "IR_TFM=net8.0"
 set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\win-x64\ir.exe"
 if not exist "%IR_BIN%" set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\ir.exe"
 set "S=%IR_ROOT%\Src\StdLib"
-start "" /b "%IR_BIN%" -X:UsePrism "-X:StdLib=%S%\ironruby;%S%\ruby\4.0" "%~dp0notepad.rb" %*
+start "" /b "%IR_BIN%" "-X:StdLib=%S%\ironruby;%S%\ruby\4.0" "%~dp0notepad.rb" %*

@@ -1967,6 +1967,28 @@ namespace IronRuby.Runtime {
 
         #region Paths
 
+        /// <summary>
+        /// Whether the first line of a script is a #! line that runs IronRuby's own launcher. MRI
+        /// and prism take a #! line without "ruby" in it as the start of some other program and
+        /// look further down for the Ruby one; but RubyGems and Rails write binstubs from
+        /// RbConfig's ruby_install_name, which is "ir", so `rails new` starts bin/rails with
+        /// "#!/usr/bin/env ir.exe" - a Ruby script that does not say "ruby".
+        /// </summary>
+        public static bool ShebangNamesIronRuby(string/*!*/ code) {
+            if (code == null || !code.StartsWith("#!", StringComparison.Ordinal)) {
+                return false;
+            }
+            int end = code.IndexOf('\n');
+            string shebang = (end < 0) ? code.Substring(2) : code.Substring(2, end - 2);
+            foreach (string word in shebang.Split(new[] { ' ', '\t', '\r', '/', '\\', '"', '\'' }, StringSplitOptions.RemoveEmptyEntries)) {
+                switch (word.ToLowerInvariant()) {
+                    case "ir": case "ir.exe": case "ir.cmd": case "ir.sh":
+                        return true;
+                }
+            }
+            return false;
+        }
+
         // '\' is only a path separator on Windows. On Unix it is an ordinary character in a
         // file name, and rewriting it silently loses files: mspec's own rm_r expands the path
         // first, so a fixture called "special/\a" was never found, never deleted, and every

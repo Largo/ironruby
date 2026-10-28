@@ -42,5 +42,5 @@ if "%RUBYPATH%"=="" (set "RUBYPATH=%S%\bin;%IR_BINDIR%") else (set "RUBYPATH=%S%
 
 rem -X:StdLib is split on Path.PathSeparator, which is ';' on Windows - a ':' list would
 rem be cut apart at every drive letter.
-"%IR_BIN%" -X:UsePrism "-X:StdLib=%S%\ironruby;%S%\ruby\4.0" %*
+"%IR_BIN%" "-X:StdLib=%S%\ironruby;%S%\ruby\4.0" %*
 exit /b %ERRORLEVEL%

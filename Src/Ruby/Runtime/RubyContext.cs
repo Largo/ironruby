@@ -602,8 +602,12 @@ namespace IronRuby.Runtime {
             _namespaceCache = new Dictionary<NamespaceTracker, RubyModule>();
             _referenceTypeInstanceData = new System.Runtime.CompilerServices.ConditionalWeakTable<object, RubyInstanceData>();
             _valueTypeInstanceData = new Dictionary<object, RubyInstanceData>();
-            _inputProvider = new RubyInputProvider(this, _options.Arguments, _options.LocaleEncoding);
-            _defaultExternalEncoding = _options.DefaultEncoding ?? _options.LocaleEncoding;
+            // MRI 3.0+ on Windows: the default external encoding is UTF-8 whatever the console's
+            // code page, which stays the locale encoding - and ARGV is in it too; a .NET argument
+            // is Unicode, so nothing is lost.
+            bool windows = Path.DirectorySeparatorChar == '\\';
+            _inputProvider = new RubyInputProvider(this, _options.Arguments, windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
+            _defaultExternalEncoding = _options.DefaultEncoding ?? (windows ? RubyEncoding.UTF8 : _options.LocaleEncoding);
             // -E / --encoding, resolved here rather than in the options parser because looking an
             // encoding up by its Ruby name needs a context. It overrides both -K and the locale:
             // that is the whole point of the option.
@@ -2138,6 +2142,14 @@ namespace IronRuby.Runtime {
             _privateConstantReference = owner;
         }
 
+        /// <summary>
+        /// For a lookup that reports a constant missing without calling #const_missing, which
+        /// would otherwise consume the reference: defined? does that.
+        /// </summary>
+        internal static void ClearPrivateConstantReference() {
+            _privateConstantReference = null;
+        }
+
         // thread-safe:
         // Task::Factory is a static property, not a constant: say how to get it (Task.Factory). Only CLR const and
         // static readonly fields are constants (RubyModule.TryGetClrConstantField) - a constant is cached where it is
@@ -3536,18 +3548,24 @@ namespace IronRuby.Runtime {
                 // "file:line:in `method'", read from the right: a file name can hold colons of
                 // its own - an eval inside an eval is called "(eval at file:line)" - so the line
                 // number is the last thing before ":in", not the first thing after the path.
-                string first = backtrace[0].ToString();
-                int inIndex = first.LastIndexOf(":in ", StringComparison.Ordinal);
-                string head = (inIndex >= 0) ? first.Substring(0, inIndex) : first;
+                // A frame without a file (":0:in ..." - a library method, or a CLR frame when
+                // backtraces show them) is not where the code was written: the first one that
+                // names a file is.
+                foreach (var entry in backtrace) {
+                    string frame = entry.ToString();
+                    int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
+                    string head = (inIndex >= 0) ? frame.Substring(0, inIndex) : frame;
 
-                int colon = head.LastIndexOf(':');
-                if (colon < 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
-                    line = 0;
-                    return false;
+                    int colon = head.LastIndexOf(':');
+                    if (colon <= 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
+                        continue;
+                    }
+
+                    path = head.Substring(0, colon);
+                    return true;
                 }
-
-                path = head.Substring(0, colon);
-                return true;
+                line = 0;
+                return false;
             } catch (Exception) {
                 path = null;
                 line = 0;
@@ -3567,6 +3585,13 @@ namespace IronRuby.Runtime {
             // Encoding::UTF_16BE is that every path operation raises
             // Encoding::CompatibilityError, which this layer has no way to report), and neither
             // can ASCII-8BIT, which rejects every character above U+00FF.
+            //
+            // On Windows file names are Unicode and MRI's filesystem encoding is UTF-8 whatever
+            // the console's code page: under code page 850 a path holding a character CP850 has
+            // no byte for was an Errno::EINVAL here.
+            if (Path.DirectorySeparatorChar == '\\') {
+                return RubyEncoding.UTF8;
+            }
             var external = _defaultExternalEncoding;
             if (external == null || !external.IsAsciiIdentity || external == RubyEncoding.Binary) {
                 return RubyEncoding.UTF8;
@@ -3711,47 +3736,31 @@ namespace IronRuby.Runtime {
 #endif
 
         /// <summary>
-        /// The front end a host chose, or null for the default. The default is the prism bridge
-        /// whenever IronRuby.Prism can be loaded - it is what ir, irubyc's hosts and the test suite's
-        /// prism mode use, and the only front end that parses Ruby 3 and 4 (ruby4.rb included) - and the
-        /// legacy 1.9-era parser only when it cannot. Before, null meant the legacy parser, so a host
-        /// that embedded IronRuby with Ruby.CreateEngine() and set nothing got a 1.9 parser without
-        /// any sign of it. Set this to <see cref="LegacyParser"/> to ask for the old parser explicitly.
+        /// The front end a host chose, or null for prism (IronRuby.Prism's bridge), which is the
+        /// only parser IronRuby has: the 1.9-era LALR parser that used to be the fallback is gone.
         /// </summary>
         public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> AlternativeParser;
 
-        /// <summary>The built-in 1.9-era parser, for hosts (and the legacy test mode) that want it.</summary>
-        public static readonly Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> LegacyParser =
-            (sourceUnit, options, errorSink) => new Parser().Parse(sourceUnit, options, errorSink);
-
         private static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> _defaultParser;
 
-        /// <summary>The front end in effect: the one a host set, or else the default.</summary>
+        /// <summary>The front end in effect: the one a host set, or else prism.</summary>
         public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> EffectiveParser {
             get { return AlternativeParser ?? (_defaultParser ?? (_defaultParser = ResolveDefaultParser())); }
         }
 
-        /// <summary>True when source is parsed by the legacy parser (which cannot wrap -n/-p itself).</summary>
-        public static bool UsesLegacyParser {
-            get { return EffectiveParser == LegacyParser; }
-        }
-
         // IronRuby.Prism references IronRuby, so IronRuby cannot reference it back: find it by name.
-        // A missing IronRuby.Prism means the legacy parser; a present one whose native libprism is
-        // missing fails at the first parse with DllNotFoundException - a deployment error that is
-        // better reported than papered over with a parser that cannot read the prelude.
+        // Without it there is nothing to parse with, which is a deployment error and is reported as
+        // one; a present IronRuby.Prism whose native libprism is missing fails at the first parse
+        // with DllNotFoundException.
         private static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> ResolveDefaultParser() {
-            try {
-                Type bridge = Type.GetType("IronRuby.Prism.PrismAstBridge, IronRuby.Prism", false);
-                MethodInfo parse = (bridge != null) ? bridge.GetMethod("Parse", BindingFlags.Public | BindingFlags.Static, null,
-                    new[] { typeof(SourceUnit), typeof(RubyCompilerOptions), typeof(ErrorSink) }, null) : null;
-                if (parse != null) {
-                    return (Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>)parse.CreateDelegate(typeof(Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>));
-                }
-            } catch (Exception) {
-                // not deployed, or not loadable here: fall back below
+            Type bridge = Type.GetType("IronRuby.Prism.PrismAstBridge, IronRuby.Prism", false);
+            MethodInfo parse = (bridge != null) ? bridge.GetMethod("Parse", BindingFlags.Public | BindingFlags.Static, null,
+                new[] { typeof(SourceUnit), typeof(RubyCompilerOptions), typeof(ErrorSink) }, null) : null;
+            if (parse == null) {
+                throw new InvalidOperationException(
+                    "IronRuby.Prism.dll could not be loaded: it is IronRuby's parser and has to be deployed next to IronRuby.dll.");
             }
-            return LegacyParser;
+            return (Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>)parse.CreateDelegate(typeof(Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>));
         }
 
 
@@ -4374,12 +4383,10 @@ namespace IronRuby.Runtime {
         public override TService GetService<TService>(params object[] args) {
             if (typeof(TService) == typeof(RubyService)) {
                 return (TService)(object)(_rubyService ?? (_rubyService = new RubyService(this, (Microsoft.Scripting.Hosting.ScriptEngine)args[0])));
-            } 
-            
-            if (typeof(TService) == typeof(TokenizerService)) {
-                return (TService)(object)new Tokenizer();
             }
 
+            // There is no TokenizerService (the DLR's colouring tokenizer) any more: it was the
+            // 1.9-era lexer of the legacy parser.
             return base.GetService<TService>(args);
         }
 

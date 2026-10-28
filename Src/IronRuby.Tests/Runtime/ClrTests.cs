@@ -354,7 +354,7 @@ puts c.prop1
 puts c.prop2
 (b.prop2 = 10) rescue p $!
 puts b.prop2
-");
+", 1, 0);
             }, @"
 1
 2
@@ -391,7 +391,7 @@ Foo(I): 3
 Bar(O): 7
 Baz(I): 1
 10
-");
+", 1);
         }
 
         public delegate void TestDelegate(string a);
@@ -471,7 +471,7 @@ x.CompareTo(y)
 ", @"
 method called: +
 method called: compare_to
-");
+", 1);
         }
 
         public class ClassWithGeneratedMembers1 : I1 {

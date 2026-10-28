@@ -582,9 +582,12 @@ namespace IronRuby.Builtins {
             if (isWindows) {
                 string first = parts[0];
                 if (strPath.Length >= 2 && IsDirectorySeparator(strPath[0]) && IsDirectorySeparator(strPath[1])) {
-                    // UNC: skip 2 parts 
+                    // UNC: skip 2 parts. The root's base name is its trailing separator as written
+                    // ("\\foo\bar\" gives "\"), or "/" when there is none (MRI).
                     if (parts.Length <= 2) {
-                        return MutableString.CreateMutable(path.Encoding).Append(DirectorySeparatorChar).TaintBy(path);
+                        char lastChar = strPath[strPath.Length - 1];
+                        return MutableString.CreateMutable(path.Encoding)
+                            .Append(IsDirectorySeparator(lastChar) ? lastChar : DirectorySeparatorChar).TaintBy(path);
                     }
                 } else if (first.Length == 2 && Tokenizer.IsLetter(first[0]) && first[1] == ':') {
                     // skip drive letter "X:"
@@ -599,6 +602,10 @@ namespace IronRuby.Builtins {
             }
 
             string last = parts[parts.Length - 1];
+            // "C:x" is x relative to drive C's current directory: its base name is "x" (MRI).
+            if (isWindows && parts.Length == 1 && IsDriveRelative(strPath)) {
+                last = last.Substring(2);
+            }
             if (MutableString.IsNullOrEmpty(suffix)) {
                 return MutableString.CreateMutable(last, path.Encoding);
             }
@@ -713,9 +720,36 @@ namespace IronRuby.Builtins {
             return (rooted ? "/" : "") + rest.Substring(0, slash);
         }
 
+        /// <summary>
+        /// "C:" or "C:name" with no separator after the colon: a name relative to the current
+        /// directory of drive C.
+        /// </summary>
+        private static bool IsDriveRelative(string/*!*/ path) {
+            return path.Length >= 2 && Tokenizer.IsLetter(path[0]) && path[1] == ':' &&
+                path.IndexOfAny(SeparatorChars, 2) < 0;
+        }
+
         private static MutableString/*!*/ WindowsDirName(MutableString/*!*/ path) {
             string strPath = path.ConvertToString();
             string directoryName = strPath;
+
+            // MRI: the directory of "C:" and of "C:x" is "C:.", the current directory of drive C.
+            // pathname tells a DOS-ish platform by File.dirname("A:") == "A:.", and without it
+            // Pathname#absolute? was false for every "C:/..." path.
+            if (IsDriveRelative(strPath)) {
+                return MutableString.CreateMutable(strPath.Substring(0, 2) + ".", path.Encoding);
+            }
+
+            // More than two leading separators are a UNC prefix all the same: "\\\foo\bar" is
+            // \\foo\bar, the root of share bar on server foo (MRI).
+            int leading = 0;
+            while (leading < strPath.Length && IsDirectorySeparator(strPath[leading])) {
+                leading++;
+            }
+            if (leading > 2 && leading < strPath.Length) {
+                strPath = strPath.Substring(leading - 2);
+                directoryName = strPath;
+            }
 
             if (IsValidPath(strPath)) {
                 strPath = StripPathCharacters(strPath);
@@ -867,7 +901,8 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// "~" on Windows, where there is no user database to ask. MRI looks at $HOME, then at
-        /// $HOMEDRIVE + $HOMEPATH, then at $USERPROFILE, and refuses "~name" outright. Leaving
+        /// $USERPROFILE, then at $HOMEDRIVE + $HOMEPATH, as Dir.home does, and refuses "~name"
+        /// outright. Leaving
         /// the tilde alone - which is what this used to do - made Dir.home, Gem's user directory
         /// and every "~/.somethingrc" resolve inside the working directory.
         /// </summary>
@@ -882,14 +917,14 @@ namespace IronRuby.Builtins {
 
             string home = RubyEnvironment.GetVariable(context.Platform, "HOME");
             if (home == null) {
+                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
+            }
+            if (home == null) {
                 string drive = RubyEnvironment.GetVariable(context.Platform, "HOMEDRIVE");
                 string tail = RubyEnvironment.GetVariable(context.Platform, "HOMEPATH");
                 if (tail != null) {
                     home = (drive ?? "") + tail;
                 }
-            }
-            if (home == null) {
-                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
             }
             if (home == null) {
                 throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
@@ -1106,6 +1141,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("flock", BuildConfig = "FEATURE_FILESYSTEM")]
         public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
+            if (Path.DirectorySeparatorChar == '\\') {
+                return WindowsFileLock(self, operation);
+            }
             if (!Posix.IsFlockAvailable) {
                 throw new IronRuby.Builtins.NotImplementedError("flock() function is unimplemented on this machine");
             }
@@ -1131,6 +1169,69 @@ namespace IronRuby.Builtins {
                 }
                 if (nonBlocking) {
                     // LOCK_NB on a locked file reports "would block" rather than raising
+                    return false;
+                }
+                System.Threading.Thread.Sleep(10);
+            }
+        }
+
+        private const int LOCKFILE_FAIL_IMMEDIATELY = 1;
+        private const int LOCKFILE_EXCLUSIVE_LOCK = 2;
+        private const int ERROR_LOCK_VIOLATION = 33;
+        private const int ERROR_NOT_LOCKED = 158;
+        private const int ERROR_IO_PENDING = 997;
+
+        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+        private static extern bool LockFileEx(Microsoft.Win32.SafeHandles.SafeFileHandle handle, int flags, int reserved,
+            uint lengthLow, uint lengthHigh, ref System.Threading.NativeOverlapped overlapped);
+
+        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+        private static extern bool UnlockFileEx(Microsoft.Win32.SafeHandles.SafeFileHandle handle, int reserved,
+            uint lengthLow, uint lengthHigh, ref System.Threading.NativeOverlapped overlapped);
+
+        /// <summary>
+        /// flock on Windows, as CRuby's win32.c does it: LockFileEx/UnlockFileEx over the
+        /// whole file, shared or exclusive. A blocking lock polls with FAIL_IMMEDIATELY for
+        /// the reason the Posix path above does. RubyGems takes one for every binstub it
+        /// writes, so without it `gem install` of any gem with an executable failed.
+        /// </summary>
+        private static object WindowsFileLock(RubyFile/*!*/ self, int operation) {
+            var fs = self.GetStream().BaseStream as FileStream;
+            if (fs == null) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            // Windows locks are mandatory: what is buffered has to reach the file first.
+            fs.Flush();
+
+            var overlapped = new System.Threading.NativeOverlapped();
+            if ((operation & Posix.LOCK_UN) != 0) {
+                if (!UnlockFileEx(fs.SafeFileHandle, 0, UInt32.MaxValue, UInt32.MaxValue, ref overlapped)) {
+                    int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                    // Unlocking a file that is not locked is not an error for flock(2).
+                    if (error != ERROR_NOT_LOCKED) {
+                        throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                    }
+                }
+                return 0;
+            }
+
+            int flags = LOCKFILE_FAIL_IMMEDIATELY;
+            if ((operation & Posix.LOCK_EX) != 0) {
+                flags |= LOCKFILE_EXCLUSIVE_LOCK;
+            } else if ((operation & Posix.LOCK_SH) == 0) {
+                throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+            }
+
+            while (true) {
+                overlapped = new System.Threading.NativeOverlapped();
+                if (LockFileEx(fs.SafeFileHandle, flags, 0, UInt32.MaxValue, UInt32.MaxValue, ref overlapped)) {
+                    return 0;
+                }
+                int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                if (error != ERROR_LOCK_VIOLATION && error != ERROR_IO_PENDING) {
+                    throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                }
+                if ((operation & Posix.LOCK_NB) != 0) {
                     return false;
                 }
                 System.Threading.Thread.Sleep(10);
@@ -1299,7 +1400,17 @@ namespace IronRuby.Builtins {
                 : self.Context.DecodePath(Protocols.CastToPath(toPath, basedir));
 
             if (!Posix.IsAvailable) {
-                return ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
+                MutableString expanded = ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
+
+                // No realpath(3) here, so links are not resolved; but what has to exist does, as in
+                // MRI: the whole path for realpath, all but the last component for realdirpath.
+                // pry asks Pathname#realpath whether a ./.pryrc is there and expects ENOENT if not.
+                string full = self.Context.DecodePath(expanded).TrimEnd('/', '\\');
+                string mustExist = strict ? full : System.IO.Path.GetDirectoryName(full);
+                if (!String.IsNullOrEmpty(mustExist) && !System.IO.File.Exists(mustExist) && !System.IO.Directory.Exists(mustExist)) {
+                    throw RubyExceptions.CreateENOENT("{0}", strPath);
+                }
+                return expanded;
             }
 
             string resolved = ResolvePath(self.Context, strPath, strBase, strict);

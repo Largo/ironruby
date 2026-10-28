@@ -227,8 +227,8 @@ module Gem
   end
 
   ##
-  # RbConfig.ruby names the `ir` apphost, which starts without the -X:UsePrism
-  # and -X:StdLib arguments that make it a Ruby 4 interpreter.  RubyGems and
+  # RbConfig.ruby names the `ir` apphost, which starts without the -X:StdLib
+  # argument that gives it Ruby 4's standard library.  RubyGems and
   # Bundler shell out to Gem.ruby to run binstubs and extconf.rb, so point it
   # at the ir.sh (ir.cmd on Windows) wrapper next to the source tree when there
   # is one.
@@ -554,13 +554,55 @@ module Gem
     end
   end
 
+  ##
+  # Gems that are C extensions upstream and that IronRuby has exactly one of,
+  # built in, at a newer major version than some popular gems were released
+  # for.  Such a gem cannot get the version it asks for here - there is no
+  # compiler for the C one - and the one here does what it uses, so a
+  # requirement on an older major version is read with its upper bound lifted -
+  # "~> 1.7" as ">= 1.7" - for these names only, from the given major version
+  # on, and only where the built-in version then satisfies it.  Only the bound
+  # "~>" implies is lifted: "< 4" written out is a gem saying 4 does not work.
+  #
+  # prism: IronRuby parses with it, at 2.x since it follows prism 2.0's
+  # serialization; its FFI backend would need a libprism 1.x beside that.
+  # rubocop-ast (~> 1.7), so rubocop and standard, and minitest 6 (~> 1.5),
+  # which every Rails app's tests pull in, ask for 1.x and use the Ruby API,
+  # which 2.0 kept for what they call: their exercises in Util/gems give the
+  # same output as on CRuby with prism 1.9.  0.x is an API from before 1.0.
+  #
+  # bigdecimal: the C# one in Src/Libraries presents as 4.0.1 and passes
+  # ruby/spec's library/bigdecimal.  ttfunk, so prawn, asks for ~> 3.1 and
+  # only tells a BigDecimal operand from the others by its class.  2.0 removed
+  # BigDecimal.new, so a requirement for 1.x is left alone.
+  IRONRUBY_LIFTED_REQUIREMENTS = { "prism" => 1, "bigdecimal" => 2 }.freeze # :nodoc:
+
+  module IronRubyBuiltInRequirement # :nodoc:
+    def requirement
+      requirement = super
+      from_major = IRONRUBY_LIFTED_REQUIREMENTS[name]
+      return requirement unless from_major
+      built_in = Gem.ironruby_pinned_gems[name]
+      return requirement if built_in.nil? || requirement.satisfied_by?(built_in)
+      return requirement if requirement.requirements.any? { |_, version| version.segments.first < from_major }
+
+      lifted = requirement.requirements.map do |op, version|
+        op == "~>" ? ">= #{version}" : "#{op} #{version}"
+      end
+      lifted = Gem::Requirement.new(lifted)
+      lifted.satisfied_by?(built_in) ? lifted : requirement
+    end
+  end
+
   def self.const_added(name) # :nodoc:
     super
     # Registering an autoload fires this too; only a real class is prepended to.
     Installer.prepend(IronRubyNoExtensionBuild) if name == :Installer && !autoload?(:Installer)
+    Dependency.prepend(IronRubyBuiltInRequirement) if name == :Dependency && !autoload?(:Dependency)
   end
 
   Installer.prepend(IronRubyNoExtensionBuild) if const_defined?(:Installer, false) && !autoload?(:Installer)
+  Dependency.prepend(IronRubyBuiltInRequirement) if const_defined?(:Dependency, false) && !autoload?(:Dependency)
 
   class BasicSpecification; end
 

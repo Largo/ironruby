@@ -121,7 +121,6 @@ ArgumentError
         /// A base class with a parameterless constructor is constructed with it when allocated, as before; super with
         /// arguments then runs the matching constructor, super without arguments does nothing more.
         /// </summary>
-        [Options(Prism = true)]
         public void ClrSuperConstructor2() {
             Context.ObjectClass.SetConstant("Widget", Context.GetClass(typeof(SubclassingWidget)));
             Context.ObjectClass.SetConstant("Shape", Context.GetClass(typeof(SubclassingShape)));

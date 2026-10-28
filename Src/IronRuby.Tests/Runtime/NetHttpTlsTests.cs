@@ -54,7 +54,6 @@ end
         /// SSLSocket is a blocking SslStream; before Docs/net-http-over-tls.md stage 1 none of
         /// those timeouts fired and only the system trust store counted. net/http needs prism.
         /// </summary>
-        [Options(Prism = true)]
         public void NetHttp_Tls1() {
             using (var server = new TlsTestServer()) {
                 TestOutput(NetHttpPrelude(server, true) + @"
@@ -197,7 +196,6 @@ true
         /// is a rejection with a warning. The error codes are OpenSSL's: 18 for a lone untrusted
         /// self-signed certificate, 10 expired, 9 not yet valid, 26 the wrong purpose.
         /// </summary>
-        [Options(Prism = true)]
         public void NetHttp_TlsVerifyCallback1() {
             using (var server = new TlsTestServer()) {
                 TestOutput(NetHttpPrelude(server, true) + @"
@@ -264,7 +262,6 @@ true
         /// and IO.select on #to_io and NIO::Selector see it finish. Bytes SslStream has already
         /// decrypted make the socket readable although the TCP socket under it is empty.
         /// </summary>
-        [Options(Prism = true)]
         public void Ssl_NonBlocking1() {
             using (var server = new TlsTestServer()) {
                 TestOutput(@"
@@ -382,7 +379,6 @@ true
         /// its own Gem::Net errors. Nothing of it is patched: SSLSocket's non-blocking calls are
         /// what upstream's timeouts wait on.
         /// </summary>
-        [Options(Prism = true)]
         public void NetHttp_GemNetTls1() {
             using (var server = new TlsTestServer()) {
                 TestOutput(@"
@@ -429,7 +425,6 @@ nil
         /// A plain HTTP request does not load openssl: IronRuby's net/protocol checks for its own
         /// SSLSocket without naming OpenSSL, which would run net/http's autoload.
         /// </summary>
-        [Options(Prism = true)]
         public void NetHttp_PlainNoOpenSsl1() {
             using (var server = new TlsTestServer()) {
                 TestOutput(NetHttpPrelude(server, false) + @"

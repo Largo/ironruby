@@ -678,7 +678,14 @@ namespace IronRuby.Builtins {
             // top-level `def` is, and taking them left reline's Reline::Core readers private
             // where MRI's are public.  MRI reads the visibility only off a class or module
             // body; anywhere else attr_reader defines public methods.
-            var visibility = attributesScope.IsEmpty ? RubyMethodVisibility.Public : attributesScope.Visibility;
+            //
+            // The same holds for a frame whose self is some other object: MRI's rb_attr takes the
+            // scope's visibility only when the caller's self is the module itself
+            // (rb_vm_cref_in_context). importmap-rails does
+            // `Rails::Application.send(:attr_accessor, :importmap)` at the top level of a file,
+            // where the default is private, and Rails then calls `app.importmap = ...`.
+            var visibility = (attributesScope.IsEmpty || !ReferenceEquals(attributesScope.SelfObject, self))
+                ? RubyMethodVisibility.Public : attributesScope.Visibility;
 
             if (definedNames != null) {
                 var context = scope.RubyContext;

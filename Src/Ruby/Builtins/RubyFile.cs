@@ -44,6 +44,7 @@ namespace IronRuby.Builtins {
         }
 
         private const int ENXIO = 6;
+        private const int HResultInvalidName = unchecked((int)0x8007007B);   // HRESULT of ERROR_INVALID_NAME
 
         public static Stream/*!*/ OpenFileStream(RubyContext/*!*/ context, string/*!*/ path, IOMode mode) {
             ContractUtils.RequiresNotNull(path, "path");
@@ -112,6 +113,12 @@ namespace IronRuby.Builtins {
                     // a bare IOException would have surfaced as IOError.
                     if (e.HResult == ENXIO && System.IO.Path.DirectorySeparatorChar == '/') {
                         throw RubyExceptions.CreateENXIO(path);
+                    }
+                    // Windows: a name with a character no file name may hold (<, |, ? ...) is
+                    // ERROR_INVALID_NAME, which MRI raises as Errno::EINVAL. method_source opens the
+                    // path of a method defined in "<internal:kernel>" and expects a SystemCallError.
+                    if (e.HResult == HResultInvalidName) {
+                        throw RubyExceptions.CreateEINVAL(e, "{0}", path);
                     }
                     throw;
                 } catch (UnauthorizedAccessException) {
