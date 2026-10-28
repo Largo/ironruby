@@ -112,7 +112,8 @@ esac
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
 # without breaking anything else.
 case "$RID" in
-  win-*) (cd "$STAGE" && cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION' && cmd //c ir.cmd -e 'puts RUBY_ENGINE' &&
+  win-*) test -f "$STAGE/Src/Console/bin/Release/$IR_TFM/ironrubyw.exe" &&
+         (cd "$STAGE" && cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION' && cmd //c ir.cmd -e 'puts RUBY_ENGINE' &&
           cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")") ;;
   *)     "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION' && "$STAGE/ir.sh" -e 'puts RUBY_ENGINE' ;;
 esac

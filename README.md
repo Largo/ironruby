@@ -102,6 +102,9 @@ and `ir.cmd` are its short name, the one IronRuby has used since 1.x, and run th
 `igem` / `iirb` / `irubyc` keep the i-prefix so they can sit on `PATH` beside CRuby's `gem`
 and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do. The unprefixed `gem`, `irb`, `bundle`,
 `bundler` and `irubyc` live in `Src/StdLib/bin` and are what `ironruby -S <name>` finds.
+On Windows the build also has `ironrubyw.exe` next to `ir.exe`, as CRuby has `rubyw.exe` and
+JRuby `jrubyw.exe`: the same interpreter as a Windows GUI program, which gets no console
+window - for Windows Forms and WPF programs; `Samples\Notepad\notepad.cmd` starts it.
 
 ```ruby
 # all of this runs today

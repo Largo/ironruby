@@ -30,12 +30,6 @@ namespace IronRuby.Hosting {
     public sealed class RubyConsoleOptions : ConsoleOptions {
         public string ChangeDirectory;
         public bool DisplayVersion;
-
-        /// <summary>
-        /// Neither -e nor a script was given, so the program is read from stdin, as if "-" had
-        /// been (FileName is "-"). A host without a console - irw - shows its help instead.
-        /// </summary>
-        public bool ProgramFromStdinByDefault;
     }
 
     public sealed class RubyOptionsParser : OptionsParser<RubyConsoleOptions> {
@@ -851,10 +845,10 @@ namespace IronRuby.Hosting {
 
             // `ruby` with neither -e nor a script reads the program from stdin until EOF - at a
             // terminal too - as if "-" had been given, and $0 is "-" (MRI, JRuby). IronRuby used to
-            // start the DLR's interactive console there; irb is `irb` / `iirb`.
+            // start the DLR's interactive console there; irb is `irb` / `iirb`. ironrubyw, which has
+            // no console, then reads nothing and exits, as rubyw does.
             if (!ConsoleOptions.Exit && ConsoleOptions.Command == null && ConsoleOptions.FileName == null) {
                 ConsoleOptions.FileName = "-";
-                ConsoleOptions.ProgramFromStdinByDefault = true;
                 LanguageSetup.Options["MainFile"] = "-";
             }
         }

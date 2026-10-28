@@ -45,6 +45,22 @@
           DestinationFiles="$(PublishDir)ironruby$(_NativeExecutableExtension)"
           Condition="Exists('$(PublishDir)$(AssemblyName)$(_NativeExecutableExtension)')" SkipUnchangedFiles="true" />
   </Target>
+  <!-- ironrubyw.exe, as CRuby has rubyw.exe and JRuby jrubyw.exe: the same ir.dll behind an
+       apphost marked as a Windows GUI program, so Windows gives it no console window - for
+       Windows Forms and WPF programs such as Samples/Notepad. It is the SDK's own
+       CreateAppHost, as for a WinExe project. Only a Windows apphost has the flag. -->
+  <Target Name="CreateIronRubyWAppHost" AfterTargets="Build"
+          Condition="'$(UseAppHost)' != 'false' and '$(_NativeExecutableExtension)' == '.exe' and '$(AppHostSourcePath)' != '' and Exists('$(AppHostSourcePath)')">
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(OutDir)ironrubyw.exe"
+                   AppBinaryName="$(AssemblyName)$(TargetExt)"
+                   IntermediateAssembly="@(IntermediateAssembly->'%(FullPath)')"
+                   WindowsGraphicalUserInterface="true" />
+  </Target>
+  <Target Name="PublishIronRubyWAppHost" AfterTargets="Publish"
+          Condition="'$(UseAppHost)' != 'false' and '$(_NativeExecutableExtension)' == '.exe' and Exists('$(OutDir)ironrubyw.exe')">
+    <Copy SourceFiles="$(OutDir)ironrubyw.exe" DestinationFiles="$(PublishDir)ironrubyw.exe" SkipUnchangedFiles="true" />
+  </Target>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />

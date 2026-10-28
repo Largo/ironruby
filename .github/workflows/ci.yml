@@ -202,6 +202,16 @@ jobs:
             cmd //c ironruby.cmd names.rb
             cmd //c ir.cmd -e "puts RUBY_ENGINE"
             cmd //c ironruby.cmd Util/windows-desktop-check.rb
+            # ironrubyw.exe, as rubyw.exe: the same interpreter as a Windows GUI program (PE
+            # subsystem 2), so it gets no console window. It still writes to a pipe it is given.
+            cat > subsystem.rb <<'RUBY'
+            data = File.binread(ARGV[0], 4096)
+            subsystem = data[data[0x3c, 4].unpack1("V") + 24 + 68, 2].unpack1("v")
+            abort "#{ARGV[0]}: subsystem #{subsystem}" unless subsystem == 2
+            RUBY
+            rubyw="Src/Console/bin/Debug/$TFM/ironrubyw.exe"
+            ruby subsystem.rb "$rubyw"
+            "$rubyw" -e 'require "set"; puts "ironrubyw: #{RUBY_ENGINE}"' | grep -x "ironrubyw: ironruby"
           else
             ./ironruby smoke.rb
             ./ironruby names.rb
