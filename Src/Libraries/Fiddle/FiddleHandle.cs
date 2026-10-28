@@ -226,6 +226,12 @@ namespace IronRuby.StandardLibrary.Fiddle {
 
             #region Symbols
 
+            /// <summary>
+            /// On Windows a name that is not exported is looked up again with "A" appended, as
+            /// CRuby's fiddle does: the Win32 API exports FillConsoleOutputCharacterA and
+            /// FillConsoleOutputCharacterW, not FillConsoleOutputCharacter, and reline asks for
+            /// the bare name. (CRuby also tries 32-bit stdcall decorations, name@N; x64 has none.)
+            /// </summary>
             private IntPtr Lookup(string/*!*/ name) {
                 if (!_open) {
                     throw new DLError("closed handle");
@@ -233,6 +239,14 @@ namespace IronRuby.StandardLibrary.Fiddle {
                 if (_next) {
                     throw new DLError("RTLD_NEXT is not supported on this platform");
                 }
+                IntPtr address = Export(name);
+                if (address == IntPtr.Zero && RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+                    address = Export(name + "A");
+                }
+                return address;
+            }
+
+            private IntPtr Export(string/*!*/ name) {
                 IntPtr address;
                 try {
                     if (!NativeLibrary.TryGetExport(_address, name, out address)) {
