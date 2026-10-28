@@ -171,6 +171,32 @@ module Gem
   end
 
   ##
+  # No documentation unless asked for, as on TruffleRuby: generating ri and
+  # rdoc takes longer than installing most gems, and is rarely read.  `gem
+  # install --document` (or a "gem: --document" line in ~/.gemrc) still builds
+  # it, through the hooks below.
+
+  def self.platform_defaults
+    { "gem" => "--no-document" }
+  end
+
+  # rdoc ships in IronRuby's standard library rather than as a gem, so no
+  # install wrote the plugin stub that registers its hooks on CRuby (rdoc's
+  # rubygems_plugin.rb, through <gem home>/plugins).  These register the same
+  # two, and load rdoc only when one runs.  RDoc::RubyGemsHook.generate reads
+  # the install's --document / --no-document itself.  ::RDoc, because inside
+  # Gem, RDoc is Gem::RDoc - rubygems/rdoc.rb's alias for the hook class.
+  done_installing do |installer, specs|
+    require "rdoc/rubygems_hook"
+    ::RDoc::RubyGemsHook.generate(installer, specs)
+  end
+
+  pre_uninstall do |uninstaller|
+    require "rdoc/rubygems_hook"
+    ::RDoc::RubyGemsHook.remove(uninstaller)
+  end
+
+  ##
   # RbConfig.ruby names the `ironruby` apphost, which starts without the -X:StdLib
   # argument that gives it Ruby 4's standard library.  RubyGems and
   # Bundler shell out to Gem.ruby to run binstubs and extconf.rb, so point it
