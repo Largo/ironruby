@@ -697,6 +697,7 @@ namespace IronRuby.Runtime {
             // Refinement inherits Module's ancestor-splicing hooks and must not keep them; they have to go
             // before any user code can ask Refinement.private_instance_methods.
             InitializeRefinementClass();
+            StartupTrace.Mark("RubyContext created (core classes set up)");
         }
 
         private void InitializeRefinementClass() {
@@ -3767,7 +3768,9 @@ namespace IronRuby.Runtime {
         internal MSA.Expression<T> ParseSourceCode<T>(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             Debug.Assert(sourceUnit.LanguageContext == this);
 
+            long traceStart = StartupTrace.Now();
             SourceUnitTree ast = EffectiveParser(sourceUnit, options, errorSink);
+            StartupTrace.Parsed(traceStart);
 
             if (ast == null) {
                 return null;
@@ -3780,7 +3783,9 @@ namespace IronRuby.Runtime {
                 System.Linq.Expressions.Expression.Histogram = _TransformationHistogram;
                 try {
 #endif
+            traceStart = StartupTrace.Now();
             lambda = TransformTree<T>(ast, sourceUnit, options);
+            StartupTrace.Transformed(traceStart);
 #if MEASURE_AST
                 } finally {
                     System.Linq.Expressions.Expression.Histogram = oldHistogram;

@@ -1145,6 +1145,25 @@ Words.new(""x = 1 # one\n"").parse([]).each { |t| p t }
         }
 
         /// <summary>
+        /// require 'etc.so' - a C extension by its library name, as tmpdir.rb asks for it - loads
+        /// IronRuby's etc, as JRuby loads its own for one. It used to be a LoadError, rescued in
+        /// tmpdir.rb after RubyGems had searched every gem for the file (a quarter of a second of
+        /// irb's startup), and Dir.tmpdir's system path fell back to /tmp, also on Windows.
+        /// Etc.systmpdir is spelled as MRI spells it: forward slashes.
+        /// </summary>
+        public void Require_ExtensionByLibraryName1() {
+            TestOutput(@"
+p require('etc.so'), defined?(Etc.systmpdir), require('etc')
+p Etc.systmpdir.include?('\\')
+", @"
+true
+""method""
+false
+false
+");
+        }
+
+        /// <summary>
         /// What RubyGems and Bundler need from the file system on Windows, where each of these
         /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
         /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that

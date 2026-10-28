@@ -70,8 +70,11 @@ module Etc
         alias_method method, :endgrent
       end
 
+      # MRI's rb_w32_system_tmpdir: "temp" in the user's local application data folder, with
+      # forward slashes - not TMP or TEMP, which Dir.tmpdir consults before it.
       def systmpdir
-        ENV['TMP'] || ENV['TEMP'] || 'C:/Windows/Temp'
+        local = ENV['LOCALAPPDATA']
+        local && !local.empty? ? "#{local.tr('\\', '/')}/temp" : 'C:/Windows/Temp'
       end
 
       def sysconfdir

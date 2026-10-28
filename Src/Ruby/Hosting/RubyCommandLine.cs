@@ -68,6 +68,7 @@ namespace IronRuby.Hosting {
 
         // overridden to set the default encoding to -KX
         protected override int Run() {
+            StartupTrace.Mark("command line runs (preludes and program next)");
             // Kernel#chomp, #chop, #sub and #gsub exist only under -n and -p, which is what
             // `Kernel.private_instance_methods(false)` is asked to show; so they are added here,
             // where the options are known, rather than declared with [RubyMethod].

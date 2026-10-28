@@ -134,7 +134,10 @@ namespace IronRuby.Runtime {
                 return result;
             } 
 
-            return lambda.LightCompile(compilationThreshold);
+            long traceStart = StartupTrace.Now();
+            Delegate light = lambda.LightCompile(compilationThreshold);
+            StartupTrace.Compiled(traceStart);
+            return light;
         }
 
 #if FEATURE_PDBEMIT
