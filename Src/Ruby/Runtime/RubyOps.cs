@@ -1555,6 +1555,7 @@ namespace IronRuby.Runtime {
                 anyMissing = ReportConstantDeprecation(context, firstOwner, name);
             } else if (!isGet) {
                 anyMissing = true;
+                RubyContext.ClearPrivateConstantReference();
                 return null;
             } else {
                 anyMissing = true;
@@ -1582,6 +1583,7 @@ namespace IronRuby.Runtime {
                     result = storage.Value;
                 } else if (!isGet) {
                     anyMissing = true;
+                    RubyContext.ClearPrivateConstantReference();
                     return null;
                 } else {
                     anyMissing = true;

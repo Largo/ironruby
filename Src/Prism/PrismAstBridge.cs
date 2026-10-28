@@ -430,6 +430,11 @@ namespace IronRuby.Prism {
         /// first, and then a without the inner block.
         /// </summary>
         private static void CollectPreExecution(Pm.PreExecutionNode/*!*/ node, List<Pm.PmNode>/*!*/ into) {
+            // Nested BEGINs recurse through here rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                StackGuard.RunOnFreshStack(() => CollectPreExecution(node, into));
+                return;
+            }
             if (node.Statements is Pm.StatementsNode body && Array.Exists(body.Body, n => n is Pm.PreExecutionNode)) {
                 var rest = new List<Pm.PmNode>();
                 foreach (var n in body.Body) {

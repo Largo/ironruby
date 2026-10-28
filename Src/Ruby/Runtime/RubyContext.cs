@@ -2142,6 +2142,14 @@ namespace IronRuby.Runtime {
             _privateConstantReference = owner;
         }
 
+        /// <summary>
+        /// For a lookup that reports a constant missing without calling #const_missing, which
+        /// would otherwise consume the reference: defined? does that.
+        /// </summary>
+        internal static void ClearPrivateConstantReference() {
+            _privateConstantReference = null;
+        }
+
         // thread-safe:
         // Task::Factory is a static property, not a constant: say how to get it (Task.Factory). Only CLR const and
         // static readonly fields are constants (RubyModule.TryGetClrConstantField) - a constant is cached where it is

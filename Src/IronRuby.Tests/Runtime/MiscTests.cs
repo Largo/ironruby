@@ -925,11 +925,8 @@ true
         }
 
         /// <summary>
-        /// What RubyGems and Bundler need from the file system on Windows, where each of these
-        /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
-        /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that
-        /// way), and Process's resource limits, which MRI does not define on Windows at all -
-        /// net-http-persistent calls getrlimit whenever RLIMIT_NOFILE is defined.
+        /// A drive-relative name's dirname is "C:." on Windows, as in MRI - which is how CRuby's own
+        /// pathname_builtin.rb recognises drive letters, so Pathname#absolute? depends on it.
         /// </summary>
         public void File_DriveLetters1() {
             TestOutput(@"
@@ -948,6 +945,60 @@ true
 ");
         }
 
+        /// <summary>
+        /// A relative Dir.chdir is resolved once, from the directory in force - Dir.pwd keeping
+        /// 8.3 short names once made it twice, so ".." went up two levels.
+        /// </summary>
+        public void Dir_ChdirRelative1() {
+            TestOutput(@"
+require 'tmpdir'
+require 'fileutils'
+root = File.join(Dir.tmpdir, ""ir-chdir-#{Process.pid}"")
+FileUtils.mkdir_p(File.join(root, 'a', 'a', 'a'))
+Dir.chdir(File.join(root, 'a', 'a')) do
+  Dir.chdir('..')
+  p File.basename(File.dirname(Dir.pwd)) == File.basename(root)
+  Dir.chdir('a')
+  p File.basename(File.dirname(File.dirname(Dir.pwd))) == File.basename(root)
+end
+FileUtils.rm_rf(root)
+", @"
+true
+true
+");
+        }
+
+        /// <summary>
+        /// Without HOME, "~" and Dir.home both come from USERPROFILE before HOMEDRIVE + HOMEPATH,
+        /// as in CRuby on Windows.
+        /// </summary>
+        public void File_ExpandTildeOrder1() {
+            TestOutput(@"
+require 'ruby4'
+saved = %w[HOME USERPROFILE HOMEDRIVE HOMEPATH].to_h { |k| [k, ENV[k]] }
+begin
+  ENV.delete('HOME')
+  ENV['USERPROFILE'] = 'Y:\\profile'
+  ENV['HOMEDRIVE'], ENV['HOMEPATH'] = 'X:', '\\homepath'
+  windows = File::ALT_SEPARATOR == '\\'
+  p File.expand_path('~') == (windows ? 'Y:/profile' : File.expand_path('~'))
+  p Dir.home == File.expand_path('~') || !windows
+ensure
+  saved.each { |k, v| ENV[k] = v }
+end
+", @"
+true
+true
+");
+        }
+
+        /// <summary>
+        /// What RubyGems and Bundler need from the file system on Windows, where each of these
+        /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
+        /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that
+        /// way), and Process's resource limits, which MRI does not define on Windows at all -
+        /// net-http-persistent calls getrlimit whenever RLIMIT_NOFILE is defined.
+        /// </summary>
         public void File_FlockReadpartialRlimit1() {
             TestOutput(@"
 require 'ruby4'

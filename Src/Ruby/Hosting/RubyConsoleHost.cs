@@ -99,13 +99,14 @@ namespace IronRuby.Hosting {
                     return base.CurrentDirectory;
                 }
                 set {
-                    // .NET checks the directory - its errors are what Dir.chdir turns into Errno -
-                    // but sets it through Path.GetFullPath, which expands short names too; MRI's
-                    // SetCurrentDirectory takes the path as given.
-                    base.CurrentDirectory = value;
-                    if (Path.DirectorySeparatorChar == '\\') {
-                        SetCurrentDirectoryW(value);
+                    // .NET sets it through Path.GetFullPath, which expands short names too; MRI's
+                    // SetCurrentDirectory takes the path as given. Set once - a relative path set
+                    // twice would be resolved twice - and leave a failure to .NET, whose
+                    // exceptions are what Dir.chdir turns into Errno.
+                    if (Path.DirectorySeparatorChar == '\\' && SetCurrentDirectoryW(value)) {
+                        return;
                     }
+                    base.CurrentDirectory = value;
                 }
             }
 

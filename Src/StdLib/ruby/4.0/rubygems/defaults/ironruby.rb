@@ -561,7 +561,8 @@ module Gem
   # compiler for the C one - and the one here does what it uses, so a
   # requirement on an older major version is read with its upper bound lifted -
   # "~> 1.7" as ">= 1.7" - for these names only, from the given major version
-  # on, and only where the built-in version then satisfies it.
+  # on, and only where the built-in version then satisfies it.  Only the bound
+  # "~>" implies is lifted: "< 4" written out is a gem saying 4 does not work.
   #
   # prism: IronRuby parses with it, at 2.x since it follows prism 2.0's
   # serialization; its FFI backend would need a libprism 1.x beside that.
@@ -585,12 +586,8 @@ module Gem
       return requirement if built_in.nil? || requirement.satisfied_by?(built_in)
       return requirement if requirement.requirements.any? { |_, version| version.segments.first < from_major }
 
-      lifted = requirement.requirements.filter_map do |op, version|
-        case op
-        when "~>" then ">= #{version}"
-        when "<", "<=" then nil
-        else "#{op} #{version}"
-        end
+      lifted = requirement.requirements.map do |op, version|
+        op == "~>" ? ">= #{version}" : "#{op} #{version}"
       end
       lifted = Gem::Requirement.new(lifted)
       lifted.satisfied_by?(built_in) ? lifted : requirement

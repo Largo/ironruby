@@ -901,7 +901,8 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// "~" on Windows, where there is no user database to ask. MRI looks at $HOME, then at
-        /// $HOMEDRIVE + $HOMEPATH, then at $USERPROFILE, and refuses "~name" outright. Leaving
+        /// $USERPROFILE, then at $HOMEDRIVE + $HOMEPATH, as Dir.home does, and refuses "~name"
+        /// outright. Leaving
         /// the tilde alone - which is what this used to do - made Dir.home, Gem's user directory
         /// and every "~/.somethingrc" resolve inside the working directory.
         /// </summary>
@@ -916,14 +917,14 @@ namespace IronRuby.Builtins {
 
             string home = RubyEnvironment.GetVariable(context.Platform, "HOME");
             if (home == null) {
+                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
+            }
+            if (home == null) {
                 string drive = RubyEnvironment.GetVariable(context.Platform, "HOMEDRIVE");
                 string tail = RubyEnvironment.GetVariable(context.Platform, "HOMEPATH");
                 if (tail != null) {
                     home = (drive ?? "") + tail;
                 }
-            }
-            if (home == null) {
-                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
             }
             if (home == null) {
                 throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
