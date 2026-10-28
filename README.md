@@ -281,8 +281,8 @@ every machine, with or without a CRuby next to IronRuby.
 [`Util/install-bundled-gems.rb`](Util/install-bundled-gems.rb) installs them from a CRuby
 source tarball's `gems/*.gem` and lists the ones left out and why (the C extensions IronRuby
 implements itself, and the ones that need `rbs`).  A host CRuby 4.0's gem directory is still
-offered for third-party gems, but never for a gem IronRuby ships;
-`IRONRUBY_NO_HOST_GEMS=1` turns it off entirely.
+offered for third-party gems, but never for a gem IronRuby ships, and its RubyGems plugins
+are not loaded; `IRONRUBY_NO_HOST_GEMS=1` turns it off entirely.
 
 A C extension is never built: there is no `ruby.h` to compile against, and the gem whose
 extension is missing is often in a read-only host CRuby tree.  Such a gem is left alone -

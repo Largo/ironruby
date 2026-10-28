@@ -1120,6 +1120,31 @@ true
         }
 
         /// <summary>
+        /// require 'ripper' gives Ripper::Filter, as MRI's ripper.rb does: rdoc's Ruby parser
+        /// subclasses it, and `gem install` generating documentation died on the NameError.
+        /// </summary>
+        public void Ripper_Filter1() {
+            TestOutput(@"
+require 'ruby4'
+require 'ripper'
+class Words < Ripper::Filter
+  def on_default(event, tok, data)
+    data << [lineno, column, event, tok]
+  end
+end
+Words.new(""x = 1 # one\n"").parse([]).each { |t| p t }
+", @"
+[1, 0, :on_ident, ""x""]
+[1, 1, :on_sp, "" ""]
+[1, 2, :on_op, ""=""]
+[1, 3, :on_sp, "" ""]
+[1, 4, :on_int, ""1""]
+[1, 5, :on_sp, "" ""]
+[1, 6, :on_comment, ""# one\n""]
+");
+        }
+
+        /// <summary>
         /// What RubyGems and Bundler need from the file system on Windows, where each of these
         /// used to P/Invoke libc or raise: File#flock (RubyGems locks every binstub it writes),
         /// IO#readpartial after IO#eof? has filled the buffer (Bundler checksums every .gem that

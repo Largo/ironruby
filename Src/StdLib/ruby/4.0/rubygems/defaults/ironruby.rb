@@ -90,7 +90,11 @@ module Gem
       exe = File.join(dir, "ruby#{RbConfig::CONFIG["EXEEXT"]}")
       next unless File.file?(exe)
 
-      prefix = File.dirname(File.dirname(exe))
+      # Expanded, as Gem::PathSupport expands Gem.path's entries: on Windows a PATH
+      # entry spells C:\Ruby40-x64\bin with backslashes, and a host tree spelled
+      # that way is not the C:/Ruby40-x64/... that Gem.path and a gem's base_dir
+      # name, so neither IronRubyHostGemFilter nor load_plugins recognised it.
+      prefix = File.expand_path(File.dirname(File.dirname(exe)))
       gems = File.join(prefix, "lib", "ruby", "gems", ruby_api_version)
       next unless File.directory?(gems)
       next if seen[gems]
@@ -224,6 +228,21 @@ module Gem
 
   def self.path
     paths.path | [default_dir] | host_ruby_dirs
+  end
+
+  ##
+  # RubyGems' plugins, from every directory on Gem.path but the host trees.  A
+  # host CRuby's plugins/ holds the stubs its gems' installs wrote, and they
+  # load that CRuby's code into IronRuby: its rdoc's rubygems_plugin.rb loaded
+  # rdoc 7.0.4 from the host over the rdoc vendored here ("already initialized
+  # constant RDoc::VERSION") and hooked it into every `gem install`, which then
+  # failed generating the documentation.  The host trees are for gems' files;
+  # the plugins IronRuby runs are the ones installed for IronRuby.
+
+  def self.load_plugins
+    (path - host_ruby_dirs).each do |gem_path|
+      load_plugin_files Gem::Util.glob_files_in_dir("*#{Gem.plugin_suffix_pattern}", plugindir(gem_path))
+    end
   end
 
   ##

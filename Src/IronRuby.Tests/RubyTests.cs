@@ -734,6 +734,7 @@ namespace IronRuby.Tests {
                 PackPointer_RealAddress1,
                 PackPointer_RelineWin32Api1,
                 IoConsole_WinsizeOffTerminal1,
+                Ripper_Filter1,
                 Dir_ChdirRelative1,
                 File_ExpandTildeOrder1,
                 File_FlockReadpartialRlimit1,
