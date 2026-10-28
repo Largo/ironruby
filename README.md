@@ -538,7 +538,9 @@ IronRuby, the DLR and prism (libprism too) are compiled in the job from source, 
 revisions `release.yml` pins; the NuGet packages the projects name, at the versions they
 pin - AngleSharp, AngleSharp.Xml, Microsoft.Data.Sqlite, System.Text.Encoding.CodePages
 and SQLitePCLRaw.bundle_e_sqlite3, whose native `e_sqlite3` is SQLite as that package
-builds it; and the .NET runtime.
+builds it; and the .NET runtime. The repository itself holds no programs - no `.exe`,
+`.dll`, `.so` or any other binary that runs - and CI keeps it so with
+`Util/check-no-executables.rb`, which looks at what each tracked file is, not at its name.
 
 ## Building
 

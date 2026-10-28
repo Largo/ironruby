@@ -28,6 +28,16 @@ env:
   MSPEC_REF: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
 
 jobs:
+  # The repository holds no programs - no .exe, .dll, .so or other binary that runs - so all
+  # of it can be read; Util/check-no-executables.rb says why and how it tells them apart.
+  no-executables:
+    name: no programs in the repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check every tracked file
+        run: ruby Util/check-no-executables.rb
+
   build-and-test:
     name: ${{ matrix.os }} ${{ matrix.tfm }}
     runs-on: ${{ matrix.os }}
