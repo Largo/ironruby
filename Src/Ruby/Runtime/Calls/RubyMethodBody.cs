@@ -261,7 +261,21 @@ namespace IronRuby.Runtime.Calls {
                     _interpretedDispatchers = null;
                     _compiledFrom = _compiledTo = null;
                 }
-                GetDefinitionRefinementsNoLock(declaringModule).Value = refinements;
+
+                StrongBox<RefinementActivation> record;
+                if (_definitionRefinements != null && _definitionRefinements.TryGetValue(declaringModule, out record)) {
+                    if (!ReferenceEquals(record.Value, refinements)) {
+                        // The `def' ran again where other refinements are active, and the compiled body is shared: the
+                        // calls of it still running answer the new record from now on, the way new calls do. A scope
+                        // that memoized the old answer recomputes it, as it does after a `using', so that it agrees
+                        // with the rules that read the record (RubyCallAction.Resolve).
+                        declaringModule.Context.RefinementVersion++;
+                    }
+                } else {
+                    // nothing has been compiled against a record that did not exist
+                    record = GetDefinitionRefinementsNoLock(declaringModule);
+                }
+                record.Value = refinements;
             }
         }
 
