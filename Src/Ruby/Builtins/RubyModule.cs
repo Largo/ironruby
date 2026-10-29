@@ -2271,6 +2271,12 @@ namespace IronRuby.Builtins {
 
             InitializeMethodsNoLock();
             _methods[name] = method;
+
+            // A refinement is in no one's ancestors, so PrepareMethodUpdate reaches no class: the calls it
+            // changes are those of the module it refines.
+            if (_refinedModule != null) {
+                _context.RefinedMethodChanged(_refinedModule, name);
+            }
         }
 
         internal void AddExtensionMethodsNoLock(List<ExtensionMethodInfo>/*!*/ extensions) {
@@ -2428,8 +2434,12 @@ namespace IronRuby.Builtins {
                         if (method.InvalidateGroupsOnRemoval) {
                             InvalidateGroupsInDependentClasses(name, Int32.MaxValue);
                         }
-                        
+
                         _methods.Remove(name);
+
+                        if (_refinedModule != null) {
+                            _context.RefinedMethodChanged(_refinedModule, name);
+                        }
                     } else {
                         SetMethodNoEventNoLock(Context, name, RubyMemberInfo.HiddenMethod);
                     }
@@ -2477,6 +2487,20 @@ namespace IronRuby.Builtins {
 
             using (Context.ClassHierarchyLocker()) {
                 return ResolveMethodNoLock(name, visibility);
+            }
+        }
+
+        /// <summary>
+        /// What a call of <paramref name="name"/> written where <paramref name="refinements"/> are active resolves
+        /// to, for code that binds such a call itself (the method JIT).  Not registered for invalidation the way a
+        /// call site's resolution is: the caller guards on RubyModule.GlobalMethodVersion.
+        /// </summary>
+        internal MethodResolutionResult ResolveMethod(string/*!*/ name, VisibilityContext visibility, RefinementActivation refinements) {
+            if (refinements == null || refinements.IsEmpty) {
+                return ResolveMethod(name, visibility);
+            }
+            using (Context.ClassHierarchyLocker()) {
+                return ResolveMethodNoLock(name, visibility, MethodLookup.Default, refinements);
             }
         }
 

@@ -22,9 +22,9 @@
  * whatever ArgumentError there is to raise.
  *
  * A receiverless call may call a method of any visibility, so resolving the name on the
- * receiver's class with every visibility allowed is what the call site does too. Calls
- * where refinements could be in play are never sent this way (JitRuntime.Disabled,
- * RubyContext.HasRefinements), and neither is anything once tracing is on.
+ * receiver's class with every visibility allowed is what the call site does too. A call
+ * a refinement could reach (RubyContext.IsRefinementSensitive) is never sent this way - only
+ * its call site knows where it is made - and neither is anything once tracing is on.
  *
  * ***************************************************************************/
 
@@ -84,7 +84,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private object Call(object self, object p0, object p1, object k0, object k1, object k2) {
-            if (_megamorphic || JitRuntime.Disabled || _context.HasRefinements) { return NoDirect; }
+            if (_megamorphic) { return NoDirect; }
 
             RubyClass cls = JitRuntime.ClassOf(_context, self);
             int version = RubyModule.GlobalMethodVersion;
@@ -128,6 +128,13 @@ namespace IronRuby.Runtime.Jit {
         private State/*!*/ Resolve(RubyClass/*!*/ cls, int version) {
             var state = new State { Class = cls, Version = version };
             try {
+                // Refining the name re-versions the class, so the state is resolved again when it is.
+                if (_context.HasRefinements) {
+                    using (_context.ClassHierarchyLocker()) {
+                        if (_context.IsRefinementSensitive(cls, _name)) { return state; }
+                    }
+                }
+
                 var resolved = cls.ResolveMethod(_name, VisibilityContext.AllVisible);
                 var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
                 if (info == null) { return state; }
@@ -168,7 +175,7 @@ namespace IronRuby.Runtime.Jit {
             Arguments arguments) {
 
             var options = gen.Context.RubyOptions;
-            if (!options.Jit || options.EnableTracing || options.Profile || JitRuntime.Disabled) { return null; }
+            if (!options.Jit || options.EnableTracing || options.Profile) { return null; }
             if (arguments == null) { return null; }
 
             var exprs = arguments.Expressions;

@@ -138,9 +138,6 @@ namespace IronRuby.Runtime {
             // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
             public RefinementActivation Refinements;
             public int RefinementsVersion;
-
-            // see RubyMethodScope.DefinitionRefinements
-            public StrongBox<RefinementActivation> MethodDefinitionRefinements;
         }
 
         private RareState _rare;
@@ -629,21 +626,24 @@ namespace IronRuby.Runtime {
                 // into it.  The declaring scope is shared by every method defined in it, so the
                 // definition-time state comes from the compiled body instead - see
                 // RubyMethodBody.SetDefinitionRefinements.  A body compiled with no record was
-                // defined before anything was refined at all.
+                // defined where nothing was `using'd (or before anything was refined at all).
                 var recorded = methodScope.DefinitionRefinements;
                 if (recorded == null) {
-                    outer = RefinementActivation.Empty;
-                } else {
-                    outer = recorded.Value ?? ((_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty);
+                    return RefinementActivation.Empty;
                 }
+                outer = recorded.Value ?? ((_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty);
             } else {
                 outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
             }
             RefinementActivation result = (UsedModules != null) ? RefinementActivation.Create(outer, UsedModules, UsedModuleSnapshots) : outer;
 
-            var rare = Rare;
-            rare.Refinements = result;
-            rare.RefinementsVersion = version;
+            // Only a scope that has its rare state anyway keeps the answer.  The others - the scope of
+            // nearly every method and block call - get it from their parent chain each time, which is
+            // what memoizing would cost them to begin with, without allocating per call.
+            if (cached != null) {
+                cached.Refinements = result;
+                cached.RefinementsVersion = version;
+            }
             return result;
         }
 
@@ -1160,14 +1160,17 @@ var closureScope = scope as RubyClosureScope;
             get { return _blockParameter; }
         }
 
+        // see DefinitionRefinements
+        private StrongBox<RefinementActivation> _definitionRefinements;
+
         /// <summary>
         /// The refinements active where the method was defined, stored by the compiled body right after
-        /// it creates this scope; null for a body compiled before anything was refined.  Public because
-        /// the method body assigns it directly.
+        /// it creates this scope; null for a body compiled with nothing `using'd where it was defined.
+        /// Public because the method body assigns it directly - on every call, so it is a field of its own.
         /// </summary>
         public StrongBox<RefinementActivation> DefinitionRefinements {
-            get { var r = RareOrNull; return (r != null) ? r.MethodDefinitionRefinements : null; }
-            set { Rare.MethodDefinitionRefinements = value; }
+            get { return _definitionRefinements; }
+            set { _definitionRefinements = value; }
         }
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,

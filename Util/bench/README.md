@@ -14,8 +14,10 @@ runtime unoptimized for the .NET JIT. `ir.sh` honours `IR_CONFIG=Release`.
 
 Type-specializes a hot method body: unboxed int/long/double locals and CLR arithmetic, no
 RubyMethodScope, direct self-calls for recursion. Guards on one global method-table
-version (covers redefinition, override, singleton, prepend, include, alias); refinements
-disable it; overflow out of Int64 and division by zero deopt to the generic body, so a body
+version (covers redefinition, override, singleton, prepend, include, alias, and a method
+coming or going in a refinement); the operators and self-calls a body binds are resolved
+under the refinements active where it was defined, so a refinement elsewhere costs it
+nothing; overflow out of Int64 and division by zero deopt to the generic body, so a body
 that can deopt and has a side effect is never specialized.
 
 An Integer is carried as a CLR `int` or `long` following the runtime's own rule - Int32 if

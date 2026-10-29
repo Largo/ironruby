@@ -288,11 +288,18 @@ namespace IronRuby.Runtime.Calls {
                 gen.MethodCoverage = _coverage.FindMethod(this, declaringModule);
             }
 
-            // Only programs that refine anything pay for the definition-time refinement record.
+            // Only a method defined where something is `using'd pays for the definition-time refinement
+            // record (a scope field written on every call): no call in any other body can see a
+            // refinement, so it is compiled as if nothing were refined.  Should the same `def' run
+            // again where a refinement is active, SetDefinitionRefinements drops this compilation.
             StrongBox<RefinementActivation> definitionRefinements = null;
             if (declaringScope.RubyContext.HasRefinements) {
                 lock (this) {
                     definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
+                    if (definitionRefinements.Value != null && definitionRefinements.Value.IsEmpty) {
+                        definitionRefinements = null;
+                        _compiledWithoutDefinitionRefinements = true;
+                    }
                 }
             } else {
                 _compiledWithoutDefinitionRefinements = true;
@@ -306,7 +313,7 @@ namespace IronRuby.Runtime.Calls {
             // the only place the rest of the runtime knows about it.
             var context = declaringScope.RubyContext;
             if (context.RubyOptions.Jit) {
-                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule);
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule, definitionRefinements);
             }
             return result;
         }

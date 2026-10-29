@@ -689,6 +689,13 @@ namespace IronRuby.Tests {
                 DummySingletons1, 
                 DummySingletons2, 
 
+                Refinements1,
+                Refinements2,
+                Refinements3,
+                Refinements4,
+                Refinements5,
+                Refinements6,
+
                 Super1,
                 SuperParameterless1,
                 SuperParameterless2A,

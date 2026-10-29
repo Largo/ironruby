@@ -429,7 +429,7 @@ namespace IronRuby.Runtime {
         // The implicit calls a conversion site makes carry no scope, so they cannot see refinements.
         // The two below run ahead of such a site where MRI honours the refinements of the lexical
         // position - "#{x}" and &x - and answer null (use the site) unless one is actually in play.
-        // Until something has been refined they cost a field read.
+        // Unless some refinement has the method in question they cost a field read and a hash lookup.
 
         /// <summary>
         /// "#{x}" where a refinement of x's class defines #to_s.
@@ -437,7 +437,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static MutableString TryConvertToSWithRefinements(RubyScope/*!*/ scope, object value) {
             var context = scope.RubyContext;
-            if (!context.HasRefinements || value is MutableString) {
+            if (!context.HasRefinements || value is MutableString || !context.IsRefinedMethodName("to_s")) {
                 return null;
             }
             if (!IsRefinedHere(scope, value, "to_s")) {
@@ -460,11 +460,17 @@ namespace IronRuby.Runtime {
             if (!context.HasRefinements || value == null || value is Proc) {
                 return null;
             }
+            // Only a refinement with #to_proc, or - for a Symbol - with the method the proc calls, makes a
+            // difference to what &x passes.
+            var symbol = value as RubySymbol;
+            bool toProcRefined = context.IsRefinedMethodName(Symbols.ToProc);
+            if (!toProcRefined && (symbol == null || !context.IsRefinedMethodName(symbol.ToString()))) {
+                return null;
+            }
             if (scope.GetActiveRefinements().IsEmpty) {
                 return null;
             }
-            if (!IsRefinedHere(scope, value, Symbols.ToProc)) {
-                var symbol = value as RubySymbol;
+            if (!toProcRefined || !IsRefinedHere(scope, value, Symbols.ToProc)) {
                 // Symbol#to_proc, but with the calls it makes bound to this scope:
                 return (symbol != null) ? Proc.CreateMethodInvoker(scope, symbol.ToString()) : null;
             }
