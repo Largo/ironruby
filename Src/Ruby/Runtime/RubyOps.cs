@@ -426,6 +426,15 @@ namespace IronRuby.Runtime {
             return scope.GetActiveRefinements();
         }
 
+        /// <summary>
+        /// The same for the guard of a call-site rule, which is only built once a refinement exists: in a
+        /// runtime where one ever has, GetActiveRefinements' first test is always false.
+        /// </summary>
+        [Emitted]
+        public static RefinementActivation/*!*/ GetLexicalRefinements(RubyScope/*!*/ scope) {
+            return scope.GetLexicalRefinements();
+        }
+
         // The implicit calls a conversion site makes carry no scope, so they cannot see refinements.
         // The two below run ahead of such a site where MRI honours the refinements of the lexical
         // position - "#{x}" and &x - and answer null (use the site) unless one is actually in play.
