@@ -46,6 +46,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.BCrypt.BCryptLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nio4r.Nio4rLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Rbs.RbsLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -17337,6 +17338,129 @@ namespace IronRuby.StandardLibrary.Puma {
         
         public static System.Exception/*!*/ ExceptionFactory__Puma__HttpParserError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Rbs {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class RbsLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("RBS", typeof(IronRuby.StandardLibrary.Rbs.RbsOps), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("RBS::Location", typeof(IronRuby.StandardLibrary.Rbs.RbsOps.Location), 0x00000008, classRef0, LoadRBS__Location_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Int32, System.Int32, IronRuby.StandardLibrary.Rbs.RbsOps.Location>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.Create)
+            );
+            IronRuby.Builtins.RubyClass def3 = DefineClass("RBS::Parser", typeof(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps), 0x00000008, classRef0, null, LoadRBS__Parser_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "Location", def2);
+            SetConstant(def1, "Parser", def3);
+        }
+        
+        private static void LoadRBS__Location_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "_add_optional_child", 0x11, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, IronRuby.Builtins.RubySymbol, System.Int32, System.Int32, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.AddOptionalChild)
+            );
+            
+            DefineLibraryMethod(module, "_add_optional_no_child", 0x11, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.AddOptionalNoChild)
+            );
+            
+            DefineLibraryMethod(module, "_add_required_child", 0x11, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, IronRuby.Builtins.RubySymbol, System.Int32, System.Int32, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.AddRequiredChild)
+            );
+            
+            DefineLibraryMethod(module, "_end_pos", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, System.Int32>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.GetEndPos)
+            );
+            
+            DefineLibraryMethod(module, "_optional_keys", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.GetOptionalKeys)
+            );
+            
+            DefineLibraryMethod(module, "_required_keys", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.GetRequiredKeys)
+            );
+            
+            DefineLibraryMethod(module, "_start_pos", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, System.Int32>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.GetStartPos)
+            );
+            
+            DefineLibraryMethod(module, "[]", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.StandardLibrary.Rbs.RbsOps.Location, System.Object, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.GetChild)
+            );
+            
+            DefineLibraryMethod(module, "buffer", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.GetBuffer)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, System.Object, System.Int32, System.Int32, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Rbs.RbsOps.Location, IronRuby.StandardLibrary.Rbs.RbsOps.Location, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.Location.InitializeCopy)
+            );
+            
+        }
+        
+        private static void LoadRBS__Parser_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "_ironruby_librbs_version", 0x22, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.LibrbsVersion)
+            );
+            
+            DefineLibraryMethod(module, "_lex", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.Lex)
+            );
+            
+            DefineLibraryMethod(module, "_parse_inline_leading_annotation", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Int32, System.Object, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.ParseInlineLeadingAnnotation)
+            );
+            
+            DefineLibraryMethod(module, "_parse_inline_trailing_annotation", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Int32, System.Object, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.ParseInlineTrailingAnnotation)
+            );
+            
+            DefineLibraryMethod(module, "_parse_method_type", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Int32, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.ParseMethodTypeMethod)
+            );
+            
+            DefineLibraryMethod(module, "_parse_signature", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Int32, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.ParseSignatureMethod)
+            );
+            
+            DefineLibraryMethod(module, "_parse_type", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Int32, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.ParseTypeMethod)
+            );
+            
+            DefineLibraryMethod(module, "_parse_type_params", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Int32, System.Object, System.Object>(IronRuby.StandardLibrary.Rbs.RbsOps.ParserOps.ParseTypeParamsMethod)
+            );
+            
         }
         
     }
