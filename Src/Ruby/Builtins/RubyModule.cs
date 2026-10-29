@@ -2661,18 +2661,24 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        // A class's place has the extension methods of the interfaces it implements as well, as using_clr_extensions
-        // puts those in the class's own CLR method group: a Dictionary's select is LINQ's, not the Ruby one its
-        // IDictionary picks up ahead of IEnumerable[T].
+        // Extension methods have the places using_clr_extensions gives them, the CLR method groups of classes backed by a CLR
+        // type: a class's place has its own and those of the interfaces it implements (a Dictionary's select is LINQ's,
+        // not the Ruby one its IDictionary picks up ahead of IEnumerable[T]). An interface module, a Ruby class (one that
+        // includes IEnumerable[Object] too) and a singleton class have none of their own.
+        private bool IsScopedExtensionPlace {
+            get { return IsClass && !IsSingletonClass && _typeTracker != null; }
+        }
+
         private bool HasScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            if (!IsScopedExtensionPlace) {
+                return false;
+            }
             if (HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
                 return true;
             }
-            if (IsClass) {
-                foreach (var mixin in Mixins) {
-                    if (mixin.HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
-                        return true;
-                    }
+            foreach (var mixin in Mixins) {
+                if (mixin.HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                    return true;
                 }
             }
             return false;
@@ -2715,7 +2721,7 @@ namespace IronRuby.Builtins {
                 }
 
                 int baseCount = overloads.Count;
-                ForEachAncestor((module) => {
+                Action<RubyModule> addExtensions = (module) => {
                     List<ExtensionMethodInfo> candidates;
                     if (module._scopedExtensionMethods != null && module._scopedExtensionMethods.TryGetValue(name, out candidates)) {
                         foreach (var extension in candidates) {
@@ -2723,6 +2729,14 @@ namespace IronRuby.Builtins {
                             if (extensions.Contains(extension.Method) && present.Add(extension.Method)) {
                                 overloads.Add(new ReflectionOverloadInfo(extension.Method));
                             }
+                        }
+                    }
+                };
+                ForEachAncestor((module) => {
+                    if (module.IsScopedExtensionPlace) {
+                        addExtensions(module);
+                        foreach (var mixin in module.Mixins) {
+                            addExtensions(mixin);
                         }
                     }
                     return false;

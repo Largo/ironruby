@@ -1163,9 +1163,10 @@ ruby
         /// <summary>
         /// A Ruby object gets no extension methods its Ruby ancestors don't extend: an Array's select is Array#select, its
         /// where is Enumerable's, and it has no Select, as with using_clr_extensions - where a List's where is LINQ's
-        /// ahead of the same Enumerable#where. A CLR class's place has those of its interfaces (a Dictionary's
-        /// select is LINQ's, not the one its IDictionary picks up), a singleton class sees them, and a Ruby method defined
-        /// ahead of them takes over a call bound to them, and gives it back.
+        /// ahead of the same Enumerable#where. A Ruby class including IEnumerable[Object] gets none either. A CLR class's
+        /// place has those of its interfaces (a Dictionary's select is LINQ's, not the one its IDictionary picks up), a
+        /// singleton class sees them, and a Ruby method defined ahead of them takes over a call bound to them, and gives
+        /// it back.
         /// </summary>
         public void ClrScopedExtensions5() {
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
@@ -1184,6 +1185,10 @@ end
 using System::Linq
 a = [3, 1, 2]
 p a.select { |x| x > 1 }, (a.Select { |x| x } rescue $!.class), (a.where { |x| x } rescue $!.class)
+class RubyEnumerable
+  include System::Collections::Generic::IEnumerable[Object]
+end
+p RubyEnumerable.new.respond_to?(:first_or_default)
 p d.select { |kv| kv.key }.to_a
 def list.extra = nil
 p list.respond_to?(:where), list.method(:where).call { |x| x > 1 }.to_a, list.where { |x| x > 1 }.to_a
@@ -1201,6 +1206,7 @@ p go(list).to_a
 [3, 2]
 NoMethodError
 :ruby
+false
 [1]
 true
 [3]
