@@ -315,6 +315,19 @@ namespace IronRuby.Runtime.Calls {
             // a proc-converter target of a method unwinder triggered by break from a block.
             if (args.Signature.HasBlock && calleeHasBlockParam) {
                 metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+            } else if (args.Signature.HasBlock && bindingTarget.Success && HasAnyBlockParameter(overloads)) {
+                // The overload was chosen knowing whether the block is nil - Hash#initialize(self)
+                // over Hash#initialize([NotNull]BlockParam, self) - and RuleControlFlowBuilder, which
+                // records that for a callee taking the block, does not run for one that ignores it.
+                // A super site, which always carries a block slot, shares its rules between all the
+                // super calls of a method: after a blockless `super()` in a Hash subclass's
+                // initialize, a later `super() { |h, k| ... }` got the blockless overload and the
+                // hash no default proc (ActiveSupport::InheritableOptions, and so every Rails
+                // controller's per-request config, lost its parent).
+                var metaBlock = args.GetMetaBlock();
+                metaBuilder.AddRestriction(metaBlock.Value == null
+                    ? (Expression)Ast.Equal(metaBlock.Expression, AstUtils.Constant(null))
+                    : Ast.NotEqual(metaBlock.Expression, AstUtils.Constant(null)));
             }
 
             // add restrictions used for overload resolution:
@@ -404,6 +417,15 @@ namespace IronRuby.Runtime.Calls {
                 ),
                 resultVariable
             );
+        }
+
+        private static bool HasAnyBlockParameter(IList<OverloadInfo>/*!*/ overloads) {
+            foreach (var overload in overloads) {
+                if (HasBlockParameter(overload)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static bool HasBlockParameter(OverloadInfo/*!*/ method) {
