@@ -1864,10 +1864,12 @@ namespace IronRuby.Runtime {
                         var result = c.Value as T;
                         bool isClass = typeof(T) == typeof(RubyClass);
                         if (result == null || result.IsClass != isClass) {
-                            throw RubyExceptions.CreateTypeError("`{0}' is not a {1}", name, isClass ? "class" : "module");
+                            // MRI's rb_define_class/rb_define_module: "Zlib is not a module (Class)"
+                            throw RubyExceptions.CreateTypeError("{0} is not a {1} ({2})", name, isClass ? "class" : "module",
+                                GetClassName(c.Value));
                         }
                         if (isClass && (restrictions & ModuleRestrictions.AllowReopening) == 0) {
-                            throw RubyExceptions.CreateTypeError("cannot redefine {1} `{0}'", name, isClass ? "class" : "module");
+                            throw RubyExceptions.CreateTypeError("cannot redefine {1} '{0}'", name, isClass ? "class" : "module");
                         }
                         return result;
                     }
@@ -3816,7 +3818,7 @@ namespace IronRuby.Runtime {
                     return path.ConvertToString();
                 }
             } catch (DecoderFallbackException) {
-                throw RubyExceptions.CreateEINVAL("Invalid multi-byte sequence in path `{0}'", path.ToAsciiString());
+                throw RubyExceptions.CreateEINVAL("Invalid multi-byte sequence in path '{0}'", path.ToAsciiString());
             }
         }
 

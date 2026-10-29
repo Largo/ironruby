@@ -1676,15 +1676,48 @@ begin; Object.send(:remove_const, :foo); rescue NameError => e; puts e.message; 
 begin; Object.new.singleton_class::Foo; rescue NameError => e; puts e.message; end
 begin; Math::Foo; rescue NameError => e; puts e.message; end
 ", @"
-undefined method `foo' for #<Object:ID>
-undefined method `foo' for main
-undefined method `foo' for an instance of INS
+undefined method 'foo' for #<Object:ID>
+undefined method 'foo' for main
+undefined method 'foo' for an instance of INS
 bind argument must be an instance of #<Class:ID>
 wrong constant name Foo::
 Math::PI::X does not refer to class/module
 'foo' is not allowed as a constant variable name
 uninitialized constant Foo
 uninitialized constant Math::Foo
+");
+        }
+
+        /// <summary>
+        /// Messages worded as CRuby 4.0 words them, beyond the quotes: super names its receiver,
+        /// remove_class_variable and NUM2INT have wordings of their own, and a library's class clashing
+        /// with a constant names the constant's class. (Util/error-message-matrix.rb checks these and the
+        /// ones the Ruby prelude raises, which this runtime does not load, against CRuby.)
+        /// </summary>
+        public void ErrorMessages_Wording1() {
+            TestOutput(@"
+class C; def m = super; def self.cm = super; end
+begin; C.new.m; rescue NoMethodError => e; p e.message, e.name, e.receiver.class; end
+begin; C.cm; rescue NoMethodError => e; puts e.message; end
+class Integer; def sup = super; end
+begin; 1.sup; rescue NoMethodError => e; puts e.message; end
+begin; C.send(:remove_class_variable, :x); rescue NameError => e; puts e.message; end
+begin; C.class_variable_get(:x); rescue NameError => e; puts e.message; end
+[2**31, -2**31 - 1, 2**64].each { |n| begin; 1.round(n); rescue RangeError => e; puts e.message; end }
+StringIO = 1
+begin; require 'stringio'; rescue TypeError => e; puts e.message; end
+", @"
+""super: no superclass method 'm' for an instance of C""
+:m
+C
+super: no superclass method 'cm' for class C
+super: no superclass method 'sup' for an instance of Integer
+wrong class variable name x
+'x' is not allowed as a class variable name
+integer 2147483648 too big to convert to 'int'
+integer -2147483649 too small to convert to 'int'
+bignum too big to convert into 'long'
+StringIO is not a class (Integer)
 ");
         }
 
@@ -1787,9 +1820,9 @@ p BasicObject.instance_method(:initialize).bind_call(Object.new)
 ", @"
 #<Method: RSub(RBase).cm()>
 #<Method: RBase.cm()>
-method `priv' for class `RBase' is private
-method `prot' for class `RBase' is protected
-undefined method `nope' for class `RBase'
+method 'priv' for class 'RBase' is private
+method 'prot' for class 'RBase' is protected
+undefined method 'nope' for class 'RBase'
 nil
 ");
         }
@@ -1881,7 +1914,7 @@ negative array size (or size too big)
 [1, ""A""]
 1
 instance of IO needed
-class String needs to have method `_load'
+class String needs to have method '_load'
 Comparable does not refer to class
 [0, 0, 192, 127]
 [1]

@@ -210,11 +210,11 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateNotClrTypeError(RubyClass/*!*/ rubyClass) {
-            return CreateTypeError("`{0}' doesn't represent a CLR type", rubyClass.Name);
+            return CreateTypeError("'{0}' doesn't represent a CLR type", rubyClass.Name);
         }
 
         public static Exception/*!*/ CreateNotClrNamespaceError(RubyModule/*!*/ rubyModule) {
-            return CreateTypeError("`{0}' doesn't represent a CLR namespace", rubyModule.Name);
+            return CreateTypeError("'{0}' doesn't represent a CLR namespace", rubyModule.Name);
         }
 
         public static Exception/*!*/ CreateMissingDefaultConstructorError(RubyClass/*!*/ rubyClass, string/*!*/ initializerOwnerName) {
@@ -223,7 +223,7 @@ namespace IronRuby.Runtime {
             Type baseType = rubyClass.GetUnderlyingSystemType().BaseType;
             Debug.Assert(baseType != null);
 
-            return CreateTypeError("can't allocate class `{1}' that derives from type `{0}' with no default constructor;" +
+            return CreateTypeError("can't allocate class '{1}' that derives from type '{0}' with no default constructor;" +
                 " define {1}#new singleton method instead of {2}#initialize",
                 rubyClass.Context.GetTypeName(baseType, true), rubyClass.Name, initializerOwnerName
             );
@@ -305,14 +305,14 @@ namespace IronRuby.Runtime {
 
         public static Exception/*!*/ CreateUndefinedMethodError(RubyModule/*!*/ module, string/*!*/ methodName) {
             return WithNameAndReceiver(module.Context,
-                CreateNameError("undefined method `{0}' for {2} `{1}'",
+                CreateNameError("undefined method '{0}' for {2} '{1}'",
                     methodName, GetModuleErrorName(module), module.IsClass ? "class" : "module"),
                 methodName, module);
         }
 
         /// <summary>
         /// How MRI names a module in an error message. A metaclass is reported as the class or
-        /// module it is attached to ("for class `String'" rather than "#&lt;Class:String&gt;"),
+        /// module it is attached to ("for class 'String'" rather than "#&lt;Class:String&gt;"),
         /// but the singleton class of an ordinary object keeps its own description. An anonymous
         /// module has no Name at all, so it falls back to #to_s - which is what the specs
         /// interpolate into their expected messages.
@@ -547,21 +547,26 @@ namespace IronRuby.Runtime {
 
         public static Exception/*!*/ CreateUndefinedLocalOrMethod(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
-                CreateNameError(FormatMethodMissingMessage(context, self, name, "undefined local variable or method `{0}' for {1}")), name, self);
+                CreateNameError(FormatMethodMissingMessage(context, self, name, "undefined local variable or method '{0}' for {1}")), name, self);
         }
 
         public static Exception/*!*/ CreatePrivateMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
-                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}")), name, self);
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method '{0}' called for {1}")), name, self);
         }
 
         public static Exception/*!*/ CreateProtectedMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
-                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method `{0}' called for {1}")), name, self);
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method '{0}' called for {1}")), name, self);
+        }
+
+        public static Exception/*!*/ CreateNoSuperclassMethod(RubyContext/*!*/ context, object self, string/*!*/ name) {
+            return WithNameAndReceiver(context,
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "super: no superclass method '{0}' for {1}")), name, self);
         }
 
         public static string/*!*/ FormatMethodMissingMessage(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return FormatMethodMissingMessage(context, self, name, "undefined method `{0}' for {1}");
+            return FormatMethodMissingMessage(context, self, name, "undefined method '{0}' for {1}");
         }
 
         [ThreadStatic]

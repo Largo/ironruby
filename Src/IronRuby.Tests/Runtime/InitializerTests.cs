@@ -138,7 +138,7 @@ class C
   new
 end
 ", @"
-#<TypeError: Cannot undefine `initialize' method>
+#<TypeError: Cannot undefine 'initialize' method>
 [1, 2, 3]
 init
 ");

@@ -823,7 +823,7 @@ end
 
 c.foo rescue p $!
 "), @"
-#<NoMethodError: protected method `foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for #<C:*>>
 ", OutputFlags.Match);
         }
 
@@ -858,11 +858,11 @@ end
 "), @"
 foo
 foo
-#<NoMethodError: protected method `foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for #<C:*>>
 mm
 foo
 foo
-#<NoMethodError: protected method `foo' called for #<C:*>>
+#<NoMethodError: protected method 'foo' called for #<C:*>>
 mm
 ", OutputFlags.Match);
         }
@@ -946,7 +946,7 @@ end
 
 B.new.send :foo
 ", @"
-#<NoMethodError: private method `foo' called for an instance of B>
+#<NoMethodError: private method 'foo' called for an instance of B>
 foo
 ");
         }

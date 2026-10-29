@@ -692,7 +692,7 @@ namespace IronRuby.Runtime {
 
         public static void CheckClassVariableName(string name) {
             if (!Tokenizer.IsClassVariableName(name)) {
-                throw RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name));
+                throw RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as a class variable name", name));
             }
         }
 
@@ -730,7 +730,7 @@ namespace IronRuby.Runtime {
         public static void CheckClassVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name, object nameArg) {
             if (!Tokenizer.IsClassVariableName(name)) {
                 throw RubyExceptions.WithNameAndReceiver(
-                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name)),
+                    RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as a class variable name", name)),
                     GetVariableNameForError(context, name, nameArg), receiver);
             }
         }
@@ -1088,7 +1088,7 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module '{0}' into '{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }
@@ -1115,7 +1115,7 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module '{0}' into '{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }
@@ -2231,7 +2231,7 @@ namespace IronRuby.Runtime {
                     if (length == 1 || path[1] == '/' || (FileSystemUsesDriveLetters && path[1] == '\\')) {
                         string homeDirectory = RubyEnvironment.GetVariable(platform, "HOME");
                         if (homeDirectory == null) {
-                            throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                            throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding '~'");
                         }
 
                         if (length <= 2) {

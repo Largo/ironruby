@@ -159,7 +159,7 @@ namespace IronRuby.Runtime {
             RubyScope/*!*/ parent, RubyModule/*!*/ module) {
 
             if (parent.RubyContext != module.Context) {
-                throw RubyExceptions.CreateTypeError("Cannot open a module `{0}' defined in a foreign runtime #{1}", module.Name, module.Context.RuntimeId);
+                throw RubyExceptions.CreateTypeError("Cannot open a module '{0}' defined in a foreign runtime #{1}", module.Name, module.Context.RuntimeId);
             }
 
             RubyModuleScope scope = new RubyModuleScope(parent, module);
@@ -3167,8 +3167,8 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] //SuperCallAction
-        public static Exception/*!*/ MakeMissingSuperException(string/*!*/ name) {
-            return new MissingMethodException(String.Format("super: no superclass method `{0}'", name));
+        public static Exception/*!*/ MakeMissingSuperException(RubyContext/*!*/ context, object self, string/*!*/ name) {
+            return RubyExceptions.CreateNoSuperclassMethod(context, self, name);
         }
 
         [Emitted]
@@ -3183,13 +3183,13 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Exception/*!*/ MakeAbstractMethodCalledError(RuntimeMethodHandle/*!*/ method) {
-            return new NotImplementedException(String.Format("Abstract method `{0}' not implemented", MethodInfo.GetMethodFromHandle(method)));
+            return new NotImplementedException(String.Format("Abstract method '{0}' not implemented", MethodInfo.GetMethodFromHandle(method)));
         }
 
         [Emitted]
         public static Exception/*!*/ MakeInvalidArgumentTypesError(string/*!*/ methodName) {
             // TODO:
-            return new ArgumentException(String.Format("wrong number or type of arguments for `{0}'", methodName));
+            return new ArgumentException(String.Format("wrong number or type of arguments for '{0}'", methodName));
         }
 
         [Emitted]
@@ -3215,7 +3215,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Exception/*!*/ MakeConstructorUndefinedError(RubyClass/*!*/ classObj) {
-            return RubyExceptions.CreateTypeError(String.Format("`{0}' doesn't have a visible CLR constructor", 
+            return RubyExceptions.CreateTypeError(String.Format("'{0}' doesn't have a visible CLR constructor", 
                 classObj.Context.GetTypeName(classObj.TypeTracker.Type, true)
             ));
         }
@@ -3238,7 +3238,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Exception/*!*/ MakeClrProtectedMethodCalledError(RubyContext/*!*/ context, object target, string/*!*/ methodName) {
             return new MissingMethodException(
-                RubyExceptions.FormatMethodMissingMessage(context, target, methodName, "CLR protected method `{0}' called for {1}; " +
+                RubyExceptions.FormatMethodMissingMessage(context, target, methodName, "CLR protected method '{0}' called for {1}; " +
                 "CLR protected methods can only be called with a receiver whose class is a Ruby subclass of the class declaring the method")
             );
         }
@@ -3246,7 +3246,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Exception/*!*/ MakeClrVirtualMethodCalledError(RubyContext/*!*/ context, object target, string/*!*/ methodName) {
             return new MissingMethodException(
-                RubyExceptions.FormatMethodMissingMessage(context, target, methodName, "Virtual CLR method `{0}' called via super from {1}; " +
+                RubyExceptions.FormatMethodMissingMessage(context, target, methodName, "Virtual CLR method '{0}' called via super from {1}; " +
                 "Super calls to virtual CLR methods can only be used in a Ruby subclass of the class declaring the method")
             );
         }
@@ -3299,7 +3299,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Exception/*!*/ MakeMissingMemberError(string/*!*/ memberName) {
-            return new MissingMemberException(String.Format(CultureInfo.InvariantCulture, "undefined member: `{0}'", memberName));
+            return new MissingMemberException(String.Format(CultureInfo.InvariantCulture, "undefined member: '{0}'", memberName));
         }
 
         #endregion

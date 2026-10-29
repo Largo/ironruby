@@ -264,9 +264,9 @@ false
 6
 2
 'Int32'
-#<NoMethodError: undefined method `nope' for an instance of Microsoft::Scripting::Actions::TypeGroup>
+#<NoMethodError: undefined method 'nope' for an instance of Microsoft::Scripting::Actions::TypeGroup>
 [NoMethodError, :nope, [1, 2]]
-#<NoMethodError: undefined method `nope' for an instance of Microsoft::Scripting::Actions::TypeGroup>
+#<NoMethodError: undefined method 'nope' for an instance of Microsoft::Scripting::Actions::TypeGroup>
 false
 2
 5

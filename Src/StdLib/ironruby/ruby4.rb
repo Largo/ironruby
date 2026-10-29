@@ -146,7 +146,9 @@ class Object
       (klass.ancestors - klass.superclass.ancestors).include?(
         (klass.instance_method(name).owner rescue nil))
     unless defined
-      ::Kernel.raise(::NameError, "undefined singleton method `#{name}\' for #{inspect}")
+      # MRI names a class or module here by its #name, anything else by its #inspect.
+      receiver = (::Module === self && self.name) || inspect
+      ::Kernel.raise(::NameError, "undefined singleton method '#{name}' for '#{receiver}'")
     end
     method(name)
   end unless method_defined?(:singleton_method)
@@ -166,7 +168,8 @@ class Module
       sym = name.to_sym
       # NameError, not NoMethodError, and it names the missing method.
       unless method_defined?(sym) || private_method_defined?(sym)
-        ::Kernel.raise(::NameError, "undefined method `#{sym}' for #{self.inspect}")
+        ::Kernel.raise(::NameError,
+          "undefined method '#{sym}' for #{::Class === self ? 'class' : 'module'} '#{self.name || inspect}'")
       end
       # The flag only means anything for a method of the shape `def m(*args)`.
       # MRI warns and skips otherwise; the wording is rb_warn's, verbatim.
@@ -4476,7 +4479,11 @@ class << Dir
         pw = (Etc.getpwuid(Process.uid) rescue nil)
         dir = pw && pw.dir
       end
-      raise ArgumentError, "couldn't find HOME environment -- expanding `~'" unless dir
+      unless dir
+        # MRI names the uid the user database had no entry for; Windows has no user database.
+        raise ArgumentError, File::ALT_SEPARATOR ? "couldn't find HOME environment -- expanding '~'" :
+          "couldn't find home for uid '#{Process.uid}'"
+      end
       # MRI on Windows: the home directory is written with forward slashes, like every path it
       # makes, whatever HOME holds ("C:\Users\x" from Git Bash, for one). ENV keeps its value.
       return File::ALT_SEPARATOR ? dir.tr("\\", "/") : dir.dup
@@ -4816,7 +4823,7 @@ class Array
     value = rng.rand(limit)
     value = value.to_int if value.respond_to?(:to_int) && !value.is_a?(::Integer)
     unless value.is_a?(::Integer)
-      ::Kernel.raise(::NoMethodError, "undefined method `to_int' for #{value.inspect}")
+      ::Kernel.raise(::NoMethodError, "undefined method 'to_int' for #{value.inspect}")
     end
     ::Kernel.raise(::RangeError, "random number too big #{value}") if value < 0 || value >= limit
     value
@@ -7477,7 +7484,7 @@ class Data
         return names if names
         klass = klass.superclass
       end
-      ::Kernel.raise(::NoMethodError, "undefined method `members' for #{self}")
+      ::Kernel.raise(::NoMethodError, "undefined method 'members' for class #{self}")
     end
 
     # Only a class made by Data.define can be instantiated: Data.new is undefined.
