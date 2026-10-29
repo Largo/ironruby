@@ -195,7 +195,7 @@ a = Exception.new
 p a.method(:data) rescue p $!
 p a.method(:Data)
 ", @"
-#<NameError: undefined method `data' for class `Exception'>
+#<NameError: undefined method 'data' for class 'Exception'>
 #<Method: Exception#Data()>
 ");
         }
@@ -322,10 +322,10 @@ puts C.method(:StaticGenericM).of(Integer)[123]
 Foo(I): 1
 Foo(O): 2
 Bar(I): 22
-#<NoMethodError: CLR protected method `foo' called for *ProtectedA*>
+#<NoMethodError: CLR protected method 'foo' called for *ProtectedA*>
 Foo(O): 6
-#<NoMethodError: CLR protected method `bar' called for *ProtectedB*>
-#<NoMethodError: CLR protected method `StaticM' called for *ProtectedB*>
+#<NoMethodError: CLR protected method 'bar' called for *ProtectedB*>
+#<NoMethodError: CLR protected method 'StaticM' called for *ProtectedB*>
 StaticM
 StaticGenericM: 123
 ", OutputFlags.Match);
@@ -358,7 +358,7 @@ puts b.prop2
             }, @"
 1
 2
-#<NoMethodError: CLR protected method `prop2=' called for *ProtectedB*>
+#<NoMethodError: CLR protected method 'prop2=' called for *ProtectedB*>
 0
 ", OutputFlags.Match);
         }
@@ -584,7 +584,7 @@ M1()
 M1<MutableString>()
 M1<MutableString, Int32>()
 #<ArgumentError: generic arguments could not be infered for method 'M1'>
-#<ArgumentError: wrong number of generic arguments for `M1'>
+#<ArgumentError: wrong number of generic arguments for 'M1'>
 "
             );
 
@@ -597,9 +597,9 @@ puts GM.method(:property).of(Integer) rescue p $!
 puts GM.method(:event).of(Integer) rescue p $!
 ", @"
 M2(Fixnum)
-#<ArgumentError: wrong number of generic arguments for `field'>
-#<ArgumentError: wrong number of generic arguments for `property'>
-#<ArgumentError: wrong number of generic arguments for `event'>
+#<ArgumentError: wrong number of generic arguments for 'field'>
+#<ArgumentError: wrong number of generic arguments for 'property'>
+#<ArgumentError: wrong number of generic arguments for 'event'>
 "
             );
         }
@@ -878,7 +878,7 @@ a.first_or_default rescue p $!
 using_clr_extensions System::Linq
 p a.first_or_default
 ", @"
-#<NoMethodError: undefined method `first_or_default' for an instance of System::Int32[]>
+#<NoMethodError: undefined method 'first_or_default' for an instance of System::Int32[]>
 1
 ");  // names the receiver's class, not its inspect, as CRuby does since 3.3
         }
@@ -1957,8 +1957,8 @@ m = OM.method(:M2)
 m.overload(Object, String) rescue p $!
 m.overload() rescue p $!
 "), @"
-#<ArgumentError: no overload of `M2' matches given parameter types>
-#<ArgumentError: no overload of `M2' matches given parameter types>
+#<ArgumentError: no overload of 'M2' matches given parameter types>
+#<ArgumentError: no overload of 'M2' matches given parameter types>
 "
             );
 
@@ -1980,7 +1980,7 @@ p method(:bar).overload(Object, Object).call(1,2)
 p method(:bar).overload(Object, Object, Object).call(1,2,3)
 "), @"
 [1, 2]
-#<ArgumentError: no overload of `foo' matches given parameter types>
+#<ArgumentError: no overload of 'foo' matches given parameter types>
 [1]
 [1, 2]
 [1, 2, 3]
@@ -2042,7 +2042,7 @@ puts m.overload(Integer).clr_members.size          # RubyScope and BlockParam ar
 puts m.overload(System::String) rescue p $!       # RubyClass is not hidden here
 ", @"
 1
-#<ArgumentError: no overload of `foo' matches given parameter types>
+#<ArgumentError: no overload of 'foo' matches given parameter types>
 ");
 
             // library methods:
@@ -2489,12 +2489,12 @@ C[Integer][1] rescue p $!
 InteropTests::Generics1::C
 InteropTests::Generics1::C[T]
 InteropTests::Generics1::C[T, S]
-#<ArgumentError: Type group `C' does not contain a type of generic arity 30>
+#<ArgumentError: Type group 'C' does not contain a type of generic arity 30>
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[Integer]
-#<ArgumentError: `InteropTests::Generics1::C[Integer]' is not a generic type definition>
-#<ArgumentError: `InteropTests::Generics1::C[Integer]' is not a generic type definition>
+#<ArgumentError: 'InteropTests::Generics1::C[Integer]' is not a generic type definition>
+#<ArgumentError: 'InteropTests::Generics1::C[Integer]' is not a generic type definition>
 ");
             
             // C<> is a mixin for all its instantiations:
@@ -2547,8 +2547,8 @@ C[1].new rescue p $!
 C[1].instance_method(:Arity) rescue p $!
 ", @"
 #<Method: InteropTests::Generics1::C[Integer]#Arity()>
-#<NoMethodError: undefined method `new' for module InteropTests::Generics1::C[T]>
-#<NameError: undefined method `Arity' for module `InteropTests::Generics1::C[T]'>
+#<NoMethodError: undefined method 'new' for module InteropTests::Generics1::C[T]>
+#<NameError: undefined method 'Arity' for module 'InteropTests::Generics1::C[T]'>
 ");
         }
 
@@ -3180,7 +3180,7 @@ end
 
 C.new.bar rescue p $!
 "), @"
-#<NoMethodError: Virtual CLR method `bar' called via super from *; Super calls to virtual CLR methods can only be used in a Ruby subclass of the class declaring the method>
+#<NoMethodError: Virtual CLR method 'bar' called via super from *; Super calls to virtual CLR methods can only be used in a Ruby subclass of the class declaring the method>
 ", OutputFlags.Match);
         }
 

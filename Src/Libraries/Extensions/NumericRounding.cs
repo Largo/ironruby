@@ -103,7 +103,12 @@ namespace IronRuby.Builtins {
 
             IntegerValue value = Protocols.CastToInteger(integerCast, ndigits);
             if (!value.IsFixnum) {
-                throw RubyExceptions.CreateRangeError("integer {0} too big to convert to `int'", value.Bignum);
+                // MRI's NUM2INT narrows to a C long first, and a value too large for one fails there.
+                BigInteger big = value.Bignum;
+                if (big > Int64.MaxValue || big < Int64.MinValue) {
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                }
+                throw RubyExceptions.CreateRangeError("integer {0} too {1} to convert to 'int'", big, big.Sign < 0 ? "small" : "big");
             }
             return value.Fixnum;
         }

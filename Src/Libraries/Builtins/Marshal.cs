@@ -1324,7 +1324,7 @@ namespace IronRuby.Builtins {
             private object/*!*/ ReadUsingLoad() {
                 RubyClass theClass = ReadType();
                 if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
-                    throw RubyExceptions.CreateTypeError("class {0} needs to have method `_load'",
+                    throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
                         theClass.GetDisplayName(Context, false).ToString());
                 }
                 return _sites.Load.Target(_sites.Load, theClass, ReadString());
@@ -1364,7 +1364,7 @@ namespace IronRuby.Builtins {
                     ModuleOps.ExtendObject(extension, obj);
                 }
                 if (!Context.ResolveMethod(obj, "marshal_load", VisibilityContext.AllVisible).Found) {
-                    throw RubyExceptions.CreateTypeError("instance of {0} needs to have method `marshal_load'",
+                    throw RubyExceptions.CreateTypeError("instance of {0} needs to have method 'marshal_load'",
                         Context.GetClassOf(obj).GetDisplayName(Context, false).ToString());
                 }
                 _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, ReadAnObject(false));

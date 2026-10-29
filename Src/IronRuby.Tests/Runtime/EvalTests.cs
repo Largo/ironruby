@@ -84,13 +84,13 @@ END
             // subclass. `a`, assigned in the block and read only inside eval strings, is the one parse
             // warning `ruby -wc` gives for each wrapping.
             string output = @"
-#<N*Error: * `b' *>
+#<N*Error: * 'b' *>
 N*Error
 N*Error
-#<N*Error: * `a' *>
-#<N*Error: * `b' *>
-#<N*Error: * `a' *>
-#<N*Error: * `b' *>
+#<N*Error: * 'a' *>
+#<N*Error: * 'b' *>
+#<N*Error: * 'a' *>
+#<N*Error: * 'b' *>
 ";
 
             AssertOutput(() => CompilerTest(String.Format(@"def foo; {0}; end; foo", body), 1, 0), output, OutputFlags.Match);

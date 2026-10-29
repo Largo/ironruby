@@ -884,7 +884,8 @@ namespace IronRuby.Builtins {
                     home = Posix.GetHomeDirectory(Posix.GetEUid());
                 }
                 if (home == null) {
-                    throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                    // MRI's rb_default_home_dir names the real uid, whatever it looked up
+                    throw RubyExceptions.CreateArgumentError("couldn't find home for uid '{0}'", Posix.GetUid());
                 }
                 if (home.Length == 0 || home[0] != DirectorySeparatorChar) {
                     throw RubyExceptions.CreateArgumentError("non-absolute home");
@@ -927,7 +928,7 @@ namespace IronRuby.Builtins {
                 }
             }
             if (home == null) {
-                throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding '~'");
             }
 
             home = home.Replace(AltDirectorySeparatorChar, DirectorySeparatorChar);

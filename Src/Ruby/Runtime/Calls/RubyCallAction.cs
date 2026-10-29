@@ -832,7 +832,11 @@ namespace IronRuby.Runtime.Calls {
                 methodMissing.DeclaringModule == methodMissing.Context.BasicObjectClass && methodMissing is RubyLibraryMethodInfo) {
 
                 if (isSuperCall) {
-                    metaBuilder.SetError(Methods.MakeMissingSuperException.OpCall(AstUtils.Constant(methodName)));
+                    metaBuilder.SetError(Methods.MakeMissingSuperException.OpCall(
+                        AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)),
+                        AstUtils.Convert(args.TargetExpression, typeof(object)),
+                        AstUtils.Constant(methodName)
+                    ));
                 } else if (incompatibleVisibility == RubyMethodVisibility.Private) {
                     metaBuilder.SetError(WithCallArguments(Methods.MakePrivateMethodCalledError.OpCall(
                         AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)), args.TargetExpression, AstUtils.Constant(methodName)), args)

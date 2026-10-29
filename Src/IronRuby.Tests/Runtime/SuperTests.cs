@@ -272,7 +272,7 @@ end
 
 D.new.bar rescue p $!
 "), @"
-#<NoMethodError: super: no superclass method `bar'>
+#<NoMethodError: super: no superclass method 'bar' for an instance of D>
 ");
         }
 
@@ -684,7 +684,7 @@ eval('
 ", @"
 main
 main
-#<NoMethodError: undefined method `foo' for main>
+#<NoMethodError: undefined method 'foo' for main>
 ");
         }
     }

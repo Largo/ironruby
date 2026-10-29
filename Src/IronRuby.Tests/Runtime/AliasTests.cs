@@ -154,7 +154,7 @@ end
 d = D.new
 d.bar
 ", @"
-#<NameError: undefined method `f' for class `E'>
+#<NameError: undefined method 'f' for class 'E'>
 ");
         }
 

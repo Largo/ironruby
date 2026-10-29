@@ -782,6 +782,7 @@ namespace IronRuby.Tests {
                 Hash_ValuesAtDefault1,
                 Lambda_ArityMessages1,
                 ErrorMessages_Receivers1,
+                ErrorMessages_Wording1,
                 Time_StringParsing1,
                 Struct_IndexMessages1,
                 Backtrace_RaiseInRescue1,

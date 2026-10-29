@@ -1739,7 +1739,7 @@ namespace IronRuby.Builtins {
             RubyClass cls = context.GetClassOf(self);
             Type type = (asType != null) ? Protocols.ToType(context, asType) : null;
             if (!cls.TryGetClrMember(name, type, out info)) {
-                throw RubyExceptions.CreateNameError("undefined CLR method `{0}' for class `{1}'", name, cls.Name);
+                throw RubyExceptions.CreateNameError("undefined CLR method '{0}' for class '{1}'", name, cls.Name);
             }
 
             return new RubyMethod(self, info, name);
@@ -1793,7 +1793,7 @@ namespace IronRuby.Builtins {
                 if (info.Visibility == RubyMethodVisibility.Public) {
                     return new RubyMethod(self, info, name);
                 }
-                throw RubyExceptions.CreateNameError("method `{0}' for class `{1}' is {2}",
+                throw RubyExceptions.CreateNameError("method '{0}' for class '{1}' is {2}",
                     name, context.GetClassDisplayName(self),
                     info.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
@@ -2302,7 +2302,7 @@ namespace IronRuby.Builtins {
             } else if (namespaceModule.NamespaceTracker == null) {
                 throw RubyExceptions.CreateNotClrNamespaceError(namespaceModule);
             } else if (context != namespaceModule.Context) {
-                throw RubyExceptions.CreateTypeError("Cannot use namespace `{0}' defined in a foreign runtime #{1}",
+                throw RubyExceptions.CreateTypeError("Cannot use namespace '{0}' defined in a foreign runtime #{1}",
                     namespaceModule.NamespaceTracker.Name, namespaceModule.Context.RuntimeId);
             } else {
                 ns = namespaceModule.NamespaceTracker.Name;
