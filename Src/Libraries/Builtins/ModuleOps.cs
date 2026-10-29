@@ -239,7 +239,7 @@ namespace IronRuby.Builtins {
             Type staticClass;
             if (RubyModule.IsClrExtensionSource(refiner, out ns, out staticClass)) {
                 if (refiner.Context != scope.RubyContext) {
-                    throw RubyExceptions.CreateTypeError("Cannot use `{0}' defined in a foreign runtime #{1}", refiner.Name, refiner.Context.RuntimeId);
+                    throw RubyExceptions.CreateTypeError("Cannot use '{0}' defined in a foreign runtime #{1}", refiner.Name, refiner.Context.RuntimeId);
                 }
                 scope.RubyContext.ActivateScopedExtensions(ns ?? staticClass.Namespace ?? String.Empty);
                 scope.ActivateRefinements(refiner, true);
