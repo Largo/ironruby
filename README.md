@@ -288,11 +288,14 @@ reason.  The versions in the table are checked against the running interpreter's
 CRuby 4.0's pure-Ruby **bundled gems** - `rake`, `rexml`, `minitest`, `test-unit`, `csv`,
 `logger`, `matrix`, `net-imap`/`-smtp`/`-pop`/`-ftp`, `drb`, `racc`, `ostruct` and the rest -
 ship as real installed gems in IronRuby's own gem home, `Src/StdLib/ruby/gems/4.0.0`, at the
-versions CRuby 4.0.6 bundles, so `require "rexml/document"` and `ir -S rake` work the same on
+versions CRuby 4.0.9 bundles, so `require "rexml/document"` and `ir -S rake` work the same on
 every machine, with or without a CRuby next to IronRuby.
 [`Util/install-bundled-gems.rb`](Util/install-bundled-gems.rb) installs them from a CRuby
 source tarball's `gems/*.gem` and lists the ones left out and why (the C extensions IronRuby
-implements itself, and the ones that need `rbs`).  IronRuby never uses the gems of a CRuby
+implements itself, `typeprof` and `debug`).  Two come at another version than CRuby's, from
+rubygems.org and pinned by SHA-256: `rbs` 4.0.0.dev.5, the release IronRuby's `rbs_extension`
+is built from (below), and `repl_type_completor` 0.1.16, since releases before 0.1.14 refuse rbs 4 -
+so irb completes with its `TypeCompletor`, as on CRuby.  IronRuby never uses the gems of a CRuby
 installed on the same machine: a gem it needs is installed for IronRuby, with `igem install`
 or Bundler.
 

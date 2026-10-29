@@ -62,8 +62,9 @@ if command -v ruby >/dev/null 2>&1; then
   mkdir -p "$tmp/gen/native"
   cp "$SHIM/../generate.rb" "$tmp/gen/"
   ruby "$tmp/gen/generate.rb" "$tmp/rbs/config.yml" >/dev/null
-  if ! cmp -s "$tmp/gen/native/rbs_ironruby_nodes.inc" "$SHIM/rbs_ironruby_nodes.inc" ||
-     ! cmp -s "$tmp/gen/RbsNodes.Generated.cs" "$SHIM/../RbsNodes.Generated.cs"; then
+  # A Windows checkout (core.autocrlf) has the committed files with CRLF endings.
+  if ! tr -d '\r' < "$SHIM/rbs_ironruby_nodes.inc" | cmp -s "$tmp/gen/native/rbs_ironruby_nodes.inc" - ||
+     ! tr -d '\r' < "$SHIM/../RbsNodes.Generated.cs" | cmp -s "$tmp/gen/RbsNodes.Generated.cs" -; then
     echo "build-librbs.sh: the committed bridge is not what rbs $VERSION's config.yml generates;" \
          "run ruby Src/Libraries/Rbs/generate.rb on it" >&2
     exit 1
