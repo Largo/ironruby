@@ -331,10 +331,15 @@ namespace IronRuby.Runtime {
         // refine, which is what keeps the whole feature off the fast path.
         private readonly Dictionary<RubyModule, bool> _refinedModules = new Dictionary<RubyModule, bool>();
 
-        // { refined module -> the names a refinement of it has (or had) in its method table }.  This is
-        // what decides whether a call can be affected by a refinement at all - CRuby's REFINED method
-        // entry: a refinement of String that defines #shout makes `x.shout' a refined call where x is a
-        // String, and leaves `x.upcase' and every call on an Integer alone.  Only ever grows.
+        // Set by the first `using' of a CLR namespace or static class (see ActivateScopedExtensions): from
+        // then on lexical activations matter even if nothing is refined.
+        private bool _hasScopedExtensions;
+
+        // { module -> the names a refinement of it, or an extension method of it some `using' of a CLR
+        // namespace has brought in, has (or had) }.  This is what decides whether a call can depend on
+        // where it is made at all - CRuby's REFINED method entry: a refinement of String that defines
+        // #shout makes `x.shout' a refined call where x is a String, and leaves `x.upcase' and every call
+        // on an Integer alone.  Only ever grows.
         private readonly Dictionary<RubyModule, HashSet<string>> _refinedMethodNames = new Dictionary<RubyModule, HashSet<string>>();
 
         // Every name in _refinedMethodNames, read without the class-hierarchy lock; copy-on-write.
@@ -344,8 +349,12 @@ namespace IronRuby.Runtime {
         internal readonly Dictionary<RefinementActivation, RefinementActivation> RefinementActivations =
             new Dictionary<RefinementActivation, RefinementActivation>(RefinementActivation.ContentComparer);
 
+        /// <summary>
+        /// True once anything has been refined or a CLR namespace `using'd: from then on what a `using'
+        /// activates is recorded where methods are defined and asked by the calls that can depend on it.
+        /// </summary>
         internal bool HasRefinements {
-            get { return _refinedModules.Count > 0; }
+            get { return _refinedModules.Count > 0 || _hasScopedExtensions; }
         }
 
         private RubyClass _refinementClass;
@@ -381,24 +390,42 @@ namespace IronRuby.Runtime {
         /// </summary>
         internal void RefinedMethodChanged(RubyModule/*!*/ refinedModule, string/*!*/ name) {
             RequiresClassHierarchyLock();
+            AddLexicalMethodName(refinedModule, name);
+            refinedModule.AllDependentMethodsUpdated("RefinedMethod: " + name);
+        }
 
+        /// <summary>
+        /// Extension methods of <paramref name="module"/> named <paramref name="names"/> can now be reached by a
+        /// call made where their namespace is `using'd: the calls of those names on the module and below it
+        /// re-bind, now with the lexical guard.
+        /// </summary>
+        internal void LexicalMethodsAdded(RubyModule/*!*/ module, ICollection<string>/*!*/ names, string/*!*/ reason) {
+            RequiresClassHierarchyLock();
+            if (names.Count == 0) {
+                return;
+            }
+            foreach (string name in names) {
+                AddLexicalMethodName(module, name);
+            }
+            module.AllDependentMethodsUpdated(reason);
+        }
+
+        private void AddLexicalMethodName(RubyModule/*!*/ module, string/*!*/ name) {
             HashSet<string> names;
-            if (!_refinedMethodNames.TryGetValue(refinedModule, out names)) {
-                _refinedMethodNames.Add(refinedModule, names = new HashSet<string>());
+            if (!_refinedMethodNames.TryGetValue(module, out names)) {
+                _refinedMethodNames.Add(module, names = new HashSet<string>());
             }
             if (names.Add(name) && !_allRefinedMethodNames.Contains(name)) {
                 var all = new HashSet<string>(_allRefinedMethodNames);
                 all.Add(name);
                 _allRefinedMethodNames = all;
             }
-
-            refinedModule.AllDependentMethodsUpdated("RefinedMethod: " + name);
         }
 
         /// <summary>
         /// True if a call of <paramref name="name"/> on an instance of <paramref name="cls"/> could be
         /// affected by a refinement: some refinement of the class or of one of its ancestors has a method
-        /// of that name.  Whether one is active where the call is made is the call site's question, which
+        /// of that name (or a `using'd CLR namespace has an extension method of that name for one of them).  Whether one is active where the call is made is the call site's question, which
         /// only call sites that answer true here ask; all the others are built - and dispatched, and
         /// JIT-compiled - exactly as if nothing were refined.
         /// </summary>
@@ -1397,13 +1424,22 @@ namespace IronRuby.Runtime {
 
         private readonly object ExtensionsLock = new object();
         
-        // List of assemblies that might include extension methods but whose processing was delayed until the first call of use_clr_extensions.
-        // Null once use_clr_extensions has been called.
+        // List of assemblies that might include extension methods but whose processing was delayed until the first call of
+        // use_clr_extensions or `using' of a CLR namespace. Null once either has run.
         private List<Assembly> _potentialExtensionAssemblies = new List<Assembly>();
 
         // A list of extension methods that are available for activation. Grouped by a declaring namespace.
         // Value is null if the namepsace has been activated.
         private Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>> _availableExtensions;
+
+        // Every extension method loaded so far, by declaring namespace: what a `using' of the namespace brings in,
+        // whether or not using_clr_extensions has activated it everywhere as well.
+        private readonly Dictionary<string, List<ExtensionMethodInfo>>/*!*/ _loadedExtensions = new Dictionary<string, List<ExtensionMethodInfo>>();
+
+        // The namespaces some `using' has named. Their extension methods - those of assemblies loaded later too - are
+        // filed with the types they extend (RubyModule.AddScopedExtensionMethodsNoLock), for the calls made where the
+        // namespace (or the method's static class) is `using'd to see.
+        private readonly HashSet<string>/*!*/ _scopedExtensionNamespaces = new HashSet<string>();
 
         // Assemblies whose extension methods have been registered (or are queued to be, in _potentialExtensionAssemblies).
         private readonly HashSet<Assembly>/*!*/ _extensionAssemblies = new HashSet<Assembly>();
@@ -1429,6 +1465,7 @@ namespace IronRuby.Runtime {
 
         private void LoadExtensions(IEnumerable<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>/*!*/ extensionMethodGroups) {
             List<IEnumerable<ExtensionMethodInfo>> immediatelyActivated = null;
+            List<ExtensionMethodInfo> scoped = null;
 
             lock (ExtensionsLock) {
                 foreach (var extensionMethodGroup in extensionMethodGroups) {
@@ -1437,6 +1474,22 @@ namespace IronRuby.Runtime {
                     }
 
                     string ns = extensionMethodGroup.Key;
+                    var methods = new List<ExtensionMethodInfo>(extensionMethodGroup.Value);
+
+                    List<ExtensionMethodInfo> loaded;
+                    if (!_loadedExtensions.TryGetValue(ns, out loaded)) {
+                        _loadedExtensions.Add(ns, loaded = new List<ExtensionMethodInfo>());
+                    }
+                    loaded.AddRange(methods);
+
+                    // an assembly loaded after its namespace was `using'd:
+                    if (_scopedExtensionNamespaces.Contains(ns)) {
+                        if (scoped == null) {
+                            scoped = new List<ExtensionMethodInfo>();
+                        }
+                        scoped.AddRange(methods);
+                    }
+
                     List<IEnumerable<ExtensionMethodInfo>> extensions;
                     if (_availableExtensions.TryGetValue(ns, out extensions)) {
                         if (extensions == null) {
@@ -1448,18 +1501,91 @@ namespace IronRuby.Runtime {
                     } else {
                         _availableExtensions.Add(ns, extensions = new List<IEnumerable<ExtensionMethodInfo>>());
                     }
-                    extensions.Add(extensionMethodGroup.Value);
+                    extensions.Add(methods);
                 }
             }
 
             if (immediatelyActivated != null) {
                 ActivateExtensions(immediatelyActivated);
             }
+            if (scoped != null) {
+                AddScopedExtensions(scoped);
+            }
         }
 
+        /// <summary>
+        /// using_clr_extensions: the extension methods of <paramref name="namespace"/> become methods of the types they
+        /// extend, for every call in the runtime.
+        /// </summary>
         public void ActivateExtensions(string/*!*/ @namespace) {
             ContractUtils.RequiresNotNull(@namespace, "namespace");
+            LoadExtensions(@namespace);
 
+            List<IEnumerable<ExtensionMethodInfo>> extensions = null;
+            lock (ExtensionsLock) {
+                if (_availableExtensions == null) {
+                    _availableExtensions = new Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>>();
+                }
+                _availableExtensions.TryGetValue(@namespace, out extensions);
+                
+                // activate namespace:
+                _availableExtensions[@namespace] = null;
+            }
+
+            if (extensions != null) {
+                ActivateExtensions(extensions);
+            }
+        }
+
+        // using_clr_extensions is deprecated in favour of `using'; it says so once per process.
+        private static int _usingClrExtensionsDeprecationReported;
+
+        /// <summary>
+        /// Warns that using_clr_extensions is deprecated, the first time anything in the process calls it.
+        /// <paramref name="namespaceName"/> is the namespace it was called with, or null for the global one.
+        /// </summary>
+        public void ReportUsingClrExtensionsDeprecation(string namespaceName) {
+            if (Interlocked.Exchange(ref _usingClrExtensionsDeprecationReported, 1) == 0) {
+                ReportWarning(String.Format(
+                    "using_clr_extensions is deprecated; use '{0}' instead, which brings the extension methods into the rest of " +
+                    "the file, class body or eval string only, as C#'s using directive does",
+                    namespaceName != null ? "using " + namespaceName : "using <namespace>"
+                ));
+            }
+        }
+
+        // the test driver runs every test in a fresh runtime of the same process
+        internal static void ResetUsingClrExtensionsDeprecation() {
+            _usingClrExtensionsDeprecationReported = 0;
+        }
+
+        /// <summary>
+        /// `using' of a CLR namespace, or of a static class declared in <paramref name="namespace"/>: the namespace's
+        /// extension methods become available to the calls made where it (or the class) is `using'd, and to no other
+        /// (see RubyModule.ResolveMethodNoLock).
+        /// </summary>
+        public void ActivateScopedExtensions(string/*!*/ @namespace) {
+            ContractUtils.RequiresNotNull(@namespace, "namespace");
+            LoadExtensions(@namespace);
+
+            List<ExtensionMethodInfo> extensions = null;
+            lock (ExtensionsLock) {
+                _hasScopedExtensions = true;
+                if (_scopedExtensionNamespaces.Add(@namespace)) {
+                    _loadedExtensions.TryGetValue(@namespace, out extensions);
+                }
+            }
+
+            if (extensions != null) {
+                AddScopedExtensions(extensions);
+            }
+        }
+
+        /// <summary>
+        /// Makes sure the extension methods of <paramref name="namespace"/> have been loaded, along with those of
+        /// every assembly whose processing was put off until extension methods were first asked for.
+        /// </summary>
+        private void LoadExtensions(string/*!*/ @namespace) {
             // The types of a namespace can be known through a facade's type forwarders (netstandard, System.Xml),
             // which loads the assemblies that define them without them ever being reported loaded: their extension
             // methods (System.Linq.Enumerable's) would never be seen. Look at where the namespace's types really live.
@@ -1494,21 +1620,32 @@ namespace IronRuby.Runtime {
                 }
                 LoadExtensions(extensionGroups);
             }
-
-            List<IEnumerable<ExtensionMethodInfo>> extensions;
-            lock (ExtensionsLock) {
-                _availableExtensions.TryGetValue(@namespace, out extensions);
-                
-                // activate namespace:
-                _availableExtensions[@namespace] = null;
-            }
-
-            if (extensions != null) {
-                ActivateExtensions(extensions);
-            }
         }
 
         private void ActivateExtensions(List<IEnumerable<ExtensionMethodInfo>>/*!*/ extensionLists) {
+            var groupedByType = GroupByExtendedModule(extensionLists);
+            using (ClassHierarchyLocker()) {
+                lock (ModuleCacheLock) {
+                    foreach (var entry in groupedByType) {
+                        GetExtendedModuleNoLock(entry.Key).AddExtensionMethodsNoLock(entry.Value);
+                    }
+                }
+            }
+        }
+
+        private void AddScopedExtensions(List<ExtensionMethodInfo>/*!*/ extensions) {
+            var groupedByType = GroupByExtendedModule(new[] { extensions });
+            using (ClassHierarchyLocker()) {
+                lock (ModuleCacheLock) {
+                    foreach (var entry in groupedByType) {
+                        GetExtendedModuleNoLock(entry.Key).AddScopedExtensionMethodsNoLock(entry.Value);
+                    }
+                }
+            }
+        }
+
+        // { the type whose Ruby module the extension methods are filed with -> extension methods }
+        private static Dictionary<Type, List<ExtensionMethodInfo>>/*!*/ GroupByExtendedModule(IEnumerable<IEnumerable<ExtensionMethodInfo>>/*!*/ extensionLists) {
             var groupedByType = new Dictionary<Type, List<ExtensionMethodInfo>>();
             foreach (var extensionList in extensionLists) {
                 foreach (var extension in extensionList) {
@@ -1534,18 +1671,11 @@ namespace IronRuby.Runtime {
                     list.Add(extension);
                 }
             }
+            return groupedByType;
+        }
 
-            using (ClassHierarchyLocker()) {
-                lock (ModuleCacheLock) {
-                    foreach (var entry in groupedByType) {
-                        Type target = entry.Key;
-                        var methods = entry.Value;
-
-                        RubyModule targetModule = (target.IsGenericTypeDefinition || target.IsInterface) ? GetOrCreateModuleNoLock(target) : GetOrCreateClassNoLock(target);
-                        targetModule.AddExtensionMethodsNoLock(methods);
-                    }
-                }
-            }
+        private RubyModule/*!*/ GetExtendedModuleNoLock(Type/*!*/ target) {
+            return (target.IsGenericTypeDefinition || target.IsInterface) ? GetOrCreateModuleNoLock(target) : GetOrCreateClassNoLock(target);
         }
 
         #endregion

@@ -162,4 +162,9 @@ namespace IronRubyTests.ExtensionMethods3 {
 
         public static string Open<T>(this Box<T> self, T item) { return "e:Open(T)"; }
     }
+
+    // `using IronRubyTests::ExtensionMethods3::MoreEMs' (C#'s `using static') brings in these and not EMs'.
+    public static class MoreEMs {
+        public static string Label(this Widget self) { return "e:Label()"; }
+    }
 }

@@ -377,7 +377,7 @@ TypeError
         /// </summary>
         public void ClrGenericDelegateInference1() {
             Context.ObjectClass.SetConstant("G", Context.GetClass(typeof(BinderGenerics)));
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 list = System::Collections::Generic::List[Integer].new([3, 1, 4])
 p G.filter(list) { |x| x > 1 }.to_a
 p G.filter(list, ->(x) { x > 3 }).to_a

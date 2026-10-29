@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;
@@ -59,10 +60,65 @@ namespace IronRuby.Runtime {
         // copied refinement are - it is the same module.
         private readonly HashSet<RubyModule>[] _snapshots;
 
+        // The CLR extension methods `using' brought in here and in the enclosing scopes (see Extensions);
+        // computed on first use, NoExtensions if there are none.
+        private ClrExtensionScope _extensions;
+
         private RefinementActivation(RefinementActivation outer, RubyModule[] usedModules, HashSet<RubyModule>[] snapshots) {
             _outer = outer;
             _usedModules = usedModules;
             _snapshots = snapshots;
+        }
+
+        /// <summary>
+        /// The CLR extension methods active here: those of every CLR namespace passed to `using' (C#'s
+        /// `using System.Linq;') and of every static class passed to it (C#'s `using static').  Null if
+        /// there are none.
+        /// </summary>
+        internal ClrExtensionScope Extensions {
+            get {
+                var result = _extensions;
+                if (result == null) {
+                    _extensions = result = ClrExtensionScope.Create(this);
+                }
+                return ReferenceEquals(result, ClrExtensionScope.None) ? null : result;
+            }
+        }
+
+        internal sealed class ClrExtensionScope {
+            internal static readonly ClrExtensionScope/*!*/ None = new ClrExtensionScope();
+
+            private HashSet<string> _namespaces;
+            private HashSet<Type> _classes;
+
+            internal static ClrExtensionScope/*!*/ Create(RefinementActivation/*!*/ activation) {
+                ClrExtensionScope result = null;
+                for (RefinementActivation a = activation; a != null; a = a._outer) {
+                    if (a._usedModules == null) {
+                        continue;
+                    }
+                    foreach (RubyModule module in a._usedModules) {
+                        string ns;
+                        Type cls;
+                        if (RubyModule.IsClrExtensionSource(module, out ns, out cls)) {
+                            result = result ?? new ClrExtensionScope();
+                            if (ns != null) {
+                                (result._namespaces ?? (result._namespaces = new HashSet<string>())).Add(ns);
+                            } else {
+                                (result._classes ?? (result._classes = new HashSet<Type>())).Add(cls);
+                            }
+                        }
+                    }
+                }
+                return result ?? None;
+            }
+
+            /// <summary>True if the extension method is declared in an active namespace or static class.</summary>
+            internal bool Contains(MethodInfo/*!*/ extensionMethod) {
+                Type declaringType = extensionMethod.DeclaringType;
+                return _namespaces != null && _namespaces.Contains(declaringType.Namespace ?? String.Empty)
+                    || _classes != null && _classes.Contains(declaringType);
+            }
         }
 
         internal static RefinementActivation/*!*/ CreateSingle(RefinementActivation/*!*/ outer, RubyModule/*!*/ usedModule) {

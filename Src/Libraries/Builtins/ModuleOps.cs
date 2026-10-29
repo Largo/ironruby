@@ -232,6 +232,20 @@ namespace IronRuby.Builtins {
                     scope.RubyContext.GetClassDisplayName(module)
                 );
             }
+
+            // A CLR namespace brings in its extension methods where it is used, as C#'s `using System.Linq;'
+            // does, and a static class those it declares (C#'s `using static').
+            string ns;
+            Type staticClass;
+            if (RubyModule.IsClrExtensionSource(refiner, out ns, out staticClass)) {
+                if (refiner.Context != scope.RubyContext) {
+                    throw RubyExceptions.CreateTypeError("Cannot use `{0}' defined in a foreign runtime #{1}", refiner.Name, refiner.Context.RuntimeId);
+                }
+                scope.RubyContext.ActivateScopedExtensions(ns ?? staticClass.Namespace ?? String.Empty);
+                scope.ActivateRefinements(refiner, true);
+                return;
+            }
+
             if (refiner.IsClass) {
                 throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
             }

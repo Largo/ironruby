@@ -2308,6 +2308,7 @@ namespace IronRuby.Builtins {
                 ns = namespaceModule.NamespaceTracker.Name;
             }
 
+            context.ReportUsingClrExtensionsDeprecation(namespaceModule != null ? namespaceModule.Name : null);
             context.ActivateExtensions(ns);
         }
 
