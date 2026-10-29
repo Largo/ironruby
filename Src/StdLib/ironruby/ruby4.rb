@@ -10798,8 +10798,24 @@ class Binding
     eval("local_variables")
   end unless method_defined?(:local_variables)
 
+  # A keyword can name a local - a keyword argument such as `alias:` or `if:` -
+  # but no source text can refer to it, which is exactly why Ruby code reaches
+  # for binding.local_variable_get(:alias).  Such names are looked up in the
+  # scope directly instead of through eval.
+  IR_KEYWORDS = %w[
+    alias and begin BEGIN break case class def defined? do else elsif end END
+    ensure false for if in module next nil not or redo rescue retry return self
+    super then true undef unless until when while yield __FILE__ __LINE__
+    __ENCODING__
+  ].freeze
+  private_constant :IR_KEYWORDS
+
   def local_variable_defined?(name)
-    eval("defined?(#{__check_lvar_name__(name)}) == 'local-variable'")
+    name = __check_lvar_name__(name)
+    if IR_KEYWORDS.include?(name)
+      return eval("local_variables").include?(name.to_sym)
+    end
+    eval("defined?(#{name}) == 'local-variable'")
   end unless method_defined?(:local_variable_defined?)
 
   def local_variable_get(name)
@@ -10807,6 +10823,7 @@ class Binding
     unless local_variable_defined?(name)
       ::Kernel.raise(::NameError, "local variable '#{name}' is not defined for #{inspect}")
     end
+    return __ir_local_variable_get__(name) if IR_KEYWORDS.include?(name)
     eval(name)
   end unless method_defined?(:local_variable_get)
 

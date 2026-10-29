@@ -112,6 +112,15 @@ namespace IronRuby.Builtins {
                 toStr.Context.Inspect(name).ToString());
         }
 
+        /// <summary>
+        /// The value of a local the binding sees, read from the scope rather than through eval: for
+        /// a local named by a keyword (a keyword argument such as alias:), which no source can name.
+        /// </summary>
+        [RubyMethod("__ir_local_variable_get__", RubyMethodAttributes.PrivateInstance)]
+        public static object GetLocalVariableDirect(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name) {
+            return self.LocalScope.ResolveLocalVariable(ToIdentifier(toStr, name));
+        }
+
         [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, Binding/*!*/ self) {
             return RubyUtils.ObjectToMutableStringPrefix(context, self).Append('>');
