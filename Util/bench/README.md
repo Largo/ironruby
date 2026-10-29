@@ -100,11 +100,15 @@ per run. The original Ruby prelude ran against the same assemblies using the
 retained mailbox primitives. This isolates the switch change, but does not replace
 a comparison on other runtimes and machines.
 
-| Parked fibers | Median forced collection |
+| Parked fibers | Original upper-middle collection sample |
 | ---: | ---: |
 | 0 | 9.33 ms |
 | 1,000 | 29.81 ms |
 | 10,000 | 170.80 ms |
+
+These historical GC figures use the upper-middle value of 20 samples, as the
+initial benchmark did. The corrected benchmark averages the middle pair for even
+sample counts and uses the middle value for odd counts.
 
 The C# core combines suspension, posting, owner restoration, and the resumed state
 update. It replaces tagged Ruby message arrays with typed messages and packs yield
@@ -116,9 +120,11 @@ still occupy CLR threads.
 
 The Ruby `Fiber` is now a handle over private execution state. Worker frames and
 mailboxes retain that state; the C# core keeps a weak reference to the handle.
-The current handle is strong while user code runs and is cleared before a switch
-posts its outgoing message. Collection of a discarded handle wakes the parked
-worker with a private control-flow exception. Ruby `rescue` cannot catch it and
+The current handle is strong while user code runs. Resume, raise, and kill waits
+also pin the resumer's handle until control returns, so collection cannot break
+an active resume chain. Yield and transfer waits remain collectible. Collection
+of a discarded handle wakes the parked worker with a private control-flow
+exception. Ruby `rescue` cannot catch it and
 Ruby `ensure` bodies, TracePoint hooks, signal handlers, and Ruby finalizer
 callbacks do not execute during reclamation. CLR cleanup finally blocks still
 execute. If CLR code catches the signal, the next Ruby entry throws it again;
@@ -148,9 +154,10 @@ The matrix checks handle collection, dropped generator Enumerators, factory
 scope retention, nested ensure/rescue suppression, worker reuse, reachable and
 running handle identity, ordinary kill/raise and tracing, copied handles, custom
 Enumerator receiver identity, captured locals, and repeated waves of discarded
-workers. It also waits for an idle reclaimed worker to retire. Each collection
-check has a deadline and checks worker termination rather than assuming that one
-GC is enough.
+workers. It also checks nested resume/raise/kill waits, released resumer pins,
+and collectible transfer waits, and waits for an idle reclaimed worker to retire.
+Each collection check has a deadline and checks worker termination rather than
+assuming that one GC is enough.
 
 `Fiber_ReclamationClrBoundary1` in the C# test suite exercises a CLR catch that
 swallows the signal and a CLR finally that replaces it with another exception.

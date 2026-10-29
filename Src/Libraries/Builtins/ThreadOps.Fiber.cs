@@ -216,6 +216,8 @@ namespace IronRuby.Builtins {
             private readonly RubySymbol _parentKey;
             private RubyThreadInfo _threadInfo;
             private volatile bool _completed;
+            // A resumer is part of an active call chain until its child hands control back.
+            private object _pinnedHandle;
             private const int ReclaimKind = 7;
             private static readonly FiberMessage _reclaimMessage = new FiberMessage(ReclaimKind, null);
             public object State { get; set; }
@@ -310,10 +312,19 @@ namespace IronRuby.Builtins {
             }
 
             public FiberMessage Switch(FiberCore target, int kind, object payload) {
-                Status = "suspended";
-                Deactivate();
-                target.Post(kind, payload);
-                return Take();
+                if (kind == FiberMessage.ResumeKind || kind == FiberMessage.RaiseKind || kind == FiberMessage.KillKind) {
+                    _pinnedHandle = Handle;
+                }
+                try {
+                    Status = "suspended";
+                    Deactivate();
+                    target.Post(kind, payload);
+                    return Take();
+                } finally {
+                    // Take restores the running handle before releasing this pin. Also drop it
+                    // when an interrupt unwinds the wait instead of delivering a message.
+                    _pinnedHandle = null;
+                }
             }
 
             public FiberMessage Yield(FiberCore target, RubyArray args) {

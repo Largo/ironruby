@@ -113,9 +113,89 @@ module FiberReclaimChecks
     weak
   end
 
+  def self.build_waiting_resumer(kind, holder, observer)
+    Fiber.new do
+      child = Fiber.new do
+        if kind == :resume
+          verify_waiter(observer)
+        else
+          begin
+            Fiber.yield :ready
+          rescue RuntimeError
+            verify_waiter(observer) if kind == :raise
+          ensure
+            verify_waiter(observer) if kind == :kill
+          end
+        end
+        :child_done
+      end
+      child.resume unless kind == :resume
+      holder.clear
+      case kind
+      when :resume then child.resume
+      when :raise then child.raise(RuntimeError, 'wake child')
+      when :kill then child.kill
+      end
+      Fiber.yield :parent_parked
+    end
+  end
+
+  def self.verify_waiter(observer)
+    3.times { GC.start; System::GC.wait_for_pending_finalizers }
+    assert(observer.first.weakref_alive?, 'waiting resumer lost its public handle')
+  end
+
+  def self.waiting_resumer(kind)
+    holder = []
+    observer = []
+    holder << build_waiting_resumer(kind, holder, observer)
+    observer << WeakRef.new(holder.first)
+    # Drive the state directly so the test does not accidentally keep the public
+    # handle alive in the caller's Ruby/CLR receiver slots. The holder protects
+    # startup, then the parent clears it immediately before waiting on the child.
+    [holder.first.__state__, observer.first]
+  end
+
+  def self.check_waiting_resumer(kind)
+    thread = Thread.new do
+      state, weak = waiting_resumer(kind)
+      assert(state.resume == :parent_parked, 'child did not return to its resumer')
+      eventually('resumer handle stayed pinned after yielding') do
+        !weak.weakref_alive? && state.__core__.status == 'terminated'
+      end
+    end
+    unless thread.join(10)
+      thread.kill
+      thread.join(1)
+      raise "#{kind} resumer was reclaimed before its child returned"
+    end
+    thread.value
+  end
+
+  def self.build_transferred_fiber(holder, root)
+    Fiber.new do
+      holder.clear
+      root.transfer(:transfer_parked)
+    end
+  end
+
+  def self.discard_transferred_fiber
+    holder = []
+    holder << build_transferred_fiber(holder, Fiber.current)
+    weak = WeakRef.new(holder.first)
+    state = holder.first.__state__
+    assert(state.transfer == :transfer_parked, 'transfer did not return to the root')
+    [weak, state.__core__]
+  end
+
   def self.run
     root = Fiber.current
     initial_threads = Thread.list.size
+    [:resume, :raise, :kill].each { |kind| check_waiting_resumer(kind) }
+    transfer_weak, transfer_core = discard_transferred_fiber
+    eventually('transferred fiber was incorrectly pinned') do
+      !transfer_weak.weakref_alive? && transfer_core.status == 'terminated'
+    end
     events = []
     weak, core, worker = discard(events)
     eventually('discarded handle or worker was retained') do

@@ -1,5 +1,7 @@
 using System;
 using System.Threading;
+using IronRuby.Builtins;
+using IronRuby.Runtime;
 
 namespace IronRuby.Tests {
     // A CLR boundary can catch an unwind signal or replace it from finally. The
@@ -26,6 +28,43 @@ namespace IronRuby.Tests {
     }
 
     public partial class Tests {
+        [Options(NoRuntime = true)]
+        public void Block_ReturnTraceFrameCleanup1() {
+            foreach (bool compiled in new[] { false, true }) {
+                var engine = Ruby.CreateEngine(setup => {
+                    setup.Options["EnableTracing"] = true;
+                    setup.Options["NoAdaptiveCompilation"] = compiled;
+                });
+                var result = engine.Execute<RubyArray>(@"
+class ReturnTraceFailure
+  define_method(:run) do
+    $captured_block = binding
+    [1].each { return :value }
+  end
+end
+set_trace_func proc { |event, file, line, id, frame, klass|
+  if event == 'return' && id == :run
+    set_trace_func nil
+    raise 'return trace failed'
+  end
+}
+begin
+  ReturnTraceFailure.new.run
+rescue => error
+  failure = error.message
+ensure
+  set_trace_func nil
+end
+[$captured_block, failure]
+");
+                AssertEquals(result[1].ToString(), "return trace failed");
+                var scope = (RubyBlockScope)((Binding)result[0]).FrameScope;
+                Assert(scope.InterpretedFrame == null);
+                AssertEquals(scope.LambdaReturnState, (byte)2);
+                engine.Runtime.Shutdown();
+            }
+        }
+
         public void Fiber_ReclamationClrBoundary1() {
             FiberReclaimInterop.Reset();
             Context.ObjectClass.SetConstant("FiberReclaimInterop", Context.GetClass(typeof(FiberReclaimInterop)));

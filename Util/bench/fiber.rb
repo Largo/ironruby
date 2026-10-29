@@ -36,7 +36,9 @@ when 'gc'
     end
     3.times { GC.start }
     pauses = Array.new(samples) { elapsed { GC.start } * 1000 }.sort
-    puts "gc parked=#{n} samples=#{samples} min_ms=#{pauses.first} median_ms=#{pauses[samples / 2]} max_ms=#{pauses.last}"
+    middle = samples / 2
+    median = samples.even? ? (pauses[middle - 1] + pauses[middle]) / 2.0 : pauses[middle]
+    puts "gc parked=#{n} samples=#{samples} min_ms=#{pauses.first} median_ms=#{median} max_ms=#{pauses.last}"
   ensure
     fibers.each { |f| f.resume if f.alive? }
   end
