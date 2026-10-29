@@ -46,6 +46,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.BCrypt.BCryptLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nio4r.Nio4rLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Strptime.StrptimeLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -17337,6 +17338,79 @@ namespace IronRuby.StandardLibrary.Puma {
         
         public static System.Exception/*!*/ ExceptionFactory__Puma__HttpParserError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Strptime {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class StrptimeLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
+            
+            
+            DefineGlobalClass("Strftime", typeof(IronRuby.StandardLibrary.Strptime.StrftimeOps), 0x00000008, classRef0, LoadStrftime_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            DefineGlobalClass("Strptime", typeof(IronRuby.StandardLibrary.Strptime.StrptimeOps), 0x00000008, classRef0, LoadStrptime_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+        }
+        
+        private static void LoadStrftime_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "exec", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Strptime.StrftimeOps.Exec)
+            );
+            
+            DefineLibraryMethod(module, "execi", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Strptime.StrftimeOps.ExecI)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Strptime.StrftimeOps.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Strptime.StrftimeOps.InitializeCopy)
+            );
+            
+            DefineLibraryMethod(module, "source", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Strptime.StrftimeOps.Source)
+            );
+            
+        }
+        
+        private static void LoadStrptime_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "exec", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.StandardLibrary.Strptime.StrptimeOps.Exec)
+            );
+            
+            DefineLibraryMethod(module, "execi", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Strptime.StrptimeOps.ExecI)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Strptime.StrptimeOps.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Strptime.StrptimeOps.InitializeCopy)
+            );
+            
+            DefineLibraryMethod(module, "source", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Strptime.StrptimeOps.Source)
+            );
+            
         }
         
     }
