@@ -142,16 +142,27 @@ namespace IronRuby.Runtime.Calls {
 
             int version;
             MethodResolutionResult method;
+            RefinementActivation refinements = null;
+            RecordScope recordScope = RecordScope.None;
             RubyClass targetClass = Context.GetImmediateClassOf(target);
             using (targetClass.Context.ClassHierarchyLocker()) {
-                // A precompiled dispatcher carries no conditions beyond the class version, so it cannot hold
-                // the lexical refinement guard: a call a refinement could reach is left to rule building.
-                // Refining the name later re-versions the class, which retires the dispatcher.
+                // A call a refinement could reach is resolved under the caller's refinements, and its dispatcher
+                // has to test them as the rule would. It can where the rule reads them from a method's record (see
+                // MakeRefinementGuard); any other call of the kind is left to rule building. Refining the name
+                // later re-versions the class, which retires a dispatcher made without the test.
                 if (Signature.HasScope && targetClass.Context.IsRefinementSensitive(targetClass, _methodName)) {
-                    return null;
+                    refinements = scope.GetActiveRefinements();
+                    recordScope = GetRecordScope(scope, refinements);
+                    if (recordScope == RecordScope.None) {
+                        return null;
+                    }
+                    version = targetClass.Version.Method;
+                    method = targetClass.ResolveMethodNoLock(_methodName, GetVisibilityContext(Signature, scope), MethodLookup.Default,
+                        refinements).InvalidateSitesOnOverride();
+                } else {
+                    version = targetClass.Version.Method;
+                    method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
                 }
-                version = targetClass.Version.Method;
-                method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
             }
 
             if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
@@ -174,7 +185,15 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            var dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
+            MemberDispatcher dispatcher;
+            if (refinements == null) {
+                dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
+            } else if (rubyMethod != null) {
+                dispatcher = rubyMethod.GetRefinedDispatcher(delegateType, Signature, target, version, refinements, recordScope == RecordScope.Block);
+            } else {
+                dispatcher = null;
+            }
+
             if (dispatcher != null) {
                 object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
                 RubyBinder.DumpPrecompiledRule(this, dispatcher);
