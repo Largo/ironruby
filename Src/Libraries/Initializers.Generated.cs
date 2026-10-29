@@ -48,6 +48,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Strptime.StrptimeLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Zstd.ZstdLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Yajl.YajlLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -17448,22 +17449,22 @@ namespace IronRuby.StandardLibrary.Zstd {
         
         private static void LoadZstd_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "compress", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Compress)
             );
             
             DefineLibraryMethod(module, "compress_using_dict", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.CompressUsingDict)
             );
             
             DefineLibraryMethod(module, "decompress", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Decompress)
             );
             
             DefineLibraryMethod(module, "decompress_using_dict", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.DecompressUsingDict)
             );
             
@@ -17473,7 +17474,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             );
             
             DefineLibraryMethod(module, "write_skippable_frame", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.WriteSkippableFrame)
             );
             
@@ -17486,22 +17487,22 @@ namespace IronRuby.StandardLibrary.Zstd {
         
         private static void LoadZstd_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "compress", 0x21, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Compress)
             );
             
             DefineLibraryMethod(module, "compress_using_dict", 0x21, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.CompressUsingDict)
             );
             
             DefineLibraryMethod(module, "decompress", 0x21, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Decompress)
             );
             
             DefineLibraryMethod(module, "decompress_using_dict", 0x21, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.DecompressUsingDict)
             );
             
@@ -17511,7 +17512,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             );
             
             DefineLibraryMethod(module, "write_skippable_frame", 0x21, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.WriteSkippableFrame)
             );
             
@@ -17524,7 +17525,7 @@ namespace IronRuby.StandardLibrary.Zstd {
         
         private static void LoadZstd__CDict_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "initialize", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.CDict, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.CDict.Initialize)
             );
             
@@ -17572,12 +17573,12 @@ namespace IronRuby.StandardLibrary.Zstd {
             );
             
             DefineLibraryMethod(module, "initialize", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Initialize)
             );
             
             DefineLibraryMethod(module, "write", 0x11, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Write)
             );
             
@@ -17590,10 +17591,132 @@ namespace IronRuby.StandardLibrary.Zstd {
             );
             
             DefineLibraryMethod(module, "initialize", 0x12, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress.Initialize)
             );
             
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Yajl {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class YajlLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.SystemException));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.Object));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Yajl", typeof(IronRuby.StandardLibrary.Yajl.YajlOps), 0x00000008, null, null, LoadYajl_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Yajl::EncodeError", typeof(IronRuby.StandardLibrary.Yajl.YajlOps.EncodeError), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(YajlLibraryInitializer.ExceptionFactory__Yajl__EncodeError));
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Yajl::Encoder", typeof(IronRuby.StandardLibrary.Yajl.YajlOps.Encoder), 0x00000008, classRef1, LoadYajl__Encoder_Instance, LoadYajl__Encoder_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def4 = DefineClass("Yajl::ParseError", typeof(IronRuby.StandardLibrary.Yajl.YajlOps.ParseError), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(YajlLibraryInitializer.ExceptionFactory__Yajl__ParseError));
+            IronRuby.Builtins.RubyClass def5 = DefineClass("Yajl::Parser", typeof(IronRuby.StandardLibrary.Yajl.YajlOps.Parser), 0x00000008, classRef1, LoadYajl__Parser_Instance, LoadYajl__Parser_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def6 = DefineClass("Yajl::Projector", typeof(IronRuby.StandardLibrary.Yajl.YajlOps.Projector), 0x00000008, classRef1, LoadYajl__Projector_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "EncodeError", def2);
+            SetConstant(def1, "Encoder", def3);
+            SetConstant(def1, "ParseError", def4);
+            SetConstant(def1, "Parser", def5);
+            SetConstant(def1, "Projector", def6);
+        }
+        
+        private static void LoadYajl_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "MAX_DEPTH", IronRuby.StandardLibrary.Yajl.YajlOps.MaxDepth);
+            
+        }
+        
+        private static void LoadYajl__Encoder_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "encode", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Yajl.YajlOps.Encoder, System.Object[], System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Encoder.Encode)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<System.Object, System.Object[], System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Encoder.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "on_progress=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yajl.YajlOps.Encoder, System.Object, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Encoder.SetProgressCallback)
+            );
+            
+        }
+        
+        private static void LoadYajl__Encoder_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "allocate", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Encoder.Allocate)
+            );
+            
+            DefineLibraryMethod(module, "new", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Encoder.New)
+            );
+            
+        }
+        
+        private static void LoadYajl__Parser_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "<<", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Yajl.YajlOps.Parser, System.Object, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.ParseChunk)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<System.Object, System.Object[], System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "on_parse_complete=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yajl.YajlOps.Parser, System.Object, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.SetCompleteCallback)
+            );
+            
+            DefineLibraryMethod(module, "parse", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Yajl.YajlOps.Parser, System.Object[], System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.Parse)
+            );
+            
+            DefineLibraryMethod(module, "parse_chunk", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Yajl.YajlOps.Parser, System.Object, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.ParseChunk)
+            );
+            
+        }
+        
+        private static void LoadYajl__Parser_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "allocate", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.Allocate)
+            );
+            
+            DefineLibraryMethod(module, "new", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Parser.New)
+            );
+            
+        }
+        
+        private static void LoadYajl__Projector_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "project", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Yajl.YajlOps.Projector.Project)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Yajl__EncodeError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Yajl.YajlOps.EncodeError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Yajl__ParseError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Yajl.YajlOps.ParseError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }

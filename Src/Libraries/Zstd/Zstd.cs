@@ -367,7 +367,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("compress", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("compress", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Compress(RubyContext/*!*/ context, object self, [NotNull]params object[]/*!*/ args) {
+        public static MutableString/*!*/ Compress(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             object[] pos;
             Hash kwargs = Args.Split(args, 1, 1, out pos);
 
@@ -391,7 +391,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("compress_using_dict", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("compress_using_dict", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ CompressUsingDict(RubyContext/*!*/ context, object self, [NotNull]params object[]/*!*/ args) {
+        public static MutableString/*!*/ CompressUsingDict(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             context.ReportWarning("Zstd.compress_using_dict is deprecated; use Zstd.compress with `dict:` instead.");
             if (args.Length < 2 || args.Length > 3) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 2..3)", args.Length);
@@ -455,7 +455,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("decompress", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("decompress", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Decompress(RubyContext/*!*/ context, object self, [NotNull]params object[]/*!*/ args) {
+        public static MutableString/*!*/ Decompress(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             object[] pos;
             Hash kwargs = Args.Split(args, 1, 0, out pos);
             byte[] input = Args.StringValue(context, pos[0]).ToByteArray();
@@ -490,7 +490,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("decompress_using_dict", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("decompress_using_dict", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ DecompressUsingDict(RubyContext/*!*/ context, object self, [NotNull]params object[]/*!*/ args) {
+        public static MutableString/*!*/ DecompressUsingDict(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             context.ReportWarning("Zstd.decompress_using_dict is deprecated; use Zstd.decompress with `dict:` instead.");
             if (args.Length != 2) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 2)", args.Length);
@@ -549,7 +549,7 @@ namespace IronRuby.StandardLibrary.Zstd {
 
         [RubyMethod("write_skippable_frame", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("write_skippable_frame", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ WriteSkippableFrame(RubyContext/*!*/ context, object self, [NotNull]params object[]/*!*/ args) {
+        public static MutableString/*!*/ WriteSkippableFrame(RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
             object[] pos;
             Hash kwargs = Args.Split(args, 2, 0, out pos);
             object[] kw = Args.GetKwargs(context, kwargs, "magic_variant");
@@ -623,14 +623,14 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyConstructor]
-            public static CDict/*!*/ Create(RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static CDict/*!*/ Create(RubyClass/*!*/ self, params object[]/*!*/ args) {
                 var result = new CDict(self);
                 Initialize(self.Context, result, args);
                 return result;
             }
 
             [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-            public static object Initialize(RubyContext/*!*/ context, CDict/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static object Initialize(RubyContext/*!*/ context, CDict/*!*/ self, params object[]/*!*/ args) {
                 if (args.Length < 1 || args.Length > 2) {
                     throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..2)", args.Length);
                 }
@@ -736,14 +736,14 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyConstructor]
-            public static StreamingCompress/*!*/ Create(RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static StreamingCompress/*!*/ Create(RubyClass/*!*/ self, params object[]/*!*/ args) {
                 var result = new StreamingCompress(self);
                 Initialize(self.Context, result, args);
                 return result;
             }
 
             [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-            public static object Initialize(RubyContext/*!*/ context, StreamingCompress/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static object Initialize(RubyContext/*!*/ context, StreamingCompress/*!*/ self, params object[]/*!*/ args) {
                 object[] pos;
                 Hash kwargs = Args.Split(args, 0, 1, out pos);
                 int outSize = (int)Z.ZSTD_CStreamOutSize();
@@ -786,7 +786,7 @@ namespace IronRuby.StandardLibrary.Zstd {
             /// once per compressor call it took.
             /// </summary>
             [RubyMethod("write")]
-            public static object Write(RubyContext/*!*/ context, StreamingCompress/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static object Write(RubyContext/*!*/ context, StreamingCompress/*!*/ self, params object[]/*!*/ args) {
                 long total = 0;
                 var ctx = self.Context;
                 byte[] buf = self._buf;
@@ -860,14 +860,14 @@ namespace IronRuby.StandardLibrary.Zstd {
             }
 
             [RubyConstructor]
-            public static StreamingDecompress/*!*/ Create(RubyClass/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static StreamingDecompress/*!*/ Create(RubyClass/*!*/ self, params object[]/*!*/ args) {
                 var result = new StreamingDecompress(self);
                 Initialize(self.Context, result, args);
                 return result;
             }
 
             [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-            public static object Initialize(RubyContext/*!*/ context, StreamingDecompress/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            public static object Initialize(RubyContext/*!*/ context, StreamingDecompress/*!*/ self, params object[]/*!*/ args) {
                 object[] pos;
                 Hash kwargs = Args.Split(args, 0, 0, out pos);
                 int outSize = (int)Z.ZSTD_DStreamOutSize();
