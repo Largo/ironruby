@@ -336,6 +336,11 @@ Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized 
 ~1.8x faster than the default Debug build across the whole suite. See
 [`Util/bench/README.md`](Util/bench/README.md).
 
+`IRONRUBY_STARTUP_TRACE=1` prints, when the process exits, where its startup went: milestones
+since the process started, and for the Ruby files it loaded the time spent parsing them
+(prism), transforming them to the DLR tree, compiling them for the interpreter and running
+their own code, slowest files first.
+
 ## Packaging an application (`irubyc`)
 
 `irubyc` is IronRuby's answer to JRuby's `jrubyc`: it turns a Ruby program into a .NET

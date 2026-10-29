@@ -165,6 +165,11 @@ namespace IronRuby.Runtime {
             if (options.HasSearchPaths) {
                 foreach (string path in options.SearchPaths) {
                     loadPaths.Add(_context.EncodePath(path));
+                    // -X:StdLib, which every launcher passes, names the library directories here.
+                    if (_ironRubyLibraryPath == null &&
+                        String.Equals(Path.GetFileName(path.TrimEnd('/', '\\')), "ironruby", StringComparison.OrdinalIgnoreCase)) {
+                        _ironRubyLibraryPath = CanonicalDirectory(path);
+                    }
                 }
             }
 
@@ -172,6 +177,25 @@ namespace IronRuby.Runtime {
             // TODO: remove?
             loadPaths.Add(MutableString.CreateAscii("."));
             return loadPaths;
+        }
+
+        /// <summary>
+        /// IronRuby's own library directory, Src/StdLib/ironruby: where its implementations of
+        /// CRuby's C extensions are, as .rb files (etc.rb loads the C# half). From -X:StdLib when
+        /// it names one, else the default standard library's; spelled as FindFile spells a
+        /// $LOAD_PATH directory, so the two compare.
+        /// </summary>
+        private string _ironRubyLibraryPath;
+
+        private string/*!*/ CanonicalDirectory(string/*!*/ dir) {
+            try {
+                if (dir.Length > 0 && !Platform.IsAbsolutePath(dir)) {
+                    dir = Platform.GetFullPath(dir);
+                }
+            } catch (Exception) {
+                // as FindFile: the path as given
+            }
+            return RubyUtils.CanonicalizePath(ResolveDirectoryLinks(dir)).TrimEnd('/');
         }
 
         private void AddStandardLibraryPath(RubyArray/*!*/ loadPaths, string path, string applicationBaseDir) {
@@ -222,7 +246,11 @@ namespace IronRuby.Runtime {
             // -I ones before them.
             int firstDefault = loadPaths.Count;
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/site_ruby/" + _context.StandardLibraryVersion)));
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+            string ironRubyLibrary = RubyUtils.CombinePaths(path, "ironruby");
+            if (_ironRubyLibraryPath == null) {
+                _ironRubyLibraryPath = CanonicalDirectory(ironRubyLibrary);
+            }
+            loadPaths.Add(_context.EncodePath(ironRubyLibrary));
             string rubyLib4 = RubyUtils.CombinePaths(path, "ruby/4.0");
             if (Directory.Exists(rubyLib4)) {
                 loadPaths.Add(_context.EncodePath(rubyLib4));
@@ -479,7 +507,11 @@ namespace IronRuby.Runtime {
         );
 
         internal static bool TryParseAssemblyName(string/*!*/ path, out string typeName, out string assemblyName) {
-            Match match = _AssemblyNameRegex.Match(path);
+            // The regex needs a property - a "," and a later "=" - to match. Every require asks,
+            // and an ordinary path has neither, so a quick look first: the unanchored regex
+            // otherwise tries each position of the path, which made it a tenth of irb's startup.
+            int comma = path.IndexOf(',');
+            Match match = (comma >= 0 && path.IndexOf('=', comma) >= 0) ? _AssemblyNameRegex.Match(path) : Match.Empty;
             if (match.Success) {
                 Group typeGroup = match.Groups["type"];
                 Group assemblyGroup = match.Groups["assembly"];
@@ -714,13 +746,19 @@ namespace IronRuby.Runtime {
                 if (file.SourceUnit != null) {
                     AddScriptLines(file.SourceUnit);
 
-                    ScriptCode compiledCode;
-                    if (file.SourceUnit.LanguageContext == _context) {
-                        compiledCode = CompileRubySource(file.SourceUnit, flags);
-                    } else {
-                        compiledCode = file.SourceUnit.Compile();
+                    long traceStart = StartupTrace.Now();
+                    StartupTrace.BeginFile();
+                    try {
+                        ScriptCode compiledCode;
+                        if (file.SourceUnit.LanguageContext == _context) {
+                            compiledCode = CompileRubySource(file.SourceUnit, flags);
+                        } else {
+                            compiledCode = file.SourceUnit.Compile();
+                        }
+                        loaded = Execute(globalScope, compiledCode);
+                    } finally {
+                        StartupTrace.EndFile(file.Path, traceStart);
                     }
-                    loaded = Execute(globalScope, compiledCode);
                 } else {
                     Debug.Assert(file.Path != null);
                     try {
@@ -876,6 +914,16 @@ namespace IronRuby.Runtime {
                 // - use forward slashes everywhere.
                 dir = RubyUtils.CanonicalizePath(dir);
                 ResolvedFile file = ResolveFile(RubyUtils.CombinePaths(dir, path), extension, appendExtensions, sourceFileExtensions);
+                // A C extension by its library name ("etc.so", as tmpdir.rb requires it) is IronRuby's
+                // implementation of that extension, as JRuby loads its own for one: the .rb of the
+                // same name in IronRuby's library directory. Not finding it cost a LoadError and
+                // RubyGems' search of every installed gem - a quarter of a second, the first time.
+                if (file == null && _ironRubyLibraryPath != null &&
+                    extension.Equals(".so", StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(dir.TrimEnd('/'), _ironRubyLibraryPath, StringComparison.OrdinalIgnoreCase)) {
+                    string source = path.Substring(0, path.Length - extension.Length) + ".rb";
+                    file = ResolveFile(RubyUtils.CombinePaths(dir, source), ".rb", false, sourceFileExtensions);
+                }
                 if (file != null) {
                     result.Add(file);
                 }
