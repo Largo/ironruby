@@ -131,3 +131,35 @@ namespace IronRubyTests.ExtensionMethods2 {
         }
     }
 }
+
+// Extension methods whose Ruby name (describe) is not their CLR name (Describe).
+namespace IronRubyTests.ExtensionMethods3 {
+    public class Widget {
+        public string Describe() { return "Describe()"; }
+        public string Describe(int a) { return "Describe(int)"; }
+    }
+
+    public class SubWidget : Widget {
+    }
+
+    public interface IShape {
+    }
+
+    public class Square : IShape {
+        public string Area() { return "Area()"; }
+    }
+
+    public class Box<T> {
+        public string Open() { return "Open()"; }
+    }
+
+    public static class EMs {
+        // same signature as Widget.Describe() => the instance method is preferred
+        public static string Describe(this Widget self) { return "e:Describe()"; }
+        public static string Describe(this Widget self, string a) { return "e:Describe(string)"; }
+
+        public static string Area(this IShape self, int scale) { return "e:Area(int)"; }
+
+        public static string Open<T>(this Box<T> self, T item) { return "e:Open(T)"; }
+    }
+}

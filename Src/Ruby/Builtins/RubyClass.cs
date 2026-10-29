@@ -117,7 +117,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal bool HasAdoptedInstances { get; set; }
 
-        // Increased each time an extension method is defined on interfaces or generic definitions included in this class.
+        // Increased each time an extension method is defined on this class or on interfaces or generic definitions included in it.
         internal int _extensionVersion;
 
         #endregion
@@ -474,8 +474,22 @@ namespace IronRuby.Builtins {
             //   - We could optimize a bit if the definition overrides a method group thata hasn't been used in a call site.
             //     In that case we wouldn't need to invalidate any rules. This is rare and we would still need to invalidate groups. So we don't do that.
             // - No CLR singletons special casing - extension methods can't be added on singletons.
+            //
+            // A group is stored under the name it was looked up by, which for a CLR method is either its own name (Describe)
+            // or the mangled one (describe, see TryGetClrMember).
+            var names = new HashSet<string>();
             foreach (var extension in extensions) {
-                InvalidateGroupsInSubClasses(extension.Method.Name, Int32.MaxValue);
+                string name = extension.Method.Name;
+                names.Add(name);
+
+                string mangled = RubyUtils.TryMangleName(name);
+                if (mangled != null) {
+                    names.Add(mangled);
+                }
+            }
+
+            foreach (var name in names) {
+                InvalidateGroupsInSubClasses(name, Int32.MaxValue);
             }
         }
 
