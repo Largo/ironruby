@@ -1420,13 +1420,16 @@ namespace IronRuby.Runtime {
         public static object EvaluateRefinementBlock(RubyModule/*!*/ holder, RubyModule/*!*/ refinement, BlockParam/*!*/ block) {
             Proc proc = block.Proc;
             RefinementActivation saved = proc.RefinementOverride;
+            RefinementActivation active = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
 
             // While the count is not zero the lexical walk looks at every block's override, and the rules that
             // read a method's record for a block in it fail (RubyScope.GetLexicalRefinements, RubyCallAction.Resolve).
+            // Nothing that can throw comes between the increment and the try, whose finally undoes it: a count left
+            // above zero would turn those fast paths off for the rest of the process.
             Interlocked.Increment(ref RubyOps.RefineBlocksRunning);
-            proc.RefinementOverride = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
-            holder.Context.RefinementVersion++;
             try {
+                proc.RefinementOverride = active;
+                holder.Context.RefinementVersion++;
                 return EvaluateInModule(refinement, block, null);
             } finally {
                 proc.RefinementOverride = saved;
