@@ -306,19 +306,8 @@ namespace IronRuby.Builtins {
         /// several that Encoding.GetEncoding still resolves - EUC-JP is the obvious one - and it
         /// knows nothing about the encodings Ruby has and .NET does not. Everything an alias points
         /// at has to be in here as well, or Encoding.list.include?(Encoding.find(alias)) is false.
-        ///
-        /// Built once: the set cannot change within a process, and building it costs ~35 ms
-        /// (every alias and code page is resolved through .NET), which the core prelude paid at
-        /// every startup just to define the Encoding constants.
         /// </summary>
         private static List<RubyEncoding>/*!*/ GetEncodingList(RubyContext/*!*/ context) {
-            return _encodingList ?? (_encodingList = BuildEncodingList(context));
-        }
-
-        // Read only once published; a race builds it twice and keeps either.
-        private static volatile List<RubyEncoding> _encodingList;
-
-        private static List<RubyEncoding>/*!*/ BuildEncodingList(RubyContext/*!*/ context) {
             var seen = new Dictionary<int, bool>();
             var result = new List<RubyEncoding>();
 

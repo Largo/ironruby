@@ -48,21 +48,6 @@ namespace IronRuby.Hosting {
             return Ruby.CreateRubySetup();
         }
 
-#if NETCOREAPP
-        /// <summary>
-        /// The DLR's default reads the runtime setup from the .NET Framework configuration system
-        /// (a &lt;microsoft.scripting&gt; section in ir.exe.config). On .NET that needs
-        /// System.Configuration.ConfigurationManager, which ir does not ship, so the probe could
-        /// only fail - an assembly search and a FileNotFoundException, ~25 ms of every startup -
-        /// and always ended in this same empty setup.
-        /// </summary>
-        protected override ScriptRuntimeSetup CreateRuntimeSetup() {
-            var setup = new ScriptRuntimeSetup();
-            setup.LanguageSetups.Add(CreateLanguageSetup());
-            return setup;
-        }
-#endif
-
         protected override ConsoleOptions ParseOptions(string[] args, ScriptRuntimeSetup runtimeSetup, LanguageSetup languageSetup) {
             languageSetup.Options["ApplicationBase"] = AppDomain.CurrentDomain.BaseDirectory;
             runtimeSetup.HostType = typeof(RubyScriptHost);

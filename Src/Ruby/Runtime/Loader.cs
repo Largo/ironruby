@@ -755,16 +755,26 @@ namespace IronRuby.Runtime {
                         } else {
                             compiledCode = file.SourceUnit.Compile();
                         }
-                        bool corePrelude = _corePreludeLoaderThread == Thread.CurrentThread && _corePreludeThread == null
+                        // A file the prelude requires from outside its own directory - an argf.rb
+                        // earlier on the load path, say - is a program's, and its constants keep
+                        // their locations: it runs with the marker lifted.
+                        Thread thread = Thread.CurrentThread;
+                        bool corePrelude = _corePreludeLoaderThread == thread && _corePreludeDirectory == null
                             && Path.GetFileName(file.Path) == "ruby4.rb";
+                        bool foreign = !corePrelude && _corePreludeThread == thread && !IsInCorePreludeDirectory(file.Path);
                         if (corePrelude) {
-                            _corePreludeThread = Thread.CurrentThread;
+                            _corePreludeDirectory = Path.GetDirectoryName(Path.GetFullPath(file.Path)) + Path.DirectorySeparatorChar;
+                            _corePreludeThread = thread;
+                        } else if (foreign) {
+                            _corePreludeThread = null;
                         }
                         try {
                             loaded = Execute(globalScope, compiledCode);
                         } finally {
                             if (corePrelude) {
                                 _corePreludeThread = null;
+                            } else if (foreign) {
+                                _corePreludeThread = thread;
                             }
                         }
                     } finally {
@@ -1273,6 +1283,13 @@ namespace IronRuby.Runtime {
         // The thread in LoadCorePrelude, while it is: the ruby4.rb it loads is the core prelude, a
         // later `load "ruby4.rb"` by a program is not.
         private Thread _corePreludeLoaderThread;
+
+        // The directory of the core prelude's ruby4.rb, with a trailing separator, once it has started.
+        private string _corePreludeDirectory;
+
+        private bool IsInCorePreludeDirectory(string/*!*/ path) {
+            return Path.GetFullPath(path).StartsWith(_corePreludeDirectory, StringComparison.OrdinalIgnoreCase);
+        }
 
         /// <summary>
         /// True while this thread runs ruby4.rb as the core prelude, loaded by the host itself: a
