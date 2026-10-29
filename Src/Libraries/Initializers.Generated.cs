@@ -647,6 +647,11 @@ namespace IronRuby.Builtins {
         
         private static void LoadBinding_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             module.UndefineMethodNoEvent("LocalScope");
+            DefineLibraryMethod(module, "__ir_resolve_local__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, System.Object>(IronRuby.Builtins.BindingOps.ResolveLocal)
+            );
+            
             DefineLibraryMethod(module, "__ir_variable_name__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.VariableName)
@@ -1879,8 +1884,8 @@ namespace IronRuby.Builtins {
             
             #if FEATURE_FILESYSTEM
             DefineLibraryMethod(module, "truncate", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.RubyFile, System.Int32, System.Int32>(IronRuby.Builtins.RubyFileOps.Truncate)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.RubyFile, System.Object, System.Int32>(IronRuby.Builtins.RubyFileOps.Truncate)
             );
             
             #endif
@@ -2223,8 +2228,8 @@ namespace IronRuby.Builtins {
             #endif
             #if FEATURE_FILESYSTEM
             DefineLibraryMethod(module, "truncate", 0x61, 
-                0x00040000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Int32, System.Int32>(IronRuby.Builtins.RubyFileOps.Truncate)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Int32>(IronRuby.Builtins.RubyFileOps.Truncate)
             );
             
             #endif
@@ -11241,6 +11246,11 @@ namespace IronRuby.StandardLibrary.Sockets {
         
         #if FEATURE_SYNC_SOCKETS
         private static void LoadBasicSocket_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_raw_address_family", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sockets.RubyBasicSocket, System.Int32>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.GetAddressFamily)
+            );
+            
             DefineLibraryMethod(module, "__ir_raw_libc_getsockopt", 0x11, 
                 0x00030000U, 
                 new Func<IronRuby.StandardLibrary.Sockets.RubyBasicSocket, System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.LibcGetSocketOption)
@@ -11419,6 +11429,11 @@ namespace IronRuby.StandardLibrary.Sockets {
             DefineLibraryMethod(module, "connect_nonblock", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.RubySocket, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.Sockets.RubySocket.ConnectNonBlocking)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00180008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.RubySocket, System.Object, System.Int32, System.Int32, IronRuby.StandardLibrary.Sockets.RubySocket>(IronRuby.StandardLibrary.Sockets.RubySocket.Reinitialize)
             );
             
             DefineLibraryMethod(module, "listen", 0x11, 
