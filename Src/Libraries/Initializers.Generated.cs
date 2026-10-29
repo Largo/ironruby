@@ -14243,7 +14243,7 @@ namespace IronRuby.StandardLibrary.Date {
             
             DefineLibraryMethod(module, "<=>", 0x11, 
                 0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Date.RubyDate, System.Object, System.Object>(IronRuby.StandardLibrary.Date.RubyDate.Compare)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.StandardLibrary.Date.RubyDate, System.Object, System.Object>(IronRuby.StandardLibrary.Date.RubyDate.Compare)
             );
             
             DefineLibraryMethod(module, "===", 0x11, 

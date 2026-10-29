@@ -63,5 +63,16 @@ namespace IronRuby.Runtime.Calls {
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return this;
         }
+
+        /// <summary>
+        /// A rule generator declares no parameters, so the base answer was 0 - and a Method made
+        /// from Class#new then took exactly zero arguments as a proc: `ary.map(&Foo.method(:new))`
+        /// raised "given 1, expected 0".  The generators that build calls (new, exception,
+        /// Regexp.compile, IO.for_fd, Method#call) take any arguments, -1 as in MRI; only
+        /// allocate takes none.
+        /// </summary>
+        public override int GetArity() {
+            return Equals(_ruleGenerator, new RuleGenerator(RuleGenerators.InstanceAllocator)) ? 0 : -1;
+        }
     }
 }
