@@ -55,6 +55,13 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static readonly object ForwardToBase = new object();
 
+        // How many refine blocks are running in the process (RubyUtils.EvaluateRefinementBlock). While none is, no Proc
+        // has a refine block's override, so the lexical walk steps over block scopes (RubyScope.GetLexicalRefinements),
+        // and the rule of a refined call made in a block written in a method can test the method's record instead
+        // (RubyCallAction.Resolve) - with this test.
+        [Emitted]
+        public static int RefineBlocksRunning;
+
         // an instance of a dummy type that causes any rule based on instance type check to fail
         private sealed class _NeedsUpdate {
         }

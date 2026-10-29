@@ -1420,6 +1420,10 @@ namespace IronRuby.Runtime {
         public static object EvaluateRefinementBlock(RubyModule/*!*/ holder, RubyModule/*!*/ refinement, BlockParam/*!*/ block) {
             Proc proc = block.Proc;
             RefinementActivation saved = proc.RefinementOverride;
+
+            // While the count is not zero the lexical walk looks at every block's override, and the rules that
+            // read a method's record for a block in it fail (RubyScope.GetLexicalRefinements, RubyCallAction.Resolve).
+            Interlocked.Increment(ref RubyOps.RefineBlocksRunning);
             proc.RefinementOverride = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
             holder.Context.RefinementVersion++;
             try {
@@ -1427,6 +1431,7 @@ namespace IronRuby.Runtime {
             } finally {
                 proc.RefinementOverride = saved;
                 holder.Context.RefinementVersion++;
+                Interlocked.Decrement(ref RubyOps.RefineBlocksRunning);
             }
         }
 

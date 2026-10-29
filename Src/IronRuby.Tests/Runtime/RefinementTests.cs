@@ -246,5 +246,74 @@ p work.call
             Assert(retiredHere == 0 && specializedHere == 6,
                 System.String.Format("OSR sites retired: {0} (expected 0), copies specialized: {1} (expected 6)", retiredHere, specializedHere));
         }
+
+        /// <summary>
+        /// A refined call in a method body, or in a block in it, tests the body's refinement record (RubyCallAction.Resolve).
+        /// The same `def' run again where other refinements are active changes the record, and the calls bound against
+        /// the old one bind again - in the calls of the method that start afterwards and in one that is still running,
+        /// whether or not its scope has evaluated a string. (Before the record was tested, a running call that had
+        /// evaluated a string kept the old refinements, while every other one saw the new ones.)
+        /// </summary>
+        public void Refinements9() {
+            TestOutput(@"
+module R1; refine(String) { def r = :r1 }; end
+module R2; refine(String) { def r = :r2 }; end
+module R3; refine(String) { def r = :r3 }; end
+class C; end
+using R1
+definer = proc do
+  C.class_eval do
+    def m(s) = [s.r, [1].map { s.r }.first]
+    def n(s, again) = [s.r, again.call, s.r, [1].map { s.r }.first]
+    def e(s, again) = [eval('s.r'), again.call, s.r, eval('s.r')]
+  end
+end
+definer.call
+p (1..100).map { [C.new.m('x'), C.new.n('x', -> { :none }), C.new.e('x', -> { :none })] }.uniq
+using R2
+p C.new.m('x')
+p C.new.e('x', -> { definer.call; :again })
+p (1..100).map { [C.new.m('x'), C.new.n('x', -> { :none }), C.new.e('x', -> { :none })] }.uniq
+using R3
+p C.new.n('x', -> { definer.call; :again })
+p (1..100).map { [C.new.m('x'), C.new.n('x', -> { :none }), C.new.e('x', -> { :none })] }.uniq
+", @"
+[[[:r1, :r1], [:r1, :none, :r1, :r1], [:r1, :none, :r1, :r1]]]
+[:r1, :r1]
+[:r1, :again, :r2, :r2]
+[[[:r2, :r2], [:r2, :none, :r2, :r2], [:r2, :none, :r2, :r2]]]
+[:r2, :again, :r3, :r3]
+[[[:r3, :r3], [:r3, :none, :r3, :r3], [:r3, :none, :r3, :r3]]]
+");
+        }
+
+        /// <summary>
+        /// A block written in a method body, and one inside it, that Module#refine runs see the refinements of the module
+        /// being refined, though their calls were bound against the method's record before: a rule that reads the record
+        /// for a block passes only while no refine block runs. (CRuby 4.0 answers :outer_q and :outer_n on the last line,
+        /// from the inline caches the earlier calls filled; with no earlier call it answers :inner_q and :inner_n.)
+        /// </summary>
+        public void Refinements10() {
+            TestOutput(@"
+module Outer
+  refine(String) { def o = :outer; def q = :outer_q; def n = :outer_n }
+end
+using Outer
+class FakeRefiner
+  def refine(_) = yield
+end
+def mk(target, out) = target.send(:refine, Integer) { out << ['x'.o, 'x'.q, [1].map { 'x'.n }.first] }
+holder = Module.new { refine(String) { def q = :inner_q; def n = :inner_n } }
+out = []
+fake = FakeRefiner.new
+100.times { mk(fake, out) }
+p out.uniq
+mk(holder, out)
+p out.last
+", @"
+[[:outer, :outer_q, :outer_n]]
+[:outer, :inner_q, :inner_n]
+");
+        }
     }
 }

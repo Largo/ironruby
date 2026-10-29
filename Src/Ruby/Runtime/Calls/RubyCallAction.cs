@@ -630,10 +630,7 @@ namespace IronRuby.Runtime.Calls {
             // a `using' elsewhere - after which every scope recomputes its table - leaves the condition true.
             // A refinement that gains or loses a method re-versions the classes below the refined module.
             if (refinements != null) {
-                metaBuilder.AddCondition(Ast.Equal(
-                    Methods.GetLexicalRefinements.OpCall(AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope))),
-                    Ast.Constant(refinements, typeof(RefinementActivation))
-                ));
+                metaBuilder.AddCondition(MakeRefinementGuard(args, refinements));
             }
 
             // Whenever the current self's class changes we need to invalidate the rule, if a protected method is being called.
@@ -647,6 +644,70 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return method;
+        }
+
+        // The scopes whose refinements can be read from a method's record (see GetRecordScope).
+        private enum RecordScope {
+            None,
+            Method,
+            Block,
+        }
+
+        /// <summary>
+        /// A method body's scope has the refinements its `def' recorded (RubyMethodBody.SetDefinitionRefinements) and nothing
+        /// can `using' anything inside a method, so the scope of a method, and that of a block written directly in one, has
+        /// the refinements the method's record holds - the block unless a refine block is running it, which
+        /// RubyOps.RefineBlocksRunning says none is. Which of the two <paramref name="scope"/> is, if its refinements are
+        /// <paramref name="refinements"/>; None for any other scope, whose refinements have to be walked to.
+        /// </summary>
+        private static RecordScope GetRecordScope(RubyScope/*!*/ scope, RefinementActivation/*!*/ refinements) {
+            var methodScope = scope as RubyMethodScope;
+            if (methodScope != null) {
+                return ReferenceEquals(methodScope.DefinitionRefinementsValue, refinements) ? RecordScope.Method : RecordScope.None;
+            }
+
+            var blockScope = scope as RubyBlockScope;
+            if (blockScope != null && RubyOps.RefineBlocksRunning == 0) {
+                methodScope = blockScope.Parent as RubyMethodScope;
+                if (methodScope != null && ReferenceEquals(methodScope.DefinitionRefinementsValue, refinements)) {
+                    return RecordScope.Block;
+                }
+            }
+            return RecordScope.None;
+        }
+
+        /// <summary>
+        /// The test that the caller's lexical refinements are <paramref name="refinements"/>, the ones the call was
+        /// resolved under. For the scope of a method or of a block in one it reads the method's record (GetRecordScope);
+        /// any other scope walks.
+        /// </summary>
+        private static Expression/*!*/ MakeRefinementGuard(CallArguments/*!*/ args, RefinementActivation/*!*/ refinements) {
+            var scope = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
+            var expected = Ast.Constant(refinements, typeof(RefinementActivation));
+
+            switch (GetRecordScope(args.Scope, refinements)) {
+                case RecordScope.Method:
+                    return Ast.AndAlso(
+                        Ast.TypeIs(scope, typeof(RubyMethodScope)),
+                        Ast.Equal(Ast.Call(Ast.Convert(scope, typeof(RubyMethodScope)), Methods.RubyMethodScope_get_DefinitionRefinementsValue), expected)
+                    );
+
+                case RecordScope.Block:
+                    var parent = Ast.Call(scope, Methods.RubyScope_get_Parent);
+                    return Ast.AndAlso(
+                        Ast.AndAlso(
+                            Ast.TypeIs(scope, typeof(RubyBlockScope)),
+                            Ast.Equal(Ast.Field(null, Fields.RefineBlocksRunning), AstUtils.Constant(0))
+                        ),
+                        Ast.AndAlso(
+                            Ast.TypeIs(parent, typeof(RubyMethodScope)),
+                            Ast.Equal(Ast.Call(Ast.Convert(parent, typeof(RubyMethodScope)), Methods.RubyMethodScope_get_DefinitionRefinementsValue), expected)
+                        )
+                    );
+
+                default:
+                    return Ast.Equal(Methods.GetLexicalRefinements.OpCall(scope), expected);
+            }
         }
 
         // Returns true if the call was bound (with success or failure), false if fallback should be performed.
