@@ -11233,19 +11233,40 @@ namespace IronRuby.StandardLibrary.Threading {
             IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
             
             
-            DefineGlobalClass("ConditionVariable", typeof(IronRuby.StandardLibrary.Threading.RubyConditionVariable), 0x00000008, classRef0, LoadConditionVariable_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            DefineGlobalClass("Mutex", typeof(IronRuby.StandardLibrary.Threading.RubyMutex), 0x00000008, classRef0, LoadMutex_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def1 = DefineGlobalClass("Queue", typeof(IronRuby.StandardLibrary.Threading.RubyQueue), 0x00000008, classRef0, LoadQueue_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            #if FEATURE_THREAD
+            IronRuby.Builtins.RubyClass def1 = ExtendClass(typeof(System.Threading.Thread), 0x00000000, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            #endif
+            #if FEATURE_THREAD
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Thread::ConditionVariable", typeof(IronRuby.StandardLibrary.Threading.RubyConditionVariable), 0x00000008, classRef0, LoadThread__ConditionVariable_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            #endif
+            #if FEATURE_THREAD
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Thread::Mutex", typeof(IronRuby.StandardLibrary.Threading.RubyMutex), 0x00000008, classRef0, LoadThread__Mutex_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            #endif
+            #if FEATURE_THREAD
+            IronRuby.Builtins.RubyClass def4 = DefineClass("Thread::Queue", typeof(IronRuby.StandardLibrary.Threading.RubyQueue), 0x00000008, classRef0, LoadThread__Queue_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.CreateQueue), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.CreateQueue)
             );
-            #if FEATURE_THREAD
-            ExtendClass(typeof(System.Threading.Thread), 0x00000000, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
-            DefineGlobalClass("SizedQueue", typeof(IronRuby.StandardLibrary.Threading.SizedQueue), 0x00000008, def1, LoadSizedQueue_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            #if FEATURE_THREAD
+            IronRuby.Builtins.RubyClass def5 = DefineClass("Thread::SizedQueue", typeof(IronRuby.StandardLibrary.Threading.SizedQueue), 0x00000008, def4, LoadThread__SizedQueue_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            #endif
+            #if FEATURE_THREAD
+            SetConstant(def1, "ConditionVariable", def2);
+            #endif
+            #if FEATURE_THREAD
+            SetConstant(def1, "Mutex", def3);
+            #endif
+            #if FEATURE_THREAD
+            SetConstant(def1, "Queue", def4);
+            #endif
+            #if FEATURE_THREAD
+            SetConstant(def1, "SizedQueue", def5);
+            #endif
         }
         
-        private static void LoadConditionVariable_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        #if FEATURE_THREAD
+        private static void LoadThread__ConditionVariable_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "broadcast", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Broadcast)
@@ -11279,8 +11300,10 @@ namespace IronRuby.StandardLibrary.Threading {
             );
             
         }
+        #endif
         
-        private static void LoadMutex_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        #if FEATURE_THREAD
+        private static void LoadThread__Mutex_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "exclusive_unlock", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object>(IronRuby.StandardLibrary.Threading.RubyMutex.ExclusiveUnlock)
@@ -11333,8 +11356,10 @@ namespace IronRuby.StandardLibrary.Threading {
             );
             
         }
+        #endif
         
-        private static void LoadQueue_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        #if FEATURE_THREAD
+        private static void LoadThread__Queue_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "<<", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyQueue, System.Object, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.Enqueue)
@@ -11431,8 +11456,10 @@ namespace IronRuby.StandardLibrary.Threading {
             );
             
         }
+        #endif
         
-        private static void LoadSizedQueue_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        #if FEATURE_THREAD
+        private static void LoadThread__SizedQueue_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "<<", 0x11, 
                 0x00000000U, 0x00000008U, 0x00000010U, 
                 new Func<IronRuby.StandardLibrary.Threading.SizedQueue, System.Object, System.Boolean, IronRuby.StandardLibrary.Threading.SizedQueue>(IronRuby.StandardLibrary.Threading.SizedQueue.Enqueue), 
@@ -11480,6 +11507,7 @@ namespace IronRuby.StandardLibrary.Threading {
             );
             
         }
+        #endif
         
     }
 }
@@ -13829,7 +13857,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             DefineGlobalClass("BigDecimal", typeof(IronRuby.StandardLibrary.BigDecimal.BigDecimal), 0x00000000, classRef0, LoadBigDecimal_Instance, LoadBigDecimal_Class, LoadBigDecimal_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Int32, IronRuby.StandardLibrary.BigDecimal.BigDecimal>(IronRuby.StandardLibrary.BigDecimal.BigDecimalOps.CreateBigDecimal)
             );
-            ExtendModule(typeof(IronRuby.Builtins.Kernel), 0x00000000, LoadIronRuby__Builtins__Kernel_Instance, LoadIronRuby__Builtins__Kernel_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendModule(typeof(IronRuby.Builtins.Kernel), 0x00000000, LoadKernel_Instance, LoadKernel_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
         }
         
         private static void LoadBigDecimal_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -14256,7 +14284,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             
         }
         
-        private static void LoadIronRuby__Builtins__Kernel_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadKernel_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "BigDecimal", 0x12, 
                 0x00020000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.StandardLibrary.BigDecimal.KernelOps.CreateBigDecimal)
@@ -14264,7 +14292,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             
         }
         
-        private static void LoadIronRuby__Builtins__Kernel_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadKernel_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "BigDecimal", 0x21, 
                 0x00020000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.StandardLibrary.BigDecimal.KernelOps.CreateBigDecimal)

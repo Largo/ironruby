@@ -28,7 +28,7 @@ namespace IronRuby.StandardLibrary.Threading {
     /// be woken that way), and it gives #signal the FIFO order the specs require. The old implementation
     /// used an AutoResetEvent plus a 1ms sleep per waiter in #broadcast and lost wakeups.
     /// </summary>
-    [RubyClass("ConditionVariable")]
+    [RubyClass("ConditionVariable", DefineIn = typeof(ThreadOps))]
     public class RubyConditionVariable {
 
         /// <summary>MRI's #&lt;Thread::ConditionVariable:0x...&gt;, rather than the CLR type name.</summary>

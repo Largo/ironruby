@@ -6845,16 +6845,14 @@ class Hash
 end
 
 # Mutex/Queue/SizedQueue/ConditionVariable needed `require "thread"` in 1.9; they
-# have been built in since 2.0. Ruby 2.x also re-homed them under Thread.
-require "thread" unless Object.const_defined?(:Mutex)
+# have been built in since 2.0. Ruby 2.x also re-homed them under Thread: the
+# library defines them there (Thread::Mutex is their name, as in MRI), and the
+# top-level names are aliases.
+require "thread" unless Thread.const_defined?(:Mutex, false)
 
-class Thread
-  %i[Mutex Queue SizedQueue ConditionVariable].each do |name|
-    # `false`: Object is an ancestor of Thread, so an inherited lookup finds the
-    # top-level name every time and the constant never gets re-homed.
-    next if const_defined?(name, false)
-    const_set(name, Object.const_get(name)) if Object.const_defined?(name)
-  end
+%i[Mutex Queue SizedQueue ConditionVariable].each do |name|
+  next if Object.const_defined?(name, false)
+  Object.const_set(name, Thread.const_get(name, false)) if Thread.const_defined?(name, false)
 end
 
 class Regexp
