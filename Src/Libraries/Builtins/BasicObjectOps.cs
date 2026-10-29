@@ -230,8 +230,12 @@ namespace IronRuby.Builtins {
             return RubyUtils.Evaluate(code, scope, self, singleton, immediate.IsSingletonClass ? null : immediate, file, line);
         }
 
+        // Not [NotNull] params: a lone nil argument binds as the params array itself, and
+        // [NotNull] made instance_exec(nil) { } a TypeError - which is every ActiveRecord
+        // association scope, `relation.instance_exec(owner, &scope)` with no owner.
         [RubyMethod("instance_exec")]
-        public static object InstanceExec(BlockParam block, object self, [NotNull]params object[]/*!*/ args) {
+        public static object InstanceExec(BlockParam block, object self, params object[] args) {
+            args = args ?? new object[] { null };
             if (block == null) {
                 throw RubyExceptions.CreateLocalJumpError("no block given");
             }

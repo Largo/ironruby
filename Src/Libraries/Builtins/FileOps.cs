@@ -485,8 +485,10 @@ namespace IronRuby.Builtins {
         }
 
 #if FEATURE_FILESYSTEM
+        // The size is an off_t: a file of 4 GiB and more is an ordinary thing to ask for.
         [RubyMethod("truncate", BuildConfig = "FEATURE_FILESYSTEM")]
-        public static int Truncate(RubyFile/*!*/ self, [DefaultProtocol]int size) {
+        public static int Truncate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyFile/*!*/ self, object length) {
+            long size = Protocols.CastToInteger(integerConversion, length).ToInt64();
             self.RequireWritable();
             if (size < 0) {
                 throw self.Path != null ? RubyExceptions.CreateEINVAL("Invalid argument - {0}", self.Path) : RubyExceptions.CreateEINVAL();
@@ -501,8 +503,10 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("truncate", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        public static int Truncate(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, [DefaultProtocol]int size) {
+        public static int Truncate(ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<IntegerValue>/*!*/ integerConversion,
+            RubyClass/*!*/ self, object path, object length) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            long size = Protocols.CastToInteger(integerConversion, length).ToInt64();
             if (size < 0) {
                 throw RubyExceptions.CreateEINVAL("Invalid argument - {0}", strPath);
             }

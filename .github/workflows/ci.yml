@@ -168,6 +168,31 @@ jobs:
           fi
           ls -l build
 
+      # cmark-gfm for markly (Src/Libraries/Markly), compiled from the markly gem's own
+      # sources, pinned by SHA-256. On Windows the MSYS2 gcc that links libprism
+      # links it too.
+      - name: Build libmarkly_cmark
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-markly.sh
+          ls -l Src/Libraries/Markly/native/build
+
+      # librbs: the rbs gem's parser behind rbs_extension (Src/Libraries/Rbs). The
+      # script downloads the gem pinned by SHA-256, checks the committed bridge
+      # against its config.yml, and compiles src/ with the shim - with the MSYS2
+      # gcc on Windows, as libprism is, which yields librbs.dll.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
+
       - name: Generate the C# prism loader
         working-directory: ironruby/Src/Prism
         run: ruby generate.rb
@@ -199,6 +224,14 @@ jobs:
           require "csv"
           require "rake"
           puts "rexml #{REXML::VERSION}, csv #{CSV::VERSION}, rake #{Rake::VERSION}"
+
+          # markly's extension: C# over the native cmark-gfm built above.
+          require "markly/markly"
+          parser = Markly::Parser.new(0)
+          parser.enable(:strikethrough)
+          html = parser.parse("*md* ~~x~~")._render_html(0, [:strikethrough]).strip
+          puts "markly: #{html}"
+          raise "markly rendered #{html.inspect}" unless html == "<p><em>md</em> <del>x</del></p>"
           RUBY
           # ironruby is the launcher, as jruby is JRuby's; RbConfig.ruby has to be a file,
           # since libraries spawn it, and ir is the short name, which has to keep working.

@@ -101,7 +101,8 @@ class IO
     mode.cc.setbyte(t::VMIN, 1)
     mode.cc.setbyte(t::VTIME, 0)
     mode.cc.setbyte(t::VMIN, min) if min
-    mode.cc.setbyte(t::VTIME, time) if time
+    # time: is in seconds and VTIME in tenths of one, as MRI converts it
+    mode.cc.setbyte(t::VTIME, (time * 10).to_i) if time
     if intr
       mode.iflag |= t::BRKINT
       mode.lflag |= t::ISIG
@@ -251,12 +252,13 @@ class IO
     wio.write(prompt) if prompt
     wio.flush
     begin
-      str = noecho { gets }
+      # a line is "\n"-terminated whatever $/ says, as MRI's rb_io_gets reads it
+      str = noecho { gets("\n") }
     ensure
       wio.print("\n")
       wio.flush
     end
-    str&.chomp
+    str&.chomp("\n")
   end
 
   # ------------------------------------------------------------------- cursor

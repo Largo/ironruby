@@ -607,6 +607,8 @@ namespace IronRuby.StandardLibrary.StringIO {
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self,
             object first, params object[]/*!*/ rest) {
 
+            // A lone nil after the first argument binds as the params array itself.
+            rest = rest ?? new object[] { null };
             int written = Write(tosConversion, self, first);
             foreach (object value in rest) {
                 written += Write(tosConversion, self, value);

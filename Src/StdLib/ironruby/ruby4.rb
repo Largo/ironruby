@@ -10014,8 +10014,19 @@ class Binding
     eval("local_variables")
   end unless method_defined?(:local_variables)
 
+  # A keyword argument named after a reserved word (`alias:`, `if:`, `class:`) is a local
+  # that no source text can name, so neither `defined?(alias)` nor `alias` can be eval'd:
+  # those are looked up rather than evaluated.
+  KEYWORD_LOCAL_NAMES__ = %w[BEGIN END alias and begin break case class def defined? do else
+    elsif end ensure for if in module next not or redo rescue retry return super then undef
+    unless until when while yield].freeze # :nodoc:
+
   def local_variable_defined?(name)
-    eval("defined?(#{__check_lvar_name__(name)}) == 'local-variable'")
+    name = __check_lvar_name__(name)
+    if KEYWORD_LOCAL_NAMES__.include?(name)
+      return eval("local_variables").include?(name.to_sym)
+    end
+    eval("defined?(#{name}) == 'local-variable'")
   end unless method_defined?(:local_variable_defined?)
 
   def local_variable_get(name)
@@ -10023,6 +10034,7 @@ class Binding
     unless local_variable_defined?(name)
       ::Kernel.raise(::NameError, "local variable '#{name}' is not defined for #{inspect}")
     end
+    return __ir_resolve_local__(name) if KEYWORD_LOCAL_NAMES__.include?(name)
     eval(name)
   end unless method_defined?(:local_variable_get)
 

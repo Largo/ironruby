@@ -47,6 +47,25 @@ namespace IronRuby.StandardLibrary.Sockets {
             return new RubySocket(self.Context, NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol));
         }
 
+        /// <summary>
+        /// Creates an uninitialized socket: what a Ruby subclass's .new allocates before it runs
+        /// that subclass's #initialize.
+        /// </summary>
+        public RubySocket(RubyContext/*!*/ context)
+            : base(context) {
+        }
+
+        // What `super(family, type, protocol)` reaches from a Ruby subclass's #initialize -
+        // cool.io's TCPConnectSocket < ::Socket is one. Not called by the factory above.
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubySocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            RubySocket/*!*/ self, [NotNull]object/*!*/ domain, [DefaultProtocol]int/*!*/ type, [DefaultProtocol, Optional]int protocol) {
+
+            AddressFamily addressFamily = ConvertToAddressFamily(stringCast, fixnumCast, domain);
+            self.Socket = NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol);
+            return self;
+        }
+
 #endregion
 
 #region Public Singleton Methods

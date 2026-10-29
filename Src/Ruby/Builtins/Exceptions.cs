@@ -378,6 +378,21 @@ namespace IronRuby.Builtins {
         public NoSuchDeviceOrAddressError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
     }
 
+    /// <summary>
+    /// Backs Errno::EIO. read(2) on a pty master answers EIO on Linux once every descriptor
+    /// on the slave side is closed - which is how a program driving a child through PTY.spawn
+    /// learns that the child has gone - and Ruby programs rescue Errno::EIO for exactly that.
+    /// A bare IOException would surface as IOError instead. Registered in Errno.cs.
+    /// </summary>
+    public class InputOutputError : ExternalException {
+        private const string/*!*/ M = "Input/output error";
+
+        public InputOutputError() : this(null, null) { }
+        public InputOutputError(string message) : this(message, null) { }
+        public InputOutputError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+        public InputOutputError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+    }
+
     public class InvalidError : ExternalException {
         private const string/*!*/ M = "Invalid argument";
 

@@ -15,8 +15,9 @@
 # irubyc still needs the .NET SDK, as it does from a checkout.
 #
 # It needs what a normal build needs: ../dlr with Build/dlr-patches applied, and
-# ../prism/build holding the libprism for this platform. The RID must be this
-# machine's: the archive carries this machine's libprism.
+# ../prism/build holding the libprism for this platform, and the librbs that
+# Util/build-librbs.sh builds (without it `require "rbs"` raises LoadError). The RID
+# must be this machine's: the archive carries this machine's libprism and librbs.
 set -euo pipefail
 
 RID=${1:?usage: Util/package-release.sh RID [OUTDIR]}

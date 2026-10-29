@@ -1071,7 +1071,12 @@ namespace IronRuby.Runtime {
 
             // MRI tries each extension over the whole $LOAD_PATH before the next one, so for a
             // bare name a .rb file anywhere wins over a library found in an earlier directory.
-            if (appendExtensions && extension.Length == 0 && result.Count > 1 && result[0].SourceUnit == null) {
+            // A name whose last dot starts no extension Ruby knows - "cool.io_ext" - is a bare
+            // name too: MRI appends .rb and .so to it just the same.
+            bool bareName = extension.Length == 0 ||
+                (!IsKnownExtension(extension, sourceFileExtensions ?? ArrayUtils.EmptyStrings) &&
+                 _LibraryExtensions.IndexOf(extension, DlrConfiguration.FileExtensionComparer) == -1);
+            if (appendExtensions && bareName && result.Count > 1 && result[0].SourceUnit == null) {
                 result = result.Where((f) => f.SourceUnit != null).Concat(result.Where((f) => f.SourceUnit == null)).ToList();
             }
 

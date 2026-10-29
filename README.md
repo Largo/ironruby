@@ -300,6 +300,13 @@ A C extension is never built: there is no `ruby.h` to compile against.  Such a g
 its `.rb` files load, a real `require` of the `.so` raises `LoadError`, and the pure-Ruby
 fallback most of them carry is used instead.
 
+**rbs** (Ruby's type signatures, which ruby-lsp, steep and rdoc 8 load) has no such fallback,
+so IronRuby provides its extension, `rbs_extension`: the installed gem's own Ruby loads on top
+of the rbs C parser itself - the gem's `src/`, built unmodified into `librbs` by
+[`Util/build-librbs.sh`](Util/build-librbs.sh) - with the glue that builds the Ruby objects in
+C# (`Src/Libraries/Rbs`).  The parser is tied to one rbs release, currently 4.0.0.dev.5, and
+`require "rbs"` under any other version raises a `LoadError` saying so.
+
 ### Rails
 
 A Rails 8.1 application boots and serves HTTP requests through Rack:

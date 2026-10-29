@@ -699,6 +699,18 @@ namespace IronRuby.StandardLibrary.Sockets {
         #region libc getsockopt, setsockopt
 
         /// <summary>
+        /// The socket's address family as .NET numbers it (InterNetwork 2, InterNetworkV6 23,
+        /// Unix 1), without a syscall. getsockopt needs the family and used to read it from
+        /// getsockname - but .NET's LocalEndPoint first finishes a pending non-blocking connect,
+        /// reading SO_ERROR to do it, which clears the very error a caller asking for SO_ERROR
+        /// after connect_nonblock wanted to see (cool.io's Connector, EventMachine-style code).
+        /// </summary>
+        [RubyMethod("__ir_raw_address_family", RubyMethodAttributes.PrivateInstance)]
+        public static int GetAddressFamily(RubyBasicSocket/*!*/ self) {
+            return (int)self.Socket.AddressFamily;
+        }
+
+        /// <summary>
         /// getsockopt(2) with the *platform's* level and option numbers (the Ruby layer translates
         /// Socket's winsock-numbered constants). Answers [errno, data], data nil on failure, or
         /// nil when options cannot go to libc on this platform. See the note on getsockopt.
