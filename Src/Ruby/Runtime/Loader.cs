@@ -755,7 +755,18 @@ namespace IronRuby.Runtime {
                         } else {
                             compiledCode = file.SourceUnit.Compile();
                         }
-                        loaded = Execute(globalScope, compiledCode);
+                        bool corePrelude = _corePreludeLoaderThread == Thread.CurrentThread && _corePreludeThread == null
+                            && Path.GetFileName(file.Path) == "ruby4.rb";
+                        if (corePrelude) {
+                            _corePreludeThread = Thread.CurrentThread;
+                        }
+                        try {
+                            loaded = Execute(globalScope, compiledCode);
+                        } finally {
+                            if (corePrelude) {
+                                _corePreludeThread = null;
+                            }
+                        }
                     } finally {
                         StartupTrace.EndFile(file.Path, traceStart);
                     }
@@ -1254,9 +1265,14 @@ namespace IronRuby.Runtime {
 
         #endregion
 
-        // The thread running ruby4.rb as the host's core prelude (--disable-gems), while it does. The
-        // only Ruby code on its stack then is the prelude's own, which backtraces leave out.
+        // The thread running ruby4.rb as the host's core prelude, while it does - directly under
+        // --disable-gems, else from gem_prelude.rb's first line. The only Ruby code on its stack then
+        // is the prelude's own, which backtraces leave out.
         private Thread _corePreludeThread;
+
+        // The thread in LoadCorePrelude, while it is: the ruby4.rb it loads is the core prelude, a
+        // later `load "ruby4.rb"` by a program is not.
+        private Thread _corePreludeLoaderThread;
 
         /// <summary>
         /// True while this thread runs ruby4.rb as the core prelude, loaded by the host itself: a
@@ -1272,16 +1288,11 @@ namespace IronRuby.Runtime {
         /// lists the features MRI has in $" from the start.
         /// </summary>
         internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
-            bool direct = path == "ruby4.rb";
-            if (direct) {
-                _corePreludeThread = Thread.CurrentThread;
-            }
+            _corePreludeLoaderThread = Thread.CurrentThread;
             try {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
-                if (direct) {
-                    _corePreludeThread = null;
-                }
+                _corePreludeLoaderThread = null;
             }
             ProvideCoreFeatures();
         }

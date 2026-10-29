@@ -4652,9 +4652,10 @@ module Errno
       const_set(name, klass)
       # A class made just now has no constants of its own, so there is nothing to ask it
       # first - and asking is not free: every class is a new receiver for these call
-      # sites, so each question binds a rule of its own.
-      klass.const_set(:Errno, errno)
-      klass.const_set(:Message, message)
+      # sites, so each question binds a rule of its own. So would const_set; constant
+      # assignment is no method call, and binds nothing.
+      klass::Errno = errno
+      klass::Message = message
     end
     ERRNO_CLASSES[errno] ||= klass
   end
