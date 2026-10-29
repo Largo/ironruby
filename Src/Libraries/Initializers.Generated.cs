@@ -627,7 +627,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "instance_exec", 0x51, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Object>(IronRuby.Builtins.BasicObjectOps.InstanceExec)
             );
             
@@ -13095,7 +13095,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "write", 0x11, 
-                0x00000002U, 0x00000000U, 0x80000008U, 0x00000000U, 
+                0x00000002U, 0x00000000U, 0x80000000U, 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.StringIO.StringIO.Write), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Int32>(IronRuby.StandardLibrary.StringIO.StringIO.Write), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object[], System.Int32>(IronRuby.StandardLibrary.StringIO.StringIO.Write), 
