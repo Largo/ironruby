@@ -101,22 +101,17 @@ namespace IronRuby.StandardLibrary.Threading {
 
             var info = IronRuby.Builtins.ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             LinkedListNode<IronRuby.Builtins.ThreadOps.RubyThreadInfo> node;
-            lock (self._lock) {
-                node = self._waiters.AddLast(info);
-            }
 
             // MRI: the seconds slept, rounded, when signalled; nil when the timeout ran out
             object result = null;
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            try {
+
+            // The mutex is released and the thread queued in one step under _lock: no #signal can come
+            // between them, so none is missed, and a mutex that is not ours to release (a ThreadError)
+            // leaves nothing queued for a #signal to be lost on.
+            lock (self._lock) {
                 RubyMutex.Unlock(mutex);
-            } catch {
-                // not ours to release (a ThreadError): we never waited, so do not stay in line for a
-                // #signal that would then be lost on us
-                lock (self._lock) {
-                    self._waiters.Remove(node);
-                }
-                throw;
+                node = self._waiters.AddLast(info);
             }
             try {
                 if (ms < 0) {
