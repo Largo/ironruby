@@ -981,6 +981,100 @@ p a.select(lambda { |n| n * 2 })
 #endif
         }
 
+        /// <summary>
+        /// Extension methods are added to a method group that has been used before they were activated.
+        /// The group is stored under the Ruby name (describe), not under the CLR name of the extension method (Describe).
+        /// </summary>
+        public void ClrExtensionMethods6() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+class RubyWidget < Widget; end
+
+w = Widget.new
+puts w.describe
+puts w.Describe
+puts SubWidget.new.describe(1)
+puts RubyWidget.new.describe
+
+using_clr_extensions IronRubyTests::ExtensionMethods3
+
+puts w.describe('x')
+puts w.describe                           # same signature => regular method is preferred
+puts w.describe(1)
+puts w.Describe('x')
+puts SubWidget.new.describe('x')
+puts RubyWidget.new.describe('x')
+puts w.method(:describe).call('x')
+", @"
+Describe()
+Describe()
+Describe(int)
+Describe()
+e:Describe(string)
+Describe()
+Describe(int)
+e:Describe(string)
+e:Describe(string)
+e:Describe(string)
+e:Describe(string)
+");
+        }
+
+        /// <summary>
+        /// Like ClrExtensionMethods6 for extension methods defined on an interface and on a generic type definition.
+        /// </summary>
+        public void ClrExtensionMethods7() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+s = Square.new
+b = Box[Integer].new
+puts s.area
+puts b.open
+
+using_clr_extensions IronRubyTests::ExtensionMethods3
+
+puts s.area(2)
+puts b.open(1)
+puts s.area
+puts b.open
+", @"
+Area()
+Open()
+e:Area(int)
+e:Open(T)
+Area()
+Open()
+");
+        }
+
+        /// <summary>
+        /// Enumerable.Count on IEnumerable{T} once List{T}'s Count property has been called.
+        /// </summary>
+        public void ClrExtensionMethods8() {
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
+            TestOutput(@"
+load_assembly SystemCoreAssembly
+list = System::Collections::Generic::List[Integer].new
+list.add(1)
+list.add(2)
+list.add(3)
+puts list.count
+
+using_clr_extensions System::Linq
+
+puts list.count
+puts list.count(lambda { |x| x > 1 })
+", @"
+3
+3
+2
+");
+        }
+
         #endregion
 
         #region Overloads: Inheritance, Selection
