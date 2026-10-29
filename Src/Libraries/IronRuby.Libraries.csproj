@@ -3,6 +3,8 @@
     <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>IronRuby.Libraries</AssemblyName>
     <RootNamespace>IronRuby</RootNamespace>
+    <!-- Src/Libraries/Zstd calls ZstdSharp's ZSTD_* functions, which take pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <!-- present in the tree but never compiled by the legacy csproj -->
@@ -26,6 +28,10 @@
          what nokogiri's gumbo does; nothing in the .NET base class library parses tag soup. -->
     <PackageReference Include="AngleSharp" Version="1.5.0" />
     <PackageReference Include="AngleSharp.Xml" Version="1.2.0" />
+    <!-- The codec behind the zstd-ruby gem's extension (Src/Libraries/Zstd): ZstdSharp is a
+         C# port of libzstd 1.5.7 - the version zstd-ruby 1.5.7.0 bundles - and is MIT-licensed.
+         Managed, so it needs no libzstd on the machine. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
   <ItemGroup>
     <!-- cmark-gfm for markly (Src/Libraries/Markly), built from the markly gem's own C
