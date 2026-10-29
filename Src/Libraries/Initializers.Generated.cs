@@ -11293,10 +11293,10 @@ namespace IronRuby.StandardLibrary.Threading {
             );
             
             DefineLibraryMethod(module, "wait", 0x11, 
-                0x00000000U, 0x00000004U, 0x00000004U, 
+                0x00000000U, 0x00000002U, 0x00000040U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait)
+                new Func<IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait), 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait)
             );
             
         }
@@ -11332,7 +11332,7 @@ namespace IronRuby.StandardLibrary.Threading {
             DefineLibraryMethod(module, "sleep", 0x11, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyMutex, System.Object>(IronRuby.StandardLibrary.Threading.RubyMutex.Sleep), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object, System.Object>(IronRuby.StandardLibrary.Threading.RubyMutex.Sleep)
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object, System.Object>(IronRuby.StandardLibrary.Threading.RubyMutex.Sleep)
             );
             
             DefineLibraryMethod(module, "synchronize", 0x11, 
