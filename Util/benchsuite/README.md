@@ -118,8 +118,8 @@ savina-apsp produce CRuby's exact output.
 |-|--------:|-------:|------------------:|
 | truffle (136 benchmarks) | 3.6 | 2.7 | 6 |
 | awfy (13) | 2.33 | 2.37 | 0 |
-| ruby-bench micro (41) | 2.17 | 2.28 | 4 |
-| ruby-bench pure-gem macro (20) | 4.9 | 3.5 | 0 |
+| ruby-bench micro (41) | 2.13 | 2.40 | 5 |
+| ruby-bench macro (34 of 36 run) | 6.2 | 4.8 | 0 |
 
 By group: classic 2.0 (mandelbrot 0.17, pidigits 0.80), psd.rb 2.1, micro/string
 2.2, chunky_png 3.1, liquid 3.0, rubykon 3.0, optcarrot 4.75, asciidoctor 6.9
@@ -136,22 +136,12 @@ By group: classic 2.0 (mandelbrot 0.17, pidigits 0.80), psd.rb 2.1, micro/string
 | micro/array/set-span-no-move | 48 | `a[i, n] = same-length array` |
 | micro/random/random, monitor/synchronize | 12, 10 | |
 
-ruby-bench macro (`pure-gems-run.sh`, one timed run each): optcarrot 4.5x
-(25.3s vs 5.6s; 8.8x in `Util/rubybench/pure-gems.md`), rubykon 2.9, chunky-png
-2.0, the addressable family 2.3-4.7, erubi 3.6, graphql 9.1, hexapdf 9.6,
-protoboeuf 268. liquid-render/-compile/-il and psych-load did not run, because
-their `bundle install` fails on IronRuby in a fresh GEM_HOME (they ran before
-from a populated one):
-
-- psych-load: Bundler's parallel installer dies with
-  `System::IndexOutOfRangeException` inside `Psych::Visitors::ToRuby#revive_hash`
-  while reading the stringio/psych .gem's `checksums.yaml.gz`. The same parse
-  succeeds alone and from 8 threads x 2000, so the race is elsewhere in the
-  install path; reproducible every time through `bundle install`.
-- liquid-*: the lockfile pins bigdecimal 3.2.2. `gem_compat.rb` points Bundler
-  *resolution* at IronRuby's own bigdecimal, but a locked version bypasses that:
-  the C gem is "installed" with an empty extension directory and no
-  `gem.build_complete`, and `Bundler.setup` then reports it missing.
+ruby-bench (rerun later the same day, after the C-extension work - see
+`Util/rubybench/README.md`, which also compares what TruffleRuby and JRuby do
+for each C-extension gem): optcarrot 4.0x, rubykon 2.9x, liquid 4.4-5.1x,
+fluentd 1.9x, shipit 5.0x, lobsters 20x, railsbench 23x, ruby-lsp 48x, rubocop
+77x, protoboeuf 243x. Only psych-load and sequel do not run: their Gemfiles
+demand psych 4 and sqlite3 1.x, older majors than IronRuby provides.
 
 **CRuby `test/ruby` (`mri`).** IronRuby passes 4444 of the 10220 tests CRuby
 passes (43.5%): 25 files PASS, 100 RAN, 11 CRASH, 6 N/A (they need CRuby's C
