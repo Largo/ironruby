@@ -207,5 +207,44 @@ p after('x')
 :refined
 ");
         }
+
+        /// <summary>
+        /// An OSR loop entered under other refinements than its compiled copy's gets a copy for those, however
+        /// often that happens: it does not use up the rebuilds kept for locals whose types widen, and retire.
+        /// </summary>
+        public void Refinements8() {
+            int specialized = IronRuby.Runtime.Osr.OsrLoopSite.Specialized;
+            int retired = IronRuby.Runtime.Osr.OsrLoopSite.Retired;
+            TestOutput(@"
+module R8a; refine(String) { def r8a; 1; end }; end
+module R8b; refine(String) { def r8b; 2; end }; end
+module R8c; refine(String) { def r8c; 3; end }; end
+module R8d; refine(String) { def r8d; 4; end }; end
+module R8e; refine(String) { def r8e; 5; end }; end
+work = lambda { i = 0; while i < 100_000; i += 1; end; i }
+p work.call
+using R8a
+p work.call
+using R8b
+p work.call
+using R8c
+p work.call
+using R8d
+p work.call
+using R8e
+p work.call
+", @"
+100000
+100000
+100000
+100000
+100000
+100000
+");
+            int retiredHere = IronRuby.Runtime.Osr.OsrLoopSite.Retired - retired;
+            int specializedHere = IronRuby.Runtime.Osr.OsrLoopSite.Specialized - specialized;
+            Assert(retiredHere == 0 && specializedHere == 6,
+                System.String.Format("OSR sites retired: {0} (expected 0), copies specialized: {1} (expected 6)", retiredHere, specializedHere));
+        }
     }
 }
