@@ -360,9 +360,8 @@ score_records = [s["Alice", 50], s["Bob", 40], s["Cathy", 45]].to_seq
 dict = score_records.to_dictionary(lambda {|sr| sr.name })
 dict.each {|k,v| puts "#{k} => #{v}" }
 
-# TODO: IronRuby bug
-#puts '-- OfType'
-#p [ nil, 1.0, "two", 3, "four", 5, "six", 7.0 ].to_seq.method(:of_type).of(Float).call.to_a
+puts '-- OfType'
+p [ nil, 1.0, "two", 3, "four", 5, "six", 7.0 ].to_seq.method(:of_type).of(Float).call.to_a
 
 #########################
 ### Element Operators ###
@@ -377,7 +376,7 @@ p digits.first(lambda {|s| s[0] == ?o})
 
 
 puts '-- FirstOrDefault: Simple'
-p [].to_seq(Fixnum).first_or_default
+p [].to_seq(Integer).first_or_default
 
 
 puts '-- FirstOrDefault: Condition'
@@ -397,6 +396,7 @@ System::Linq::Enumerable.range(10, 5).each { |n| puts "#{n} is #{n % 2 == 1 ? 'o
 
 puts '-- Repeat'
 System::Linq::Enumerable.repeat(7, 10).each { |n| print n }
+puts
 
 ###################
 ### Quantifiers ###
@@ -450,29 +450,29 @@ products.
 
 puts '-- Sum: Simple'
 # sum is only defined on IEnumerable<numeric type>, but numbers are of type IEnumerable<object>:
-p numbers.to_seq(Fixnum).sum
+p numbers.to_seq(Integer).sum
 
 
 puts '-- Sum: Projection'
 # sum is overloaded on the Func's return type, which we don't currently infer, so we need it to be specified explicitly:
-p words.sum(System::Func[Object, Fixnum].new { |w| w.length })
+p words.sum(System::Func[Object, Integer].new { |w| w.length })
 
 
 puts '-- Sum: Grouped'
 s = Struct.new(:category, :total_units_in_stock)
 products.
-  group_by(lambda { |p| p.category }, lambda { |c, g| s[c, g.sum(System::Func[Object, Fixnum].new { |p| p.units_in_stock })] }).
+  group_by(lambda { |p| p.category }, lambda { |c, g| s[c, g.sum(System::Func[Object, Integer].new { |p| p.units_in_stock })] }).
   each { |entry| p entry }
 
 
 puts '-- Min: Simple'
 # min is only defined on IEnumerable<numeric type>, but numbers are of type IEnumerable<object>:
-p numbers.to_seq(Fixnum).min
+p numbers.to_seq(Integer).min
 
 
 puts '-- Min: Projection'
 # min is overloaded on the Func's return type, which we don't currently infer, so we need it to be specified explicitly:
-p words.sum(System::Func[Object, Fixnum].new { |w| w.length })
+p words.method(:min).of(Object, Integer).call(lambda { |w| w.length })
 
 
 puts '-- Min: Grouped'
@@ -575,7 +575,7 @@ puts '-- Cross Join with Group Join'
 s = Struct.new(:category, :product_name)
 categories.
   group_join(products, identity, lambda { |p| p.category }, make_pair).
-  select_many(lambda { |(c, ps)| ps }, lambda { |(c,), p| s[c, p.product_name] }).
+  select_many(lambda { |(c, ps)| ps }, lambda { |(c, _), p| s[c, p.product_name] }).
   each { |entry| p entry}
 
 
@@ -583,5 +583,5 @@ puts '-- Left Outer Join'
 categories = ["foo", "no such category"].to_seq
 categories.
   group_join(products, identity, lambda { |p| p.category }, make_pair).
-  select_many(lambda { |(c, ps)| ps.default_if_empty }, lambda { |(c,), p| s[c, if p.nil? then "(No Products)" else p.product_name end] }).
+  select_many(lambda { |(c, ps)| ps.default_if_empty }, lambda { |(c, _), p| s[c, if p.nil? then "(No Products)" else p.product_name end] }).
   each { |entry| p entry}
