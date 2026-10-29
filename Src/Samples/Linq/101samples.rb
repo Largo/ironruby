@@ -15,15 +15,21 @@
 # 101 LINQ Samples in Ruby (see http://msdn.microsoft.com/en-us/vcsharp/aa336746.aspx)
 
 load_assembly 'System.Core'
-using_clr_extensions System::Linq
 
 # Linq Helpers
 
-class Object
-  def to_seq(type = Object)
-    System::Linq::Enumerable.method(:of_type).of(type).call(self.to_a)
+# LINQ extends IEnumerable<T>, and a Ruby Array isn't one, so the samples turn their arrays into
+# sequences with to_seq. A refinement keeps it to this file.
+module LinqSampleHelpers
+  refine Object do
+    def to_seq(type = Object)
+      System::Linq::Enumerable.method(:of_type).of(type).call(self.to_a)
+    end
   end
 end
+
+using System::Linq
+using LinqSampleHelpers
 
 make_pair = lambda { |a,b| [a,b] }
 identity = lambda { |a| a }
