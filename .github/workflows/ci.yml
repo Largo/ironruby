@@ -247,6 +247,24 @@ jobs:
             ./ir.sh Util/socket-write-nonblock-check.rb
           fi
 
+      # Src/Samples/Linq/101samples.rb, the port of Microsoft's 101 LINQ Samples, has to print
+      # exactly what 101samples.expected beside it says. Nothing ran it before, and it stopped
+      # parsing without anyone noticing. Its stderr counts too, so a warning fails the step.
+      # A change to the samples on purpose regenerates the file with
+      # `./ir.sh Src/Samples/Linq/101samples.rb > Src/Samples/Linq/101samples.expected 2>&1`.
+      - name: LINQ samples
+        timeout-minutes: 2
+        working-directory: ironruby
+        run: |
+          status=0
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd //c ir.cmd Src/Samples/Linq/101samples.rb > linq.txt 2>&1 || status=$?
+          else
+            ./ir.sh Src/Samples/Linq/101samples.rb > linq.txt 2>&1 || status=$?
+          fi
+          tr -d '\r' < linq.txt | diff -u Src/Samples/Linq/101samples.expected -
+          exit $status
+
       # Samples/Notepad, a Windows Forms application, driven by its own test with nobody
       # at the keyboard. A dialog that never closes would wait forever, hence the limit.
       - name: Notepad sample
