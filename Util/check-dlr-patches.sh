@@ -14,8 +14,12 @@ IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 dlr_root=$(git -C "${1:?usage: Util/check-dlr-patches.sh DLR_DIR}" rev-parse --show-toplevel 2>/dev/null) || exit 0
 check=$(mktemp -d)
 trap 'rm -rf "$check"' EXIT
+# git apply in a repository's subdirectory skips the patch's paths outside it, and then
+# "succeeds" without checking anything: the caller's directory, or a TMPDIR inside a checkout.
+# So the copy is a repository of its own, and every git apply runs at its top.
+git init -q "$check"
 for p in "$IR_ROOT"/Build/dlr-patches/*.patch; do
-  git apply --numstat "$p" | cut -f3
+  (cd "$check" && git apply --numstat "$p") | cut -f3
 done | sort -u | while read -r f; do
   [ -f "$dlr_root/$f" ] && mkdir -p "$check/$(dirname "$f")" && cp "$dlr_root/$f" "$check/$f"
 done
