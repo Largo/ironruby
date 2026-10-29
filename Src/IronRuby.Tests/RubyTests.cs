@@ -439,6 +439,12 @@ namespace IronRuby.Tests {
                 Load1,
                 LibraryLoader1,
                 LibraryLoader2,
+                Require_PathLoadedDependency1,
+                Require_PathLoadedDependency2,
+                Require_PathLoadedDependency3,
+                Require_PathLoadedDependency4,
+                Require_PathLoadedDependency5,
+                Require_PathLoadedDependency6,
 
                 ClrFields1,
                 ClrFields2,
