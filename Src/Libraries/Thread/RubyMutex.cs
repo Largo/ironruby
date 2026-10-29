@@ -14,7 +14,9 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Threading;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
@@ -218,26 +220,33 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         [RubyMethod("sleep")]
-        public static object Sleep(RubyContext/*!*/ context, RubyMutex/*!*/ self, object timeout) {
-            return DoSleep(self, ToSleepSeconds(context, timeout));
+        public static object Sleep(RespondToStorage/*!*/ respondToStorage, BinaryOpStorage/*!*/ divmodStorage,
+            BinaryOpStorage/*!*/ multiplyStorage, ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<IntegerValue>/*!*/ integerCast,
+            RubyMutex/*!*/ self, object timeout) {
+            return DoSleep(self, ToSleepSeconds(respondToStorage, divmodStorage, multiplyStorage, arrayTryCast, integerCast, timeout));
         }
 
         /// <summary>
         /// The timeout of #sleep in seconds, Double.NegativeInfinity for nil (no timeout). Also used by
         /// ConditionVariable#wait, which in MRI is mutex.sleep(timeout) and so converts the same way.
         /// </summary>
-        internal static double ToSleepSeconds(RubyContext/*!*/ context, object timeout) {
+        internal static double ToSleepSeconds(RespondToStorage/*!*/ respondToStorage, BinaryOpStorage/*!*/ divmodStorage,
+            BinaryOpStorage/*!*/ multiplyStorage, ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<IntegerValue>/*!*/ integerCast,
+            object timeout) {
+
             double seconds;
             if (timeout == null) {
                 return Double.NegativeInfinity;
             } else if (timeout is int) {
                 seconds = (int)timeout;
+            } else if (timeout is long) {
+                seconds = (long)timeout;
             } else if (timeout is double) {
                 seconds = (double)timeout;
-            } else if (timeout is System.Numerics.BigInteger) {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            } else if (timeout is BigInteger) {
+                seconds = ToWholeSeconds(integerCast, timeout);
             } else {
-                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", context.GetClassDisplayName(timeout));
+                seconds = ToSecondsByDivmod(respondToStorage, divmodStorage, multiplyStorage, arrayTryCast, integerCast, timeout);
             }
             if (Double.IsNaN(seconds)) {
                 throw RubyExceptions.CreateRangeError("NaN out of Time range");
@@ -249,6 +258,54 @@ namespace IronRuby.StandardLibrary.Threading {
                 throw RubyExceptions.CreateArgumentError("time interval must not be negative");
             }
             return seconds;
+        }
+
+        /// <summary>
+        /// MRI's interval of any other object - a Rational, a BigDecimal, a Numeric of the program's own:
+        /// <c>whole, fraction = timeout.divmod(1)</c>, then <c>fraction * 1_000_000_000</c> nanoseconds.
+        /// Something without a #divmod that answers an Array is not an interval at all.
+        /// </summary>
+        private static double ToSecondsByDivmod(RespondToStorage/*!*/ respondToStorage, BinaryOpStorage/*!*/ divmodStorage,
+            BinaryOpStorage/*!*/ multiplyStorage, ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<IntegerValue>/*!*/ integerCast,
+            object timeout) {
+
+            IList parts = null;
+            if (Protocols.RespondTo(respondToStorage, timeout, "divmod")) {
+                var divmod = divmodStorage.GetCallSite("divmod");
+                parts = Protocols.TryCastToArray(arrayTryCast, divmod.Target(divmod, timeout, ScriptingRuntimeHelpers.Int32ToObject(1)));
+            }
+            if (parts == null) {
+                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval",
+                    respondToStorage.Context.GetClassDisplayName(timeout));
+            }
+
+            double whole = ToWholeSeconds(integerCast, parts.Count > 0 ? parts[0] : null);
+            if (whole < 0) {
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
+            }
+            var multiply = multiplyStorage.GetCallSite("*");
+            double nanoseconds = ToWholeSeconds(integerCast,
+                multiply.Target(multiply, parts.Count > 1 ? parts[1] : null, ScriptingRuntimeHelpers.Int32ToObject(1000000000)));
+            return whole + nanoseconds / 1e9;
+        }
+
+        /// <summary>MRI's NUM2TIMET/NUM2LONG: a Float truncated, anything else through #to_int, into a long.</summary>
+        private static double ToWholeSeconds(ConversionStorage<IntegerValue>/*!*/ integerCast, object value) {
+            if (value is int) {
+                return (int)value;
+            } else if (value is long) {
+                return (long)value;
+            } else if (value is double) {
+                return Math.Truncate((double)value);
+            }
+            IntegerValue integer = value is BigInteger ? new IntegerValue((BigInteger)value) : Protocols.CastToInteger(integerCast, value);
+            long result;
+            if (integer.IsFixnum) {
+                return integer.Fixnum;
+            } else if (integer.Bignum.AsInt64(out result)) {
+                return result;
+            }
+            throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
         }
 
         private static object DoSleep(RubyMutex/*!*/ self, double seconds) {

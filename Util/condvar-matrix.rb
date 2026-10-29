@@ -24,6 +24,27 @@ CV = ConditionVariable.new
   show("m.sleep(#{label})") { M.synchronize { M.sleep(t) } }
 end
 
+# Anything else is an interval if #divmod(1) answers [whole, fraction], as for Rational and BigDecimal
+require "bigdecimal"
+Divmod = Struct.new(:whole, :fraction) do
+  def divmod(_) = [whole, fraction]
+end
+[Rational(1, 100), Rational(-1, 2), BigDecimal("0.01"), Divmod.new(0, 0.01), Divmod.new(0, Rational(1, 100)),
+ Divmod.new(-1, 0), Divmod.new(2**70, 0), Complex(1, 0), Object.new].each do |t|
+  label = t.is_a?(Divmod) ? "divmod -> #{[t.whole, t.fraction].inspect}" : t.instance_of?(Object) ? "Object" : t.inspect
+  show("cv.wait(m, #{label})") { M.synchronize { CV.wait(M, t) } }
+  show("m.sleep(#{label})") { M.synchronize { M.sleep(t) } }
+end
+
+# An Integer past 32 bits is still a timeout (a long one), not a TypeError
+show("m.sleep(2**40) is still sleeping") do
+  t = Thread.new { M.synchronize { M.sleep(2**40) } }
+  Thread.pass until t.stop?
+  status = t.status
+  t.kill.join
+  status
+end
+
 # Timed out: nil. Signalled: the seconds slept, an Integer.
 show("timed out") { M.synchronize { CV.wait(M, 0.01) } }
 show("signalled") do

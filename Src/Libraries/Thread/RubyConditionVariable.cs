@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -83,14 +84,21 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         [RubyMethod("wait")]
-        public static object Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
-            return Wait(context, self, mutex, null);
+        public static object Wait(RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
+            return DoWait(self, mutex, Double.NegativeInfinity);
         }
 
         [RubyMethod("wait")]
-        public static object Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
+        public static object Wait(RespondToStorage/*!*/ respondToStorage, BinaryOpStorage/*!*/ divmodStorage,
+            BinaryOpStorage/*!*/ multiplyStorage, ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<IntegerValue>/*!*/ integerCast,
+            RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
+
             // MRI's #wait is mutex.sleep(timeout): the same conversion, and the same errors
-            double seconds = RubyMutex.ToSleepSeconds(context, timeout);
+            return DoWait(self, mutex,
+                RubyMutex.ToSleepSeconds(respondToStorage, divmodStorage, multiplyStorage, arrayTryCast, integerCast, timeout));
+        }
+
+        private static object DoWait(RubyConditionVariable/*!*/ self, RubyMutex/*!*/ mutex, double seconds) {
             int ms;
             if (Double.IsNegativeInfinity(seconds)) {
                 ms = Timeout.Infinite;
