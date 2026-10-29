@@ -43,31 +43,27 @@ namespace IronRuby.StandardLibrary.Threading {
         public RubyConditionVariable() {
         }
 
+        // #signal and #broadcast wake a waiter under _lock, together with taking it off the list, so
+        // that a waiter which finds itself off the list knows the wake has already been sent.
         [RubyMethod("signal")]
         public static RubyConditionVariable/*!*/ Signal(RubyConditionVariable/*!*/ self) {
-            IronRuby.Builtins.ThreadOps.RubyThreadInfo first = null;
             lock (self._lock) {
                 if (self._waiters.Count > 0) {
-                    first = self._waiters.First.Value;
+                    var first = self._waiters.First.Value;
                     self._waiters.RemoveFirst();
+                    first.Wake();
                 }
-            }
-            if (first != null) {
-                first.Wake();
             }
             return self;
         }
 
         [RubyMethod("broadcast")]
         public static RubyConditionVariable/*!*/ Broadcast(RubyConditionVariable/*!*/ self) {
-            IronRuby.Builtins.ThreadOps.RubyThreadInfo[] all;
             lock (self._lock) {
-                all = new IronRuby.Builtins.ThreadOps.RubyThreadInfo[self._waiters.Count];
-                self._waiters.CopyTo(all, 0);
+                foreach (var waiter in self._waiters) {
+                    waiter.Wake();
+                }
                 self._waiters.Clear();
-            }
-            foreach (var waiter in all) {
-                waiter.Wake();
             }
             return self;
         }
@@ -93,18 +89,30 @@ namespace IronRuby.StandardLibrary.Threading {
 
         [RubyMethod("wait")]
         public static object Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
-            int ms = RubyQueue.GetTimeoutMilliseconds(context, timeout);
+            // MRI's #wait is mutex.sleep(timeout): the same conversion, and the same errors
+            double seconds = RubyMutex.ToSleepSeconds(context, timeout);
+            int ms;
+            if (Double.IsNegativeInfinity(seconds)) {
+                ms = Timeout.Infinite;
+            } else {
+                double milliseconds = seconds * 1000;
+                ms = milliseconds > Int32.MaxValue ? Timeout.Infinite : (int)milliseconds;
+            }
 
             var info = IronRuby.Builtins.ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             LinkedListNode<IronRuby.Builtins.ThreadOps.RubyThreadInfo> node;
-            lock (self._lock) {
-                node = self._waiters.AddLast(info);
-            }
 
             // MRI: the seconds slept, rounded, when signalled; nil when the timeout ran out
-            object result;
+            object result = null;
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            RubyMutex.Unlock(mutex);
+
+            // The mutex is released and the thread queued in one step under _lock: no #signal can come
+            // between them, so none is missed, and a mutex that is not ours to release (a ThreadError)
+            // leaves nothing queued for a #signal to be lost on.
+            lock (self._lock) {
+                RubyMutex.Unlock(mutex);
+                node = self._waiters.AddLast(info);
+            }
             try {
                 if (ms < 0) {
                     info.Sleep();
@@ -113,9 +121,20 @@ namespace IronRuby.StandardLibrary.Threading {
                     result = info.Sleep(ms) ? (object)(int)Math.Round(watch.Elapsed.TotalSeconds) : null;
                 }
             } finally {
+                bool signalled;
                 lock (self._lock) {
-                    if (node.List != null) {
+                    signalled = node.List == null;
+                    if (!signalled) {
                         self._waiters.Remove(node);
+                    }
+                }
+                if (signalled) {
+                    // A #signal picked this thread. If the timeout ran out first the wake is still
+                    // latched; take it as this wait's (MRI's waiter is woken, not timed out, and the
+                    // signal is not lost) and clear it so the thread's next sleep is not cut short.
+                    info.ClearWake();
+                    if (result == null) {
+                        result = (int)Math.Round(watch.Elapsed.TotalSeconds);
                     }
                 }
                 // Uninterruptibly: MRI promises the mutex is held again when #wait returns, even
