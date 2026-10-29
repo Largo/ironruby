@@ -470,6 +470,8 @@ namespace IronRuby.Tests {
                 ClrScopedExtensions3,
                 ClrScopedExtensions4,
                 ClrScopedExtensions5,
+                ClrScopedExtensions7,
+                ClrScopedExtensions8,
                 ClrOverloadInheritance1,
                 ClrOverloadInheritance2,
                 ClrOverloadInheritance3,
