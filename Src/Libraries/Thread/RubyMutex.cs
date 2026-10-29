@@ -30,7 +30,7 @@ namespace IronRuby.StandardLibrary.Threading {
     /// *Ruby thread* - which for a fiber means the thread that owns the fiber group, because IronRuby
     /// gives every fiber its own CLR thread.
     /// </summary>
-    [RubyClass("Mutex")]
+    [RubyClass("Mutex", DefineIn = typeof(ThreadOps))]
     public class RubyMutex {
 
         /// <summary>MRI's #&lt;Thread::Mutex:0x...&gt;, rather than the CLR type name.</summary>

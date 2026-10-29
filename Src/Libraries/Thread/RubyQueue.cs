@@ -28,7 +28,7 @@ namespace IronRuby.StandardLibrary.Threading {
     /// Thread::Queue - an unbounded blocking queue. Waits are Monitor waits, so Thread#kill and
     /// Thread#raise (which are delivered with Thread.Interrupt on .NET Core) unblock them.
     /// </summary>
-    [RubyClass("Queue")]
+    [RubyClass("Queue", DefineIn = typeof(ThreadOps))]
     public class RubyQueue {
 
         /// <summary>MRI's #&lt;Thread::Queue:0x...&gt;, rather than the CLR type name.</summary>
