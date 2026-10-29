@@ -46,6 +46,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.BCrypt.BCryptLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nio4r.Nio4rLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.CoolIo.CoolIoLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -17352,6 +17353,325 @@ namespace IronRuby.StandardLibrary.Puma {
         
         public static System.Exception/*!*/ ExceptionFactory__Puma__HttpParserError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.CoolIo {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class CoolIoLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Coolio", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Coolio::Buffer", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer), 0x00000008, classRef0, LoadCoolio__Buffer_Instance, LoadCoolio__Buffer_Class, LoadCoolio__Buffer_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.NodeSizeStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Create)
+            );
+            IronRuby.Builtins.RubyClass def4 = DefineClass("Coolio::Loop", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop), 0x00000008, classRef0, LoadCoolio__Loop_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def7 = DefineModule("Coolio::Utils", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.UtilsModule), 0x00000008, null, LoadCoolio__Utils_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def8 = DefineClass("Coolio::Watcher", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher), 0x00000008, classRef0, LoadCoolio__Watcher_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.Create)
+            );
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Coolio::IOWatcher", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher), 0x00000008, def8, LoadCoolio__IOWatcher_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.Create)
+            );
+            IronRuby.Builtins.RubyClass def5 = DefineClass("Coolio::StatWatcher", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher), 0x00000008, def8, LoadCoolio__StatWatcher_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.ToFloatStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.Create)
+            );
+            IronRuby.Builtins.RubyClass def6 = DefineClass("Coolio::TimerWatcher", typeof(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher), 0x00000008, def8, LoadCoolio__TimerWatcher_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.ToFloatStorage, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Create)
+            );
+            SetConstant(def1, "Buffer", def2);
+            SetConstant(def1, "Loop", def4);
+            SetConstant(def1, "Utils", def7);
+            SetConstant(def1, "Watcher", def8);
+            SetConstant(def1, "IOWatcher", def3);
+            SetConstant(def1, "StatWatcher", def5);
+            SetConstant(def1, "TimerWatcher", def6);
+        }
+        
+        private static void LoadCoolio__Buffer_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "MAX_SIZE", IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.MAX_SIZE);
+            
+        }
+        
+        private static void LoadCoolio__Buffer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "<<", 0x11, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Append)
+            );
+            
+            DefineLibraryMethod(module, "append", 0x11, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Append)
+            );
+            
+            DefineLibraryMethod(module, "clear", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Clear)
+            );
+            
+            DefineLibraryMethod(module, "empty?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Boolean>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.IsEmpty)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.NodeSizeStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "prepend", 0x11, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Prepend)
+            );
+            
+            DefineLibraryMethod(module, "read", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Read)
+            );
+            
+            DefineLibraryMethod(module, "read_frame", 0x11, 
+                0x00020004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, IronRuby.Builtins.MutableString, System.Object, System.Boolean>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.ReadFrame)
+            );
+            
+            DefineLibraryMethod(module, "read_from", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.ReadFrom)
+            );
+            
+            DefineLibraryMethod(module, "size", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Int32>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Size)
+            );
+            
+            DefineLibraryMethod(module, "to_str", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.ToStr)
+            );
+            
+            DefineLibraryMethod(module, "write", 0x11, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.Append)
+            );
+            
+            DefineLibraryMethod(module, "write_to", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer, System.Object, System.Int32>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.WriteTo)
+            );
+            
+        }
+        
+        private static void LoadCoolio__Buffer_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "default_node_size", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.GetDefaultNodeSize)
+            );
+            
+            DefineLibraryMethod(module, "default_node_size=", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.NodeSizeStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Buffer.SetDefaultNodeSize)
+            );
+            
+        }
+        
+        private static void LoadCoolio__IOWatcher_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "attach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.Attach)
+            );
+            
+            DefineLibraryMethod(module, "detach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.Detach)
+            );
+            
+            DefineLibraryMethod(module, "disable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.Disable)
+            );
+            
+            DefineLibraryMethod(module, "enable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.Enable)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "on_readable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.OnReadable)
+            );
+            
+            DefineLibraryMethod(module, "on_writable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.IOWatcher.OnWritable)
+            );
+            
+        }
+        
+        private static void LoadCoolio__Loop_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "ev_loop_new", 0x12, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop, System.Int32, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop.EvLoopNew)
+            );
+            
+            DefineLibraryMethod(module, "run_nonblock", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop, System.Int32>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop.RunNonBlock)
+            );
+            
+            DefineLibraryMethod(module, "run_once", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop, System.Object, System.Int32>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Loop.RunOnce)
+            );
+            
+        }
+        
+        private static void LoadCoolio__StatWatcher_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "attach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.Attach)
+            );
+            
+            DefineLibraryMethod(module, "detach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.Detach)
+            );
+            
+            DefineLibraryMethod(module, "disable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.Disable)
+            );
+            
+            DefineLibraryMethod(module, "enable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.Enable)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.ToFloatStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "on_change", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.OnChange)
+            );
+            
+            DefineLibraryMethod(module, "path", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.StatWatcher.GetPath)
+            );
+            
+        }
+        
+        private static void LoadCoolio__TimerWatcher_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "attach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.ToFloatStorage, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Attach)
+            );
+            
+            DefineLibraryMethod(module, "detach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Detach)
+            );
+            
+            DefineLibraryMethod(module, "disable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Disable)
+            );
+            
+            DefineLibraryMethod(module, "enable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Enable)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.ToFloatStorage, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "on_timer", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.OnTimer)
+            );
+            
+            DefineLibraryMethod(module, "reset", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.TimerWatcher.Reset)
+            );
+            
+        }
+        
+        private static void LoadCoolio__Utils_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "maxfds", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.UtilsModule.MaxFds)
+            );
+            
+            DefineLibraryMethod(module, "maxfds=", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.UtilsModule.SetMaxFds)
+            );
+            
+            DefineLibraryMethod(module, "ncpus", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.StandardLibrary.CoolIo.CoolioModule.UtilsModule.NCpus)
+            );
+            
+        }
+        
+        private static void LoadCoolio__Watcher_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "attach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, System.Object, IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.Attach)
+            );
+            
+            DefineLibraryMethod(module, "attached?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, System.Boolean>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.IsAttached)
+            );
+            
+            DefineLibraryMethod(module, "detach", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.Detach)
+            );
+            
+            DefineLibraryMethod(module, "disable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.Disable)
+            );
+            
+            DefineLibraryMethod(module, "enable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.Enable)
+            );
+            
+            DefineLibraryMethod(module, "enabled?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, System.Boolean>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.IsEnabled)
+            );
+            
+            DefineLibraryMethod(module, "evloop", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.GetLoop)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher, System.Object[], System.Object>(IronRuby.StandardLibrary.CoolIo.CoolioModule.Watcher.Initialize)
+            );
+            
         }
         
     }
