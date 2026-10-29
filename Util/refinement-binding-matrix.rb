@@ -26,6 +26,13 @@ end
 
 HOT = 120
 
+# Section 9's method: defined before anything in this file is refined, first called in section 1.
+def before_any(s)
+  s.r9
+rescue NoMethodError
+  :plain
+end
+
 def warm
   i = 0
   while i < HOT
@@ -50,6 +57,7 @@ module LateUser
   def self.up(s) = s.upcase
 end
 warm { LateUser.shout('x'); LateUser.up('x') }
+$before_any_first = before_any('x')
 t('before the refinement has it') { LateUser.shout('x') }
 LateM::R.send(:define_method, :shout) { :refined }
 t('defined outside the refine block') { LateUser.shout('x') }
@@ -252,3 +260,15 @@ using R8
 t('still, after a using') { m8('x') }
 definer.call
 t('defined again after the using') { m8('x') }
+
+# ---------------------------------------------------------------- 9. a def that ran before anything was refined
+
+puts
+puts '--- 9. a method defined before any refinement existed ---'
+module R9
+  refine(String) { def r9 = :refined }
+end
+using R9
+t('first called once refinements existed') { $before_any_first }
+t('called after a using in its scope') { before_any('x') }
+t('a call written after the using') { 'x'.r9 }

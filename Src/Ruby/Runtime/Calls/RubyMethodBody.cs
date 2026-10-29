@@ -231,6 +231,17 @@ namespace IronRuby.Runtime.Calls {
         // refinements, which is right for a `def' that ran before any refinement existed.
         private bool _compiledWithoutDefinitionRefinements;
 
+        // A `def' of this body ran while nothing had been refined (so it recorded nothing): a
+        // compilation for its module made after something has been must still see no refinements.
+        private bool _definedWithoutRefinements;
+
+        /// <summary>
+        /// A `def' of this body ran before anything was refined: no refinement is active where it was written.
+        /// </summary>
+        internal void SetDefinedWithoutRefinements() {
+            _definedWithoutRefinements = true;
+        }
+
         /// <summary>
         /// Records the refinements active at a `def' of this body for <paramref name="declaringModule"/>.
         /// </summary>
@@ -296,6 +307,12 @@ namespace IronRuby.Runtime.Calls {
             if (declaringScope.RubyContext.HasRefinements) {
                 lock (this) {
                     definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
+                    // With nothing recorded the scopes follow the declaring scope - what an imported refinement
+                    // method's copy needs (RubyModule.ImportMethod) - but a `def' that ran before anything was
+                    // refined saw nothing, whatever that scope `using's afterwards.
+                    if (definitionRefinements.Value == null && _definedWithoutRefinements && !declaringModule.IsRefinement) {
+                        definitionRefinements.Value = RefinementActivation.Empty;
+                    }
                     if (definitionRefinements.Value != null && definitionRefinements.Value.IsEmpty) {
                         definitionRefinements = null;
                         _compiledWithoutDefinitionRefinements = true;

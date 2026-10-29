@@ -961,6 +961,8 @@ namespace IronRuby.Runtime {
                 var definitionScope = DefinitionScope(scope, instanceOwner);
                 if (scope.RubyContext.HasRefinements) {
                     body.SetDefinitionRefinements(instanceOwner, definitionScope.GetActiveRefinements());
+                } else {
+                    body.SetDefinedWithoutRefinements();
                 }
                 SetMethod(scope.RubyContext, instanceMethod =
                     new RubyMethodInfo(body, definitionScope, instanceOwner, instanceFlags)
@@ -970,6 +972,8 @@ namespace IronRuby.Runtime {
             if (singletonOwner != null) {
                 if (scope.RubyContext.HasRefinements) {
                     body.SetDefinitionRefinements(singletonOwner, scope.GetActiveRefinements());
+                } else {
+                    body.SetDefinedWithoutRefinements();
                 }
                 SetMethod(scope.RubyContext, singletonMethod =
                     new RubyMethodInfo(body, scope, singletonOwner, singletonFlags)

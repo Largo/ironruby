@@ -181,5 +181,31 @@ p m6('x')
 :refined
 ");
         }
+
+        /// <summary>
+        /// A method defined before anything was refined, and first called after, does not see a `using' that comes
+        /// later in the scope it was defined in.
+        /// </summary>
+        public void Refinements7() {
+            TestOutput(@"
+def before(s)
+  s.r7
+rescue NoMethodError
+  :plain
+end
+module R7
+  refine(String) { def r7; :refined; end }
+end
+p before('x')
+using R7
+p before('x')
+def after(s) = s.r7
+p after('x')
+", @"
+:plain
+:plain
+:refined
+");
+        }
     }
 }

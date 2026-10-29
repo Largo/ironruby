@@ -695,6 +695,7 @@ namespace IronRuby.Tests {
                 Refinements4,
                 Refinements5,
                 Refinements6,
+                Refinements7,
 
                 Super1,
                 SuperParameterless1,
