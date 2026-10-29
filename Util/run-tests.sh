@@ -39,25 +39,9 @@ cd "$IR_ROOT" || exit 1
 
 # CI builds against the DLR with Build/dlr-patches applied. Without them this is a different
 # DLR, and the results are not CI's: DeepNesting1, for one, takes the whole process down with
-# a stack overflow. A later patch can change the lines next to an earlier one, so a patch is
-# not checked on its own: the series is taken back off, newest first, from a copy of the files
-# it touches.
-dlr_root=$(git -C "$DLR_SOURCE_DIR" rev-parse --show-toplevel 2>/dev/null) && {
-  check=$(mktemp -d)
-  for p in Build/dlr-patches/*.patch; do
-    git apply --numstat "$p" | cut -f3
-  done | sort -u | while read -r f; do
-    [ -f "$dlr_root/$f" ] && mkdir -p "$check/$(dirname "$f")" && cp "$dlr_root/$f" "$check/$f"
-  done
-  for p in $(ls -r Build/dlr-patches/*.patch); do
-    (cd "$check" && git apply --reverse "$IR_ROOT/$p" 2>/dev/null) || {
-      echo "run-tests: WARNING: $dlr_root does not have all of Build/dlr-patches ($(basename "$p") is not applied);" >&2
-      echo "run-tests: apply them, or point DLR_SOURCE_DIR at a DLR that has them (see Build/dlr-patches/README.md)" >&2
-      break
-    }
-  done
-  rm -rf "$check"
-}
+# a stack overflow. Still a warning only: a run against another DLR is sometimes the point.
+Util/check-dlr-patches.sh "$DLR_SOURCE_DIR" ||
+  echo "run-tests: WARNING: running against that DLR anyway; the results are not CI's" >&2
 
 build() {
   dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c "$IR_CONFIG" -p:DlrSourceDir="$DLR_SOURCE_DIR" > "$build_log" 2>&1

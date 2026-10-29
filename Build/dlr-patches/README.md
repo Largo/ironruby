@@ -24,7 +24,10 @@ the apply step instead of with a confusing CS1061 deep inside IronRuby.
 | `0101-stack-guard.patch` | The interpreter's `LightCompiler` and the compiled path's `FlowControlRewriter` recurse once or more per level of an expression tree, and Ruby code nests deeper than a thread's stack goes: prism accepts 10000 levels, and a call chain (`a.b.c...`) has no limit. A new `Microsoft.Scripting.Utils.StackGuard` lets them carry on on a new thread with a fresh 64 MB stack when `RuntimeHelpers.TryEnsureSufficientExecutionStack()` says the stack is nearly gone, as `System.Linq.Expressions`' own compilers do. Named to apply after the `0100-` patches, which touch `LightCompiler.cs` too. |
 | `0102-jit-on-fresh-stack.patch` | The CLR's JIT also recurses over the trees of the IL it compiles, and needs far more stack per level than the light compiler: compiling a lambda nested ~1500 Ruby levels deep (an array literal, say) overflowed a 1 MB stack - a Windows main thread's, or the thread `DeepNesting1` runs on - in `DynamicMethod.CreateDelegate`, which no managed check can catch. The light compiler now records how deep the tree went, and `LightDelegateCreator.Compile`, through which both synchronous and background compiles go, compiles a lambda deeper than 400 levels on a fresh stack (`StackGuard`, from `0101`). Hardly anything is that deep: in IronRuby.Tests, 3 of 4609 compiled lambdas, all from `DeepNesting1`. |
 
-`Util/run-tests.sh` warns when the DLR it builds against does not have all of these applied.
+`Util/check-dlr-patches.sh DLR_DIR` checks that a DLR checkout has all of these applied:
+a local one is patched once and falls behind when a new patch lands here.
+`Util/run-tests.sh` warns when the DLR it builds against does not, and
+`Util/package-release.sh` refuses to build a release from it.
 
 `aot/` holds patches for the ahead-of-time/NativeAOT prototype (`Util/aot`). CI does not apply
 them (the loop above takes this directory's `*.patch` only); `Util/aot/NativeAot/make-dlr-copy.sh`

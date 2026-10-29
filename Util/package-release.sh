@@ -28,6 +28,9 @@ VERSION=${IR_VERSION:-$(sed -n 's/.*DisplayVersion = "\(.*\)";.*/\1/p' "$IR_ROOT
 NAME="ironruby-$VERSION-$RID"
 STAGE="$OUT/$NAME"
 
+# A release is CI's build: not one from a ../dlr that has fallen behind Build/dlr-patches.
+"$IR_ROOT/Util/check-dlr-patches.sh" "$IR_ROOT/../dlr/src/core"
+
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Src"
 
