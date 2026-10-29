@@ -1606,7 +1606,8 @@ namespace IronRuby.Builtins {
         /// The table is allocated lazily so modules whose constants all come from C#/library code pay nothing.
         /// </summary>
         public void SetConstantLocation(string/*!*/ name, string sourcePath, int sourceLine) {
-            if (sourcePath == null) {
+            // Nor do the constants the core prelude defines: they are MRI's C-defined core.
+            if (sourcePath == null || Context.Loader.IsLoadingCorePrelude) {
                 return;
             }
             using (Context.ClassHierarchyLocker()) {

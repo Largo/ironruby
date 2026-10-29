@@ -801,6 +801,13 @@ namespace IronRuby.Runtime {
             sourcePath = null;
             sourceLine = 0;
 
+            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
+            // interpreted frame below would be one of the prelude's, and the walk would come back
+            // empty, after ~1ms, for each of its const_set calls (Errno and Encoding make hundreds).
+            if (context.Loader.IsLoadingCorePrelude) {
+                return false;
+            }
+
             // Fast path: the interpreter's frame chain already knows where we are; a CLR stack walk
             // with file info costs ~1ms and this is called once per Module#const_set.
             if (RubyStackTraceBuilder.TryGetInterpretedFrameLocation(out sourcePath, out sourceLine)) {
@@ -808,13 +815,6 @@ namespace IronRuby.Runtime {
             }
             sourcePath = null;
             sourceLine = 0;
-
-            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
-            // walk below would come back empty, after ~1ms, for each of the prelude's const_set calls
-            // (Errno and Encoding make hundreds).
-            if (context.Loader.IsLoadingCorePrelude) {
-                return false;
-            }
 
             RubyArray trace;
             try {
