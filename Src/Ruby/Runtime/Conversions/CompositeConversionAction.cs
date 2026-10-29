@@ -62,7 +62,16 @@ namespace IronRuby.Runtime.Conversions {
             get { return _resultType; }
         }
 
+        /// <summary>
+        /// The context's one binder for the conversion (<see cref="RubyMetaBinderFactory.CompositeConversion"/>), as every
+        /// other conversion has: its sites then share the rules it binds rather than each binding its own for the same
+        /// receiver class, and a storage's GetSite(Make(...)) allocates nothing once the site exists.
+        /// </summary>
         public static CompositeConversionAction/*!*/ Make(RubyContext/*!*/ context, CompositeConversion/*!*/ conversion) {
+            return context != null ? context.MetaBinderFactory.CompositeConversion(conversion) : Create(null, conversion);
+        }
+
+        internal static CompositeConversionAction/*!*/ Create(RubyContext context, CompositeConversion conversion) {
             switch (conversion) {
                 case CompositeConversion.ToFixnumToStr:
                     return new CompositeConversionAction(conversion,
