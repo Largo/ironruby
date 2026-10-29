@@ -2667,9 +2667,12 @@ unless defined?(Fiber)
           f = allocate
           f.__init_root__
           # A thread's root fiber starts with the storage of the fiber that created the
-          # thread; Thread.new leaves that fiber here for us.
+          # thread; Thread.new leaves that fiber's State (not its handle) here for us.
           parent = t[:__ir_fiber_parent__]
-          f.__inherit_storage__(parent) if parent
+          if parent
+            t[:__ir_fiber_parent__] = nil
+            f.__state__.__inherit_storage__(parent)
+          end
           t[:__ir_fiber_root__] = f
         end
       end
@@ -2701,7 +2704,6 @@ unless defined?(Fiber)
       @state || Fiber.__err__(::FiberError, "uninitialized fiber")
     end
     def __storage_raw__; __state__.__storage_raw__; end
-    def __inherit_storage__(parent); __state__.__inherit_storage__(parent.__state__); self; end
     def alive?; __state__.alive?; end
     def blocking?; __state__.blocking?; end
     def inspect; __state__.inspect; end

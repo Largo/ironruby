@@ -1069,10 +1069,12 @@ namespace IronRuby.Builtins {
 
             // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
             // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
-            // fiber over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb).
+            // fiber's State over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb). Not the
+            // public Fiber: a long-lived thread would keep an abandoned creator from being reclaimed.
             object creatorFiber = RubyThreadInfo.FromThread(Thread.CurrentThread)[context.CreateAsciiSymbol("__ir_fiber_current__")];
-            if (creatorFiber != null) {
-                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorFiber;
+            object creatorState = GetCurrentFiberState(context, null);
+            if (creatorFiber != null && creatorState != null) {
+                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorState;
             }
 
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads

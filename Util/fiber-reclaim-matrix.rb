@@ -190,6 +190,24 @@ module FiberReclaimChecks
     [weak, state.__core__]
   end
 
+  # A thread created inside a fiber inherits its storage, not its handle: the
+  # thread outliving the abandoned fiber must not keep the fiber's worker parked.
+  # No handle local here: the thread's block closes over this scope.
+  def self.build_thread_creator(gate)
+    Fiber.new(storage: { from_creator: :yes }) do
+      Fiber.yield(Thread.new do
+        gate.pop
+        Fiber[:from_creator]
+      end)
+    end
+  end
+
+  def self.discard_thread_creator(gate)
+    fiber = build_thread_creator(gate)
+    thread = fiber.resume
+    [WeakRef.new(fiber), fiber.__state__.__core__, thread]
+  end
+
   def self.run
     root = Fiber.current
     initial_threads = Thread.list.size
@@ -198,6 +216,13 @@ module FiberReclaimChecks
     eventually('transferred fiber was incorrectly pinned') do
       !transfer_weak.weakref_alive? && transfer_core.status == 'terminated'
     end
+    gate = Queue.new
+    creator_weak, creator_core, child_thread = discard_thread_creator(gate)
+    eventually('a thread kept the fiber that created it') do
+      !creator_weak.weakref_alive? && creator_core.status == 'terminated'
+    end
+    gate << :go
+    assert(child_thread.value == :yes, 'thread lost the storage of the fiber that created it')
     events = []
     weak, core, worker = discard(events)
     eventually('discarded handle or worker was retained') do

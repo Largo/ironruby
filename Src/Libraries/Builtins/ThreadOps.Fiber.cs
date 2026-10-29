@@ -524,9 +524,12 @@ namespace IronRuby.Builtins {
             _currentFiber = fiber;
             _currentFiberContext = context;
             FiberRegistration registration;
-            if (_fiberHandles.TryGetValue(fiber, out registration)) {
+            if (fiber != null && _fiberHandles.TryGetValue(fiber, out registration)) {
                 _currentFiberState = registration.Core.State;
                 RubyThreadInfo.FromThread(Thread.CurrentThread).FiberExecution = registration.Core;
+            } else {
+                _currentFiberState = null;
+                RubyThreadInfo.FromThread(Thread.CurrentThread).FiberExecution = null;
             }
             return fiber;
         }
