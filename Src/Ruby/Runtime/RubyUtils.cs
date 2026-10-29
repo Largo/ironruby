@@ -1591,6 +1591,32 @@ namespace IronRuby.Runtime {
 
 #if FEATURE_THREAD
 #if FEATURE_EXCEPTION_STATE
+        // Unwinds only discarded fiber stacks. Set before throwing, cleared by the worker
+        // boundary after CLR finally cleanup has completed; Ruby ensure bodies consult it.
+        public sealed class FiberReclaimSignal : StackUnwinder {
+            public FiberReclaimSignal() : base(null) { }
+        }
+
+        [ThreadStatic]
+        private static bool _reclaimingFiber;
+
+        public static bool IsReclaimingFiber { get { return _reclaimingFiber; } }
+
+        public static void BeginFiberReclamation() {
+            if (!_reclaimingFiber) {
+                _reclaimingFiber = true;
+                RequestSafePoint();
+            }
+            throw new FiberReclaimSignal();
+        }
+
+        public static void EndFiberReclamation() {
+            if (_reclaimingFiber) {
+                _reclaimingFiber = false;
+                SafePointRequestDone();
+            }
+        }
+
         /// <summary>
         /// Control-flow exception used to unwind a thread that was killed with Thread#kill / #exit / #terminate.
         /// Deriving from StackUnwinder makes RubyOps.CanRescue skip it, so - exactly like in MRI - a killed
@@ -1889,6 +1915,13 @@ namespace IronRuby.Runtime {
         /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
         /// </summary>
         public static void CheckAsyncException(bool atBlockingCall) {
+            // Reclamation runs CLR cleanup only. Do not enter Ruby signal/finalizer callbacks
+            // or replace the unwind signal with a pending asynchronous exception.
+            if (_reclaimingFiber) {
+                // A CLR catch(Exception) can swallow a control-flow signal. Keep the request
+                // active until the worker boundary, so another Ruby entry cannot continue it.
+                throw new FiberReclaimSignal();
+            }
             // Trap handlers run on the main thread at a safe point, like MRI's interrupt check.
             // The hook is installed by the Signal library, which lives in another assembly.
             Action safePoint = SafePointHandler;

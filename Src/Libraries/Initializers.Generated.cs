@@ -1532,6 +1532,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.Enumerator, System.Object, System.String, IronRuby.Builtins.RubyArray, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerator.InitializeFrom)
             );
             
+            DefineLibraryMethod(module, "__enum_iteration_source__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerator.GetIterationSource)
+            );
+            
             DefineLibraryMethod(module, "__enum_size_info__", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.GetSizeInfo)
@@ -10246,6 +10251,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32>(IronRuby.Builtins.ThreadOps.GetBacktraceLimit)
             );
             
+            DefineLibraryMethod(module, "__fiber_core__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Threading.Thread, System.Boolean, IronRuby.Builtins.ThreadOps.FiberCore>(IronRuby.Builtins.ThreadOps.CreateFiberCore)
+            );
+            
             DefineLibraryMethod(module, "__fiber_current__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetCurrentFiber)
@@ -10279,6 +10289,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__fiber_reuse__", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.ReuseFiberThread)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_state__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetCurrentFiberState)
             );
             
             DefineLibraryMethod(module, "__fiber_take__", 0x61, 

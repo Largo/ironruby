@@ -560,6 +560,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ReadGlobalVariable;
         public static MethodInfo/*!*/ RegisterShutdownHandler { get { return _RegisterShutdownHandler ?? (_RegisterShutdownHandler = CallInstruction.CacheAction<IronRuby.Builtins.Proc>(RubyOps.RegisterShutdownHandler)); } }
         private static MethodInfo _RegisterShutdownHandler;
+        public static MethodInfo/*!*/ ReleaseScopeFrame { get { return _ReleaseScopeFrame ?? (_ReleaseScopeFrame = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope>(RubyOps.ReleaseScopeFrame)); } }
+        private static MethodInfo _ReleaseScopeFrame;
         public static MethodInfo/*!*/ ReuseBfcForYield { get { return _ReuseBfcForYield ?? (_ReuseBfcForYield = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.ReuseBfcForYield)); } }
         private static MethodInfo _ReuseBfcForYield;
         public static MethodInfo/*!*/ RubyStruct_GetValue { get { return _RubyStruct_GetValue ?? (_RubyStruct_GetValue = CallInstruction.CacheFunc<IronRuby.Builtins.RubyStruct, System.Int32, System.Object>(RubyStruct.GetValue)); } }

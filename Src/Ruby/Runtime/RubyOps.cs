@@ -3045,14 +3045,31 @@ namespace IronRuby.Runtime {
             // no write to a frame that is not active: CreateRfcForMethod's shared inactive frame stays untouched
             if (rfc._activeFlowControlScope != null) {
                 rfc.LeaveMethod();
+                ReleaseScopeFrame(rfc as RubyScope);
             }
         }
-        
+
+        // A captured scope needs its locals, not a completed interpreter frame's temporary
+        // operands (which may include the Fiber handle returned by its factory method).
+        [Emitted]
+        public static void ReleaseScopeFrame(RubyScope scope) {
+            if (scope != null) {
+                scope.InterpretedFrame = null;
+            }
+        }
+
         /// <summary>
         /// Filters exceptions raised from EH-body, EH-rescue and EH-else clauses.
         /// </summary>
         [Emitted]
         public static bool CanRescue(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+            // A CLR finally may replace the reclaim signal with an ordinary exception.
+            // That still belongs to a discarded stack and must not enter a Ruby rescue.
+            if (RubyUtils.IsReclaimingFiber) {
+                return false;
+            }
+#endif
             if (exception is StackUnwinder) {
                 return false;
             }

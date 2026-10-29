@@ -195,6 +195,7 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal volatile string BlockedLabel;
             internal volatile Thread ActiveFiberThread;
+            internal FiberCore FiberExecution;
 
             /// <summary>
             /// A fiber thread parked in the pool between two fibers (ThreadOps.Fiber.cs). It is no
@@ -1043,6 +1044,11 @@ namespace IronRuby.Builtins {
             thread.Start();
         }
 
+        // Keep ThreadStarter out of the context's lifetime-long termination callback closure.
+        private static Action CreateThreadTerminator(RubyContext context) {
+            return () => TerminateAllThreads(context);
+        }
+
         /// <summary>
         /// Creates the CLR thread for a Ruby thread, ready to start once <paramref name="starter"/> has
         /// been given its block. System.Threading.Thread is sealed, so a thread of a Ruby subclass of
@@ -1053,7 +1059,7 @@ namespace IronRuby.Builtins {
             ThreadGroup group = creator.Group;
             ThreadStarter s = starter = new ThreadStarter();
             if (context.ThreadTerminator == null) {
-                context.ThreadTerminator = () => TerminateAllThreads(context);
+                context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
@@ -1071,10 +1077,12 @@ namespace IronRuby.Builtins {
 
             // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
             // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
-            // fiber over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb).
+            // fiber's State over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb). Not the
+            // public Fiber: a long-lived thread would keep an abandoned creator from being reclaimed.
             object creatorFiber = RubyThreadInfo.FromThread(Thread.CurrentThread)[context.CreateAsciiSymbol("__ir_fiber_current__")];
-            if (creatorFiber != null) {
-                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorFiber;
+            object creatorState = GetCurrentFiberState(context, null);
+            if (creatorFiber != null && creatorState != null) {
+                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorState;
             }
 
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads
@@ -1586,8 +1594,6 @@ namespace IronRuby.Builtins {
         private static void TerminateAllThreads(RubyContext/*!*/ context) {
             _terminating = true;
 
-            RubySymbol currentFiberKey = context.CreateAsciiSymbol("__ir_fiber_current__");
-            RubySymbol resumed = context.CreateAsciiSymbol("resumed");
             List<Thread> killed = new List<Thread>();
             List<Thread> busy = new List<Thread>();
 
@@ -1597,9 +1603,7 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                object fiber = info[currentFiberKey];
-                object status;
-                if (fiber != null && context.TryGetInstanceVariable(fiber, "@status", out status) && !ReferenceEquals(status, resumed)) {
+                if (info.IsIdleFiberWorker || (info.FiberExecution != null && info.FiberExecution.Status == "suspended")) {
                     // a suspended fiber (or a thread whose root fiber is suspended)
                     continue;
                 }

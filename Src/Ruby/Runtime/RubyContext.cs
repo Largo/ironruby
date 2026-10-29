@@ -5015,6 +5015,11 @@ namespace IronRuby.Runtime {
         }
 
         internal void ReportTraceEvent(string/*!*/ operation, RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ name, string fileName, int lineNumber) {
+#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
+            if (RubyUtils.IsReclaimingFiber) {
+                return;
+            }
+#endif
             if (_traceListener != null && !_traceListenerSuspended) {
                 try {
                     _traceListenerSuspended = true;
