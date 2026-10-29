@@ -315,5 +315,54 @@ p out.last
 [:outer, :inner_q, :inner_n]
 ");
         }
+
+        /// <summary>
+        /// A refined call on a Ruby object, made in a method or in a block written in one, gets a precompiled dispatcher that
+        /// tests the method's record (MethodDispatcher.CreateRefinedRubyObjectDispatcher): with no arguments, with two and
+        /// with a block. It binds again when the `def' runs again under other refinements, and when Module#refine runs the
+        /// block. (CRuby 4.0 prints :r1 on the third line, its block keeping the refinements it was made under - see
+        /// Refinements6 - and :r2 on the fifth, from the inline caches the earlier calls filled.)
+        /// </summary>
+        public void Refinements11() {
+            TestOutput(@"
+class P; end
+module R1
+  refine(P) { def r = :r1; def r2(a, b) = [:r1, a, b]; def rb = [:r1, yield] }
+end
+module R2
+  refine(P) { def r = :r2; def r2(a, b) = [:r2, a, b]; def rb = [:r2, yield] }
+end
+using R1
+definer = proc do
+  def m(o) = [o.r, o.r2(1, 2), o.rb { 3 }, [1].map { [o.r, o.r2(4, 5), o.rb { 6 }] }.first]
+end
+definer.call
+o = P.new
+p (1..100).map { m(o) }.uniq
+using R2
+p m(o)
+definer.call
+p (1..100).map { m(o) }.uniq
+class FakeRefiner
+  def refine(_) = yield
+end
+def mk(target, out, o) = target.send(:refine, Integer) { out << [o.r, o.r2(1, 2), o.rb { 3 }] }
+holder = Module.new { refine(P) { def r = :inner; def r2(a, b) = [:inner, a, b]; def rb = [:inner, yield] } }
+out = []
+fake = FakeRefiner.new
+100.times { mk(fake, out, o) }
+p out.uniq
+mk(holder, out, o)
+p out.last
+p (1..100).map { mk(fake, out, o); out.last }.uniq
+", @"
+[[:r1, [:r1, 1, 2], [:r1, 3], [:r1, [:r1, 4, 5], [:r1, 6]]]]
+[:r1, [:r1, 1, 2], [:r1, 3], [:r1, [:r1, 4, 5], [:r1, 6]]]
+[[:r2, [:r2, 1, 2], [:r2, 3], [:r2, [:r2, 4, 5], [:r2, 6]]]]
+[[:r2, [:r2, 1, 2], [:r2, 3]]]
+[:inner, [:inner, 1, 2], [:inner, 3]]
+[[:r2, [:r2, 1, 2], [:r2, 3]]]
+");
+        }
     }
 }
