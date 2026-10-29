@@ -28,6 +28,24 @@
     <PackageReference Include="AngleSharp.Xml" Version="1.2.0" />
   </ItemGroup>
   <ItemGroup>
+    <!-- cmark-gfm for markly (Src/Libraries/Markly), built from the markly gem's own C
+         sources by Util/build-markly.sh into Markly/native/build.  Ship whichever
+         platforms' builds are there, as Src/Prism/IronRuby.Prism.csproj does libprism;
+         without one, `require "markly"` raises a LoadError naming the script. -->
+    <Content Include="Markly\native\build\libmarkly_cmark.so" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\libmarkly_cmark.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libmarkly_cmark.so</Link>
+    </Content>
+    <Content Include="Markly\native\build\markly_cmark.dll" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\markly_cmark.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>markly_cmark.dll</Link>
+    </Content>
+    <Content Include="Markly\native\build\libmarkly_cmark.dylib" Condition="Exists('$(MSBuildThisFileDirectory)Markly\native\build\libmarkly_cmark.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libmarkly_cmark.dylib</Link>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />

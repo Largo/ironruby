@@ -46,6 +46,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.BCrypt.BCryptLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nio4r.Nio4rLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Markly.MarklyLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -17337,6 +17338,268 @@ namespace IronRuby.StandardLibrary.Puma {
         
         public static System.Exception/*!*/ ExceptionFactory__Puma__HttpParserError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Markly {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class MarklyLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.SystemException));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Markly", typeof(IronRuby.StandardLibrary.Markly.MarklyOps), 0x00000008, null, LoadMarkly_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Markly::Error", typeof(IronRuby.StandardLibrary.Markly.MarklyOps.MarklyError), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(MarklyLibraryInitializer.ExceptionFactory__Markly__Error));
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Markly::Node", typeof(IronRuby.StandardLibrary.Markly.MarklyOps.Node), 0x00000008, classRef1, LoadMarkly__Node_Instance, LoadMarkly__Node_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def4 = DefineClass("Markly::Parser", typeof(IronRuby.StandardLibrary.Markly.MarklyOps.Parser), 0x00000008, classRef1, LoadMarkly__Parser_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Markly.MarklyOps.Parser>(IronRuby.StandardLibrary.Markly.MarklyOps.Parser.Create)
+            );
+            SetConstant(def1, "Error", def2);
+            SetConstant(def1, "Node", def3);
+            SetConstant(def1, "Parser", def4);
+        }
+        
+        private static void LoadMarkly_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "extensions", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Markly.MarklyOps.Extensions)
+            );
+            
+        }
+        
+        private static void LoadMarkly__Node_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "_render_commonmark", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.RenderCommonMark)
+            );
+            
+            DefineLibraryMethod(module, "_render_html", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.RenderHtml)
+            );
+            
+            DefineLibraryMethod(module, "_render_plaintext", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.RenderPlaintext)
+            );
+            
+            DefineLibraryMethod(module, "append_child", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.AppendChild)
+            );
+            
+            DefineLibraryMethod(module, "delete", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.Delete)
+            );
+            
+            DefineLibraryMethod(module, "fence_info", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetFenceInfo)
+            );
+            
+            DefineLibraryMethod(module, "fence_info=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetFenceInfo)
+            );
+            
+            DefineLibraryMethod(module, "first_child", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.FirstChild)
+            );
+            
+            DefineLibraryMethod(module, "header_level", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Int32>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetHeaderLevel)
+            );
+            
+            DefineLibraryMethod(module, "header_level=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetHeaderLevel)
+            );
+            
+            DefineLibraryMethod(module, "html_escape_href", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.HtmlEscapeHref)
+            );
+            
+            DefineLibraryMethod(module, "html_escape_html", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.HtmlEscapeHtml)
+            );
+            
+            DefineLibraryMethod(module, "insert_after", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.InsertAfter)
+            );
+            
+            DefineLibraryMethod(module, "insert_before", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.InsertBefore)
+            );
+            
+            DefineLibraryMethod(module, "last_child", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.LastChild)
+            );
+            
+            DefineLibraryMethod(module, "list_start", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Int32>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetListStart)
+            );
+            
+            DefineLibraryMethod(module, "list_start=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetListStart)
+            );
+            
+            DefineLibraryMethod(module, "list_tight", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetListTight)
+            );
+            
+            DefineLibraryMethod(module, "list_tight=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetListTight)
+            );
+            
+            DefineLibraryMethod(module, "list_type", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.RubySymbol>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetListType)
+            );
+            
+            DefineLibraryMethod(module, "list_type=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetListType)
+            );
+            
+            DefineLibraryMethod(module, "next", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.Next)
+            );
+            
+            DefineLibraryMethod(module, "parent", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.Parent)
+            );
+            
+            DefineLibraryMethod(module, "parent_footnote_def", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.ParentFootnoteDef)
+            );
+            
+            DefineLibraryMethod(module, "prepend_child", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.PrependChild)
+            );
+            
+            DefineLibraryMethod(module, "previous", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.Previous)
+            );
+            
+            DefineLibraryMethod(module, "replace", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.Replace)
+            );
+            
+            DefineLibraryMethod(module, "source_position", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetSourcePosition)
+            );
+            
+            DefineLibraryMethod(module, "string_content", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetStringContent)
+            );
+            
+            DefineLibraryMethod(module, "string_content=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetStringContent)
+            );
+            
+            DefineLibraryMethod(module, "table_alignments", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetTableAlignments)
+            );
+            
+            DefineLibraryMethod(module, "tasklist_item_checked?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetTasklistItemChecked)
+            );
+            
+            DefineLibraryMethod(module, "tasklist_item_checked=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Boolean>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetTasklistItemChecked)
+            );
+            
+            DefineLibraryMethod(module, "title", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetTitle)
+            );
+            
+            DefineLibraryMethod(module, "title=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetTitle)
+            );
+            
+            DefineLibraryMethod(module, "type", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.RubySymbol>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetNodeType)
+            );
+            
+            DefineLibraryMethod(module, "type_string", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetTypeString)
+            );
+            
+            DefineLibraryMethod(module, "url", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Markly.MarklyOps.Node, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.GetUrl)
+            );
+            
+            DefineLibraryMethod(module, "url=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Node, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.SetUrl)
+            );
+            
+        }
+        
+        private static void LoadMarkly__Node_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "new", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Markly.MarklyOps.Node>(IronRuby.StandardLibrary.Markly.MarklyOps.Node.New)
+            );
+            
+        }
+        
+        private static void LoadMarkly__Parser_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "enable", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Parser, System.Object, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Parser.Enable)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Parser, System.Object, IronRuby.StandardLibrary.Markly.MarklyOps.Parser>(IronRuby.StandardLibrary.Markly.MarklyOps.Parser.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "parse", 0x11, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Markly.MarklyOps.Parser, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Markly.MarklyOps.Parser.Parse)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Markly__Error(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Markly.MarklyOps.MarklyError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }

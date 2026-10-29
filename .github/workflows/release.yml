@@ -108,6 +108,16 @@ jobs:
           fi
           ls -l build
 
+      # Built as in ci.yml (Util/build-markly.sh), so the archive carries markly's cmark-gfm.
+      - name: Build libmarkly_cmark
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-markly.sh
+          ls -l Src/Libraries/Markly/native/build
+
       # The committed loader must be the one this prism revision generates; a mismatch
       # would build fine and then misread the syntax tree.
       - name: Check the prism loader against the prism revision
