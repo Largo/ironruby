@@ -265,6 +265,23 @@ namespace IronRuby.Builtins {
             return new ArrayCursor(array, RubyUtils.CurrentRubyThread);
         }
 
+        // External iteration needs the target/generator, not the public Enumerator that owns
+        // the fiber handle. Preserve custom #each receivers, where detaching could change Ruby
+        // behavior; those can still retain themselves through their suspended user frames.
+        [RubyMethod("__enum_iteration_source__", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator GetIterationSource(RubyContext context, Enumerator self) {
+            if (context.GetImmediateClassOf(self) != context.GetClass(typeof(Enumerator)) ||
+                !IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
+                return self;
+            }
+            var source = new Enumerator(self._impl);
+            object generator;
+            if (context.TryGetInstanceVariable(self, "@generator", out generator)) {
+                context.SetInstanceVariable(source, "@generator", generator);
+            }
+            return source;
+        }
+
         private static bool IsBuiltinMethod(RubyContext/*!*/ context, object target, string/*!*/ name, Type/*!*/ declaringType, string/*!*/ clrName) {
             var method = context.ResolveMethod(target, name, VisibilityContext.AllVisible);
             if (!method.Found || !(method.Info is RubyLibraryMethodInfo)) {

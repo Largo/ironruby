@@ -774,6 +774,7 @@ namespace IronRuby.Tests {
                 Exception_Proc_Misc1,
                 ManyLocals1,
                 ManyLocals2,
+                Fiber_ReclamationClrBoundary1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,

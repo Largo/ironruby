@@ -195,6 +195,7 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal volatile string BlockedLabel;
             internal volatile Thread ActiveFiberThread;
+            internal FiberCore FiberExecution;
 
             /// <summary>
             /// A fiber thread parked in the pool between two fibers (ThreadOps.Fiber.cs). It is no
@@ -1035,6 +1036,11 @@ namespace IronRuby.Builtins {
             thread.Start();
         }
 
+        // Keep ThreadStarter out of the context's lifetime-long termination callback closure.
+        private static Action CreateThreadTerminator(RubyContext context) {
+            return () => TerminateAllThreads(context);
+        }
+
         /// <summary>
         /// Creates the CLR thread for a Ruby thread, ready to start once <paramref name="starter"/> has
         /// been given its block. System.Threading.Thread is sealed, so a thread of a Ruby subclass of
@@ -1045,7 +1051,7 @@ namespace IronRuby.Builtins {
             ThreadGroup group = creator.Group;
             ThreadStarter s = starter = new ThreadStarter();
             if (context.ThreadTerminator == null) {
-                context.ThreadTerminator = () => TerminateAllThreads(context);
+                context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
@@ -1578,8 +1584,6 @@ namespace IronRuby.Builtins {
         private static void TerminateAllThreads(RubyContext/*!*/ context) {
             _terminating = true;
 
-            RubySymbol currentFiberKey = context.CreateAsciiSymbol("__ir_fiber_current__");
-            RubySymbol resumed = context.CreateAsciiSymbol("resumed");
             List<Thread> killed = new List<Thread>();
             List<Thread> busy = new List<Thread>();
 
@@ -1589,9 +1593,7 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                object fiber = info[currentFiberKey];
-                object status;
-                if (fiber != null && context.TryGetInstanceVariable(fiber, "@status", out status) && !ReferenceEquals(status, resumed)) {
+                if (info.IsIdleFiberWorker || (info.FiberExecution != null && info.FiberExecution.Status == "suspended")) {
                     // a suspended fiber (or a thread whose root fiber is suspended)
                     continue;
                 }
