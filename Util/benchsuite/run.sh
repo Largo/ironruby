@@ -74,7 +74,9 @@ fi
 
 if [ "$all" = 1 ]; then
   "$RUBY" "$HERE/suite.rb" --suite truffle,awfy,mri ${args[@]+"${args[@]}"}
-  "$ROOT/Util/rubybench/run.sh" --group micro
+  rb_args=(--group micro)
+  for a in ${args[@]+"${args[@]}"}; do [ "$a" = --verify ] && rb_args+=(--verify); done
+  "$ROOT/Util/rubybench/run.sh" "${rb_args[@]}"
 else
   exec "$RUBY" "$HERE/suite.rb" ${args[@]+"${args[@]}"}
 fi

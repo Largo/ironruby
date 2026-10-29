@@ -38,8 +38,10 @@ the harness reports them ("Average of last 3, non-warmup iters").
 | graphql | OK | 669 ms | 86 ms | 7.8x |
 | graphql-native | N/A | | | needs graphql-c_parser's graphql/graphql_c_parser_ext.so |
 
-Every one of the 24 that run had to be fixed to get there - before this round the
+23 of them run now. Each had to be fixed to get there - before the first round the
 harness killed all of them (see bug 1) and half could not even `bundle install`.
+psych-load ran in that round but is N/A since 2026-10-29 (its row says why), so
+its entry under output equivalence below describes the earlier run.
 
 ## Output equivalence
 

@@ -104,8 +104,6 @@ namespace IronRuby.Builtins {
         private readonly bool _readable;
         private readonly bool _writable;
         private readonly bool _ownsDescriptor;
-        // 0 not asked yet, 1 a terminal, -1 not one
-        private int _terminal;
 
         [DllImport("libc", EntryPoint = "isatty")]
         private static extern int sys_isatty(int fd);
@@ -142,13 +140,10 @@ namespace IronRuby.Builtins {
             throw new NotSupportedException();
         }
 
+        // Not cached: IO#reopen dup2s another file onto the same descriptor, and a stale
+        // answer would send a reopened terminal's timed read into an endless poll.
         private bool IsTerminal {
-            get {
-                if (_terminal == 0) {
-                    _terminal = sys_isatty(_descriptor) == 1 ? 1 : -1;
-                }
-                return _terminal > 0;
-            }
+            get { return sys_isatty(_descriptor) == 1; }
         }
 
         [DllImport("libc", EntryPoint = "tcgetattr")]

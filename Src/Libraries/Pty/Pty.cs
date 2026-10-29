@@ -212,6 +212,10 @@ namespace IronRuby.StandardLibrary.Pty {
                     all.AddRange(actions);
                 }
                 pid = RubyProcess.Spawn(file, argv, envp, all, pgroup, closeOthers, true);
+            } catch {
+                // Nothing owns the master yet - Wrap has not run - so it would leak.
+                sys_close(master);
+                throw;
             } finally {
                 // The child has its own descriptors on the slave by now (posix_spawn returns once
                 // the exec has happened or failed); the parent's copy would only keep the master

@@ -79,15 +79,29 @@ module BenchSuite
       end
     end
 
+    # TERM, a grace period, then KILL to the whole group whatever happened: the
+    # leader (ir.sh) can exit while the dotnet process under it is still running,
+    # and a stray CPU-bound child would distort every later timing.
     def kill_group(pid)
       Process.kill('TERM', -pid) rescue nil
+      reaped = false
       10.times do
-        return if Process.wait(pid, Process::WNOHANG)
+        break if (reaped = Process.wait(pid, Process::WNOHANG))
         sleep 0.2
       end
       Process.kill('KILL', -pid) rescue nil
-      Process.wait(pid) rescue nil
+      Process.wait(pid) rescue nil unless reaped
     end
+
+    # A log as text: a benchmark or a stack trace can write bytes that are not
+    # UTF-8, and matching a regexp against those raises ArgumentError.
+    def log_text(log)
+      File.read(log).scrub
+    rescue SystemCallError
+      ''
+    end
+
+    def log_lines(log) = log_text(log).lines(chomp: true)
 
     def median(xs)
       s = xs.sort
@@ -106,7 +120,7 @@ module BenchSuite
     end
 
     def first_error(log)
-      lines = File.readlines(log, chomp: true).drop(1) rescue []
+      lines = log_lines(log).drop(1)
       line = lines.find { |l| l =~ /\(\w*(Error|Exception)\)|Error:|^\s*\S+\.rb:\d+:in .*: / } ||
              lines.reverse.find { |l| !l.strip.empty? }
       # "<internal:/long/path/kernel_require.rb>:139:in 'Kernel#require': msg"
@@ -139,7 +153,7 @@ module BenchSuite
     def truffle_entries
       abort "missing #{@truffle} - run Util/benchsuite/run.sh --fetch" unless Dir.exist?(@truffle)
       BenchSuiteCatalog::TRUFFLE_GLOBS.flat_map { |g| Dir.glob(g, base: @truffle).sort }
-        .select { |rel| File.read(File.join(@truffle, rel)) =~ /^\s*benchmark\b/ }
+        .select { |rel| File.read(File.join(@truffle, rel)).scrub =~ /^\s*benchmark\b/ }
         .select { |rel| matches?("truffle/#{rel}") }
     end
 
@@ -183,7 +197,7 @@ module BenchSuite
     def parse_simple(log)
       out = Hash.new { |h, k| h[k] = [] }
       cur = nil
-      File.readlines(log, chomp: true).drop(1).each do |l|
+      log_lines(log).drop(1).each do |l|
         if l =~ /\A\d+(\.\d+)?(e[+-]?\d+)?\z/
           out[cur] << l.to_f if cur
         elsif l == 'optimised away'
@@ -200,7 +214,7 @@ module BenchSuite
       base = rel.sub(/\.rb\z/, '')
       parsed = per.transform_values { |how, st, log| [how, st, log, parse_simple(log)] }
       names = parsed.values.flat_map { |*, p| p.keys }.uniq
-      if names.empty? && parsed.values.all? { |how, _, log, _| how == :exit && File.read(log).include?('No benchmarks found') }
+      if names.empty? && parsed.values.all? { |how, _, log, _| how == :exit && log_text(log).include?('No benchmarks found') }
         return [Result.new(suite: 'truffle', name: base, status: 'N/A', note: 'defines no benchmark outside TruffleRuby')]
       end
       names = [nil] if names.empty?
@@ -230,7 +244,7 @@ module BenchSuite
     end
 
     def parse_verify(log)
-      lines = File.readlines(log, chomp: true)
+      lines = log_lines(log)
       out = lines.grep(/\AVERIFY /).to_h do |l|
         _, name, rest = l.split(' ', 3)
         [name, rest]
@@ -261,14 +275,15 @@ module BenchSuite
         ir = vals.dig(:ir, 3, n)
         cr = vals.dig(:cruby, 3, n)
         status, note =
-          if BenchSuiteCatalog::TRUFFLE_UNSTABLE[rel]
-            ['SKIP', BenchSuiteCatalog::TRUFFLE_UNSTABLE[rel]]
-          elsif (cr.nil? || cr.include?('RAISED')) && (ir.nil? || ir.include?('RAISED'))
+          if (cr.nil? || cr.include?('RAISED')) && (ir.nil? || ir.include?('RAISED'))
             ['BOTH-FAIL', "ir: #{ir || first_error(vals.dig(:ir, 2))}; cruby: #{cr || first_error(vals.dig(:cruby, 2))}"]
           elsif cr.nil? || cr.include?('RAISED')
             ['CRUBY-FAIL', "cruby: #{cr || first_error(vals.dig(:cruby, 2))}"]
           elsif ir.nil? || ir.include?('RAISED')
             ['FAIL', "ir: #{ir || first_error(vals.dig(:ir, 2))}"]
+          elsif BenchSuiteCatalog::TRUFFLE_UNSTABLE[rel]
+            # only once both produced a value: a crash must not pass as a skip
+            ['SKIP', BenchSuiteCatalog::TRUFFLE_UNSTABLE[rel]]
           elsif ir == cr
             ['SAME', ir[0, 90]]
           elsif (why = BenchSuiteCatalog::TRUFFLE_KNOWN_DIFF[rel])
@@ -300,9 +315,9 @@ module BenchSuite
           cmd = [*interp, '-r', File.join(HERE, 'prelude.rb'), harness, name, outer.to_s, cfg[:inner].to_s]
           how, st = spawn_logged(cmd, log, timeout: @o.time * 20 + 300,
                                  budget: @o.verify ? nil : @o.time * 2)
-          times = File.readlines(log).filter_map { |l| l[/runtime: (\d+)us/, 1]&.to_f }.map { |us| us / 1e6 }
+          times = log_lines(log).filter_map { |l| l[/runtime: (\d+)us/, 1]&.to_f }.map { |us| us / 1e6 }
           failed = (how == :exit && !st.success?) || times.empty? ||
-                   File.read(log).include?('incorrect result')
+                   log_text(log).include?('incorrect result')
           if how == :timeout && times.empty?
             bad[key] = 'TIMEOUT'
             notes << "#{key}: timeout"
@@ -376,7 +391,7 @@ module BenchSuite
       return nil if last =~ / = [\d.]+ s\s*$/
       token = last[/\] (\S+)/, 1] or return nil
       klass, meth = token.split('#', 2)
-      defs = File.read(file).scan(/^\s*def (test_\w+[?!]?)/).flatten
+      defs = File.read(file).scrub.scan(/^\s*def (test_\w+[?!]?)/).flatten
       best = defs.select { |d| meth.start_with?(d) }.max_by(&:size)
       "#{klass}##{best || meth}"
     end

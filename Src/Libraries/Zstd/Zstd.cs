@@ -777,6 +777,9 @@ namespace IronRuby.StandardLibrary.Zstd {
                         Append(result, buf, (int)outBuf.pos);
                     }
                 }
+                // ctx.Ptr was the last use of ctx; without this the finalizer could free the
+                // ZSTD_CCtx while ZSTD_compressStream2 is still using it.
+                GC.KeepAlive(ctx);
                 return MutableString.CreateBinary(result.ToArray(), RubyEncoding.Binary);
             }
 
@@ -805,6 +808,7 @@ namespace IronRuby.StandardLibrary.Zstd {
                         }
                     }
                 }
+                GC.KeepAlive(ctx);
                 return Protocols.Normalize(total);
             }
 
@@ -825,6 +829,7 @@ namespace IronRuby.StandardLibrary.Zstd {
                         Append(result, buf, (int)outBuf.pos);
                     } while (ret > 0);
                 }
+                GC.KeepAlive(ctx);
                 return MutableString.CreateBinary(result.ToArray(), RubyEncoding.Binary);
             }
 
@@ -903,6 +908,7 @@ namespace IronRuby.StandardLibrary.Zstd {
                         Append(result, buf, (int)outBuf.pos);
                     }
                 }
+                GC.KeepAlive(self._dctx);
                 return MutableString.CreateBinary(result.ToArray(), RubyEncoding.Binary);
             }
         }

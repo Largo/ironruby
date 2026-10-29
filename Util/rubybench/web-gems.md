@@ -9,10 +9,11 @@ its own Gemfile, run the way `run_benchmarks.rb` runs it:
 
 Times below (rerun 2026-10-29, after the C-extension work) are the harness's
 "average of last 3" with WARMUP_ITRS=1, IronRuby Release on .NET 8 against
-CRuby 4.0.6 on the same box, via `Util/rubybench/pure-gems-run.sh`.  They are indicative rather than
-precise: another agent was running benchmarks on the same machine throughout,
-and three iterations is not enough warmup for a JIT that is still speeding up at
-the last one (rack goes 1197 -> 771 -> 564 ms across the three).
+CRuby 4.0.6 on the same box, via `Util/rubybench/pure-gems-run.sh` - except
+rubocop, which runs one iteration on both (see the note below).  They are
+indicative rather than precise: three iterations is not enough warmup for a JIT
+that is still speeding up at the last one (in the first round rack went
+1197 -> 771 -> 564 ms across its three).
 
 | benchmark    | status | IronRuby | CRuby   | IR/CRuby | what it does, or why not |
 |--------------|--------|----------|---------|----------|--------------------------|
@@ -21,7 +22,7 @@ the last one (rack goes 1197 -> 771 -> 564 ms across the three).
 | mail         | OK     | 1337 ms  | 233 ms  | 5.7x     | parse and re-emit a multipart message 50x |
 | erubi-rails  | OK     | 13849 ms | 2202 ms | 6.3x     | render a Discourse topic template 10k times |
 | grape        | OK     | 14500 ms | 1494 ms | 9.7x     | Grape API, 100k requests |
-| rubocop      | OK     | 17436 ms | 226 ms  | 77x      | autocorrect a fixture through RuboCop::Runner |
+| rubocop      | OK     | 17436 ms | 226 ms  | 77x      | autocorrect a fixture through RuboCop::Runner (one iteration on both, see below) |
 | railsbench   | OK     | 65540 ms | 2853 ms | 23x      | Rails 8.1 + sqlite3, 2000 requests, every one asserted 200 |
 | lobsters     | OK     | 26203 ms | 1299 ms | 20x      | the Lobsters Rails app, 114 routes per iteration, every one asserted 200 |
 | shipit       | OK     | 11021 ms | 2221 ms | 5.0x     | Shopify's shipit-engine Rails app, every request asserted 200 |

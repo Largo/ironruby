@@ -561,6 +561,11 @@ namespace IronRuby.StandardLibrary.Yajl {
             }
 
             private static object Filter(EventStream/*!*/ parser, object schema, Event ev) {
+                // One C# frame per nesting level: a document of tens of thousands of '[' would
+                // overflow the stack, which the CLR cannot catch, so stop while there is room.
+                if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
+                    throw new SystemStackError("stack level too deep");
+                }
                 switch (ev.Token) {
                     case YajlTok.LeftBrace:
                         return FilterArraySubtree(parser, schema, ev);
