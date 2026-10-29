@@ -1264,6 +1264,91 @@ TypeError
 ");
         }
 
+        /// <summary>
+        /// A call of a scoped extension method made in a method, or in a block in one, tests the method's refinement record:
+        /// the same `def' run again after a `using' of the namespace reaches the extension methods, and a method defined
+        /// after it reaches them as well.
+        /// </summary>
+        public void ClrScopedExtensions6() {
+            TestOutput(@"
+L = System::Collections::Generic::List[Integer]
+list = L.new([1, 2, 3])
+module R; refine(String) { def r = :r }; end
+using R
+definer = proc do
+  def counts(l) = [(l.where { |x| x > 1 }.Count rescue :none), [1].map { (l.Where { |x| x > 2 }.Count rescue :none) }.first]
+end
+definer.call
+p (1..100).map { counts(list) }.uniq
+using System::Linq
+p counts(list)
+definer.call
+p (1..100).map { counts(list) }.uniq
+module Other
+  def self.counts(l) = [l.where { |x| x > 1 }.Count, [1].map { l.Where { |x| x > 2 }.Count }.first]
+end
+p (1..100).map { Other.counts(list) }.uniq
+", @"
+[[:none, :none]]
+[:none, :none]
+[[2, 1]]
+[[2, 1]]
+");
+        }
+
+        /// <summary>
+        /// A refined call on a Ruby object, made in a method or in a block in one, gets a precompiled dispatcher when it
+        /// resolves to a Ruby method (RubyCallAction.BindPrecompiled). For an instance of a Ruby subclass of List[Object],
+        /// that is one the subclass or a singleton class defines ahead of the extension methods of List[Object]'s place.
+        /// Enumerable's, behind that place, lose to LINQ's, and taking the ones ahead away hands the calls back to LINQ,
+        /// with an argument and with a block. An Array has no place, so it keeps Enumerable's.
+        /// </summary>
+        public void ClrScopedExtensions7() {
+            TestOutput(@"
+module Enumerable
+  def where(&) = :behind
+  def skip(n) = :behind
+end
+class Bag < System::Collections::Generic::List[Object]
+end
+using System::Linq
+def show(r) = Symbol === r ? r : r.to_a
+def direct(b) = [show(b.skip(1)), show(b.where { |x| x > 1 })]
+def nested(b) = [1].map { [show(b.skip(2)), show(b.where { |x| x > 2 })] }.first
+def hot(b) = (1..100).map { direct(b) + nested(b) }.uniq
+b = Bag.new
+b.add(1); b.add(2); b.add(3)
+p hot(b)
+class Bag
+  def skip(n) = :ahead
+  def where(&) = :ahead
+end
+p hot(b)
+class Bag
+  remove_method :skip, :where
+end
+p hot(b)
+c = Bag.new
+c.add(5); c.add(6)
+def c.skip(n) = :singleton
+def c.where(&) = :singleton
+p hot(c), hot(b)
+class << c
+  remove_method :skip, :where
+end
+p hot(c)
+p hot([1, 2, 3])
+", @"
+[[[2, 3], [2, 3], [3], [3]]]
+[[:ahead, :ahead, :ahead, :ahead]]
+[[[2, 3], [2, 3], [3], [3]]]
+[[:singleton, :singleton, :singleton, :singleton]]
+[[[2, 3], [2, 3], [3], [3]]]
+[[[6], [5, 6], [], [5, 6]]]
+[[:behind, :behind, :behind, :behind]]
+");
+        }
+
         #endregion
 
         #region Overloads: Inheritance, Selection
