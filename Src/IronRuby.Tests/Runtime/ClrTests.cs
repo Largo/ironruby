@@ -1107,9 +1107,9 @@ TypeError
         }
 
         /// <summary>
-        /// Extension methods come last, as in C#: a Ruby method is called (Enumerable#select), a CLR method group gets
-        /// them as more overloads (List#count, Widget#describe - the instance method winning a tie), and a name nothing
-        /// else has gets them alone (where).
+        /// Extension methods are where using_clr_extensions puts them: they shadow the Ruby methods a CLR type picks up
+        /// from Enumerable (select), a CLR method group gets them as more overloads (List#count, Widget#describe - the
+        /// instance method winning a tie), and a name nothing else has gets them alone (where).
         /// </summary>
         public void ClrScopedExtensions2() {
             Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
@@ -1124,7 +1124,7 @@ list.add(1)
 list.add(2)
 using System::Linq
 using IronRubyTests::ExtensionMethods3
-p list.select { |x| x > 1 }
+p list.select { |x| x * 10 }.to_a
 p list.Select { |x| x * 10 }.to_a
 p list.count, list.count(lambda { |x| x > 1 })
 p list.where { |x| x > 1 }.to_a
@@ -1139,7 +1139,7 @@ class RubyWidget < Widget
 end
 puts RubyWidget.new.describe('x')
 ", @"
-[3, 2]
+[30, 10, 20]
 [30, 10, 20]
 3
 2
@@ -1157,6 +1157,57 @@ e:Area(int)
 Open()
 e:Open(T)
 ruby
+");
+        }
+
+        /// <summary>
+        /// A Ruby object gets no extension methods its Ruby ancestors don't extend: an Array's select is Array#select, its
+        /// where is Enumerable's, and it has no Select, as with using_clr_extensions - where a List's where is LINQ's
+        /// ahead of the same Enumerable#where. A CLR class's place has those of its interfaces (a Dictionary's
+        /// select is LINQ's, not the one its IDictionary picks up), a singleton class sees them, and a Ruby method defined
+        /// ahead of them takes over a call bound to them, and gives it back.
+        /// </summary>
+        public void ClrScopedExtensions5() {
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
+
+            TestOutput(@"
+load_assembly SystemCoreAssembly
+L = System::Collections::Generic::List[Integer]
+list = L.new
+list.add(3)
+list.add(1)
+d = System::Collections::Generic::Dictionary[Integer, Integer].new
+d.add(1, 2)
+module Enumerable
+  def where(&) = :ruby
+end
+using System::Linq
+a = [3, 1, 2]
+p a.select { |x| x > 1 }, (a.Select { |x| x } rescue $!.class), (a.where { |x| x } rescue $!.class)
+p d.select { |kv| kv.key }.to_a
+def list.extra = nil
+p list.respond_to?(:where), list.method(:where).call { |x| x > 1 }.to_a, list.where { |x| x > 1 }.to_a
+def go(l) = l.select { |x| x * 10 }
+p go(list).to_a
+class L
+  def select(&) = :ruby
+end
+p go(list)
+class L
+  remove_method :select
+end
+p go(list).to_a
+", @"
+[3, 2]
+NoMethodError
+:ruby
+[1]
+true
+[3]
+[3]
+[30, 10]
+:ruby
+[30, 10]
 ");
         }
 
