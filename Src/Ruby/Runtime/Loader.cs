@@ -643,20 +643,19 @@ namespace IronRuby.Runtime {
 
             Utils.Log(String.Format("Assembly '{0}' resolved: found in '{1}'", fullName, file.Path), "RESOLVE_ASSEMBLY");
             try {
-                Assembly assembly = LoadAssemblyFromFile(file.Path);
-
-                // TODO: this API is broken
-                if (AssemblyName.ReferenceMatchesDefinition(assemblyName, assembly.GetName())) 
-                {
-                    Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
-                    DomainManager.LoadAssembly(assembly);
-                    return assembly;
+                // Checked before loading, as next to the requesting assembly (LoadAssemblyNextTo): an older copy here
+                // must not answer a reference to a newer one, and a file that won't do isn't loaded at all.
+                if (!Satisfies(AssemblyName.GetAssemblyName(file.Path), assemblyName)) {
+                    return null;
                 }
+
+                Assembly assembly = LoadAssemblyFromFile(file.Path);
+                Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
+                DomainManager.LoadAssembly(assembly);
+                return assembly;
             } catch (Exception e) {
                 throw RubyExceptions.CreateLoadError(e);
             }
-
-            return null;
         }
 
         /// <summary>
@@ -672,19 +671,34 @@ namespace IronRuby.Runtime {
             }
 
             string path = Path.Combine(Path.GetDirectoryName(requestingFile), reference.Name + ".dll");
+
+            // A file that won't do isn't loaded at all: nothing would use it, and it would stay loaded. One that isn't
+            // an assembly (a native DLL of the same name) or can't be read isn't an answer either: the reference is
+            // left unresolved, as if nothing were there.
             try {
-                // a file that won't do isn't loaded at all: nothing would use it, and it would stay loaded
                 if (!Platform.FileExists(path) || !Satisfies(AssemblyName.GetAssemblyName(path), reference)) {
                     return null;
                 }
+            } catch (Exception e) when (e is IOException || e is BadImageFormatException) {
+                return null;
+            }
 
-                Assembly assembly = LoadAssemblyFromFile(path);
-                Utils.Log(String.Format("Assembly '{0}' loaded for '{1}' from '{2}'", assembly.FullName, reference.FullName, path), "RESOLVE_ASSEMBLY");
-                DomainManager.LoadAssembly(assembly);
-                return assembly;
+            Assembly assembly;
+            try {
+                assembly = LoadAssemblyFromFile(path);
             } catch (Exception e) {
                 throw RubyExceptions.CreateLoadError(e);
             }
+            Utils.Log(String.Format("Assembly '{0}' loaded for '{1}' from '{2}'", assembly.FullName, reference.FullName, path), "RESOLVE_ASSEMBLY");
+
+            // The assembly is what the reference asks for even if its extension methods can't be read (they name a type
+            // of an assembly that isn't there, say): that is reported, and the reference still gets it.
+            try {
+                DomainManager.LoadAssembly(assembly);
+            } catch (Exception e) when (e is IOException || e is BadImageFormatException || e is TypeLoadException) {
+                _context.ReportWarning(String.Format("extension methods of {0} not read: {1}", assembly.GetName().Name, e.Message.TrimEnd()));
+            }
+            return assembly;
         }
 
         /// <summary>
