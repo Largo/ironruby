@@ -811,6 +811,8 @@ namespace IronRuby.Compiler {
         private static FieldInfo _IsDefinedConstantSiteCache_Version;
         public static FieldInfo/*!*/ NeedsUpdate { get { return _NeedsUpdate ?? (_NeedsUpdate = GetField(typeof(RubyOps), "NeedsUpdate")); } }
         private static FieldInfo _NeedsUpdate;
+        public static FieldInfo/*!*/ RefineBlocksRunning { get { return _RefineBlocksRunning ?? (_RefineBlocksRunning = GetField(typeof(RubyOps), "RefineBlocksRunning")); } }
+        private static FieldInfo _RefineBlocksRunning;
         public static FieldInfo/*!*/ RubyContext_ConstantAccessVersion { get { return _RubyContext_ConstantAccessVersion ?? (_RubyContext_ConstantAccessVersion = GetField(typeof(RubyContext), "ConstantAccessVersion")); } }
         private static FieldInfo _RubyContext_ConstantAccessVersion;
         public static FieldInfo/*!*/ RubyModule_Version { get { return _RubyModule_Version ?? (_RubyModule_Version = GetField(typeof(RubyModule), "Version")); } }

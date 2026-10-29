@@ -619,7 +619,10 @@ namespace IronRuby.Runtime {
             // scope below the block, method or other body it is part of answers: the walk is a loop
             // that reads a field or two per scope.  The first scope that has rare state - the top level
             // or class body a `using' ran in, mostly - answers from its memo, or takes the general step,
-            // which recurses from there.
+            // which recurses from there.  A block's Proc has an override only while a refine block runs
+            // it, and RubyUtils.EvaluateRefinementBlock counts those, so while none runs a block scope is
+            // one more step down.
+            bool refineBlockRunning = RubyOps.RefineBlocksRunning != 0;
             RubyScope scope = this;
             do {
                 var rare = scope._rare;
@@ -631,22 +634,22 @@ namespace IronRuby.Runtime {
                     return scope.ComputeActiveRefinements();
                 }
 
-                var blockScope = scope as RubyBlockScope;
-                if (blockScope != null) {
-                    var blockOverride = blockScope.BlockFlowControl.Proc.RefinementOverride;
-                    if (blockOverride != null) {
-                        return blockOverride;
+                var methodScope = scope as RubyMethodScope;
+                if (methodScope != null) {
+                    var recorded = methodScope.DefinitionRefinements;
+                    if (recorded == null) {
+                        return RefinementActivation.Empty;
                     }
-                } else {
-                    var methodScope = scope as RubyMethodScope;
-                    if (methodScope != null) {
-                        var recorded = methodScope.DefinitionRefinements;
-                        if (recorded == null) {
-                            return RefinementActivation.Empty;
-                        }
-                        var definition = recorded.Value;
-                        if (definition != null) {
-                            return definition;
+                    var definition = recorded.Value;
+                    if (definition != null) {
+                        return definition;
+                    }
+                } else if (refineBlockRunning) {
+                    var blockScope = scope as RubyBlockScope;
+                    if (blockScope != null) {
+                        var blockOverride = blockScope.BlockFlowControl.Proc.RefinementOverride;
+                        if (blockOverride != null) {
+                            return blockOverride;
                         }
                     }
                 }
@@ -1220,6 +1223,17 @@ var closureScope = scope as RubyClosureScope;
         public StrongBox<RefinementActivation> DefinitionRefinements {
             get { return _definitionRefinements; }
             set { _definitionRefinements = value; }
+        }
+
+        /// <summary>
+        /// What the record holds, null if there is no record or it holds nothing (an imported refinement method's,
+        /// which follows its declaring scope). Read by the rule of a refined call made here (RubyCallAction.Resolve).
+        /// </summary>
+        public RefinementActivation DefinitionRefinementsValue {
+            get {
+                var record = _definitionRefinements;
+                return (record != null) ? record.Value : null;
+            }
         }
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,
