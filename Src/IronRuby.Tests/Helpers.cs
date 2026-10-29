@@ -190,12 +190,11 @@ namespace IronRuby.Tests {
         }
 
         /// <summary>
-        /// TestOutput for code that calls using_clr_extensions, which reports once per process that it is deprecated:
-        /// once in this test, which may be run on its own or after another that called it.
+        /// TestOutput for code that calls using_clr_extensions, which reports once per runtime that it is deprecated:
+        /// once in this test, which runs in a runtime of its own.
         /// </summary>
         [DebuggerHiddenAttribute]
         private void LegacyExtensionsTestOutput(string code, string expectedOutput) {
-            RubyContext.ResetUsingClrExtensionsDeprecation();
             TestOutput(code, expectedOutput, 0, 1);
         }
 

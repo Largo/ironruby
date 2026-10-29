@@ -1537,26 +1537,22 @@ namespace IronRuby.Runtime {
             }
         }
 
-        // using_clr_extensions is deprecated in favour of `using'; it says so once per process.
-        private static int _usingClrExtensionsDeprecationReported;
+        // using_clr_extensions is deprecated in favour of `using'; each runtime says so once.
+        private int _usingClrExtensionsDeprecationReported;
 
         /// <summary>
-        /// Warns that using_clr_extensions is deprecated, the first time anything in the process calls it.
+        /// Warns that using_clr_extensions is deprecated, the first time anything in the runtime calls it where the
+        /// warning shows: a call made while $VERBOSE is nil, which prints no warning, leaves it to the next one.
         /// <paramref name="namespaceName"/> is the namespace it was called with, or null for the global one.
         /// </summary>
         public void ReportUsingClrExtensionsDeprecation(string namespaceName) {
-            if (Interlocked.Exchange(ref _usingClrExtensionsDeprecationReported, 1) == 0) {
+            if (Verbose != null && Interlocked.Exchange(ref _usingClrExtensionsDeprecationReported, 1) == 0) {
                 ReportWarning(String.Format(
                     "using_clr_extensions is deprecated; use '{0}' instead, which brings the extension methods into the rest of " +
                     "the file, class body or eval string only, as C#'s using directive does",
                     namespaceName != null ? "using " + namespaceName : "using <namespace>"
                 ));
             }
-        }
-
-        // the test driver runs every test in a fresh runtime of the same process
-        internal static void ResetUsingClrExtensionsDeprecation() {
-            _usingClrExtensionsDeprecationReported = 0;
         }
 
         /// <summary>
