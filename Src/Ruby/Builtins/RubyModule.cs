@@ -2588,6 +2588,12 @@ namespace IronRuby.Builtins {
             MethodResolutionResult result;
             List<RubyModule> refinementBuffer = (refinements != null && !refinements.IsEmpty) ? new List<RubyModule>() : null;
 
+            // The CLR extension methods `using'd where the call is made, and whether the search passed a module they
+            // extend before it found the method:
+            var scopedExtensions = (refinements != null && IsClass && (options & MethodLookup.Virtual) == 0) ?
+                refinements.Extensions : null;
+            bool passedScopedExtensions = false;
+
             if (ForEachAncestor((module) => {
                 if (refinementBuffer != null) {
                     refinementBuffer.Clear();
@@ -2603,7 +2609,11 @@ namespace IronRuby.Builtins {
                 }
                 owner = module;
                 foundCallerSelf |= module == visibility.Class;
-                return module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info);
+                if (module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                    return true;
+                }
+                passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
+                return false;
             })) {
                 if (info == null || info.IsUndefined) {
                     result = MethodResolutionResult.NotFound;
@@ -2629,18 +2639,55 @@ namespace IronRuby.Builtins {
                 return _context.ObjectClass.ResolveMethodNoLock(name, visibility, options & ~MethodLookup.FallbackToObject, refinements);
             }
 
-            // The CLR extension methods `using'd where the call is made come last, as in C#: a call that finds
-            // a Ruby method calls it, one that finds a CLR method group gets them as more overloads, and one
-            // that finds nothing gets them alone.
-            if (refinements != null && IsClass && !IsSingletonClass && (options & MethodLookup.Virtual) == 0 &&
-                (!result.Found || result.Info is RubyMethodGroupInfo)) {
-                var extensions = refinements.Extensions;
-                if (extensions != null) {
-                    return AddScopedExtensionsNoLock(name, result, refinements, extensions);
+            // The CLR extension methods `using'd where the call is made are where using_clr_extensions puts them for
+            // everyone, which is where a refinement of the type they extend would be: a CLR method group anywhere gets
+            // them as more overloads (List#count; an exact tie goes to the instance member), and they shadow a Ruby method
+            // the type picks up after it (IEnumerable[T]'s select ahead of Enumerable#select) - but not one ahead of it
+            // (Array#select: an Array's ancestors don't include IEnumerable[T]).
+            if (scopedExtensions != null) {
+                if (result.Found && result.Info is RubyMethodGroupInfo) {
+                    return AddScopedExtensionsNoLock(name, result, refinements, scopedExtensions);
+                }
+                if (passedScopedExtensions) {
+                    var extended = AddScopedExtensionsNoLock(name, MethodResolutionResult.NotFound, refinements, scopedExtensions);
+                    if (extended.Found) {
+                        // a site bound to them must re-bind if what they shadow changes, as a definition ahead of them would
+                        result.InvalidateSitesOnOverride();
+                    }
+                    return extended;
                 }
             }
 
             return result;
+        }
+
+        // A class's place has the extension methods of the interfaces it implements as well, as using_clr_extensions
+        // puts those in the class's own CLR method group: a Dictionary's select is LINQ's, not the Ruby one its
+        // IDictionary picks up ahead of IEnumerable[T].
+        private bool HasScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            if (HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                return true;
+            }
+            if (IsClass) {
+                foreach (var mixin in Mixins) {
+                    if (mixin.HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private bool HasOwnScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            List<ExtensionMethodInfo> candidates;
+            if (_scopedExtensionMethods != null && _scopedExtensionMethods.TryGetValue(name, out candidates)) {
+                foreach (var extension in candidates) {
+                    if (extensions.Contains(extension.Method)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         private MethodResolutionResult AddScopedExtensionsNoLock(string/*!*/ name, MethodResolutionResult result,
@@ -2690,7 +2737,7 @@ namespace IronRuby.Builtins {
             }
 
             // A site bound to the extended group must re-bind when what it extends (or, for a name that found
-            // nothing, a method of the name defined anywhere) would change the call - as for the group itself.
+            // no group, a method of the name defined anywhere) would change the call - as for the group itself.
             if (result.Found) {
                 result.InvalidateSitesOnOverride();
             } else {
