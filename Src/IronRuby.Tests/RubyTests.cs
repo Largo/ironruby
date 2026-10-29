@@ -445,6 +445,8 @@ namespace IronRuby.Tests {
                 Require_PathLoadedDependency4,
                 Require_PathLoadedDependency5,
                 Require_PathLoadedDependency6,
+                Require_UnreadableExtensions1,
+                Require_UnreadableExtensions2,
 
                 ClrFields1,
                 ClrFields2,

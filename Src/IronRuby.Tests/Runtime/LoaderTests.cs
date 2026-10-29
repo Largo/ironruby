@@ -425,6 +425,77 @@ PathLoadedFixture::Widget.new.shout
         }
 
         /// <summary>
+        /// A require that fails reading the DLL's extension methods, because a type in their signatures can't be found,
+        /// can be retried once it can: the DLL isn't in $LOADED_FEATURES, and the second require reads them. It used to
+        /// return true without reading them, as the runtime had seen the assembly already.
+        /// </summary>
+        public void Require_UnreadableExtensions1() {
+            if (_driver.PartialTrust) return;
+
+            string dir = MakeFixtureDir();
+            WriteFixtureAssembly(Path.Combine(dir, "a"), "PathLoadedWidgets", "1.0.0.0", null);
+            WriteFixtureAssembly(Path.Combine(dir, "b"), "PathLoadedExtensions", "1.0.0.0", "1.0.0.0");
+            Context.ActivateExtensions("PathLoadedFixture");
+
+            TestOutput(@"
+begin
+  require ""#{$fixtures}/b/PathLoadedExtensions.dll""
+rescue LoadError
+  puts $!.class
+end
+puts $LOADED_FEATURES.grep(/PathLoadedExtensions/).size
+require ""#{$fixtures}/a/PathLoadedWidgets.dll""
+puts require(""#{$fixtures}/b/PathLoadedExtensions.dll"")
+puts PathLoadedFixture::Widget.new.shout
+", @"
+LoadError
+0
+true
+shout
+");
+        }
+
+        /// <summary>
+        /// The extension methods of DLLs required before any are asked for are read when they first are. One DLL whose
+        /// extension methods can't be read gets a warning and doesn't cost the others theirs. The activation (using_clr_extensions
+        /// or `using') used to raise, and the DLLs queued after that one never had theirs read. The next activation of its
+        /// namespace tries it again.
+        /// </summary>
+        public void Require_UnreadableExtensions2() {
+            if (_driver.PartialTrust) return;
+
+            string dir = MakeFixtureDir();
+            WriteFixtureAssembly(dir, "PathLoadedWidgets", "1.0.0.0", null);
+            WriteFixtureAssembly(dir, "PathLoadedNewerExtensions", "1.0.0.0", "3.0.0.0");
+            WriteFixtureAssembly(dir, "PathLoadedWhisper", "1.0.0.0", "1.0.0.0", "Whisper");
+
+            TestOutput(@"
+require ""#{$fixtures}/PathLoadedWidgets.dll""
+require ""#{$fixtures}/PathLoadedNewerExtensions.dll""
+require ""#{$fixtures}/PathLoadedWhisper.dll""
+puts :required
+", @"
+required
+");
+
+            Context.ActivateExtensions("PathLoadedFixture");
+            Assert(Context.RuntimeErrorSink.WarningCount == 1);
+
+            TestOutput(@"
+w = PathLoadedFixture::Widget.new
+puts w.whisper
+puts((w.shout rescue $!.class))
+", @"
+whisper
+NoMethodError
+", 0, 1);
+
+            // PathLoadedWidgets 3.0 still can't be found: reported again rather than raised
+            Context.ActivateExtensions("PathLoadedFixture");
+            Assert(Context.RuntimeErrorSink.WarningCount == 2);
+        }
+
+        /// <summary>
         /// The test's temp directory, emptied, as $fixtures. A DLL loaded from it stays loaded until the process
         /// exits, and on Windows can't be deleted until then, so each run starts over rather than cleaning up.
         /// </summary>
@@ -438,10 +509,11 @@ PathLoadedFixture::Widget.new.shout
 
         /// <summary>
         /// Writes <paramref name="name"/>.dll, version <paramref name="version"/>, to <paramref name="dir"/>: with the Widget
-        /// class, or, given the version of PathLoadedWidgets to build against, with WidgetExtensions. It is emitted with
+        /// class, or, given the version of PathLoadedWidgets to build against, with WidgetExtensions. Its method is Shout, or
+        /// <paramref name="method"/> in a class named after it, and returns its name in lower case. It is emitted with
         /// System.Reflection.Metadata because PersistedAssemblyBuilder needs .NET 9, and these tests run on .NET 8 too.
         /// </summary>
-        private static void WriteFixtureAssembly(string/*!*/ dir, string/*!*/ name, string/*!*/ version, string widgetsVersion) {
+        private static void WriteFixtureAssembly(string/*!*/ dir, string/*!*/ name, string/*!*/ version, string widgetsVersion, string method = "Shout") {
             var metadata = new MetadataBuilder();
             var il = new BlobBuilder();
             var bodies = new MethodBodyStreamEncoder(il);
@@ -488,16 +560,16 @@ PathLoadedFixture::Widget.new.shout
 
                 var shoutSignature = new BlobBuilder();
                 new BlobEncoder(shoutSignature).MethodSignature().Parameters(1, r => r.Type().String(), p => p.AddParameter().Type().Type(widget, false));
-                code.LoadString(metadata.GetOrAddUserString("shout"));
+                code.LoadString(metadata.GetOrAddUserString(method.ToLowerInvariant()));
                 code.OpCode(ILOpCode.Ret);
                 var shout = metadata.AddMethodDefinition(
                     MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
-                    MethodImplAttributes.IL, metadata.GetOrAddString("Shout"), metadata.GetOrAddBlob(shoutSignature), bodies.AddMethodBody(code),
+                    MethodImplAttributes.IL, metadata.GetOrAddString(method), metadata.GetOrAddBlob(shoutSignature), bodies.AddMethodBody(code),
                     metadata.AddParameter(ParameterAttributes.None, metadata.GetOrAddString("w"), 1));
 
                 var extensions = metadata.AddTypeDefinition(
                     TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit,
-                    metadata.GetOrAddString("PathLoadedFixture"), metadata.GetOrAddString("WidgetExtensions"), objectType,
+                    metadata.GetOrAddString("PathLoadedFixture"), metadata.GetOrAddString(method == "Shout" ? "WidgetExtensions" : method + "Extensions"), objectType,
                     MetadataTokens.FieldDefinitionHandle(1), shout);
 
                 metadata.AddCustomAttribute(assembly, extensionAttribute, noArguments);
