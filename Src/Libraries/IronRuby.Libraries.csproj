@@ -52,6 +52,24 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <!-- librbs, the rbs gem's parser behind `rbs_extension` (Src/Libraries/Rbs), built by
+         Util/build-librbs.sh into Rbs/native/build: librbs.so, librbs.dylib, or librbs.dll
+         under MinGW gcc on Windows.  Ship whichever ones are there, as libprism is shipped
+         from Src/Prism; RbsNative picks by RuntimeInformation. -->
+    <Content Include="Rbs\native\build\librbs.so" Condition="Exists('Rbs\native\build\librbs.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.so</Link>
+    </Content>
+    <Content Include="Rbs\native\build\librbs.dll" Condition="Exists('Rbs\native\build\librbs.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.dll</Link>
+    </Content>
+    <Content Include="Rbs\native\build\librbs.dylib" Condition="Exists('Rbs\native\build\librbs.dylib')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>librbs.dylib</Link>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />

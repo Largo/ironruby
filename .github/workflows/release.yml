@@ -126,6 +126,17 @@ jobs:
           ruby generate.rb ../../../prism/config.yml "$RUNNER_TEMP/prism-gen"
           diff -r --strip-trailing-cr Generated "$RUNNER_TEMP/prism-gen"
 
+      # Built as in ci.yml: the rbs gem's parser behind rbs_extension, from the gem
+      # pinned by SHA-256 in Util/build-librbs.sh, shipped beside the assemblies.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
+
       # package-release.sh rebuilds libe_sqlite3.so for the Linux archive (gcc, unzip) and
       # checks it with the system's libsqlite3 preloaded, the case SQLitePCL.raw#682 is about.
       - name: SQLite for the Linux archive

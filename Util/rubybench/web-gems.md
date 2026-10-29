@@ -23,7 +23,7 @@ the last one (rack goes 1197 -> 771 -> 564 ms across the three).
 | rubocop      | OK     | 26219 ms | 1139 ms | 23x      | autocorrect a fixture through RuboCop::Runner (one iteration, see below) |
 | railsbench   | OK     | 124815 ms| 6271 ms | 19.9x    | Rails 8.1 + sqlite3, 2000 requests, every one asserted 200 |
 | sequel       | FAIL   | -        | 94 ms*  | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 and the 1.x gem is C source.  Sequel itself works here - the same script on IronRuby's sqlite3 gives byte-identical output to CRuby.  *one iteration.  The shim is 2.x's API, not 1.x's, so claiming 1.4 would be false - see below |
-| ruby-lsp     | N/A    | -        | -       | -        | ruby-lsp depends on rbs, a C extension with no pure-Ruby fallback |
+| ruby-lsp     | OK*    | 10963 ms | 216 ms  | 51x      | RubyIndexer indexes a 564 KB fixture.  rbs runs on librbs (`rbs_extension`, Src/Libraries/Rbs); the index is identical to CRuby's.  ~10 s of each iteration is sorbet-runtime's sig checking (with `SORBET_RUNTIME_DEFAULT_CHECKED_LEVEL=never`: 1116 ms vs 149 ms), ~1 s Prism.parse's Ruby deserializer.  *The Gemfile.lock pins prism 1.7.0, which IronRuby (prism 1.9.0, built in) cannot install; measured with the lock's prism line changed to 1.9.0 |
 | fluentd      | N/A    | -        | -       | -        | fluentd depends on strptime, and the Gemfile on yajl-ruby; both are C extensions |
 | lobsters     | N/A    | -        | -       | -        | needs bcrypt and markly (C extensions), and pins rubocop 0.81 which needs jaro_winkler (C) |
 | shipit       | N/A    | -        | -       | -        | shipit-engine -> paquito -> msgpack, and puma; both C extensions |

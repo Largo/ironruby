@@ -153,6 +153,19 @@ jobs:
           bash Util/build-markly.sh
           ls -l Src/Libraries/Markly/native/build
 
+      # librbs: the rbs gem's parser behind rbs_extension (Src/Libraries/Rbs). The
+      # script downloads the gem pinned by SHA-256, checks the committed bridge
+      # against its config.yml, and compiles src/ with the shim - with the MSYS2
+      # gcc on Windows, as libprism is, which yields librbs.dll.
+      - name: Build librbs
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          Util/build-librbs.sh
+          ls -l Src/Libraries/Rbs/native/build
+
       - name: Generate the C# prism loader
         working-directory: ironruby/Src/Prism
         run: ruby generate.rb

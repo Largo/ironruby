@@ -539,7 +539,9 @@ class Pathname
   #
   # This method is available since 1.8.5.
   #
+  # Without a block, an Enumerator over the same Pathnames (as since Ruby 2.3).
   def descend
+    return to_enum(__method__) unless block_given?
     vs = []
     ascend {|v| vs << v }
     vs.reverse_each {|v| yield v }
@@ -566,7 +568,9 @@ class Pathname
   #
   # This method is available since 1.8.5.
   #
+  # Without a block, an Enumerator over the same Pathnames (as since Ruby 2.3).
   def ascend
+    return to_enum(__method__) unless block_given?
     path = @path
     yield self
     while r = chop_basename(path)
@@ -774,23 +778,32 @@ class Pathname    # * IO *
   #
   # This method has existed since 1.8.1.
   #
-  def each_line(*args, &block) # :yield: line
-    IO.foreach(@path, *args, &block)
+  def each_line(*args, **kw, &block) # :yield: line
+    IO.foreach(@path, *args, **kw, &block)
   end
+
+  # The IO and File delegators pass keyword arguments through (encoding:, mode:, chomp:,
+  # ...): this file predates them, and a splat alone would turn them into a positional Hash.
 
   # See <tt>IO.read</tt>.  Returns all data from the file, or the first +N+ bytes
   # if specified.
-  def read(*args) IO.read(@path, *args) end
+  def read(*args, **kw) IO.read(@path, *args, **kw) end
 
   # See <tt>IO.binread</tt>.  Returns all the bytes from the file, or the first +N+
   # if specified.
-  def binread(*args) IO.binread(@path, *args) end
+  def binread(*args, **kw) IO.binread(@path, *args, **kw) end
 
   # See <tt>IO.readlines</tt>.  Returns all the lines from the file.
-  def readlines(*args) IO.readlines(@path, *args) end
+  def readlines(*args, **kw) IO.readlines(@path, *args, **kw) end
 
   # See <tt>IO.sysopen</tt>.
   def sysopen(*args) IO.sysopen(@path, *args) end
+
+  # See <tt>File.write</tt>.  Writes +contents+ to the file (Ruby 2.1).
+  def write(*args, **kw) File.write(@path, *args, **kw) end
+
+  # See <tt>File.binwrite</tt>.  Writes +contents+ to the file in binary mode (Ruby 2.1).
+  def binwrite(*args, **kw) File.binwrite(@path, *args, **kw) end
 end
 
 
@@ -832,8 +845,8 @@ class Pathname    # * File *
   def make_link(old) File.link(old, @path) end
 
   # See <tt>File.open</tt>.  Opens the file for reading or writing.
-  def open(*args, &block) # :yield: file
-    File.open(@path, *args, &block)
+  def open(*args, **kw, &block) # :yield: file
+    File.open(@path, *args, **kw, &block)
   end
 
   # See <tt>File.readlink</tt>.  Read symbolic link.
@@ -963,11 +976,11 @@ end
 
 class Pathname    # * Dir *
   # See <tt>Dir.glob</tt>.  Returns or yields Pathname objects.
-  def Pathname.glob(*args) # :yield: pathname
+  def Pathname.glob(*args, **kw) # :yield: pathname
     if block_given?
-      Dir.glob(*args) {|f| yield self.new(f) }
+      Dir.glob(*args, **kw) {|f| yield self.new(f) }
     else
-      Dir.glob(*args).map {|f| self.new(f) }
+      Dir.glob(*args, **kw).map {|f| self.new(f) }
     end
   end
 
