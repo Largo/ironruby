@@ -246,7 +246,7 @@ namespace IronRuby.Compiler.Ast {
             ).Finally(
                 AstUtils.Try(traceReturn).Finally(
                     leaveNestedReturn,
-                    Ast.Call(typeof(RubyOps).GetMethod("ReleaseScopeFrame"), scopeVariable),
+                    Methods.ReleaseScopeFrame.OpCall(scopeVariable),
                     Ast.Empty()
                 )
             );

@@ -116,7 +116,7 @@ module FiberReclaimChecks
   def self.build_waiting_resumer(kind, holder, observer)
     Fiber.new do
       child = Fiber.new do
-        if kind == :resume
+        if kind == :resume || kind == :transfer
           verify_waiter(observer)
         else
           begin
@@ -129,10 +129,12 @@ module FiberReclaimChecks
         end
         :child_done
       end
-      child.resume unless kind == :resume
+      child.resume unless kind == :resume || kind == :transfer
       holder.clear
       case kind
       when :resume then child.resume
+      # The child's end returns to the deepest fiber of the root's resume chain: this one.
+      when :transfer then child.transfer
       when :raise then child.raise(RuntimeError, 'wake child')
       when :kill then child.kill
       end
@@ -191,7 +193,7 @@ module FiberReclaimChecks
   def self.run
     root = Fiber.current
     initial_threads = Thread.list.size
-    [:resume, :raise, :kill].each { |kind| check_waiting_resumer(kind) }
+    [:resume, :transfer, :raise, :kill].each { |kind| check_waiting_resumer(kind) }
     transfer_weak, transfer_core = discard_transferred_fiber
     eventually('transferred fiber was incorrectly pinned') do
       !transfer_weak.weakref_alive? && transfer_core.status == 'terminated'
@@ -266,6 +268,15 @@ module FiberReclaimChecks
         assert(error.message == 'uninitialized fiber', 'copied fiber raised the wrong error')
       end
     end
+
+    # A handle has one execution state and one registration (MRI: fiber_t_alloc).
+    begin
+      live.__send__(:initialize) { }
+      reinitialized = true
+    rescue RuntimeError => error
+      assert(error.message == 'cannot initialize twice', 'second initialize raised the wrong error')
+    end
+    assert(!reinitialized, 'a fiber was initialized twice')
 
     # An overridden #each must still run on its original public receiver.
     custom = [1].to_enum

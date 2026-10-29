@@ -3025,6 +3025,7 @@ namespace IronRuby.Runtime {
 
         // A captured scope needs its locals, not a completed interpreter frame's temporary
         // operands (which may include the Fiber handle returned by its factory method).
+        [Emitted]
         public static void ReleaseScopeFrame(RubyScope scope) {
             if (scope != null) {
                 scope.InterpretedFrame = null;

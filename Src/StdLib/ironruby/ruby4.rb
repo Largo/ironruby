@@ -2684,6 +2684,8 @@ unless defined?(Fiber)
     end
 
     def initialize(blocking: false, storage: true, &block)
+      # what fiber_t_alloc raises; the handle is registered with its FiberCore only once
+      Fiber.__err__(::RuntimeError, "cannot initialize twice") if @state
       @state = State.new(self, blocking: blocking, storage: storage, &block)
     end
 
@@ -2782,6 +2784,8 @@ unless defined?(Fiber)
         self
       end
       def __resuming__; @resuming; end
+      # Somebody resumed us and waits: we are in the root fiber's resume chain.
+      def __resumed__; !@prev.nil?; end
       def __set_resuming__(f); @resuming = f; end
       def __core__; @core; end
       def __handle__; @core.handle; end
@@ -2984,7 +2988,7 @@ unless defined?(Fiber)
       # Hands control from `cur` to `target` and blocks until control comes back.
       def self.__switch__(cur, target, kind, payload = nil)
         target.__start__
-        cur.__act__(cur.__core__.switch(target.__core__, kind, payload))
+        cur.__act__(cur.__core__.switch(target.__core__, kind, payload, cur.__resumed__))
       end
 
       # A fiber runs on a thread of its own: one whose last fiber has finished if one is

@@ -311,8 +311,11 @@ namespace IronRuby.Builtins {
                 return message;
             }
 
-            public FiberMessage Switch(FiberCore target, int kind, object payload) {
-                if (kind == FiberMessage.ResumeKind || kind == FiberMessage.RaiseKind || kind == FiberMessage.KillKind) {
+            // A transfer from a fiber that is itself resumed also gets control back: the target's
+            // end returns to the deepest fiber of the root's resume chain, which is this one.
+            public FiberMessage Switch(FiberCore target, int kind, object payload, bool resumed) {
+                if (kind == FiberMessage.ResumeKind || kind == FiberMessage.RaiseKind || kind == FiberMessage.KillKind ||
+                    (kind == FiberMessage.TransferKind && resumed)) {
                     _pinnedHandle = Handle;
                 }
                 try {
@@ -328,7 +331,7 @@ namespace IronRuby.Builtins {
             }
 
             public FiberMessage Yield(FiberCore target, RubyArray args) {
-                return Switch(target, FiberMessage.YieldKind, PackArguments(args));
+                return Switch(target, FiberMessage.YieldKind, PackArguments(args), false);
             }
 
             private static object PackArguments(RubyArray args) {
