@@ -1115,12 +1115,15 @@ namespace IronRuby.Runtime {
 
         private void AssemblyLoaded(Assembly/*!*/ assembly) {
             _namespaces.LoadAssembly(assembly);
-            AddExtensionAssembly(assembly);
-
-            // The assembly can add types to namespaces whose misses are already cached (defined?
-            // and constant sites keep their answer per constant version).
-            using (ClassHierarchyLocker()) {
-                ConstantAccessVersion++;
+            try {
+                AddExtensionAssembly(assembly);
+            } finally {
+                // The assembly can add types to namespaces whose misses are already cached (defined?
+                // and constant sites keep their answer per constant version) - its namespaces are
+                // loaded even if its extension methods can't be read.
+                using (ClassHierarchyLocker()) {
+                    ConstantAccessVersion++;
+                }
             }
         }
 
@@ -1444,7 +1447,12 @@ namespace IronRuby.Runtime {
         // Assemblies whose extension methods have been registered (or are queued to be, in _potentialExtensionAssemblies).
         private readonly HashSet<Assembly>/*!*/ _extensionAssemblies = new HashSet<Assembly>();
 
-        private void AddExtensionAssembly(Assembly/*!*/ assembly) {
+        /// <summary>
+        /// Registers the extension methods of <paramref name="assembly"/>, or queues them until extension methods are first asked
+        /// for. Does nothing for an assembly seen already, unless reading its extension methods failed: the exception is thrown
+        /// and the next call tries again (a require of the DLL once what it references can be found, say).
+        /// </summary>
+        internal void AddExtensionAssembly(Assembly/*!*/ assembly) {
             lock (ExtensionsLock) {
                 if (!_extensionAssemblies.Add(assembly)) {
                     return;
@@ -1460,7 +1468,28 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            LoadExtensions(ReflectionUtils.GetVisibleExtensionMethodGroups(assembly, true));
+            LoadExtensions(ReadExtensionMethods(assembly));
+        }
+
+        // Reading an assembly's extension methods loads the types in their signatures, and fails if one lives in an assembly
+        // that can't be found. The assembly is then forgotten, so that it's read again next time.
+        private IEnumerable<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>/*!*/ ReadExtensionMethods(Assembly/*!*/ assembly) {
+            try {
+                return ReflectionUtils.GetVisibleExtensionMethodGroups(assembly, true);
+            } catch {
+                lock (ExtensionsLock) {
+                    _extensionAssemblies.Remove(assembly);
+                }
+                throw;
+            }
+        }
+
+        private static bool IsUnreadableExtensionAssembly(Exception/*!*/ e) {
+            return e is IOException || e is BadImageFormatException || e is TypeLoadException || e is LoadError;
+        }
+
+        private void ReportUnreadableExtensionAssembly(Assembly/*!*/ assembly, Exception/*!*/ e) {
+            ReportWarning(String.Format("extension methods of {0} not read: {1}", assembly.GetName().Name, e.Message.TrimEnd()));
         }
 
         private void LoadExtensions(IEnumerable<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>/*!*/ extensionMethodGroups) {
@@ -1590,11 +1619,18 @@ namespace IronRuby.Runtime {
                 MemberTracker member;
                 tracker = (tracker != null && tracker.TryGetValue(part, out member)) ? member as NamespaceTracker : null;
             }
+            // An assembly whose extension methods can't be read is reported, and read again by the next `using' of its
+            // namespace or require of it; the rest are read.
             if (tracker != null) {
                 foreach (var member in tracker) {
                     var typeTracker = member.Value as TypeTracker;
                     if (typeTracker != null && !(typeTracker is TypeGroup)) {
-                        AddExtensionAssembly(typeTracker.Type.Assembly);
+                        Assembly assembly = typeTracker.Type.Assembly;
+                        try {
+                            AddExtensionAssembly(assembly);
+                        } catch (Exception e) when (IsUnreadableExtensionAssembly(e)) {
+                            ReportUnreadableExtensionAssembly(assembly, e);
+                        }
                     }
                 }
             }
@@ -1612,7 +1648,11 @@ namespace IronRuby.Runtime {
             if (assemblies != null) {
                 var extensionGroups = new List<KeyValuePair<string, IEnumerable<ExtensionMethodInfo>>>(); 
                 foreach (var assembly in assemblies) {
-                    extensionGroups.AddRange(ReflectionUtils.GetVisibleExtensionMethodGroups(assembly, true));
+                    try {
+                        extensionGroups.AddRange(ReadExtensionMethods(assembly));
+                    } catch (Exception e) when (IsUnreadableExtensionAssembly(e)) {
+                        ReportUnreadableExtensionAssembly(assembly, e);
+                    }
                 }
                 LoadExtensions(extensionGroups);
             }
