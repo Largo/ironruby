@@ -189,6 +189,16 @@ namespace IronRuby.Tests {
             AssertOutput(() => CompilerTest(code, expectedCompilerWarningCount, expectedRuntimeWarningCount), expectedOutput);
         }
 
+        /// <summary>
+        /// TestOutput for code that calls using_clr_extensions, which reports once per process that it is deprecated:
+        /// once in this test, which may be run on its own or after another that called it.
+        /// </summary>
+        [DebuggerHiddenAttribute]
+        private void LegacyExtensionsTestOutput(string code, string expectedOutput) {
+            RubyContext.ResetUsingClrExtensionsDeprecation();
+            TestOutput(code, expectedOutput, 0, 1);
+        }
+
         [DebuggerHiddenAttribute]
         private void XTestOutput(string code, string expectedOutput) {
             XAssertOutput(() => CompilerTest(code), expectedOutput);

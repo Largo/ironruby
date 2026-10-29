@@ -134,8 +134,9 @@ list = System::Collections::Generic::List[Integer].new([3, 1, 4])   # an Array f
 list.Sort { |a, b| b <=> a }       # a block goes to the trailing delegate parameter
 list.ForEach { |x| break if x < 3 } # break ends the CLR call, as it does a Ruby one
 
-using_clr_extensions System::Linq
+using System::Linq                  # extension methods for the rest of the file, as C#'s `using`
 list.where { it > 1 }.order_by { -it }.to_a      # => [4, 3]
+list.select { it > 1 }             # a Ruby method still wins: Enumerable#select, not LINQ's Select
 
 Widget.new(title: "Hi", width: 300) # keywords bind parameters by name, or set properties
 Greeter.greet("Ann", greeting: "Hello", times: 2)
@@ -159,6 +160,14 @@ end
 System::Math::PI                    # const and static readonly fields are constants
 command.Parameters.AddWithValue("$name", "Ann")   # a Ruby String for an Object parameter is a System.String
 ```
+
+`using` a CLR namespace works like C#'s `using` directive and like a refinement: its extension
+methods are visible from that point to the end of the file, class body or eval string, and
+nowhere else. `using System::Linq::Enumerable` brings in one static class's (C#'s `using static`).
+Extension methods come last, as in C#: a Ruby method of the same name is called instead, a CLR
+method group gets them as more overloads (`list.count(pred)`), and the CLR-cased name
+(`list.Select`) still reaches them. The older `using_clr_extensions` activates a namespace for
+the whole runtime and is deprecated.
 
 Also: a `Method` converts to a delegate, `IComparable<T>` types are `Comparable`,
 `IAsyncEnumerable<T>` is `Enumerable`, C# 8 default interface methods are callable and run for

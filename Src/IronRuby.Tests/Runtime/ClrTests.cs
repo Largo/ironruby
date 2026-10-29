@@ -831,7 +831,7 @@ p I.Mixed(1)
 
         public void ClrExtensionMethods1() {
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly SystemCoreAssembly
 using_clr_extensions System::Linq
 
@@ -849,7 +849,7 @@ p a.first_or_default
         public void ClrExtensionMethods2() {
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             Context.ObjectClass.SetConstant("DummyLinqAssembly", typeof(System.Linq.Dummy).Assembly.FullName);
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly DummyLinqAssembly
 
 using_clr_extensions System::Linq
@@ -868,7 +868,7 @@ p System::Array[Integer].new([1,2,3]).first_or_default
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             Context.ObjectClass.SetConstant("DummyLinqAssembly", typeof(System.Linq.Dummy).Assembly.FullName);
             
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly DummyLinqAssembly
 load_assembly SystemCoreAssembly
 
@@ -889,7 +889,7 @@ p a.first_or_default
         public void ClrExtensionMethods4() {
             Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods2.EMs).Assembly);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 L = System::Collections::Generic::List
 D = System::Collections::Generic::Dictionary
 using_clr_extensions IronRubyTests::ExtensionMethods2
@@ -988,7 +988,7 @@ p a.select(lambda { |n| n * 2 })
         public void ClrExtensionMethods6() {
             Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 include IronRubyTests::ExtensionMethods3
 class RubyWidget < Widget; end
 
@@ -1028,7 +1028,7 @@ e:Describe(string)
         public void ClrExtensionMethods7() {
             Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 include IronRubyTests::ExtensionMethods3
 s = Square.new
 b = Box[Integer].new
@@ -1056,7 +1056,7 @@ Open()
         /// </summary>
         public void ClrExtensionMethods8() {
             Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 load_assembly SystemCoreAssembly
 list = System::Collections::Generic::List[Integer].new
 list.add(1)
@@ -1072,6 +1072,138 @@ puts list.count(lambda { |x| x > 1 })
 3
 3
 2
+");
+        }
+
+        /// <summary>
+        /// `using' a CLR namespace brings its extension methods into the rest of the file, class body or eval string,
+        /// lexically, like a refinement: a method defined before it, or outside the class body, does not see them.
+        /// </summary>
+        public void ClrScopedExtensions1() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+w = Widget.new
+def before(w) = (w.describe('x') rescue $!.class)
+module M
+  using IronRubyTests::ExtensionMethods3
+  def self.inside(w) = w.describe('x')
+end
+class C
+  def self.outside(w) = (w.describe('x') rescue $!.class)
+end
+puts before(w), M.inside(w), C.outside(w), (w.describe('x') rescue $!.class)
+using IronRubyTests::ExtensionMethods3
+puts w.describe('x'), before(w)
+", @"
+TypeError
+e:Describe(string)
+TypeError
+TypeError
+e:Describe(string)
+TypeError
+");
+        }
+
+        /// <summary>
+        /// Extension methods come last, as in C#: a Ruby method is called (Enumerable#select), a CLR method group gets
+        /// them as more overloads (List#count, Widget#describe - the instance method winning a tie), and a name nothing
+        /// else has gets them alone (where).
+        /// </summary>
+        public void ClrScopedExtensions2() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
+
+            TestOutput(@"
+load_assembly SystemCoreAssembly
+include IronRubyTests::ExtensionMethods3
+list = System::Collections::Generic::List[Integer].new
+list.add(3)
+list.add(1)
+list.add(2)
+using System::Linq
+using IronRubyTests::ExtensionMethods3
+p list.select { |x| x > 1 }
+p list.Select { |x| x * 10 }.to_a
+p list.count, list.count(lambda { |x| x > 1 })
+p list.where { |x| x > 1 }.to_a
+p list.reverse, list.to_a
+p list.respond_to?(:where), list.method(:where).call { |x| x < 3 }.to_a
+
+w = Widget.new
+puts w.describe, w.describe(1), w.describe('x'), SubWidget.new.describe('x')
+puts Square.new.area, Square.new.area(2), Box[Integer].new.open, Box[Integer].new.open(1)
+class RubyWidget < Widget
+  def describe(*) = 'ruby'
+end
+puts RubyWidget.new.describe('x')
+", @"
+[3, 2]
+[30, 10, 20]
+3
+2
+[3, 2]
+nil
+[2, 1, 3]
+true
+[2, 1]
+Describe()
+Describe(int)
+e:Describe(string)
+e:Describe(string)
+Area()
+e:Area(int)
+Open()
+e:Open(T)
+ruby
+");
+        }
+
+        /// <summary>
+        /// `using' a static class brings in its extension methods only (C#'s `using static').
+        /// </summary>
+        public void ClrScopedExtensions3() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+module OnlyMore
+  using IronRubyTests::ExtensionMethods3::MoreEMs
+  def self.go(w) = [w.label.to_s, (w.describe('x') rescue $!.class)]
+end
+module Both
+  using IronRubyTests::ExtensionMethods3
+  def self.go(w) = [w.label.to_s, w.describe('x').to_s]
+end
+p OnlyMore.go(Widget.new), Both.go(Widget.new)
+", @"
+[""e:Label()"", TypeError]
+[""e:Label()"", ""e:Describe(string)""]
+");
+        }
+
+        /// <summary>
+        /// A call bound before anything `using'd the namespace re-binds when something does, and still does not see
+        /// the extension methods where they are not `using'd.
+        /// </summary>
+        public void ClrScopedExtensions4() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods3.EMs).Assembly);
+
+            TestOutput(@"
+include IronRubyTests::ExtensionMethods3
+w = Widget.new
+def call_it(w) = (w.describe('x') rescue $!.class)
+3.times { call_it(w) }
+module Later
+  using IronRubyTests::ExtensionMethods3
+  def self.go(w) = w.describe('x')
+end
+puts call_it(w), Later.go(w), call_it(w)
+", @"
+TypeError
+e:Describe(string)
+TypeError
 ");
         }
 
@@ -1372,7 +1504,7 @@ f4
             Runtime.LoadAssembly(Assembly.GetExecutingAssembly());
             OverloadInheritance2.Load(Context);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 using_clr_extensions IronRubyTests::ExtensionMethods1
 d = D.new
 puts d.f(1)                               # f1 on A
@@ -1408,7 +1540,7 @@ e6
             Runtime.LoadAssembly(Assembly.GetExecutingAssembly());
             OverloadInheritance2.Load(Context);
 
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 using_clr_extensions nil
 puts F.new.f(1,2,3,4,5,6,7)               # no namespace
  

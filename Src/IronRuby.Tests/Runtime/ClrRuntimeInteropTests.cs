@@ -586,7 +586,7 @@ UTF8 ""ut_f8"" nil
         /// next to the generic extensions of the interface definition (Sum&lt;T&gt;(this IEnumerable&lt;T&gt;, Func&lt;T, int&gt;)).
         /// </summary>
         public void ClrClosedInterfaceExtensions1() {
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 L = System::Collections::Generic::List
 l = L[Integer].new
 l.add(3)
@@ -628,7 +628,7 @@ System::Collections::Generic::List[Integer]
         /// </summary>
         public void ClrClosedInterfaceExtensions2() {
             Runtime.LoadAssembly(typeof(IronRubyTests.ClosedInterfaceExtensions.Extensions).Assembly);
-            TestOutput(@"
+            LegacyExtensionsTestOutput(@"
 using_clr_extensions IronRubyTests::ClosedInterfaceExtensions
 L = System::Collections::Generic::List
 ints = L[Integer].new
