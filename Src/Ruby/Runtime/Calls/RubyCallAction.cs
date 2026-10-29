@@ -631,7 +631,7 @@ namespace IronRuby.Runtime.Calls {
             // A refinement that gains or loses a method re-versions the classes below the refined module.
             if (refinements != null) {
                 metaBuilder.AddCondition(Ast.Equal(
-                    Methods.GetActiveRefinements.OpCall(AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope))),
+                    Methods.GetLexicalRefinements.OpCall(AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope))),
                     Ast.Constant(refinements, typeof(RefinementActivation))
                 ));
             }

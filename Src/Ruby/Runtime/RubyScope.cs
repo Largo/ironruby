@@ -603,12 +603,61 @@ namespace IronRuby.Runtime {
         /// cheap) call-site guard.
         /// </summary>
         public RefinementActivation/*!*/ GetActiveRefinements() {
-            var context = RubyContext;
-            if (!context.HasRefinements) {
+            if (!RubyContext.HasRefinements) {
                 return RefinementActivation.Empty;
             }
+            return GetLexicalRefinements();
+        }
 
-            int version = context.RefinementVersion;
+        /// <summary>
+        /// <see cref="GetActiveRefinements"/> for a caller that knows something has been refined in this
+        /// runtime, which stays true: the guard of a refined call's rule (RubyOps.GetLexicalRefinements),
+        /// which runs on every call.
+        /// </summary>
+        internal RefinementActivation/*!*/ GetLexicalRefinements() {
+            // A scope without rare state has no `using' of its own and no memo, so it answers what the
+            // scope below the block, method or other body it is part of answers: the walk is a loop
+            // that reads a field or two per scope.  The first scope that has rare state - the top level
+            // or class body a `using' ran in, mostly - answers from its memo, or takes the general step,
+            // which recurses from there.
+            RubyScope scope = this;
+            do {
+                var rare = scope._rare;
+                if (rare != null) {
+                    var memo = rare.Refinements;
+                    if (memo != null && rare.RefinementsVersion == scope._top.RubyContext.RefinementVersion) {
+                        return memo;
+                    }
+                    return scope.ComputeActiveRefinements();
+                }
+
+                var blockScope = scope as RubyBlockScope;
+                if (blockScope != null) {
+                    var blockOverride = blockScope.BlockFlowControl.Proc.RefinementOverride;
+                    if (blockOverride != null) {
+                        return blockOverride;
+                    }
+                } else {
+                    var methodScope = scope as RubyMethodScope;
+                    if (methodScope != null) {
+                        var recorded = methodScope.DefinitionRefinements;
+                        if (recorded == null) {
+                            return RefinementActivation.Empty;
+                        }
+                        var definition = recorded.Value;
+                        if (definition != null) {
+                            return definition;
+                        }
+                    }
+                }
+                scope = scope._parent;
+            } while (scope != null);
+
+            return RefinementActivation.Empty;
+        }
+
+        private RefinementActivation/*!*/ ComputeActiveRefinements() {
+            int version = RubyContext.RefinementVersion;
             var cached = _rare;
             if (cached != null && cached.Refinements != null && cached.RefinementsVersion == version) {
                 return cached.Refinements;
@@ -631,9 +680,9 @@ namespace IronRuby.Runtime {
                 if (recorded == null) {
                     return RefinementActivation.Empty;
                 }
-                outer = recorded.Value ?? ((_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty);
+                outer = recorded.Value ?? ((_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty);
             } else {
-                outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
+                outer = (_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty;
             }
             RefinementActivation result = (UsedModules != null) ? RefinementActivation.Create(outer, UsedModules, UsedModuleSnapshots) : outer;
 
