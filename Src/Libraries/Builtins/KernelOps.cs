@@ -325,6 +325,23 @@ namespace IronRuby.Builtins {
         [ThreadStatic]
         private static bool _inNumericStub;
 
+        // Each stub requires its file only once per runtime.  C# callers - Time#subsec,
+        // Integer#to_r - call the stub directly rather than through dispatch, so they never reach
+        // the replacement, and a `require` per call scans every loaded feature and stats files:
+        // TZInfo asks Time#subsec for every timestamp it converts, and that require was 85% of
+        // the time lobsters spent rendering a page of comments.
+        private static readonly object _ComplexLoadedKey = new object();
+        private static readonly object _RationalLoadedKey = new object();
+
+        private static void RequireNumericFile(RubyScope/*!*/ scope, object self, object key, string/*!*/ file) {
+            object loaded;
+            if (scope.RubyContext.TryGetLibraryData(key, out loaded)) {
+                return;
+            }
+            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii(file), LoadFlags.Require);
+            scope.RubyContext.GetOrCreateLibraryData(key, () => true);
+        }
+
         [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
         [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby19)]
         public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toComplex, 
@@ -334,7 +351,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateNotImplementedError("Complex is not defined for this receiver");
             }
             // TODO: hack: redefines this method
-            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("complex18.rb"), LoadFlags.Require);
+            RequireNumericFile(scope, self, _ComplexLoadedKey, "complex18.rb");
             var site = toComplex.GetCallSite("Complex", 2);
             _inNumericStub = true;
             try {
@@ -353,7 +370,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateNotImplementedError("Rational is not defined for this receiver");
             }
             // TODO: hack: redefines this method
-            scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("rational18.rb"), LoadFlags.Require);
+            RequireNumericFile(scope, self, _RationalLoadedKey, "rational18.rb");
             var site = toRational.GetCallSite("Rational", 2);
             _inNumericStub = true;
             try {
