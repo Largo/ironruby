@@ -46,21 +46,34 @@ namespace IronRuby.Runtime {
         // core method written in Ruby is that method's own, not its caller's.
         private bool _keepInternalFrames;
 
-        private RubyStackTraceBuilder(RubyContext/*!*/ context) {
+        private RubyStackTraceBuilder(RubyContext/*!*/ context)
+            : this(context, context.GetPathEncoding()) {
+        }
+
+        private RubyStackTraceBuilder(RubyContext/*!*/ context, RubyEncoding/*!*/ encoding) {
             _context = context;
             _needsClrFileInfo = NeedsClrFileInfo(context);
             _hasFileAccessPermission = _needsClrFileInfo && DetectFileAccessPermissions();
             _exceptionDetail = context.Options.ExceptionDetail;
-            _encoding = context.GetPathEncoding();
+            _encoding = encoding;
             _trace = new RubyArray();
         }
-        
-        internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) 
+
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted)
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+            AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
+        }
 
+        private RubyStackTraceBuilder(CapturedTrace/*!*/ captured)
+            : this(captured.Context, captured.Encoding) {
+            _interpretedFrames = captured.InterpretedFrames;
+            AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
+        }
+
+        private void AddExceptionBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
             AddBacktrace(throwSiteTrace.GetFrames(), 0, false);
 
             // Compiled trace: contains frames above and including the first Ruby filter/catch site that the exception was caught by:
@@ -71,6 +84,39 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// What the backtrace of a raised exception is made of, taken where the first Ruby frame saw
+        /// the exception go by - the stack walks, and the interpreted frames the interpreter saved on
+        /// the exception - but not yet turned into strings. Most exceptions are rescued and dropped
+        /// without anyone asking for their backtrace, and formatting it (resolving every frame's
+        /// method, parsing the encoded names, building a string per frame) is most of what a raise
+        /// used to cost. <see cref="Build"/> does it on first use and yields exactly what building it
+        /// eagerly yielded: everything it reads is either captured here or fixed for the context.
+        /// </summary>
+        internal sealed class CapturedTrace {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly RubyEncoding/*!*/ Encoding;
+            internal readonly StackTrace/*!*/ ThrowSiteTrace;
+            internal readonly StackTrace CatchSiteTrace;
+            internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
+            internal readonly bool IsCatchSiteInterpreted;
+
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
+                Context = context;
+                Encoding = context.GetPathEncoding();
+                // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
+                ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
+                // the interpreter's frames are saved on the exception once, and raise clears them:
+                InterpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+                CatchSiteTrace = catchSiteTrace;
+                IsCatchSiteInterpreted = isCatchSiteInterpreted;
+            }
+
+            internal RubyArray/*!*/ Build() {
+                return new RubyStackTraceBuilder(this).RubyTrace;
+            }
+        }
+
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames)
             : this(context, skipFrames, false) {
         }
@@ -78,6 +124,12 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
+
+            // Kernel#caller and #caller_locations: -X:ExceptionDetail adds the CLR frames to exception
+            // backtraces, not here, where code reads the frames - require_relative takes its directory
+            // from the first one, and would get a .cs file of the runtime instead of the caller's.
+            _exceptionDetail = false;
+
             var trace = GetClrStackTrace(null, _needsClrFileInfo);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
@@ -214,6 +266,37 @@ namespace IronRuby.Runtime {
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
         internal static StackTrace GetClrStackTrace(Exception exception, bool needFileInfo) {
             return exception != null ? new StackTrace(exception, needFileInfo) : new StackTrace(needFileInfo);
+        }
+
+        /// <summary>
+        /// Whether a catch-site walk taken in an interpreted frame (see RubyExceptionData.CaptureExceptionTrace)
+        /// can stand for the walk of any other exception the frame catches: whether it shows the frame
+        /// once. While the interpreter runs a frame's finally blocks on the way out of an exception it
+        /// re-enters the frame's Run method from HandleException, and the walk then has two runs of it.
+        /// </summary>
+        internal static bool IsReusableCatchSiteTrace(StackTrace/*!*/ trace) {
+            var frames = trace.GetFrames();
+            int i = 0;
+            while (i < frames.Length && !IsInterpreterRunFrame(frames[i])) {
+                i++;
+            }
+            if (i == frames.Length) {
+                return false;
+            }
+            var interpreterType = frames[i].GetMethod().DeclaringType;
+            while (i < frames.Length && IsInterpreterRunFrame(frames[i])) {
+                i++;
+            }
+            if (i == frames.Length) {
+                return false;
+            }
+            var next = frames[i].GetMethod();
+            return next != null && !(next.DeclaringType == interpreterType && next.Name == "HandleException");
+        }
+
+        private static bool IsInterpreterRunFrame(StackFrame/*!*/ frame) {
+            var method = frame.GetMethod();
+            return method != null && InterpretedFrame.IsInterpretedFrame(method);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
@@ -445,25 +528,28 @@ namespace IronRuby.Runtime {
             return name;
         }
 
-        private static readonly ConcurrentDictionary<Type, Type>/*!*/ _copyingClasses = new ConcurrentDictionary<Type, Type>();
+        // Per library assembly: copied-in module -> the class that copies it.
+        private static readonly ConcurrentDictionary<Assembly, Dictionary<Type, Type>>/*!*/ _copyingClasses =
+            new ConcurrentDictionary<Assembly, Dictionary<Type, Type>>();
 
         // The builtin class with a Ruby name of its own (Integer rather than System::Byte, say)
         // that copies the given module in, or null.
         private string GetCopyingClassName(Assembly/*!*/ assembly, Type/*!*/ included) {
             Type copying;
-            if (!_copyingClasses.TryGetValue(included, out copying)) {
-                copying = FindCopyingClass(assembly, included);
-                _copyingClasses.TryAdd(included, copying);
-            }
-            return copying != null ? GetLibraryModuleName(copying) : null;
+            return _copyingClasses.GetOrAdd(assembly, FindCopyingClasses).TryGetValue(included, out copying) ?
+                GetLibraryModuleName(copying) : null;
         }
 
-        private static Type FindCopyingClass(Assembly/*!*/ assembly, Type/*!*/ included) {
+        // One pass over the assembly's attributes answers every later lookup: it reads the attributes
+        // of every type in IronRuby.Libraries, and doing that once per copied module made each of the
+        // first few backtraces of a process cost ~15 ms.
+        private static Dictionary<Type, Type>/*!*/ FindCopyingClasses(Assembly/*!*/ assembly) {
+            var result = new Dictionary<Type, Type>();
             Type[] types;
             try {
                 types = assembly.GetTypes();
             } catch (ReflectionTypeLoadException) {
-                return null;
+                return result;
             }
             foreach (Type candidate in types) {
                 var attr = (RubyModuleAttribute)Attribute.GetCustomAttribute(candidate, typeof(RubyModuleAttribute), false);
@@ -471,16 +557,29 @@ namespace IronRuby.Runtime {
                     continue;
                 }
                 foreach (IncludesAttribute includes in candidate.GetCustomAttributes(typeof(IncludesAttribute), false)) {
-                    if (includes.Copy && Array.IndexOf(includes.Types, included) >= 0) {
-                        return candidate;
+                    if (includes.Copy) {
+                        foreach (Type included in includes.Types) {
+                            // the first copying class in type order, as the per-module scan found it
+                            if (!result.ContainsKey(included)) {
+                                result.Add(included, candidate);
+                            }
+                        }
                     }
                 }
             }
-            return null;
+            return result;
         }
 
         private static bool IsVisibleClrFrame(MethodBase/*!*/ method) {
             if (Microsoft.Scripting.Actions.DynamicSiteHelpers.IsInvisibleDlrStackFrame(method)) {
+                return false;
+            }
+
+            // The entry of a JIT-specialized method (JitStub.BuildEntry, BuildDirectEntry): its fast
+            // path raises nothing, and its slow path calls the method's generic body, which is the
+            // frame that stands for the method.
+            if (method.DeclaringType == null && (method.Name.StartsWith(Jit.JitStub.EntryNamePrefix, StringComparison.Ordinal) ||
+                method.Name.StartsWith(Jit.JitStub.DirectEntryNamePrefix, StringComparison.Ordinal))) {
                 return false;
             }
 
@@ -516,7 +615,8 @@ namespace IronRuby.Runtime {
 #endif
         }
 #endif
-        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb" };
+        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb", "/ironruby/gem_compat.rb",
+            "/ironruby/ironruby/rational.rb", "/ironruby/ironruby/complex.rb" };
 
         /// <summary>
         /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in

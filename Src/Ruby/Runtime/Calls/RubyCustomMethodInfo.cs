@@ -23,12 +23,22 @@ using IronRuby.Builtins;
 namespace IronRuby.Runtime.Calls {
     internal sealed class RubyCustomMethodInfo : RubyMemberInfo {
         private readonly RuleGenerator/*!*/ _ruleGenerator;
+        private readonly int? _arity;
 
         public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule)
+            : this(ruleGenerator, flags, declaringModule, null) {
+        }
+
+        /// <summary>
+        /// A rule generator with a fixed number of arguments - a Struct member's reader (0) or
+        /// writer (1) - reports it as its arity.
+        /// </summary>
+        public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule, int? arity)
             : base(flags, declaringModule) {
 
             Assert.NotNull(ruleGenerator, declaringModule);
             _ruleGenerator = ruleGenerator;
+            _arity = arity;
         }
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
@@ -53,26 +63,26 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyCustomMethodInfo(_ruleGenerator, flags, module);
+            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity);
         }
 
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return new MemberInfo[] { _ruleGenerator.GetMethodInfo() };
         }
 
-        public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
-            return this;
-        }
-
         /// <summary>
-        /// A rule generator declares no parameters, so the base answer was 0 - and a Method made
-        /// from Class#new then took exactly zero arguments as a proc: `ary.map(&Foo.method(:new))`
-        /// raised "given 1, expected 0".  The generators that build calls (new, exception,
-        /// Regexp.compile, IO.for_fd, Method#call) take any arguments, -1 as in MRI; only
-        /// allocate takes none.
+        /// A rule generator binds whatever arguments arrive - Class#new, Kernel#send, IO.open -
+        /// so its arity is -1, as MRI's is for those; Class#allocate alone takes nothing.
         /// </summary>
         public override int GetArity() {
-            return Equals(_ruleGenerator, new RuleGenerator(RuleGenerators.InstanceAllocator)) ? 0 : -1;
+            if (_arity.HasValue) {
+                return _arity.Value;
+            }
+            return _ruleGenerator.GetMethodInfo().Name == "InstanceAllocator" ? 0 : -1;
+        }
+
+        public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
+            return this;
         }
     }
 }

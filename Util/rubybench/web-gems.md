@@ -114,13 +114,9 @@ Found, not fixed:
   `<a data-confirm=... rel="nofollow">`.  Hash.cs has said "TODO: ordered
   dictionary" since 2010; fixing it means replacing the backing store, which is
   too large and too shared a change for this round.
-* **rake 0.8.7 shadows the rake gem outside a bundle.**  `Src/StdLib/ruby/1.9.1`
-  still carries Ruby 1.9's rake, and -X:StdLib puts it on `$LOAD_PATH`, so
-  `require "rake"` answers 0.8.7 rather than activating the installed gem.
-  Inside a bundle Bundler's load paths win and rake 13 is used, which is why no
-  benchmark tripped over it.  The 1.9.1 tree is a deliberate fallback for the
-  libraries Ruby 4.0 gemified, so this is a policy question rather than a bug to
-  patch here.
+* **rake 0.8.7 shadowed the rake gem outside a bundle** (resolved): the Ruby 1.9
+  library tree that carried it, `Src/StdLib/ruby/1.9.1`, is no longer shipped or
+  on the load path, so `require "rake"` activates the installed rake 13.
 * **A YAML timestamp loses its offset.**  `t: 2001-12-14 21:59:43.10 -5` loads
   as `2001-12-15 03:59:43.1 +0100` (the box's zone) instead of CRuby's
   `2001-12-14 21:59:43.1 -0500`.  Pre-existing, in the engine's timestamp

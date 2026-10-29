@@ -754,19 +754,18 @@ namespace IronRuby.StandardLibrary.Sockets {
                 str = str.Remove(0, 1);
             }
 
-            Tokenizer tokenizer = new Tokenizer();
-            tokenizer.Initialize(new StringReader(str));
-            Tokens token = tokenizer.GetNextToken();
-            TokenValue value = tokenizer.TokenValue;
-            Tokens nextToken = tokenizer.GetNextToken();
-
-            // We are only interested in the whole string being a valid Integer
-            if (token == Tokens.Integer && nextToken == Tokens.Integer) {
-                return isNegative ? -value.Integer1 : value.Integer1;
-            } else {
-                throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
+            // The whole string has to be one Ruby integer literal that fits a Fixnum.
+            if (IntegerLiteral.IsMatch(str)) {
+                IntegerValue value = Tokenizer.ParseInteger(str, 0);
+                if (value.IsFixnum) {
+                    return isNegative ? -value.Fixnum : value.Fixnum;
+                }
             }
+            throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
         }
+
+        private static readonly System.Text.RegularExpressions.Regex IntegerLiteral = new System.Text.RegularExpressions.Regex(
+            @"\A(?:0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|0[bB][01]+(?:_[01]+)*|0[dD][0-9]+(?:_[0-9]+)*|0[oO]?[0-7]+(?:_[0-7]+)*|[1-9][0-9]*(?:_[0-9]+)*|0)\z");
 
 #endregion
     }

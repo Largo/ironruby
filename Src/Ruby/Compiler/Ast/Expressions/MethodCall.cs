@@ -65,7 +65,7 @@ namespace IronRuby.Compiler.Ast {
             _target = target;
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             var literal = _target as StringLiteral;
             if (literal != null && _methodName == "freeze" && (Arguments == null || Arguments.IsEmpty) && Block == null) {
                 return literal.TransformReadFrozen(gen);
@@ -95,6 +95,14 @@ namespace IronRuby.Compiler.Ast {
             Debug.Assert(singleArgument == null || arguments == null && assignmentRhsArgument == null);
             Assert.NotNull(gen, transformedTarget);
             Assert.NotEmpty(methodName);
+
+            // -X:JIT: `m(x, k: v)' may go straight into m's specialized body (Runtime/Jit/JitKeywordCall.cs)
+            if (hasImplicitSelf && block == null && singleArgument == null && assignmentRhsArgument == null && node is MethodCall) {
+                var direct = IronRuby.Runtime.Jit.JitKeywordCall.TryTransform(gen, methodName, transformedTarget, arguments);
+                if (direct != null) {
+                    return direct;
+                }
+            }
 
             // Pass args in this order:
             // 1. instance

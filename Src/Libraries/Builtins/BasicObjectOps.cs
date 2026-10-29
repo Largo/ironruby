@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -28,8 +29,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
         public static object Reinitialize(object self) {
             // takes no arguments: Object.new(1), and a `super` passing arguments up to here, are
-            // "wrong number of arguments (given 1, expected 0)" in MRI
-            return self;
+            // "wrong number of arguments (given 1, expected 0)" in MRI; answers nil, as MRI's does
+            return null;
         }
 
         #region singleton_method_added, singleton_method_removed, singleton_method_undefined, method_missing
@@ -53,8 +54,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
-            // the arguments of the call that found no method are what NoMethodError#args reports
-            throw NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            // the arguments of the call that found no method are what NoMethodError#args reports,
+            // and the way the call was made (implicit receiver or not) is what #private_call? reports
+            var error = NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            RubyExceptionData.GetInstance(error).PrivateCall = RubyOps.MethodMissingPrivateCall;
+            RubyOps.MethodMissingPrivateCall = false;
+            throw error;
         }
 
         #endregion
@@ -68,70 +73,80 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            return KernelOps.SendMessage(scope, self, methodName);
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            return KernelOps.SendMessage(storage, scope, self, methodName);
         }
 
         // ARGS: 0&
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            return KernelOps.SendMessage(scope, block, self, methodName);
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            return KernelOps.SendMessage(storage, scope, block, self, methodName);
         }
 
         // ARGS: 1
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
-            return KernelOps.SendMessage(scope, self, methodName, arg1);
+            return KernelOps.SendMessage(storage, scope, self, methodName, arg1);
         }
 
         // ARGS: 1&
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
-            return KernelOps.SendMessage(scope, block, self, methodName, arg1);
+            return KernelOps.SendMessage(storage, scope, block, self, methodName, arg1);
         }
 
         // ARGS: 2
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
-            return KernelOps.SendMessage(scope, self, methodName, arg1, arg2);
+            return KernelOps.SendMessage(storage, scope, self, methodName, arg1, arg2);
         }
 
         // ARGS: 2&
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
-            return KernelOps.SendMessage(scope, block, self, methodName, arg1, arg2);
+            return KernelOps.SendMessage(storage, scope, block, self, methodName, arg1, arg2);
         }
 
         // ARGS: 3
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
-            return KernelOps.SendMessage(scope, self, methodName, arg1, arg2, arg3);
+            return KernelOps.SendMessage(storage, scope, self, methodName, arg1, arg2, arg3);
         }
 
         // ARGS: 3&
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
-            return KernelOps.SendMessage(scope, block, self, methodName, arg1, arg2, arg3);
+            return KernelOps.SendMessage(storage, scope, block, self, methodName, arg1, arg2, arg3);
         }
 
         // ARGS: N
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
-            return KernelOps.SendMessage(scope, self, methodName, args);
+            return KernelOps.SendMessage(storage, scope, self, methodName, args);
         }
 
         // ARGS: N&
         [RubyMethod("__send__")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
-            return KernelOps.SendMessage(scope, block, self, methodName, args);
+            return KernelOps.SendMessage(storage, scope, block, self, methodName, args);
         }
 
         #endregion

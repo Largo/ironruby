@@ -25,6 +25,7 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
+using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 
@@ -91,13 +92,19 @@ namespace IronRuby.Builtins {
         // interlocked
         internal static int _globalMethodVersion = 0;
 
+        // interlocked; bumped only where a class's method version is (IncrementMethodVersion)
+        private static int _methodTableVersion = 0;
+
         /// <summary>
-        /// Read by JIT-compiled code as its one global guard: every method table change anywhere
-        /// bumps it, so a specialization that snapshots it is invalidated by any def, undef,
-        /// alias, include, extend or singleton-method definition.
+        /// Read by JIT-compiled code as its one global guard: every method table change that can
+        /// alter a resolution call sites depend on bumps it, so a specialization that snapshots it is
+        /// invalidated by any def, undef, alias, include, extend or singleton-method definition that
+        /// overrides something. Creating a class or module does not: a new module changes no existing
+        /// class's resolution, and Class.new, Struct.new or a fresh singleton class after a method
+        /// had been specialized would otherwise send that method down the generic path for good.
         /// </summary>
         public static int GlobalMethodVersion {
-            get { return System.Threading.Volatile.Read(ref _globalMethodVersion); }
+            get { return System.Threading.Volatile.Read(ref _methodTableVersion); }
         }
         internal static int _globalModuleId = 0;
 
@@ -986,6 +993,7 @@ namespace IronRuby.Builtins {
         private void IncrementMethodVersion() {
             if (IsClass) {
                 Version.Method = Interlocked.Increment(ref _globalMethodVersion);
+                Interlocked.Increment(ref _methodTableVersion);
             }
         }
 
@@ -1598,7 +1606,8 @@ namespace IronRuby.Builtins {
         /// The table is allocated lazily so modules whose constants all come from C#/library code pay nothing.
         /// </summary>
         public void SetConstantLocation(string/*!*/ name, string sourcePath, int sourceLine) {
-            if (sourcePath == null) {
+            // Nor do the constants the core prelude defines: they are MRI's C-defined core.
+            if (sourcePath == null || Context.Loader.IsLoadingCorePrelude) {
                 return;
             }
             using (Context.ClassHierarchyLocker()) {
@@ -1981,14 +1990,46 @@ namespace IronRuby.Builtins {
 
             if (_namespaceTracker != null) {
                 object value;
-                if (_namespaceTracker.TryGetValue(name, out value)) {
+                // the member can live in a platform assembly nothing has loaded yet:
+                if (_namespaceTracker.TryGetValue(name, out value) ||
+                    _context.TryLoadNamespaceMemberAssembly(_namespaceTracker, name) && _namespaceTracker.TryGetValue(name, out value)) {
                     storage = new ConstantStorage( _context.TrackerToModule(value));
                     return true;
                 }
             }
 
+            object fieldValue;
+            if (_typeTracker != null && TryGetClrConstantField(name, out fieldValue)) {
+                storage = new ConstantStorage(fieldValue);
+                return true;
+            }
+
             storage = default(ConstantStorage);
             return false;
+        }
+
+        /// <summary>
+        /// A CLR class's const and static readonly fields are its constants - System::Math::PI, Int32::MaxValue,
+        /// String::Empty, an enum's values - as a Java class's static final fields are in JRuby. Other static members,
+        /// mutable fields and properties included, are methods: Math.Max, Task.Factory, DateTime.Now.
+        /// </summary>
+        private bool TryGetClrConstantField(string/*!*/ name, out object value) {
+            value = null;
+            Type type = _typeTracker.Type;
+            if ((Restrictions & ModuleRestrictions.NoNameMapping) != 0 || type.ContainsGenericParameters || !Tokenizer.IsConstantName(name)) {
+                return false;
+            }
+
+            var flags = BindingFlags.Static | BindingFlags.DeclaredOnly | BindingFlags.Public |
+                (_context.DomainManager.Configuration.PrivateBinding ? BindingFlags.NonPublic : 0);
+
+            FieldInfo field = type.GetField(name, flags);
+            if (field == null || !(field.IsLiteral || field.IsInitOnly)) {
+                return false;
+            }
+
+            value = field.GetValue(null);
+            return true;
         }
 
         // Direct lookup into the constant table (if it exists).
@@ -2089,10 +2130,8 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             ForEachAncestor(inherited, delegate(RubyModule/*!*/ module) {
-
-                // Skip CLR modules (methods declared on CLR modules have already been looked for in the class).
-                // If 'this' is a CLR module, we want to visit all mixed-in methods.
-                if (module.IsClrModule && !this.IsClrModule) return false;
+                // CLR modules are visited like any other: method lookup finds the methods libraries define on an
+                // interface module, and the default interface methods, so listing them has to as well.
 
                 // notification that we entered the module (it could have no method):
                 if (action(module, null, null)) return true;
@@ -2675,14 +2714,16 @@ namespace IronRuby.Builtins {
 
         private bool TryGetClrMember(string/*!*/ name, bool virtualLookup, out RubyMemberInfo method) {
             // Skip hidden CLR overloads.
-            // Skip lookup on types that are not visible, that are interfaces or generic type definitions.
-            if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {
+            // An interface exposes only its default methods, a generic type definition nothing (see GetDefaultInterfaceMethods).
+            if (_typeTracker != null) {
                 // Note: Do not allow mangling for CLR virtual lookups - we want to match the overridden name exactly as is, 
                 // so that it corresponds to the base method call the override stub performs.
                 bool mapNames = (Restrictions & ModuleRestrictions.NoNameMapping) == 0;
                 bool unmangleNames = !virtualLookup && mapNames;
 
-                if (TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
+                if (IsModuleType(_typeTracker.Type) ?
+                    TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
+                    TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
                     _methods.Add(name, method);
                     return true;
                 }
@@ -2690,6 +2731,106 @@ namespace IronRuby.Builtins {
 
             method = null;
             return false;
+        }
+
+        // The public instance members of an interface and its base interfaces that have a default implementation (C# 8),
+        // or an empty array.
+        private MethodInfo[] _defaultInterfaceMethods;
+
+        private MethodInfo/*!*/[]/*!*/ GetDefaultInterfaceMethods() {
+            if (_defaultInterfaceMethods == null) {
+                Type type = _typeTracker.Type;
+                var result = new List<MethodInfo>();
+                // A generic definition's methods cannot be called, only those of its instantiations. The base interfaces
+                // are searched too: an interface module does not include the modules of the interfaces it extends.
+                if (type.IsInterface && !type.ContainsGenericParameters) {
+                    AddDefaultInterfaceMethods(result, type);
+                    foreach (Type baseInterface in type.GetInterfaces()) {
+                        AddDefaultInterfaceMethods(result, baseInterface);
+                    }
+                }
+                _defaultInterfaceMethods = result.ToArray();
+            }
+            return _defaultInterfaceMethods;
+        }
+
+        private static void AddDefaultInterfaceMethods(List<MethodInfo>/*!*/ result, Type/*!*/ interfaceType) {
+            foreach (MethodInfo method in interfaceType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)) {
+                if (method.IsAbstract || method.ContainsGenericParameters) {
+                    continue;
+                }
+
+                // a member that hides one of the same signature in a base interface wins over it:
+                int hidden = result.FindIndex((existing) => existing.Name == method.Name && 
+                    ReflectionUtils.GetParameterTypes(existing.GetParameters()).ValueEquals(ReflectionUtils.GetParameterTypes(method.GetParameters())));
+
+                if (hidden < 0) {
+                    result.Add(method);
+                } else if (result[hidden].DeclaringType.IsAssignableFrom(method.DeclaringType)) {
+                    result[hidden] = method;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Abstract interface members are metadata: an object exposes its implementation of them through its class.
+        /// A default interface method has a body of its own, which is all a class implementing the interface without
+        /// overriding the member has (and all a Ruby class including it has), so it is callable from the interface module.
+        /// The call dispatches through the interface: an implementation, if there is one, still wins.
+        /// </summary>
+        private bool TryGetDefaultInterfaceMember(string/*!*/ name, bool unmangleNames, out RubyMemberInfo method) {
+            method = null;
+            var defaults = GetDefaultInterfaceMethods();
+            if (defaults.Length == 0 || name.Length == 0) {
+                return false;
+            }
+
+            // a method, a property getter or a property setter:
+            bool isSetter = name.Length > 1 && name.LastCharacter() == '=';
+            string clrName = isSetter ? name.Substring(0, name.Length - 1) : name;
+            string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(clrName) : null;
+
+            List<OverloadInfo> overloads = null;
+            foreach (var dim in defaults) {
+                string dimName = dim.Name;
+                if (dim.IsSpecialName) {
+                    if (!dimName.StartsWith(isSetter ? "set_" : "get_", StringComparison.Ordinal)) {
+                        continue;
+                    }
+                    dimName = dimName.Substring(4);
+                } else if (isSetter) {
+                    continue;
+                }
+
+                // the name the member is listed under (see RubyClass.GetIrregularlyMangledName):
+                if (dimName == clrName || dimName == altName ||
+                    unmangleNames && RubyUtils.HasMangledName(dimName) && RubyUtils.TryMangleName(dimName) == clrName) {
+                    if (overloads == null) {
+                        overloads = new List<OverloadInfo>();
+                    }
+                    overloads.Add(new ReflectionOverloadInfo(dim));
+                }
+            }
+
+            if (overloads == null) {
+                return false;
+            }
+
+            // an attached CLR member: virtual sites forward to the default body rather than call it through the interface
+            method = new RubyOverloadGroupInfo(overloads.ToArray(), this, null, false);
+            return true;
+        }
+
+        internal IEnumerable<string/*!*/>/*!*/ EnumerateDefaultInterfaceMembers() {
+            foreach (var dim in GetDefaultInterfaceMethods()) {
+                if (!dim.IsSpecialName) {
+                    yield return dim.Name;
+                } else if (dim.Name.StartsWith("get_", StringComparison.Ordinal)) {
+                    yield return dim.Name.Substring(4);
+                } else if (dim.Name.StartsWith("set_", StringComparison.Ordinal)) {
+                    yield return dim.Name.Substring(4) + "=";
+                }
+            }
         }
 
         protected virtual bool TryGetClrMember(Type/*!*/ type, string/*!*/ name, bool mapNames, bool unmangleNames, out RubyMemberInfo method) {
@@ -2712,9 +2853,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            // CLR members (do not include interface members - they are not callable methods, just metadata):
-            if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {
-                foreach (string name in EnumerateClrMembers(_typeTracker.Type)) {
+            // CLR members (do not include abstract interface members - they are not callable methods, just metadata):
+            if (_typeTracker != null) {
+                foreach (string name in IsModuleType(_typeTracker.Type) ? EnumerateDefaultInterfaceMembers() : EnumerateClrMembers(_typeTracker.Type)) {
                     if (action(this, name, RubyMemberInfo.InteropMember)) {
                         return true;
                     }
@@ -2749,6 +2890,17 @@ namespace IronRuby.Builtins {
         /// </remarks>
         public void ForEachMember(bool inherited, RubyMethodAttributes attributes, IEnumerable<string> foreignMembers, 
             Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
+            ForEachMember(inherited, attributes, foreignMembers, false, action);
+        }
+
+        /// <param name="objectMethods">
+        /// Kernel#public_methods(false) and its private and protected siblings, as against
+        /// Module#instance_methods(false): MRI lists the object's singleton class, whatever is
+        /// mixed into it, and the object's class itself - but not modules prepended to that
+        /// class, nor anything above it.
+        /// </param>
+        public void ForEachMember(bool inherited, RubyMethodAttributes attributes, IEnumerable<string> foreignMembers, bool objectMethods,
+            Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
 
             Context.RequiresClassHierarchyLock();
 
@@ -2782,7 +2934,24 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // The modules prepended to the object's class, which Kernel#public_methods(false) does
+            // not list although they precede the class in the walk: everything the first class
+            // that is not a singleton declares as an ancestor (its included modules come after it,
+            // where the walk has stopped).
+            HashSet<RubyModule> firstClassOwned = null;
+            if (instanceMethods && !inherited && objectMethods) {
+                for (RubyClass c = this as RubyClass; c != null; c = c.SuperClass) {
+                    if (!c.IsSingletonClass) {
+                        firstClassOwned = new HashSet<RubyModule>();
+                        RubyClass owner = c;
+                        c.ForEachDeclaredAncestor((m) => { if (!ReferenceEquals(m, owner)) firstClassOwned.Add(m); return false; });
+                        break;
+                    }
+                }
+            }
+
             bool stop = false;
+            bool seenSelf = false;
             ForEachInstanceMethod(true, delegate(RubyModule/*!*/ module, string name, RubyMemberInfo member) {
 
                 if (member == null) {
@@ -2793,7 +2962,20 @@ namespace IronRuby.Builtins {
                     }
 
                     if (instanceMethods) {
-                        stop = !inherited && (!IsClass || module.IsClass && !module.IsSingletonClass);
+                        // instance_methods(false) lists what the module itself defines: not what
+                        // a module prepended to it defines (those come first in the walk), and
+                        // for a singleton class not the class behind it.
+                        if (!inherited) {
+                            if (objectMethods) {
+                                // through the singleton classes, up to and including the object's class
+                                stop = module.IsClass && !module.IsSingletonClass;
+                            } else {
+                                if (seenSelf) {
+                                    return true;
+                                }
+                                seenSelf = ReferenceEquals(module, this);
+                            }
+                        }
                     } else if (singletonMethods) {
                         if (!inherited && module != this || classOwned.Contains(module)) {
                             return true;
@@ -2803,6 +2985,12 @@ namespace IronRuby.Builtins {
                     }
 
                 } else if (!visited.ContainsKey(name)) {
+                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this))) {
+                        // a prepended module's member: not this module's, and it must not hide
+                        // the one this module defines under the same name
+                        return false;
+                    }
+
                     // yield the member only if it has the right visibility:
                     if (!member.IsUndefined && !member.IsHidden && (((RubyMethodAttributes)member.Visibility & attributes) != 0)) {
                         action(name, module, member);
@@ -2939,10 +3127,32 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
+        // thread-safe without the class hierarchy lock: is_a?, kind_of? and Module#=== call this on
+        // every check, and the lock plus the closure ForEachAncestor needs were most of their cost.
+        // The walk only reads _prepends and _mixins, which are replaced, never mutated in place, under
+        // the lock, and the superclass chain; an include/prepend running concurrently is seen or not,
+        // just as with the lock, which only orders this check before or after it.
         public bool HasAncestor(RubyModule/*!*/ module) {
-            using (Context.ClassHierarchyLocker()) {
-                return HasAncestorNoLock(module);
+            RubyClass cls = this as RubyClass;
+            if (cls == null) {
+                return IsDeclaredAncestor(module);
             }
+            for (RubyClass c = cls; c != null; c = c.SuperClass) {
+                if (c.IsDeclaredAncestor(module)) return true;
+            }
+            return false;
+        }
+
+        // The modules ForEachDeclaredAncestor visits, read without the lock (see HasAncestor).
+        private bool IsDeclaredAncestor(RubyModule/*!*/ module) {
+            if (this == module) return true;
+            foreach (RubyModule p in _prepends) {
+                if (p == module) return true;
+            }
+            foreach (RubyModule m in _mixins) {
+                if (m == module) return true;
+            }
+            return false;
         }
 
         public bool HasAncestorNoLock(RubyModule/*!*/ module) {

@@ -102,6 +102,10 @@ namespace IronRuby.Runtime.Calls {
                 ), "BIND");
             }
 #endif
+            if (argArray == null && (result = BindShared<T>(args)) != null) {
+                return result;
+            }
+
             result = this.LightBind<T>(args, context.Options.CompilationThreshold);
             CacheTarget(result);
             return result;
@@ -113,6 +117,13 @@ namespace IronRuby.Runtime.Calls {
         protected virtual object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             return null;
         } 
+
+        /// <summary>
+        /// Returns a rule that is shared with receivers of other classes the call resolves the same for, or null (see <see cref="RuleVersionSet"/>).
+        /// </summary>
+        internal virtual T BindShared<T>(object[]/*!*/ args) where T : class {
+            return null;
+        }
 
         public override DynamicMetaObject/*!*/ Bind(DynamicMetaObject/*!*/ scopeOrContextOrTargetOrArgArray, DynamicMetaObject/*!*/[]/*!*/ args) {
             PerfTrack.NoteEvent(PerfTrack.Categories.Binding, "Ruby: " + GetType().Name + Signature.ToString() + ": Bind");

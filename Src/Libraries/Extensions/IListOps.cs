@@ -233,15 +233,9 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateTypeError("{0}#allocate should return IList", cls.Name);
         }
 
-        internal static IEnumerable<Int32>/*!*/ ReverseEnumerateIndexes(IList/*!*/ collection) {
-            for (int originalSize = collection.Count, i = originalSize - 1; i >= 0; i--) {
-                yield return i;
-                if (collection.Count < originalSize) {
-                    i = originalSize - (originalSize - collection.Count);
-                    originalSize = collection.Count;
-                }
-            }
-        }
+        // The reverse walks below are MRI's (rb_ary_reverse_each, rb_ary_rindex): index Count - 1
+        // down to 0, and when the block has shrunk the array below the index just visited, on from
+        // its new end - elements appended meanwhile are not visited, and none is visited twice.
 
         #endregion
 
@@ -250,6 +244,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("replace")]
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static IList/*!*/ Replace(IList/*!*/ self, [NotNull, DefaultProtocol]IList/*!*/ other) {
+            // frozen is checked first, even for the no-op below (MRI: rb_ary_modify_check)
+            RequireNotFrozen(self);
             // ary.replace(ary) has to be a no-op, and clearing first would make it empty the
             // array instead.  Rails runs into exactly this: Rails::Command#with_argv does
             // ARGV.replace(argv) where argv *is* ARGV, so `rails db:migrate db:seed` lost
@@ -688,6 +684,11 @@ namespace IronRuby.Builtins {
             index = NormalizeIndexThrowIfNegative(self, index);
 
             if (index >= self.Count) {
+                // MRI's rb_ary_store: an index the array cannot grow to (here, one past which
+                // the count would overflow) is an IndexError, not an arithmetic accident.
+                if (index == Int32.MaxValue) {
+                    throw RubyExceptions.CreateIndexError("index {0} too big", index);
+                }
                 self.AddMultiple(index + 1 - self.Count, null);
             }
 
@@ -773,7 +774,7 @@ namespace IronRuby.Builtins {
             if (start < 0) {
                 // The range is reported as it was written, not as it was normalized: MRI says
                 // "-9..0 out of range" for a[-9..0], not "-6..0".
-                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", originalStart, end);
+                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", originalStart, endless ? "" : end.ToString());
             }
 
             if (endless) {
@@ -1127,6 +1128,18 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         public static object Each([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
+            var array = self as RubyArray;
+            if (array != null) {
+                // the same loop, without an interface call for Count and the element every time round
+                for (int i = 0; i < array.Count; i++) {
+                    object result;
+                    if (block.Yield(array[i], out result)) {
+                        return result;
+                    }
+                }
+                return self;
+            }
+
             for (int i = 0; i < self.Count; i++) {
                 object result;
                 if (block.Yield(self[i], out result)) {
@@ -1135,6 +1148,60 @@ namespace IronRuby.Builtins {
             }
             return self;
         }
+
+        #region map, collect, select
+
+        // Array's own, as in MRI (rb_ary_collect, rb_ary_select): they walk the array rather than
+        // run Enumerable's versions, which call #each with a block of their own that yields to the
+        // given block - two block invocations and a packed argument array per element. Like MRI's,
+        // they do not call an #each that a subclass defines.
+
+        [RubyMethod("collect")]
+        [RubyMethod("map")]
+        public static Enumerator/*!*/ GetMapEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "map");
+        }
+
+        [RubyMethod("collect")]
+        [RubyMethod("map")]
+        public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
+            var result = new RubyArray(self.Count);
+            var array = self as RubyArray;
+            for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                object blockResult;
+                if (collector.Yield(array != null ? array[i] : self[i], out blockResult)) {
+                    return blockResult;
+                }
+                result.Add(blockResult);
+            }
+            return result;
+        }
+
+        [RubyMethod("filter")]
+        [RubyMethod("select")]
+        public static Enumerator/*!*/ GetSelectEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "select");
+        }
+
+        [RubyMethod("filter")]
+        [RubyMethod("select")]
+        public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            var result = new RubyArray();
+            var array = self as RubyArray;
+            for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                object blockResult;
+                if (predicate.Yield(array != null ? array[i] : self[i], out blockResult)) {
+                    return blockResult;
+                }
+                if (Protocols.IsTrue(blockResult)) {
+                    // MRI adds the element as it is once the block has run (rb_ary_elt)
+                    result.Add(i < self.Count ? self[i] : null);
+                }
+            }
+            return result;
+        }
+
+        #endregion
 
         [RubyMethod("each_index")]
         public static Enumerator/*!*/ EachIndex(IList/*!*/ self) {
@@ -1162,10 +1229,14 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reverse_each")]
         public static object ReverseEach([NotNull]BlockParam/*!*/ block, RubyArray/*!*/ self) {
-            foreach (int index in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 object result;
-                if (block.Yield(self[index], out result)) {
+                if (block.Yield(self[i], out result)) {
                     return result;
+                }
+                int count = self.Count;
+                if (count < i) {
+                    i = count;
                 }
             }
             return self;
@@ -1213,8 +1284,51 @@ namespace IronRuby.Builtins {
 
         #region fill
 
+        // Array#fill(obj, start = 0), fill(obj, start, length), fill(obj, range), and the block
+        // forms fill { }, fill(start) { }, fill(start, length) { }, fill(range) { }. One Ruby
+        // method dispatching by hand: as separate overloads the Integer- and Object-typed
+        // positions competed when a block was given ("Found multiple methods"), and the arity
+        // errors could not say 1..3 (no block) or 0..2 (block) the way MRI does.
         [RubyMethod("fill")]
-        public static IList/*!*/ Fill(IList/*!*/ self, object obj, [DefaultParameterValue(0)]int start) {
+        public static object Fill(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, IList/*!*/ self, params object[]/*!*/ args) {
+            int begin, length;
+            if (block == null) {
+                if (args.Length < 1 || args.Length > 3) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..3)", args.Length);
+                }
+                object obj = args[0];
+                if (args.Length == 1) {
+                    return Fill(self, obj, 0);
+                }
+                if (args.Length == 2 && args[1] is Range) {
+                    FillRange(fixnumCast, self, (Range)args[1], out begin, out length);
+                    return Fill(self, obj, begin, length);
+                }
+                int start = (args[1] == null) ? 0 : Protocols.CastToFixnum(fixnumCast, args[1]);
+                if (args.Length == 2 || args[2] == null) {
+                    return Fill(self, obj, start);
+                }
+                return Fill(self, obj, start, Protocols.CastToFixnum(fixnumCast, args[2]));
+            }
+
+            if (args.Length > 2) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..2)", args.Length);
+            }
+            if (args.Length == 0) {
+                return Fill(block, self, 0);
+            }
+            if (args.Length == 1 && args[0] is Range) {
+                FillRange(fixnumCast, self, (Range)args[0], out begin, out length);
+                return Fill(block, self, begin, length);
+            }
+            int blockStart = (args[0] == null) ? 0 : Protocols.CastToFixnum(fixnumCast, args[0]);
+            if (args.Length == 1 || args[1] == null) {
+                return Fill(block, self, blockStart);
+            }
+            return Fill(block, self, blockStart, Protocols.CastToFixnum(fixnumCast, args[1]));
+        }
+
+        public static IList/*!*/ Fill(IList/*!*/ self, object obj, int start) {
             RequireNotFrozen(self);
             // Note: Array#fill(obj, start) is not equivalent to Array#fill(obj, start, 0)
             // (as per MRI behavior, the latter can expand the array if start > length, but the former doesn't)
@@ -1226,7 +1340,6 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("fill")]
         public static IList/*!*/ Fill(IList/*!*/ self, object obj, int start, int length) {
             RequireNotFrozen(self);
             // Note: Array#fill(obj, start) is not equivalent to Array#fill(obj, start, 0)
@@ -1249,20 +1362,6 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("fill")]
-        public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, IList/*!*/ self, object obj, object start, [DefaultParameterValue(null)]object length) {
-            // with a block the value comes from the block, so three arguments are one too many
-            if (block != null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 3, expected 0..2)");
-            }
-            int startFixnum = (start == null) ? 0 : Protocols.CastToFixnum(fixnumCast, start);
-            if (length == null) {
-                return Fill(self, obj, startFixnum);
-            } else {
-                return Fill(self, obj, startFixnum, Protocols.CastToFixnum(fixnumCast, length));
-            }
-        }
-
         /// <summary>
         /// MRI normalizes the range against the current length and refuses one whose beginning
         /// lies before the first element - #fill does not extend an array backwards.
@@ -1276,7 +1375,7 @@ namespace IronRuby.Builtins {
 
             begin = NormalizeIndex(self, rawBegin);
             if (begin < 0) {
-                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", rawBegin, rawEnd);
+                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", rawBegin, endless ? "" : rawEnd.ToString());
             }
 
             int end = endless ? self.Count - 1 : NormalizeIndex(self, rawEnd);
@@ -1285,16 +1384,7 @@ namespace IronRuby.Builtins {
                 : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
         }
 
-        [RubyMethod("fill")]
-        public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object obj, [NotNull]Range/*!*/ range) {
-            int begin, length;
-            FillRange(fixnumCast, self, range, out begin, out length);
-
-            return Fill(self, obj, begin, length);
-        }
-
-        [RubyMethod("fill")]
-        public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, [DefaultParameterValue(0)]int start) {
+        public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start) {
             RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
 
@@ -1315,7 +1405,6 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("fill")]
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start, int length) {
             RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
@@ -1331,24 +1420,6 @@ namespace IronRuby.Builtins {
             }
 
             return self;
-        }
-
-        [RubyMethod("fill")]
-        public static object Fill(ConversionStorage<int>/*!*/ fixnumCast, [NotNull]BlockParam/*!*/ block, IList/*!*/ self, object start, [DefaultParameterValue(null)]object length) {
-            int startFixnum = (start == null) ? 0 : Protocols.CastToFixnum(fixnumCast, start);
-            if (length == null) {
-                return Fill(block, self, startFixnum);
-            } else {
-                return Fill(block, self, startFixnum, Protocols.CastToFixnum(fixnumCast, length));
-            }
-        }
-
-        [RubyMethod("fill")]
-        public static object Fill(ConversionStorage<int>/*!*/ fixnumCast, [NotNull]BlockParam/*!*/ block, IList/*!*/ self, [NotNull]Range/*!*/ range) {
-            int begin, length;
-            FillRange(fixnumCast, self, range, out begin, out length);
-
-            return Fill(block, self, begin, length);
         }
 
         #endregion
@@ -1526,6 +1597,17 @@ namespace IronRuby.Builtins {
             return Flatten(tryToAry, self, maxDepth, CreateResultArray(allocateStorage, self));
         }
 
+        /// <summary>flatten(nil) flattens all the way down, like flatten with no argument.</summary>
+        [RubyMethod("flatten")]
+        public static IList/*!*/ Flatten(UnaryOpStorage/*!*/ allocateStorage, ConversionStorage<IList>/*!*/ tryToAry, IList/*!*/ self, DynamicNull maxDepth) {
+            return Flatten(allocateStorage, tryToAry, self, -1);
+        }
+
+        [RubyMethod("flatten!")]
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, DynamicNull maxDepth) {
+            return FlattenInPlace(tryToAry, self, -1);
+        }
+
         [RubyMethod("flatten!")]
         public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, [DefaultProtocol, DefaultParameterValue(-1)] int maxDepth) {
             self.RequireNotFrozen();
@@ -1636,7 +1718,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("rindex")]
         public static object ReverseIndex([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
-            foreach (int i in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 object blockResult;
                 if (predicate.Yield(self[i], out blockResult)) {
                     return blockResult;
@@ -1644,6 +1726,10 @@ namespace IronRuby.Builtins {
 
                 if (Protocols.IsTrue(blockResult)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(i);
+                }
+                int count = self.Count;
+                if (count < i) {
+                    i = count;
                 }
             }
             return null;
@@ -1655,9 +1741,13 @@ namespace IronRuby.Builtins {
                 equals.Context.ReportWarning("given block not used");
             } 
             
-            foreach (int i in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 if (Protocols.IsEqual(equals, self[i], item)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(i);
+                }
+                // an == that shrank the array below the next index ends the search, as in MRI
+                if (i > self.Count) {
+                    break;
                 }
             }
             return null;
@@ -1833,7 +1923,7 @@ namespace IronRuby.Builtins {
         private static MutableString DefaultSeparator(RubyContext/*!*/ context) {
             var separator = context.ItemSeparator;
             if (separator != null) {
-                context.ReportWarning("$, is set to non-nil value");
+                context.ReportDeprecationWarning("$, is set to non-nil value");
             }
             return separator;
         }
@@ -2500,7 +2590,7 @@ namespace IronRuby.Builtins {
         
         [RubyMethod("combination")]
         public static object GetCombinations(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, IList/*!*/ self,
-            [Optional]object size) {
+            object size) {
 
             int? length = PermutationLength(fixnumCast, size);
             var enumerator = new CombinationEnumerator(self, length);
@@ -2563,7 +2653,9 @@ namespace IronRuby.Builtins {
                     }
                     compareResult = Protocols.ConvertCompareResult(comparisonStorage, blockResult);
                 } else {
-                    compareResult = Protocols.Compare(comparisonStorage, item, result);
+                    // MRI asks the current extreme how it compares to the candidate, so
+                    // [1, nil].max fails as "comparison of Integer with nil"
+                    compareResult = -Protocols.Compare(comparisonStorage, result, item);
                 }
 
                 if (compareResult == comparisonValue) {
@@ -2698,9 +2790,11 @@ namespace IronRuby.Builtins {
             int count = self.Count;
             RubyArray results = (block == null) ? new RubyArray(count) : null;
 
-            for (int i = 0; i < count; i++) {
+            // MRI re-reads the length on every step of the block form, so a block that shrinks the
+            // receiver cuts the iteration short; the array form fixes it up front.
+            for (int i = 0; i < (block != null ? self.Count : count); i++) {
                 var tuple = new RubyArray(others.Length + 1);
-                tuple.Add(self[i]);
+                tuple.Add(i < self.Count ? self[i] : null);
                 for (int j = 0; j < others.Length; j++) {
                     IList other = others[j];
                     tuple.Add(i < other.Count ? other[i] : null);

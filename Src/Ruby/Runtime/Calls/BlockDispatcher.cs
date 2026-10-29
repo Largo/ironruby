@@ -23,6 +23,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
+using Microsoft.Scripting.Interpreter;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Reflection;
@@ -30,6 +31,7 @@ using IronRuby.Builtins;
 using System.Collections.ObjectModel;
 using System.Collections;
 using System.Diagnostics;
+using System.Threading;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
@@ -73,7 +75,24 @@ namespace IronRuby.Runtime.Calls {
             // Note: this might potentially be executed by multiple threads. So we can assert that _block == null here.
             // It's ok if the delegate is overwritten multiple times since all the target methods are equivalent.
             _block = (T)method;
+            Volatile.Write(ref _hasMethod, true);
+
+            // A block defined in interpreted code gets the interpreter's delegate, which keeps going
+            // through LightLambda.RunN - a check and a cast - on every call even once the lambda has
+            // compiled itself, and every later Proc of this block reuses that delegate. Call the
+            // compiled one directly as soon as there is one: it is the very delegate RunN would call.
+            var light = ((Delegate)method).Target as LightLambda;
+            if (light != null) {
+                light.Compile += OnLightLambdaCompiled;
+            }
             return this;
+        }
+
+        private void OnLightLambdaCompiled(object sender, LightLambdaCompileEventArgs/*!*/ e) {
+            var compiled = e.Compiled as T;
+            if (compiled != null) {
+                _block = compiled;
+            }
         }
     }
 
@@ -176,7 +195,18 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public RubyParameterSignature ParameterSignature {
             get { return _parameterSignature; }
-            set { _parameterSignature = value; }
+            set {
+                _parameterSignature = value;
+                _checksKeywords = value != null && (value.TakesKeywords || value.RefusesKeywords);
+            }
+        }
+
+        // the signature declares keywords or **nil, so even a proc's arguments are checked on a yield
+        // (see RubyOps.RequireLambdaArity); cached because RefusesKeywords walks the parameter list
+        private bool _checksKeywords;
+
+        internal bool ChecksKeywords {
+            get { return _checksKeywords; }
         }
 
         public bool HasUnsplatParameter {
@@ -209,6 +239,13 @@ namespace IronRuby.Runtime.Calls {
         // Includes anonymous parameter.
         public abstract int ParameterCount { get; }
         public abstract Delegate/*!*/ Method { get; }
+
+        // Method != null, without the virtual call: InstantiateBlock asks on every call with a literal block
+        private protected bool _hasMethod;
+
+        internal bool HasMethod {
+            get { return Volatile.Read(ref _hasMethod); }
+        }
         internal abstract BlockDispatcher/*!*/ SetMethod(object/*!*/ method);
 
         public string SourcePath { get { return _sourcePath; } }

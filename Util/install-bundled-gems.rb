@@ -25,7 +25,8 @@
 # interpreter into its default gem home, which `require` finds by activating
 # them.  IronRuby used to have 1.9-era copies of most of them on $LOAD_PATH -
 # rake 0.8.7, rexml 3.1.7.3, MiniTest 1.6 - and got the modern ones only on a
-# machine that also had CRuby 4.0 installed, through Gem.host_ruby_dirs.  With
+# machine that also had CRuby 4.0 installed, through that CRuby's gem tree
+# (which IronRuby no longer reads at all).  With
 # these installed here the modern gem is always present, on every machine and
 # on Windows, and the 1.9 copies are gone.
 #
@@ -60,7 +61,6 @@ BIN_DIR = File.join(STDLIB, "bin")
 LOAD_PATH_DIRS = [
   File.join(STDLIB, "ironruby"),
   File.join(STDLIB, "ruby", "4.0"),
-  File.join(STDLIB, "ruby", "1.9.1"),
   File.join(STDLIB, "ruby", "site_ruby", "1.9.1"),
   File.join(STDLIB, "ruby", "site_ruby"),
 ].freeze

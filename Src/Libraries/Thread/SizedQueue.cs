@@ -27,6 +27,13 @@ namespace IronRuby.StandardLibrary.Threading {
     /// </summary>
     [RubyClass]
     public class SizedQueue : RubyQueue {
+
+        /// <summary>MRI's #&lt;Thread::SizedQueue:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, SizedQueue/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         private int _limit = 1;
 
         public SizedQueue([DefaultProtocol]int limit) {

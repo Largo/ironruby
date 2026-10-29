@@ -111,6 +111,26 @@ namespace IronRuby.Builtins {
         }
 
         private static object TrueForItems(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool stop, bool positiveResult) {
+            // An Array's #all?, #any? and #none? are its own in MRI (rb_ary_all_p etc.): they walk the
+            // array and yield each element once rather than going through #each and a block of ours.
+            var array = self as RubyArray;
+            if (array != null) {
+                for (int i = 0; i < array.Count; i++) {
+                    object item = array[i];
+                    if (predicate != null) {
+                        object blockResult;
+                        if (predicate.Yield(item, out blockResult)) {
+                            return blockResult;
+                        }
+                        item = blockResult;
+                    }
+                    if (Protocols.IsTrue(item) == stop) {
+                        return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
+                    }
+                }
+                return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+            }
+
             object result = ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
             Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 object item = PackValues(args);

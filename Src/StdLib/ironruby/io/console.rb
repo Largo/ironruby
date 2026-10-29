@@ -204,10 +204,12 @@ class IO
 
   # -------------------------------------------------------------------- size
 
-  # [rows, columns] of the terminal this IO is connected to.
+  # [rows, columns] of the terminal this IO is connected to.  Off one, MRI raises
+  # ENOTTY from ioctl, and on Windows EBADF - the error GetConsoleScreenBufferInfo
+  # leaves for a handle that is no console output, STDIN's included.
   def winsize
     size = ::Termios.winsize(self)
-    raise Errno::ENOTTY, __console_name__ unless size
+    raise (::Termios.supported? ? Errno::ENOTTY : Errno::EBADF), __console_name__ unless size
     size
   end
 

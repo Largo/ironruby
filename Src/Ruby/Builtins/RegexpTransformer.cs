@@ -1002,17 +1002,18 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < units; i++) {
                     more = open + stillEmpty + copy + more + close;
                 }
+                // Lazily the loop of units is a counted one: .NET 10 goes on taking empty units
+                // of (?:...)*? until its backtracking stack overflows - (()|a)*? and the like -
+                // where (?:...){0,N}? stops as Onigmo does.
+                string loop = lazy ? "){0," + (Int32.MaxValue - 1) + "}?" : ")*";
                 if (min == 0) {
                     _sb.Insert(entityIndex, "(?:" + start);
-                    _sb.Append(more).Append(")*");
+                    _sb.Append(more).Append(loop);
                 } else {
                     if (min > 1) {
                         _sb.Append('{').Append(min).Append('}');
                     }
-                    _sb.Append("(?:").Append(start).Append(copy).Append(more).Append(")*");
-                }
-                if (lazy) {
-                    _sb.Append('?');
+                    _sb.Append("(?:").Append(start).Append(copy).Append(more).Append(loop);
                 }
                 return true;
             }

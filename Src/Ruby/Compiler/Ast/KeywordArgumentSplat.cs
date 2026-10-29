@@ -39,11 +39,32 @@ namespace IronRuby.Compiler.Ast {
     /// Arguments.IndexOfSplatted see it, so no new NodeTypes entry is needed.
     /// </summary>
     public partial class KeywordArgumentSplat : SplattedArgument {
+        // `f(**h)` alone: Argument stores h in a temporary, and this is the hash to splat instead
+        // when h is neither a Hash nor nil - `{}.merge(temporary)`, which applies #to_hash.
+        private readonly Expression _converted;
+
         public KeywordArgumentSplat(Expression/*!*/ hash)
             : base(hash) {
         }
 
-        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+        /// <summary>
+        /// `f(**h)`: <paramref name="hash"/> evaluates h (and keeps it for <paramref name="converted"/>),
+        /// which is splatted as it is when it is a Hash or nil - a copy is made either way - and
+        /// through <paramref name="converted"/> otherwise. Building `{}.merge(h)` for every call only
+        /// to copy the result again cost a Ruby-level Hash#merge per call.
+        /// </summary>
+        public KeywordArgumentSplat(Expression/*!*/ hash, Expression/*!*/ converted)
+            : base(hash) {
+            _converted = converted;
+        }
+
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
+            if (_converted != null) {
+                return MSA.Expression.Coalesce(
+                    Methods.SplatKeywordHashIfHash.OpCall(gen.CurrentScopeVariable, AstUtils.Box(Argument.TransformRead(gen))),
+                    Methods.SplatKeywordHash.OpCall(gen.CurrentScopeVariable, AstUtils.Box(_converted.TransformRead(gen)))
+                );
+            }
             return Methods.SplatKeywordHash.OpCall(gen.CurrentScopeVariable, AstUtils.Box(Argument.TransformRead(gen)));
         }
     }

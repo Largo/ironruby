@@ -165,6 +165,11 @@ namespace IronRuby.Runtime {
             if (options.HasSearchPaths) {
                 foreach (string path in options.SearchPaths) {
                     loadPaths.Add(_context.EncodePath(path));
+                    // -X:StdLib, which every launcher passes, names the library directories here.
+                    if (_ironRubyLibraryPath == null &&
+                        String.Equals(Path.GetFileName(path.TrimEnd('/', '\\')), "ironruby", StringComparison.OrdinalIgnoreCase)) {
+                        _ironRubyLibraryPath = CanonicalDirectory(path);
+                    }
                 }
             }
 
@@ -172,6 +177,25 @@ namespace IronRuby.Runtime {
             // TODO: remove?
             loadPaths.Add(MutableString.CreateAscii("."));
             return loadPaths;
+        }
+
+        /// <summary>
+        /// IronRuby's own library directory, Src/StdLib/ironruby: where its implementations of
+        /// CRuby's C extensions are, as .rb files (etc.rb loads the C# half). From -X:StdLib when
+        /// it names one, else the default standard library's; spelled as FindFile spells a
+        /// $LOAD_PATH directory, so the two compare.
+        /// </summary>
+        private string _ironRubyLibraryPath;
+
+        private string/*!*/ CanonicalDirectory(string/*!*/ dir) {
+            try {
+                if (dir.Length > 0 && !Platform.IsAbsolutePath(dir)) {
+                    dir = Platform.GetFullPath(dir);
+                }
+            } catch (Exception) {
+                // as FindFile: the path as given
+            }
+            return RubyUtils.CanonicalizePath(ResolveDirectoryLinks(dir)).TrimEnd('/');
         }
 
         private void AddStandardLibraryPath(RubyArray/*!*/ loadPaths, string path, string applicationBaseDir) {
@@ -222,12 +246,15 @@ namespace IronRuby.Runtime {
             // -I ones before them.
             int firstDefault = loadPaths.Count;
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/site_ruby/" + _context.StandardLibraryVersion)));
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+            string ironRubyLibrary = RubyUtils.CombinePaths(path, "ironruby");
+            if (_ironRubyLibraryPath == null) {
+                _ironRubyLibraryPath = CanonicalDirectory(ironRubyLibrary);
+            }
+            loadPaths.Add(_context.EncodePath(ironRubyLibrary));
             string rubyLib4 = RubyUtils.CombinePaths(path, "ruby/4.0");
             if (Directory.Exists(rubyLib4)) {
                 loadPaths.Add(_context.EncodePath(rubyLib4));
             }
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/" + _context.StandardLibraryVersion)));
 
             for (int i = firstDefault; i < loadPaths.Count; i++) {
                 var entry = (MutableString)loadPaths[i];
@@ -480,7 +507,11 @@ namespace IronRuby.Runtime {
         );
 
         internal static bool TryParseAssemblyName(string/*!*/ path, out string typeName, out string assemblyName) {
-            Match match = _AssemblyNameRegex.Match(path);
+            // The regex needs a property - a "," and a later "=" - to match. Every require asks,
+            // and an ordinary path has neither, so a quick look first: the unanchored regex
+            // otherwise tries each position of the path, which made it a tenth of irb's startup.
+            int comma = path.IndexOf(',');
+            Match match = (comma >= 0 && path.IndexOf('=', comma) >= 0) ? _AssemblyNameRegex.Match(path) : Match.Empty;
             if (match.Success) {
                 Group typeGroup = match.Groups["type"];
                 Group assemblyGroup = match.Groups["assembly"];
@@ -683,9 +714,8 @@ namespace IronRuby.Runtime {
                         _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
                     }
 
-                    // MRI warns under -w. Only for a require the program made: Kernel#Complex and
-                    // #Rational are autoloaded constants pointing at complex18.rb and rational18.rb,
-                    // and those files reopen the very class whose autoload is running - a circularity
+                    // MRI warns under -w. Only for a require the program made: an autoloaded
+                    // constant whose file reopens the very class being autoloaded is a circularity
                     // the user did not write.
                     if (circular && (flags & LoadFlags.WarnCircular) != 0) {
                         _context.ReportWarning("loading in progress, circular require considered harmful - " + file.Path, true);
@@ -716,13 +746,40 @@ namespace IronRuby.Runtime {
                 if (file.SourceUnit != null) {
                     AddScriptLines(file.SourceUnit);
 
-                    ScriptCode compiledCode;
-                    if (file.SourceUnit.LanguageContext == _context) {
-                        compiledCode = CompileRubySource(file.SourceUnit, flags);
-                    } else {
-                        compiledCode = file.SourceUnit.Compile();
+                    long traceStart = StartupTrace.Now();
+                    StartupTrace.BeginFile();
+                    try {
+                        ScriptCode compiledCode;
+                        if (file.SourceUnit.LanguageContext == _context) {
+                            compiledCode = CompileRubySource(file.SourceUnit, flags);
+                        } else {
+                            compiledCode = file.SourceUnit.Compile();
+                        }
+                        // A file the prelude requires from outside its own directory - an argf.rb
+                        // earlier on the load path, say - is a program's, and its constants keep
+                        // their locations: it runs with the marker lifted.
+                        Thread thread = Thread.CurrentThread;
+                        bool corePrelude = _corePreludeLoaderThread == thread && _corePreludeDirectory == null
+                            && Path.GetFileName(file.Path) == "ruby4.rb";
+                        bool foreign = !corePrelude && _corePreludeThread == thread && !IsInCorePreludeDirectory(file.Path);
+                        if (corePrelude) {
+                            _corePreludeDirectory = Path.GetDirectoryName(Path.GetFullPath(file.Path)) + Path.DirectorySeparatorChar;
+                            _corePreludeThread = thread;
+                        } else if (foreign) {
+                            _corePreludeThread = null;
+                        }
+                        try {
+                            loaded = Execute(globalScope, compiledCode);
+                        } finally {
+                            if (corePrelude) {
+                                _corePreludeThread = null;
+                            } else if (foreign) {
+                                _corePreludeThread = thread;
+                            }
+                        }
+                    } finally {
+                        StartupTrace.EndFile(file.Path, traceStart);
                     }
-                    loaded = Execute(globalScope, compiledCode);
                 } else {
                     Debug.Assert(file.Path != null);
                     try {
@@ -878,6 +935,16 @@ namespace IronRuby.Runtime {
                 // - use forward slashes everywhere.
                 dir = RubyUtils.CanonicalizePath(dir);
                 ResolvedFile file = ResolveFile(RubyUtils.CombinePaths(dir, path), extension, appendExtensions, sourceFileExtensions);
+                // A C extension by its library name ("etc.so", as tmpdir.rb requires it) is IronRuby's
+                // implementation of that extension, as JRuby loads its own for one: the .rb of the
+                // same name in IronRuby's library directory. Not finding it cost a LoadError and
+                // RubyGems' search of every installed gem - a quarter of a second, the first time.
+                if (file == null && _ironRubyLibraryPath != null &&
+                    extension.Equals(".so", StringComparison.OrdinalIgnoreCase) &&
+                    String.Equals(dir.TrimEnd('/'), _ironRubyLibraryPath, StringComparison.OrdinalIgnoreCase)) {
+                    string source = path.Substring(0, path.Length - extension.Length) + ".rb";
+                    file = ResolveFile(RubyUtils.CombinePaths(dir, source), ".rb", false, sourceFileExtensions);
+                }
                 if (file != null) {
                     result.Add(file);
                 }
@@ -1213,12 +1280,51 @@ namespace IronRuby.Runtime {
 
         #endregion
 
+        // The thread running ruby4.rb as the host's core prelude, while it does - directly under
+        // --disable-gems, else from gem_prelude.rb's first line. The only Ruby code on its stack then
+        // is the prelude's own, which backtraces leave out.
+        private Thread _corePreludeThread;
+
+        // The thread in LoadCorePrelude, while it is: the ruby4.rb it loads is the core prelude, a
+        // later `load "ruby4.rb"` by a program is not.
+        private Thread _corePreludeLoaderThread;
+
+        // The directory of the core prelude's ruby4.rb, with a trailing separator, once it has started.
+        private string _corePreludeDirectory;
+
+        private bool IsInCorePreludeDirectory(string/*!*/ path) {
+            return Path.GetFullPath(path).StartsWith(_corePreludeDirectory, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// True while this thread runs ruby4.rb as the core prelude, loaded by the host itself: a
+        /// backtrace taken now has no frame in it (they are all the prelude's, which backtraces
+        /// skip), so a caller that only wants the innermost location need not walk the CLR stack.
+        /// </summary>
+        internal bool IsLoadingCorePrelude {
+            get { return _corePreludeThread == Thread.CurrentThread; }
+        }
+
+        /// <summary>
+        /// Requires the core prelude - gem_prelude.rb, or ruby4.rb under --disable-gems - and then
+        /// lists the features MRI has in $" from the start.
+        /// </summary>
+        internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
+            _corePreludeLoaderThread = Thread.CurrentThread;
+            try {
+                LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+            } finally {
+                _corePreludeLoaderThread = null;
+            }
+            ProvideCoreFeatures();
+        }
+
         // Features the core prelude loaded: kept out of $" (MRI's own Ruby-defined core is not in
         // it either) but still loaded, so that requiring one again does nothing.
         private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
 
         private static readonly string[]/*!*/ _CorePreludeFiles = {
-            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb",
+            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "rational.rb", "complex.rb",
             "gem_compat.rb"
         };
 
@@ -1341,12 +1447,19 @@ namespace IronRuby.Runtime {
             // An extensionless entry in $" says nothing about a file that was found: MRI only
             // counts "foo" as loaded when no foo.rb (or library) could be found at all.
             // A feature listed by name ("set.rb", "complex.so" - what MRI provides) is loaded for
-            // a require of that name, with or without the extension.
+            // a require of that name, with or without the extension. Except that a library
+            // ("foo.so") does not stand in for a Ruby file found on the path: MRI's
+            // search_required goes on to look for foo.rb when only foo.so is in $", which is how
+            // `require "pathname"` loads lib/pathname.rb over the core's "pathname.so".
             IEnumerable<MutableString> requested;
             if (RubyUtils.GetExtension(path).Length != 0) {
                 requested = new[] { _context.EncodePath(path) };
             } else if (!Platform.IsAbsolutePath(path) && !path.StartsWith(".", StringComparison.Ordinal)) {
-                requested = new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
+                var found = files.FirstOrDefault();
+                bool foundSource = found != null && found.SourceUnit != null;
+                requested = foundSource
+                    ? new[] { _context.EncodePath(path + ".rb") }
+                    : new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
             } else {
                 requested = Enumerable.Empty<MutableString>();
             }

@@ -237,6 +237,13 @@ namespace IronRuby.Builtins {
             _value = value;
         }
 
+        /// <summary>
+        /// Set by UncaughtThrowError.new(tag, value, message): #to_s then formats the message with
+        /// the tag (MRI's uncaught_throw_to_s), and a missing message is kept apart from an empty one.
+        /// </summary>
+        public bool FormatsTag { get; set; }
+        public bool HasMessage { get; set; }
+
         public object Tag {
             get { return _tag; }
         }
