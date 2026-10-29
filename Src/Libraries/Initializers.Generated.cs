@@ -47,6 +47,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nio4r.Nio4rLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Strptime.StrptimeLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Zstd.ZstdLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -17409,6 +17410,188 @@ namespace IronRuby.StandardLibrary.Strptime {
             DefineLibraryMethod(module, "source", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Strptime.StrptimeOps.Source)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Zstd {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class ZstdLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Zstd", typeof(IronRuby.StandardLibrary.Zstd.ZstdOps), 0x00000008, LoadZstd_Instance, LoadZstd_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Zstd::CDict", typeof(IronRuby.StandardLibrary.Zstd.ZstdOps.CDict), 0x00000008, classRef0, LoadZstd__CDict_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.Zstd.ZstdOps.CDict>(IronRuby.StandardLibrary.Zstd.ZstdOps.CDict.Create)
+            );
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Zstd::DDict", typeof(IronRuby.StandardLibrary.Zstd.ZstdOps.DDict), 0x00000008, classRef0, LoadZstd__DDict_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Zstd.ZstdOps.DDict>(IronRuby.StandardLibrary.Zstd.ZstdOps.DDict.Create)
+            );
+            IronRuby.Builtins.RubyClass def4 = DefineClass("Zstd::StreamingCompress", typeof(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress), 0x00000008, classRef0, LoadZstd__StreamingCompress_Instance, null, LoadZstd__StreamingCompress_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Create)
+            );
+            IronRuby.Builtins.RubyClass def5 = DefineClass("Zstd::StreamingDecompress", typeof(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress), 0x00000008, classRef0, LoadZstd__StreamingDecompress_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress.Create)
+            );
+            SetConstant(def1, "CDict", def2);
+            SetConstant(def1, "DDict", def3);
+            SetConstant(def1, "StreamingCompress", def4);
+            SetConstant(def1, "StreamingDecompress", def5);
+        }
+        
+        private static void LoadZstd_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "compress", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Compress)
+            );
+            
+            DefineLibraryMethod(module, "compress_using_dict", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.CompressUsingDict)
+            );
+            
+            DefineLibraryMethod(module, "decompress", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Decompress)
+            );
+            
+            DefineLibraryMethod(module, "decompress_using_dict", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.DecompressUsingDict)
+            );
+            
+            DefineLibraryMethod(module, "read_skippable_frame", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.ReadSkippableFrame)
+            );
+            
+            DefineLibraryMethod(module, "write_skippable_frame", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.WriteSkippableFrame)
+            );
+            
+            DefineLibraryMethod(module, "zstd_version", 0x12, 
+                0x00000000U, 
+                new Func<System.Object, System.Int32>(IronRuby.StandardLibrary.Zstd.ZstdOps.ZstdVersion)
+            );
+            
+        }
+        
+        private static void LoadZstd_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "compress", 0x21, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Compress)
+            );
+            
+            DefineLibraryMethod(module, "compress_using_dict", 0x21, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.CompressUsingDict)
+            );
+            
+            DefineLibraryMethod(module, "decompress", 0x21, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.Decompress)
+            );
+            
+            DefineLibraryMethod(module, "decompress_using_dict", 0x21, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.DecompressUsingDict)
+            );
+            
+            DefineLibraryMethod(module, "read_skippable_frame", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.ReadSkippableFrame)
+            );
+            
+            DefineLibraryMethod(module, "write_skippable_frame", 0x21, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.WriteSkippableFrame)
+            );
+            
+            DefineLibraryMethod(module, "zstd_version", 0x21, 
+                0x00000000U, 
+                new Func<System.Object, System.Int32>(IronRuby.StandardLibrary.Zstd.ZstdOps.ZstdVersion)
+            );
+            
+        }
+        
+        private static void LoadZstd__CDict_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.CDict, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.CDict.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Zstd.ZstdOps.CDict, System.Object, System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.CDict.InitializeCopy)
+            );
+            
+        }
+        
+        private static void LoadZstd__DDict_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.DDict, System.Object, System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.DDict.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Zstd.ZstdOps.DDict, System.Object, System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.DDict.InitializeCopy)
+            );
+            
+        }
+        
+        private static void LoadZstd__StreamingCompress_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "CONTINUE", IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Continue);
+            SetConstant(module, "END", IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.End);
+            SetConstant(module, "FLUSH", IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Flush);
+            
+        }
+        
+        private static void LoadZstd__StreamingCompress_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "compress", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Compress)
+            );
+            
+            DefineLibraryMethod(module, "finish", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Finish)
+            );
+            
+            DefineLibraryMethod(module, "flush", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Flush_)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "write", 0x11, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingCompress.Write)
+            );
+            
+        }
+        
+        private static void LoadZstd__StreamingDecompress_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "decompress", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress.Decompress)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress, System.Object[], System.Object>(IronRuby.StandardLibrary.Zstd.ZstdOps.StreamingDecompress.Initialize)
             );
             
         }
