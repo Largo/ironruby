@@ -202,14 +202,15 @@ namespace IronRuby.Runtime.Jit {
             prologue.AddRange(tupleInit);
 
             // The same loop can be entered under other refinements than the ones the copy was built
-            // under - an eval string's, say: build one for those.
+            // under - an eval string's, say: build one for those. Not a Retype: the locals' types are
+            // as the copy expects, and those rebuilds are kept for the day one of them widens.
             prologue.Add(Ast.IfThen(
                 Ast.NotEqual(
                     Ast.Call(IronRuby.Compiler.Methods.GetActiveRefinements,
                         Ast.Convert(Ast.ArrayIndex(argsParameter, Ast.Constant(scopeArgIndex)), typeof(RubyScope))),
                     Ast.Constant(refinements, typeof(RefinementActivation))
                 ),
-                Ast.Return(exit, Ast.Constant(OsrLoopSite.Retype, typeof(object)))
+                Ast.Return(exit, Ast.Constant(OsrLoopSite.RefinementsChanged, typeof(object)))
             ));
 
             if (self != null) {
