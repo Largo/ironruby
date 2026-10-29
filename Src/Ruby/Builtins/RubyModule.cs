@@ -341,6 +341,19 @@ namespace IronRuby.Builtins {
         // { method-name -> methods }
         internal Dictionary<string, List<ExtensionMethodInfo>> _extensionMethods;
 
+        // The extension methods of this type that `using' a namespace (or a static class) can bring in,
+        // or null: those of every namespace some `using' has named. Unlike _extensionMethods they are
+        // not part of any method group; a call sees the ones active where it is made (see
+        // ResolveMethodNoLock).  { CLR or Ruby method name (Where, where) -> methods }
+        private Dictionary<string, List<ExtensionMethodInfo>> _scopedExtensionMethods;
+
+        // { (name, activation, the group lookup found or NoBaseGroup) -> the method group a call of name sees
+        // there }: the CLR method group extended by the active extension methods, or a group of those
+        // alone (null if none applies).  For the class version in _scopedExtensionGroupsVersion; classes only.
+        private Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo> _scopedExtensionGroups;
+        private int _scopedExtensionGroupsVersion;
+        private static readonly object NoBaseGroup = new object();
+
         //
         // Refinements (Module#refine).  Two independent roles:
         //
@@ -2575,6 +2588,12 @@ namespace IronRuby.Builtins {
             MethodResolutionResult result;
             List<RubyModule> refinementBuffer = (refinements != null && !refinements.IsEmpty) ? new List<RubyModule>() : null;
 
+            // The CLR extension methods `using'd where the call is made, and whether the search passed a module they
+            // extend before it found the method:
+            var scopedExtensions = (refinements != null && IsClass && (options & MethodLookup.Virtual) == 0) ?
+                refinements.Extensions : null;
+            bool passedScopedExtensions = false;
+
             if (ForEachAncestor((module) => {
                 if (refinementBuffer != null) {
                     refinementBuffer.Clear();
@@ -2590,7 +2609,11 @@ namespace IronRuby.Builtins {
                 }
                 owner = module;
                 foundCallerSelf |= module == visibility.Class;
-                return module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info);
+                if (module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                    return true;
+                }
+                passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
+                return false;
             })) {
                 if (info == null || info.IsUndefined) {
                     result = MethodResolutionResult.NotFound;
@@ -2616,7 +2639,185 @@ namespace IronRuby.Builtins {
                 return _context.ObjectClass.ResolveMethodNoLock(name, visibility, options & ~MethodLookup.FallbackToObject, refinements);
             }
 
+            // The CLR extension methods `using'd where the call is made are where using_clr_extensions puts them for
+            // everyone, which is where a refinement of the type they extend would be: a CLR method group anywhere gets
+            // them as more overloads (List#count; an exact tie goes to the instance member), and they shadow a Ruby method
+            // the type picks up after it (IEnumerable[T]'s select ahead of Enumerable#select) - but not one ahead of it
+            // (Array#select: an Array's ancestors don't include IEnumerable[T]).
+            if (scopedExtensions != null) {
+                if (result.Found && result.Info is RubyMethodGroupInfo) {
+                    return AddScopedExtensionsNoLock(name, result, refinements, scopedExtensions);
+                }
+                if (passedScopedExtensions) {
+                    var extended = AddScopedExtensionsNoLock(name, MethodResolutionResult.NotFound, refinements, scopedExtensions);
+                    if (extended.Found) {
+                        // a site bound to them must re-bind if what they shadow changes, as a definition ahead of them would
+                        result.InvalidateSitesOnOverride();
+                    }
+                    return extended;
+                }
+            }
+
             return result;
+        }
+
+        // Extension methods have the places using_clr_extensions gives them, the CLR method groups of classes backed by a CLR
+        // type: a class's place has its own and those of the interfaces it implements (a Dictionary's select is LINQ's,
+        // not the Ruby one its IDictionary picks up ahead of IEnumerable[T]). An interface module, a Ruby class (one that
+        // includes IEnumerable[Object] too) and a singleton class have none of their own.
+        private bool IsScopedExtensionPlace {
+            get { return IsClass && !IsSingletonClass && _typeTracker != null; }
+        }
+
+        private bool HasScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            if (!IsScopedExtensionPlace) {
+                return false;
+            }
+            if (HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                return true;
+            }
+            foreach (var mixin in Mixins) {
+                if (mixin.HasOwnScopedExtensionMethodsNoLock(name, extensions)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool HasOwnScopedExtensionMethodsNoLock(string/*!*/ name, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+            List<ExtensionMethodInfo> candidates;
+            if (_scopedExtensionMethods != null && _scopedExtensionMethods.TryGetValue(name, out candidates)) {
+                foreach (var extension in candidates) {
+                    if (extensions.Contains(extension.Method)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private MethodResolutionResult AddScopedExtensionsNoLock(string/*!*/ name, MethodResolutionResult result,
+            RefinementActivation/*!*/ refinements, RefinementActivation.ClrExtensionScope/*!*/ extensions) {
+
+            int version = Version.Method;
+            if (_scopedExtensionGroups == null || _scopedExtensionGroupsVersion != version) {
+                _scopedExtensionGroups = new Dictionary<Key<string, RefinementActivation, object>, RubyMemberInfo>();
+                _scopedExtensionGroupsVersion = version;
+            }
+
+            var baseGroup = result.Found ? (RubyMethodGroupInfo)result.Info : null;
+            var key = Key.Create(name, refinements, (object)baseGroup ?? NoBaseGroup);
+            RubyMemberInfo group;
+            if (!_scopedExtensionGroups.TryGetValue(key, out group)) {
+                var present = new HashSet<MethodBase>();
+                var overloads = new List<OverloadInfo>();
+                if (baseGroup != null) {
+                    foreach (var overload in baseGroup.MethodBases) {
+                        overloads.Add(overload);
+                        if (overload.ReflectionInfo != null) {
+                            present.Add(overload.ReflectionInfo);
+                        }
+                    }
+                }
+
+                int baseCount = overloads.Count;
+                Action<RubyModule> addExtensions = (module) => {
+                    List<ExtensionMethodInfo> candidates;
+                    if (module._scopedExtensionMethods != null && module._scopedExtensionMethods.TryGetValue(name, out candidates)) {
+                        foreach (var extension in candidates) {
+                            // (an extension activated by using_clr_extensions as well is in the group already)
+                            if (extensions.Contains(extension.Method) && present.Add(extension.Method)) {
+                                overloads.Add(new ReflectionOverloadInfo(extension.Method));
+                            }
+                        }
+                    }
+                };
+                ForEachAncestor((module) => {
+                    if (module.IsScopedExtensionPlace) {
+                        addExtensions(module);
+                        foreach (var mixin in module.Mixins) {
+                            addExtensions(mixin);
+                        }
+                    }
+                    return false;
+                });
+
+                group = (overloads.Count > baseCount) ? new RubyMethodGroupInfo(overloads.ToArray(), this, false) : null;
+                _scopedExtensionGroups.Add(key, group);
+            }
+
+            if (group == null) {
+                return result;
+            }
+
+            // A site bound to the extended group must re-bind when what it extends (or, for a name that found
+            // no group, a method of the name defined anywhere) would change the call - as for the group itself.
+            if (result.Found) {
+                result.InvalidateSitesOnOverride();
+            } else {
+                result.InvalidateSitesOnMissingMethodAddition(name, Context);
+            }
+            return new MethodResolutionResult(group, this, true);
+        }
+
+        /// <summary>
+        /// True if `using <paramref name="module"/>' brings in CLR extension methods: <paramref name="module"/> is a
+        /// CLR namespace (C#'s `using System.Linq;'), whose name is returned in <paramref name="ns"/>, or a CLR
+        /// static class (C#'s `using static'), returned in <paramref name="staticClass"/>.
+        /// </summary>
+        public static bool IsClrExtensionSource(RubyModule/*!*/ module, out string ns, out Type staticClass) {
+            if (module.NamespaceTracker != null) {
+                ns = module.NamespaceTracker.Name;
+                staticClass = null;
+                return true;
+            }
+
+            ns = null;
+            staticClass = null;
+            Type type;
+            if (module.IsClass && module.TypeTracker != null && (type = module.TypeTracker.Type).IsAbstract && type.IsSealed &&
+                !type.IsGenericTypeDefinition) {
+                staticClass = type;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Adds extension methods of this type from a namespace some `using' has named: the calls made where the
+        /// namespace (or the methods' static class) is used can see them from now on.
+        /// </summary>
+        internal void AddScopedExtensionMethodsNoLock(List<ExtensionMethodInfo>/*!*/ extensions) {
+            Context.RequiresClassHierarchyLock();
+
+            if (_scopedExtensionMethods == null) {
+                _scopedExtensionMethods = new Dictionary<string, List<ExtensionMethodInfo>>();
+            }
+
+            // Filed under the CLR name and the Ruby one (Where: where; ToJSON: to_json), the names a call can use.
+            var names = new HashSet<string>();
+            foreach (var extension in extensions) {
+                string clrName = extension.Method.Name;
+                AddScopedExtensionMethod(clrName, extension, names);
+
+                string mangled = RubyUtils.TryMangleName(clrName);
+                if (mangled != null && mangled != clrName) {
+                    AddScopedExtensionMethod(mangled, extension, names);
+                }
+            }
+
+            Context.LexicalMethodsAdded(this, names, "ScopedExtensions");
+        }
+
+        private void AddScopedExtensionMethod(string/*!*/ name, ExtensionMethodInfo extension, HashSet<string>/*!*/ names) {
+            List<ExtensionMethodInfo> overloads;
+            if (!_scopedExtensionMethods.TryGetValue(name, out overloads)) {
+                _scopedExtensionMethods.Add(name, overloads = new List<ExtensionMethodInfo>());
+            }
+            if (!overloads.Contains(extension)) {
+                overloads.Add(extension);
+                names.Add(name);
+            }
         }
 
         private bool IsMethodVisible(RubyMemberInfo/*!*/ method, RubyModule/*!*/ owner, VisibilityContext visibility, bool foundCallerSelf) {
