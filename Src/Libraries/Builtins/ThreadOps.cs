@@ -348,6 +348,14 @@ namespace IronRuby.Builtins {
             internal void Wake() {
                 _runSignal.Set();
             }
+
+            /// <summary>
+            /// Drops a Wake() the thread's sleep did not consume - one that came after a timeout ran
+            /// out or an exception ended the wait - so that it does not cut the next sleep short.
+            /// </summary>
+            internal void ClearWake() {
+                _runSignal.Reset();
+            }
         }
 
         //  declared private instance methods:

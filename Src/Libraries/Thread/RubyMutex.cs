@@ -219,23 +219,39 @@ namespace IronRuby.StandardLibrary.Threading {
 
         [RubyMethod("sleep")]
         public static object Sleep(RubyContext/*!*/ context, RubyMutex/*!*/ self, object timeout) {
+            return DoSleep(self, ToSleepSeconds(context, timeout));
+        }
+
+        /// <summary>
+        /// The timeout of #sleep in seconds, Double.NegativeInfinity for nil (no timeout). Also used by
+        /// ConditionVariable#wait, which in MRI is mutex.sleep(timeout) and so converts the same way.
+        /// </summary>
+        internal static double ToSleepSeconds(RubyContext/*!*/ context, object timeout) {
             double seconds;
             if (timeout == null) {
-                seconds = Double.NegativeInfinity;
+                return Double.NegativeInfinity;
             } else if (timeout is int) {
                 seconds = (int)timeout;
             } else if (timeout is double) {
                 seconds = (double)timeout;
+            } else if (timeout is System.Numerics.BigInteger) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
             } else {
                 throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", context.GetClassDisplayName(timeout));
             }
-            return DoSleep(self, seconds);
+            if (Double.IsNaN(seconds)) {
+                throw RubyExceptions.CreateRangeError("NaN out of Time range");
+            }
+            if (Double.IsPositiveInfinity(seconds)) {
+                throw RubyExceptions.CreateRangeError("Inf out of Time range");
+            }
+            if (seconds < 0) {
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
+            }
+            return seconds;
         }
 
         private static object DoSleep(RubyMutex/*!*/ self, double seconds) {
-            if (seconds < 0 && !Double.IsNegativeInfinity(seconds)) {
-                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
-            }
             lock (self._syncRoot) {
                 if (self._owner != CurrentOwner) {
                     throw new ThreadError("Attempt to unlock a mutex which is not locked");
