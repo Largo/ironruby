@@ -83,6 +83,14 @@ namespace IronRuby.Runtime {
         // lazy init
         private ConcurrentDictionary<string, Scope> _loadedScripts;
 
+        // The assemblies this runtime loaded from files, each mapped to its file: a reference of one's that nothing else
+        // resolves is looked for next to it (LoadAssemblyNextTo).
+        private readonly ConcurrentDictionary<Assembly, string>/*!*/ _assemblyFiles = new ConcurrentDictionary<Assembly, string>();
+
+        // Those of every runtime in the process: a reference made by another runtime's is left to that runtime
+        // (ResolveAssembly).
+        private static readonly ConditionalWeakTable<Assembly, string>/*!*/ _AssemblyFilesOfAllRuntimes = new ConditionalWeakTable<Assembly, string>();
+
 #if FEATURE_FILESYSTEM
         // TODO: static
         // maps full normalized path to compiled code:
@@ -571,7 +579,7 @@ namespace IronRuby.Runtime {
 
                     _assembliesBeingResolved.Add(assemblyName);
                     try {
-                        return loader.ResolveAssembly(assemblyName);
+                        return loader.ResolveAssembly(assemblyName, args.RequestingAssembly);
                     } catch (Exception e) {
                         // the exception might not be reported by the type loader, so at least report a warning:
                         loader._context.ReportWarning(
@@ -588,10 +596,46 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal Assembly ResolveAssembly(string/*!*/ fullName) {
+        /// <summary>
+        /// The assembly for a reference by name that .NET's own probing did not find: one this runtime has loaded already,
+        /// else one on $LOAD_PATH, else one next to the assembly that asked, if that was loaded from a file.
+        /// </summary>
+        internal Assembly ResolveAssembly(string/*!*/ fullName, Assembly requestingAssembly) {
             Utils.Log(String.Format("Resolving assembly: '{0}'", fullName), "RESOLVE_ASSEMBLY");
-            
+
+            // The event is the process's, and every runtime in it is asked, in the order they hooked it. A reference
+            // made by a DLL that another runtime loaded from a file is left to that one: this runtime would answer it
+            // with its own copy of what the DLL references, loaded already or found on its $LOAD_PATH.
+            if (requestingAssembly != null && !_assemblyFiles.ContainsKey(requestingAssembly) &&
+                _AssemblyFilesOfAllRuntimes.TryGetValue(requestingAssembly, out _)) {
+                return null;
+            }
+
             AssemblyName assemblyName = new AssemblyName(fullName);
+            return FindLoadedAssembly(assemblyName)
+                ?? LoadAssemblyFromLoadPath(assemblyName, fullName)
+                ?? LoadAssemblyNextTo(requestingAssembly, assemblyName);
+        }
+
+        /// <summary>
+        /// One of the assemblies this runtime has loaded, if one will do. Most references that get here are made by
+        /// a DLL required by its path: Assembly.LoadFile gives each file a load context of its own, where a reference
+        /// by name finds the application's assemblies and no other. If the DLL referenced is loaded too, the reference
+        /// is to that one. Loading it again, from $LOAD_PATH or the directory, would make a second copy with types
+        /// of its own, and the DLL making the reference would take the copy's types, not those of the objects Ruby
+        /// has made.
+        /// </summary>
+        private Assembly FindLoadedAssembly(AssemblyName/*!*/ reference) {
+            foreach (Assembly assembly in DomainManager.GetLoadedAssemblyList()) {
+                if (!assembly.IsDynamic && Satisfies(assembly.GetName(), reference)) {
+                    Utils.Log(String.Format("Assembly '{0}' already loaded for '{1}'", assembly.FullName, reference.FullName), "RESOLVE_ASSEMBLY");
+                    return assembly;
+                }
+            }
+            return null;
+        }
+
+        private Assembly LoadAssemblyFromLoadPath(AssemblyName/*!*/ assemblyName, string/*!*/ fullName) {
             ResolvedFile file = FindFile(assemblyName.Name, true, ArrayUtils.EmptyStrings, false).FirstOrDefault();
             if (file == null || file.SourceUnit != null) {
                 return null;
@@ -599,23 +643,90 @@ namespace IronRuby.Runtime {
 
             Utils.Log(String.Format("Assembly '{0}' resolved: found in '{1}'", fullName, file.Path), "RESOLVE_ASSEMBLY");
             try {
-                Assembly assembly = Platform.LoadAssemblyFromPath(file.Path);
-
-                // TODO: this API is broken
-                if (AssemblyName.ReferenceMatchesDefinition(assemblyName, assembly.GetName())) 
-                {
-                    Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
-                    DomainManager.LoadAssembly(assembly);
-                    return assembly;
+                // Checked before loading, as next to the requesting assembly (LoadAssemblyNextTo): an older copy here
+                // must not answer a reference to a newer one, and a file that won't do isn't loaded at all.
+                if (!Satisfies(AssemblyName.GetAssemblyName(file.Path), assemblyName)) {
+                    return null;
                 }
+
+                Assembly assembly = LoadAssemblyFromFile(file.Path);
+                Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
+                DomainManager.LoadAssembly(assembly);
+                return assembly;
             } catch (Exception e) {
                 throw RubyExceptions.CreateLoadError(e);
             }
+        }
 
-            return null;
+        /// <summary>
+        /// .NET Framework's LoadFrom context looked for an assembly's references next to it. Assembly.LoadFile,
+        /// which require uses, does not, so a DLL required by its path found what it references only on
+        /// $LOAD_PATH. This looks next to the assemblies loaded from files, after $LOAD_PATH, and loads what it
+        /// finds there as what is found on $LOAD_PATH is loaded: its namespaces become Ruby's.
+        /// </summary>
+        private Assembly LoadAssemblyNextTo(Assembly requestingAssembly, AssemblyName/*!*/ reference) {
+            string requestingFile;
+            if (requestingAssembly == null || !_assemblyFiles.TryGetValue(requestingAssembly, out requestingFile)) {
+                return null;
+            }
+
+            string path = Path.Combine(Path.GetDirectoryName(requestingFile), reference.Name + ".dll");
+
+            // A file that won't do isn't loaded at all: nothing would use it, and it would stay loaded. One that isn't
+            // an assembly (a native DLL of the same name) or can't be read isn't an answer either: the reference is
+            // left unresolved, as if nothing were there.
+            try {
+                if (!Platform.FileExists(path) || !Satisfies(AssemblyName.GetAssemblyName(path), reference)) {
+                    return null;
+                }
+            } catch (Exception e) when (e is IOException || e is BadImageFormatException) {
+                return null;
+            }
+
+            Assembly assembly;
+            try {
+                assembly = LoadAssemblyFromFile(path);
+            } catch (Exception e) {
+                throw RubyExceptions.CreateLoadError(e);
+            }
+            Utils.Log(String.Format("Assembly '{0}' loaded for '{1}' from '{2}'", assembly.FullName, reference.FullName, path), "RESOLVE_ASSEMBLY");
+
+            // The assembly is what the reference asks for even if its extension methods can't be read (they name a type
+            // of an assembly that isn't there, say): that is reported, and the reference still gets it.
+            try {
+                DomainManager.LoadAssembly(assembly);
+            } catch (Exception e) when (e is IOException || e is BadImageFormatException || e is TypeLoadException) {
+                _context.ReportWarning(String.Format("extension methods of {0} not read: {1}", assembly.GetName().Name, e.Message.TrimEnd()));
+            }
+            return assembly;
+        }
+
+        /// <summary>
+        /// Whether an assembly named <paramref name="definition"/> will do for a reference to <paramref name="reference"/>:
+        /// the same simple name and culture and at least the version asked for, as .NET's binder requires of an
+        /// application's assemblies, and the same public key token if the reference names one.
+        /// AssemblyName.ReferenceMatchesDefinition compares the simple names only.
+        /// </summary>
+        private static bool Satisfies(AssemblyName/*!*/ definition, AssemblyName/*!*/ reference) {
+            byte[] token = reference.GetPublicKeyToken();
+            return String.Equals(definition.Name, reference.Name, StringComparison.OrdinalIgnoreCase)
+                && String.Equals(definition.CultureName ?? "", reference.CultureName ?? "", StringComparison.OrdinalIgnoreCase)
+                && (reference.Version == null || (definition.Version != null && definition.Version >= reference.Version))
+                && (token == null || token.Length == 0 || token.AsSpan().SequenceEqual(definition.GetPublicKeyToken()));
         }
 
 #endif
+        /// <summary>
+        /// Loads the assembly in the file at <paramref name="path"/>, remembering the file and that this runtime
+        /// loaded it (ResolveAssembly).
+        /// </summary>
+        private Assembly/*!*/ LoadAssemblyFromFile(string/*!*/ path) {
+            Assembly assembly = Platform.LoadAssemblyFromPath(path);
+            _assemblyFiles.TryAdd(assembly, path);
+            _AssemblyFilesOfAllRuntimes.AddOrUpdate(assembly, path);
+            return assembly;
+        }
+
         #endregion
 
         private class ResolvedFile {
@@ -783,7 +894,7 @@ namespace IronRuby.Runtime {
                 } else {
                     Debug.Assert(file.Path != null);
                     try {
-                        Assembly assembly = Platform.LoadAssemblyFromPath(file.Path);
+                        Assembly assembly = LoadAssemblyFromFile(file.Path);
                         DomainManager.LoadAssembly(assembly);
                         loaded = assembly;
                     } catch (BadImageFormatException) when (IsNativeExtensionPath(file.Path)) {
