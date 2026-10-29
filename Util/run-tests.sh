@@ -15,6 +15,12 @@ export PATH=/usr/local/dotnet:$PATH
 # so a net10.0 run does not clobber the net8.0 one.
 : "${IR_TFM:=net8.0}"
 : "${DLR_SOURCE_DIR:=/root/workspace/dlr/src/core}"
+# Absolute, as the caller meant it: the check below runs from $IR_ROOT and MSBuild resolves a
+# relative DlrSourceDir from Src/IronRuby.Tests, so a relative path would name two other places.
+dlr_dir=$(cd "$DLR_SOURCE_DIR" 2>/dev/null && pwd) || {
+  echo "run-tests: no DLR at $DLR_SOURCE_DIR" >&2; exit 1;
+}
+DLR_SOURCE_DIR=$dlr_dir
 mkdir -p /tmp/rk
 cd "$IR_ROOT" || exit 1
 
