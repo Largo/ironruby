@@ -1442,10 +1442,10 @@ namespace IronRuby.Builtins {
             RubyClass cls = context.GetImmediateClassOf(self);
 
             // A refinement active where #respond_to? was called counts, as it does for a call. Without
-            // one - nearly always - the answer comes from the class's lock-free method-lookup cache,
-            // and the site keeps it while the class's method version stays the same.
+            // one with the name - nearly always - the answer comes from the class's lock-free
+            // method-lookup cache, and the site keeps it while the class's method version stays the same.
             int version = -1;
-            if (scope.GetActiveRefinements().IsEmpty) {
+            if (!context.IsRefinedMethodName(methodName) || scope.GetActiveRefinements().IsEmpty) {
                 bool answer;
                 if (respondToMissingStorage.TryGetAnswer(cls, methodName, includePrivate, out answer)) {
                     return answer;

@@ -322,15 +322,27 @@ namespace IronRuby.Runtime {
         #region Refinements
 
         // Bumped by every successful `using'.  RubyScope memoizes its effective RefinementActivation and
-        // recomputes it when this changes, so a `using' anywhere invalidates every memoized table - and
-        // with it every call-site rule guarded on a table instance.  `using' is rare; correctness first.
+        // recomputes it when this changes.  The recomputed table is the same instance whenever its contents
+        // are (RefinementActivation interns them), so a `using' only fails the call-site rules guarded on
+        // a table it actually changed.
         internal int RefinementVersion = 1;
 
-        // Every module that Module#refine has ever been called on, plus - transitively at query time -
-        // the classes that inherit from them.  Empty in a program that never calls refine, which is what
-        // keeps the whole feature off the fast path: RubyCallAction only looks at scopes when this is
-        // non-empty.
+        // Every module that Module#refine has ever been called on.  Empty in a program that never calls
+        // refine, which is what keeps the whole feature off the fast path.
         private readonly Dictionary<RubyModule, bool> _refinedModules = new Dictionary<RubyModule, bool>();
+
+        // { refined module -> the names a refinement of it has (or had) in its method table }.  This is
+        // what decides whether a call can be affected by a refinement at all - CRuby's REFINED method
+        // entry: a refinement of String that defines #shout makes `x.shout' a refined call where x is a
+        // String, and leaves `x.upcase' and every call on an Integer alone.  Only ever grows.
+        private readonly Dictionary<RubyModule, HashSet<string>> _refinedMethodNames = new Dictionary<RubyModule, HashSet<string>>();
+
+        // Every name in _refinedMethodNames, read without the class-hierarchy lock; copy-on-write.
+        private volatile HashSet<string> _allRefinedMethodNames = new HashSet<string>();
+
+        // RefinementActivation's intern table (see RefinementActivation.Intern).
+        internal readonly Dictionary<RefinementActivation, RefinementActivation> RefinementActivations =
+            new Dictionary<RefinementActivation, RefinementActivation>(RefinementActivation.ContentComparer);
 
         internal bool HasRefinements {
             get { return _refinedModules.Count > 0; }
@@ -356,29 +368,59 @@ namespace IronRuby.Runtime {
             if (_refinedModules.ContainsKey(refinedModule)) {
                 return;
             }
+            // A refinement that defines nothing changes no call: the call sites it can affect are
+            // invalidated name by name, as methods arrive in it (RefinedMethodChanged).
             _refinedModules.Add(refinedModule, true);
-
-            // The method JIT resolves calls statically and has no notion of an activated
-            // refinement, so the first `refine' switches every specialization off for good.
-            IronRuby.Runtime.Jit.JitRuntime.Disable();
-
-            // Every call site that targets this module or a descendant of it must re-bind, because from
-            // now on its rule needs the refinement guard.  This mirrors what RubyClass.PrependsUpdated
-            // does for a prepend: the MRO the site cached is no longer the whole story.
-            refinedModule.MethodsUpdated("Refine");
         }
 
         /// <summary>
-        /// True if a call whose target is <paramref name="cls"/> could be affected by a refinement, i.e.
-        /// the class or one of its ancestors has been refined.  Call sites for classes that answer false
-        /// are built exactly as they were before refinements existed and pay nothing.
+        /// A refinement of <paramref name="refinedModule"/> defined, redefined, undefined or removed its
+        /// method <paramref name="name"/>.  The call sites that resolved the name on the module or below it
+        /// were bound without the refinement guard (the name was not refined yet) or against the method it
+        /// had before, so they re-bind - CRuby clears the method cache of the refined class for the name.
         /// </summary>
-        internal bool IsRefinementSensitive(RubyModule/*!*/ cls) {
+        internal void RefinedMethodChanged(RubyModule/*!*/ refinedModule, string/*!*/ name) {
             RequiresClassHierarchyLock();
-            if (_refinedModules.Count == 0) {
+
+            HashSet<string> names;
+            if (!_refinedMethodNames.TryGetValue(refinedModule, out names)) {
+                _refinedMethodNames.Add(refinedModule, names = new HashSet<string>());
+            }
+            if (names.Add(name) && !_allRefinedMethodNames.Contains(name)) {
+                var all = new HashSet<string>(_allRefinedMethodNames);
+                all.Add(name);
+                _allRefinedMethodNames = all;
+            }
+
+            refinedModule.AllDependentMethodsUpdated("RefinedMethod: " + name);
+        }
+
+        /// <summary>
+        /// True if a call of <paramref name="name"/> on an instance of <paramref name="cls"/> could be
+        /// affected by a refinement: some refinement of the class or of one of its ancestors has a method
+        /// of that name.  Whether one is active where the call is made is the call site's question, which
+        /// only call sites that answer true here ask; all the others are built - and dispatched, and
+        /// JIT-compiled - exactly as if nothing were refined.
+        /// </summary>
+        internal bool IsRefinementSensitive(RubyModule/*!*/ cls, string/*!*/ name) {
+            RequiresClassHierarchyLock();
+            if (!IsRefinedMethodName(name)) {
                 return false;
             }
-            return cls.ForEachAncestor(true, (m) => _refinedModules.ContainsKey(m));
+            return cls.ForEachAncestor(true, (m) => {
+                HashSet<string> names;
+                return _refinedMethodNames.TryGetValue(m, out names) && names.Contains(name);
+            });
+        }
+
+        /// <summary>
+        /// False if no refinement anywhere has a method <paramref name="name"/>: no call of the name can be a
+        /// refined call.  Lock-free, for the checks made on every execution of an operation rather than once
+        /// per call-site rule.
+        /// </summary>
+        public bool IsRefinedMethodName(string/*!*/ name) {
+            var names = _allRefinedMethodNames;
+            return names.Count != 0 && names.Contains(name);
         }
 
         #endregion

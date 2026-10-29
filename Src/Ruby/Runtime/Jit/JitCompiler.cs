@@ -64,6 +64,10 @@ namespace IronRuby.Runtime.Jit {
         private readonly RubyContext/*!*/ _context;
         private readonly int _scopeDepth;
 
+        // The refinements active where the code being compiled was written: the calls it binds itself
+        // (operators, the self-call) are resolved as its call sites would resolve them.
+        private RefinementActivation/*!*/ _refinements = RefinementActivation.Empty;
+
         // Locals, in nested scopes. Ruby has no block scoping, but a local first assigned
         // inside a conditionally executed region is nil on the path that skipped it, which a
         // typed int/double slot cannot represent. Declaring such a local in the region's own
@@ -192,16 +196,17 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
-            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, out slots, out canDeopt);
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, RefinementActivation.Empty, out slots, out canDeopt);
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
-            Func<string, JT> ivarProfile, out List<JitLoopSlot> slots, out bool canDeopt) {
+            Func<string, JT> ivarProfile, RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt) {
 
             slots = null;
             canDeopt = false;
             var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile);
+            c._refinements = refinements;
             MSA.Expression body;
             try {
                 JT type;
@@ -339,10 +344,11 @@ namespace IronRuby.Runtime.Jit {
         /// cannot be specialized.
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
-            return TryCompile(ast, context, paramTypes, null);
+            return TryCompile(ast, context, paramTypes, null, RefinementActivation.Empty);
         }
 
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
@@ -350,6 +356,7 @@ namespace IronRuby.Runtime.Jit {
             JT guess = JT.None;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords);
+                c._refinements = refinements;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(paramTypes, c._selfReturn);
@@ -1142,8 +1149,10 @@ namespace IronRuby.Runtime.Jit {
             return JitRuntime.ClassOf(_context, sample);
         }
 
-        private static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
-            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+        private bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
+            // A refinement of the operator active where the code was written is what its call site would
+            // call: that is not the built-in one either.
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible, _refinements);
             var info = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
             if (info == null) { return false; }
             foreach (var member in info.GetMembers()) {

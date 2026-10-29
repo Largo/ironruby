@@ -117,12 +117,6 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            // A precompiled dispatcher carries no conditions beyond the class version, so it cannot hold
-            // the lexical refinement guard.  Once anything has been refined we fall back to rule building.
-            if (Context.HasRefinements) {
-                return null;
-            }
-
             // Nor can it hold RubyMethodInfo.BuildCallNoFlow's unmarking of a keyword-arguments
             // hash handed to a method that declares no keywords. A call site's syntax decides
             // whether it passes keywords, so seeing one here means every call at this site
@@ -150,6 +144,12 @@ namespace IronRuby.Runtime.Calls {
             MethodResolutionResult method;
             RubyClass targetClass = Context.GetImmediateClassOf(target);
             using (targetClass.Context.ClassHierarchyLocker()) {
+                // A precompiled dispatcher carries no conditions beyond the class version, so it cannot hold
+                // the lexical refinement guard: a call a refinement could reach is left to rule building.
+                // Refining the name later re-versions the class, which retires the dispatcher.
+                if (Signature.HasScope && targetClass.Context.IsRefinementSensitive(targetClass, _methodName)) {
+                    return null;
+                }
                 version = targetClass.Version.Method;
                 method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
             }
@@ -227,7 +227,7 @@ namespace IronRuby.Runtime.Calls {
         internal override T BindShared<T>(object[]/*!*/ args) {
             RubyContext context = Context;
             if (context == null || Signature.ResolveOnly || (Signature.Flags & ~SharableCallFlags) != 0 ||
-                context.HasRefinements || TracePoint.CCallTracing) {
+                TracePoint.CCallTracing) {
                 return null;
             }
 
@@ -264,6 +264,10 @@ namespace IronRuby.Runtime.Calls {
             using (context.ClassHierarchyLocker()) {
                 targetClass.InitializeMethodsNoLock();
                 if (target != null && !(target is IRubyObject) && !HasPlainClrTypeTest(targetClass, _methodName)) {
+                    return null;
+                }
+                // a rule shared by receivers of several classes cannot hold the lexical refinement guard either
+                if (Signature.HasScope && context.IsRefinementSensitive(targetClass, _methodName)) {
                     return null;
                 }
                 version = targetClass.Version.Method;
@@ -593,10 +597,11 @@ namespace IronRuby.Runtime.Calls {
                 );
 
                 // Refinements are lexically scoped, so resolution has to consult the scope the call site was
-                // compiled in - which IronRuby hands to every source-level call site as argument 0.  Sites
-                // whose target class has never been refined are built exactly as before and pay nothing.
-                if (args.Signature.HasScope && !args.Signature.IsSuperCall && targetClass.Context.HasRefinements
-                    && targetClass.Context.IsRefinementSensitive(targetClass)) {
+                // compiled in - which IronRuby hands to every source-level call site as argument 0.  Only a
+                // call of a name some refinement of the target class (or of an ancestor) has is: every other
+                // site is built exactly as before and pays nothing - CRuby's REFINED method entry.
+                if (args.Signature.HasScope && !args.Signature.IsSuperCall
+                    && targetClass.Context.IsRefinementSensitive(targetClass, methodName)) {
                     refinements = args.Scope.GetActiveRefinements();
                 }
 
@@ -621,9 +626,9 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // The rule is only valid while the caller's lexical activation is the one it was bound against.
-            // RefinementActivation instances are canonical per lexical position, so reference equality is
-            // enough; a `using' anywhere bumps RubyContext.RefinementVersion, every scope recomputes a fresh
-            // table and this condition fails, forcing a re-bind.
+            // RefinementActivation instances are interned by contents, so reference equality is enough, and
+            // a `using' elsewhere - after which every scope recomputes its table - leaves the condition true.
+            // A refinement that gains or loses a method re-versions the classes below the refined module.
             if (refinements != null) {
                 metaBuilder.AddCondition(Ast.Equal(
                     Methods.GetActiveRefinements.OpCall(AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope))),
