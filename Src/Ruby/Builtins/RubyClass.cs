@@ -1175,7 +1175,7 @@ namespace IronRuby.Builtins {
             // If all CLR inherited members are to be returned we are done.
             // (creates a detached info; used by Kernel#clr_member)
             if (inherited) {
-                method = MakeGroup(initialMembers, initialMembers.Count, specialNameOnly, true);
+                method = MakeGroup(initialMembers, true);
                 return true;
             }
 
@@ -1242,7 +1242,7 @@ namespace IronRuby.Builtins {
                 // return the group, it will be stored in the method table by the caller:
                 method = MakeGroup(allMethods.Values);
             } else {
-                method = MakeGroup(initialMembers, initialMembers.Count, specialNameOnly, false);
+                method = MakeGroup(initialMembers, false);
             }
 
             return true;
@@ -1266,8 +1266,12 @@ namespace IronRuby.Builtins {
                 var altExtensions = (altName) != null ? GetClrExtensionMethods(type, altMemberName) : Enumerable.Empty<ExtensionMethodInfo>();
 
                 foreach (var extension in extensions.Concat(altExtensions)) {
-                    // TODO: inherit ExtensionMethodInfo <: OverloadInfo?
-                    yield return new ReflectionOverloadInfo(extension.Method);
+                    // Filtered like the type's own methods above. A property lookup (specialNameOnly) then skips
+                    // get_Weight(this Widget) as it skips an instance method named get_Weight: neither is an accessor.
+                    if (IsVisible(extension.Method.Attributes, extension.Method.DeclaringType, specialNameOnly)) {
+                        // TODO: inherit ExtensionMethodInfo <: OverloadInfo?
+                        yield return new ReflectionOverloadInfo(extension.Method);
+                    }
                 }
             }
         }
@@ -1416,15 +1420,9 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private RubyMethodGroupInfo/*!*/ MakeGroup(IEnumerable<OverloadInfo/*!*/>/*!*/ members, int visibleMemberCount, bool specialNameOnly, bool isDetached) {
-            var allMethods = new OverloadInfo[visibleMemberCount];
-            int i = 0;
-            foreach (var method in members) {
-                if (IsVisible(method.Attributes, method.DeclaringType, specialNameOnly)) {
-                    allMethods[i++] = method;
-                }
-            }
-
+        // members are what GetClrMethods returned, already filtered
+        private RubyMethodGroupInfo/*!*/ MakeGroup(List<OverloadInfo/*!*/>/*!*/ members, bool isDetached) {
+            var allMethods = members.ToArray();
             return isDetached ? 
                 new RubyMethodGroupInfo(allMethods, this, _isSingletonClass) :
                 new RubyOverloadGroupInfo(allMethods, this, null, _isSingletonClass);
