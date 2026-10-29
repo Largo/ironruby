@@ -881,7 +881,11 @@ namespace IronRuby.Runtime {
                     Debug.Assert(file.Path != null);
                     try {
                         Assembly assembly = LoadAssemblyFromFile(file.Path);
-                        DomainManager.LoadAssembly(assembly);
+                        if (!DomainManager.LoadAssembly(assembly)) {
+                            // The runtime has seen the assembly, which it reports once: maybe in a require that failed
+                            // reading its extension methods. This reads them if they haven't been read.
+                            _context.AddExtensionAssembly(assembly);
+                        }
                         loaded = assembly;
                     } catch (BadImageFormatException) when (IsNativeExtensionPath(file.Path)) {
                         // A gem's compiled CRuby extension. It is not a CLR assembly and never will
