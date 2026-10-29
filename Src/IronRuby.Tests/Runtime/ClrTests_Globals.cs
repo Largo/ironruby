@@ -168,3 +168,47 @@ namespace IronRubyTests.ExtensionMethods3 {
         public static string Label(this Widget self) { return "e:Label()"; }
     }
 }
+
+// Extension methods named like property accessors (get_Weight, set_Item). They aren't accessors: C# makes no property
+// or indexer of them, and doesn't let them change the extended type's own.
+namespace IronRubyTests.ExtensionMethods4 {
+    // no property or indexer of its own
+    public class Crate {
+    }
+
+    // a Weight property and an indexer, whose accessors' names the extension methods below take
+    public class Scale {
+        public int Weight { get { return 1; } set { Last = "Weight=" + value; } }
+        public int this[int i] { get { return 10 + i; } set { Last = "[" + i + "]=" + value; } }
+        public string Last;
+    }
+
+    public interface IWeighed {
+    }
+
+    public class Parcel : IWeighed {
+    }
+
+    // an instance method named like an accessor that isn't one
+    public class Plain {
+        public string get_Weight() { return "get_Weight()"; }
+    }
+
+    public static class EMs {
+        public static string get_Weight(this Crate self) { return "e:get_Weight()"; }
+        public static string set_Weight(this Crate self, int value) { return "e:set_Weight(int)"; }
+        public static string get_Item(this Crate self, int i) { return "e:get_Item(int)"; }
+        public static string set_Item(this Crate self, int i, int value) { return "e:set_Item(int, int)"; }
+
+        // same signatures as Scale's accessors => the accessors are preferred
+        public static string get_Weight(this Scale self) { return "e:get_Weight()"; }
+        public static string set_Weight(this Scale self, int value) { return "e:set_Weight(int)"; }
+        public static string get_Item(this Scale self, int i) { return "e:get_Item(int)"; }
+        public static string set_Item(this Scale self, int i, int value) { return "e:set_Item(int, int)"; }
+        public static string get_Weight(this Scale self, int scale) { return "e:get_Weight(int)"; }
+
+        public static string get_Weight(this IWeighed self) { return "e:IWeighed.get_Weight()"; }
+
+        public static string get_Heft(this object self) { return "e:get_Heft()"; }
+    }
+}

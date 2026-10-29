@@ -1075,6 +1075,75 @@ puts list.count(lambda { |x| x > 1 })
 ");
         }
 
+        // What ClrExtensionMethods9 and ClrScopedExtensions6 run once IronRubyTests::ExtensionMethods4 is activated, and
+        // what it prints, the same for both. An error shows as its class (and name), not its message.
+        private const string AccessorNamedExtensionsCode = @"
+include IronRubyTests::ExtensionMethods4
+def outcome = (yield rescue $!.is_a?(NameError) ? [$!.class, $!.name] : $!.class)
+
+c = Crate.new
+puts c.get_Weight, c.set_Weight(1), c.get_Item(0), c.set_Item(0, 1)
+p outcome { c.weight }, outcome { c.Weight }, outcome { c.weight = 1 }, outcome { c[0] }, outcome { c[0] = 1 }
+p outcome { c.respond_to?(:weight) }, outcome { c.method(:weight) }, outcome { c.clr_member(:weight) }
+
+pl = Plain.new
+puts pl.get_Weight
+p outcome { pl.weight }
+
+pa = Parcel.new
+puts pa.get_Weight
+p outcome { pa.weight }, outcome { Object.new.Heft }, outcome { 1.Heft }
+
+s = Scale.new
+p outcome { s.weight }, outcome { s.Weight }, outcome { s[2] }, outcome { s.get_Weight }, outcome { s.get_Item(2) }
+p outcome { s.clr_member(:weight).call }, outcome { s.clr_member(:[]).call(4) }
+p outcome { s.get_Weight(3).to_s }, outcome { s.weight(3) }
+p outcome { s.weight = 5; s.last.to_s }, outcome { s[2] = 9; s.last.to_s }
+";
+
+        private const string AccessorNamedExtensionsOutput = @"
+e:get_Weight()
+e:set_Weight(int)
+e:get_Item(int)
+e:set_Item(int, int)
+[NoMethodError, :weight]
+[NoMethodError, :Weight]
+[NoMethodError, :weight=]
+[NoMethodError, :[]]
+[NoMethodError, :[]=]
+false
+[NameError, :weight]
+[NameError, nil]
+get_Weight()
+[NoMethodError, :weight]
+e:IWeighed.get_Weight()
+[NoMethodError, :weight]
+[NoMethodError, :Heft]
+[NoMethodError, :Heft]
+1
+1
+12
+1
+12
+1
+14
+""e:get_Weight(int)""
+ArgumentError
+""Weight=5""
+""[2]=9""
+";
+
+        /// <summary>
+        /// An extension method named like a property accessor, such as get_Weight(this Crate), is an ordinary method, as in C#
+        /// and as an instance method so named that isn't an accessor is (Plain's): crate.weight and crate[0] are undefined, and
+        /// the extended type's own property and indexer (Scale's) are unchanged. using_clr_extensions used to leave a null in
+        /// the property's method group for it, which threw NullReferenceException.
+        /// </summary>
+        public void ClrExtensionMethods9() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods4.EMs).Assembly);
+            LegacyExtensionsTestOutput("using_clr_extensions IronRubyTests::ExtensionMethods4" + AccessorNamedExtensionsCode, AccessorNamedExtensionsOutput);
+        }
+
         /// <summary>
         /// `using' a CLR namespace brings its extension methods into the rest of the file, class body or eval string,
         /// lexically, like a refinement: a method defined before it, or outside the class body, does not see them.
@@ -1262,6 +1331,14 @@ TypeError
 e:Describe(string)
 TypeError
 ");
+        }
+
+        /// <summary>
+        /// ClrExtensionMethods9 through `using': the same calls give the same results.
+        /// </summary>
+        public void ClrScopedExtensions6() {
+            Runtime.LoadAssembly(typeof(IronRubyTests.ExtensionMethods4.EMs).Assembly);
+            TestOutput("using IronRubyTests::ExtensionMethods4" + AccessorNamedExtensionsCode, AccessorNamedExtensionsOutput);
         }
 
         #endregion
