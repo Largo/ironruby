@@ -595,7 +595,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("negative argument");
             }
             if (times > Int64.MaxValue) {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
             }
 
             // Ruby 3.0 dropped subclass preservation here: "MyString.new("x") * 2".class is String.
@@ -975,7 +975,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static int NarrowIndex(BigInteger value) {
             if (value > Int64.MaxValue || value < Int64.MinValue) {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
             }
             if (value > Int32.MaxValue) {
                 return Int32.MaxValue;

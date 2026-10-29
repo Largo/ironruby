@@ -96,7 +96,7 @@ namespace IronRuby.Builtins {
 
             int number;
             if (!_numbers.TryGetValue(bare, out number)) {
-                throw RubyExceptions.CreateArgumentError("unsupported signal `{0}'",
+                throw RubyExceptions.CreateArgumentError("unsupported signal '{0}'",
                     name.StartsWith("SIG", StringComparison.Ordinal) ? name : "SIG" + name);
             }
             return negated ? -number : number;

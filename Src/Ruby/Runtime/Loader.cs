@@ -575,7 +575,7 @@ namespace IronRuby.Runtime {
                     } catch (Exception e) {
                         // the exception might not be reported by the type loader, so at least report a warning:
                         loader._context.ReportWarning(
-                            String.Format("An exception was risen while resolving an assembly `{0}': {1}", assemblyName, e.Message)
+                            String.Format("An exception was risen while resolving an assembly '{0}': {1}", assemblyName, e.Message)
                         );
                         throw;
                     } finally {

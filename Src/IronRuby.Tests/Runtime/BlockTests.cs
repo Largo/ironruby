@@ -2258,7 +2258,7 @@ p n.call(nil)
 n.call() rescue p $!
 p n.call([1,2])
 ", @"
-#<NoMethodError: private method `foo' called for an instance of C>
+#<NoMethodError: private method 'foo' called for an instance of C>
 true
 #<ArgumentError: no receiver given>
 false

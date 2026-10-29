@@ -2272,12 +2272,12 @@ namespace IronRuby.Builtins {
             Assert.NotNull(name, method);
 
             if (callerContext != _context) {
-                throw RubyExceptions.CreateTypeError(String.Format("Cannot define a method on a {0} `{1}' defined in a foreign runtime #{2}",
+                throw RubyExceptions.CreateTypeError(String.Format("Cannot define a method on a {0} '{1}' defined in a foreign runtime #{2}",
                     IsClass ? "class" : "module", _name, _context.RuntimeId));
             }
 
             if (method.IsUndefined && name == Symbols.Initialize) {
-                throw RubyExceptions.CreateTypeError("Cannot undefine `initialize' method");
+                throw RubyExceptions.CreateTypeError("Cannot undefine 'initialize' method");
             }
 
             PrepareMethodUpdate(name, method);
@@ -3430,7 +3430,7 @@ namespace IronRuby.Builtins {
                 if (module.IsInterface && !CanIncludeClrInterface) {
                     if (Array.IndexOf(_prepends, module) == -1) {
                         throw new InvalidOperationException(String.Format(
-                            "Interface `{0}' cannot be prepended to class `{1}' because its underlying type has already been created",
+                            "Interface '{0}' cannot be prepended to class '{1}' because its underlying type has already been created",
                             module.Name, Name
                         ));
                     }
@@ -3583,7 +3583,7 @@ namespace IronRuby.Builtins {
                 if (module.IsInterface && !CanIncludeClrInterface) {
                     if (Array.IndexOf(_mixins, module) == -1) {
                         throw new InvalidOperationException(String.Format(
-                            "Interface `{0}' cannot be included in class `{1}' because its underlying type has already been created",
+                            "Interface '{0}' cannot be included in class '{1}' because its underlying type has already been created",
                             module.Name, Name
                         ));
                     }

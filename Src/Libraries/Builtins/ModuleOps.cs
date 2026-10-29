@@ -679,7 +679,7 @@ namespace IronRuby.Builtins {
             // MRI: ignores ModuleFunction scope flag (doesn't create singleton methods):
 
             if (!Tokenizer.IsVariableName(name)) {
-                throw RubyExceptions.CreateNameError("invalid attribute name `{0}'", name);
+                throw RubyExceptions.CreateNameError("invalid attribute name '{0}'", name);
             }
 
             var varName = "@" + name;
@@ -864,8 +864,8 @@ namespace IronRuby.Builtins {
 
                 if (!self.RemoveMethod(methodName)) {
                     // MRI's wording for remove_method differs from undef_method's:
-                    //   "method `x' not defined in C"
-                    throw RubyExceptions.CreateNameError("method `{0}' not defined in {1}",
+                    //   "method 'x' not defined in C"
+                    throw RubyExceptions.CreateNameError("method '{0}' not defined in {1}",
                         methodName, RubyExceptions.GetModuleErrorName(self));
                 }
             }
@@ -1164,7 +1164,10 @@ namespace IronRuby.Builtins {
         public static object RemoveClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
             object value;
             if (!self.TryGetClassVariable(variableName, out value)) {
-                RubyUtils.CheckClassVariableName(variableName);
+                // MRI words a bad name differently here than class_variable_get and friends do
+                if (!Tokenizer.IsClassVariableName(variableName)) {
+                    throw RubyExceptions.CreateNameError("wrong class variable name {0}", variableName);
+                }
                 throw RubyExceptions.CreateNameError("class variable {0} not defined for {1}", variableName, self.Name);
             }
             self.RemoveClassVariable(variableName);
@@ -1769,7 +1772,7 @@ namespace IronRuby.Builtins {
             }
             if (method.Visibility != RubyMethodVisibility.Public) {
                 // the method is there, just not public - which is what MRI says
-                throw RubyExceptions.CreateNameError("method `{0}' for {1} `{2}' is {3}", methodName,
+                throw RubyExceptions.CreateNameError("method '{0}' for {1} '{2}' is {3}", methodName,
                     self.IsClass ? "class" : "module", self.GetDisplayName(scope.RubyContext, false),
                     method.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
@@ -1850,7 +1853,7 @@ namespace IronRuby.Builtins {
                 return self.TypeTracker != null ? self.Context.GetClass(self.TypeTracker.Type.MakeByRefType()) : null;
             } catch (Exception) {
                 throw RubyExceptions.CreateTypeError(
-                    "Cannot create by-ref type for `{0}'", self.Context.GetTypeName(self.TypeTracker.Type, true)
+                    "Cannot create by-ref type for '{0}'", self.Context.GetTypeName(self.TypeTracker.Type, true)
                 );
             }
         }
@@ -1872,7 +1875,7 @@ namespace IronRuby.Builtins {
                     arrayType = elementType.MakeArrayType();
                 } catch (Exception) {
                     throw RubyExceptions.CreateTypeError(
-                        "Cannot create array type for `{0}'", self.Context.GetTypeName(elementType, true)
+                        "Cannot create array type for '{0}'", self.Context.GetTypeName(elementType, true)
                     );
                 }
                 return self.Context.GetModule(arrayType);
@@ -1880,14 +1883,14 @@ namespace IronRuby.Builtins {
 
             if (!type.IsGenericTypeDefinition) {
                 if (provided > 0) {
-                    throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
+                    throw RubyExceptions.CreateArgumentError("'{0}' is not a generic type definition", self.Name);
                 }
                 return self;
             }
 
             int required = type.GetGenericArguments().Length;
             if (required != provided) {
-                throw RubyExceptions.CreateArgumentError("Type `{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
+                throw RubyExceptions.CreateArgumentError("Type '{0}' requires {1} generic type arguments, {2} provided", self.Name, required, provided);
             }
 
             Type concreteType = type.MakeGenericType(Protocols.ToTypes(self.Context, typeArgs));
@@ -1898,20 +1901,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         public static RubyModule/*!*/ Of(RubyModule/*!*/ self, int genericArity) {
             if (self.TypeTracker == null) {
-                throw RubyExceptions.CreateArgumentError("`{0}' is not a type", self.Name);
+                throw RubyExceptions.CreateArgumentError("'{0}' is not a type", self.Name);
             }
 
             Type type = self.TypeTracker.Type;
 
             if (!type.IsGenericTypeDefinition) {
                 if (genericArity > 0) {
-                    throw RubyExceptions.CreateArgumentError("`{0}' is not a generic type definition", self.Name);
+                    throw RubyExceptions.CreateArgumentError("'{0}' is not a generic type definition", self.Name);
                 }
                 return self;
             }
             
             if (type.GetGenericArguments().Length != genericArity) {
-                throw RubyExceptions.CreateArgumentError("`{0}' does not have generic arity {1}", self.Name, genericArity);
+                throw RubyExceptions.CreateArgumentError("'{0}' does not have generic arity {1}", self.Name, genericArity);
             }
 
             return self;

@@ -406,7 +406,7 @@ namespace IronRuby.Hosting {
                     option = "-E";
                     value = arg.Substring(2);
                 } else {
-                    throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                    throw new InvalidOptionException(String.Format("Option '{0}' not supported", arg));
                 }
 
                 SetEncodings(option, value);
@@ -443,7 +443,7 @@ namespace IronRuby.Hosting {
                 } else if (arg[prefix.Length] == '=' || arg[prefix.Length] == '-') {
                     features = arg.Substring(prefix.Length + 1);
                 } else {
-                    throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                    throw new InvalidOptionException(String.Format("Option '{0}' not supported", arg));
                 }
 
                 foreach (var feature in features.Split(',')) {
@@ -469,7 +469,7 @@ namespace IronRuby.Hosting {
                 int separator = 0;
                 for (int i = 2; i < arg.Length; i++) {
                     if (arg[i] < '0' || arg[i] > '7') {
-                        throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                        throw new InvalidOptionException(String.Format("Option '{0}' not supported", arg));
                     }
                     separator = separator * 8 + (arg[i] - '0');
                 }
@@ -534,7 +534,7 @@ namespace IronRuby.Hosting {
 
             if (arg.StartsWith("-C", StringComparison.Ordinal) ||
                 arg.StartsWith("-T", StringComparison.Ordinal)) {
-                throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                throw new InvalidOptionException(String.Format("Option '{0}' not supported", arg));
             }
 
             int colon = arg.IndexOf(':');
@@ -556,7 +556,7 @@ namespace IronRuby.Hosting {
                     break;
 
                 case "--copyright":
-                    throw new InvalidOptionException(String.Format("Option `{0}' not supported", optionName));
+                    throw new InvalidOptionException(String.Format("Option '{0}' not supported", optionName));
 
                 case "-n":
                     LanguageSetup.Options["LoopOverInput"] = true;
@@ -678,14 +678,14 @@ namespace IronRuby.Hosting {
                 case "-1.8.7":
                 case "-1.9":
                 case "-2.0":
-                    throw new InvalidOptionException(String.Format("Option `{0}' is no longer supported. The compatible Ruby version is 1.9.", optionName));
+                    throw new InvalidOptionException(String.Format("Option '{0}' is no longer supported. The compatible Ruby version is 1.9.", optionName));
 
                 case "-X":
                     switch (optionValue) {
                         case "AutoIndent":
                         case "TabCompletion":
                         case "ColorfulConsole":
-                            throw new InvalidOptionException(String.Format("Option `{0}' not supported", optionName));
+                            throw new InvalidOptionException(String.Format("Option '{0}' not supported", optionName));
 
                         case "ObjectSpace":
                             LanguageSetup.Options["ObjectSpace"] = ScriptingRuntimeHelpers.True;
