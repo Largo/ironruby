@@ -11,8 +11,8 @@
 # interpreter, from the root of the source tree, against an unpacked CRuby
 # source tarball (the .gem files are in its gems/ directory):
 #
-#     ./ir.sh Util/install-bundled-gems.rb /path/to/ruby-4.0.6
-#     ./ir.sh Util/install-bundled-gems.rb --check /path/to/ruby-4.0.6
+#     ./ir.sh Util/install-bundled-gems.rb /path/to/ruby-4.0.9
+#     ./ir.sh Util/install-bundled-gems.rb --check /path/to/ruby-4.0.9
 #
 # The second form changes nothing: it reports what is out of date and every
 # library in the load-path standard library that shadows a shipped gem, and
