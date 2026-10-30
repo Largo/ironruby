@@ -12,9 +12,10 @@
 ; the user can write to without admin rights, and a path with a space in it breaks
 ; Bundler's RUBYOPT, Rails' templates and mspec. Setup asks whether to install for the
 ; current user or for all users; either way it can add the install directory, where
-; ironruby.cmd, ir.cmd, irb.cmd and igem.cmd are, to the front of that user's or the
-; system's PATH. The uninstaller removes the files, whatever IronRuby wrote under Src
-; since (installed gems included), and the PATH entry.
+; ironruby.cmd, ir.cmd, iirb.cmd and igem.cmd are, to the front of that user's or the
+; system's PATH. There is no irb.cmd or gem.cmd: those names stay CRuby's. The
+; uninstaller removes the files, whatever IronRuby wrote under Src since (installed gems
+; included), and the PATH entry.
 ;
 ; build-installer.sh passes these; to run ISCC by hand, pass them the same way:
 ;   /DAppVersion=4.0.2           the version, as in the archive's name
@@ -73,15 +74,20 @@ SetupLogging=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "modifypath"; Description: "Add IronRuby to the &PATH: ironruby, ir, irb, igem"
+Name: "modifypath"; Description: "Add IronRuby to the &PATH: ironruby, ir, iirb, igem"
 Name: "assocfiles"; Description: "Run .&rb files with IronRuby when they are opened"; Flags: unchecked
 
 [Files]
 ; The archive's tree, unchanged.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; Earlier builds of this installer put an irb.cmd here, which on the PATH shadowed
+; CRuby's irb; an upgrade removes it.
+Type: files; Name: "{app}\irb.cmd"
+
 [Icons]
-Name: "{group}\Interactive IronRuby"; Filename: "{app}\irb.cmd"; WorkingDir: "{%USERPROFILE}"
+Name: "{group}\Interactive IronRuby"; Filename: "{app}\iirb.cmd"; WorkingDir: "{%USERPROFILE}"
 Name: "{group}\Start Command Prompt with IronRuby"; Filename: "{cmd}"; Parameters: "/k ""set ""PATH={app};%PATH%"" & ironruby.cmd -v"""; WorkingDir: "{%USERPROFILE}"
 Name: "{group}\IronRuby Notepad"; Filename: "{app}\Samples\Notepad\notepad.cmd"; WorkingDir: "{app}\Samples\Notepad"
 
@@ -172,7 +178,8 @@ begin
     Log('PATH is now: ' + Path);
 end;
 
-{ First, as RubyInstaller puts Ruby first: irb is IronRuby's irb then. }
+{ First, as RubyInstaller puts Ruby first. Every launcher here is i-prefixed or named
+  ironruby/ir, so being first shadows none of a CRuby's: irb and gem stay CRuby's. }
 procedure AddToPath(Dir: String);
 var
   Path: String;

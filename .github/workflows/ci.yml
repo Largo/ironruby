@@ -254,7 +254,7 @@ jobs:
             cmd //c ir.cmd -e "puts RUBY_ENGINE"
             # irb loads reline, which on Windows looks up Win32 functions through Fiddle by
             # their names without the A suffix; 4.0.2 died there, at a pipe as at a console.
-            printf 'puts 6 * 7\n' | cmd //c irb.cmd | grep -x 42
+            printf 'puts 6 * 7\n' | cmd //c iirb.cmd | grep -x 42
             cmd //c ironruby.cmd Util/windows-desktop-check.rb
             rubyw="Src/Console/bin/Debug/$TFM/ironrubyw.exe"
             ruby subsystem.rb "$rubyw"
@@ -263,7 +263,7 @@ jobs:
             ./ironruby smoke.rb
             ./ironruby names.rb
             ./ir.sh -e 'puts RUBY_ENGINE'
-            printf 'puts 6 * 7\n' | ./irb.sh | grep -x 42
+            printf 'puts 6 * 7\n' | ./iirb.sh | grep -x 42
           fi
 
       # IO#write_nonblock on a socket claims only what the kernel took (#14). On Linux the

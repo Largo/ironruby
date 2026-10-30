@@ -76,8 +76,12 @@ $setup = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
   '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', $mode, "/LOG=`"$log`"")
 if ($setup.ExitCode -ne 0) { Get-Content $log -Tail 30; Fail "setup exited with $($setup.ExitCode)" }
 
-foreach ($launcher in 'ironruby.cmd', 'ir.cmd', 'irb.cmd', 'igem.cmd', 'unins000.exe') {
+foreach ($launcher in 'ironruby.cmd', 'ir.cmd', 'iirb.cmd', 'igem.cmd', 'unins000.exe') {
   if (-not (Test-Path (Join-Path $Dir $launcher))) { Fail "no $launcher in $Dir" }
+}
+# First on the PATH, these would shadow a CRuby's irb and gem.
+foreach ($launcher in 'irb.cmd', 'gem.cmd') {
+  if (Test-Path (Join-Path $Dir $launcher)) { Fail "$launcher in $Dir would shadow CRuby's" }
 }
 $first = ((Get-RawPath) -split ';')[0]
 if ($first -ne $Dir) { Fail "$Dir is not first on the $scope PATH, $first is" }
@@ -88,8 +92,8 @@ $where = Invoke-Fresh 'where ironruby'
 if (($where -split "`r?`n")[0] -ne "$Dir\ironruby.cmd") { Fail "ironruby is not $Dir\ironruby.cmd" }
 $engine = Invoke-Fresh 'ir -e puts(RUBY_ENGINE)'
 if ($engine -ne 'ironruby') { Fail "ir: $engine" }
-$irb = Invoke-Fresh 'irb' "puts 6 * 7`n"
-if ($irb -notmatch '42') { Fail 'irb did not run the line it was given' }
+$irb = Invoke-Fresh 'iirb' "puts 6 * 7`n"
+if ($irb -notmatch '42') { Fail 'iirb did not run the line it was given' }
 Invoke-Fresh 'igem install rack --no-document' | Out-Null
 $gems = Join-Path $Dir 'Src\StdLib\ruby\gems\4.0.0\gems'
 if (-not (Get-ChildItem $gems -Filter 'rack-*' -Directory)) { Fail "rack is not in $gems" }
