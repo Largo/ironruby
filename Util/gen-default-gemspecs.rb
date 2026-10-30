@@ -208,8 +208,9 @@ GEMS = {
   # railties depends on irb, and irb on reline.  Without these two, installing
   # railties resolves irb against rubygems.org, which drags in rdoc 8 and then
   # rbs - a C extension - for a library IronRuby already ships and already runs
-  # as `ir -S irb`.
-  "irb" => ["1.16.0", "Interactive Ruby", ["irb", "irb/"], require: false, bin: ["irb"],
+  # as `ir -S irb`.  irb is 1.18.0 from rubygems.org, newer than the 1.16.0
+  # CRuby 4.0.9 bundles: 1.18 has the startup banner.
+  "irb" => ["1.18.0", "Interactive Ruby", ["irb", "irb/"], require: false, bin: ["irb"],
             pinned: true],
   "reline" => ["0.6.3", "GNU Readline and Editline, in pure Ruby",
                ["reline", "reline/"], require: false, pinned: true],

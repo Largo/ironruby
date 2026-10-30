@@ -90,10 +90,10 @@ SKIPPED = {
   "syslog" => "C extension; IronRuby implements it (Src/StdLib/ironruby/syslog.rb), default gemspec",
   "win32ole" => "C extension; IronRuby implements it over COM interop (Src/StdLib/ironruby/win32ole.rb)",
   # Part of IronRuby's standard library already - vendored in Src/StdLib/ruby/4.0
-  # at exactly the version CRuby bundles - and listed as default gems, because
-  # irb's upstream dependency tree ends in a C extension (see
-  # gen-default-gemspecs.rb).  A gem copy would be a second copy.
-  "irb" => "vendored in Src/StdLib/ruby/4.0; a default gem here",
+  # at the version CRuby bundles, except irb, which is the newer 1.18.0 - and
+  # listed as default gems, because irb's upstream dependency tree ends in a C
+  # extension (see gen-default-gemspecs.rb).  A gem copy would be a second copy.
+  "irb" => "vendored in Src/StdLib/ruby/4.0 (1.18.0); a default gem here",
   "reline" => "vendored in Src/StdLib/ruby/4.0; a default gem here",
   "rdoc" => "vendored in Src/StdLib/ruby/4.0 as irb's dependency",
   "readline" => "IronRuby's readline is rb-readline, in Src/StdLib/ruby/site_ruby/1.9.1",
