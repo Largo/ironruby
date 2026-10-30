@@ -1030,22 +1030,20 @@ class Integer
 end
 
 class Float
-  # rb_float_pow: a negative base to a power that is not whole leaves the real line.
-  alias_method :__ir_pow__, :**
-  private :__ir_pow__
+  # Float#** is C# (ClrFloat.Power): a Float or Integer power of a Float is Math.Pow there.
+  # These are the two cases it hands back.
 
-  def **(other)
-    if ::Float === other
-      if self < 0 && ::Float.__ir_fractional__(other)
-        return ::Complex.__polar_pi__((-self).__send__(:__ir_pow__, other), other)
-      end
-      __ir_pow__(other)
-    elsif ::Integer === other
-      __ir_pow__(other)
-    else
-      __ir_num_coerce_bin__(other, :**)
-    end
+  # rb_float_pow: a negative base to a power that is not whole leaves the real line.
+  # (-self) is positive, so its ** stays in C#.
+  def __ir_pow_complex__(other)
+    ::Complex.__polar_pi__((-self) ** other, other)
   end
+  private :__ir_pow_complex__
+
+  def __ir_pow_coerce__(other)
+    __ir_num_coerce_bin__(other, :**)
+  end
+  private :__ir_pow_coerce__
 
   # `y != round(y)` in C: true for a NaN, false for an infinity.
   def self.__ir_fractional__(y)

@@ -318,22 +318,55 @@ namespace IronRuby.Builtins {
             return DomainCheck(_lgamma != null ? _lgamma(x) : MathUtils.LogGamma(x), "lgamma");
         }
         
+        // The logarithms of a Float or Fixnum that is not negative, as __ir_log__ & co. in ruby4.rb
+        // compute them for one: a NaN comes back as it is, 0.0 and -0.0 give -Infinity. A Fixnum
+        // or an Int64 is far below the 2**1024 from which those split the exponent off first.
+        // Everything else - a negative number (DomainError), a Bignum, a Rational, nil, a base of
+        // nil - goes to the Ruby definitions.
+        private static bool TryGetLogArgument(object x, out double d) {
+            return TryGetDouble(x, out d) && (d >= 0.0 || double.IsNaN(d));
+        }
+
         [RubyMethodAttribute("log", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("log", RubyMethodAttributes.PublicSingleton)]
-        public static double Log(object self, [DefaultProtocol]double x) {
-            return DomainCheck(SM.Log(x), "log");
+        public static object Log(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (TryGetLogArgument(x, out d)) {
+                return double.IsNaN(d) ? d : SM.Log(d);
+            }
+            return General(general, "__ir_log__", self, x);
+        }
+
+        [RubyMethodAttribute("log", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethodAttribute("log", RubyMethodAttributes.PublicSingleton)]
+        public static object Log(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object x, object newBase) {
+            double d, b;
+            if (TryGetLogArgument(x, out d) && TryGetLogArgument(newBase, out b)) {
+                if (double.IsNaN(d)) return d;
+                if (double.IsNaN(b)) return b;
+                return SM.Log(d) / SM.Log(b);
+            }
+            return General(general, "__ir_log__", self, x, newBase);
         }
 
         [RubyMethodAttribute("log10", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("log10", RubyMethodAttributes.PublicSingleton)]
-        public static double Log10(object self, [DefaultProtocol]double x) {
-            return DomainCheck(SM.Log10(x), "log10");
+        public static object Log10(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (TryGetLogArgument(x, out d)) {
+                return double.IsNaN(d) ? d : SM.Log10(d);
+            }
+            return General(general, "__ir_log10__", self, x);
         }
 
         [RubyMethodAttribute("log2", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("log2", RubyMethodAttributes.PublicSingleton)]
-        public static double Log2(object self, [DefaultProtocol]double x) {
-            return DomainCheck(SM.Log(x)/SM.Log(2), "log2");
+        public static object Log2(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (TryGetLogArgument(x, out d)) {
+                return double.IsNaN(d) ? d : SM.Log2(d);
+            }
+            return General(general, "__ir_log2__", self, x);
         }
 
         [RubyMethodAttribute("sin", RubyMethodAttributes.PrivateInstance)]

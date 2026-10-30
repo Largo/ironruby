@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
 using System.Numerics;
@@ -297,19 +298,27 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Raises <code>self</code> the <code>other</code> power, where other is Float.
+        /// Raises <code>self</code> the <code>other</code> power, where other is Float. A negative
+        /// base to a power that is not whole leaves the real line (rb_float_pow): that Complex is
+        /// __ir_pow_complex__ in rational.rb.
         /// </summary>
         [RubyMethod("**")]
-        public static double Power(double self, double other) {
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ complexPower, double self, double other) {
+            if (self < 0 && (double.IsNaN(other) || (!double.IsInfinity(other) && other != Math.Round(other)))) {
+                var site = complexPower.GetCallSite("__ir_pow_complex__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                return site.Target(site, self, other);
+            }
             return Math.Pow(self, other);
         }
 
         /// <summary>
-        /// Raises <code>self</code> the <code>other</code> power, where other is not Fixnum, Bignum or Float.
+        /// Raises <code>self</code> the <code>other</code> power, where other is not Fixnum, Bignum or
+        /// Float: __ir_pow_coerce__ in rational.rb.
         /// </summary>
         [RubyMethod("**")]
-        public static object Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, double self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, other);
+        public static object Power(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ coercePower, double self, object other) {
+            var site = coercePower.GetCallSite("__ir_pow_coerce__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, other);
         }
 
         #endregion

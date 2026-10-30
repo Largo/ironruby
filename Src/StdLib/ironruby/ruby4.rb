@@ -8486,7 +8486,9 @@ module Math
 
   # Math.log(x) and Math.log(x, nil) are different calls - the second is a
   # TypeError - so the base cannot be an optional parameter defaulting to nil.
-  def log(x, *rest)
+  # log, log2 and log10 of a Float or Fixnum that is not negative are C#
+  # (RubyMath); these are what the rest goes to.
+  def __ir_log__(x, *rest)
     if rest.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
     end
@@ -8501,14 +8503,14 @@ module Math
     v / (::System::Math.Log(b) + bbits * ::System::Math.Log(2.0))
   end
 
-  def log2(x)
+  def __ir_log2__(x)
     x, bits = __log_split__(x)
     r = __log__(x, "log2")
     return r if r
     ::System::Math.Log2(x) + bits
   end
 
-  def log10(x)
+  def __ir_log10__(x)
     x, bits = __log_split__(x)
     r = __log__(x, "log10")
     return r if r
@@ -8639,8 +8641,10 @@ module Math
   module_function :acos, :asin, :atan, :atan2, :cos, :sin, :tan, :cosh, :sinh, :tanh, :asinh, :exp, :cbrt,
                   :sqrt, :hypot
   # The Float/Fixnum fast path of these is C# (RubyMath); their general Ruby half:
-  module_function :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__
-  private_class_method :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__
+  module_function :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__,
+                  :__ir_log__, :__ir_log2__, :__ir_log10__
+  private_class_method :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__,
+                       :__ir_log__, :__ir_log2__, :__ir_log10__
 end
 
 # `ruby2_keywords' written at the top level is Object.ruby2_keywords. MRI defines it on
