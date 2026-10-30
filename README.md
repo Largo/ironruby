@@ -44,7 +44,7 @@ not kept.
 - **[A method JIT and OSR](#performance)**, on by default: integer and float loops, `fib`
   and `mandelbrot` run in **0.27–0.74×** CRuby's time. Over all 50 benchmarks the geomean
   is 3.25×; calls, strings and arrays are where the work is.
-- **irb 1.16 + reline**, **RubyGems 4.0.16 and Bundler** over real TLS, and Ruby 4.0's
+- **irb 1.18 + reline**, **RubyGems 4.0.16 and Bundler** over real TLS, and Ruby 4.0's
   standard library and bundled gems.
 - **[Rails 8.1 boots](#rails)** and serves requests through Rack (with nokogiri stubbed).
 - **.NET is right there**: `require "System.Windows.Forms"`, and Windows Forms and WPF load
@@ -83,8 +83,9 @@ irb(main):010> 1 / 0
         from (irb):10:in '<main>'
 ```
 
-That is **irb 1.16.0 and reline 0.6.3**, the same ones CRuby 4.0 ships — with syntax
-highlighting, auto-indent, Tab completion, history and `ls`/`show_source` — running on
+That is **irb 1.18.0 and reline 0.6.3** - reline as CRuby 4.0 ships it, irb the newer release
+with its startup banner - with syntax highlighting, auto-indent, Tab completion, history and
+`ls`/`show_source`, running on
 IronRuby. `io/console` is a C extension in CRuby, so IronRuby implements it over termios.
 
 Scripts run the same way, and gems install with real TLS:
@@ -205,7 +206,7 @@ version (`4.0.0`).
 | Big integers | `Microsoft.Scripting.Math` | `System.Numerics` |
 | Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
 | Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
-| REPL | irb from 2011 | **irb 1.16.0 + reline**, on a termios `io/console` |
+| REPL | irb from 2011 | **irb 1.18.0 + reline**, on a termios `io/console` |
 | Gems | RubyGems 1.3.7 (2010) | **RubyGems 4.0.16 + Bundler**, installing over real TLS; `gem install rails` resolves without compiling C |
 
 ## The prism front end
