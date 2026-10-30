@@ -62,7 +62,7 @@ drives it in CI with nobody at the keyboard.*
 ## A first look
 
 ```console
-$ ./irb.sh
+$ ./iirb.sh
 irb(main):001> RUBY_DESCRIPTION
 => "IronRuby 4.0.2 (4.0.0) on .NET 8.0.31 [x86_64-linux]"
 irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
@@ -102,8 +102,9 @@ RubyGems writes for an installed gem name the launcher by its path instead, `#!<
 so they only work where that path still does.) `ir.sh` and `ir.cmd` are its short name, the
 one IronRuby has used since 1.x, and run the same thing.
 `igem` / `iirb` / `irubyc` keep the i-prefix so they can sit on `PATH` beside CRuby's `gem`
-and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do. The unprefixed `gem`, `irb`, `bundle`,
-`bundler` and `irubyc` live in `Src/StdLib/bin` and are what `ironruby -S <name>` finds.
+and `irb`, as JRuby's `jgem`, `jirb` and `jrubyc` do; IronRuby has no launcher named `irb` or
+`gem`, so those stay CRuby's. The unprefixed `gem`, `irb`, `bundle`, `bundler` and `irubyc`
+live in `Src/StdLib/bin`, which is not on the PATH, and are what `ironruby -S <name>` finds.
 On Windows the build also has `ironrubyw.exe` next to `ir.exe`, as CRuby has `rubyw.exe` and
 JRuby `jrubyw.exe`: the same interpreter as a Windows GUI program, which gets no console
 window - for Windows Forms and WPF programs; `Samples\Notepad\notepad.cmd` starts it.
@@ -509,7 +510,7 @@ which skips RubyGems); later runs of the activity take a few milliseconds.
 ## Platforms
 
 Linux is the primary target and the one the numbers above are measured on. **Windows works**:
-`ir.cmd` and `irb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
+`ir.cmd` and `iirb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
 **0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
 `core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
 `poll(2)`, so `core/io` and the socket suites hang rather than fail). Win32OLE and
@@ -532,21 +533,21 @@ one and run the launchers in it:
 ```console
 $ tar xzf ironruby-4.0.2-linux-x64.tar.gz && cd ironruby-4.0.2-linux-x64
 $ ./ironruby -e 'puts RUBY_DESCRIPTION'
-$ ./irb.sh
+$ ./iirb.sh
 $ ./igem.sh install rack
 ```
 
 From 4.0.2 on, the archives have `ironruby` and `ironruby.cmd` (see above), and `ir.sh` /
 `ir.cmd` keep working; 4.0.1 and earlier have only those.
-On Windows, unzip it and use `ironruby.cmd`, `irb.cmd` and `igem.cmd`, or double-click
+On Windows, unzip it and use `ironruby.cmd`, `iirb.cmd` and `igem.cmd`, or double-click
 `Samples\Notepad\notepad.cmd`. From 4.0.3 on there is also an installer,
 `ironruby-<version>-win-x64-setup.exe`, in the style of RubyInstaller: it installs the same
 tree into `C:\IronRuby40-x64` (or a directory you choose), for you or for all users, puts
-that directory first on your PATH so `ironruby`, `ir`, `irb` and `igem` work from a new
+that directory first on your PATH so `ironruby`, `ir`, `iirb` and `igem` work from a new
 terminal, and its uninstaller removes it all again, installed gems included. It needs no
 admin rights for you alone, and keeps the default path free of spaces, which Bundler, the
-Rails templates and mspec do not handle. IronRuby's `irb` then comes before CRuby's on the
-PATH; CRuby's `ruby` and `gem` are not affected. `Util/installer/build-installer.sh` makes
+Rails templates and mspec do not handle. Nothing in that directory is named like a CRuby
+launcher, so CRuby's `ruby`, `irb` and `gem` are not affected. `Util/installer/build-installer.sh` makes
 it from the zip with [Inno Setup](https://jrsoftware.org/isinfo.php), from
 `Util/installer/ironruby.iss`. The archive has the same layout as a checkout, with the
 Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
@@ -634,7 +635,7 @@ Windows; `IronRuby.Prism.csproj` ships whichever shared libraries are there and
 $ dotnet build Src/Console/Ruby.Console.csproj -c Release -r win-x64 --self-contained false
 ```
 
-Copy `Src/Console/bin/Release/net8.0/win-x64/`, `Src/StdLib/`, `ir.cmd` and `irb.cmd` to the
+Copy `Src/Console/bin/Release/net8.0/win-x64/`, `Src/StdLib/`, `ironruby.cmd`, `ir.cmd` and `iirb.cmd` to the
 Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries under
 `Src\Console\bin\%IR_CONFIG%\net8.0\`, with or without a `win-x64` level). Then:
 
@@ -642,7 +643,7 @@ Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries u
 C:\ir> set IR_CONFIG=Release
 C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
 IronRuby 4.0.2 (4.0.0) on .NET 8.0.31 [x64-mswin64]
-C:\ir> irb.cmd
+C:\ir> iirb.cmd
 C:\ir> set RUBY_EXE=C:\ir\ir.cmd
 C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
 ```

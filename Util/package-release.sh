@@ -7,8 +7,9 @@
 #
 # The archive keeps the source tree's layout - the launchers at the top, the build in
 # Src/Console/bin/Release/<tfm>, the standard library in Src/StdLib - so ir.sh/ir.cmd,
-# igem, irb and irubyc work from the unpacked directory exactly as they do in a
-# checkout (ir.sh picks the Release build when there is no Debug one).
+# igem, iirb and irubyc work from the unpacked directory exactly as they do in a
+# checkout (ir.sh picks the Release build when there is no Debug one). There is no irb
+# or gem launcher: on a PATH those names are CRuby's.
 #
 # The build is self-contained, so it runs on a machine with no .NET installed, and
 # ReadyToRun, so IronRuby's own assemblies start as native code (see publish-r2r.sh).
@@ -41,8 +42,8 @@ dotnet publish "$IR_ROOT/Src/Console/Ruby.Console.csproj" \
 rm -f "$STAGE/Src/Console/bin/Release/$IR_TFM"/*.pdb
 
 case "$RID" in
-  win-*) launchers=(ironruby.cmd ir.cmd irb.cmd igem.cmd iirb.cmd irubyc.cmd) ;;
-  *)     launchers=(ironruby ir.sh irb.sh igem.sh iirb.sh irubyc.sh) ;;
+  win-*) launchers=(ironruby.cmd ir.cmd igem.cmd iirb.cmd irubyc.cmd) ;;
+  *)     launchers=(ironruby ir.sh igem.sh iirb.sh irubyc.sh) ;;
 esac
 for f in "${launchers[@]}" README.md; do
   cp "$IR_ROOT/$f" "$STAGE/"
@@ -114,7 +115,7 @@ esac
 
 # A quick check that the unpacked tree starts, before it is archived - and on Windows
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
-# without breaking anything else. irb has to start too: it loads reline, which on Windows
+# without breaking anything else. iirb has to start too: it loads reline, which on Windows
 # looks up Win32 functions through Fiddle, and 4.0.2's died there.
 # One command per line: set -e does not stop at a failure on the left of && - nor at a
 # case whose last && list failed that way - so a chain would let a broken tree through.
@@ -124,13 +125,13 @@ case "$RID" in
     (cd "$STAGE"
      cmd //c ironruby.cmd -e 'puts RUBY_DESCRIPTION'
      cmd //c ir.cmd -e 'puts RUBY_ENGINE'
-     printf 'puts 6 * 7\n' | cmd //c irb.cmd | grep -x 42
+     printf 'puts 6 * 7\n' | cmd //c iirb.cmd | grep -x 42
      cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")")
     ;;
   *)
     "$STAGE/ironruby" -e 'puts RUBY_DESCRIPTION'
     "$STAGE/ir.sh" -e 'puts RUBY_ENGINE'
-    printf 'puts 6 * 7\n' | "$STAGE/irb.sh" | grep -x 42
+    printf 'puts 6 * 7\n' | "$STAGE/iirb.sh" | grep -x 42
     ;;
 esac
 
