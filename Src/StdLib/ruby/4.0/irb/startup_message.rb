@@ -48,7 +48,9 @@ module IRB
       end
 
       def build_info_lines
-        version_line = "#{Color.colorize('IRB', [:BOLD])} v#{VERSION} - Ruby #{RUBY_VERSION}"
+        # IronRuby: name the interpreter that is running, as RUBY_DESCRIPTION does.
+        ruby = defined?(IRONRUBY_VERSION) ? "IronRuby #{IRONRUBY_VERSION} (#{RUBY_VERSION})" : "Ruby #{RUBY_VERSION}"
+        version_line = "#{Color.colorize('IRB', [:BOLD])} v#{VERSION} - #{ruby}"
         tip_line = colorize_tip(TIPS.sample)
         dir_line = Color.colorize(short_pwd, [:CYAN])
 
