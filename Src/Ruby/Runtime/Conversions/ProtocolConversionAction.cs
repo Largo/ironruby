@@ -399,7 +399,8 @@ namespace IronRuby.Runtime.Conversions {
             }
             methodMissing.InvalidateSitesOnMissingMethodAddition(methodName, context);
 
-            // an object that has overridden method_missing is asked for the conversion anyway (MakeMethodMissingConversion):
+            // An object that has overridden method_missing is asked for the conversion anyway (MakeMethodMissingConversion).
+            // One that has overridden only respond_to_missing? is asked that, but nothing could answer the call then:
             return IsOverridden(methodMissing.Info, context.BasicObjectClass) && !(methodMissing.Info is RubyScopeMethodMissingInfo);
         }
 

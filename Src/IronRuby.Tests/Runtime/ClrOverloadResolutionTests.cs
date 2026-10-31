@@ -200,16 +200,21 @@ Ref(T, ref Int32)
             public string Three(int value) { return "Three(Int32)"; }
             public string Three(double value) { return "Three(Double)"; }
 
+            public string Real(int value) { return "Real(Int32)"; }
+            public string Real(float value) { return "Real(Single)"; }
+            public string Real(double value) { return "Real(Double)"; }
+
             public string Pair(int a, int b) { return "Pair(Int32, Int32)"; }
             public string Pair(double a, double b) { return "Pair(Double, Double)"; }
         }
 
         /// <summary>
         /// A CLR method's String and Int32 parameters take any object by Ruby's conversion protocols (to_str, to_int),
-        /// which only the call can try. An overload whose conversion the object's class cannot do is no match for one
-        /// whose conversion it can do; if it can do none, the call fails with the TypeError calling any of them would
-        /// raise rather than as an ambiguity - passed positionally, splatted or by keyword. An object that can do both is an
-        /// ambiguity still.
+        /// which only the call can try. An overload whose conversion the object's class does not implement is no match for
+        /// one whose conversion it does; if it implements none, the call fails with MRI's TypeError rather than as an
+        /// ambiguity - passed positionally, splatted or by keyword. An object that implements both is an ambiguity still,
+        /// and so is a call whose other arguments prefer another overload. A Float parameter counts only a Numeric as
+        /// convertible, as MRI does, though IronRuby calls to_f of any object passed to it alone.
         /// </summary>
         public void ClrOverloadProtocolConversions1() {
             Context.ObjectClass.SetConstant("P", Context.GetClass(typeof(ProtocolOverloads)));
@@ -238,7 +243,16 @@ puts try { o.put('k', value: IntLike.new) }
 puts try { o.put(**{key: 'k', value: Time.now}) }
 puts try { o.three(Object.new) }
 puts try { o.three(FloatLike.new) }
-puts try { o.pair(FloatLike.new, 1) }
+puts try { o.real(IntLike.new) }
+puts try { o.real(FloatLike.new) }
+puts try { o.real(Time.now) }
+puts try { o.real(nil) }
+puts try { o.real(:sym) }
+puts try { o.pair(IntLike.new, 1.5) }
+puts try { o.pair(IntLike.new, IntLike.new) }
+puts try { System::Math.max(Time.at(100), 1) }
+puts try { System::Math.max('3', 1) }
+puts try { System::Math.min(FloatLike.new, 1.5) }
 ", @"
 Put(String, String)
 Put(String, Int32)
@@ -255,8 +269,17 @@ TypeError: no implicit conversion of Time into String or Integer
 Put(String, Int32)
 TypeError: no implicit conversion of Time into String or Integer
 TypeError: no implicit conversion of Object into String, Integer, or Float
-Three(Double)
-Pair(Double, Double)
+TypeError: no implicit conversion of FloatLike into String, Integer, or Float
+Real(Int32)
+TypeError: no implicit conversion of FloatLike into Integer
+TypeError: no implicit conversion of Time into Integer
+TypeError: no implicit conversion of nil into Integer
+TypeError: no implicit conversion of Symbol into Integer
+System::Reflection::AmbiguousMatchException: Found multiple methods for 'pair': pair(Integer, Integer), pair(Float, Float)
+Pair(Int32, Int32)
+TypeError: no implicit conversion of Time into Integer or Float
+TypeError: no implicit conversion of String into Integer or Float
+TypeError: no implicit conversion of FloatLike into Integer or Float
 ");
         }
 

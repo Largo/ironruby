@@ -61,11 +61,8 @@ namespace IronRuby.Runtime.Calls {
         // An optional list of assumptions upon arguments that were made during resolution.
         private List<Key<int, NarrowingLevel, Expression>> _argumentAssumptions;
 
-        // Arguments whose class the rule tests, because the protocol conversions their class can do decided the binding.
+        // Arguments whose class the rule tests, because the protocol conversions their class implements decided the binding.
         private List<DynamicMetaObject> _classTestedArguments;
-
-        // Whether an overload can take the arguments, as overloads are compared pairwise (see CanTakeArguments).
-        private Dictionary<MethodCandidate, bool> _candidatesTakingArguments;
 
         // Keywords of a call to a CLR method that bind by name: to its parameters, and for a constructor
         // also to the properties and fields of the new object. Null when the call passes no keywords or
@@ -815,12 +812,12 @@ namespace IronRuby.Runtime.Calls {
 
             // On the last narrowing level any object converts to a CLR method's String, numeric, Array or Hash parameter by
             // Ruby's conversion protocols (to_str, to_int, ...), and only the call finds out whether it can. A conversion
-            // the object's class cannot do is the worst there is:
+            // the object's class does not implement is the worst there is:
             if (level >= NarrowingLevel.Three) {
-                bool oneFails = ConversionCanOnlyFail(arg, candidateOne);
-                bool twoFails = ConversionCanOnlyFail(arg, candidateTwo);
-                if (oneFails != twoFails) {
-                    return oneFails ? Candidate.Two : Candidate.One;
+                bool oneLacks = LacksImplicitConversion(arg, candidateOne);
+                bool twoLacks = LacksImplicitConversion(arg, candidateTwo);
+                if (oneLacks != twoLacks) {
+                    return oneLacks ? Candidate.Two : Candidate.One;
                 }
             }
 
@@ -828,31 +825,14 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols and its class cannot
-        /// do that one: the call could only raise the conversion's TypeError.
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols and its class does not
+        /// implement that conversion the way MRI's implicit conversions go: it has no to_str, to_int, to_ary or to_hash for
+        /// it, or for a floating-point parameter it is not a Numeric. The call then raises the conversion's TypeError - or
+        /// parses a String, calls to_f of another object or passes an Int32? parameter null, more than MRI would do, which
+        /// should not make an overload a better choice than another.
         /// </summary>
-        private bool ConversionCanOnlyFail(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
-            return NeedsProtocolConversion(arg, parameter) && !MayConvertByProtocol(arg, parameter.Type);
-        }
-
-        /// <summary>
-        /// False if one of the arguments converts to its parameter of <paramref name="candidate"/> by a protocol conversion
-        /// that can only fail (<see cref="ConversionCanOnlyFail"/>).
-        /// </summary>
-        private bool CanTakeArguments(ApplicableCandidate/*!*/ candidate) {
-            bool result;
-            if (_candidatesTakingArguments == null) {
-                _candidatesTakingArguments = new Dictionary<MethodCandidate, bool>();
-            } else if (_candidatesTakingArguments.TryGetValue(candidate.Method, out result)) {
-                return result;
-            }
-
-            var args = GetActualArguments();
-            result = true;
-            for (int i = 0; i < args.Count && result; i++) {
-                result = !ConversionCanOnlyFail(args[i], candidate.GetParameter(i));
-            }
-            return _candidatesTakingArguments[candidate.Method] = result;
+        private bool LacksImplicitConversion(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            return NeedsProtocolConversion(arg, parameter) && !HasImplicitConversion(arg, parameter.Type);
         }
 
         /// <summary>
@@ -872,11 +852,13 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// False if the protocol conversion of the argument to <paramref name="type"/> can only fail: its class has no
-        /// to_xxx method for it and does not answer through respond_to? or method_missing either
-        /// (<see cref="ProtocolConversionAction.CanConvert"/>). That depends on the class, so the rule tests it from here on.
+        /// False if the class of the argument does not implement the protocol conversion to <paramref name="type"/>: it has
+        /// no to_xxx method for it and does not answer through respond_to? or method_missing either
+        /// (<see cref="ProtocolConversionAction.CanConvert"/>), or the conversion is to_f and the class is not a Numeric -
+        /// MRI converts nothing else to a Float implicitly (rb_to_float: "can't convert String into Float"). That depends
+        /// on the class, so the rule tests it from here on.
         /// </summary>
-        private bool MayConvertByProtocol(DynamicMetaObject/*!*/ arg, Type/*!*/ type) {
+        private bool HasImplicitConversion(DynamicMetaObject/*!*/ arg, Type/*!*/ type) {
             string methodName;
             if (!arg.HasValue || RubyMetaBinder.IsForeignMetaObject(arg) ||
                 (methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type)) == null) {
@@ -886,8 +868,17 @@ namespace IronRuby.Runtime.Calls {
             RubyClass cls = Context.GetImmediateClassOf(arg.Value);
             using (Context.ClassHierarchyLocker()) {
                 AddArgumentClassTest(arg, cls);
+                if (methodName == Symbols.ToF && !IsNumeric(cls)) {
+                    return false;
+                }
                 return ProtocolConversionAction.CanConvert(cls, methodName);
             }
+        }
+
+        private bool IsNumeric(RubyClass/*!*/ cls) {
+            // Integer < Numeric:
+            RubyClass integer = Context.IntegerClass;
+            return integer != null && integer.SuperClass != null && cls.IsSubclassOf(integer.SuperClass);
         }
 
         private void AddArgumentClassTest(DynamicMetaObject/*!*/ arg, RubyClass/*!*/ cls) {
@@ -914,13 +905,8 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// Decides between overloads that no argument prefers. One that can take the arguments wins over one that could
-        /// only raise because the class of an argument cannot do the protocol conversion it needs - also where the
-        /// arguments disagree: of Pair(Int32, Int32) and Pair(Double, Double) given an object with only #to_f and a 1,
-        /// the first takes the 1 more closely but only the second can take the object.
-        ///
-        /// Then C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only
-        /// prefers a non-generic method to a generic one (C# spec, "better function member"). In C#'s order:
+        /// C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only prefers
+        /// a non-generic method to a generic one (C# spec, "better function member"). In C#'s order:
         /// - one that takes the arguments in its normal form wins over one that expands its params array;
         /// - of two that expand it, the one with more declared parameters wins;
         /// - one that gets an argument for each of its parameters wins over one that needs a default value;
@@ -930,13 +916,6 @@ namespace IronRuby.Runtime.Calls {
         ///   Func&lt;int, int&gt; selector, that is the first.
         /// </summary>
         protected override Candidate CompareEquivalentCandidates(ApplicableCandidate/*!*/ one, ApplicableCandidate/*!*/ two) {
-            if (_implicitProtocolConversions) {
-                bool oneTakes = CanTakeArguments(one), twoTakes = CanTakeArguments(two);
-                if (oneTakes != twoTakes) {
-                    return oneTakes ? Candidate.One : Candidate.Two;
-                }
-            }
-
             Candidate result = base.CompareEquivalentCandidates(one, two);
             if (result != Candidate.Equivalent) {
                 return result;
@@ -1386,9 +1365,10 @@ namespace IronRuby.Runtime.Calls {
 
         /// <summary>
         /// Overloads found equally good may all be ones that cannot take the arguments: each needs a protocol conversion
-        /// of an argument whose class cannot do it, as Method(String, String) and Method(String, Integer) do for a Time.
-        /// Then the call fails as calling any of them would, with MRI's TypeError ("no implicit conversion of Time into
-        /// String or Integer"), not as an ambiguity. Null if some overload could take the arguments.
+        /// of an argument whose class does not implement it (<see cref="LacksImplicitConversion"/>), as Method(String, String)
+        /// and Method(String, Integer) do for a Time. Then the call fails with MRI's TypeError for such a conversion ("no
+        /// implicit conversion of Time into String or Integer"), not as an ambiguity. Null if some overload could take the
+        /// arguments.
         /// </summary>
         private Expression MakeProtocolConversionError(BindingTarget/*!*/ target) {
             if (!_implicitProtocolConversions) {
@@ -1403,7 +1383,7 @@ namespace IronRuby.Runtime.Calls {
                 int failed = -1;
                 for (int i = 0; i < args.Count && failed < 0; i++) {
                     ParameterWrapper parameter = GetBoundParameter(parameters, args, i);
-                    if (parameter != null && ConversionCanOnlyFail(args[i], parameter)) {
+                    if (parameter != null && LacksImplicitConversion(args[i], parameter)) {
                         failures.Add(new KeyValuePair<int, Type>(i, parameter.Type));
                         failed = i;
                     }
@@ -1458,9 +1438,20 @@ namespace IronRuby.Runtime.Calls {
             return Context.GetImmediateClassOf(value).GetNonSingletonClass().GetNonNullName(Context);
         }
 
-        // A CLR String parameter takes a Ruby String, and a nullable one a value or nil:
+        // The class MRI names for the implicit conversion the parameter needs, whatever CLR type it has: Integer for a Byte,
+        // an Int64 or an Int32? parameter alike (to_int), Float for a Single (to_f), String for a CLR String (to_str).
         private string/*!*/ GetProtocolConversionTargetName(Type/*!*/ type) {
-            return (type == typeof(string)) ? "String" : GetConversionTargetName(Nullable.GetUnderlyingType(type) ?? type);
+            string methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type);
+            if (methodName == Symbols.ToInt) {
+                return "Integer";
+            }
+            if (methodName == Symbols.ToF) {
+                return "Float";
+            }
+            if (methodName == Symbols.ToStr) {
+                return "String";
+            }
+            return GetConversionTargetName(Nullable.GetUnderlyingType(type) ?? type);
         }
 
         // "A", "A or B", "A, B, or C" - the way DescribeExpectedArgumentCount lists arities.
