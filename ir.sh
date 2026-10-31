@@ -23,14 +23,24 @@ S="$IR_ROOT/Src/StdLib"
 # marks the assemblies non-optimizable, so the JIT leaves the whole runtime unoptimized
 # too - and it passes the same specs and the same IronRuby.Tests.  Util/run-tests.sh and
 # regen-initializers.sh read IR_CONFIG as well, so one export covers a whole session.
-# Debug stays the default because every worktree and every agent script builds it.
-# A binary release (Util/package-release.sh) ships only the Release build: when
-# IR_CONFIG is not set and there is no Debug build, run that one.
+# Debug is what an unconfigured run uses, because every worktree and agent script builds it.
+# A binary release (Util/package-release.sh) ships only the Release build: when IR_CONFIG is
+# not set and there is no Debug build, run that one.
+# Once an R2R host has been published (Util/publish-r2r.sh) it is the default instead: startup
+# is about a third faster (`ir -e 1`: 1.30 s -> 0.80 s). It is skipped while a Debug or Release
+# build is newer than it, since that build has changes the host does not have.
 if [ -z "$IR_CONFIG" ]; then
   IR_CONFIG=Debug
   if [ ! -x "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir" ] &&
      [ -x "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir" ]; then
     IR_CONFIG=Release
+  fi
+  R2R_DLL="$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net8.0}/ir.dll"
+  if [ -x "$IR_ROOT/Src/Console/bin/R2R/${IR_TFM:-net8.0}/ir" ] &&
+     [ -z "$(find "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir.dll" \
+                  "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir.dll" \
+                  -maxdepth 0 -newer "$R2R_DLL" 2>/dev/null)" ]; then
+    IR_CONFIG=R2R
   fi
 fi
 
