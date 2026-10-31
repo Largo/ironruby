@@ -467,6 +467,8 @@ namespace IronRuby.Tests {
                 Load1,
                 LibraryLoader1,
                 LibraryLoader2,
+                CaseEquals1,
+                CaseEquals2,
 
                 ClrFields1,
                 ClrFields2,
