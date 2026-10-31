@@ -920,11 +920,14 @@ namespace IronRuby.Runtime.Calls {
         /// the first takes the 1 more closely but only the second can take the object.
         ///
         /// Then C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only
-        /// prefers a non-generic method to a generic one: the overload whose declared parameter types are more specific
-        /// wins, a type parameter being less specific than any other type (C# spec, "better function member"). Of LINQ's
-        /// Max&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, int&gt;) and
-        /// Max&lt;TSource, TResult&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, TResult&gt;), both Max(List&lt;int&gt;, Func&lt;int, int&gt;)
-        /// for a Func&lt;int, int&gt; selector, that is the first.
+        /// prefers a non-generic method to a generic one (C# spec, "better function member"). In C#'s order:
+        /// - one that takes the arguments in its normal form wins over one that expands its params array;
+        /// - of two that expand it, the one with more declared parameters wins;
+        /// - one that gets an argument for each of its parameters wins over one that needs a default value;
+        /// - the one whose declared parameter types are more specific wins, a type parameter being less specific than any
+        ///   other type. Of LINQ's Max&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, int&gt;) and
+        ///   Max&lt;TSource, TResult&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, TResult&gt;), both Max(List&lt;int&gt;, Func&lt;int, int&gt;) for a
+        ///   Func&lt;int, int&gt; selector, that is the first.
         /// </summary>
         protected override Candidate CompareEquivalentCandidates(ApplicableCandidate/*!*/ one, ApplicableCandidate/*!*/ two) {
             if (_implicitProtocolConversions) {
@@ -947,13 +950,42 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
+            var args = GetActualArguments();
+            for (int i = 0; i < args.Count; i++) {
+                if (one.GetParameter(i).Type != two.GetParameter(i).Type) {
+                    return result;
+                }
+            }
+
+            bool expandedOne, expandedTwo, defaultsOne, defaultsTwo;
+            if (!TryGetArgumentForm(one.Method, declarationOne, out expandedOne, out defaultsOne) ||
+                !TryGetArgumentForm(two.Method, declarationTwo, out expandedTwo, out defaultsTwo)) {
+                return result;
+            }
+
+            if (expandedOne != expandedTwo) {
+                return expandedOne ? Candidate.Two : Candidate.One;
+            }
+
+            int countOne = declarationOne.GetParameters().Length, countTwo = declarationTwo.GetParameters().Length;
+            if (expandedOne && countOne != countTwo) {
+                return countOne > countTwo ? Candidate.One : Candidate.Two;
+            }
+
+            if (defaultsOne != defaultsTwo) {
+                return defaultsOne ? Candidate.Two : Candidate.One;
+            }
+
+            // Of two that need default values for different numbers of parameters C# prefers neither:
+            if (countOne != countTwo) {
+                return result;
+            }
+
             int specificity = 0;
-            for (int i = 0; i < GetActualArguments().Count; i++) {
-                ParameterWrapper parameterOne = one.GetParameter(i), parameterTwo = two.GetParameter(i);
+            for (int i = 0; i < args.Count; i++) {
                 Type declaredOne, declaredTwo;
-                if (parameterOne.Type != parameterTwo.Type ||
-                    !TryGetDeclaredType(declarationOne, parameterOne, out declaredOne) ||
-                    !TryGetDeclaredType(declarationTwo, parameterTwo, out declaredTwo)) {
+                if (!TryGetDeclaredType(declarationOne, one.GetParameter(i), out declaredOne) ||
+                    !TryGetDeclaredType(declarationTwo, two.GetParameter(i), out declaredTwo)) {
                     return result;
                 }
 
@@ -994,6 +1026,37 @@ namespace IronRuby.Runtime.Calls {
             return method.IsGenericMethod ? ((MethodInfo)method).GetGenericMethodDefinition() : method;
         }
 
+        /// <summary>
+        /// Whether the candidate expands the params array of the method, into any number of items including none, and
+        /// whether it substitutes the default value of a parameter no argument is passed for. False if it leaves out a
+        /// parameter for another reason, such as an out parameter it returns.
+        /// </summary>
+        private static bool TryGetArgumentForm(MethodCandidate/*!*/ candidate, MethodBase/*!*/ declaration, out bool expanded,
+            out bool usesDefaults) {
+
+            ParameterInfo[] declared = declaration.GetParameters();
+            var passed = new bool[declared.Length];
+            foreach (ParameterWrapper parameter in candidate.GetParameters()) {
+                ParameterInfo info = parameter.ParameterInfo;
+                if (info != null && info.Position >= 0 && info.Position < declared.Length) {
+                    passed[info.Position] = true;
+                }
+            }
+
+            expanded = usesDefaults = false;
+            for (int i = 0; i < declared.Length; i++) {
+                if (declared[i].IsDefined(typeof(ParamArrayAttribute), false)) {
+                    expanded = !candidate.HasParamsArray;
+                } else if (!passed[i]) {
+                    if (!declared[i].IsOptional) {
+                        return false;
+                    }
+                    usesDefaults = true;
+                }
+            }
+            return true;
+        }
+
         private static bool TryGetDeclaredType(MethodBase/*!*/ declaration, ParameterWrapper/*!*/ parameter, out Type declaredType) {
             ParameterInfo info = parameter.ParameterInfo;
             if (info == null) {
@@ -1002,14 +1065,27 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
 
-            // C# compares the parameters as declared, not as expanded from a params array or reduced from a by-ref:
-            if (info.ParameterType != parameter.Type || info.Position < 0) {
+            if (info.Position < 0) {
                 declaredType = null;
                 return false;
             }
 
             declaredType = declaration.GetParameters()[info.Position].ParameterType;
-            return true;
+
+            // a by-ref parameter takes a StrongBox or the value itself, but C# compares ref T to ref int:
+            if (info.ParameterType == parameter.Type || info.ParameterType.IsByRef) {
+                return true;
+            }
+
+            // an item of an expanded params array, compared by the item type:
+            if (declaredType.IsArray && parameter.Type == info.ParameterType.GetElementType() &&
+                info.IsDefined(typeof(ParamArrayAttribute), false)) {
+                declaredType = declaredType.GetElementType();
+                return true;
+            }
+
+            declaredType = null;
+            return false;
         }
 
         /// <summary>

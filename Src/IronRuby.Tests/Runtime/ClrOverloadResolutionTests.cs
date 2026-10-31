@@ -124,6 +124,74 @@ true
 ");
         }
 
+        // Generic overloads C# tells apart by how they take the arguments, before it compares their parameter types.
+        public static class TieBreakForms {
+            // Each parameter gets an argument: wins over one that needs a default value, though that is more specific.
+            public static string Defaults<T>(T a, T b) { return "Defaults(T, T)"; }
+            public static string Defaults<T>(int a, T b, int c = 0) { return "Defaults(Int32, T, Int32=)"; }
+
+            // The normal form wins over an expanded params array, also one expanded into no items.
+            public static string Normal<T>(T a, T b) { return "Normal(T, T)"; }
+            public static string Normal<T>(int a, T b, params int[] rest) { return "Normal(Int32, T, params Int32[])"; }
+
+            // Of two expanded ones the one with more declared parameters wins, ...
+            public static string Declared<T>(T a, params T[] rest) { return "Declared(T, params T[])"; }
+            public static string Declared<T>(T a, T b, params T[] rest) { return "Declared(T, T, params T[])"; }
+
+            // ... or of as many the more specific one, the items compared by their type.
+            public static string Expanded<T>(T a, params T[] rest) { return "Expanded(T, params T[])"; }
+            public static string Expanded<T>(int a, params T[] rest) { return "Expanded(Int32, params T[])"; }
+            public static string Rest<T>(T a, params T[] rest) { return "Rest(T, params T[])"; }
+            public static string Rest<T>(T a, params int[] rest) { return "Rest(T, params Int32[])"; }
+
+            // Of two that need default values the more specific one wins if they have as many parameters, else neither.
+            public static string SameDefaults<T>(T a, T b, int c = 0) { return "SameDefaults(T, T, Int32=)"; }
+            public static string SameDefaults<T>(int a, T b, int c = 0) { return "SameDefaults(Int32, T, Int32=)"; }
+            public static string OtherDefaults<T>(T a, T b, int c = 0, int d = 0) { return "OtherDefaults(T, T, Int32=, Int32=)"; }
+            public static string OtherDefaults<T>(int a, T b, int c = 0) { return "OtherDefaults(Int32, T, Int32=)"; }
+
+            // ref Int32 is more specific than ref T.
+            public static string Ref<T>(T a, ref int b) { b = 1; return "Ref(T, ref Int32)"; }
+            public static string Ref<T>(T a, ref T b) { return "Ref(T, ref T)"; }
+        }
+
+        /// <summary>
+        /// C#'s tie-break rules come in order: the normal form over an expanded params array, of two expanded ones the
+        /// one with more declared parameters, all parameters passed over a default value substituted - and only then the
+        /// more specific parameter types. Each result is the one the C# compiler picks; "ambiguous" is its error CS0121.
+        /// </summary>
+        public void ClrOverloadGenericTieBreak3() {
+            Context.ObjectClass.SetConstant("F", Context.GetClass(typeof(TieBreakForms)));
+            TestOutput(@"
+def try = (yield rescue $!.class.name)
+puts try { F.defaults(1, 2) }
+puts try { F.defaults(1, 2, 3) }
+puts try { F.normal(1, 2) }
+puts try { F.normal(1, 2, 3) }
+puts try { F.declared(1, 2, 3) }
+puts try { F.expanded(1, 2) }
+puts try { F.expanded(1, 2, 3) }
+puts try { F.rest(1, 2) }
+puts try { F.rest(1) }
+puts try { F.same_defaults(1, 2) }
+puts try { F.other_defaults(1, 2) }
+puts try { F.ref(1, System::Runtime::CompilerServices::StrongBox[Integer].new(0)) }
+", @"
+Defaults(T, T)
+Defaults(Int32, T, Int32=)
+Normal(T, T)
+Normal(Int32, T, params Int32[])
+Declared(T, T, params T[])
+Expanded(Int32, params T[])
+Expanded(Int32, params T[])
+Rest(T, params Int32[])
+System::Reflection::AmbiguousMatchException
+SameDefaults(Int32, T, Int32=)
+System::Reflection::AmbiguousMatchException
+Ref(T, ref Int32)
+");
+        }
+
         public class ProtocolOverloads {
             public string Put(string key, string value) { return "Put(String, String)"; }
             public string Put(string key, int value) { return "Put(String, Int32)"; }
