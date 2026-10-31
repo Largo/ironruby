@@ -41,4 +41,12 @@
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
+  <!-- A Release build on Linux also produces the ReadyToRun host (Util/publish-r2r.sh), which ir.sh runs by default:
+       it starts about a third faster. The publish is a RuntimeIdentifier build of its own, so the target stays out of
+       it, and IronRubyNestedR2R stops a publish from running it again. A failed publish only warns: the IL build is
+       still good, and ir.sh does not pick a host older than the build. -->
+  <Target Name="IronRubyReadyToRunHost" AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != '' and '$(RuntimeIdentifier)' == '' and '$(IronRubyNestedR2R)' != 'true' and '$(IronRubyR2R)' != 'false' and $([MSBuild]::IsOSPlatform('Linux'))">
+    <Exec ContinueOnError="WarnAndContinue" Command="&quot;$(DOTNET_HOST_PATH)&quot; publish &quot;$(MSBuildProjectFullPath)&quot; -c Release -r linux-x64 --self-contained false -f $(TargetFramework) -p:PublishReadyToRun=true -p:IronRubyNestedR2R=true -p:IronRubyTargetFrameworks=$(TargetFramework) -p:DlrSourceDir=&quot;$(DlrSourceDir)&quot; -o &quot;$(MSBuildProjectDirectory)/bin/R2R/$(TargetFramework)&quot; -nologo" />
+  </Target>
 </Project>
