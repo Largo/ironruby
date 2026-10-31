@@ -810,6 +810,126 @@ namespace IronRuby.Runtime.Calls {
             return base.SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
         }
 
+        /// <summary>
+        /// C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only
+        /// prefers a non-generic method to a generic one: the overload whose declared parameter types are more specific
+        /// wins, a type parameter being less specific than any other type (C# spec, "better function member"). Of LINQ's
+        /// Max&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, int&gt;) and
+        /// Max&lt;TSource, TResult&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, TResult&gt;), both Max(List&lt;int&gt;, Func&lt;int, int&gt;)
+        /// for a Func&lt;int, int&gt; selector, that is the first.
+        /// </summary>
+        protected override Candidate CompareEquivalentCandidates(ApplicableCandidate/*!*/ one, ApplicableCandidate/*!*/ two) {
+            Candidate result = base.CompareEquivalentCandidates(one, two);
+            if (result != Candidate.Equivalent) {
+                return result;
+            }
+
+            MethodBase declarationOne = GetDeclaration(one.Method.Overload);
+            MethodBase declarationTwo = GetDeclaration(two.Method.Overload);
+            if (declarationOne == null || declarationTwo == null ||
+                declarationOne == one.Method.Overload.ReflectionInfo && declarationTwo == two.Method.Overload.ReflectionInfo) {
+                // nothing generic to compare
+                return result;
+            }
+
+            int specificity = 0;
+            for (int i = 0; i < GetActualArguments().Count; i++) {
+                ParameterWrapper parameterOne = one.GetParameter(i), parameterTwo = two.GetParameter(i);
+                Type declaredOne, declaredTwo;
+                if (parameterOne.Type != parameterTwo.Type ||
+                    !TryGetDeclaredType(declarationOne, parameterOne, out declaredOne) ||
+                    !TryGetDeclaredType(declarationTwo, parameterTwo, out declaredTwo)) {
+                    return result;
+                }
+
+                int c = CompareSpecificity(declaredOne, declaredTwo);
+                if (c != 0) {
+                    if (specificity == -c) {
+                        return result;
+                    }
+                    specificity = c;
+                }
+            }
+
+            return specificity > 0 ? Candidate.One : specificity < 0 ? Candidate.Two : result;
+        }
+
+        /// <summary>
+        /// The method with its declared parameter types - those of a generic method's definition, in a generic type's
+        /// definition - or null if it cannot be found.
+        /// </summary>
+        private static MethodBase GetDeclaration(OverloadInfo/*!*/ overload) {
+            MethodBase method = overload.ReflectionInfo;
+            if (method == null || method.ContainsGenericParameters) {
+                return null;
+            }
+
+            if (method.DeclaringType != null && method.DeclaringType.IsConstructedGenericType) {
+                try {
+                    return method.Module.ResolveMethod(method.MetadataToken);
+                } catch (ArgumentException) {
+                    return null;
+                } catch (InvalidOperationException) {
+                    return null;
+                } catch (NotSupportedException) {
+                    return null;
+                }
+            }
+
+            return method.IsGenericMethod ? ((MethodInfo)method).GetGenericMethodDefinition() : method;
+        }
+
+        private static bool TryGetDeclaredType(MethodBase/*!*/ declaration, ParameterWrapper/*!*/ parameter, out Type declaredType) {
+            ParameterInfo info = parameter.ParameterInfo;
+            if (info == null) {
+                // the instance, or a parameter the binder adds:
+                declaredType = parameter.Type;
+                return true;
+            }
+
+            // C# compares the parameters as declared, not as expanded from a params array or reduced from a by-ref:
+            if (info.ParameterType != parameter.Type || info.Position < 0) {
+                declaredType = null;
+                return false;
+            }
+
+            declaredType = declaration.GetParameters()[info.Position].ParameterType;
+            return true;
+        }
+
+        /// <summary>
+        /// +1 if <paramref name="one"/> is more specific than <paramref name="two"/>, -1 if it is less, 0 otherwise: a type
+        /// parameter is less specific than any other type, and a constructed type or an array is more specific than another
+        /// of the same shape if one of its type arguments is and none is less (C# spec, "better function member").
+        /// </summary>
+        private static int CompareSpecificity(Type/*!*/ one, Type/*!*/ two) {
+            if (one.IsGenericParameter || two.IsGenericParameter) {
+                return (one.IsGenericParameter == two.IsGenericParameter) ? 0 : one.IsGenericParameter ? -1 : +1;
+            }
+
+            if (one.IsArray && two.IsArray && one.GetArrayRank() == two.GetArrayRank() ||
+                one.IsByRef && two.IsByRef || one.IsPointer && two.IsPointer) {
+                return CompareSpecificity(one.GetElementType(), two.GetElementType());
+            }
+
+            if (one.IsGenericType && two.IsGenericType && one.GetGenericTypeDefinition() == two.GetGenericTypeDefinition()) {
+                Type[] argsOne = one.GetGenericArguments(), argsTwo = two.GetGenericArguments();
+                int result = 0;
+                for (int i = 0; i < argsOne.Length; i++) {
+                    int c = CompareSpecificity(argsOne[i], argsTwo[i]);
+                    if (c != 0) {
+                        if (result == -c) {
+                            return 0;
+                        }
+                        result = c;
+                    }
+                }
+                return result;
+            }
+
+            return 0;
+        }
+
         public override Expression/*!*/ Convert(DynamicMetaObject/*!*/ metaObject, Type restrictedType, ParameterInfo info, Type/*!*/ toType) {
             Expression expr = metaObject.Expression;
             Type fromType = restrictedType ?? expr.Type;
