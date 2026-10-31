@@ -61,6 +61,12 @@ namespace IronRuby.Runtime.Calls {
         // An optional list of assumptions upon arguments that were made during resolution.
         private List<Key<int, NarrowingLevel, Expression>> _argumentAssumptions;
 
+        // Arguments whose class the rule tests, because the protocol conversions their class can do decided the binding.
+        private List<DynamicMetaObject> _classTestedArguments;
+
+        // Whether an overload can take the arguments, as overloads are compared pairwise (see CanTakeArguments).
+        private Dictionary<MethodCandidate, bool> _candidatesTakingArguments;
+
         // Keywords of a call to a CLR method that bind by name: to its parameters, and for a constructor
         // also to the properties and fields of the new object. Null when the call passes no keywords or
         // they are passed on as a positional Hash. _keywordNames holds the CLR name each keyword binds to.
@@ -807,11 +813,113 @@ namespace IronRuby.Runtime.Calls {
                 return Candidate.One;
             }
 
+            // On the last narrowing level any object converts to a CLR method's String, numeric, Array or Hash parameter by
+            // Ruby's conversion protocols (to_str, to_int, ...), and only the call finds out whether it can. A conversion
+            // the object's class cannot do is the worst there is:
+            if (level >= NarrowingLevel.Three) {
+                bool oneFails = ConversionCanOnlyFail(arg, candidateOne);
+                bool twoFails = ConversionCanOnlyFail(arg, candidateTwo);
+                if (oneFails != twoFails) {
+                    return oneFails ? Candidate.Two : Candidate.One;
+                }
+            }
+
             return base.SelectBestConversionFor(arg, candidateOne, candidateTwo, level);
         }
 
         /// <summary>
-        /// C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols and its class cannot
+        /// do that one: the call could only raise the conversion's TypeError.
+        /// </summary>
+        private bool ConversionCanOnlyFail(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            return NeedsProtocolConversion(arg, parameter) && !MayConvertByProtocol(arg, parameter.Type);
+        }
+
+        /// <summary>
+        /// False if one of the arguments converts to its parameter of <paramref name="candidate"/> by a protocol conversion
+        /// that can only fail (<see cref="ConversionCanOnlyFail"/>).
+        /// </summary>
+        private bool CanTakeArguments(ApplicableCandidate/*!*/ candidate) {
+            bool result;
+            if (_candidatesTakingArguments == null) {
+                _candidatesTakingArguments = new Dictionary<MethodCandidate, bool>();
+            } else if (_candidatesTakingArguments.TryGetValue(candidate.Method, out result)) {
+                return result;
+            }
+
+            var args = GetActualArguments();
+            result = true;
+            for (int i = 0; i < args.Count && result; i++) {
+                result = !ConversionCanOnlyFail(args[i], candidate.GetParameter(i));
+            }
+            return _candidatesTakingArguments[candidate.Method] = result;
+        }
+
+        /// <summary>
+        /// True if the argument converts to the parameter only by one of Ruby's conversion protocols, which a CLR
+        /// method's parameter of a String, numeric, IList or IDictionary type accepts any object for on the last
+        /// narrowing level (<see cref="Converter.CanConvertFrom"/>).
+        /// </summary>
+        private bool NeedsProtocolConversion(DynamicMetaObject/*!*/ arg, ParameterWrapper/*!*/ parameter) {
+            if (!_implicitProtocolConversions || !ProtocolConversionAction.HasDefaultConversion(parameter.Type)) {
+                return false;
+            }
+
+            Type argType = arg.GetLimitType();
+            bool explicitProtocol = HasExplicitProtocolConversion(parameter);
+            return !Converter.CanConvertFrom(arg, argType, parameter.Type, parameter.ProhibitNull, NarrowingLevel.Two, explicitProtocol, true).IsConvertible
+                && Converter.CanConvertFrom(arg, argType, parameter.Type, parameter.ProhibitNull, NarrowingLevel.Three, explicitProtocol, true).IsConvertible;
+        }
+
+        /// <summary>
+        /// False if the protocol conversion of the argument to <paramref name="type"/> can only fail: its class has no
+        /// to_xxx method for it and does not answer through respond_to? or method_missing either
+        /// (<see cref="ProtocolConversionAction.CanConvert"/>). That depends on the class, so the rule tests it from here on.
+        /// </summary>
+        private bool MayConvertByProtocol(DynamicMetaObject/*!*/ arg, Type/*!*/ type) {
+            string methodName;
+            if (!arg.HasValue || RubyMetaBinder.IsForeignMetaObject(arg) ||
+                (methodName = ProtocolConversionAction.GetDefaultConversionMethodName(Context, type)) == null) {
+                return true;
+            }
+
+            RubyClass cls = Context.GetImmediateClassOf(arg.Value);
+            using (Context.ClassHierarchyLocker()) {
+                AddArgumentClassTest(arg, cls);
+                return ProtocolConversionAction.CanConvert(cls, methodName);
+            }
+        }
+
+        private void AddArgumentClassTest(DynamicMetaObject/*!*/ arg, RubyClass/*!*/ cls) {
+            if (_classTestedArguments == null) {
+                _classTestedArguments = new List<DynamicMetaObject>();
+            } else if (_classTestedArguments.Contains(arg)) {
+                return;
+            }
+            _classTestedArguments.Add(arg);
+
+            // A splatted argument is read from the list the splat test stores, so it can only be tested after that test,
+            // the way AddArgumentRestrictions does:
+            var args = GetActualArguments();
+            int index = args.Arguments.IndexOf(arg);
+            bool splatted = (index >= 0) ? (index >= args.FirstSplattedArg && index <= _lastSplattedArg) : _keywordsSplatted;
+
+            bool treatRestrictionsAsConditions = _metaBuilder.TreatRestrictionsAsConditions;
+            _metaBuilder.TreatRestrictionsAsConditions |= splatted;
+            try {
+                _metaBuilder.AddTargetTypeTest(arg.Value, cls, arg.Expression, _args.MetaContext, ProtocolConversionAction.DefaultConversionMethodNames);
+            } finally {
+                _metaBuilder.TreatRestrictionsAsConditions = treatRestrictionsAsConditions;
+            }
+        }
+
+        /// <summary>
+        /// Decides between overloads that no argument prefers. One that can take the arguments wins over one that could
+        /// only raise because the class of an argument cannot do the protocol conversion it needs - also where the
+        /// arguments disagree: of Pair(Int32, Int32) and Pair(Double, Double) given an object with only #to_f and a 1,
+        /// the first takes the 1 more closely but only the second can take the object.
+        ///
+        /// Then C#'s tie-break between overloads that take the same parameter types once instantiated, where the DLR only
         /// prefers a non-generic method to a generic one: the overload whose declared parameter types are more specific
         /// wins, a type parameter being less specific than any other type (C# spec, "better function member"). Of LINQ's
         /// Max&lt;TSource&gt;(IEnumerable&lt;TSource&gt;, Func&lt;TSource, int&gt;) and
@@ -819,6 +927,13 @@ namespace IronRuby.Runtime.Calls {
         /// for a Func&lt;int, int&gt; selector, that is the first.
         /// </summary>
         protected override Candidate CompareEquivalentCandidates(ApplicableCandidate/*!*/ one, ApplicableCandidate/*!*/ two) {
+            if (_implicitProtocolConversions) {
+                bool oneTakes = CanTakeArguments(one), twoTakes = CanTakeArguments(two);
+                if (oneTakes != twoTakes) {
+                    return oneTakes ? Candidate.One : Candidate.Two;
+                }
+            }
+
             Candidate result = base.CompareEquivalentCandidates(one, two);
             if (result != Candidate.Equivalent) {
                 return result;
@@ -1137,7 +1252,7 @@ namespace IronRuby.Runtime.Calls {
             Expression exceptionValue;
             switch (target.Result) {
                 case BindingResult.AmbiguousMatch:
-                    exceptionValue = MakeAmbiguousCallError(target);
+                    exceptionValue = MakeProtocolConversionError(target) ?? MakeAmbiguousCallError(target);
                     break;
 
                 case BindingResult.IncorrectArgumentCount:
@@ -1191,6 +1306,97 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return Methods.MakeAmbiguousMatchError.OpCall(AstUtils.Constant(sb.ToString()));
+        }
+
+        /// <summary>
+        /// Overloads found equally good may all be ones that cannot take the arguments: each needs a protocol conversion
+        /// of an argument whose class cannot do it, as Method(String, String) and Method(String, Integer) do for a Time.
+        /// Then the call fails as calling any of them would, with MRI's TypeError ("no implicit conversion of Time into
+        /// String or Integer"), not as an ambiguity. Null if some overload could take the arguments.
+        /// </summary>
+        private Expression MakeProtocolConversionError(BindingTarget/*!*/ target) {
+            if (!_implicitProtocolConversions) {
+                return null;
+            }
+
+            var args = GetActualArguments();
+            var failures = new List<KeyValuePair<int, Type>>();
+            int firstFailure = Int32.MaxValue;
+            foreach (MethodCandidate candidate in target.AmbiguousMatches) {
+                var parameters = candidate.GetParameters();
+                int failed = -1;
+                for (int i = 0; i < args.Count && failed < 0; i++) {
+                    ParameterWrapper parameter = GetBoundParameter(parameters, args, i);
+                    if (parameter != null && ConversionCanOnlyFail(args[i], parameter)) {
+                        failures.Add(new KeyValuePair<int, Type>(i, parameter.Type));
+                        failed = i;
+                    }
+                }
+
+                if (failed < 0) {
+                    // this one could take the arguments
+                    return null;
+                }
+                firstFailure = Math.Min(firstFailure, failed);
+            }
+
+            // name what the first argument that fails would have to convert to:
+            var targetNames = new List<string>();
+            foreach (var failure in failures) {
+                string name = GetProtocolConversionTargetName(failure.Value);
+                if (failure.Key == firstFailure && !targetNames.Contains(name)) {
+                    targetNames.Add(name);
+                }
+            }
+
+            return Methods.CreateImplicitConversionError.OpCall(
+                AstUtils.Constant(GetConversionSourceName(args[firstFailure].Value)),
+                AstUtils.Constant(JoinAlternatives(targetNames))
+            );
+        }
+
+        // The parameter of a candidate the argument at the index binds to: a positional argument to the parameter at its
+        // index, a keyword to the parameter of its name (ActualArguments.TryBindNamedArguments).
+        private static ParameterWrapper GetBoundParameter(IList<ParameterWrapper>/*!*/ parameters, ActualArguments/*!*/ args, int index) {
+            if (index < args.Arguments.Count) {
+                return parameters[index];
+            }
+
+            string name = args.ArgNames[index - args.Arguments.Count];
+            foreach (var parameter in parameters) {
+                if (parameter.Name == name) {
+                    return parameter;
+                }
+            }
+            return null;
+        }
+
+        // How a conversion error names the object: true, false and nil as themselves, anything else by its class.
+        private string/*!*/ GetConversionSourceName(object value) {
+            if (value == null) {
+                return "nil";
+            }
+            if (value is bool) {
+                return (bool)value ? "true" : "false";
+            }
+            return Context.GetImmediateClassOf(value).GetNonSingletonClass().GetNonNullName(Context);
+        }
+
+        // A CLR String parameter takes a Ruby String, and a nullable one a value or nil:
+        private string/*!*/ GetProtocolConversionTargetName(Type/*!*/ type) {
+            return (type == typeof(string)) ? "String" : GetConversionTargetName(Nullable.GetUnderlyingType(type) ?? type);
+        }
+
+        // "A", "A or B", "A, B, or C" - the way DescribeExpectedArgumentCount lists arities.
+        private static string/*!*/ JoinAlternatives(IList<string>/*!*/ items) {
+            var sb = new StringBuilder();
+            for (int i = 0; i < items.Count; i++) {
+                if (i > 0) {
+                    sb.Append(i == items.Count - 1 ? (items.Count == 2 ? " or " : ", or ") : ", ");
+                }
+                sb.Append(items[i]);
+            }
+            return sb.ToString();
         }
 
         private Expression MakeIncorrectArgumentCountError(BindingTarget target) {

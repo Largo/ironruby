@@ -559,6 +559,8 @@ namespace IronRuby.Tests {
                 ClrGenericDelegateInference1,
                 ClrOverloadGenericTieBreak1,
                 ClrOverloadGenericTieBreak2,
+                ClrOverloadProtocolConversions1,
+                ClrOverloadProtocolConversions2,
                 ClrRangeIndexArguments1,
                 ClrConstantFields1,
                 ClrStringObjectArguments1,

@@ -1,7 +1,8 @@
 /* ****************************************************************************
  *
  * How a Ruby call chooses between CLR overloads that fit its arguments
- * equally: C#'s tie-break for generic methods.
+ * equally: C#'s tie-break for generic methods, and what the arguments'
+ * conversion protocols can actually do.
  *
  * This source code is subject to terms and conditions of the Apache License,
  * Version 2.0. A copy of the license can be found in the License.html file at
@@ -120,6 +121,120 @@ end
 8.0
 -1
 true
+");
+        }
+
+        public class ProtocolOverloads {
+            public string Put(string key, string value) { return "Put(String, String)"; }
+            public string Put(string key, int value) { return "Put(String, Int32)"; }
+
+            public string Three(string value) { return "Three(String)"; }
+            public string Three(int value) { return "Three(Int32)"; }
+            public string Three(double value) { return "Three(Double)"; }
+
+            public string Pair(int a, int b) { return "Pair(Int32, Int32)"; }
+            public string Pair(double a, double b) { return "Pair(Double, Double)"; }
+        }
+
+        /// <summary>
+        /// A CLR method's String and Int32 parameters take any object by Ruby's conversion protocols (to_str, to_int),
+        /// which only the call can try. An overload whose conversion the object's class cannot do is no match for one
+        /// whose conversion it can do; if it can do none, the call fails with the TypeError calling any of them would
+        /// raise rather than as an ambiguity - passed positionally, splatted or by keyword. An object that can do both is an
+        /// ambiguity still.
+        /// </summary>
+        public void ClrOverloadProtocolConversions1() {
+            Context.ObjectClass.SetConstant("P", Context.GetClass(typeof(ProtocolOverloads)));
+            TestOutput(@"
+o = P.new
+def try = (yield rescue ""#{$!.class}: #{$!.message}"")
+class IntLike; def to_int = 1; end
+class StrLike; def to_str = 's'; end
+class Both; def to_int = 1; def to_str = 's'; end
+class Ghost; def method_missing(name, *) = (name == :to_int ? 1 : super); end
+class FloatLike; def to_f = 1.0; end
+
+puts try { o.put('k', 'v') }
+puts try { o.put('k', 1) }
+puts try { o.put('k', nil) }
+puts try { o.put('k', Time.now) }
+puts try { o.put('k', Object.new) }
+puts try { o.put('k', IntLike.new) }
+puts try { o.put('k', StrLike.new) }
+puts try { o.put('k', Both.new) }
+puts try { o.put('k', Ghost.new) }
+puts try { o.put(*['k', Time.now]) }
+puts try { o.put(*['k', IntLike.new]) }
+puts try { o.put(key: 'k', value: Time.now) }
+puts try { o.put('k', value: IntLike.new) }
+puts try { o.put(**{key: 'k', value: Time.now}) }
+puts try { o.three(Object.new) }
+puts try { o.three(FloatLike.new) }
+puts try { o.pair(FloatLike.new, 1) }
+", @"
+Put(String, String)
+Put(String, Int32)
+Put(String, String)
+TypeError: no implicit conversion of Time into String or Integer
+TypeError: no implicit conversion of Object into String or Integer
+Put(String, Int32)
+Put(String, String)
+System::Reflection::AmbiguousMatchException: Found multiple methods for 'put': put(System::String, System::String), put(System::String, Integer)
+System::Reflection::AmbiguousMatchException: Found multiple methods for 'put': put(System::String, System::String), put(System::String, Integer)
+TypeError: no implicit conversion of Time into String or Integer
+Put(String, Int32)
+TypeError: no implicit conversion of Time into String or Integer
+Put(String, Int32)
+TypeError: no implicit conversion of Time into String or Integer
+TypeError: no implicit conversion of Object into String, Integer, or Float
+Three(Double)
+Pair(Double, Double)
+");
+        }
+
+        /// <summary>
+        /// What decides between the overloads is the class of the argument: a call site re-binds when the class gains or
+        /// loses a conversion method, and an object with a singleton method of its own is told apart from others of its class.
+        /// </summary>
+        public void ClrOverloadProtocolConversions2() {
+            Context.ObjectClass.SetConstant("P", Context.GetClass(typeof(ProtocolOverloads)));
+            TestOutput(@"
+O = P.new
+def put(value) = (O.put('k', value) rescue ""#{$!.class}: #{$!.message}"")
+def put_splat(*args) = (O.put(*args) rescue ""#{$!.class}: #{$!.message}"")
+class Foo; end
+foo = Foo.new
+puts put(foo), put_splat('k', foo)
+class Foo; def to_int = 1; end
+puts put(foo), put_splat('k', foo)
+class Foo; remove_method :to_int; end
+puts put(foo), put_splat('k', foo)
+module Stringish; def to_str = 's'; end
+class Foo; include Stringish; end
+puts put(foo), put_splat('k', foo)
+
+a, b = Object.new, Object.new
+def b.to_int = 2
+puts put(a), put(b), put(a)
+
+sb1, sb2 = System::Text::StringBuilder.new, System::Text::StringBuilder.new
+def sb2.to_int = 3
+puts put(sb1), put(sb2), put(sb1)
+", @"
+TypeError: no implicit conversion of Foo into String or Integer
+TypeError: no implicit conversion of Foo into String or Integer
+Put(String, Int32)
+Put(String, Int32)
+TypeError: no implicit conversion of Foo into String or Integer
+TypeError: no implicit conversion of Foo into String or Integer
+Put(String, String)
+Put(String, String)
+TypeError: no implicit conversion of Object into String or Integer
+Put(String, Int32)
+TypeError: no implicit conversion of Object into String or Integer
+TypeError: no implicit conversion of System::Text::StringBuilder into String or Integer
+Put(String, Int32)
+TypeError: no implicit conversion of System::Text::StringBuilder into String or Integer
 ");
         }
     }
