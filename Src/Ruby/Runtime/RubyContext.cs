@@ -1348,6 +1348,17 @@ namespace IronRuby.Runtime {
                 baseClass = _objectClass;
             } else {
                 baseClass = GetOrCreateClassNoLock(type.BaseType);
+
+                // System::Exception is Ruby's Exception, which a bare rescue does not catch. A CLR exception deriving from it
+                // directly (.NET's recommended base for custom exceptions; AggregateException, ApplicationException) is an
+                // ordinary application error, like the SystemExceptions that are StandardErrors, so it is a StandardError too:
+                // for rescue, is_a? and ancestors alike. Ruby's own exception classes get their MRI superclasses from the library
+                // initializers and never come here. Neither the types emitted for Ruby subclasses of Exception (IRubyType) nor
+                // IronRuby's control flow (StackUnwinder: throw, break, Thread#kill) are errors, so they keep Exception.
+                if (baseClass == _exceptionClass && _standardErrorClass != null
+                    && !typeof(IRubyType).IsAssignableFrom(type) && !typeof(StackUnwinder).IsAssignableFrom(type)) {
+                    baseClass = _standardErrorClass;
+                }
             }
 
             TypeTracker tracker = (TypeTracker)TypeTracker.FromMemberInfo(type);
