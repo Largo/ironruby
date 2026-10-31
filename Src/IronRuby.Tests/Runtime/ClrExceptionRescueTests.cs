@@ -12,7 +12,9 @@
 
 using System;
 using System.Threading.Tasks;
+using IronRuby.Builtins;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -114,6 +116,7 @@ p AppError.ancestors.grep(Class)
 p AppError < StandardError, DerivedAppError < StandardError, System::AggregateException <= StandardError
 e = AppError.new('x')
 p e.is_a?(StandardError), StandardError === e, e.is_a?(Exception)
+p System::SystemException === e, System::SystemException.to_clr_type.IsInstanceOfType(e)
 p StandardError.superclass, Exception.superclass, System::Exception.equal?(Exception)
 p System::NotSupportedException.ancestors.grep(Class).take(3)
 ", @"
@@ -129,6 +132,8 @@ true
 true
 true
 true
+true
+false
 Exception
 Object
 true
@@ -317,6 +322,55 @@ bare System::AggregateException: Interrupt
 bare System::AggregateException: ThrowCatchUnwinder
 bare Microsoft::Scripting::SyntaxErrorException
 Exception SyntaxError
+");
+        }
+
+        public class RescueLibraryException : Exception {
+            public RescueLibraryException() : base("library") { }
+        }
+
+        public class RescueTouchedLibraryException : Exception {
+            public RescueTouchedLibraryException() : base("touched") { }
+        }
+
+        public class RescueExceptionLibraryInitializer : LibraryInitializer {
+            protected override void LoadModules() {
+                // the extension defines the type's class: nothing has asked for it yet
+                RubyClass libError = ExtendClass(typeof(RescueLibraryException), 0, null, DefineLibraryTag, null, null, RubyModule.EmptyArray);
+                Context.ObjectClass.SetConstant("LibError", libError);
+                ExtendClass(typeof(RescueTouchedLibraryException), 0, null, DefineLibraryTag, null, null, RubyModule.EmptyArray);
+            }
+
+            private void DefineLibraryTag(RubyModule/*!*/ module) {
+                DefineLibraryMethod(module, "library_tag", 0x9, new[] {
+                    LibraryOverload.Reflect(new Func<object, string>(LibraryTag)),
+                });
+            }
+
+            public static string LibraryTag(object self) {
+                return "tagged";
+            }
+        }
+
+        /// <summary>
+        /// A library that extends a CLR exception (ExtendClass with no superclass) gives it the superclass Ruby would, whether
+        /// the library loads before or after the type is first used.
+        /// </summary>
+        public void ClrExceptionRescue7() {
+            Context.DefineGlobalVariable("lib_name", MutableString.CreateAscii(typeof(RescueExceptionLibraryInitializer).AssemblyQualifiedName));
+            Context.ObjectClass.SetConstant("TouchedError", Context.GetClass(typeof(RescueTouchedLibraryException)));
+            TestOutput(@"
+require $lib_name
+[LibError, TouchedError].each do |c|
+  begin
+    raise c.new
+  rescue => e
+    puts ""#{c.superclass}: #{e.message} #{e.library_tag}""
+  end
+end
+", @"
+StandardError: library tagged
+StandardError: touched tagged
 ");
         }
     }
