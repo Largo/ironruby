@@ -11,6 +11,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Threading.Tasks;
 using IronRuby.Runtime;
 
 namespace IronRuby.Tests {
@@ -41,6 +42,12 @@ namespace IronRuby.Tests {
             public static void ThrowPlain() { throw new Exception("plain failed"); }
             public static void ThrowNotSupported() { throw new NotSupportedException("not supported"); }
             public static void Call(Action action) { action(); }
+            public static void WaitTask() { Task.Run(() => { throw new RescueAppException("in task"); }).Wait(); }
+            public static void InvokeReflected() { typeof(RescueThrower).GetMethod("ThrowApp").Invoke(null, null); }
+            public static void RunInTask(Action action) { Task.Run(action).Wait(); }
+            public static void RunWrapped(Action action) {
+                try { action(); } catch (Exception e) { throw new AggregateException(e); }
+            }
         }
 
         private void DefineRescueFixtures() {
@@ -254,6 +261,63 @@ true
 ");
             Assert(!Context.GetClass(typeof(BlockUnwinder)).IsSubclassOf(Context.StandardErrorClass));
             Assert(Context.GetClass(typeof(StackUnwinder)).SuperClass == Context.ExceptionClass);
+        }
+
+        /// <summary>
+        /// The wrappers a C# exception usually arrives in: a faulted task's AggregateException, reflection's
+        /// TargetInvocationException, Thread#join. A wrapper is a StandardError whatever it carries, also a SystemExit or
+        /// a throw from a Ruby callback: the class decides, as for any exception. A hosting API's syntax error is a CLR
+        /// exception too; eval's is Ruby's SyntaxError, a ScriptError.
+        /// </summary>
+        public void ClrExceptionRescue6() {
+            DefineRescueFixtures();
+            TestOutput(@"
+[:wait_task, :invoke_reflected].each do |m|
+  begin
+    T.send(m)
+  rescue => e
+    puts ""bare #{e.class}: #{e.InnerException.class}: #{e.InnerException.message}""
+  end
+end
+
+t = Thread.new { T.throw_app }
+t.report_on_exception = false
+begin
+  t.join
+rescue => e
+  puts ""join #{e.class}: #{e.message}""
+end
+
+[-> { T.run_in_task(-> { exit 2 }) }, -> { T.run_in_task(-> { raise Interrupt }) },
+ -> { T.run_wrapped(-> { throw :x }) }].each do |l|
+  r = begin
+    catch(:x) { l.(); :none }
+  rescue => e
+    ""bare #{e.class}: #{e.InnerException.class.name.split('::').last}""
+  end
+  puts r
+end
+
+[-> { IronRuby.create_engine.execute('1+') }, -> { eval('1+') }].each do |l|
+  r = begin
+    l.()
+  rescue => e
+    ""bare #{e.class}""
+  rescue Exception => e
+    ""Exception #{e.class}""
+  end
+  puts r
+end
+", @"
+bare System::AggregateException: IronRuby::Tests::Tests::RescueAppException: in task
+bare System::Reflection::TargetInvocationException: IronRuby::Tests::Tests::RescueAppException: app failed
+join IronRuby::Tests::Tests::RescueAppException: app failed
+bare System::AggregateException: SystemExit
+bare System::AggregateException: Interrupt
+bare System::AggregateException: ThrowCatchUnwinder
+bare Microsoft::Scripting::SyntaxErrorException
+Exception SyntaxError
+");
         }
     }
 }

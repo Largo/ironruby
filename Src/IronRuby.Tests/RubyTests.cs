@@ -602,6 +602,7 @@ namespace IronRuby.Tests {
                 ClrExceptionRescue3,
                 ClrExceptionRescue4,
                 ClrExceptionRescue5,
+                ClrExceptionRescue6,
                 ClrAsyncEnumerable1,
                 ClrClosedInterfaceExtensions1,
                 ClrClosedInterfaceExtensions2,
