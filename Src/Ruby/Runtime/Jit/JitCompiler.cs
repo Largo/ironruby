@@ -977,17 +977,21 @@ namespace IronRuby.Runtime.Jit {
 
         private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, out JT type) {
             string op = node.Operation;
-            if (op == "&&" || op == "||") { throw JitBailout.Instance; }
-
             var element = node.Left as ArrayItemAccess;
+            if (op == "&&" || op == "||") {
+                if (element != null) { return EmitArrayLocalLogicalWrite(element, op == "||", node.Right, out type); }
+                throw JitBailout.Instance;
+            }
+
             if (element != null) { return EmitIndexWrite(element, op, node.Right, out type); }
 
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
+                // In a loop: logged so a deopt takes it back, and one that would raise deopts first
+                // (EmitLoopIVarWrite) - an exception leaving an outlined loop part way through would
+                // leave the scope's locals as they were on entry.
+                if (_loop != null) { return EmitLoopIVarWrite(ivarTarget, op, node.Right, out type); }
                 if (op != null) { throw JitBailout.Instance; }
-                // A write can raise (FrozenError), and an exception leaving an outlined loop
-                // part way through would leave the scope's locals as they were on entry.
-                if (_loop != null) { throw Bail("instance variable write in an outlined loop"); }
                 JT vt;
                 var v = Emit(node.Right, out vt);
                 _pure = false;      // an ivar write is observable, so the body may not deopt
@@ -1407,6 +1411,31 @@ namespace IronRuby.Runtime.Jit {
                             Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, true)));
                         object value;
                         _context.TryGetInstanceVariable(live, variableName, out value);
+                        string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
+                        if (guard == null) { type = JT.Obj; return read; }
+                        type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
+                        return Ast.Call(JitRuntime.M(guard), read);
+                    }
+                }
+            }
+
+            // `o.x', o a local holding a Struct and x one of its members' readers: the member, read
+            // under the same checks of o's class and the method version (JitRuntime.ReadStructMember),
+            // typed by what the member holds now - a guarded unboxing for an Integer or a Float.
+            if (argc == 0 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty) {
+                MSA.ParameterExpression bound;
+                JT boundType;
+                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
+                    var peek = _peekLocal(receiverLocal);
+                    var live = peek.HasValue ? peek.Value.Value as RubyStruct : null;
+                    int index = (live != null) ? JitRuntime.StructMemberSite.MemberIndex(live.ImmediateClass, node.MethodName) : -1;
+                    if (index >= 0) {
+                        _canDeopt = true;
+                        if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                        _peeked.Add(receiverLocal);
+                        MSA.Expression read = Ast.Call(JitRuntime.M("ReadStructMember"), peek.Value.Key,
+                            Ast.Constant(new JitRuntime.StructMemberSite(node.MethodName, index)));
+                        object value = RubyStruct.GetValue(live, index);
                         string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
                         if (guard == null) { type = JT.Obj; return read; }
                         type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;

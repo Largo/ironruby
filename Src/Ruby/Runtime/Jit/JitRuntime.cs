@@ -561,13 +561,25 @@ namespace IronRuby.Runtime.Jit {
             if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
                 throw Deopt();
             }
+            WriteIVar(obj, value, site.Variable, log);
+        }
+
+        /// <summary>
+        /// `@x = v' in an outlined loop (JitCompiler.EmitLoopIVarWrite), and an attr_writer's store: a
+        /// variable the object already has, its old value logged for JitUndoLog.Rollback. Anything else
+        /// deopts before writing.
+        /// </summary>
+        public static void WriteIVar(object self, object value, InstanceVariableSite/*!*/ variable, JitUndoLog/*!*/ log) {
+            var obj = self as RubyObject;
+            if (obj == null) {
+                throw Deopt();
+            }
             var data = obj._instanceData;
             if (data == null || data._frozen || log.IsFull) {
                 throw Deopt();
             }
             object[] slots = data._ivars;
             var shape = RubyInstanceData.ShapeOf(slots);
-            var variable = site.Variable;
             var entry = variable.Cache;
             int index;
             if (shape == entry.Shape && entry.Next == null) {
@@ -590,6 +602,53 @@ namespace IronRuby.Runtime.Jit {
                 data.SetInstanceVariable(variable.Name, value);
             }
             log.Replaced(data, variable.Name, old);
+        }
+
+        /// <summary>
+        /// A Struct member's reader called as `o.x' in an outlined loop (JitCompiler.EmitCall): the member
+        /// itself while o's class, under the current global method version, still answers x with the
+        /// reader of that member; a deopt otherwise.
+        /// </summary>
+        public sealed class StructMemberSite {
+            internal readonly string/*!*/ Name;
+            internal readonly int Index;
+
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            internal StructMemberSite(string/*!*/ name, int index) {
+                Name = name;
+                Index = index;
+            }
+
+            /// <summary>The member <paramref name="name"/> reads on <paramref name="cls"/>, called with an explicit receiver; -1 if it is not a member's reader.</summary>
+            internal static int MemberIndex(RubyClass/*!*/ cls, string/*!*/ name) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                if (!resolved.Found || resolved.Info.Visibility != RubyMethodVisibility.Public) { return -1; }
+                var info = resolved.Info as IronRuby.Runtime.Calls.RubyCustomMethodInfo;
+                return (info != null) ? info.StructGetterIndex : -1;
+            }
+
+            internal bool Holds(RubyClass/*!*/ cls) {
+                var b = _bound;
+                if (b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion) { return true; }
+                int version = RubyModule.GlobalMethodVersion;
+                if (MemberIndex(cls, Name) != Index) { return false; }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+        }
+
+        public static object ReadStructMember(object self, StructMemberSite/*!*/ site) {
+            var s = self as RubyStruct;
+            if (s == null || !site.Holds(s.ImmediateClass)) {
+                throw Deopt();
+            }
+            return RubyStruct.GetValue(s, site.Index);
         }
 
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {

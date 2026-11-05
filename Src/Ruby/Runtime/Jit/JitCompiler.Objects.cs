@@ -971,6 +971,90 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `a[i] ||= v' (`a[i] &&= v') of a load-once Array: the element, and only when it is falsy (truthy)
+        /// v evaluated and stored, as ArrayStore stores - logged, and deopting before a store that would
+        /// grow the Array or raise. The value is the element kept or v.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitArrayLocalLogicalWrite(ArrayItemAccess/*!*/ element, bool isOr, RExpr/*!*/ right, out JT type) {
+            var args = element.Arguments.Expressions;
+            string op = isOr ? "||" : "&&";
+            if (element.Block != null || args.Length != 1 || args[0] is SplattedArgument) { throw Bail("[] " + op + "= with " + args.Length + " arguments"); }
+            if (!ArrayMethodIsPlain(true) || !ArrayMethodIsPlain(false)) { throw Bail("[] " + op + "= on a redefined Array#[]"); }
+            var array = ArrayLocal(element.Array);
+            if (array == null) { throw Bail("[] " + op + "= of anything but a load-once Array"); }
+
+            var indexTemp = Ast.Variable(typeof(int), "#index");
+            var current = Ast.Variable(typeof(object), "#element");
+            var stored = Ast.Variable(typeof(object), "#value");
+            var index = EmitArrayIndex(args[0]);
+            // v is only evaluated on one branch: a local it would bind is not bound on the other
+            PushScope();
+            JT valueType;
+            var value = Emit(right, out valueType);
+            if (PopScope().Count > 0) { throw Bail("[] " + op + "= of a value that binds a local"); }
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("[] " + op + "= of a value that jumps away"); }
+
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            MSA.Expression truthy = Ast.Call(IsTrueMethod, current);
+            var store = Ast.Block(typeof(object),
+                Ast.Assign(stored, BoxForStore(value, valueType)),
+                Ast.Call(JitRuntime.M("ArrayStore"), array.Value.Key, indexTemp, stored, _undoLog),
+                stored
+            );
+            type = JT.Obj;
+            return Ast.Block(typeof(object), new[] { indexTemp, current, stored },
+                Ast.Assign(indexTemp, index),
+                Ast.Assign(current, Ast.Call(JitRuntime.M("ArrayGet"), array.Value.Key, indexTemp)),
+                Ast.Condition(isOr ? (MSA.Expression)Ast.Not(truthy) : truthy, store, current, typeof(object))
+            );
+        }
+
+        /// <summary>
+        /// `@x = v', `@x op= v' in an outlined loop: the store an attr_writer's would be
+        /// (JitRuntime.WriteIVar), which logs the value it replaces so the iteration stays restartable,
+        /// and deopts before a write that would add the variable or raise (a frozen self). `@x op= v'
+        /// reads @x as NumericIVar does, a number of the type it holds now.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitLoopIVarWrite(InstanceVariable/*!*/ target, string op, RExpr/*!*/ right, out JT type) {
+            if (_ivarProfile == null) { throw Bail("instance variable write in a loop entered without self"); }
+            if (op == "&&" || op == "||") { throw Bail("instance variable " + op + "="); }
+            JT valueType;
+            MSA.Expression value;
+            if (op == null) {
+                value = Emit(right, out valueType);
+            } else {
+                if (!JitScreen.IsBinaryOperator(op)) { throw Bail("instance variable " + op + "="); }
+                JT currentType, rhsType;
+                var current = Emit(target, out currentType);
+                current = NumericIVar(target, current, ref currentType);
+                var rhs = Emit(right, out rhsType);
+                rhs = NumericIVar(right, rhs, ref rhsType);
+                if (!IsNumeric(currentType) || !IsNumeric(rhsType)) { throw Bail("instance variable " + op + "= of " + currentType + ", " + rhsType); }
+                value = EmitBinary(op, current, currentType, rhs, rhsType, out valueType);
+            }
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("instance variable write of a value that jumps away"); }
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { valueTemp },
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("WriteIVar"), _self, BoxForStore(valueTemp, valueType),
+                    Ast.Constant(new InstanceVariableSite(target.Name)), _undoLog),
+                valueTemp
+            );
+        }
+
+        /// <summary>
         /// `o.x = v' in an outlined loop, o a local holding an object whose x= is a public attr_writer
         /// (or a method that is one, see JitRuntime.SelfAttrSite.WriterVariable): the store the writer does (JitRuntime.WriteSelfAttr), of o as it is in its tuple slot, as
         /// EmitCall reads `o.x' when x is an attr_reader. The store logs the value it replaces, as an
@@ -978,11 +1062,41 @@ namespace IronRuby.Runtime.Jit {
         /// adding the variable or raising deopts before it is made. The value is v.
         /// </summary>
         private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+            if (node.Qualifier is SelfReference && op == null && !node.IsSafeNavigation) {
+                return EmitSelfAttributeWrite(node.Name, right, out type);
+            }
             var receiverLocal = node.Qualifier as LocalVariable;
             if (op != null || node.IsSafeNavigation || receiverLocal == null) {
                 throw Bail("attribute assignment " + node.Name);
             }
             return EmitAttributeWrite(receiverLocal, node.Name, right, out type);
+        }
+
+        /// <summary>
+        /// `self.x = v' in an outlined loop where x= is, on self's class, an attr_writer (private ones too,
+        /// as a call on self may reach them): the store, as for `o.x = v'.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitSelfAttributeWrite(string/*!*/ name, RExpr/*!*/ right, out JT type) {
+            if (_loop == null || _attrProfile == null || !_refinements.IsEmpty) { throw Bail("attribute assignment self." + name); }
+            string variableName = _attrProfile(name);
+            if (variableName == null) { throw Bail("attribute assignment self." + name + " that is not an attr_writer"); }
+            JT valueType;
+            var value = Emit(right, out valueType);
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _hashWrite = true;
+            if (_undoLog == null) {
+                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            }
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { valueTemp },
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("WriteSelfAttr"), _self, BoxForStore(valueTemp, valueType),
+                    Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, false, true)), _undoLog),
+                valueTemp
+            );
         }
 
         private MSA.Expression/*!*/ EmitAttributeWrite(LocalVariable/*!*/ receiverLocal, string/*!*/ name, RExpr/*!*/ right, out JT type) {

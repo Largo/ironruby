@@ -201,7 +201,10 @@ namespace IronRuby.Runtime.Jit {
                 };
                 // and which of self's methods are attr_readers, and of what (JitCompiler.EmitCall)
                 RubyClass selfClass = JitRuntime.ClassOf(context, liveSelf);
-                attrProfile = name => JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name, false);
+                // `x=' asks after an attr_writer (JitCompiler.EmitAttributeWrite of `self.x = v')
+                attrProfile = name => name.Length > 1 && name[name.Length - 1] == '='
+                    ? JitRuntime.SelfAttrSite.WriterVariable(selfClass, name, false)
+                    : JitRuntime.SelfAttrSite.ReaderVariable(selfClass, name, false);
             }
 
             List<JitLoopSlot> slots;
