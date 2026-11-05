@@ -49,7 +49,7 @@ every operator, not interpretation.
 
 ## Core iterators: the loop the iterator and its block make together
 
-`n.times { }`, `a.upto(b) { }`, `a.downto(b) { }` and Array's `each`, `map`, `select`, `any?`,
+`n.times { }`, `a.upto(b) { }`, `a.downto(b) { }`, `(a..b).each { }` and Array's `each`, `map`, `select`, `any?`,
 `all?` and `none?` loop in C# and yield to the block, so there is no `while` for -X:OSR to
 replace, and each iteration pays a block invocation and a dynamic call site per operator.
 TruffleRuby inlines the block into the iterator's loop; here, once one block literal has been
@@ -93,12 +93,32 @@ once, and the site then builds a second copy over the types the locals hold *now
 than handing the loop back for good. That is what makes `int_arith` move: 3.61x of CRuby
 before, 0.57x after.
 
+## Iterators inside a compiled loop or method
+
+Inside a loop -X:OSR compiles (or a method -X:JIT compiles), `a.each { |x| }` over an Array local,
+`n.times { }`, `a.upto(b) { }`, `a.downto(b) { }` and `(a..b).each { }` of Integers, given a
+literal block, run inline: the iterator's loop is a nested loop of the compiled code, and the
+block's parameter and locals are typed variables of it (Src/Ruby/Runtime/Jit/JitCompiler.Iterators.cs).
+So `n.times { a.each { |b1| a.each { |b2| ... } } }` is one specialized loop, however short the
+inner Arrays. The block must be one BlockLoopSite could outline: one plain parameter at most, no
+`break`/`redo`/`return`/`yield`, `next` without a value, and locals assigned before they are read.
+Util/osr-iterator-matrix.rb is the differential matrix.
+
+`nbody` went from 0.38 s to 0.10 s with this (CRuby 4.0: 0.08 s).
+
+A method whose loop writes Array or Hash elements is left to -X:OSR rather than compiled whole:
+the method JIT logs every write until the method returns (a deopt re-runs the method), where an
+outlined loop commits each iteration's writes and loads its Arrays once - 2-3x faster per iteration.
+
 ## Known limits
 
-- Every iterator other than the ones above (Range#each, Hash#each, each_with_index, a Ruby
-  method's `yield`, ...) still invokes its block once per element: a block given to one of those
-  is never outlined, whatever its body. A `while` inside such a block is still replaced by -X:OSR
-  as any other.
+- Every iterator other than the ones above (Hash#each, each_with_index, a Ruby method's `yield`,
+  ...) still invokes its block once per element: a block given to one of those is never
+  outlined, whatever its body. A `while` inside such a block is still replaced by -X:OSR as
+  any other.
+- A compiled loop calls no Ruby method: a loop that calls one of its own (`draw_span(...)`) runs
+  generically, however simple the method. Library calls it knows (Array#[], Float#to_i, clamp,
+  min/max, abs, the iterators above) are compiled in.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.

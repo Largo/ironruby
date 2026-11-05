@@ -74,6 +74,7 @@ namespace IronRuby.Runtime.Jit {
             get { return _count >= MaxEntries; }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ref Entry Add() {
             if (_count == _entries.Length) {
                 Array.Resize(ref _entries, _entries.Length * 2);
@@ -89,6 +90,7 @@ namespace IronRuby.Runtime.Jit {
             e.Index = index;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void Replaced(RubyArray/*!*/ array, int index, object old) {
             ref Entry e = ref Add();
             e.Target = array;
@@ -113,6 +115,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>The writes since <paramref name="mark"/> stand (and more may follow).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Commit(int mark) {
             int count = _count;
             if (count > mark) {
@@ -489,9 +492,8 @@ namespace IronRuby.Runtime.Jit {
             if (array == null || array.GetType() != typeof(RubyArray)) {
                 return null;
             }
-            // While no Array has a class of its own, an exact RubyArray's is Array: no table lookup.
-            RubyContext context = arrayClass.Context;
-            if (context.AnyArrayHasOwnClass && context.GetImmediateClassOf(array) != arrayClass) {
+            // An exact RubyArray that was never given a class of its own has Array's: no table lookup.
+            if (array.MayHaveOwnClass && arrayClass.Context.GetImmediateClassOf(array) != arrayClass) {
                 return null;
             }
             return array;
@@ -632,6 +634,7 @@ namespace IronRuby.Runtime.Jit {
         // ---- numeric speculation on an element -----------------------------------------------
 
         /// <summary>An element read used as an Integer operand (`h[k] += 1'): an Integer, or a deopt.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long SpeculateLong(object value) {
             if (value is int) { return (int)value; }
             if (value is long) { return (long)value; }
@@ -639,6 +642,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>An element read used as a Float operand: an Integer or a Float, as a double, or a deopt.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double SpeculateDouble(object value) {
             if (value is double) { return (double)value; }
             if (value is int) { return (int)value; }

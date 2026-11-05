@@ -16,6 +16,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 
@@ -171,6 +172,8 @@ namespace IronRuby.Runtime.Jit {
     public static partial class JitRuntime {
         // ---- the numeric library calls of JitCompiler.Numeric.cs -----------------------------
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
         public static long ShiftRightLong(long value, long count) {
             if (count < 0) {
                 if (count == Int64.MinValue) { throw Deopt(); }
@@ -178,6 +181,8 @@ namespace IronRuby.Runtime.Jit {
             }
             return (count >= 64) ? (value < 0 ? -1 : 0) : value >> (int)count;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
         public static long ShiftLeftLong(long value, long count) {
             if (count < 0) {
@@ -192,6 +197,8 @@ namespace IronRuby.Runtime.Jit {
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
         public static long AbsLong(long value) {
             if (value == Int64.MinValue) { throw Deopt(); }
             return Math.Abs(value);
@@ -199,25 +206,33 @@ namespace IronRuby.Runtime.Jit {
 
         // Float#ceil, #floor, #round: an Integer, which a NaN, an infinity (FloatDomainError) or a
         // Bignum is not one we carry.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long CeilToLong(double value) {
             return FloatToLong(Math.Ceiling(value));
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
         public static long FloorToLong(double value) {
             return FloatToLong(Math.Floor(value));
         }
 
         /// <summary>Float#round: half away from zero, as C's round(), which MRI's round_half_up is with no digits.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long RoundToLong(double value) {
             return FloatToLong(Math.Round(value, MidpointRounding.AwayFromZero));
         }
 
         // Comparable#clamp: min past max raises, an equal value is the receiver itself.
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
         public static int ClampInt(int value, int min, int max) {
             if (min > max) { throw Deopt(); }
             return (value < min) ? min : (value > max) ? max : value;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
         public static long ClampLong(long value, long min, long max) {
             if (min > max) { throw Deopt(); }
@@ -225,6 +240,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>A NaN anywhere is a comparison that fails, and -0.0 compares equal to 0.0 (the receiver is kept).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double ClampDouble(double value, double min, double max) {
             if (!(min <= max) || Double.IsNaN(value)) { throw Deopt(); }
             return (value < min) ? min : (value > max) ? max : value;
@@ -233,15 +249,24 @@ namespace IronRuby.Runtime.Jit {
         // Array#min / #max of two: the second only when it is strictly less (greater), so that of
         // equal elements the first is the one answered (0.0 and -0.0 included).
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
         public static int MinInt(int a, int b) { return (b < a) ? b : a; }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int MaxInt(int a, int b) { return (b > a) ? b : a; }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long MinLong(long a, long b) { return (b < a) ? b : a; }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long MaxLong(long a, long b) { return (b > a) ? b : a; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
         public static double MinDouble(double a, double b) {
             if (Double.IsNaN(a) || Double.IsNaN(b)) { throw Deopt(); }
             return (b < a) ? b : a;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
         public static double MaxDouble(double a, double b) {
             if (Double.IsNaN(a) || Double.IsNaN(b)) { throw Deopt(); }

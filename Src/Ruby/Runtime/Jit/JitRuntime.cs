@@ -157,6 +157,7 @@ namespace IronRuby.Runtime.Jit {
             return m;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long AddLong(long a, long b) {
             long r = unchecked(a + b);
             // Signed overflow iff both operands differ in sign from the result.
@@ -164,6 +165,7 @@ namespace IronRuby.Runtime.Jit {
             return r;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long SubLong(long a, long b) {
             long r = unchecked(a - b);
             // Signed overflow iff the operands differ in sign and the result differs from a.
@@ -171,6 +173,7 @@ namespace IronRuby.Runtime.Jit {
             return r;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long MulLong(long a, long b) {
             long low;
             long high = Math.BigMul(a, b, out low);
@@ -236,6 +239,7 @@ namespace IronRuby.Runtime.Jit {
         /// parameter of a self-call. It only fits when the value fits, and if it does not the
         /// Ruby value has genuinely grown past Int32: deopt and let the generic body carry it.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int DemoteToInt(long v) {
             if (v < Int32.MinValue || v > Int32.MaxValue) { throw Deopt(); }
             return (int)v;
@@ -733,17 +737,20 @@ namespace IronRuby.Runtime.Jit {
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
         // unboxed while it holds the type it held when the loop was compiled, a deopt once it does not.
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GuardInt(object value) {
             if (value is int) { return (int)value; }
             throw Deopt();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long GuardLong(object value) {
             if (value is int) { return (int)value; }
             if (value is long) { return (long)value; }
             throw Deopt();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double GuardDouble(object value) {
             if (value is double) { return (double)value; }
             throw Deopt();
@@ -754,12 +761,14 @@ namespace IronRuby.Runtime.Jit {
         // next copy reads that one's elements as objects (OsrLoopSite.ElementGuardFailed) instead of
         // deopting on the same nil - a transparent texel, say - every time it comes round.
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GuardElementInt(object value, JitElementGuard/*!*/ guard) {
             if (value is int) { return (int)value; }
             guard.Failed = true;
             throw Deopt();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double GuardElementDouble(object value, JitElementGuard/*!*/ guard) {
             if (value is double) { return (double)value; }
             guard.Failed = true;

@@ -1,7 +1,8 @@
 /* ****************************************************************************
  *
  * -X:OSR for the loops the core iterators run: `n.times { }', `a.upto(b) { }',
- * `a.downto(b) { }', and Array's `each', `map', `select', `any?', `all?' and `none?'.
+ * `a.downto(b) { }', `(a..b).each { }' (Integer#upto's loop, see RangeOps.EachFixnum), and Array's
+ * `each', `map', `select', `any?', `all?' and `none?'.
  *
  * Those loops are C# loops in the library that yield to a block, so there is no `while' for
  * OsrLoopSite to replace, and every iteration pays for a block invocation and a dynamic call
@@ -126,6 +127,32 @@ namespace IronRuby.Runtime.Osr {
             return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), hasNext, name);
         }
 
+        /// <summary>
+        /// The parameter of a block a compiled loop may run inline as a loop of its own (JitCompiler.EmitInlinedIterator):
+        /// what TryCreate asks of a block, and the parameter, if any, through <paramref name="parameter"/>.
+        /// </summary>
+        internal static bool IsInlinable(BlockDefinition/*!*/ ast, out LocalVariable parameter) {
+            parameter = null;
+            int depth = ast.DefinedScopeDepth;
+            if (depth <= 0) { return false; }
+            var parameters = ast.Parameters;
+            if (parameters.Optional.Length != 0 || parameters.Unsplat != null || parameters.Block != null ||
+                parameters.SuperSplat != null || parameters.Mandatory.Length > 1) {
+                return false;
+            }
+            var signature = parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords || signature.MaxPositionalCount != parameters.Mandatory.Length)) {
+                return false;
+            }
+            if (parameters.Mandatory.Length == 1) {
+                parameter = parameters.Mandatory[0] as LocalVariable;
+                if (parameter == null || parameter.DefinitionLexicalDepth != depth) { return false; }
+            }
+            List<LocalVariable> locals;
+            bool hasNext;
+            return Screen.Accepts(ast.Body, depth, parameter, out locals, out hasNext);
+        }
+
         internal BlockLoopSite/*!*/ GetSite(BlockLoopKind kind) {
             var site = Sites[(int)kind];
             if (site == null) {
@@ -156,19 +183,31 @@ namespace IronRuby.Runtime.Osr {
                 var screen = new Screen(depth, parameter);
                 locals = screen._locals;
                 hasNext = false;
-                foreach (var statement in body) {
+                if (!screen.AcceptsStatements(body)) { return false; }
+                hasNext = screen._hasNext;
+                return true;
+            }
+
+            private bool AcceptsStatements(IEnumerable<Expression>/*!*/ statements) {
+                foreach (var statement in statements) {
+                    // A sequence the parser made of one statement - `a[i] ||= v' is `?index0? = i; a[?index0?] ||= v',
+                    // the index evaluated once - runs its statements in order, as the body runs its own.
+                    var sequence = statement as BlockExpression;
+                    if (sequence != null) {
+                        if (!AcceptsStatements(sequence.Statements)) { return false; }
+                        continue;
+                    }
                     var assignment = statement as SimpleAssignmentExpression;
                     var target = (assignment != null && assignment.Operation == null) ? assignment.Left as LocalVariable : null;
-                    if (target != null && target.DefinitionLexicalDepth == depth && !screen.IsKnown(target)) {
+                    if (target != null && target.DefinitionLexicalDepth == _depth && !IsKnown(target)) {
                         // the value first, which may not read the local it is about to be stored in
-                        assignment.Right.Walk(screen);
-                        screen._locals.Add(target);
+                        assignment.Right.Walk(this);
+                        _locals.Add(target);
                     } else {
-                        statement.Walk(screen);
+                        statement.Walk(this);
                     }
-                    if (screen._rejected) { return false; }
+                    if (_rejected) { return false; }
                 }
-                hasNext = screen._hasNext;
                 return true;
             }
 
@@ -214,7 +253,12 @@ namespace IronRuby.Runtime.Osr {
             // never see one: catch it at the call. The loop emitter cannot take a call with a block either
             // (JitCompiler: "call with a block"), so without this a block like `n.times { a.each { } }' was
             // let through, and the first entry spent a whole OSR compile (~25ms) only to retire the site.
-            public override bool Enter(MethodCall/*!*/ node) { return node.Block != null ? Reject() : !_rejected; }
+            // A literal block given to an iterator the loop compiler runs inline (JitCompiler.IsInlinedIterator)
+            // is screened again, as a block of its own, when the compiler gets to it.
+            public override bool Enter(MethodCall/*!*/ node) {
+                if (node.Block == null) { return !_rejected; }
+                return (node.Block is BlockDefinition && IronRuby.Runtime.Jit.JitCompiler.IsInlinedIterator(node)) ? !_rejected : Reject();
+            }
 
             public override bool Enter(LocalVariable/*!*/ node) {
                 // A local of the block's own is nil at the top of every iteration, which a loop slot

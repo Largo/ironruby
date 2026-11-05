@@ -44,6 +44,8 @@ namespace IronRuby.Builtins {
         private const uint IsFrozenFlag = 1;
         private const uint IsTaintedFlag = 2;
         private const uint IsUntrustedFlag = 4;
+        // Set, for good, before this Array gets a class other than Array (RubyContext.MarkOwnClass).
+        private const uint MayHaveOwnClassFlag = 8;
 
         [Conditional("DEBUG")]
         private void ObjectInvariant() {
@@ -187,6 +189,18 @@ namespace IronRuby.Builtins {
             get {
                 return (_flags & IsFrozenFlag) != 0;
             }
+        }
+
+        /// <summary>
+        /// False while this Array's class is Array itself - no singleton class, not adopted - so that its
+        /// class can be known without a look in the instance data table (JitRuntime.OsrArray).
+        /// </summary>
+        internal bool MayHaveOwnClass {
+            get { return (_flags & MayHaveOwnClassFlag) != 0; }
+        }
+
+        internal void MarkMayHaveOwnClass() {
+            System.Threading.Interlocked.Or(ref _flags, MayHaveOwnClassFlag);
         }
 
         void IRubyObjectState.Freeze() {

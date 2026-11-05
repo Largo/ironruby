@@ -35,6 +35,8 @@ namespace IronRuby.Runtime.Jit {
         // The body writes Hash or Array elements (EmitIndexWrite). In loop mode the iteration commits
         // the writes of the one before it at its top, through these two (see JitLoopFacts).
         private bool _hashWrite;
+        // a while loop of a method body writes Array or Hash elements (see TryCompile)
+        private bool _loopWrites;
         private MSA.ParameterExpression _undoLog, _undoMark;
 
         // ---- values only ever stored -------------------------------------------------------
@@ -641,21 +643,57 @@ namespace IronRuby.Runtime.Jit {
         /// worth speculating to be an Integer even next to another object (a deopt tells otherwise).
         /// </summary>
         private bool HoldsIntegerElements(RExpr/*!*/ operand) {
+            JT kind = ElementKind(operand);
+            return kind == JT.Int || kind == JT.Lng;
+        }
+
+        // A block run inline over an Array local the loop can see (EmitInlinedIterator), by the Key of the
+        // block's parameter: that parameter's values are the Array's elements.
+        private Dictionary<string, RubyArray> _inlineSources;
+
+        /// <summary>
+        /// What the elements `x[i]' reads are, from a sample of them: Lng if every one sampled is an
+        /// Integer, Dbl if every one is a Float, None otherwise or with nothing to sample. x is a local of
+        /// an outlined loop holding an Array, or the parameter of a block run inline over an Array of
+        /// Arrays, whose inner Arrays are sampled.
+        /// </summary>
+        private JT ElementKind(RExpr/*!*/ operand) {
             var read = operand as MethodCall;
             if (read == null || read.MethodName != "[]" || read.Block != null || read.Arguments == null ||
                 read.Arguments.Expressions.Length != 1 || !(read.Target is LocalVariable) || _loop == null || _peekLocal == null) {
-                return false;
+                return JT.None;
             }
-            var peek = _peekLocal((LocalVariable)read.Target);
-            var array = peek.HasValue ? peek.Value.Value as RubyArray : null;
-            if (array == null || array.Count == 0) { return false; }
+            var local = (LocalVariable)read.Target;
             const int Samples = 16;
-            int step = Math.Max(1, array.Count / Samples);
+            RubyArray outer;
+            if (_inlineSources != null && _inlineSources.TryGetValue(Key(local), out outer)) {
+                JT kind = JT.None;
+                int step = Math.Max(1, outer.Count / Samples);
+                for (int i = 0; i < outer.Count; i += step) {
+                    var inner = outer[i] as RubyArray;
+                    if (inner == null) { return JT.None; }
+                    JT k = SampledKind(inner, Samples);
+                    if (k == JT.None || (kind != JT.None && k != kind)) { return JT.None; }
+                    kind = k;
+                }
+                return kind;
+            }
+            var peek = _peekLocal(local);
+            var array = peek.HasValue ? peek.Value.Value as RubyArray : null;
+            return (array != null) ? SampledKind(array, Samples) : JT.None;
+        }
+
+        private static JT SampledKind(RubyArray/*!*/ array, int samples) {
+            if (array.Count == 0) { return JT.None; }
+            JT kind = JT.None;
+            int step = Math.Max(1, array.Count / samples);
             for (int i = 0; i < array.Count; i += step) {
                 object element = array[i];
-                if (!(element is int) && !(element is long)) { return false; }
+                JT k = (element is int || element is long) ? JT.Lng : (element is double) ? JT.Dbl : JT.None;
+                if (k == JT.None || (kind != JT.None && k != kind)) { return JT.None; }
+                kind = k;
             }
-            return true;
+            return kind;
         }
 
         /// <summary>An operand the profile has only ever seen as something other than a number is not speculated to be one.</summary>

@@ -2076,12 +2076,18 @@ namespace IronRuby.Runtime {
         private volatile bool _hasAdoptedClrObjects;
 
         /// <summary>
-        /// Set, for good, before the first RubyArray gets a class other than Array: a singleton class,
-        /// or an adopted or replaced one. Until then the immediate class of an exact RubyArray is Array
-        /// without a look in the instance data table, which is what an outlined loop asks of every
-        /// Array it loads on entry (JitRuntime.OsrArray).
+        /// Before a RubyArray gets a class other than Array - a singleton class, or an adopted or replaced
+        /// one - it is marked (RubyArray.MayHaveOwnClass), so that the immediate class of an unmarked exact
+        /// RubyArray is Array without a look in the instance data table. That is what an outlined loop
+        /// asks of every Array it loads on entry (JitRuntime.OsrArray). Per Array, not per runtime: the
+        /// library itself gives an Array a singleton method or two at startup.
         /// </summary>
-        internal volatile bool AnyArrayHasOwnClass;
+        private static void MarkOwnClass(object/*!*/ obj) {
+            var array = obj as RubyArray;
+            if (array != null) {
+                array.MarkMayHaveOwnClass();
+            }
+        }
 
         private RubyClass TryGetClassOfAdoptedClrObject(object/*!*/ obj) {
             RubyInstanceData data;
@@ -2117,9 +2123,7 @@ namespace IronRuby.Runtime {
                     clrClass.MethodsUpdated("AdoptClrObject");
                 }
                 _hasAdoptedClrObjects = true;
-                if (obj is RubyArray) {
-                    AnyArrayHasOwnClass = true;
-                }
+                MarkOwnClass(obj);
                 GetInstanceData(obj).ImmediateClass = cls;
             }
         }
@@ -2190,9 +2194,7 @@ namespace IronRuby.Runtime {
                 rubyObj.ImmediateClass = singleton;
                 return;
             }
-            if (obj is RubyArray) {
-                AnyArrayHasOwnClass = true;
-            }
+            MarkOwnClass(obj);
             if (data != null) {
                 data.ImmediateClass = singleton;
             } else {
@@ -2643,9 +2645,7 @@ namespace IronRuby.Runtime {
                     clrClass.MethodsUpdated("ReplaceClrObjectClass");
                 }
                 _hasAdoptedClrObjects = true;
-                if (obj is RubyArray) {
-                    AnyArrayHasOwnClass = true;
-                }
+                MarkOwnClass(obj);
                 GetInstanceData(obj).ImmediateClass = cls;
             }
         }

@@ -50,6 +50,11 @@ namespace IronRuby.Compiler.Ast {
         private readonly Statements/*!*/ _body;
         private readonly LexicalScope/*!*/ _definedScope;
 
+        /// <summary>The lexical depth of the block's own scope: its parameters and locals are defined at it.</summary>
+        internal int DefinedScopeDepth {
+            get { return _definedScope.Depth; }
+        }
+
         public Parameters/*!*/ Parameters {
             get { return _parameters; }
         }

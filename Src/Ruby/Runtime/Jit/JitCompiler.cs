@@ -319,7 +319,8 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>The key a local is looked up under: names repeat across lexical depths.</summary>
         private string/*!*/ Key(LocalVariable/*!*/ local) {
-            return (_loop == null) ? local.Name : local.Name + "@" + local.DefinitionLexicalDepth;
+            // a method's own locals by name; in a loop, and a block run inline, by name and depth
+            return (_loop == null && local.DefinitionLexicalDepth == _scopeDepth) ? local.Name : local.Name + "@" + local.DefinitionLexicalDepth;
         }
 
         /// <summary>
@@ -486,6 +487,17 @@ namespace IronRuby.Runtime.Jit {
                     if (JitRuntime.Verbose) {
                         Console.Error.WriteLine("[jit] rejected {0} arity {1}: {2}", ast.Name, paramTypes.Length,
                             c._bailReason ?? "unsupported construct");
+                    }
+                    return null;
+                }
+
+                // A method whose loop writes Array or Hash elements is better left to OSR, which
+                // replaces the loop alone: a typed method body logs every write until the method returns
+                // (a deopt re-runs the whole method), and indexes an Array local through the intrinsics,
+                // where the outlined loop commits each iteration's writes and loads the Array once.
+                if (c._loopWrites && context.RubyOptions.Osr) {
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] rejected {0} arity {1}: a loop that writes is OSR's", ast.Name, paramTypes.Length);
                     }
                     return null;
                 }
@@ -882,7 +894,7 @@ namespace IronRuby.Runtime.Jit {
             var loop = node as WhileLoopExpression;
             if (loop != null) { return EmitWhile(loop, out type); }
 
-            if (_loop != null && _breakLabel != null) {
+            if ((_loop != null || _inlinedBlocks > 0) && _breakLabel != null) {
                 var brk = node as BreakStatement;
                 if (brk != null) {
                     if (brk.Arguments != null) { throw JitBailout.Instance; }
@@ -955,7 +967,8 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
-            if (_loop == null && local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
+            bool inlined = IsInlinedLocal(local);
+            if (_loop == null && !inlined && local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
             MSA.ParameterExpression p;
             if (!TryLookup(Key(local), out p, out type)) {
                 KeyValuePair<MSA.ParameterExpression, JT> loaded;
@@ -964,7 +977,7 @@ namespace IronRuby.Runtime.Jit {
                     type = JT.Obj;
                     return Ast.Convert(loaded.Key, typeof(object));
                 }
-                if (_loop != null) {
+                if (_loop != null && !inlined) {
                     // a local only stored is an object slot, holding the box it holds (IsStoredOnly)
                     BindLoopLocal(local, IsStoredOnly(local) ? JT.Obj : JT.None, out p, out type);
                     return LoadLoopSlot(p);
@@ -1004,7 +1017,8 @@ namespace IronRuby.Runtime.Jit {
             if (attribute != null) { return EmitAttributeWrite(attribute, op, node.Right, out type); }
 
             var target = node.Left as LocalVariable;
-            if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
+            bool inlinedTarget = (target != null) && IsInlinedLocal(target);
+            if (target == null || (_loop == null && !inlinedTarget && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
             if (_inKeywordDefault) { throw Bail("keyword default assigns a local"); }
 
             JT rhsType;
@@ -1014,7 +1028,7 @@ namespace IronRuby.Runtime.Jit {
             JT lt;
             bool known = TryLookup(Key(target), out p, out lt);
             bool storedOnly = (op == null) && IsNumeric(rhsType) && IsStoredOnly(target);
-            if (!known && _loop != null) {
+            if (!known && _loop != null && !inlinedTarget) {
                 // The slot exists in the tuple whether or not the loop has read it yet, and it
                 // is written back on the way out, so it has to be bound rather than declared.
                 // `x op= v' reads x first, so an object v says nothing about what x holds
@@ -1056,7 +1070,7 @@ namespace IronRuby.Runtime.Jit {
                     rhsType = lt;
                 }
             } else {
-                p = Declare(target.Name, rhsType);
+                p = Declare(Key(target), rhsType);
             }
             type = rhsType;
             return (_loop != null) ? StoreLoopSlot(p, rhs) : (MSA.Expression)Ast.Assign(p, rhs);
@@ -1109,7 +1123,11 @@ namespace IronRuby.Runtime.Jit {
             var test = EmitCondition(node.Condition);
             if (!node.IsWhileLoop) { test = Ast.Not(test); }
             JT ignored;
+            bool wroteBefore = _hashWrite;
+            _hashWrite = false;
             var body = EmitRegion(node.Statements, out ignored);
+            if (_hashWrite) { _loopWrites = true; }
+            _hashWrite |= wroteBefore;
             _breakLabel = savedBreak;
             _continueLabel = savedContinue;
             type = JT.Obj;
@@ -1351,7 +1369,11 @@ namespace IronRuby.Runtime.Jit {
         // ---- calls -------------------------------------------------------------------------
 
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
-            if (node.Block != null) { throw Bail("call with a block: " + node.MethodName); }
+            if (node.Block != null) {
+                // `a.each { }', `n.times { }' and the like run inline (JitCompiler.Iterators.cs)
+                if (IsInlinedIterator(node)) { return EmitInlinedIterator(node, out type); }
+                throw Bail("call with a block: " + node.MethodName);
+            }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
 
@@ -1536,6 +1558,15 @@ namespace IronRuby.Runtime.Jit {
                 }
                 if ((lt == JT.Obj && IsNumeric(rt)) || (IsNumeric(lt) && rt == JT.Obj)) {
                     return EmitSpeculatedBinary(node.MethodName, l, lt, node.Target, r, rt, args.Expressions[0], out type);
+                }
+                if (lt == JT.Obj && rt == JT.Obj && JitScreen.IsBinaryOperator(node.MethodName) &&
+                    ElementKind(node.Target) == JT.Dbl && ElementKind(args.Expressions[0]) == JT.Dbl) {
+                    // `b1[0] - b2[0]', both Arrays of Floats now: the receiver is speculated to be a Float, and
+                    // the argument next to it (an Integer there is Integer op Float, which is Float op Float)
+                    RequireBuiltin(JT.Dbl, node.MethodName);
+                    _canDeopt = true;
+                    return EmitSpeculatedBinary(node.MethodName, Ast.Call(JitRuntime.M("GuardDouble"), l), JT.Dbl, null,
+                        r, rt, args.Expressions[0], out type);
                 }
                 if (lt == JT.Obj && rt == JT.Obj && JitScreen.IsBinaryOperator(node.MethodName) &&
                     HoldsIntegerElements(node.Target) && HoldsIntegerElements(args.Expressions[0])) {
@@ -1926,6 +1957,13 @@ namespace IronRuby.Runtime.Jit {
 
         private readonly JitKeywords _keywords;
 
+        // the depths of the blocks of iterators that run inline, being walked
+        private HashSet<int> _inlineDepths;
+
+        private bool IsInlinedDepth(int depth) {
+            return _inlineDepths != null && _inlineDepths.Contains(depth);
+        }
+
         // walking a keyword default, which may not assign a local (JitCompiler.EmitKeywordDefaults)
         private bool _inKeywordDefault;
 
@@ -2067,7 +2105,7 @@ namespace IronRuby.Runtime.Jit {
                 // A local from an enclosing scope is never read from a typed body. (Emit also
                 // bails on a read before any assignment, which is a flow property: say yes.)
                 _otherUses.Add(local.Name);
-                return local.DefinitionLexicalDepth == _scopeDepth || No(node);
+                return local.DefinitionLexicalDepth == _scopeDepth || IsInlinedDepth(local.DefinitionLexicalDepth) || No(node);
             }
 
             var assign = node as SimpleAssignmentExpression;
@@ -2098,7 +2136,10 @@ namespace IronRuby.Runtime.Jit {
                     return Walk(assign.Right);
                 }
                 var target = assign.Left as LocalVariable;
-                if (target == null || target.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
+                if (target == null || (target.DefinitionLexicalDepth != _scopeDepth && !IsInlinedDepth(target.DefinitionLexicalDepth)) ||
+                    _inKeywordDefault) {
+                    return No(node);
+                }
                 _otherUses.Add(target.Name);
                 return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
             }
@@ -2179,7 +2220,10 @@ namespace IronRuby.Runtime.Jit {
             }
 
             // break/next are only emitted in loop mode, which a method body never is, so they
-            // fall through to the rejection below along with every other unknown node.
+            // fall through to the rejection below along with every other unknown node - but for the
+            // `next' of a block run inline (JitCompiler.EmitInlinedIterator).
+            var next = node as NextStatement;
+            if (next != null && next.Arguments == null && _inlineDepths != null && _inlineDepths.Count > 0) { return true; }
 
             var body = node as Body;
             if (body != null) { return WalkBody(body); }
@@ -2240,7 +2284,22 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>Mirrors JitCompiler.EmitCall: a self-recursive call, a binary operator, an element read or a Hash query.</summary>
         private bool WalkCall(MethodCall/*!*/ node) {
-            if (node.Block != null) { return No(node); }
+            if (node.Block != null) {
+                // an iterator run inline: its receiver, arguments and block body (JitCompiler.Iterators.cs)
+                if (!JitCompiler.IsInlinedIterator(node) || !Walk(node.Target)) { return No(node); }
+                if (node.Arguments != null) {
+                    foreach (var arg in node.Arguments.Expressions) {
+                        if (!Walk(arg)) { return false; }
+                    }
+                }
+                var block = (BlockDefinition)node.Block;
+                if (_inlineDepths == null) { _inlineDepths = new HashSet<int>(); }
+                int depth = block.DefinedScopeDepth;
+                if (!_inlineDepths.Add(depth)) { return No(node); }
+                bool ok = WalkStatements(block.Body);
+                _inlineDepths.Remove(depth);
+                return ok;
+            }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
 
