@@ -267,3 +267,29 @@ t('>> 2**64 (a Bignum count)') { shift_loop(ints, 2**64, false) }
 t('a Float count') { shift_loop(ints, 2.5, false) }
 lst = []
 t('Array#<< still appends') { i = 0; while i < N; lst << i; i += 1; end; lst.size }
+
+# ---------------------------------------------------------------- 6. predicates, unary minus
+
+def preds(a)
+  e = o = z = 0
+  n = 0
+  i = 0
+  while i < a.size
+    v = a[i]
+    e += 1 if v.even?
+    o += 1 if v.odd?
+    z += 1 if v.zero?
+    n += -v + +v - -v
+    i += 1
+  end
+  [e, o, z, n]
+end
+t('even?, odd?, zero?, -x, +x') { preds(ints) }
+t('of Int64 and negative values') { preds(Array.new(N) { |i| (i - 3000) * 2**40 }) }
+t('-x of -2**63') { preds(Array.new(N) { |i| i == 5000 ? -2**63 : i }) }
+t('zero? of Floats') { r = 0; i = 0; while i < N; r += 1 if floats[i].zero?; i += 1; end; r }
+nn = Array.new(N) { |i| i % 3 == 0 ? nil : i }
+t('nil? of nil and Integers') { r = 0; i = 0; while i < N; r += 1 if nn[i].nil?; i += 1; end; r }
+class NilLike; def nil? = true; end
+nn2 = nn.dup; nn2[5000] = NilLike.new
+t('nil? redefined on one class') { r = 0; i = 0; while i < N; r += 1 if nn2[i].nil?; i += 1; end; r }

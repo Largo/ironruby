@@ -29,7 +29,7 @@ namespace IronRuby.Runtime.Jit {
 
         // The scope the body's constants resolve in: a method's declaring scope, an outlined loop's
         // own. Null when there is none, and then no constant is folded.
-        private readonly RubyScope _constantScope;
+        private RubyScope _constantScope;
         private bool _usesConstants;
 
         // The body writes Hash or Array elements (EmitIndexWrite). In loop mode the iteration commits
@@ -678,7 +678,7 @@ namespace IronRuby.Runtime.Jit {
                 }
                 return kind;
             }
-            var peek = _peekLocal(local);
+            var peek = PeekLocal(local);
             var array = peek.HasValue ? peek.Value.Value as RubyArray : null;
             return (array != null) ? SampledKind(array, Samples) : JT.None;
         }
@@ -728,6 +728,9 @@ namespace IronRuby.Runtime.Jit {
         internal sealed class ReceiverHints {
             internal Type[] Parameters;
             internal Type Self;
+            // Loop mode: the class of the loop's self when it was compiled (JitCompiler.TryEmitInlinedCall), and self
+            internal RubyClass SelfClass;
+            internal object SelfValue;
             // Loop mode: the load-once Array locals (by Key) whose elements an earlier copy found not
             // all of one type - read as objects this time - and, filled in by the compiler, the guards
             // of the ones that are read typed (OsrLoopSite.ElementGuardFailed).
@@ -754,7 +757,7 @@ namespace IronRuby.Runtime.Jit {
             if (local == null) { return null; }
             if (_loop != null) {
                 if (_peekLocal == null) { return null; }
-                var peek = _peekLocal(local);
+                var peek = PeekLocal(local);
                 if (!peek.HasValue) { return null; }
                 object value = peek.Value.Value;
                 return (value == null) ? typeof(void) : value.GetType();
@@ -1143,8 +1146,10 @@ namespace IronRuby.Runtime.Jit {
             }
             MSA.ParameterExpression bound;
             JT boundType;
-            if (TryLookup(Key(receiverLocal), out bound, out boundType)) { throw Bail("attribute assignment to a typed local"); }
-            var peek = _peekLocal(receiverLocal);
+            if (TryLookup(Key(receiverLocal), out bound, out boundType) && !HasProvenance(receiverLocal)) {
+                throw Bail("attribute assignment to a typed local");
+            }
+            var peek = PeekLocal(receiverLocal);
             object live = peek.HasValue ? peek.Value.Value : null;
             string variableName = (live is RubyObject)
                 ? JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, live), name, true) : null;
@@ -1153,8 +1158,10 @@ namespace IronRuby.Runtime.Jit {
             JT valueType;
             var value = Emit(right, out valueType);
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
-            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
-            _peeked.Add(receiverLocal);
+            if (!HasProvenance(receiverLocal)) {
+                if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                _peeked.Add(receiverLocal);
+            }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
             _canDeopt = true;
             _hashWrite = true;
@@ -1225,7 +1232,7 @@ namespace IronRuby.Runtime.Jit {
             JT t;
             if (TryLookup(key, out p, out t)) { return null; }
 
-            var peek = _peekLocal(local);
+            var peek = PeekLocal(local);
             if (!peek.HasValue) { return null; }
             var live = peek.Value.Value as RubyArray;
             RubyClass arrayClass = ArrayClass;
@@ -1240,6 +1247,20 @@ namespace IronRuby.Runtime.Jit {
             _arrayLoads.Add(new KeyValuePair<MSA.ParameterExpression, MSA.Expression>(variable,
                 Ast.Call(JitRuntime.M("OsrArray"), Ast.Convert(peek.Value.Key, typeof(object)), Ast.Constant(arrayClass, typeof(RubyClass)))));
             _arrayPeeked.Add(local);
+            return RegisterArrayLocal(key, variable, live);
+        }
+
+        /// <summary>
+        /// A load-once Array's variable under <paramref name="key"/>, its elements read as the type a sample
+        /// of <paramref name="live"/>'s have, through an element guard (see OsrLoopSite.ElementGuardFailed).
+        /// </summary>
+        private KeyValuePair<MSA.ParameterExpression, JT> RegisterArrayLocal(string/*!*/ key, MSA.ParameterExpression/*!*/ variable,
+            RubyArray/*!*/ live) {
+            if (_arrayLocals == null) {
+                _arrayLocals = new Dictionary<string, KeyValuePair<MSA.ParameterExpression, JT>>();
+                _arrayLoads = new List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>>();
+                _arrayPeeked = new List<LocalVariable>();
+            }
             JT elementType = (_hints != null && _hints.ObjectElements != null && _hints.ObjectElements.Contains(key))
                 ? JT.Obj : ElementType(live);
             if (elementType != JT.Obj && _hints != null) {
@@ -1250,8 +1271,37 @@ namespace IronRuby.Runtime.Jit {
                 _elementGuards.Add(variable, guard);
             }
             var result = new KeyValuePair<MSA.ParameterExpression, JT>(variable, elementType);
-            _arrayLocals.Add(key, result);
+            _arrayLocals[key] = result;
             return result;
+        }
+
+        /// <summary>
+        /// `x = @a' in a callee being inlined, x assigned nowhere else in it and @a a plain Array now: x is a
+        /// load-once Array from here on, checked when assigned (a deopt if it is not a plain Array then).
+        /// Null when that is not the case.
+        /// </summary>
+        private MSA.Expression EmitArrayLocalAssignment(LocalVariable/*!*/ target, RExpr/*!*/ right, MSA.Expression/*!*/ rhs, JT rhsType) {
+            var ivar = right as InstanceVariable;
+            if (ivar == null || rhsType != JT.Obj || _inlineDepth == 0 || _localScopeIndex < 0 || _liveSelf == null ||
+                _singleAssigned == null || !_singleAssigned.Contains(target.Name) || _noArrayLocals || !_refinements.IsEmpty) {
+                return null;
+            }
+            object value;
+            if (!_context.TryGetInstanceVariable(_liveSelf, ivar.Name, out value)) { return null; }
+            var live = value as RubyArray;
+            if (live == null || live.GetType() != typeof(RubyArray) || _context.GetImmediateClassOf(live) != ArrayClass) { return null; }
+
+            string key = Key(target);
+            var p = DeclareAt(_localScopeIndex, key, JT.Obj);
+            var variable = Ast.Variable(typeof(RubyArray), "#array:" + target.Name);
+            _declared[_localScopeIndex].Add(variable);
+            RegisterArrayLocal(key, variable, live);
+            _canDeopt = true;
+            return Ast.Block(typeof(object),
+                Ast.Assign(p, rhs),
+                Ast.Assign(variable, Ast.Call(JitRuntime.M("MethodArray"), p, Ast.Constant(ArrayClass, typeof(RubyClass)))),
+                p
+            );
         }
 
         // Method mode: the parameters loaded once, which the body then must not assign (checked by TryCompile).

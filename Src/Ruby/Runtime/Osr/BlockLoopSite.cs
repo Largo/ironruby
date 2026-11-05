@@ -183,31 +183,16 @@ namespace IronRuby.Runtime.Osr {
                 var screen = new Screen(depth, parameter);
                 locals = screen._locals;
                 hasNext = false;
-                if (!screen.AcceptsStatements(body)) { return false; }
-                hasNext = screen._hasNext;
-                return true;
-            }
-
-            private bool AcceptsStatements(IEnumerable<Expression>/*!*/ statements) {
-                foreach (var statement in statements) {
-                    // A sequence the parser made of one statement - `a[i] ||= v' is `?index0? = i; a[?index0?] ||= v',
-                    // the index evaluated once - runs its statements in order, as the body runs its own.
-                    var sequence = statement as BlockExpression;
-                    if (sequence != null) {
-                        if (!AcceptsStatements(sequence.Statements)) { return false; }
-                        continue;
-                    }
-                    var assignment = statement as SimpleAssignmentExpression;
-                    var target = (assignment != null && assignment.Operation == null) ? assignment.Left as LocalVariable : null;
-                    if (target != null && target.DefinitionLexicalDepth == _depth && !IsKnown(target)) {
-                        // the value first, which may not read the local it is about to be stored in
-                        assignment.Right.Walk(this);
-                        _locals.Add(target);
-                    } else {
-                        statement.Walk(this);
-                    }
-                    if (_rejected) { return false; }
+                foreach (var statement in body) {
+                    statement.Walk(screen);
+                    if (screen._rejected) { return false; }
                 }
+                // A local of the block's own is nil at the top of every call of the block, which a loop slot
+                // carried over from the iteration before is not: none may be read before it is assigned.
+                if (!DefiniteAssignment.Check(body, local => local.DefinitionLexicalDepth == depth, new[] { parameter })) {
+                    return false;
+                }
+                hasNext = screen._hasNext;
                 return true;
             }
 
@@ -261,14 +246,11 @@ namespace IronRuby.Runtime.Osr {
             }
 
             public override bool Enter(LocalVariable/*!*/ node) {
-                // A local of the block's own is nil at the top of every iteration, which a loop slot
-                // carried over from the iteration before is not. The parameter is assigned at the top of
-                // every iteration, and so is a local whose first mention is a statement that assigns it;
-                // any other is out.
-                if (node.DefinitionLexicalDepth < 0 || (node.DefinitionLexicalDepth >= _depth &&
-                    (node.DefinitionLexicalDepth != _depth || !IsKnown(node)))) {
-                    return Reject();
-                }
+                // The block's own locals are collected, for the loop's tuple to have their slots; that none is
+                // read before it is assigned is DefiniteAssignment's to prove. A deeper one is a nested block's,
+                // which the Walker never shows.
+                if (node.DefinitionLexicalDepth < 0 || node.DefinitionLexicalDepth > _depth) { return Reject(); }
+                if (node.DefinitionLexicalDepth == _depth && !IsKnown(node)) { _locals.Add(node); }
                 return !_rejected;
             }
         }

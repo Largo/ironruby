@@ -110,15 +110,40 @@ A method whose loop writes Array or Hash elements is left to -X:OSR rather than 
 the method JIT logs every write until the method returns (a deopt re-runs the method), where an
 outlined loop commits each iteration's writes and loads its Arrays once - 2-3x faster per iteration.
 
+## Ruby methods a compiled loop calls
+
+An outlined loop compiles in the body of a Ruby method it calls (Src/Ruby/Runtime/Jit/JitCompiler.Inline.cs):
+`m(a)` and `self.m(a)` on the loop's self, and `o.m(a)` on a local whose value the loop can see,
+typed by the arguments at that call site, up to four calls deep. The method is resolved when the loop
+is compiled, under the method-version guard every compiled loop has, plus a class check: of self once
+on entry, of another receiver at the call. Inside, the callee follows the loop's own rules - no call, every
+write logged and taken back by a deopt - so a deopt in it re-runs the iteration generically, where the call
+is a real call with its frame, backtrace and TracePoint events.
+
+A callee's locals, and a block's run inline or outlined, are variables of the compiled loop, which do
+not start each call as nil the way Ruby's do: Src/Ruby/Runtime/Osr/DefiniteAssignment.cs proves no
+read of one can come before an assignment of it in the same call (`if c; t = 1; else; t = 2; end`
+passes; `t = 1 if c; t` does not, and such a method or block is not compiled in).
+
+Util/bench/render.rb, best ms per frame (CRuby 4.0: 31.6 for the whole frame):
+
+| kernel  | before | after |
+| ---     | ---:   | ---:  |
+| planes  | 16.4   | 7.7   |
+| all     | 18.3   | 9.7   |
+
+Util/osr-inline-matrix.rb is the differential matrix.
+
 ## Known limits
 
 - Every iterator other than the ones above (Hash#each, each_with_index, a Ruby method's `yield`,
   ...) still invokes its block once per element: a block given to one of those is never
   outlined, whatever its body. A `while` inside such a block is still replaced by -X:OSR as
   any other.
-- A compiled loop calls no Ruby method: a loop that calls one of its own (`draw_span(...)`) runs
-  generically, however simple the method. Library calls it knows (Array#[], Float#to_i, clamp,
-  min/max, abs, the iterators above) are compiled in.
+- A compiled loop still makes no call. A Ruby method it calls is compiled in instead (below) when it
+  can be; when it cannot - optional, splat, block or keyword parameters, a block passed, `yield`,
+  recursion, a receiver whose class the loop cannot see when it is compiled - the loop runs
+  generically.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.

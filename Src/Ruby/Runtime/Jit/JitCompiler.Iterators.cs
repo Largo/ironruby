@@ -42,7 +42,8 @@ namespace IronRuby.Runtime.Jit {
         private HashSet<int> _inlineDepths;
 
         private bool IsInlinedLocal(LocalVariable/*!*/ local) {
-            return _inlineDepths != null && _inlineDepths.Contains(local.DefinitionLexicalDepth);
+            // every local of a callee being inlined is one of its frame's (JitCompiler.Inline.cs)
+            return _inlineDepth > 0 || (_inlineDepths != null && _inlineDepths.Contains(local.DefinitionLexicalDepth));
         }
 
         /// <summary>`a.each { }', `n.times { }', `a.upto(b) { }', `a.downto(b) { }' with a literal block.</summary>
@@ -82,29 +83,33 @@ namespace IronRuby.Runtime.Jit {
                 var e = Emit(range.End, out et);
                 b = NumericIVar(range.Begin, b, ref bt);
                 e = NumericIVar(range.End, e, ref et);
-                if (bt != JT.Int || et != JT.Int) { throw Bail("Range#each of " + bt + ".." + et); }
-                var first = Ast.Variable(typeof(int), "#first");
-                var last = Ast.Variable(typeof(int), "#last");
+                if (!IsInteger(bt) || !IsInteger(et)) { throw Bail("Range#each of " + bt + ".." + et); }
+                bool ints = (bt == JT.Int && et == JT.Int);
+                var first = Ast.Variable(typeof(long), "#first");
+                var last = Ast.Variable(typeof(long), "#last");
                 temps.Add(first);
                 temps.Add(last);
-                setup.Add(Ast.Assign(first, b));
-                setup.Add(Ast.Assign(last, e));
-                // #n = last - first (- 1 when the end is excluded): the iterations less one, negative for none
-                MSA.Expression span = Ast.Subtract(Ast.Convert(last, typeof(long)), Ast.Convert(first, typeof(long)));
-                if (range.IsExclusive) { span = Ast.Subtract(span, Ast.Constant(1L)); }
+                setup.Add(Ast.Assign(first, Coerce(b, bt, JT.Lng)));
+                setup.Add(Ast.Assign(last, Coerce(e, et, JT.Lng)));
+                // #n = last - first (- 1 when the end is excluded): the iterations less one, negative for none;
+                // out of Int64 deopts
+                _canDeopt = true;
+                MSA.Expression span = Ast.Call(JitRuntime.M("SubLong"), last, first);
+                if (range.IsExclusive) { span = Ast.Call(JitRuntime.M("SubLong"), span, Ast.Constant(1L)); }
                 setup.Add(Ast.Assign(count, span));
                 test = Ast.LessThanOrEqual(counter, count);
-                element = Ast.Convert(Ast.Add(Ast.Convert(first, typeof(long)), counter), typeof(int));
-                elementType = JT.Int;
-                value = Ast.Convert(Ast.New(typeof(Range).GetConstructor(new[] { typeof(int), typeof(int), typeof(bool) }),
-                    first, last, Ast.Constant(range.IsExclusive)), typeof(object));
+                MSA.Expression at = Ast.Add(first, counter);
+                // between two Int32s every number is one
+                element = ints ? (MSA.Expression)Ast.Convert(at, typeof(int)) : at;
+                elementType = ints ? JT.Int : JT.Lng;
+                value = Ast.Call(JitRuntime.M("MakeIntegerRange"), first, last, Ast.Constant(range.IsExclusive));
             } else if (node.MethodName == "each") {
                 if (!IsPublicBuiltin(ArrayClass, "each")) { throw Bail("Array#each is not the built-in one"); }
                 var loaded = ArrayLocal(node.Target);
                 if (loaded == null) { throw Bail("each of anything but a load-once Array"); }
                 var array = loaded.Value;
                 // what the block's parameter holds, for the elements of its elements to be sampled (ElementKind)
-                var source = (_peekLocal != null && node.Target is LocalVariable) ? _peekLocal((LocalVariable)node.Target) : null;
+                var source = (_peekLocal != null && node.Target is LocalVariable) ? PeekLocal((LocalVariable)node.Target) : null;
                 if (parameter != null && source.HasValue && source.Value.Value is RubyArray) {
                     if (_inlineSources == null) { _inlineSources = new Dictionary<string, RubyArray>(); }
                     _inlineSources[Key(parameter)] = (RubyArray)source.Value.Value;
@@ -178,8 +183,10 @@ namespace IronRuby.Runtime.Jit {
             MSA.Expression body;
             List<MSA.ParameterExpression> declared;
             MSA.Expression bindParameter = null;
+            int savedScopeIndex = _localScopeIndex;
             try {
                 PushScope();
+                _localScopeIndex = _vars.Count - 1;
                 if (parameter != null) {
                     var p = Declare(Key(parameter), elementType);
                     bindParameter = Ast.Assign(p, element);
@@ -188,6 +195,7 @@ namespace IronRuby.Runtime.Jit {
                 body = EmitStatements(block.Body, out ignored);
                 declared = PopScope();
             } finally {
+                _localScopeIndex = savedScopeIndex;
                 _inlinedBlocks--;
                 _breakLabel = savedBreak;
                 _continueLabel = savedContinue;

@@ -214,6 +214,8 @@ namespace IronRuby.Runtime.Jit {
             var hints = new JitCompiler.ReceiverHints { ObjectElements = objectElements };
             if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
                 hints.Self = (args[selfArgIndex] == null) ? typeof(void) : args[selfArgIndex].GetType();
+                hints.SelfClass = context.GetImmediateClassOf(args[selfArgIndex]);
+                hints.SelfValue = args[selfArgIndex];
             }
             MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, scope, hints,
                 refinements, out slots, out canDeopt, out facts);
@@ -264,6 +266,15 @@ namespace IronRuby.Runtime.Jit {
 
             if (self != null) {
                 prologue.Add(Ast.Assign(self, Ast.ArrayIndex(argsParameter, Ast.Constant(selfArgIndex))));
+            }
+            // Calls on self were compiled in as the methods self's class answered them with: a self of
+            // another class (the method the loop is in, called on a subclass) gets a copy of its own.
+            if (facts.SelfClass != null) {
+                prologue.Add(Ast.IfThen(
+                    Ast.Not(Ast.Call(JitRuntime.M("SelfClassIs"), Ast.Constant(context),
+                        Ast.ArrayIndex(argsParameter, Ast.Constant(selfArgIndex)), Ast.Constant(facts.SelfClass))),
+                    Ast.Return(exit, Ast.Call(JitRuntime.M("OsrTypeGuardFailed"), Ast.Constant("self class")))
+                ));
             }
 
             // Nothing may have redefined Integer#+ (or anything else) since the types were

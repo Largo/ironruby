@@ -42,6 +42,23 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        /// <summary>
+        /// `x.nil?': false for a number; for an object, whether it is nil, while its class answers nil? with
+        /// Kernel's (JitRuntime.NilQuery, which deopts otherwise).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitNilQuery(RExpr/*!*/ target, out JT type) {
+            JT tt;
+            var t = Emit(target, out tt);
+            type = JT.Bool;
+            if (IsNumeric(tt) || tt == JT.Bool) {
+                RequireBuiltin(tt, "nil?");
+                return Ast.Block(t, Ast.Constant(false));
+            }
+            if (tt != JT.Obj) { throw Bail("nil? of a " + tt); }
+            _canDeopt = true;
+            return Ast.Call(JitRuntime.M("NilQuery"), Ast.Constant(_context), t, Ast.Constant(new JitRuntime.NilQuerySite()));
+        }
+
         internal static bool IsShift(string/*!*/ name) {
             return name == ">>" || name == "<<";
         }
@@ -172,8 +189,40 @@ namespace IronRuby.Runtime.Jit {
     public static partial class JitRuntime {
         // ---- the numeric library calls of JitCompiler.Numeric.cs -----------------------------
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        /// <summary>The classes `nil?' was last found to be Kernel's on, under which global method version.</summary>
+        public sealed class NilQuerySite {
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal readonly Binding Next;
+                internal Binding(RubyClass/*!*/ cls, int version, Binding next) { Class = cls; Version = version; Next = next; }
+            }
+            private volatile Binding _bound;
 
+            internal bool Holds(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                int depth = 0;
+                for (var b = _bound; b != null && depth < 4; b = b.Next, depth++) {
+                    if (b.Class == cls && b.Version == version) { return true; }
+                }
+                var resolved = cls.ResolveMethod("nil?", IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                var info = resolved.Found ? resolved.Info as IronRuby.Runtime.Calls.RubyLibraryMethodInfo : null;
+                if (info == null || !ReferenceEquals(info.DeclaringModule, cls.Context.KernelModule) || !info.IsPublic) { return false; }
+                // a few classes at a time: a variable that holds nil or an Integer meets two
+                var bound = _bound;
+                _bound = new Binding(cls, version, (bound != null && bound.Version == version) ? bound : null);
+                return true;
+            }
+        }
+
+        public static bool NilQuery(RubyContext/*!*/ context, object value, NilQuerySite/*!*/ site) {
+            var obj = value as RubyObject;
+            RubyClass cls = (obj != null) ? obj.ImmediateClass : context.GetImmediateClassOf(value);
+            if (!site.Holds(cls)) { throw Deopt(); }
+            return value == null;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long ShiftRightLong(long value, long count) {
             if (count < 0) {
                 if (count == Int64.MinValue) { throw Deopt(); }

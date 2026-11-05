@@ -82,7 +82,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly List<Dictionary<string, JT>>/*!*/ _types = new List<Dictionary<string, JT>>();
         private readonly List<List<MSA.ParameterExpression>>/*!*/ _declared = new List<List<MSA.ParameterExpression>>();
 
-        private readonly MSA.ParameterExpression/*!*/ _self;
+        // not readonly: a callee being inlined on another receiver has that receiver as its self
+        private MSA.ParameterExpression/*!*/ _self;
         private readonly JT[]/*!*/ _paramTypes;
         private readonly string/*!*/[]/*!*/ _paramNames;
 
@@ -197,11 +198,11 @@ namespace IronRuby.Runtime.Jit {
         // Loop mode: what an instance variable of the loop's self holds right now, as a type
         // (see NumericIVar). Null when the loop was entered without its self, which is then
         // unbound and the loop may not touch self or an instance variable.
-        private readonly Func<string, JT> _ivarProfile;
+        private Func<string, JT> _ivarProfile;
 
         // Loop mode: the instance variable a method name reads on the loop's self if that method
         // is an attr_reader there, else null (see EmitCall). Null when the loop has no self.
-        private readonly Func<string, string> _attrProfile;
+        private Func<string, string> _attrProfile;
 
         // The attribute reads EmitCall turned into instance variable reads, and the variable each
         // reads, so that NumericIVar can type them the way it types the variable itself.
@@ -258,6 +259,8 @@ namespace IronRuby.Runtime.Jit {
             // the Arrays the body indexes directly (ArrayLocal), each a variable the entry loads by the
             // expression paired with it - null when the local does not hold a plain Array; or null
             internal List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> Arrays;
+            // calls on self were inlined, resolved in this class: the entry checks self still has it
+            internal RubyClass SelfClass;
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
@@ -279,8 +282,12 @@ namespace IronRuby.Runtime.Jit {
                 try {
                     JT type;
                     body = c.EmitWhile(loop, out type);
-                } catch (JitBailout) {
-                    if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: {0}", c._bailReason ?? "unsupported construct"); }
+                } catch (JitBailout e) {
+                    if (Osr.OsrLoopSite.Verbose) {
+                        // a bare bailout says nothing: where it was thrown does
+                        string where = (c._bailReason == null && e.StackTrace != null) ? " " + e.StackTrace.Split('\n')[0].Trim() : "";
+                        Console.Error.WriteLine("[osr]   emitter: {0}{1}", c._bailReason ?? "unsupported construct", where);
+                    }
                     return null;
                 }
                 // An Array loaded once on entry (ArrayLocal) is read from its tuple slot, so the loop must
@@ -297,12 +304,19 @@ namespace IronRuby.Runtime.Jit {
             }
             // A deopt restores the locals to what they were at the top of the iteration and
             // hands the loop back, so the iteration is re-run: it must not have been observable.
-            if (c._canDeopt && !c._pure) { return null; }
+            if (c._canDeopt && !c._pure) {
+                if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: a body that can deopt is not pure"); }
+                return null;
+            }
             // An attribute receiver read straight from its tuple slot must not also be a typed
             // slot the loop writes (EmitCall).
             if (c._peeked != null) {
                 foreach (var local in c._peeked) {
-                    if (c._vars[0].ContainsKey(c.Key(local))) { return null; }
+                    // a slot the loop only reads holds what the tuple holds
+                    if (c._writtenLocals != null && c._writtenLocals.Contains(c.Key(local))) {
+                        if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: {0} is read in place and written", local.Name); }
+                        return null;
+                    }
                 }
             }
             slots = c._slots;
@@ -310,6 +324,7 @@ namespace IronRuby.Runtime.Jit {
             facts.UndoLog = c._undoLog;
             facts.UndoMark = c._undoMark;
             facts.Arrays = c._arrayLoads;
+            facts.SelfClass = c._selfClassGuarded ? hints.SelfClass : null;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -320,7 +335,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The key a local is looked up under: names repeat across lexical depths.</summary>
         private string/*!*/ Key(LocalVariable/*!*/ local) {
             // a method's own locals by name; in a loop, and a block run inline, by name and depth
-            return (_loop == null && local.DefinitionLexicalDepth == _scopeDepth) ? local.Name : local.Name + "@" + local.DefinitionLexicalDepth;
+            return _framePrefix + ((_loop == null && local.DefinitionLexicalDepth == _scopeDepth) ? local.Name : local.Name + "@" + local.DefinitionLexicalDepth);
         }
 
         /// <summary>
@@ -396,6 +411,20 @@ namespace IronRuby.Runtime.Jit {
             p = null;
             type = JT.None;
             return false;
+        }
+
+        // Loop mode: the slots the loop assigns, by Key
+        private HashSet<string> _writtenLocals;
+
+        // the scope a block run inline, or an inlined callee, declares its locals in; -1 outside them
+        private int _localScopeIndex = -1;
+
+        private MSA.ParameterExpression/*!*/ DeclareAt(int scope, string/*!*/ name, JT type) {
+            var p = Ast.Parameter(ClrType(type), name);
+            _vars[scope].Add(name, p);
+            _types[scope].Add(name, type);
+            _declared[scope].Add(p);
+            return p;
         }
 
         private MSA.ParameterExpression/*!*/ Declare(string/*!*/ name, JT type) {
@@ -1023,6 +1052,7 @@ namespace IronRuby.Runtime.Jit {
 
             JT rhsType;
             var rhs = Emit(node.Right, out rhsType);
+            MSA.Expression arrayAssignment;
 
             MSA.ParameterExpression p;
             JT lt;
@@ -1061,18 +1091,37 @@ namespace IronRuby.Runtime.Jit {
                     rhs = BoxForStore(rhs, rhsType);
                     rhsType = JT.Obj;
                 }
+                if (IsNumeric(lt) && rhsType == JT.Obj) {
+                    // `t = H' typed t, and now `t = a[x]': the object is speculated to be a number of that
+                    // type, and the generic code takes over on the day it is not
+                    _canDeopt = true;
+                    rhs = Ast.Call(JitRuntime.M(lt == JT.Int ? "GuardInt" : lt == JT.Lng ? "GuardLong" : "GuardDouble"), rhs);
+                    rhsType = lt;
+                }
                 if (lt != rhsType) {
                     // Int and Lng are two representations of one Ruby class, so a store across
                     // them is a widening or a narrowing, not a type change. Anything else would
                     // change the value's class, which one typed slot cannot express.
-                    if (!IsInteger(lt) || !IsInteger(rhsType)) { throw JitBailout.Instance; }
+                    if (!IsInteger(lt) || !IsInteger(rhsType)) { throw Bail("a " + rhsType + " stored into a " + lt + " local"); }
                     rhs = Coerce(rhs, rhsType, lt);
                     rhsType = lt;
                 }
+            } else if (inlinedTarget && _localScopeIndex >= 0 && op == null &&
+                (arrayAssignment = EmitArrayLocalAssignment(target, node.Right, rhs, rhsType)) != null) {
+                type = JT.Obj;
+                return arrayAssignment;
+            } else if (inlinedTarget && _localScopeIndex >= 0) {
+                // a local of a block run inline or of an inlined callee: one variable for the whole call,
+                // wherever it is first assigned (DefiniteAssignment proved no read comes before an assignment)
+                p = DeclareAt(_localScopeIndex, Key(target), rhsType);
             } else {
                 p = Declare(Key(target), rhsType);
             }
             type = rhsType;
+            if (_loop != null && !inlinedTarget) {
+                if (_writtenLocals == null) { _writtenLocals = new HashSet<string>(); }
+                _writtenLocals.Add(Key(target));
+            }
             return (_loop != null) ? StoreLoopSlot(p, rhs) : (MSA.Expression)Ast.Assign(p, rhs);
         }
 
@@ -1196,6 +1245,7 @@ namespace IronRuby.Runtime.Jit {
             // In loop mode the body being emitted is one loop outlined out of its method, entered
             // and left by the OSR site. A `return' there returns from the *method*, which the
             // outlined copy has no way to do.
+            if (_frame != null) { return EmitInlineReturn(node, out type); }
             if (_loop != null) { throw Bail("return inside an outlined loop"); }
 
             var args = node.Arguments;
@@ -1420,15 +1470,18 @@ namespace IronRuby.Runtime.Jit {
             if (argc == 0 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty) {
                 MSA.ParameterExpression bound;
                 JT boundType;
-                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
-                    var peek = _peekLocal(receiverLocal);
+                if (!TryLookup(Key(receiverLocal), out bound, out boundType) || HasProvenance(receiverLocal)) {
+                    var peek = PeekLocal(receiverLocal);
                     object live = peek.HasValue ? peek.Value.Value : null;
                     string variableName = (live != null)
                         ? JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) : null;
                     if (variableName != null) {
                         _canDeopt = true;
-                        if (_peeked == null) { _peeked = new List<LocalVariable>(); }
-                        _peeked.Add(receiverLocal);
+                        // the loop must not write the local it reads in place (a callee's parameter is no slot)
+                        if (!HasProvenance(receiverLocal)) {
+                            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                            _peeked.Add(receiverLocal);
+                        }
                         MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), peek.Value.Key,
                             Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, true)));
                         object value;
@@ -1447,14 +1500,17 @@ namespace IronRuby.Runtime.Jit {
             if (argc == 0 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty) {
                 MSA.ParameterExpression bound;
                 JT boundType;
-                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
-                    var peek = _peekLocal(receiverLocal);
+                if (!TryLookup(Key(receiverLocal), out bound, out boundType) || HasProvenance(receiverLocal)) {
+                    var peek = PeekLocal(receiverLocal);
                     var live = peek.HasValue ? peek.Value.Value as RubyStruct : null;
                     int index = (live != null) ? JitRuntime.StructMemberSite.MemberIndex(live.ImmediateClass, node.MethodName) : -1;
                     if (index >= 0) {
                         _canDeopt = true;
-                        if (_peeked == null) { _peeked = new List<LocalVariable>(); }
-                        _peeked.Add(receiverLocal);
+                        // the loop must not write the local it reads in place (a callee's parameter is no slot)
+                        if (!HasProvenance(receiverLocal)) {
+                            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                            _peeked.Add(receiverLocal);
+                        }
                         MSA.Expression read = Ast.Call(JitRuntime.M("ReadStructMember"), peek.Value.Key,
                             Ast.Constant(new JitRuntime.StructMemberSite(node.MethodName, index)));
                         object value = RubyStruct.GetValue(live, index);
@@ -1472,8 +1528,8 @@ namespace IronRuby.Runtime.Jit {
             if (argc == 1 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty && !(args.Expressions[0] is SplattedArgument)) {
                 MSA.ParameterExpression bound;
                 JT boundType;
-                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
-                    var peek = _peekLocal(receiverLocal);
+                if (!TryLookup(Key(receiverLocal), out bound, out boundType) || HasProvenance(receiverLocal)) {
+                    var peek = PeekLocal(receiverLocal);
                     object live = peek.HasValue ? peek.Value.Value : null;
                     if (live is RubyObject && JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) != null) {
                         return EmitAttributeWrite(receiverLocal, node.MethodName, args.Expressions[0], out type);
@@ -1532,6 +1588,35 @@ namespace IronRuby.Runtime.Jit {
             if (IsLiteralMinMax(node, argc)) {
                 return EmitLiteralMinMax(node, out type);
             }
+            if (argc == 0 && node.Target != null && node.MethodName == "nil?") {
+                return EmitNilQuery(node.Target, out type);
+            }
+            // Integer#even?, #odd?, #zero? and Float#zero?
+            if (argc == 0 && node.Target != null && (node.MethodName == "even?" || node.MethodName == "odd?" || node.MethodName == "zero?")) {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (!IsNumeric(tt) || (tt == JT.Dbl && node.MethodName != "zero?")) { throw Bail(node.MethodName + " of a " + tt); }
+                RequireBuiltin(tt, node.MethodName);
+                type = JT.Bool;
+                if (node.MethodName == "zero?") { return Ast.Equal(t, Ast.Default(t.Type)); }
+                var low = Ast.And(Coerce(t, tt, JT.Lng), Ast.Constant(1L));
+                return node.MethodName == "even?" ? Ast.Equal(low, Ast.Constant(0L)) : Ast.NotEqual(low, Ast.Constant(0L));
+            }
+            // `-x', `+x' of a number
+            if (argc == 0 && node.Target != null && (node.MethodName == "-@" || node.MethodName == "+@")) {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (!IsNumeric(tt)) { throw Bail(node.MethodName + " of a " + tt); }
+                RequireBuiltin(tt, node.MethodName);
+                if (node.MethodName == "+@") { type = tt; return t; }
+                if (tt == JT.Dbl) { type = JT.Dbl; return Ast.Negate(t); }
+                type = JT.Lng;
+                if (tt == JT.Int) { return Ast.Negate(Ast.Convert(t, typeof(long))); }
+                _canDeopt = true;
+                return Ast.Call(JitRuntime.M("SubLong"), Ast.Constant(0L), t);
+            }
             // `a >> b', `a << b' of two Integers; anything else (an Array's <<) is not one
             if (argc == 1 && node.Target != null && IsShift(node.MethodName) && !(args.Expressions[0] is SplattedArgument)) {
                 JT lt, rt;
@@ -1556,7 +1641,7 @@ namespace IronRuby.Runtime.Jit {
                 if (node.MethodName == "[]") {
                     return EmitIndexRead(node.Target, l, lt, r, rt, out type);
                 }
-                if ((lt == JT.Obj && IsNumeric(rt)) || (IsNumeric(lt) && rt == JT.Obj)) {
+                if (((lt == JT.Obj && IsNumeric(rt)) || (IsNumeric(lt) && rt == JT.Obj)) && JitScreen.IsBinaryOperator(node.MethodName)) {
                     return EmitSpeculatedBinary(node.MethodName, l, lt, node.Target, r, rt, args.Expressions[0], out type);
                 }
                 if (lt == JT.Obj && rt == JT.Obj && JitScreen.IsBinaryOperator(node.MethodName) &&
@@ -1577,6 +1662,10 @@ namespace IronRuby.Runtime.Jit {
                         r, rt, args.Expressions[0], out type);
                 }
             }
+
+            // a Ruby method: its body, compiled in (JitCompiler.Inline.cs)
+            MSA.Expression inlined;
+            if (TryEmitInlinedCall(node, out inlined, out type)) { return inlined; }
 
             throw Bail("call: " + node.MethodName + "/" + argc);
         }
@@ -2314,7 +2403,9 @@ namespace IronRuby.Runtime.Jit {
             }
 
             // JitCompiler.Numeric.cs
-            if (node.Target != null && ((argc == 0 && (JitCompiler.IsNumericUnary(node.MethodName) || node.MethodName == "to_i")) ||
+            if (node.Target != null && ((argc == 0 && (JitCompiler.IsNumericUnary(node.MethodName) || node.MethodName == "to_i" ||
+                    node.MethodName == "nil?" || node.MethodName == "even?" || node.MethodName == "odd?" || node.MethodName == "zero?" ||
+                    node.MethodName == "-@" || node.MethodName == "+@")) ||
                 (argc == 2 && node.MethodName == "clamp"))) {
                 if (!Walk(node.Target)) { return false; }
                 if (args != null) {
