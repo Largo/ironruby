@@ -75,6 +75,16 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex) {
+            List<JitElementGuard> elementGuards;
+            return TryCompile(loop, context, scopeDepth, tupleArgIndex, args, selfArgIndex, scopeArgIndex, null, out elementGuards);
+        }
+
+        /// <param name="objectElements">The load-once Array locals whose elements are read as objects.</param>
+        /// <param name="elementGuards">The guards of the ones read typed, which a failed element read sets.</param>
+        internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
+            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex,
+            HashSet<string> objectElements, out List<JitElementGuard> elementGuards) {
+            elementGuards = null;
 
             // The refinements active where the loop is written: the operators it inlines are resolved
             // under them, as its call sites would resolve them.
@@ -198,12 +208,13 @@ namespace IronRuby.Runtime.Jit {
             bool canDeopt;
             JitCompiler.JitLoopFacts facts;
             // what self is, as a hint for the Array and Hash intrinsics (JitCompiler.ObservedType)
-            var hints = new JitCompiler.ReceiverHints();
+            var hints = new JitCompiler.ReceiverHints { ObjectElements = objectElements };
             if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
                 hints.Self = (args[selfArgIndex] == null) ? typeof(void) : args[selfArgIndex].GetType();
             }
             MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, scope, hints,
                 refinements, out slots, out canDeopt, out facts);
+            elementGuards = hints.ElementGuards;
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;

@@ -690,6 +690,11 @@ namespace IronRuby.Runtime.Jit {
         internal sealed class ReceiverHints {
             internal Type[] Parameters;
             internal Type Self;
+            // Loop mode: the load-once Array locals (by Key) whose elements an earlier copy found not
+            // all of one type - read as objects this time - and, filled in by the compiler, the guards
+            // of the ones that are read typed (OsrLoopSite.ElementGuardFailed).
+            internal HashSet<string> ObjectElements;
+            internal List<JitElementGuard> ElementGuards;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
@@ -1032,6 +1037,8 @@ namespace IronRuby.Runtime.Jit {
         private List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> _arrayLoads;
         // the locals themselves, which the loop then must not write (checked by TryCompileLoop)
         private List<LocalVariable> _arrayPeeked;
+        // the element guards of the load-once Arrays read typed, by their variable
+        private Dictionary<MSA.ParameterExpression, JitElementGuard> _elementGuards;
         // the second attempt at a loop that writes a local the first one loaded once
         private bool _noArrayLocals;
         private bool? _arrayGetPlain, _arraySetPlain;
@@ -1081,7 +1088,16 @@ namespace IronRuby.Runtime.Jit {
             _arrayLoads.Add(new KeyValuePair<MSA.ParameterExpression, MSA.Expression>(variable,
                 Ast.Call(JitRuntime.M("OsrArray"), Ast.Convert(peek.Value.Key, typeof(object)), Ast.Constant(arrayClass, typeof(RubyClass)))));
             _arrayPeeked.Add(local);
-            var result = new KeyValuePair<MSA.ParameterExpression, JT>(variable, ElementType(live));
+            JT elementType = (_hints != null && _hints.ObjectElements != null && _hints.ObjectElements.Contains(key))
+                ? JT.Obj : ElementType(live);
+            if (elementType != JT.Obj && _hints != null) {
+                var guard = new JitElementGuard(key);
+                if (_hints.ElementGuards == null) { _hints.ElementGuards = new List<JitElementGuard>(); }
+                _hints.ElementGuards.Add(guard);
+                if (_elementGuards == null) { _elementGuards = new Dictionary<MSA.ParameterExpression, JitElementGuard>(); }
+                _elementGuards.Add(variable, guard);
+            }
+            var result = new KeyValuePair<MSA.ParameterExpression, JT>(variable, elementType);
             _arrayLocals.Add(key, result);
             return result;
         }
@@ -1202,7 +1218,17 @@ namespace IronRuby.Runtime.Jit {
             }
             _canDeopt = true;
             type = array.Value;
-            return Ast.Call(JitRuntime.M(array.Value == JT.Int ? "GuardInt" : "GuardDouble"), read);
+            return GuardElement(array, read);
+        }
+
+        /// <summary>An element of a load-once Array unboxed to the type its elements are read as.</summary>
+        private MSA.Expression/*!*/ GuardElement(KeyValuePair<MSA.ParameterExpression, JT> array, MSA.Expression/*!*/ read) {
+            bool isInt = (array.Value == JT.Int);
+            JitElementGuard guard;
+            if (_elementGuards != null && _elementGuards.TryGetValue(array.Key, out guard)) {
+                return Ast.Call(JitRuntime.M(isInt ? "GuardElementInt" : "GuardElementDouble"), read, Ast.Constant(guard));
+            }
+            return Ast.Call(JitRuntime.M(isInt ? "GuardInt" : "GuardDouble"), read);
         }
 
         /// <summary>`a[i]' where a is a load-once Array and Array#[] the library method; null otherwise.</summary>
@@ -1239,10 +1265,10 @@ namespace IronRuby.Runtime.Jit {
                 var rhs = Emit(right, out rhsType);
                 JT currentType;
                 if (array.Value == JT.Int && IsInteger(rhsType)) {
-                    current = Ast.Call(JitRuntime.M("GuardInt"), current);
+                    current = GuardElement(array, current);
                     currentType = JT.Int;
                 } else if (array.Value == JT.Dbl && rhsType == JT.Dbl) {
-                    current = Ast.Call(JitRuntime.M("GuardDouble"), current);
+                    current = GuardElement(array, current);
                     currentType = JT.Dbl;
                 } else if (rhsType == JT.Dbl) {
                     // Integer op Float and Float op Float are both Float op Float

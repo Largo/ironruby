@@ -486,7 +486,12 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         public static RubyArray OsrArray(object value, RubyClass/*!*/ arrayClass) {
             var array = value as RubyArray;
-            if (array == null || array.GetType() != typeof(RubyArray) || arrayClass.Context.GetImmediateClassOf(array) != arrayClass) {
+            if (array == null || array.GetType() != typeof(RubyArray)) {
+                return null;
+            }
+            // While no Array has a class of its own, an exact RubyArray's is Array: no table lookup.
+            RubyContext context = arrayClass.Context;
+            if (context.AnyArrayHasOwnClass && context.GetImmediateClassOf(array) != arrayClass) {
                 return null;
             }
             return array;

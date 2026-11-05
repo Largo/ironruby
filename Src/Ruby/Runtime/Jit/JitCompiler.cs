@@ -1465,6 +1465,33 @@ namespace IronRuby.Runtime.Jit {
                 throw Bail("to_i on " + tt);
             }
 
+            // `x.abs', `f.ceil', `f.floor', `f.round', `x.clamp(lo, hi)', `[a, b].min', `[a, b].max'
+            // (JitCompiler.Numeric.cs)
+            if (argc == 0 && node.Target != null && IsNumericUnary(node.MethodName)) {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (IsNumeric(tt)) { return EmitNumericUnary(node.MethodName, t, tt, out type); }
+                throw Bail(node.MethodName + " on " + tt);
+            }
+            if (argc == 2 && node.Target != null && node.MethodName == "clamp" &&
+                !(args.Expressions[0] is SplattedArgument) && !(args.Expressions[1] is SplattedArgument)) {
+                return EmitClamp(node, out type);
+            }
+            if (IsLiteralMinMax(node, argc)) {
+                return EmitLiteralMinMax(node, out type);
+            }
+            // `a >> b', `a << b' of two Integers; anything else (an Array's <<) is not one
+            if (argc == 1 && node.Target != null && IsShift(node.MethodName) && !(args.Expressions[0] is SplattedArgument)) {
+                JT lt, rt;
+                var l = Emit(node.Target, out lt);
+                var r = Emit(args.Expressions[0], out rt);
+                l = NumericIVar(node.Target, l, ref lt);
+                r = NumericIVar(args.Expressions[0], r, ref rt);
+                if (IsInteger(lt) && IsInteger(rt)) { return EmitShift(node.MethodName, l, lt, r, rt, out type); }
+                throw Bail("operator " + node.MethodName + " on " + lt + ", " + rt);
+            }
+
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
             if (node.Target != null && argc == 1 && !(args.Expressions[0] is SplattedArgument)) {
                 JT lt, rt;
@@ -2194,6 +2221,27 @@ namespace IronRuby.Runtime.Jit {
                     foreach (var arg in args.Expressions) {
                         if (arg is SplattedArgument || !Walk(arg)) { return No(node); }
                     }
+                }
+                return true;
+            }
+
+            // JitCompiler.Numeric.cs
+            if (node.Target != null && ((argc == 0 && (JitCompiler.IsNumericUnary(node.MethodName) || node.MethodName == "to_i")) ||
+                (argc == 2 && node.MethodName == "clamp"))) {
+                if (!Walk(node.Target)) { return false; }
+                if (args != null) {
+                    foreach (var arg in args.Expressions) {
+                        if (arg is SplattedArgument || !Walk(arg)) { return No(node); }
+                    }
+                }
+                return true;
+            }
+            if (node.Target != null && argc == 1 && JitCompiler.IsShift(node.MethodName)) {
+                return WalkOperand(node.Target) && WalkOperand(args.Expressions[0]);
+            }
+            if (JitCompiler.IsLiteralMinMax(node, argc)) {
+                foreach (var item in ((ArrayConstructor)node.Target).Arguments.Expressions) {
+                    if (!Walk(item)) { return false; }
                 }
                 return true;
             }

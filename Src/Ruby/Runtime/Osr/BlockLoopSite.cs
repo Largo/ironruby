@@ -77,13 +77,16 @@ namespace IronRuby.Runtime.Osr {
         internal readonly LocalVariable Parameter;
         // the block's other locals, each assigned by a statement of the body before anything reads it
         internal readonly LocalVariable/*!*/[]/*!*/ Locals;
+        // the body has a `next' of its own (with no value): the loop counts at the top of the iteration
+        internal readonly bool HasNext;
         internal readonly string/*!*/ Name;
         internal readonly BlockLoopSite[]/*!*/ Sites = new BlockLoopSite[KindCount];
 
         private BlockLoopInfo(BlockDefinition/*!*/ ast, RubyContext/*!*/ context, int depth, LocalVariable parameter,
-            LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name) {
+            LocalVariable/*!*/[]/*!*/ locals, bool hasNext, string/*!*/ name) {
             Ast = ast;
             Locals = locals;
+            HasNext = hasNext;
             Context = context;
             Depth = depth;
             Parameter = parameter;
@@ -116,10 +119,11 @@ namespace IronRuby.Runtime.Osr {
             }
 
             List<LocalVariable> locals;
-            if (ast.Body.Count == 0 || !Screen.Accepts(ast.Body, depth, parameter, out locals)) {
+            bool hasNext;
+            if (ast.Body.Count == 0 || !Screen.Accepts(ast.Body, depth, parameter, out locals, out hasNext)) {
                 return null;
             }
-            return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), name);
+            return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), hasNext, name);
         }
 
         internal BlockLoopSite/*!*/ GetSite(BlockLoopKind kind) {
@@ -147,9 +151,11 @@ namespace IronRuby.Runtime.Osr {
             // body's own, `x = v', before anything else in the body mentions it (see Enter(LocalVariable)).
             private readonly List<LocalVariable>/*!*/ _locals = new List<LocalVariable>();
 
-            internal static bool Accepts(Statements/*!*/ body, int depth, LocalVariable parameter, out List<LocalVariable> locals) {
+            internal static bool Accepts(Statements/*!*/ body, int depth, LocalVariable parameter, out List<LocalVariable> locals,
+                out bool hasNext) {
                 var screen = new Screen(depth, parameter);
                 locals = screen._locals;
+                hasNext = false;
                 foreach (var statement in body) {
                     var assignment = statement as SimpleAssignmentExpression;
                     var target = (assignment != null && assignment.Operation == null) ? assignment.Left as LocalVariable : null;
@@ -162,8 +168,12 @@ namespace IronRuby.Runtime.Osr {
                     }
                     if (screen._rejected) { return false; }
                 }
+                hasNext = screen._hasNext;
                 return true;
             }
+
+            // a `next' that ends the block's iteration
+            private bool _hasNext;
 
             private bool IsKnown(LocalVariable/*!*/ local) {
                 if (_parameter != null && local.Name == _parameter.Name) { return true; }
@@ -184,7 +194,14 @@ namespace IronRuby.Runtime.Osr {
             // In a `while' of the body's own these jump within the body; at the block's level they
             // leave the iteration or the iterator.
             public override bool Enter(BreakStatement/*!*/ node) { return _loops > 0 ? !_rejected : Reject(); }
-            public override bool Enter(NextStatement/*!*/ node) { return _loops > 0 ? !_rejected : Reject(); }
+            // A `next' with no value ends the iteration, which in the loop is a `continue' - once the counter
+            // has moved on at the top of the iteration (MakeLoop). The value of one would be the block's.
+            public override bool Enter(NextStatement/*!*/ node) {
+                if (_loops > 0) { return !_rejected; }
+                if (node.Arguments != null) { return Reject(); }
+                _hasNext = true;
+                return !_rejected;
+            }
             public override bool Enter(RedoStatement/*!*/ node) { return _loops > 0 ? !_rejected : Reject(); }
             public override bool Enter(RetryStatement/*!*/ node) { return Reject(); }
             public override bool Enter(ReturnStatement/*!*/ node) { return Reject(); }
@@ -323,6 +340,15 @@ namespace IronRuby.Runtime.Osr {
             if (info.Parameter != null) {
                 statements.Add(new SimpleAssignmentExpression(info.Parameter, element, null, location));
             }
+            // A body with a `next' (a `continue' here) counts first, so that the `next' skips nothing
+            // but the rest of the body. A deopt still resumes at the iteration it interrupted: the
+            // counter is restored with the other locals to what it was at the top of the iteration.
+            var step = new SimpleAssignmentExpression(counter, Literal.Integer(1, location),
+                kind == BlockLoopKind.DownTo ? "-" : "+", location);
+            if (info.HasNext) {
+                Debug.Assert(kind <= BlockLoopKind.Each);
+                statements.Add(step);
+            }
             var body = info.Ast.Body;
             int last = body.Count - 1;
             for (int i = 0; i < last; i++) {
@@ -357,8 +383,9 @@ namespace IronRuby.Runtime.Osr {
                     statements.Add(body[last]);
                     break;
             }
-            statements.Add(new SimpleAssignmentExpression(counter, Literal.Integer(1, location),
-                kind == BlockLoopKind.DownTo ? "-" : "+", location));
+            if (!info.HasNext) {
+                statements.Add(step);
+            }
 
             return new WhileLoopExpression(condition, true, false, statements, location);
         }
@@ -372,6 +399,8 @@ namespace IronRuby.Runtime.Osr {
             var proc = block.Proc;
             var info = proc.Dispatcher.LoopInfo;
             if (info == null || proc.Kind == ProcKind.Lambda) { return null; }
+            // a `next' gives the block's value: only the iterators that ignore it take one
+            if (info.HasNext && kind > BlockLoopKind.Each) { return null; }
             return info.GetSite(kind);
         }
 

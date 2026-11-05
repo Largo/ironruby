@@ -131,6 +131,10 @@ namespace IronRuby.Runtime.Osr {
         private int _deopts;
         private int _retypes;
         private int _refinementRebuilds;
+        // The load-once Array locals whose elements turned out not all of one type, which every later
+        // copy reads as objects; and the element guards of the current copy.
+        private HashSet<string> _objectElements;
+        private List<JitElementGuard> _elementGuards;
 
         public OsrLoopSite(string/*!*/ name) {
             _name = name;
@@ -182,6 +186,16 @@ namespace IronRuby.Runtime.Osr {
                     return Retry;
                 }
 
+                if (ElementGuardFailed()) {
+                    // An element of an Array the copy reads typed was something else - a nil among
+                    // Integers. That Array's elements are read as objects from now on: build the copy
+                    // again, which does not count against the deopts that retire the loop, since each
+                    // Array can only be widened once.
+                    Deopts++;
+                    Rebuild();
+                    return Retry;
+                }
+
                 // The copy gave the loop back: an Integer overflowed out of Int64, a guard did
                 // not hold, or a division would have raised. A few of those and the loop is
                 // better off where it is; until then the generic body runs a short stretch and
@@ -193,6 +207,27 @@ namespace IronRuby.Runtime.Osr {
                 Retire();
             }
             return Retry;
+        }
+
+        /// <summary>
+        /// Whether the deopt just taken was a load-once Array's element guard that had not failed before;
+        /// its local is then read as objects by every later copy.
+        /// </summary>
+        private bool ElementGuardFailed() {
+            var guards = _elementGuards;
+            if (guards == null) { return false; }
+            bool widened = false;
+            lock (_lock) {
+                foreach (var guard in guards) {
+                    if (!guard.Failed) { continue; }
+                    if (_objectElements == null) { _objectElements = new HashSet<string>(); }
+                    if (_objectElements.Add(guard.Key)) { widened = true; }
+                }
+            }
+            if (widened && Verbose) {
+                Console.Error.WriteLine("[osr] {0}: element guard failed, reading those elements as objects", _name);
+            }
+            return widened;
         }
 
         /// <summary>Let the back edge fire again after a short stretch of the generic loop.</summary>
@@ -226,7 +261,10 @@ namespace IronRuby.Runtime.Osr {
 
                 long start = Stopwatch.GetTimestamp();
                 try {
-                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex);
+                    List<JitElementGuard> guards;
+                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex,
+                        _objectElements, out guards);
+                    _elementGuards = guards;
                 } catch (Exception e) {
                     if (Verbose) {
                         Console.Error.WriteLine("[osr] {0}: specialization failed: {1}", _name, e.Message);

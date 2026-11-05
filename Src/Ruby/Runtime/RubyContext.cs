@@ -2075,6 +2075,14 @@ namespace IronRuby.Runtime {
 
         private volatile bool _hasAdoptedClrObjects;
 
+        /// <summary>
+        /// Set, for good, before the first RubyArray gets a class other than Array: a singleton class,
+        /// or an adopted or replaced one. Until then the immediate class of an exact RubyArray is Array
+        /// without a look in the instance data table, which is what an outlined loop asks of every
+        /// Array it loads on entry (JitRuntime.OsrArray).
+        /// </summary>
+        internal volatile bool AnyArrayHasOwnClass;
+
         private RubyClass TryGetClassOfAdoptedClrObject(object/*!*/ obj) {
             RubyInstanceData data;
             RubyClass immediate;
@@ -2109,6 +2117,9 @@ namespace IronRuby.Runtime {
                     clrClass.MethodsUpdated("AdoptClrObject");
                 }
                 _hasAdoptedClrObjects = true;
+                if (obj is RubyArray) {
+                    AnyArrayHasOwnClass = true;
+                }
                 GetInstanceData(obj).ImmediateClass = cls;
             }
         }
@@ -2177,7 +2188,12 @@ namespace IronRuby.Runtime {
             IRubyObject rubyObj = obj as IRubyObject;
             if (rubyObj != null) {
                 rubyObj.ImmediateClass = singleton;
-            } else if (data != null) {
+                return;
+            }
+            if (obj is RubyArray) {
+                AnyArrayHasOwnClass = true;
+            }
+            if (data != null) {
                 data.ImmediateClass = singleton;
             } else {
                 (data = GetInstanceData(obj)).ImmediateClass = singleton;
@@ -2627,6 +2643,9 @@ namespace IronRuby.Runtime {
                     clrClass.MethodsUpdated("ReplaceClrObjectClass");
                 }
                 _hasAdoptedClrObjects = true;
+                if (obj is RubyArray) {
+                    AnyArrayHasOwnClass = true;
+                }
                 GetInstanceData(obj).ImmediateClass = cls;
             }
         }

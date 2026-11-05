@@ -25,6 +25,7 @@ using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Builtins {
     using UnaryOp = Func<CallSite, object, object>;
@@ -582,7 +583,7 @@ namespace IronRuby.Builtins {
             if (self.End == null) {
                 return StepEndless(storage, block, self, self.Begin, 1);
             } else if (self.Begin is int && self.End is int) {
-                return StepFixnum(block, self, (int)self.Begin, (int)self.End, 1);
+                return EachFixnum(block, self, (int)self.Begin, (int)self.End);
             } else if (self.Begin is MutableString) {
                 return StepString(storage, block, self, (MutableString)self.Begin, (MutableString)self.End, 1);
             } else if (self.Begin is RubySymbol && self.End is RubySymbol) {
@@ -658,6 +659,36 @@ namespace IronRuby.Builtins {
         /// This method is optimized for direct integer operations using &lt; and + directly.
         /// It is not used if either begin or end are outside Fixnum bounds.
         /// </remarks>
+        /// <summary>
+        /// (a..b).each and (a...b).each over Fixnums: Integer#upto's loop, to b or to b - 1, and so the
+        /// same outlined loop (BlockLoopSite, BlockLoopKind.UpTo) once the block has been yielded to
+        /// often enough - `(x1..x2).each do |x| ... end' is how a renderer walks its columns.
+        /// </summary>
+        private static object EachFixnum(BlockParam/*!*/ block, Range/*!*/ self, int begin, int end) {
+            if (self.ExcludeEnd) {
+                if (end == Int32.MinValue) { return self; }
+                end--;
+            }
+            int i = begin;
+            var loop = ((long)end - begin >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.UpTo) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
+            while (i <= end) {
+                if (--countdown <= 0 && (long)end - i >= BlockLoopSite.MinRun) {
+                    i = loop.Run(block, i, end, ref countdown);
+                    if (i > end) { break; }
+                }
+                object result;
+                if (block.Yield(i, out result)) {
+                    return result;
+                }
+                // i++ would wrap round when end is Int32.MaxValue
+                if (i == end) { break; }
+                i++;
+            }
+            if (loop != null) { loop.Leave(countdown); }
+            return self;
+        }
+
         private static object StepFixnum(BlockParam/*!*/ block, Range/*!*/ self, int begin, int end, int step) {
             Assert.NotNull(block, self);
             CheckStep(step);

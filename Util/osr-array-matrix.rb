@@ -374,3 +374,40 @@ def mj_rebind(a, b)
   s
 end
 t('method: the parameter reassigned') { (0...300).sum { mj_rebind([1, 2, 3, 4, 5, 6], [10, 20, 30, 40, 50, 60]) } }
+
+# ---------------------------------------------------------------- 10. a nil among sampled Integers
+# A wall column: one loop entered once per column, most columns all Integers, a few with a
+# transparent (nil) texel off the sampled points. The element guard that meets the nil says which
+# Array it was, and the next copy reads that one's elements as objects instead of retiring.
+
+def wall_column(fb, x, column, cmap, h)
+  y = 0
+  while y < h
+    color = column[(y * 3) % column.size]
+    fb[(y * 8) + x] = cmap[color] if color
+    y += 1
+  end
+end
+cmap8 = Array.new(256) { |i| (i * 3) & 255 }
+solid = Array.new(128) { |i| (i * 5) & 255 }
+holey = solid.dup
+holey[61] = nil
+holey[62] = 7.5
+wfb = Array.new(8 * 4000, 0)
+t('wall: solid columns') { 60.times { |c| wall_column(wfb, c & 7, solid, cmap8, 4000) }; wfb.sum }
+t('wall: a column with a hole') { 60.times { |c| wall_column(wfb, c & 7, c.odd? ? holey : solid, cmap8, 4000) }; [wfb.sum, wfb[61 * 8 / 3]] }
+
+def bump_column(a, n)
+  i = 0
+  while i < n
+    a[i % a.size] += 1
+    i += 1
+  end
+  a.sum
+end
+ints = Array.new(64) { |i| i }
+t('op-assign: Integers') { 3.times.map { bump_column(ints, 5000) } }
+ints[33] = 0.5
+t('op-assign: a Float among them') { 3.times.map { bump_column(ints, 5000) } }
+ints[34] = nil
+t('op-assign: a nil among them') { bump_column(ints, 5000) }

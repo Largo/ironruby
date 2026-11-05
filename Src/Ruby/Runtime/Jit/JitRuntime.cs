@@ -26,6 +26,19 @@ namespace IronRuby.Runtime.Jit {
     /// body from the top. That is why there is no mid-body state materialization here: the
     /// compiler refuses to specialize any body for which restarting would be visible.
     /// </summary>
+    /// <summary>
+    /// The element guard of one load-once Array in an outlined loop: set when an element was not of
+    /// the type the copy reads that Array's elements as. <see cref="Key"/> names the local.
+    /// </summary>
+    public sealed class JitElementGuard {
+        internal readonly string/*!*/ Key;
+        internal volatile bool Failed;
+
+        internal JitElementGuard(string/*!*/ key) {
+            Key = key;
+        }
+    }
+
     [Serializable]
     internal sealed class JitDeoptException : Exception {
         internal static readonly JitDeoptException Instance = new JitDeoptException();
@@ -674,6 +687,23 @@ namespace IronRuby.Runtime.Jit {
 
         public static double GuardDouble(object value) {
             if (value is double) { return (double)value; }
+            throw Deopt();
+        }
+
+        // An element of a load-once Array read as the type a sample of its elements had
+        // (JitCompiler.EmitArrayRead). The guard that fails says which Array it was, so the loop's
+        // next copy reads that one's elements as objects (OsrLoopSite.ElementGuardFailed) instead of
+        // deopting on the same nil - a transparent texel, say - every time it comes round.
+
+        public static int GuardElementInt(object value, JitElementGuard/*!*/ guard) {
+            if (value is int) { return (int)value; }
+            guard.Failed = true;
+            throw Deopt();
+        }
+
+        public static double GuardElementDouble(object value, JitElementGuard/*!*/ guard) {
+            if (value is double) { return (double)value; }
+            guard.Failed = true;
             throw Deopt();
         }
 
