@@ -62,6 +62,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitInlinedIterator(MethodCall/*!*/ node, out JT type) {
+            bool unused = _valueUnused;
             var block = (BlockDefinition)node.Block;
             LocalVariable parameter;
             if (!_refinements.IsEmpty) { throw Bail("iterator " + node.MethodName + " under refinements"); }
@@ -193,6 +194,8 @@ namespace IronRuby.Runtime.Jit {
                     bindParameter = Ast.Assign(p, element);
                 }
                 JT ignored;
+                // the block's value: each, times, upto and downto ignore it
+                _discardStatements = true;
                 body = EmitStatements(block.Body, out ignored);
                 declared = PopScope();
             } finally {
@@ -228,7 +231,8 @@ namespace IronRuby.Runtime.Jit {
 
             setup.Insert(0, Ast.Assign(counter, Ast.Constant(0L)));
             setup.Add(Ast.Loop(Ast.Block(declared, iteration), exit, cont));
-            setup.Add(value);
+            // the iterator's value - the Range of `(a..b).each', made per call - only for someone who uses it
+            setup.Add(unused ? Ast.Constant(null, typeof(object)) : value);
             type = JT.Obj;
             return Ast.Block(typeof(object), temps, setup);
         }

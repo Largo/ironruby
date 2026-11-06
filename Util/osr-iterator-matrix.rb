@@ -266,3 +266,21 @@ class Range
   remove_method :__matrix_each
 end
 t('all back') { kinds([1, 2, 3], N) }
+
+# ---------------------------------------------------------------- 5. the value of an inline iterator, used or not
+
+def last_is_each(k) = (k..k + 2).each { |j| j }
+def used_values(n)
+  r = []
+  i = 0
+  while i < n
+    a = last_is_each(i & 3)
+    b = if i.even? then (1..2).each { |j| j } else 5 end
+    (0..1).each { |j| j }
+    c = (3...5).each { |j| j }
+    r = [a, b, c]
+    i += 1
+  end
+  r
+end
+t('the Range an inline (a..b).each answers, where it is used') { used_values(N) }

@@ -199,6 +199,10 @@ namespace IronRuby.Runtime.Jit {
             }
             private volatile Binding _bound;
 
+            // the method version at which nil's, and an Integer's, nil? was last found to be Kernel's: the common
+            // answers without a class lookup
+            internal volatile int NilVersion = -1, IntegerVersion = -1;
+
             internal bool Holds(RubyClass/*!*/ cls) {
                 int version = RubyModule.GlobalMethodVersion;
                 int depth = 0;
@@ -215,10 +219,23 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool NilQuery(RubyContext/*!*/ context, object value, NilQuerySite/*!*/ site) {
+            if (value == null) {
+                if (site.NilVersion == RubyModule.GlobalMethodVersion) { return true; }
+            } else if (value is int) {
+                if (site.IntegerVersion == RubyModule.GlobalMethodVersion) { return false; }
+            }
+            return NilQuerySlow(context, value, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool NilQuerySlow(RubyContext/*!*/ context, object value, NilQuerySite/*!*/ site) {
+            int version = RubyModule.GlobalMethodVersion;
             var obj = value as RubyObject;
             RubyClass cls = (obj != null) ? obj.ImmediateClass : context.GetImmediateClassOf(value);
             if (!site.Holds(cls)) { throw Deopt(); }
+            if (value == null) { site.NilVersion = version; } else if (value is int) { site.IntegerVersion = version; }
             return value == null;
         }
 

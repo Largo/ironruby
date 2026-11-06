@@ -213,3 +213,53 @@ end
 t('Writer#v= redefined') { w.run(N) }
 w.freeze
 t('frozen self') { w.run(N) }
+
+# ---------------------------------------------------------------- 5. instance variables read once on entry
+
+class Hoist
+  attr_accessor :k
+  def initialize; @k = 1; @base = 10; end
+  def bump(o) = o.k = o.k + 1
+  def alias_write(n)
+    me = self
+    s = 0
+    i = 0
+    while i < n
+      s += @k + @base
+      bump(me)            # writes @k of self, through another name
+      i += 1
+    end
+    [s, @k]
+  end
+  def attr_write(n)
+    s = 0
+    i = 0
+    while i < n
+      s += @k
+      self.k = i & 7
+      i += 1
+    end
+    s
+  end
+  def op_write(n)
+    i = 0
+    while i < n
+      @k += @base
+      i += 1
+    end
+    @k
+  end
+  def read_only(n)
+    s = 0
+    i = 0
+    while i < n
+      s += @k * @base
+      i += 1
+    end
+    s
+  end
+end
+t('an ivar the loop reads, written through an alias of self') { Hoist.new.alias_write(N) }
+t('written by self.k =') { Hoist.new.attr_write(N) }
+t('@k += @base') { Hoist.new.op_write(N) }
+t('only read') { Hoist.new.read_only(N) }

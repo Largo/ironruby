@@ -1098,7 +1098,7 @@ namespace IronRuby.Runtime.Jit {
             type = valueType;
             return Ast.Block(ClrType(valueType), new[] { valueTemp },
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteIVar"), _self, BoxForStore(valueTemp, valueType),
+                Ast.Call(JitRuntime.M("WriteIVar"), WrittenIVar(_self, target.Name), BoxForStore(valueTemp, valueType),
                     Ast.Constant(new InstanceVariableSite(target.Name)), _undoLog),
                 valueTemp
             );
@@ -1143,7 +1143,7 @@ namespace IronRuby.Runtime.Jit {
             type = valueType;
             return Ast.Block(ClrType(valueType), new[] { valueTemp },
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteSelfAttr"), _self, BoxForStore(valueTemp, valueType),
+                Ast.Call(JitRuntime.M("WriteSelfAttr"), WrittenIVar(_self, variableName), BoxForStore(valueTemp, valueType),
                     Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, false, true)), _undoLog),
                 valueTemp
             );
@@ -1181,7 +1181,7 @@ namespace IronRuby.Runtime.Jit {
             type = valueType;
             return Ast.Block(ClrType(valueType), new[] { valueTemp },
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteSelfAttr"), peek.Value.Key, BoxForStore(valueTemp, valueType),
+                Ast.Call(JitRuntime.M("WriteSelfAttr"), WrittenIVar(peek.Value.Key, variableName), BoxForStore(valueTemp, valueType),
                     Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
                 valueTemp
             );

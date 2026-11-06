@@ -228,6 +228,7 @@ namespace IronRuby.Runtime.Jit {
             _paramTypes = new JT[0];
             _paramNames = new string[0];
             _self = self ?? Ast.Parameter(typeof(object), "#self");
+            _loopSelf = _self;
             _ivarProfile = (self != null) ? ivarProfile : null;
             _attrProfile = (self != null) ? attrProfile : null;
             _peekLocal = peekLocal;
@@ -278,11 +279,14 @@ namespace IronRuby.Runtime.Jit {
             facts = default(JitLoopFacts);
             JitCompiler c;
             MSA.Expression body;
-            for (bool arrayLocals = true; ; arrayLocals = false) {
+            bool arrayLocals = true;
+            HashSet<string> noHoist = null;
+            for (int attempt = 0; ; attempt++) {
                 c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
                 c._hints = hints;
                 c._refinements = refinements;
                 c._noArrayLocals = !arrayLocals;
+                c._noHoist = noHoist;
                 try {
                     JT type;
                     body = c.EmitWhile(loop, out type);
@@ -304,8 +308,31 @@ namespace IronRuby.Runtime.Jit {
                         if (c._vars[0].ContainsKey(c.Key(local))) { conflict = true; break; }
                     }
                 }
+                // an instance variable read once on entry that the loop also writes: again, reading that one each time
+                if (!conflict && c._hoistedIVars != null && c._ivarsWritten != null && attempt < 3) {
+                    bool written = false;
+                    foreach (var name in c._hoistedIVars.Keys) {
+                        if (c._ivarsWritten.Contains(name)) { written = true; break; }
+                    }
+                    if (written) {
+                        noHoist = new HashSet<string>(c._ivarsWritten);
+                        if (noHoist != null && c._noHoist != null) { noHoist.UnionWith(c._noHoist); }
+                        continue;
+                    }
+                }
                 if (!conflict) { break; }
                 if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter: an indexed local is also a slot; again without load-once Arrays"); }
+                arrayLocals = false;
+            }
+            if (c._hoistedIVars != null) {
+                // read on entry; the copy deopts at a safe point rather than run a handler that could write one
+                var reads = new List<MSA.Expression>();
+                foreach (var entry in c._hoistedIVars) {
+                    reads.Add(Ast.Assign(entry.Value, Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(context), c._loopSelf,
+                        Ast.Constant(new InstanceVariableSite(entry.Key)))));
+                }
+                reads.Add(body);
+                body = Ast.Block(typeof(object), c._hoistedIVars.Values, reads);
             }
             // A deopt restores the locals to what they were at the top of the iteration and
             // hands the loop back, so the iteration is re-run: it must not have been observable.
@@ -421,6 +448,32 @@ namespace IronRuby.Runtime.Jit {
 
         // Loop mode: the slots the loop assigns, by Key
         private HashSet<string> _writtenLocals;
+
+        // Loop mode: an instance variable of the loop's self that nothing in the loop writes is read once, on entry,
+        // into a variable. Compiled code calls no Ruby code, so nothing else on this thread can write it while the
+        // loop runs, and a write of the loop's own to a variable of that name on any object (an inlined callee's
+        // receiver may be self) makes TryCompileLoop compile the loop again without that one (_noHoist).
+        private MSA.ParameterExpression _loopSelf;
+        private Dictionary<string, MSA.ParameterExpression> _hoistedIVars;
+        private HashSet<string> _ivarsWritten;
+        private HashSet<string> _noHoist;
+
+        private MSA.Expression/*!*/ HoistedIVar(string/*!*/ name) {
+            MSA.ParameterExpression v;
+            if (_hoistedIVars == null) { _hoistedIVars = new Dictionary<string, MSA.ParameterExpression>(); }
+            if (!_hoistedIVars.TryGetValue(name, out v)) {
+                v = Ast.Variable(typeof(object), "#ivar:" + name);
+                _hoistedIVars.Add(name, v);
+            }
+            return v;
+        }
+
+        /// <summary>Records a write of an instance variable of this name, on whatever <paramref name="receiver"/> is.</summary>
+        private MSA.Expression/*!*/ WrittenIVar(MSA.Expression/*!*/ receiver, string/*!*/ name) {
+            if (_ivarsWritten == null) { _ivarsWritten = new HashSet<string>(); }
+            _ivarsWritten.Add(name);
+            return receiver;
+        }
 
         // loops of the body's own, `while's and iterators run inline
         private int _nestedLoops;
@@ -839,21 +892,33 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitStatements(Statements statements, out JT type) {
+            // the last statement's value is unused when the list's is (a loop's body, an unused if's branch)
+            bool lastUnused = _discardStatements;
+            _discardStatements = false;
             if (statements == null || statements.Count == 0) {
                 type = JT.Obj;
                 return Ast.Constant(null, typeof(object));
             }
             if (statements.Count == 1) {
+                _discard = lastUnused;
                 return Emit(statements.First, out type);
             }
             var parts = new List<MSA.Expression>();
             foreach (var s in statements.AllButLast) {
                 JT ignored;
+                _discard = true;
                 parts.Add(Emit(s, out ignored));
             }
+            _discard = lastUnused;
             parts.Add(Emit(statements.Last, out type));
             return Ast.Block(ClrType(type), parts);
         }
+
+        // Values nobody uses. _discard: the next Emit's (set by its caller); _valueUnused: the node Emit is
+        // dispatching now (read first thing by the handlers that care); _discardStatements: the last statement
+        // of the next EmitStatements'. Only an optimization: an iterator run inline makes no value for nobody
+        // (EmitInlinedIterator) - `(a..b).each { }' would make a Range per call.
+        private bool _discard, _valueUnused, _discardStatements;
 
         /// <summary>
         /// The node dispatch. ADDING A CASE HERE MEANS ADDING ONE TO <see cref="JitScreen"/> at
@@ -863,6 +928,8 @@ namespace IronRuby.Runtime.Jit {
         /// node kinds the screen rejected, so the omission shows up there.
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
+            _valueUnused = _discard;
+            _discard = false;
             if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
             // Deep enough to run this thread out of stack: the method stays interpreted (see StackGuard).
             if (!StackGuard.IsSufficient) { throw Bail("nested too deeply for the stack"); }
@@ -919,6 +986,10 @@ namespace IronRuby.Runtime.Jit {
             if (ivar != null) {
                 if (_loop != null && _ivarProfile == null) { throw Bail("instance variable in a loop entered without self"); }
                 type = JT.Obj;
+                // the loop's own self: read once, on entry (see HoistedIVar)
+                if (_loop != null && ReferenceEquals(_self, _loopSelf) && (_noHoist == null || !_noHoist.Contains(ivar.Name))) {
+                    return HoistedIVar(ivar.Name);
+                }
                 return Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(_context), _self, Ast.Constant(new InstanceVariableSite(ivar.Name)));
             }
 
@@ -1138,32 +1209,39 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitIf(IfExpression/*!*/ node, out JT type) {
+            bool unused = _valueUnused;
             var clauses = node.ElseIfClauses;
             MSA.Expression elseExpr = Ast.Constant(null, typeof(object));
             JT elseType = JT.Obj;
             int i = (clauses != null) ? clauses.Count - 1 : -1;
             if (i >= 0 && clauses[i].Condition == null) {
+                _discardStatements = unused;
                 elseExpr = EmitRegion(clauses[i].Statements, out elseType);
                 i--;
             }
             for (; i >= 0; i--) {
                 if (clauses[i].Condition == null) { throw JitBailout.Instance; }
                 JT thenType;
+                _discardStatements = unused;
                 var thenExpr = EmitRegion(clauses[i].Statements, out thenType);
                 elseExpr = Join(EmitCondition(clauses[i].Condition), thenExpr, thenType, elseExpr, elseType, out elseType);
             }
             JT headType;
+            _discardStatements = unused;
             var head = EmitRegion(node.Body, out headType);
             return Join(EmitCondition(node.Condition), head, headType, elseExpr, elseType, out type);
         }
 
         private MSA.Expression/*!*/ EmitUnless(UnlessExpression/*!*/ node, out JT type) {
+            bool unused = _valueUnused;
             JT thenType;
+            _discardStatements = unused;
             var thenExpr = EmitRegion(node.Statements, out thenType);
             MSA.Expression elseExpr = Ast.Constant(null, typeof(object));
             JT elseType = JT.Obj;
             if (node.ElseClause != null) {
                 if (node.ElseClause.Condition != null) { throw JitBailout.Instance; }
+                _discardStatements = unused;
                 elseExpr = EmitRegion(node.ElseClause.Statements, out elseType);
             }
             return Join(Ast.Not(EmitCondition(node.Condition)), thenExpr, thenType, elseExpr, elseType, out type);
@@ -1186,6 +1264,7 @@ namespace IronRuby.Runtime.Jit {
             JT ignored;
             bool wroteBefore = _hashWrite;
             _hashWrite = false;
+            _discardStatements = true;
             var body = EmitRegion(node.Statements, out ignored);
             if (_hashWrite) { _loopWrites = true; }
             _hashWrite |= wroteBefore;

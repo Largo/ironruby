@@ -487,6 +487,7 @@ namespace IronRuby.Runtime.Jit {
         /// a singleton class, whose #[] and #[]= could be other methods - and null otherwise, which
         /// hands the loop back. The loop never writes the local, so this is the only check it needs.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static RubyArray OsrArray(object value, RubyClass/*!*/ arrayClass) {
             var array = value as RubyArray;
             if (array == null || array.GetType() != typeof(RubyArray)) {
@@ -500,6 +501,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>OsrArray for a method's parameter (JitCompiler.ArrayParameter): what is not a plain Array deopts.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static RubyArray/*!*/ MethodArray(object value, RubyClass/*!*/ arrayClass) {
             return OsrArray(value, arrayClass) ?? throw Deopt();
         }
