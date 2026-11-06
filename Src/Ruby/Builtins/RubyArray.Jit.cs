@@ -11,6 +11,7 @@ namespace IronRuby.Builtins {
         /// Array#[] with an Integer index: counted from the end when negative, nil when out of range
         /// either way - what IListOps.GetElement answers, without going through IList.
         /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal object JitElementOrNil(int index) {
             int count = _count;
             if (index < 0) {

@@ -637,9 +637,15 @@ namespace IronRuby.Runtime.Jit {
                 return (info != null) ? info.StructGetterIndex : -1;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             internal bool Holds(RubyClass/*!*/ cls) {
                 var b = _bound;
                 if (b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion) { return true; }
+                return Bind(cls);
+            }
+
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            private bool Bind(RubyClass/*!*/ cls) {
                 int version = RubyModule.GlobalMethodVersion;
                 if (MemberIndex(cls, Name) != Index) { return false; }
                 _bound = new Binding(cls, version);
@@ -647,6 +653,7 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object ReadStructMember(object self, StructMemberSite/*!*/ site) {
             var s = self as RubyStruct;
             if (s == null || !site.Holds(s.ImmediateClass)) {

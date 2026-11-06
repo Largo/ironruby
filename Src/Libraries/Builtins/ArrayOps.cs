@@ -125,7 +125,9 @@ namespace IronRuby.Builtins {
         }
 
         private static object CreateArray(BlockParam/*!*/ block, int size) {
-            return Reinitialize(block, new RubyArray(), size);
+            // room for every element up front, rather than growing it one block value at a time
+            CheckArraySize(size);
+            return Reinitialize(block, new RubyArray(size), size);
         }
 
         [RubyConstructor]

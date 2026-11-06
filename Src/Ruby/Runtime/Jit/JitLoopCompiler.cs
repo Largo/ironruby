@@ -57,6 +57,12 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal MSA.ParameterExpression Assigned;
         internal MSA.ParameterExpression AssignedSnapshot;
+        /// <summary>
+        /// A local of the block BlockLoopSite made this loop of, which only the block can see and which every
+        /// iteration assigns before it reads it (DefiniteAssignment): nothing reads it after the loop, nor after
+        /// a deopt hands an iteration back, so it is never stored home - a Float would be boxed for nobody.
+        /// </summary>
+        internal bool NoStore;
     }
 
     internal static class JitLoopCompiler {
@@ -187,7 +193,9 @@ namespace IronRuby.Runtime.Jit {
                 }
 
                 Type clr = (type == JT.Int) ? typeof(int) : (type == JT.Lng) ? typeof(long) : (type == JT.Dbl) ? typeof(double) : typeof(object);
+                bool blockLocal = (local.DefinitionLexicalDepth == freshDepth && !local.Name.StartsWith("#", StringComparison.Ordinal));
                 return new JitLoopSlot {
+                    NoStore = blockLocal,
                     Type = type,
                     Variable = Ast.Parameter(clr, local.Name),
                     Snapshot = Ast.Parameter(clr, local.Name + "#snap"),
@@ -371,8 +379,10 @@ namespace IronRuby.Runtime.Jit {
                     prologue.Add(Ast.Assign(slot.Variable, read));
                     prologue.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                 }
-                storeCurrent.Add(store);
-                storeSnapshot.Add(storeSnap);
+                if (!slot.NoStore) {
+                    storeCurrent.Add(store);
+                    storeSnapshot.Add(storeSnap);
+                }
             }
 
             // The loop runs, the locals go home, and the value is nil: a `while' has no other
