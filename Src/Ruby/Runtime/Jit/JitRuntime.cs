@@ -175,6 +175,13 @@ namespace IronRuby.Runtime.Jit {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long MulLong(long a, long b) {
+            // two Int32s never overflow a long: the common case, without the 128-bit product
+            if ((ulong)(a + 0x80000000L) <= 0xFFFFFFFFUL && (ulong)(b + 0x80000000L) <= 0xFFFFFFFFUL) { return a * b; }
+            return MulLongWide(a, b);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static long MulLongWide(long a, long b) {
             long low;
             long high = Math.BigMul(a, b, out low);
             // The 128-bit product fits in 64 bits iff the high half is the sign extension.
@@ -767,6 +774,18 @@ namespace IronRuby.Runtime.Jit {
         // (JitCompiler.EmitArrayRead). The guard that fails says which Array it was, so the loop's
         // next copy reads that one's elements as objects (OsrLoopSite.ElementGuardFailed) instead of
         // deopting on the same nil - a transparent texel, say - every time it comes round.
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static int ElementGuardFailedInt(JitElementGuard/*!*/ guard) {
+            guard.Failed = true;
+            throw Deopt();
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static double ElementGuardFailedDouble(JitElementGuard/*!*/ guard) {
+            guard.Failed = true;
+            throw Deopt();
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GuardElementInt(object value, JitElementGuard/*!*/ guard) {

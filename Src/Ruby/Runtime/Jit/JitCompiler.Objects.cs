@@ -1435,7 +1435,15 @@ namespace IronRuby.Runtime.Jit {
             bool isInt = (array.Value == JT.Int);
             JitElementGuard guard;
             if (_elementGuards != null && _elementGuards.TryGetValue(array.Key, out guard)) {
-                return Ast.Call(JitRuntime.M(isInt ? "GuardElementInt" : "GuardElementDouble"), read, Ast.Constant(guard));
+                // The test inline, the guard object only on the way out: as an argument it was loaded from the
+                // closure's constants, and cast, on every read.
+                Type clr = isInt ? typeof(int) : typeof(double);
+                var element = Ast.Variable(typeof(object), "#element");
+                return Ast.Block(clr, new[] { element },
+                    Ast.Assign(element, read),
+                    Ast.Condition(Ast.TypeIs(element, clr), Ast.Unbox(element, clr),
+                        Ast.Call(JitRuntime.M(isInt ? "ElementGuardFailedInt" : "ElementGuardFailedDouble"), Ast.Constant(guard)), clr)
+                );
             }
             return Ast.Call(JitRuntime.M(isInt ? "GuardInt" : "GuardDouble"), read);
         }

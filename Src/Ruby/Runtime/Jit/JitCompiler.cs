@@ -1963,6 +1963,11 @@ namespace IronRuby.Runtime.Jit {
                     type = operand;
                     var bl = Coerce(l, lt, operand);
                     var br = Coerce(r, rt, operand);
+                    if (op == "&" && operand == JT.Lng && (IsSmallMask(l) || IsSmallMask(r))) {
+                        // `x.to_i & 63': between 0 and the mask, an Int32 whatever x is
+                        type = JT.Int;
+                        return Ast.Convert(Ast.And(bl, br), typeof(int));
+                    }
                     if (op == "&") { return Ast.And(bl, br); }
                     if (op == "|") { return Ast.Or(bl, br); }
                     return Ast.ExclusiveOr(bl, br);
@@ -1980,6 +1985,12 @@ namespace IronRuby.Runtime.Jit {
                 case "%": _canDeopt = true; return Ast.Call(JitRuntime.M("ModLong"), l, r);
                 default: throw Bail("integer operator " + op);
             }
+        }
+
+        /// <summary>A non-negative Int32 constant: `x & c' is between 0 and c.</summary>
+        private static bool IsSmallMask(MSA.Expression/*!*/ e) {
+            var c = e as MSA.ConstantExpression;
+            return c != null && ((c.Value is int && (int)c.Value >= 0) || (c.Value is long && (long)c.Value >= 0 && (long)c.Value <= Int32.MaxValue));
         }
 
         private MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {

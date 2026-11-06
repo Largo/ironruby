@@ -293,3 +293,20 @@ t('nil? of nil and Integers') { r = 0; i = 0; while i < N; r += 1 if nn[i].nil?;
 class NilLike; def nil? = true; end
 nn2 = nn.dup; nn2[5000] = NilLike.new
 t('nil? redefined on one class') { r = 0; i = 0; while i < N; r += 1 if nn2[i].nil?; i += 1; end; r }
+
+# ---------------------------------------------------------------- 7. x & mask is an Int32
+
+def masks(a)
+  s = 0
+  i = 0
+  while i < a.size
+    v = a[i]
+    s += (v & 63) * 64 + (v & 0x7FFFFFFF) + (-v & 1023)
+    i += 1
+  end
+  s
+end
+t('masks of Int64 values') { masks(Array.new(N) { |i| (i - 3000) * 2**40 + i }) }
+t('masks of negative Int32 values') { masks(Array.new(N) { |i| -i * 7919 }) }
+t('a Bignum among them') { masks(Array.new(N) { |i| i == 5000 ? 2**70 + 5 : i }) }
+t('Float#to_i & 63') { r = 0; i = 0; while i < N; r += ((i * -1.37).to_i & 63) * 64; i += 1; end; r }
