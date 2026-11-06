@@ -261,6 +261,10 @@ namespace IronRuby.Runtime.Jit {
             internal List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> Arrays;
             // calls on self were inlined, resolved in this class: the entry checks self still has it
             internal RubyClass SelfClass;
+            // the body inlines a call or runs a loop of its own
+            internal bool Heavy;
+            // the body could not be compiled for want of a profile: an entry that sees other values may do better
+            internal bool ProfileGap;
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
@@ -283,6 +287,7 @@ namespace IronRuby.Runtime.Jit {
                     JT type;
                     body = c.EmitWhile(loop, out type);
                 } catch (JitBailout e) {
+                    facts.ProfileGap = c._profileGap;
                     if (Osr.OsrLoopSite.Verbose) {
                         // a bare bailout says nothing: where it was thrown does
                         string where = (c._bailReason == null && e.StackTrace != null) ? " " + e.StackTrace.Split('\n')[0].Trim() : "";
@@ -325,6 +330,7 @@ namespace IronRuby.Runtime.Jit {
             facts.UndoMark = c._undoMark;
             facts.Arrays = c._arrayLoads;
             facts.SelfClass = c._selfClassGuarded ? hints.SelfClass : null;
+            facts.Heavy = c._inlineFrames > 0 || c._nestedLoops > 0;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -415,6 +421,9 @@ namespace IronRuby.Runtime.Jit {
 
         // Loop mode: the slots the loop assigns, by Key
         private HashSet<string> _writtenLocals;
+
+        // loops of the body's own, `while's and iterators run inline
+        private int _nestedLoops;
 
         // the scope a block run inline, or an inlined callee, declares its locals in; -1 outside them
         private int _localScopeIndex = -1;
@@ -1053,6 +1062,9 @@ namespace IronRuby.Runtime.Jit {
             JT rhsType;
             var rhs = Emit(node.Right, out rhsType);
             MSA.Expression arrayAssignment;
+            if (inlinedTarget && op == null && rhsType == JT.Obj && _peekLocal != null) {
+                RecordProfile(target, node.Right);
+            }
 
             MSA.ParameterExpression p;
             JT lt;
@@ -1180,6 +1192,8 @@ namespace IronRuby.Runtime.Jit {
             _breakLabel = savedBreak;
             _continueLabel = savedContinue;
             type = JT.Obj;
+
+            if (node != _loop) { _nestedLoops++; }
 
             // The outlined loop keeps a copy of its locals as they were at the top of the
             // iteration. A deopt part way through one restores them, so the loop is handed back

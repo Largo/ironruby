@@ -51,6 +51,9 @@ namespace IronRuby.Runtime.Jit {
             internal int Returns;
         }
 
+        // a call was not compiled in for want of a profile of its receiver (TryCompileLoop's profileGap)
+        internal bool _profileGap;
+
         // the callee being emitted, and how deep the inlining is
         private InlineFrame _frame;
         private int _inlineDepth;
@@ -96,7 +99,102 @@ namespace IronRuby.Runtime.Jit {
                 }
                 return null;
             }
+            // a block's own local, in the tuple made for this run of the loop: nil, which says nothing
+            if (_hints != null && local.DefinitionLexicalDepth == _hints.FreshDepth && !local.Name.StartsWith("#", StringComparison.Ordinal)) {
+                return null;
+            }
             return _peekLocal(local);
+        }
+
+        // ---- value profiles -------------------------------------------------------------------
+
+        private const int ProfileDepth = 4;
+        private const int ProfileSamples = 16;
+
+        /// <summary>
+        /// What <paramref name="node"/> evaluates to, as far as the values the loop can see when it is compiled
+        /// tell: an instance variable of <paramref name="self"/>, a local the loop can see (or a parameter's
+        /// profile), an element of an Array whose sampled elements all have one class (or are all plain
+        /// Arrays), an attribute or Struct member, or what a Ruby method answers with its last expression.
+        /// Null when nothing says. Only ever a profile: whatever is compiled from it is guarded where it is used.
+        /// </summary>
+        private object ValueProfile(RExpr/*!*/ node, object self, bool localsKnown, int depth) {
+            if (depth > ProfileDepth) { return null; }
+            var ivar = node as InstanceVariable;
+            if (ivar != null) {
+                object v;
+                return (self != null && _context.TryGetInstanceVariable(self, ivar.Name, out v)) ? v : null;
+            }
+            var local = node as LocalVariable;
+            if (local != null) {
+                if (!localsKnown) { return null; }
+                var peek = PeekLocal(local);
+                return peek.HasValue ? peek.Value.Value : null;
+            }
+            if (node is SelfReference) { return self; }
+            var call = node as MethodCall;
+            if (call == null || call.Block != null) { return null; }
+            int argc = (call.Arguments == null) ? 0 : call.Arguments.Expressions.Length;
+
+            object receiver = (call.Target == null || call.Target is SelfReference)
+                ? self : ValueProfile(call.Target, self, localsKnown, depth + 1);
+            if (receiver == null) { return null; }
+
+            if (call.MethodName == "[]" && argc == 1 && receiver is RubyArray) {
+                return SampleElements((RubyArray)receiver);
+            }
+            var obj = receiver as RubyObject;
+            if (obj == null) { return null; }
+            var cls = obj.ImmediateClass;
+            if (argc == 0) {
+                string variable = JitRuntime.SelfAttrSite.ReaderVariable(cls, call.MethodName, false);
+                if (variable != null) {
+                    object v;
+                    return _context.TryGetInstanceVariable(obj, variable, out v) ? v : null;
+                }
+                var s = obj as RubyStruct;
+                if (s != null) {
+                    int index = JitRuntime.StructMemberSite.MemberIndex(cls, call.MethodName);
+                    if (index >= 0) { return RubyStruct.GetValue(s, index); }
+                }
+            }
+            var resolved = cls.ResolveMethod(call.MethodName, VisibilityContext.AllVisible);
+            var info = resolved.Found ? resolved.Info as RubyMethodInfo : null;
+            var ast = (info != null) ? info.GetSyntaxTree() : null;
+            var last = (ast != null && ast.Body != null) ? LastStatement(ast.Body) : null;
+            // the callee's locals and parameters are not this frame's: they say nothing here
+            return (last != null) ? ValueProfile(last, obj, false, depth + 1) : null;
+        }
+
+        /// <summary>A representative element: when the sampled ones are all RubyObjects of one class, or all plain Arrays.</summary>
+        private object SampleElements(RubyArray/*!*/ array) {
+            if (array.Count == 0) { return null; }
+            int step = Math.Max(1, array.Count / ProfileSamples);
+            object first = array[0];
+            var firstObject = first as RubyObject;
+            bool arrays = first is RubyArray && first.GetType() == typeof(RubyArray);
+            if (firstObject == null && !arrays) { return null; }
+            for (int i = 0; i < array.Count; i += step) {
+                object e = array[i];
+                if (arrays) {
+                    if (!(e is RubyArray) || e.GetType() != typeof(RubyArray)) { return null; }
+                } else {
+                    var o = e as RubyObject;
+                    if (o == null || !ReferenceEquals(o.ImmediateClass, firstObject.ImmediateClass)) { return null; }
+                }
+            }
+            return first;
+        }
+
+        /// <summary>
+        /// `x = v' of a local of a block run inline or of an inlined callee: what v's profile says x holds, for the
+        /// calls on x to be compiled in (TryEmitInlinedCall) and its members read (PeekLocal).
+        /// </summary>
+        private void RecordProfile(LocalVariable/*!*/ target, RExpr/*!*/ right) {
+            object live = ValueProfile(right, _liveSelf, true, 0);
+            if (!(live is RubyObject)) { return; }
+            if (_provenance == null) { _provenance = new Dictionary<string, object>(); }
+            _provenance[Key(target)] = live;
         }
 
         /// <summary>A callee's parameter with a profile from its argument (see PeekLocal).</summary>
@@ -133,7 +231,11 @@ namespace IronRuby.Runtime.Jit {
                 if (local == null) { return false; }
                 var peek = PeekLocal(local);
                 liveReceiver = peek.HasValue ? peek.Value.Value as RubyObject : null;
-                if (liveReceiver == null) { return false; }
+                if (liveReceiver == null) {
+                    // nothing says what o is now (nil, say, this time round): another entry may know
+                    _profileGap = true;
+                    return false;
+                }
                 cls = ((RubyObject)liveReceiver).ImmediateClass;
             }
 

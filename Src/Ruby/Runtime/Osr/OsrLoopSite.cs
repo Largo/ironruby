@@ -118,6 +118,17 @@ namespace IronRuby.Runtime.Osr {
         internal RubyContext Context;
         internal int ScopeDepth;
         internal Dictionary<int, int> TupleArgIndex;
+        // The lexical depth whose locals live in a tuple made for each run (a block BlockLoopSite outlines): what
+        // they hold when the loop is compiled is no profile. -1 for a `while'.
+        internal int FreshDepth = -1;
+
+        /// <summary>The copy inlines a call or runs a loop of its own: worth entering for a few iterations (BlockLoopSite).</summary>
+        internal volatile bool Heavy;
+
+        /// <summary>A copy has been built, or found not buildable.</summary>
+        internal bool HasCompiled {
+            get { return _tried; }
+        }
         // Where in the argument array the loop's self is; -1 if it is not passed.
         internal int SelfArgIndex = -1;
         // Where in the argument array the loop's RubyScope is: its constants resolve in it, and its
@@ -131,6 +142,9 @@ namespace IronRuby.Runtime.Osr {
         private int _deopts;
         private int _retypes;
         private int _refinementRebuilds;
+        private bool _profileGap;
+        private int _profileRetries;
+        private const int MaxProfileRetries = 2;
         // The load-once Array locals whose elements turned out not all of one type, which every later
         // copy reads as objects; and the element guards of the current copy.
         private HashSet<string> _objectElements;
@@ -203,6 +217,12 @@ namespace IronRuby.Runtime.Osr {
                 // to be seen at all.
                 Deopts++;
                 if (++_deopts >= 8) { Retire(); } else { ReArmCountdown(); }
+            } else if (_profileGap && ++_profileRetries <= MaxProfileRetries) {
+                // Not compilable for want of a profile - a receiver that was nil this time round: let a later
+                // entry, after another full count, try again with the values it sees.
+                lock (_lock) { _tried = false; }
+                Counting = true;
+                Countdown = Threshold;
             } else {
                 Retire();
             }
@@ -262,9 +282,12 @@ namespace IronRuby.Runtime.Osr {
                 long start = Stopwatch.GetTimestamp();
                 try {
                     List<JitElementGuard> guards;
+                    bool heavy, profileGap;
                     _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex,
-                        _objectElements, out guards);
+                        _objectElements, FreshDepth, out guards, out heavy, out profileGap);
                     _elementGuards = guards;
+                    Heavy = heavy;
+                    _profileGap = (_typed == null) && profileGap;
                 } catch (Exception e) {
                     if (Verbose) {
                         Console.Error.WriteLine("[osr] {0}: specialization failed: {1}", _name, e.Message);

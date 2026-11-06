@@ -171,6 +171,7 @@ namespace IronRuby.Runtime.Jit {
             int depth = block.DefinedScopeDepth;
             if (_inlineDepths == null) { _inlineDepths = new HashSet<int>(); }
             if (!_inlineDepths.Add(depth)) { throw Bail("an inline block within itself"); }
+            _nestedLoops++;
             var exit = Ast.Label("#iterator-exit");
             var cont = Ast.Label("#iterator-continue");
             var savedBreak = _breakLabel;

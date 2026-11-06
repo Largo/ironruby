@@ -262,10 +262,26 @@ namespace IronRuby.Runtime.Osr {
     /// </summary>
     public sealed class BlockLoopSite {
         /// <summary>
-        /// Iterations an entry must have left for the copy to be worth entering: the entry allocates
-        /// the argument array and a tuple and runs the copy's guards, which a handful of yields beat.
+        /// Iterations an entry must have left for the iterator to ask the site at all. The site itself
+        /// wants more (_minRun) unless its copy is heavy: the entry allocates the argument array and a
+        /// tuple and runs the copy's guards, which a handful of yields of a light body beat.
         /// </summary>
-        public const int MinRun = 16;
+        public const int MinRun = 4;
+
+        // what an entry must have left for the copy to be run: LightMinRun, or HeavyMinRun once the copy
+        // turned out to inline a call or run a loop of its own (OsrLoopSite.Heavy)
+        private const int LightMinRun = 16;
+        private const int HeavyMinRun = 4;
+
+        /// <summary>
+        /// Too few iterations left for this site's copy: the iterator yields the rest itself, and is not
+        /// asked again this entry. Before the site has compiled, a short entry may compile it.
+        /// </summary>
+        private bool Declines(long remaining, ref long countdown) {
+            if (remaining >= (_osr.Heavy ? HeavyMinRun : LightMinRun) || !_osr.HasCompiled) { return false; }
+            countdown = Int64.MaxValue;
+            return true;
+        }
 
         private readonly BlockLoopInfo/*!*/ _info;
         private readonly BlockLoopKind _kind;
@@ -311,6 +327,7 @@ namespace IronRuby.Runtime.Osr {
             _osr.LoopAst = MakeLoop(info, kind, depth, _counterIndex, _limitIndex, _resultIndex, _keptIndex);
             _osr.Context = info.Context;
             _osr.ScopeDepth = depth;
+            _osr.FreshDepth = depth;
             _osr.TupleArgIndex = tupleArgIndex;
             _osr.SelfArgIndex = depth + 1;
             _osr.ScopeArgIndex = depth + 2;
@@ -454,6 +471,7 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public int Run(BlockParam/*!*/ block, int i, int limit, ref long countdown) {
             Debug.Assert(_kind <= BlockLoopKind.DownTo);
+            if (Declines(Math.Abs((long)limit - i) + 1, ref countdown)) { return i; }
             int kept;
             Run(block, i, ScriptingRuntimeHelpers.Int32ToObject(limit), null, 0, out i, out kept);
             countdown = _osr.Countdown;
@@ -463,6 +481,7 @@ namespace IronRuby.Runtime.Osr {
         /// <summary>Array#each's: runs from index <paramref name="i"/> on, answers the index to resume at.</summary>
         public int Run(BlockParam/*!*/ block, RubyArray/*!*/ array, int i, ref long countdown) {
             Debug.Assert(_kind == BlockLoopKind.Each);
+            if (Declines(array.Count - i, ref countdown)) { return i; }
             int kept;
             Run(block, i, array, null, 0, out i, out kept);
             countdown = _osr.Countdown;
@@ -477,6 +496,7 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public int Run(BlockParam/*!*/ block, RubyArray/*!*/ array, RubyArray/*!*/ result, int i, ref long countdown) {
             Debug.Assert(_kind == BlockLoopKind.Map || _kind == BlockLoopKind.Select);
+            if (Declines(array.Count - i, ref countdown)) { return i; }
             // The copy stores into the result rather than appends to it, so it gets room for every
             // element there is, which no Ruby code sees before it is cut back to what was produced.
             int kept = result.Count;
@@ -496,6 +516,7 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public int Run(BlockParam/*!*/ block, RubyArray/*!*/ array, int i, ref long countdown, out bool found) {
             Debug.Assert(_kind == BlockLoopKind.FindTruthy || _kind == BlockLoopKind.FindFalsy);
+            if (Declines(array.Count - i, ref countdown)) { found = false; return i; }
             int kept;
             Run(block, i, array, null, 0, out i, out kept);
             found = (kept == 1);

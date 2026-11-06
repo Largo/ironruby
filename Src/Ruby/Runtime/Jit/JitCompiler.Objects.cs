@@ -731,6 +731,8 @@ namespace IronRuby.Runtime.Jit {
             // Loop mode: the class of the loop's self when it was compiled (JitCompiler.TryEmitInlinedCall), and self
             internal RubyClass SelfClass;
             internal object SelfValue;
+            // Loop mode: the depth of a block's own locals in the loop BlockLoopSite made of it, -1 otherwise
+            internal int FreshDepth = -1;
             // Loop mode: the load-once Array locals (by Key) whose elements an earlier copy found not
             // all of one type - read as objects this time - and, filled in by the compiler, the guards
             // of the ones that are read typed (OsrLoopSite.ElementGuardFailed).
@@ -757,6 +759,13 @@ namespace IronRuby.Runtime.Jit {
             if (local == null) { return null; }
             if (_loop != null) {
                 if (_peekLocal == null) { return null; }
+                // a slot the loop writes before it reads it holds, in the tuple, nothing this run will see
+                MSA.ParameterExpression bound;
+                JT boundType;
+                JitLoopSlot slot;
+                if (TryLookup(Key(local), out bound, out boundType) && _slotByVariable.TryGetValue(bound, out slot) && slot.Assigned != null) {
+                    return null;
+                }
                 var peek = PeekLocal(local);
                 if (!peek.HasValue) { return null; }
                 object value = peek.Value.Value;
@@ -1281,14 +1290,12 @@ namespace IronRuby.Runtime.Jit {
         /// Null when that is not the case.
         /// </summary>
         private MSA.Expression EmitArrayLocalAssignment(LocalVariable/*!*/ target, RExpr/*!*/ right, MSA.Expression/*!*/ rhs, JT rhsType) {
-            var ivar = right as InstanceVariable;
-            if (ivar == null || rhsType != JT.Obj || _inlineDepth == 0 || _localScopeIndex < 0 || _liveSelf == null ||
+            if (rhsType != JT.Obj || _inlineDepth == 0 || _localScopeIndex < 0 ||
                 _singleAssigned == null || !_singleAssigned.Contains(target.Name) || _noArrayLocals || !_refinements.IsEmpty) {
                 return null;
             }
-            object value;
-            if (!_context.TryGetInstanceVariable(_liveSelf, ivar.Name, out value)) { return null; }
-            var live = value as RubyArray;
+            // `x = @a', `x = @cols[i]', `x = tex.column(i)': whatever the profile of the value says
+            var live = ValueProfile(right, _liveSelf, true, 0) as RubyArray;
             if (live == null || live.GetType() != typeof(RubyArray) || _context.GetImmediateClassOf(live) != ArrayClass) { return null; }
 
             string key = Key(target);

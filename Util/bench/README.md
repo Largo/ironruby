@@ -127,10 +127,20 @@ passes; `t = 1 if c; t` does not, and such a method or block is not compiled in)
 
 Util/bench/render.rb, best ms per frame (CRuby 4.0: 31.6 for the whole frame):
 
-| kernel  | before | after |
-| ---     | ---:   | ---:  |
-| planes  | 16.4   | 7.7   |
-| all     | 18.3   | 9.7   |
+| kernel  | before | calls on self | + receivers out of Arrays |
+| ---     | ---:   | ---:          | ---:                      |
+| wall    | 1.4    | 1.4           | 1.05                      |
+| segs    | 1.5    | 1.5           | 1.2                       |
+| planes  | 16.4   | 7.7           | 7.4                       |
+| all     | 18.3   | 9.7           | 8.45                      |
+
+A receiver read out of an Array (`tex = @textures[t]; tex.column(x)`) is profiled by sampling that Array:
+if the elements sampled all have one class, the call is compiled in for it, under the per-call class
+check. The same profile, through what an inlined method returns, makes a local assigned once from
+`tex.column(x)` a load-once Array when the columns are plain Arrays. A loop that could not be compiled
+for want of such a profile (the receiver was nil on that entry) is tried again, twice at most, by a later
+entry. A block whose compiled loop inlines a call or runs a loop of its own is run compiled for as few
+as 4 iterations (16 otherwise).
 
 Util/osr-inline-matrix.rb is the differential matrix.
 
@@ -142,8 +152,7 @@ Util/osr-inline-matrix.rb is the differential matrix.
   any other.
 - A compiled loop still makes no call. A Ruby method it calls is compiled in instead (below) when it
   can be; when it cannot - optional, splat, block or keyword parameters, a block passed, `yield`,
-  recursion, a receiver whose class the loop cannot see when it is compiled - the loop runs
-  generically.
+  recursion, a receiver no profile says anything about (`Foo.new.m`) - the loop runs generically.
 - A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
   and every later call whose argument types no longer match falls through to the generic
   body. Only -X:OSR rebuilds.

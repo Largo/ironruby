@@ -319,3 +319,61 @@ def traced(n)
   calls
 end
 t('TracePoint :call sees every inlined call') { traced(N) }
+
+# ---------------------------------------------------------------- 9. receivers read out of Arrays
+
+class Wall
+  def initialize(textures); @textures = textures; end
+  def texel(t, x, y)
+    tex = @textures[t]
+    col = tex.column(x)
+    col[y & 15] + tex.width
+  end
+  def draw(n)
+    s = 0
+    i = 0
+    while i < n
+      s += texel(i % @textures.size, i, i >> 2)
+      i += 1
+    end
+    s
+  end
+end
+same = Array.new(6) { |k| Tex.new(4 + k) }
+t('a receiver from an Array of one class') { Wall.new(same).draw(N) }
+mixed_tex = same.dup
+mixed_tex[3] = Other.new
+t('one element of another class') { Wall.new(mixed_tex).draw(N) }
+holey_tex = same.dup
+holey_tex[2] = nil
+t('a nil element reaching a call') { Wall.new(holey_tex).draw(N) }
+
+Seg2 = Struct.new(:x1, :x2, :back)
+Sec = Struct.new(:ceil)
+def seg_columns(segs)
+  s = 0
+  segs.each do |seg|
+    back = seg.back
+    (seg.x1..seg.x2).each do |x|
+      s += x
+      s += back.ceil if back
+    end
+  end
+  s
+end
+early_nil = Array.new(400) { |k| Seg2.new(k, k + 3 + (k % 7), k < 300 ? nil : Sec.new(k)) }
+t('a receiver nil for a while, then an object') { 5.times.map { seg_columns(early_nil) }.last }
+
+def short_heavy(rows)
+  s = 0
+  rows.each do |row|
+    (0...row.size).each do |k|
+      next if row[k] == 3
+      s += Shade.new.light(row[k], k * 3.0)
+    end
+  end
+  s
+end
+rows = Array.new(300) { |k| Array.new(2 + k % 9) { |j| (j * k) & 7 } }
+t('short ranges entering a heavy outlined block') { 4.times.map { short_heavy(rows) }.last }
+t('map and select over short Arrays') { (0...3000).sum { |k| a = [k, k + 1, k + 2]; a.map { |v| v * 2 }.sum + a.select { |v| v.odd? }.size } }
