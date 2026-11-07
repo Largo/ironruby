@@ -3025,6 +3025,108 @@ fiber of another thread: 2
         }
 
         /// <summary>
+        /// IO.pipe on Windows is a CreatePipe pipe (WindowsPipeStream). A thread blocked reading it used to
+        /// be Running to the CLR, so Thread#stop? never said true and ruby/spec's `Thread.pass until
+        /// t.stop?` spun for ever; closing the read end from another thread did not reach the blocked read;
+        /// and #read_nonblock / #write_nonblock blocked on an empty / full pipe. Windows only.
+        /// </summary>
+        public void Windows_PipeBlocking1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+# bounded, so that a thread that never looks blocked fails the test instead of hanging it
+def wait_for(seconds = 10); deadline = Time.now + seconds; Thread.pass until yield || Time.now > deadline; end
+r, w = IO.pipe
+t = Thread.new { begin; r.read; rescue IOError => e; e.message; end }
+wait_for { t.stop? }
+puts ""blocked reader: #{t.status.inspect}""
+r.close
+puts ""closed underneath: #{(t.join(10) ? t.value : :still_blocked).inspect}""
+w.close
+r, w = IO.pipe
+puts ""empty: #{begin; r.read_nonblock(5); rescue IO::WaitReadable; :wait_readable; end.inspect}""
+puts ""empty, exception: false: #{r.read_nonblock(5, exception: false).inspect}""
+w.write ""ab""
+puts ""two bytes: #{r.read_nonblock(5).inspect}""
+n = 0
+full = begin; loop { n += w.write_nonblock('a' * 10_000) }; rescue IO::WaitWritable; :wait_writable; end
+puts ""full: #{full.inspect} after #{n > 0 ? 'some' : 'no'} bytes""
+puts ""full, exception: false: #{w.write_nonblock('a', exception: false).inspect}""
+r.close
+puts ""reader gone: #{begin; w.write_nonblock('a'); rescue SystemCallError => e; e.class; end}""
+w.close
+r, w = IO.pipe
+writer = Thread.new { w.write('a' * 100_000) }
+wait_for { writer.stop? }
+started = Time.now
+other = begin; w.write_nonblock('b'); rescue IO::WaitWritable; :wait_writable; end
+puts ""behind a blocked writer: #{other.inspect}, at once: #{Time.now - started < 2}""
+r.read(100_000)
+writer.join
+r.close; w.close
+", @"
+blocked reader: ""sleep""
+closed underneath: ""stream closed in another thread""
+empty: :wait_readable
+empty, exception: false: :wait_readable
+two bytes: ""ab""
+full: :wait_writable after some bytes
+full, exception: false: :wait_writable
+reader gone: Errno::EPIPE
+behind a blocked writer: :wait_writable, at once: true
+");
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern bool SetStdHandle(int nStdHandle, IntPtr handle);
+
+        /// <summary>
+        /// STDOUT redirected to a pipe and put into non-blocking mode with io/nonblock: #syswrite on a
+        /// full pipe takes what fits and then raises IO::WaitWritable, as write(2) on an O_NONBLOCK
+        /// descriptor 1 does. It used to block, because STDOUT's stream is the console stream and
+        /// #syswrite did not look behind it for the pipe. The process's standard output handle is
+        /// pointed at a pipe nobody reads for the length of the test, and SharedIO is given what
+        /// .NET gives a redirected standard output it cannot write to (Stream.Null), so that STDOUT
+        /// goes to the handle. Windows only.
+        /// </summary>
+        public void Windows_StdoutPipeSysWrite1() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
+            const int STD_OUTPUT_HANDLE = -11;
+            using (var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In)) {
+                IntPtr saved = GetStdHandle(STD_OUTPUT_HANDLE);
+                SetStdHandle(STD_OUTPUT_HANDLE, pipe.ClientSafePipeHandle.DangerousGetHandle());
+                ConsoleStream.ResetStandardDescriptors();
+                Runtime.IO.SetOutput(System.IO.Stream.Null, System.IO.TextWriter.Null);
+                try {
+                    // Nothing may be printed here: standard output is the pipe being filled.
+                    var result = Engine.Execute<string>(@"
+require 'io/nonblock'
+STDOUT.nonblock = true
+begin
+  first = STDOUT.syswrite('a' * 2_000_000)
+  second = begin; STDOUT.syswrite('b' * 10); rescue IO::WaitWritable; 'wait_writable'; end
+  ""#{first > 0 && first < 2_000_000 ? 'short write' : first} then #{second}""
+ensure
+  STDOUT.nonblock = false
+end
+").ToString();
+                    Assert(result == "short write then wait_writable", result);
+                } finally {
+                    SetStdHandle(STD_OUTPUT_HANDLE, saved);
+                    ConsoleStream.ResetStandardDescriptors();
+                    Runtime.IO.RedirectToConsole();
+                }
+            }
+        }
+
+        /// <summary>
         /// What MRI does on Windows with the functions win32/Makefile.sub leaves out, and with the ones
         /// win32.c supplies. Dir.fchdir, Dir.for_fd, Dir#fileno, Dir.chroot, File.lutime, File.mkfifo and the
         /// process-group and set-id parts of Process are rb_f_notimplement stubs there: NotImplementedError,
