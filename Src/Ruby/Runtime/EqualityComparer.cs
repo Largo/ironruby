@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
+using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 
@@ -57,17 +58,20 @@ namespace IronRuby.Runtime {
             // An Integer key compares by value, whichever of the two immediate CLR types carries
             // it. The narrowing funnels make an Int32 and an Int64 of the same value impossible,
             // but a long straight out of a CLR method has not been through one.
-            if (x is int) {
-                return y is int ? (int)x == (int)y : y is long && (int)x == (long)y;
+            // A probe key of any other class asks its own eql? below: an object that wraps an
+            // Integer and delegates #hash and #eql? to it finds the Integer's entry (Bug #9381).
+            if (x is int && (y is int || y is long)) {
+                return y is int ? (int)x == (int)y : (int)x == (long)y;
             }
 
-            if (x is long) {
-                return y is long ? (long)x == (long)y : y is int && (long)x == (int)y;
+            if (x is long && (y is int || y is long)) {
+                return y is long ? (long)x == (long)y : (long)x == (int)y;
             }
 
             // Dictionary<,> calls this as Equals(storedKey, probeKey); Ruby dispatches eql? on the
-            // key being looked up, so the arguments are swapped here.
-            return RubyOps.IsTrue(_eqlSite.Target(_eqlSite, y, x));
+            // key being looked up, so the arguments are swapped here. A nil key is stored as the
+            // null sentinel, which the probe has to see as nil.
+            return RubyOps.IsTrue(_eqlSite.Target(_eqlSite, CustomStringDictionary.ObjToNull(y), CustomStringDictionary.ObjToNull(x)));
         }
 
         int IEqualityComparer<object>.GetHashCode(object obj) {
@@ -78,7 +82,7 @@ namespace IronRuby.Runtime {
             // MRI's any_hash hashes these core values itself and never dispatches #hash, so a
             // redefined Integer#hash or String#hash does not affect Hash lookups. The values are
             // the ones the built-in #hash methods answer. A String subclass still dispatches.
-            if (obj == null) {
+            if (obj == null || CustomStringDictionary.IsNullObject(obj)) {
                 return RubyUtils.NilObjectId;
             }
             if (obj is double) {
