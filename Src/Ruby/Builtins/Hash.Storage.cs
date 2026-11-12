@@ -341,10 +341,12 @@ namespace IronRuby.Builtins {
             if (key == null) {
                 throw new ArgumentNullException("key");
             }
-            Entry[] entries = _entries;
-            if (entries != null) {
+            if (_entries != null) {
                 IEqualityComparer<object> comparer = _comparer;
                 int hashCode = comparer.GetHashCode(key);
+                // the key's #hash may have grown this very hash (ar2st_object), so the entries
+                // are read after it
+                Entry[] entries = _entries;
                 int[] buckets = _buckets ?? LinkPendingBuckets();
                 int i = buckets[(int)FastMod((uint)hashCode, (uint)buckets.Length, _fastModMultiplier)] - 1;
                 int collisions = 0;
