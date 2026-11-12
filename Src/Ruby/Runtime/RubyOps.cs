@@ -4867,7 +4867,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static Exception/*!*/ CreateNotSymbolNorStringError(RubyContext/*!*/ context, object obj) {
-            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToAsciiString());
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToString());
         }
 
         /// <summary>
