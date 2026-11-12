@@ -4103,7 +4103,7 @@ Float(""1.5""): 1.5
 Float(nil): ""TypeError: can't convert nil into Float""
 Integer base: ""ArgumentError: base specified for non string value""
 redefined **: [9, 9]
-");
+", 0, 1);
         }
 
         /// <summary>

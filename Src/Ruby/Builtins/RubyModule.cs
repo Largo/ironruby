@@ -2217,6 +2217,12 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName) {
+            // `alias foo foo' discards nothing: the entry stays the same body (and, aliased, `def foo'
+            // after it does not warn either)
+            if (newName != oldName) {
+                WarnMethodRedefinition(newName);
+            }
+
             RubyMemberInfo method;
             using (Context.ClassHierarchyLocker()) {
                 // MRI: aliases a super-forwarder not the real method.
@@ -2276,21 +2282,25 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The warnings MRI's rb_method_entry_make gives when `def', define_method or attr_*
+        /// The warnings MRI's rb_method_entry_make gives when `def', define_method, attr_* or alias
         /// (re)defines a method here: "redefining 'object_id' may cause serious problems" whenever
         /// warnings are on, and under $VERBOSE "method redefined; discarding old foo", pointing
         /// at the previous definition, when this module's own entry is replaced. An entry that was
         /// aliased (alias_count), is itself an alias, or is undefined or a super forwarder
         /// (ZSUPER) discards nothing worth warning about. Called before the new entry is stored,
         /// outside the class hierarchy lock: a warning runs Warning.warn, which may be Ruby code.
-        /// <paramref name="sourcePath"/> is the file the new definition is written in, when known.
+        /// <paramref name="sourcePath"/> is the file the new definition is written in, when known;
+        /// with <paramref name="sourceLine"/> the warning points there - at the `def' - rather
+        /// than at the line the frame last reported.
         /// </summary>
-        public void WarnMethodRedefinition(string/*!*/ name, string sourcePath = null) {
+        public void WarnMethodRedefinition(string/*!*/ name, string sourcePath = null, int sourceLine = 0) {
             if (_context.Loader.IsLoadingCorePrelude || _context.Loader.IsIronRubyLibraryFile(sourcePath)) {
                 return;
             }
 
-            if (name == "object_id" || name == "__id__" || name == "__send__") {
+            // only over a method the module has (a BasicObject subclass has no object_id)
+            if ((name == "object_id" || name == "__id__" || name == "__send__") &&
+                ResolveMethod(name, VisibilityContext.AllVisible).Found) {
                 _context.ReportWarning("redefining '" + name + "' may cause serious problems");
             }
 
@@ -2318,12 +2328,20 @@ namespace IronRuby.Builtins {
 
             // A method the prelude or an IronRuby library file wrote in Ruby is a C method in
             // MRI, or not there at all until the library that replaces it is loaded (pp.rb's
-            // Kernel#pretty_print): either way no Ruby code of CRuby's is being discarded.
-            if (RubyStackTraceBuilder.IsInternalFile(file) || _context.Loader.IsIronRubyLibraryFile(file)) {
+            // Kernel#pretty_print): either way no Ruby code of CRuby's is being discarded. A C#
+            // method replaced by an alias, define_method or attr_*, which do not say where they
+            // are written, is most likely the prelude's doing (`require "ruby4"' outside the
+            // core prelude, as IronRuby.Tests do), so that is not warned about either.
+            if (RubyStackTraceBuilder.IsInternalFile(file) || _context.Loader.IsIronRubyLibraryFile(file) ||
+                sourcePath == null && existing is RubyLibraryMethodInfo) {
                 return;
             }
 
-            _context.ReportWarning("method redefined; discarding old " + name, true);
+            if (sourcePath != null && sourceLine > 0) {
+                _context.ReportWarningAt(sourcePath, sourceLine, "method redefined; discarding old " + name);
+            } else {
+                _context.ReportWarning("method redefined; discarding old " + name, true);
+            }
 
             // a C# method, as a C one, has no previous definition to point at
             if (file != null) {

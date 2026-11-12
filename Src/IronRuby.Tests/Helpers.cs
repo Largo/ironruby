@@ -87,7 +87,8 @@ namespace IronRuby.Tests {
             Assert(log.WarningCount == expectedCompilerWarningCount, String.Format(
                 "Wrong number of compile time errors/warnings: expected {0}, got {1}: {2}",
                 expectedCompilerWarningCount, log.WarningCount, DescribeLog(log)));
-            Assert(Context.RuntimeErrorSink.WarningCount == expectedRuntimeWarningCount, "Wrong number of runtime warnings");
+            Assert(Context.RuntimeErrorSink.WarningCount == expectedRuntimeWarningCount, String.Format(
+                "Wrong number of runtime warnings: expected {0}, got {1}", expectedRuntimeWarningCount, Context.RuntimeErrorSink.WarningCount));
         }
 
         private static string/*!*/ DescribeLog(LoggingErrorSink/*!*/ log) {
