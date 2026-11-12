@@ -9779,9 +9779,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "flatten!", 0x51, 
-                0x00000000U, 0x00020000U, 0x00020000U, 
+                new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00020000U}, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Builtins.RubyArray, Microsoft.Scripting.Runtime.DynamicNull, System.Collections.IList>(IronRuby.Builtins.IListOps.FlattenInPlace), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Builtins.RubyArray, System.Collections.IList>(IronRuby.Builtins.IListOps.FlattenInPlace), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Builtins.RubyArray, System.Int32, System.Collections.IList>(IronRuby.Builtins.IListOps.FlattenInPlace), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyArray, System.Object, System.Collections.IList>(IronRuby.Builtins.IListOps.FlattenInPlace), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, System.Collections.IList, System.Int32, System.Collections.IList>(IronRuby.Builtins.IListOps.FlattenInPlace)
             );
             
@@ -9803,8 +9805,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
-                0x00010002U, 
-                new Func<System.Collections.IList, System.Collections.IList, System.Collections.IList>(IronRuby.Builtins.IListOps.Replace)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, System.Collections.IList, System.Object, System.Collections.IList>(IronRuby.Builtins.IListOps.Replace)
             );
             
             DefineLibraryMethod(module, "insert", 0x51, 
@@ -9899,8 +9901,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "replace", 0x51, 
-                0x00010002U, 
-                new Func<System.Collections.IList, System.Collections.IList, System.Collections.IList>(IronRuby.Builtins.IListOps.Replace)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, System.Collections.IList, System.Object, System.Collections.IList>(IronRuby.Builtins.IListOps.Replace)
             );
             
             DefineLibraryMethod(module, "reverse", 0x51, 

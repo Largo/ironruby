@@ -249,10 +249,16 @@ namespace IronRuby.Builtins {
 
         #region initialize_copy, replace, clear, to_a, to_ary
 
+        // frozen is checked first, before the argument is converted and even for the no-op below
+        // (MRI: rb_ary_modify_check), so a frozen array's replace(42) is a FrozenError
         [RubyMethod("replace")]
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static IList/*!*/ Replace(IList/*!*/ self, [NotNull, DefaultProtocol]IList/*!*/ other) {
-            // frozen is checked first, even for the no-op below (MRI: rb_ary_modify_check)
+        public static IList/*!*/ Replace(ConversionStorage<IList>/*!*/ arrayCast, IList/*!*/ self, object other) {
+            RequireNotFrozen(self);
+            return Replace(self, Protocols.CastToArray(arrayCast, other));
+        }
+
+        public static IList/*!*/ Replace(IList/*!*/ self, [NotNull]IList/*!*/ other) {
             RequireNotFrozen(self);
             // ary.replace(ary) has to be a no-op, and clearing first would make it empty the
             // array instead.  Rails runs into exactly this: Rails::Command#with_argv does
@@ -1734,13 +1740,27 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("flatten!")]
         public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, DynamicNull maxDepth) {
-            return FlattenInPlace(tryToAry, self, -1);
+            return FlattenInPlace(tryToAry, self);
         }
 
         [RubyMethod("flatten!")]
-        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, [DefaultProtocol, DefaultParameterValue(-1)] int maxDepth) {
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self) {
+            self.RequireNotFrozen();
+            return FlattenInPlace(tryToAry, (IList)self, -1);
+        }
+
+        [RubyMethod("flatten!")]
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, int maxDepth) {
             self.RequireNotFrozen();
             return FlattenInPlace(tryToAry, (IList)self, maxDepth);
+        }
+
+        // frozen is checked before the depth is converted (MRI: rb_ary_modify_check first)
+        [RubyMethod("flatten!")]
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, ConversionStorage<int>/*!*/ fixnumCast,
+            RubyArray/*!*/ self, object maxDepth) {
+            self.RequireNotFrozen();
+            return FlattenInPlace(tryToAry, (IList)self, Protocols.CastToFixnum(fixnumCast, maxDepth));
         }
         
         [RubyMethod("flatten!")]
