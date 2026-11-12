@@ -703,5 +703,62 @@ namespace IronRuby.Runtime.Jit {
         public static bool ConstantsOk(RubyContext/*!*/ context, int snapshot) {
             return context.ConstantAccessVersion == snapshot;
         }
+
+        // ---- Class#new (JitCompiler.EmitConstruction) -------------------------------------
+
+        /// <summary>
+        /// `C.new(a, b)' as the last thing a specialized method does: the construction the rule of the
+        /// call of new would make (RubyClass.TryGetObjectConstruction) - allocate, call C's Ruby
+        /// initialize - made directly. The construction checks the class's version itself, and while
+        /// :c_call is traced, or after anything has moved it, the call goes through an ordinary call
+        /// site of new instead: the initializer runs Ruby code, so the body cannot deopt around it.
+        /// </summary>
+        public sealed class ConstructionSite {
+            internal readonly Calls.ObjectConstruction/*!*/ Construction;
+            internal readonly int Arity;
+            internal readonly System.Runtime.CompilerServices.CallSite/*!*/ Fallback;
+
+            internal ConstructionSite(RubyContext/*!*/ context, Calls.ObjectConstruction/*!*/ construction, int arity) {
+                Construction = construction;
+                Arity = arity;
+                var action = Calls.RubyCallAction.Make(context, "new", Calls.RubyCallSignature.Simple(arity));
+                switch (arity) {
+                    case 0: Fallback = CallSite<Func<CallSite, object, object>>.Create(action); break;
+                    case 1: Fallback = CallSite<Func<CallSite, object, object, object>>.Create(action); break;
+                    case 2: Fallback = CallSite<Func<CallSite, object, object, object, object>>.Create(action); break;
+                    default: Fallback = CallSite<Func<CallSite, object, object, object, object, object>>.Create(action); break;
+                }
+            }
+
+            internal bool IsDirect {
+                get { return Construction.IsCurrent(Arity) && !TracePoint.CCallTracing; }
+            }
+        }
+
+        internal const int MaxConstructionArity = 3;
+
+        public static object Construct0(ConstructionSite/*!*/ site, object cls) {
+            if (site.IsDirect) { return site.Construction.Construct0(); }
+            var s = (CallSite<Func<CallSite, object, object>>)site.Fallback;
+            return s.Target(s, cls);
+        }
+
+        public static object Construct1(ConstructionSite/*!*/ site, object cls, object a0) {
+            if (site.IsDirect) { return site.Construction.Construct1(a0); }
+            var s = (CallSite<Func<CallSite, object, object, object>>)site.Fallback;
+            return s.Target(s, cls, a0);
+        }
+
+        public static object Construct2(ConstructionSite/*!*/ site, object cls, object a0, object a1) {
+            if (site.IsDirect) { return site.Construction.Construct2(a0, a1); }
+            var s = (CallSite<Func<CallSite, object, object, object, object>>)site.Fallback;
+            return s.Target(s, cls, a0, a1);
+        }
+
+        public static object Construct3(ConstructionSite/*!*/ site, object cls, object a0, object a1, object a2) {
+            if (site.IsDirect) { return site.Construction.Construct3(a0, a1, a2); }
+            var s = (CallSite<Func<CallSite, object, object, object, object, object>>)site.Fallback;
+            return s.Target(s, cls, a0, a1, a2);
+        }
     }
 }

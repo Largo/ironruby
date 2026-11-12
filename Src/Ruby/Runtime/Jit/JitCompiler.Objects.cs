@@ -519,6 +519,78 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        // ---- Class#new ---------------------------------------------------------------------
+        // `def make(x) P.new(x, 0) end': the method JIT took no call but its own operators and
+        // intrinsics, so a factory method ran generically, scope and all, around the call of new.
+        // Calling new runs the class's initialize - Ruby code, which may do anything, including
+        // redefining a method the specialized body relies on - so it is only taken as the very last
+        // thing the method does: everything the body checked at its entry has been used by then.
+        // The initializer's effects are observable, so a body that can deopt is not specialized.
+
+        /// <summary>
+        /// The call `C.new(a, ...)' (C a constant, at most JitRuntime.MaxConstructionArity plain
+        /// arguments, no block) that is the last statement of the method's body, or null.
+        /// </summary>
+        internal static MethodCall TailConstruction(IronRuby.Compiler.Ast.MethodDefinition/*!*/ ast) {
+            var body = ast.Body;
+            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) { return null; }
+            var statements = body.Statements;
+            if (statements == null || statements.Count == 0) { return null; }
+            var call = statements.Last as MethodCall;
+            if (call == null || call.MethodName != "new" || call.Block != null || !(call.Target is ConstantVariable)) { return null; }
+            var args = call.Arguments;
+            if (args != null) {
+                if (args.Expressions.Length > JitRuntime.MaxConstructionArity) { return null; }
+                foreach (var arg in args.Expressions) {
+                    if (arg is SplattedArgument || arg is HashConstructor) { return null; }
+                }
+            }
+            return call;
+        }
+
+        /// <summary>
+        /// `C.new(a, b)': where C's new is Class#new, public, and the construction is the plain one
+        /// (RubyClass.TryGetObjectConstruction: a RubyObject and a Ruby initialize of mandatory
+        /// parameters, or of optional and rest ones the call plan binds), the construction made
+        /// directly (JitRuntime.Construct*).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitConstruction(MethodCall/*!*/ node, out JT type) {
+            var target = (ConstantVariable)node.Target;
+            var cls = ResolveConstant(target) as RubyClass;
+            if (cls == null) { throw Bail("new of a constant that is not a class"); }
+            int argc = (node.Arguments == null) ? 0 : node.Arguments.Expressions.Length;
+
+            // what the call site would call: resolved under the refinements active where the method
+            // was written, and as a site resolves it, so that a change that copies the method
+            // (private_class_method) moves the method version
+            var meta = JitRuntime.ClassOf(_context, cls);
+            var refined = meta.ResolveMethod("new", VisibilityContext.AllVisible, _refinements);
+            MethodResolutionResult resolved;
+            using (_context.ClassHierarchyLocker()) {
+                resolved = meta.ResolveMethodForSiteNoLock("new", VisibilityContext.AllVisible);
+            }
+            var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
+            if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
+                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                throw Bail("new is not Class#new");
+            }
+            var construction = cls.TryGetObjectConstruction(argc);
+            if (construction == null) { throw Bail("new of " + cls.Name + " is not a plain construction"); }
+
+            var callArgs = new List<MSA.Expression>(argc + 2);
+            callArgs.Add(Ast.Constant(new JitRuntime.ConstructionSite(_context, construction, argc)));
+            JT ct;
+            callArgs.Add(Coerce(EmitConstant(target, out ct), ct, JT.Obj));
+            for (int i = 0; i < argc; i++) {
+                JT at;
+                var a = Emit(node.Arguments.Expressions[i], out at);
+                callArgs.Add(BoxForStore(a, at));
+            }
+            _pure = false;
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
+        }
+
         /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
         internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
             if (node.MethodName != "==" && node.MethodName != "!=") { return false; }

@@ -1538,6 +1538,11 @@ namespace IronRuby.Runtime.Jit {
                 throw Bail("to_i on " + tt);
             }
 
+            // `C.new(a, b)' ending the method (JitCompiler.Objects.cs).
+            if (_ast != null && _loop == null && _keywords == null && node == TailConstruction(_ast)) {
+                return EmitConstruction(node, out type);
+            }
+
             // `s == "lit"', `s != "lit"' (JitCompiler.Objects.cs).
             if (node.Target != null && argc == 1 && IsStringLiteralComparison(node)) {
                 return EmitStringLiteralComparison(node, out type);
@@ -2070,7 +2075,11 @@ namespace IronRuby.Runtime.Jit {
             _methodName = ast.Name;
             // a method with keywords is never called directly from its typed body (EmitCall)
             _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
+            _tailConstruction = (keywords != null) ? null : JitCompiler.TailConstruction(ast);
         }
+
+        // the `C.new(a, b)' the method ends with, if it does (JitCompiler.TailConstruction)
+        private readonly MethodCall _tailConstruction;
 
         /// <summary>
         /// False when no assignment of parameter types could ever make TryCompile succeed for
@@ -2389,6 +2398,16 @@ namespace IronRuby.Runtime.Jit {
                 if (args != null) {
                     foreach (var arg in args.Expressions) {
                         if (arg is SplattedArgument || !Walk(arg)) { return No(node); }
+                    }
+                }
+                return true;
+            }
+
+            if (node == _tailConstruction) {
+                // `C.new(a, b)' ending the method (JitCompiler.EmitConstruction)
+                if (args != null) {
+                    foreach (var arg in args.Expressions) {
+                        if (!Walk(arg)) { return false; }
                     }
                 }
                 return true;
