@@ -1486,6 +1486,15 @@ namespace IronRuby.Builtins {
                             long pointer = 0;
                             if (pointerArg != null) {
                                 MutableString target = ToMutableString(stringCast, pointerArg);
+                                // 'P' points at a fixed-length structure: MRI refuses a string
+                                // shorter than the count (1 when none is given).
+                                if (target != null && directive.Directive == 'P') {
+                                    int needed = directive.Count ?? 1;
+                                    if (target.GetByteCount() < needed) {
+                                        throw RubyExceptions.CreateArgumentError(
+                                            "too short buffer for P({0} for {1})", target.GetByteCount(), needed);
+                                    }
+                                }
                                 if (target != null) {
                                     if (pointers == null) {
                                         pointers = new RubyArray();
