@@ -3694,7 +3694,7 @@ p((1.instance_eval { M13.send(:module_function); def x13; end; :ok } rescue $!))
 true
 [true, true]
 #<TypeError: can't define singleton>
-");
+", 0, 5);
         }
 
         /// <summary>

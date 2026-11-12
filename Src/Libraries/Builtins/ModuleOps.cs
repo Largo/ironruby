@@ -328,11 +328,24 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// MRI's scope_visibility_check: `private' (and the rest) with no arguments sets the default
+        /// visibility of the scope it is called from, which in a method body is the method's
+        /// own - almost certainly not what was meant, so it is warned about.
+        /// </summary>
+        private static void CheckScopeVisibility(RubyScope/*!*/ scope, string/*!*/ methodName, object[]/*!*/ methodNames) {
+            if (methodNames.Length == 0 && scope.Kind == ScopeKind.Method) {
+                scope.RubyContext.ReportWarning(
+                    "calling " + methodName + " without arguments inside a method may not have the intended effect");
+            }
+        }
+
         // thread-safe:
         [RubyMethod("private", RubyMethodAttributes.PrivateInstance)]
         public static object SetPrivateVisibility(ConversionStorage<string>/*!*/ stringCast,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
 
+            CheckScopeVisibility(scope, "private", methodNames);
             // overwrites methods to instance:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PrivateInstance);
             return VisibilityResult(methodNames);
@@ -342,6 +355,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("protected", RubyMethodAttributes.PrivateInstance)]
         public static object SetProtectedVisibility(ConversionStorage<string>/*!*/ stringCast,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            CheckScopeVisibility(scope, "protected", methodNames);
             // overwrites methods to instance:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ProtectedInstance);
             return VisibilityResult(methodNames);
@@ -351,6 +365,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("public", RubyMethodAttributes.PrivateInstance)]
         public static object SetPublicVisibility(ConversionStorage<string>/*!*/ stringCast,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            CheckScopeVisibility(scope, "public", methodNames);
             // overwrites methods to instance:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PublicInstance);
             return VisibilityResult(methodNames);
@@ -384,6 +399,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("module_function must be called for modules");
             }
             
+            CheckScopeVisibility(scope, "module_function", methodNames);
             // overwrites visibility to public:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ModuleFunction);
             return VisibilityResult(methodNames);
