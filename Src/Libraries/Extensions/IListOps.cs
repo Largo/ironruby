@@ -1953,10 +1953,19 @@ namespace IronRuby.Builtins {
         private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, List<MutableString/*!*/>/*!*/ parts, 
             ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
-            foreach (object item in list) {
+            // the length is read again on every step, as MRI's ary_join_1 does: a #to_str or #to_ary
+            // may change the array
+            for (int i = 0; i < list.Count; i++) {
+                JoinItem(conversions, list, list[i], parts, ref isBinary, ref seen);
+            }
+        }
+
+        private static void JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, List<MutableString/*!*/>/*!*/ parts,
+            ref bool? isBinary, ref Dictionary<object, bool> seen) {
+            {
                 if (item == null) {
                     parts.Add(null);
-                    continue;
+                    return;
                 }
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
@@ -1975,7 +1984,7 @@ namespace IronRuby.Builtins {
                     seen.Add(item, true);
                     JoinRecursive(conversions, listItem, parts, ref isBinary, ref seen);
                     seen.Remove(item);
-                    continue;
+                    return;
                 }
 
                 // try to_str first, then to_s:
@@ -1990,8 +1999,33 @@ namespace IronRuby.Builtins {
             bool? isBinary = (separator != null) ? separator.IsBinary : (bool?)null;
             Dictionary<object, bool> seen = null;
             
-            // build a list of strings to join:
-            JoinRecursive(conversions, self, parts, ref isBinary, ref seen);
+            // build a list of strings to join, the way MRI's rb_ary_join does: it scans the leading
+            // Strings, asking the first element that is not one for #to_str, then takes the Strings
+            // still in front of it (the #to_str may have changed the array) and joins the rest one
+            // by one, rereading the array as it goes.
+            int scanned = 0;
+            while (scanned < self.Count) {
+                object item = self[scanned];
+                if (item is MutableString) {
+                    scanned++;
+                    continue;
+                }
+                if (item != null) {
+                    conversions.ToStr.Target(conversions.ToStr, item);
+                }
+                break;
+            }
+            int index = 0;
+            for (; index < scanned && index < self.Count; index++) {
+                var str = self[index] as MutableString;
+                if (str == null) {
+                    break;
+                }
+                JoinItem(conversions, self, str, parts, ref isBinary, ref seen);
+            }
+            for (; index < self.Count; index++) {
+                JoinItem(conversions, self, self[index], parts, ref isBinary, ref seen);
+            }
             if (parts.Count == 0) {
                 return MutableString.CreateEmpty(RubyEncoding.Ascii);
             }
