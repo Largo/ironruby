@@ -1350,6 +1350,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
             [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
+            // MRI's rb_str_update checks the encodings (rb_enc_check) before the index.
+            self.RequireCompatibleEncoding(value);
+
             // The index counts characters: content left as bytes by a byte operation (#bytesize,
             // #getbyte, ...) is switched back first, or a multibyte character would be split.
             int length = GetCharacterLength(self);
@@ -1383,6 +1386,7 @@ namespace IronRuby.Builtins {
             if (charsToOverwrite < 0) {
                 throw RubyExceptions.CreateIndexError("negative length {0}", charsToOverwrite);
             }
+            self.RequireCompatibleEncoding(value);
 
             int length = GetCharacterLength(self);
             if (System.Math.Abs((long)start) > length) {
@@ -4274,6 +4278,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("insert")]
         public static MutableString Insert(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+            // rb_str_update, like #[]=, checks the encodings before the index
+            self.RequireCompatibleEncoding(value);
             return self.Insert(self.ToClrIndex(NormalizeInsertIndex(start, GetCharacterLength(self))), value);
         }
 
