@@ -877,6 +877,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadComplex_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_basic_op__", 0x61, 
+                0x00000008U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.RubySymbol, System.Boolean>(IronRuby.Builtins.RubyComplex.IsBasicOp)
+            );
+            
             DefineLibraryMethod(module, "__ir_scan__", 0x61, 
                 0x00000002U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyComplex.Scan)
