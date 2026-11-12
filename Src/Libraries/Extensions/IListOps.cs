@@ -428,17 +428,20 @@ namespace IronRuby.Builtins {
             }
 
             // MRI refuses to even start building a product whose size doesn't fit into a native integer.
-            // Without this check (0..100).to_a.product(a, a, ... ) loops essentially forever.
-            long size = self.Count;
-            for (int i = 0; i < arrays.Length; i++) {
-                long count = arrays[i].Count;
-                if (size > Int64.MaxValue / count) {
+            // Without this check (0..100).to_a.product(a, a, ... ) loops essentially forever. Only the
+            // result array has a size: given a block, rb_ary_product yields however many there are.
+            if (block == null) {
+                long size = self.Count;
+                for (int i = 0; i < arrays.Length; i++) {
+                    long count = arrays[i].Count;
+                    if (size > Int64.MaxValue / count) {
+                        throw RubyExceptions.CreateRangeError("too big to product");
+                    }
+                    size *= count;
+                }
+                if (size > Int32.MaxValue) {
                     throw RubyExceptions.CreateRangeError("too big to product");
                 }
-                size *= count;
-            }
-            if (size > Int32.MaxValue) {
-                throw RubyExceptions.CreateRangeError("too big to product");
             }
 
             int[] indices = new int[1 + arrays.Length];
@@ -1663,8 +1666,9 @@ namespace IronRuby.Builtins {
                     // push a work item that will process the items following the nested list:
                     worklist.Push((list, nestedIndex + 1, depth));
 
-                    // yield items preceding the nested list:
-                    for (int i = start; i < nestedIndex; i++) {
+                    // yield items preceding the nested list (a #to_ary may have shortened the list since
+                    // they were looked at - Bug #22318):
+                    for (int i = start; i < nestedIndex && i < list.Count; i++) {
                         yield return list[i];
                     }
 
@@ -1688,7 +1692,7 @@ namespace IronRuby.Builtins {
                 depth = workitem.Depth;
 
                 // finishing nested list:
-                if (start == list.Count) {
+                if (start >= list.Count) {
                     recursionPath.Remove(list);
                     goto next;
                 }
