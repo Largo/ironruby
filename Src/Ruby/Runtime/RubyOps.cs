@@ -4833,6 +4833,22 @@ namespace IronRuby.Runtime {
             }
 
             long power = (long)exponent + scale;
+
+            // The mantissa is rounded to a double's 53 bits here, to nearest, ties to even (the
+            // BigInteger conversion truncates), and one too long for a double ("0x1f" and 268
+            // zeros) is no longer Infinity before it is scaled down.
+            long bitLength = (long)mantissa.GetBitLength();
+            if (bitLength > 53) {
+                int shift = (int)(bitLength - 53);
+                BigInteger dropped = mantissa & ((BigInteger.One << shift) - 1);
+                BigInteger half = BigInteger.One << (shift - 1);
+                mantissa >>= shift;
+                if (dropped > half || (dropped == half && !mantissa.IsEven)) {
+                    mantissa += 1;
+                }
+                power += shift;
+            }
+
             if (power > 99999) {
                 power = 99999;
             } else if (power < -99999) {
