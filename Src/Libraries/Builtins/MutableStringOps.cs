@@ -4425,7 +4425,10 @@ namespace IronRuby.Builtins {
             bool unicode = str.Encoding.IsUnicodeEncoding;
             // A binary string has no letters outside ASCII: "a\xFF".succ is "b\xFF", the
             // 0xFF byte is not a (Latin-1 letter) to be stepped.
-            bool binary = str.Encoding == RubyEncoding.Binary;
+            // Nor has a multibyte encoding other than Unicode: Onigmo's EUC-JP, Shift_JIS, GBK,
+            // Big5... answer ALNUM for ASCII only, so "\xA1\xB4" in EUC-JP steps its bytes
+            // rather than its (Lm) code point.
+            bool binary = str.Encoding == RubyEncoding.Binary || (!unicode && str.Encoding.MaxBytesPerChar > 1);
             for (int i = index; i >= 0; --i) {
                 char c = str.GetChar(i);
                 if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : (!binary || c < 0x80) && Char.IsLetterOrDigit(c))
@@ -4554,6 +4557,115 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// MRI's rb_enc_precise_mbclen over bytes[start, start + count): the length of the
+        /// character there, 0 if the bytes are only the start of one, -1 if they are invalid.
+        /// </summary>
+        private static int PreciseCharLength(Encoding/*!*/ strict, byte[]/*!*/ bytes, int start, int count) {
+            var decoder = strict.GetDecoder();
+            var chars = new char[8];
+            for (int k = 0; k < count; k++) {
+                int produced;
+                try {
+                    produced = decoder.GetChars(bytes, start + k, 1, chars, 0, false);
+                } catch (DecoderFallbackException) {
+                    return -1;
+                } catch (ArgumentException) {
+                    return -1;
+                }
+                if (produced > 0) {
+                    return k + 1;
+                }
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// MRI's enc_succ_char for an encoding whose characters are one byte or more: steps the
+        /// bytes of the character as a big-endian number until they spell a valid character of
+        /// the same length. Returns false when that wrapped around through all-zero bytes.
+        /// </summary>
+        private static bool SuccCharacterBytes(Encoding/*!*/ strict, byte[]/*!*/ p, int start, int len) {
+            // the walk only ever goes up, so it ends; the cap is a guard against an encoding
+            // whose decoder never accepts a character of this length
+            for (int guard = 0; guard < (1 << 20); guard++) {
+                int i;
+                for (i = len - 1; i >= 0 && p[start + i] == 0xff; i--) {
+                    p[start + i] = 0;
+                }
+                if (i < 0) {
+                    return false;
+                }
+                p[start + i]++;
+                int l = PreciseCharLength(strict, p, start, len);
+                if (l > 0) {
+                    if (l == len) {
+                        return true;
+                    }
+                    for (int j = l; j < len; j++) {
+                        p[start + j] = 0xff;
+                    }
+                } else if (l < 0 && i < len - 1) {
+                    int len2;
+                    for (len2 = len - 1; len2 > 0; len2--) {
+                        if (PreciseCharLength(strict, p, start, len2) >= 0) {
+                            break;
+                        }
+                    }
+                    for (int j = len2 + 1; j < len; j++) {
+                        p[start + j] = 0xff;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// MRI's str_succ for a string with no alphanumeric character, in an ASCII-compatible
+        /// encoding: the rightmost valid character is stepped to the next valid character of
+        /// the same byte length, carrying into the one before it when it wraps, and "\x01"
+        /// goes in front once every character has wrapped. Invalid bytes are passed over. The
+        /// bytes are what is stepped, not the code point: "\xA1\xFE" in EUC-JP is followed by
+        /// "\xA2\xA1", and "\uFFFF" by "\x01\u0800".
+        /// </summary>
+        private static void SuccNonAlphaNumeric(MutableString/*!*/ self) {
+            var strict = self.Encoding.StrictEncoding;
+            byte[] bytes = self.ToByteArray();
+
+            var starts = new List<int>();
+            var lengths = new List<int>();
+            int pos = 0;
+            while (pos < bytes.Length) {
+                int l = PreciseCharLength(strict, bytes, pos, bytes.Length - pos);
+                if (l > 0) {
+                    starts.Add(pos);
+                    lengths.Add(l);
+                    pos += l;
+                } else {
+                    pos++;
+                }
+            }
+
+            bool done = false;
+            for (int c = starts.Count - 1; c >= 0 && !done; c--) {
+                int start = starts[c], len = lengths[c];
+                if (SuccCharacterBytes(strict, bytes, start, len)) {
+                    done = true;
+                } else if (PreciseCharLength(strict, bytes, start, len) != len) {
+                    // wrapped to \0...\0: search the next valid character
+                    SuccCharacterBytes(strict, bytes, start, len);
+                }
+            }
+
+            var encoding = self.Encoding;
+            self.Clear();
+            if (!done) {
+                self.Append((byte)1);
+            }
+            self.Append(bytes);
+            self.ForceEncoding(encoding);
+        }
+
         [RubyMethod("succ!")]
         [RubyMethod("next!")]
         public static MutableString/*!*/ SuccInPlace(MutableString/*!*/ self) {
@@ -4568,7 +4680,9 @@ namespace IronRuby.Builtins {
             // characters, so a multi-byte string walked off the end of itself.
             int last = self.GetCharCount() - 1;
             int index = GetIndexOfRightmostAlphaNumericCharacter(self, last);
-            if (index == -1) {
+            if (index == -1 && self.Encoding != RubyEncoding.Binary && self.Encoding.IsAsciiIdentity) {
+                SuccNonAlphaNumeric(self);
+            } else if (index == -1) {
                 // MRI passes over bytes that are not valid in the encoding (held as escapes, see
                 // EscapingEncoding) and steps the rightmost character; with none, "\x01" goes in
                 // front: "\xE3\x81".succ is "\x01\xE3\x81".
