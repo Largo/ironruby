@@ -976,7 +976,10 @@ namespace IronRuby.Prism {
                         Statements prologue;
                         var parameters = BlockParameters(lambda.Parameters, false, out prologue);
                         var body = BlockBody(lambda.Body, span, prologue);
-                        return new LambdaDefinition(new BlockDefinition(scope, parameters, body, span));
+                        // MRI places a lambda literal at its body's opening { or do, which for
+                        // ->(x,\n y) { } is not the line of the arrow (Proc#source_location).
+                        var blockSpan = Span(lambda.OpeningLoc.Start, lambda.StartOffset + lambda.Length - lambda.OpeningLoc.Start);
+                        return new LambdaDefinition(new BlockDefinition(scope, parameters, body, blockSpan));
                     } finally {
                         _scopes.Pop();
                     }
