@@ -3253,8 +3253,8 @@ namespace IronRuby.Prism {
                 Expression hasKey = new MethodCall(hash, "key?", new Arguments(keySymbol), span);
                 if (_patternMissingKey != null) {
                     hasKey = new OrExpression(hasKey, new BlockExpression(MakeStatements(new Expression[] {
-                        new SimpleAssignmentExpression(_patternMissingKey,
-                            new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key)), null, span),
+                        new SimpleAssignmentExpression(_patternMissingKey, new ArrayConstructor(new Arguments(new Expression[] {
+                            new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key)), hash }), span), null, span),
                         Literal.False(span)
                     }), span), span);
                 }
@@ -3313,7 +3313,8 @@ namespace IronRuby.Prism {
             Expression lenAssign;
             var len = NewTemp(new MethodCall(arr, "length", null, span), span, out lenAssign);
             tests.Add(new BlockExpression(MakeStatements(lenAssign, Literal.True(span)), span));
-            tests.Add(new MethodCall(len, ">=", new Arguments(Literal.Integer(count, span)), span));
+            tests.Add(Explained(new MethodCall(len, ">=", new Arguments(Literal.Integer(count, span)), span),
+                "length", new Expression[] { arr, len, Literal.Integer(count, span), Literal.True(span) }, span));
 
             // captures inside the block must live in the enclosing scope
             PreDeclareCaptures(node.Requireds);
