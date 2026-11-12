@@ -795,7 +795,7 @@ namespace IronRuby.Builtins {
                         }
                         var regex = parts[i] as RubyRegex;
                         if (regex != null) {
-                            regex.AppendTo(source);
+                            regex.AppendTo(source, false);
                         } else {
                             source.Append(((MutableString)parts[i]).ToByteArray());
                         }
@@ -812,7 +812,7 @@ namespace IronRuby.Builtins {
 
                 var regex = parts[i] as RubyRegex;
                 if (regex != null) {
-                    regex.AppendTo(result);
+                    regex.AppendTo(result, false);
                 } else {
                     result.Append(RubyRegex.Escape((MutableString)parts[i]));
                 }
