@@ -10382,6 +10382,7 @@ class IO
     options = __encode_options__
     text = __decorate_newlines__(text, options, false) if __decorated__(options, false)
     target = external_encoding
+    return __xml_encode_for_write__(text, target, options) if options[:xml]
     return text if target.nil? || target == ::Encoding::BINARY || text.encoding == target
     return text if text.ascii_only? && target.ascii_compatible?
     options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
@@ -10398,6 +10399,26 @@ class IO
     text.encode(target, **options)
   end
   private :__encode_for_write__
+
+  # xml: :attr puts quotes around everything the IO writes, so like a stateful encoding
+  # it needs one converter for the life of the IO (IO#close writes the closing quote).
+  def __xml_encode_for_write__(text, target, options)
+    options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
+    ec = @__write_ec__
+    unless ec
+      if target.nil? || target == ::Encoding::BINARY || target == ::Encoding::UTF_8
+        ec = ::Encoding::Converter.new("", "", **options)
+      else
+        ec = ::Encoding::Converter.new(::Encoding::UTF_8, target, **options)
+      end
+      @__write_ec__ = ec
+    end
+    unless ec.source_encoding.nil? && (target.nil? || target == ::Encoding::BINARY)
+      text = text.encode(::Encoding::UTF_8, **options.reject { |key, _| key == :xml })
+    end
+    ec.convert(text.b)
+  end
+  private :__xml_encode_for_write__
 
   # chomp: is a keyword, so a Hash sitting in the last positional slot is a
   # separator argument - a TypeError - and not options. MRI tolerates keywords it

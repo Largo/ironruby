@@ -767,7 +767,7 @@ namespace IronRuby.Builtins {
 
                     string escape = XmlEscape(codepoint);
                     if (escape != null) {
-                        if (!EmitInserted(Encoding.ASCII.GetBytes(escape), written, limit)) {
+                        if (!EmitInserted(AsciiInDestination(escape), written, limit)) {
                             return "destination_buffer_full";
                         }
                         i += size;
@@ -937,16 +937,24 @@ namespace IronRuby.Builtins {
             /// converter finished without ever having converted anything writes both at once.
             /// </summary>
             private byte[]/*!*/ ApplyXmlDecorators(byte[]/*!*/ bytes) {
-                if (bytes.Length == 0 || (_flags & XmlAttrQuoteFlag) == 0 ||
-                    !DestinationEncoding.IsAsciiIdentity || _xmlQuoteOpened) {
+                if (bytes.Length == 0 || (_flags & XmlAttrQuoteFlag) == 0 || _xmlQuoteOpened) {
                     return bytes;
                 }
 
                 _xmlQuoteOpened = true;
-                var result = new byte[bytes.Length + 1];
-                result[0] = (byte)'"';
-                Array.Copy(bytes, 0, result, 1, bytes.Length);
-                return result;
+                return Concat(AsciiInDestination("\""), bytes);
+            }
+
+            /// <summary>
+            /// ASCII text the decorators write, in the destination encoding: MRI's escapers run on
+            /// the UTF-8 side of the conversion, so a UTF-16 destination gets "\0\"" and a
+            /// stateful one the ASCII bytes (in its initial state).
+            /// </summary>
+            private byte[]/*!*/ AsciiInDestination(string/*!*/ text) {
+                if (DestinationEncoding.IsAsciiIdentity || DestinationEncoding.IsDummy) {
+                    return Encoding.ASCII.GetBytes(text);
+                }
+                return DestinationEncoding.TranscodingEncoding.GetBytes(text);
             }
 
             /// <summary>
@@ -956,8 +964,7 @@ namespace IronRuby.Builtins {
             /// reference the converter itself produced is not escaped a second time.
             /// </summary>
             private string XmlEscape(int codepoint) {
-                if ((_flags & (XmlTextFlag | XmlAttrContentFlag)) == 0 ||
-                    !DestinationEncoding.IsAsciiIdentity && !DestinationEncoding.IsDummy) {
+                if ((_flags & (XmlTextFlag | XmlAttrContentFlag)) == 0) {
                     return null;
                 }
                 bool attribute = (_flags & XmlAttrContentFlag) != 0;
@@ -973,11 +980,11 @@ namespace IronRuby.Builtins {
 
             /// <summary>The bytes a decorator still owes the output once the input is exhausted.</summary>
             private byte[]/*!*/ FinishDecorators() {
-                if ((_flags & XmlAttrQuoteFlag) == 0 || !DestinationEncoding.IsAsciiIdentity || _decoratorsFinished) {
+                if ((_flags & XmlAttrQuoteFlag) == 0 || _decoratorsFinished) {
                     return EmptyBytes;
                 }
                 _decoratorsFinished = true;
-                byte[] result = _xmlQuoteOpened ? new byte[] { (byte)'"' } : new byte[] { (byte)'"', (byte)'"' };
+                byte[] result = AsciiInDestination(_xmlQuoteOpened ? "\"" : "\"\"");
                 _xmlQuoteOpened = true;
                 return result;
             }
