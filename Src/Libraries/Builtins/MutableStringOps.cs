@@ -1351,6 +1351,18 @@ namespace IronRuby.Builtins {
             return ScriptingRuntimeHelpers.Int32ToObject(value);
         }
 
+        // An index past Fixnum that still fits a C long is simply out of the string in MRI
+        // (rb_str_aset: "index N out of string"); only a wider one fails to convert.
+        [RubyMethod("[]=")]
+        public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
+            [NotNull]BigInteger/*!*/ index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+            if (index < Int64.MinValue || index > Int64.MaxValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
+            self.RequireNotFrozen();
+            throw RubyExceptions.CreateIndexError("index {0} out of string", index);
+        }
+
         [RubyMethod("[]=")]
         public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
             [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
