@@ -545,7 +545,10 @@ namespace IronRuby.Builtins {
         }
 
         private static string/*!*/ Escape(int c) {
-            return IsMetaCharacter(c) ? "\\" + (char)c : ((char)c).ToString();
+            // Any whitespace is escaped too: the CLR's x mode skips every Char.IsWhiteSpace
+            // character, so a literal \f, \v or U+00A0 (from an escape or Regexp.quote) would vanish,
+            // where Onigmo keeps all of them.
+            return IsMetaCharacter(c) || Char.IsWhiteSpace((char)c) ? "\\" + (char)c : ((char)c).ToString();
         }
 
         private static bool IsMetaCharacter(int c) {
@@ -2697,7 +2700,18 @@ namespace IronRuby.Builtins {
 
             bool positive = !Read('^');
 
-            var result = ParseCharacterGroupIntersections();
+            // Onigmo (fetch_token_in_cc) reads a ']' straight after '[' or '[^' as a literal member
+            // when another ']' follows to close the class: [ ]a] (without the space) is ']' or 'a'.
+            CharacterSet leadingBracket = null;
+            if (Peek() == ']' && _rubyPattern.IndexOf(']', _index + 1) >= 0) {
+                Read(']');
+                leadingBracket = CharacterSet.MakeCharacter(']', @"\]");
+            }
+
+            var result = (leadingBracket != null && Peek() == ']') ? leadingBracket : ParseCharacterGroupIntersections();
+            if (leadingBracket != null && result != leadingBracket) {
+                result = leadingBracket.Union(result);
+            }
             if (!positive) {
                 result = result.Complement();
             }

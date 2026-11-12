@@ -273,7 +273,7 @@ namespace IronRuby.Builtins {
 
             RubyContext context = integerConversion.Context;
             if (!format.Encoding.IsAsciiIdentity) {
-                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+                throw new EncodingCompatibilityError("ASCII incompatible encoding: " + format.Encoding.Name);
             }
 
             MutableString buffer = null;

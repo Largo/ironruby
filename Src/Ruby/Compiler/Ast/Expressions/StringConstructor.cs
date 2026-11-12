@@ -101,7 +101,10 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), value)
                 )
             );
-            return expression.Location.IsValid ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
+            // A local variable node is shared by every read of the variable and carries the span of
+            // its declaration, which would move the statement's line back there (a call taking
+            // "#{block_param}" reported the block's first line), so a read keeps the statement's.
+            return expression.Location.IsValid && !(expression is LocalVariable) ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
         }
 
         #region Factories

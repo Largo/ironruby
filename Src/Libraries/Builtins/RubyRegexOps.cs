@@ -598,7 +598,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("~")]
         public static object ImplicitMatch(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope, RubyRegex/*!*/ self) {
-            return MatchIndex(scope, self, Protocols.CastToString(stringCast, scope.GetInnerMostClosureScope().LastInputLine));
+            // rb_reg_match2: anything but a String in $_ (nil, typically) clears $~ and answers
+            // nil, before the regexp itself is even looked at
+            var closureScope = scope.GetInnerMostClosureScope();
+            var line = closureScope.LastInputLine as MutableString;
+            if (line == null) {
+                closureScope.CurrentMatch = null;
+                return null;
+            }
+            return MatchIndex(scope, self, line);
         }
 
         [RubyMethod("source")]
@@ -787,7 +795,7 @@ namespace IronRuby.Builtins {
                         }
                         var regex = parts[i] as RubyRegex;
                         if (regex != null) {
-                            regex.AppendTo(source);
+                            regex.AppendTo(source, false);
                         } else {
                             source.Append(((MutableString)parts[i]).ToByteArray());
                         }
@@ -804,7 +812,7 @@ namespace IronRuby.Builtins {
 
                 var regex = parts[i] as RubyRegex;
                 if (regex != null) {
-                    regex.AppendTo(result);
+                    regex.AppendTo(result, false);
                 } else {
                     result.Append(RubyRegex.Escape((MutableString)parts[i]));
                 }

@@ -278,6 +278,13 @@ namespace IronRuby.Builtins {
             return MutableStringOps.Match(scope, block, self.String.Clone(), pattern, start);
         }
 
+        [RubyMethod("match")]
+        public static object Match(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
+            ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            RubySymbol/*!*/ self, object pattern, object arg1, object arg2, [NotNull]params object[]/*!*/ rest) {
+            return MutableStringOps.Match(storage, stringTryCast, scope, block, self.String.Clone(), pattern, arg1, arg2, rest);
+        }
+
         // Delegating from Ruby would put an extra frame between the =~ a Regexp prefix performs
         // and the caller, and $~ is frame-local, so Regexp.last_match would come back nil.
         [RubyMethod("start_with?")]

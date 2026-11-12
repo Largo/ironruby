@@ -255,7 +255,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
-        private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
+        internal static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
             switch (encoding.CodePage) {
                 case RubyEncoding.CodePageUTF16BE:
                 case RubyEncoding.CodePageUTF16LE:
@@ -333,6 +333,29 @@ namespace IronRuby.Builtins {
                     }
                     if (codepoint > 0xffffff) {
                         throw OutOfCharRange(codepoint);
+                    }
+                    throw InvalidCodePoint(encoding, codepoint);
+
+                case 54936: // GB18030
+                    // Onigmo's gb18030_code_to_mbc writes the code point's significant bytes as
+                    // they are, and rb_enc_uint_chr then rejects anything that is not one valid
+                    // character: ASCII, a two byte lead/trail pair or a four byte
+                    // lead/digit/lead/digit sequence.
+                    if (codepoint <= 0x7f) {
+                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
+                    }
+                    if (codepoint > 0xff && codepoint <= 0xffff) {
+                        uint lead = codepoint >> 8, trail = codepoint & 0xff;
+                        if (lead >= 0x81 && lead <= 0xfe && trail >= 0x40 && trail <= 0xfe && trail != 0x7f) {
+                            return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
+                        }
+                    }
+                    if (codepoint > 0xffffff) {
+                        byte b1 = (byte)(codepoint >> 24), b2 = (byte)(codepoint >> 16), b3 = (byte)(codepoint >> 8), b4 = (byte)codepoint;
+                        if (b1 >= 0x81 && b1 <= 0xfe && b2 >= 0x30 && b2 <= 0x39 &&
+                            b3 >= 0x81 && b3 <= 0xfe && b4 >= 0x30 && b4 <= 0x39) {
+                            return MutableString.CreateBinary(new[] { b1, b2, b3, b4 }, resultEncoding);
+                        }
                     }
                     throw InvalidCodePoint(encoding, codepoint);
 

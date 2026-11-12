@@ -804,7 +804,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
-            throw RubyExceptions.CreateRangeError("bignum out of char range");
+            // rb_str_concat narrows the Integer to an unsigned 32 bit code point and, unlike
+            // Integer#chr, reports a wider one by its value.
+            if (c.Sign < 0 || c > UInt32.MaxValue) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
+            return self.Append(Integer.ToChr(self.Encoding, self.Encoding, (uint)c));
         }
 
         // Ruby 1.9 gave #concat - but not #<< - any number of arguments. Each one is an
@@ -1344,6 +1349,18 @@ namespace IronRuby.Builtins {
             self.SetByte(at, unchecked((byte)value));
             // MRI answers the value that was written, not the receiver.
             return ScriptingRuntimeHelpers.Int32ToObject(value);
+        }
+
+        // An index past Fixnum that still fits a C long is simply out of the string in MRI
+        // (rb_str_aset: "index N out of string"); only a wider one fails to convert.
+        [RubyMethod("[]=")]
+        public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
+            [NotNull]BigInteger/*!*/ index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+            if (index < Int64.MinValue || index > Int64.MaxValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
+            self.RequireNotFrozen();
+            throw RubyExceptions.CreateIndexError("index {0} out of string", index);
         }
 
         [RubyMethod("[]=")]
@@ -3367,7 +3384,7 @@ namespace IronRuby.Builtins {
                         if (Char.IsDigit(c)) {
                             AppendGroupByIndex(match, c - '0', result);
                         } else if (c == '&') {
-                            AppendGroupByIndex(match, match.GroupCount - 1, result);
+                            AppendGroupByIndex(match, 0, result); // \& is the whole match, \0's other spelling
                         } else if (c == '`') {
                             // Replace with everything in the input string BEFORE the match
                             AppendInputPiece(result, input, 0, match.Index);
@@ -3426,8 +3443,10 @@ namespace IronRuby.Builtins {
             while (end < replacement.Length && replacement.GetChar(end) != close) {
                 end++;
             }
-            if (end >= replacement.Length || end == start) {
-                return false;
+            // rb_reg_regsub: a "\k<" with no closing ">" is a malformed reference, and an empty
+            // name is one the pattern does not have
+            if (end >= replacement.Length) {
+                throw RubyExceptions.CreateRuntimeError("invalid group name reference format");
             }
 
             string name = replacement.GetSlice(start, end - start).ConvertToString();
@@ -4331,6 +4350,26 @@ namespace IronRuby.Builtins {
             return RegexpOps.Match(scope, block, new RubyRegex(converted, RubyRegexOptions.NONE), self, start);
         }
 
+        // rb_str_match_m hands any further arguments on to the pattern's own #match, so a Regexp
+        // whose #match takes more than (str, pos) gets them; a plain Regexp raises ArgumentError.
+        [RubyMethod("match")]
+        public static object Match(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
+            ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            MutableString/*!*/ self, object pattern, object arg1, object arg2, [NotNull]params object[]/*!*/ rest) {
+            RubyRegex regex = pattern as RubyRegex;
+            if (regex == null) {
+                MutableString converted = (pattern is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, pattern);
+                if (converted == null) {
+                    throw RubyExceptions.CreateUnexpectedTypeError(scope.RubyContext, pattern, "Regexp");
+                }
+                regex = new RubyRegex(converted, RubyRegexOptions.NONE);
+            }
+            var args = new RubyArray(3 + rest.Length) { self, arg1, arg2 };
+            args.AddRange(rest);
+            var site = storage.GetCallSite("match", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument));
+            return YieldMatch(block, site.Target(site, regex, args));
+        }
+
         private static object YieldMatch(BlockParam block, object match) {
             if (block == null || match == null) {
                 return match;
@@ -4930,10 +4969,17 @@ namespace IronRuby.Builtins {
                 return fields;
             }
 
+            // MRI's str_mod_check after each yield: the block must not change the receiver's
+            // buffer or length ("string modified"). A same-length rewrite keeps MRI's buffer and
+            // goes unnoticed there, so only the length is compared.
+            int length = self.GetByteCount();
             foreach (object field in fields) {
                 object blockResult;
                 if (block.Yield(field, out blockResult)) {
                     return blockResult;
+                }
+                if (self.GetByteCount() != length) {
+                    throw RubyExceptions.CreateRuntimeError("string modified");
                 }
             }
 
@@ -5397,14 +5443,21 @@ namespace IronRuby.Builtins {
         #region replace, reverse, reverse!
 
         [RubyMethod("replace")]
-        public static MutableString/*!*/ Replace(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
-            // Handle case where objects are the same identity
-            if (ReferenceEquals(self, other)) {
-                self.RequireNotFrozen();
+        public static MutableString/*!*/ Replace(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, object other) {
+            // rb_str_replace checks the receiver before it converts the argument, so a frozen
+            // string raises FrozenError even for an argument that is not a String.
+            self.RequireNotFrozen();
+            var str = other as MutableString ?? Protocols.CastToString(stringCast, other);
+            if (ReferenceEquals(self, str)) {
                 return self;
             }
 
-            return self.Replace(other);
+            return self.Replace(str);
+        }
+
+        public static MutableString/*!*/ Replace(MutableString/*!*/ self, [NotNull]MutableString/*!*/ other) {
+            self.RequireNotFrozen();
+            return ReferenceEquals(self, other) ? self : self.Replace(other);
         }
 
         [RubyMethod("reverse")]
@@ -5760,11 +5813,29 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("unpack")]
-        public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ format,
+        public static object Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, [Optional]BlockParam block,
+            MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            return RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            RubyArray values = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options), false, block == null);
+            if (block == null) {
+                return values;
+            }
+
+            // MRI's pack_unpack_internal yields each value instead of collecting them and answers
+            // nil. It reads the string as it goes and raises "string modified" once the block has
+            // changed its length (Bug #22315); the values here are read up front.
+            int length = self.GetByteCount();
+            foreach (object value in values) {
+                object blockResult;
+                if (block.Yield(value, out blockResult)) {
+                    return blockResult;
+                }
+                if (self.GetByteCount() != length) {
+                    throw RubyExceptions.CreateRuntimeError("string modified");
+                }
+            }
+            return null;
         }
 
         [RubyMethod("unpack1")]

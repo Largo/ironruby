@@ -115,8 +115,9 @@ namespace IronRuby.Builtins {
             if (self.IsIsolated) {
                 throw RubyExceptions.CreateArgumentError("Can't create Binding from isolated Proc");
             }
-            // a curried or composed proc has no Ruby scope of its own to hand out
-            if (self.LocalScope.IsEmpty) {
+            // a curried or composed proc has no Ruby scope of its own to hand out, nor does
+            // Symbol#to_proc's, which MRI makes as a C level (ifunc) proc
+            if (self.LocalScope.IsEmpty || self.SymbolName != null) {
                 throw RubyExceptions.CreateArgumentError("Can't create Binding from C level Proc");
             }
             // Method#to_proc makes a proc whose self is the method's receiver rather than the
