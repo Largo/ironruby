@@ -1398,7 +1398,23 @@ namespace IronRuby.Prism {
 
                 // an array literal is only defined if every element is
                 case Pm.ArrayNode array:
-                    return DefinedAs(ElementsDefined(array, span), "expression", span);
+                    return DefinedAs(ElementsDefined(array.Elements, span), "expression", span);
+
+                // ... and so is a hash literal: every key and value, and what ** splats
+                case Pm.HashNode hash:
+                    return DefinedAs(ElementsDefined(hash.Elements, span), "expression", span);
+
+                // A call is defined only if its arguments are (CRuby's defined_expr checks each
+                // one, splatted or keyword, before the method): `f(undefined_local)` is nil. A
+                // block argument is not checked.
+                case Pm.CallNode argumentsCall
+                    when argumentsCall.Arguments is Pm.ArgumentsNode callArguments && callArguments.Arguments.Length > 0
+                        && !HasFlag(argumentsCall, Pm.CallNodeFlags.AttributeWrite):
+                    var callDefined = argumentsCall.Receiver != null
+                        ? GuardedDefined(argumentsCall.Receiver, new IsDefinedExpression(Expr(node), span), span)
+                        : Freeze(new IsDefinedExpression(Expr(node), span), span);
+                    return new ConditionalExpression(ElementsDefined(((Pm.ArgumentsNode)argumentsCall.Arguments).Arguments, span),
+                        callDefined, Literal.Nil(span), span);
 
                 // `a.x = v` and `a[i] = v` are the x= / []= methods, not assignments; they lower
                 // to a SimpleAssignmentExpression, which would report "assignment"
@@ -1449,13 +1465,37 @@ namespace IronRuby.Prism {
             }
         }
 
-        private Expression/*!*/ ElementsDefined(Pm.ArrayNode/*!*/ node, SourceSpan span) {
+        // The elements of an array or hash literal, or a call's arguments, all defined: a splat
+        // stands for what it splats, a hash (a keyword one too) for its keys and values. Each
+        // is tested as defined? itself would test it, so `[[a]]` and `f(g(a))` look inside.
+        private Expression/*!*/ ElementsDefined(Pm.PmNode/*!*/[]/*!*/ elements, SourceSpan span) {
             Expression result = null;
-            foreach (var element in node.Elements) {
-                var value = element is Pm.SplatNode splat ? splat.Expression : element;
-                if (value == null) continue;
-                var test = new IsDefinedExpression(Expr(Unparen(value)), Span(value));
-                result = (result == null) ? (Expression)test : new AndExpression(result, test, span);
+            foreach (var element in elements) {
+                Expression test;
+                switch (element) {
+                    case Pm.SplatNode splat:
+                        // an anonymous `*' is always there
+                        if (splat.Expression == null) continue;
+                        test = Defined(splat.Expression, Span(splat.Expression));
+                        break;
+                    case Pm.AssocSplatNode assocSplat:
+                        if (assocSplat.Value == null) continue;
+                        test = Defined(assocSplat.Value, Span(assocSplat.Value));
+                        break;
+                    case Pm.AssocNode assoc:
+                        test = new AndExpression(Defined(assoc.Key, Span(assoc.Key)), Defined(assoc.Value, Span(assoc.Value)), span);
+                        break;
+                    case Pm.KeywordHashNode keywords:
+                        test = ElementsDefined(keywords.Elements, span);
+                        break;
+                    case Pm.ForwardingArgumentsNode _:
+                    case Pm.BlockArgumentNode _:
+                        continue;
+                    default:
+                        test = Defined(element, Span(element));
+                        break;
+                }
+                result = (result == null) ? test : new AndExpression(result, test, span);
             }
             return result ?? (Expression)Literal.True(span);
         }
