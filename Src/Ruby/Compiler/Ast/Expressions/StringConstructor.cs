@@ -274,7 +274,11 @@ namespace IronRuby.Compiler.Ast {
                 // TODO: we should emit Append calls directly, and not create an array first
                 // TODO: MRI reports a syntax error
                 // we can't concatenate due to encoding incompatibilities, report error at runtime:
-                return factory.CreateExpressionN(gen, CollectionUtils.ConvertAll(parts, (e) => e.Transform(gen)));
+                // Each part is a MutableString here: a literal as itself, anything else converted by #to_s
+                // (the parts' plain Transform is typed object, which the MutableString[] can't hold).
+                var unmerged = new List<MSA.Expression>();
+                TransformPartsUnmerged(gen, parts, unmerged);
+                return factory.CreateExpressionN(gen, unmerged);
             }
 
             // finish trailing literals:
@@ -302,6 +306,20 @@ namespace IronRuby.Compiler.Ast {
             var str = value as string;
             var part = (str != null) ? MutableString.Create(str, encoding) : MutableString.CreateBinary((byte[])value, encoding);
             return AstUtils.Constant(part.Freeze(), typeof(MutableString));
+        }
+
+        private static void TransformPartsUnmerged(AstGenerator/*!*/ gen, List<Expression>/*!*/ parts, List<MSA.Expression>/*!*/ result) {
+            foreach (Expression part in parts) {
+                StringLiteral literal;
+                StringConstructor ctor;
+                if ((literal = part as StringLiteral) != null) {
+                    result.Add(TransformLiteralPart(literal.Value, literal.Encoding));
+                } else if ((ctor = part as StringConstructor) != null) {
+                    TransformPartsUnmerged(gen, ctor.Parts, result);
+                } else {
+                    result.Add(MakeConversion(gen, part));
+                }
+            }
         }
 
         //
