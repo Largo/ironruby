@@ -189,8 +189,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyEncoding/*!*/ self) {
-            // TODO: to_s overridden
-            MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
+            // MRI's enc_inspect builds the text in US-ASCII: every encoding name is ASCII
+            MutableString result = MutableString.CreateMutable(RubyEncoding.Ascii);
             result.Append("#<");
             result.Append(context.GetClassDisplayName(self));
             result.Append(':');
