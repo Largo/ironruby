@@ -3652,6 +3652,8 @@ class String
   # Replaces every byte that is not part of a valid character with the given
   # replacement (the encoding's own replacement character by default).
   def scrub(replacement = nil, &block)
+    # MRI refuses the pair before it looks at the string, valid or not
+    ::Kernel.raise(::ArgumentError, "both of block and replacement given") if block && !replacement.nil?
     # String, not the receiver's class: since Ruby 3.0 only #dup, #clone and #+@ carry a
     # String subclass over to the result.
     return __ir_plain_copy__ if valid_encoding?
@@ -3677,7 +3679,7 @@ class String
     # The other multibyte encodings (EUC-JP, GB18030, Big5, ...) get the runs of bytes to
     # replace from C#, which finds them in the bytes the way MRI does: in GB18030 "\xA1\x39"
     # is one run although "\x39" alone is a valid character (see MutableString.GetScrubRuns).
-    runs = source.__send__(:__ir_scrub_runs__)
+    runs = __ir_wide_scrub_runs__(source) || source.__send__(:__ir_scrub_runs__)
     if runs
       pos = 0
       size = source.bytesize
@@ -3712,6 +3714,59 @@ class String
     flush.call
     out
   end unless method_defined?(:scrub)
+
+  # UTF-16 and UTF-32 are scrubbed a code unit at a time, as MRI's enc_strlen reads them:
+  # each lone surrogate, out-of-range unit or left-over byte is one replacement, and a
+  # high surrogate is a character only together with the low one after it. Answers the
+  # [offset, length] pairs of the bad runs, or nil for any other encoding.
+  def __ir_wide_scrub_runs__(source)
+    enc = source.encoding
+    big = enc == ::Encoding::UTF_16BE || enc == ::Encoding::UTF_32BE
+    if enc == ::Encoding::UTF_16BE || enc == ::Encoding::UTF_16LE
+      unit = ->(i) { big ? (source.getbyte(i) << 8) | source.getbyte(i + 1) : (source.getbyte(i + 1) << 8) | source.getbyte(i) }
+      runs = []
+      size = source.bytesize
+      i = 0
+      while i < size
+        if i + 2 > size
+          runs << i << size - i
+          break
+        end
+        u = unit.(i)
+        if u >= 0xD800 && u <= 0xDBFF
+          if i + 4 <= size && (0xDC00..0xDFFF).cover?(unit.(i + 2))
+            i += 4
+          else
+            runs << i << 2
+            i += 2
+          end
+        elsif u >= 0xDC00 && u <= 0xDFFF
+          runs << i << 2
+          i += 2
+        else
+          i += 2
+        end
+      end
+      runs
+    elsif enc == ::Encoding::UTF_32BE || enc == ::Encoding::UTF_32LE
+      runs = []
+      size = source.bytesize
+      i = 0
+      while i < size
+        if i + 4 > size
+          runs << i << size - i
+          break
+        end
+        b = (0..3).map { |k| source.getbyte(i + k) }
+        b.reverse! unless big
+        u = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+        runs << i << 4 if u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)
+        i += 4
+      end
+      runs
+    end
+  end
+  private :__ir_wide_scrub_runs__
 
   # The replacement character of the encoding: U+FFFD where there is one, "?" elsewhere.
   def __ir_scrub_default__
