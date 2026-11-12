@@ -280,6 +280,15 @@ namespace IronRuby.Builtins {
             return IListOps.Equals(equals, self.Values, other.Values);
         }
 
+        private static bool IsAscii(string/*!*/ str) {
+            foreach (char c in str) {
+                if (c >= 0x80) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         [RubyMethod("to_s")]
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyStruct/*!*/ self) {
@@ -289,9 +298,16 @@ namespace IronRuby.Builtins {
                 // #<struct Struct::Foo name=nil, val=nil>, or #<struct name=nil> when the class
                 // (or an enclosing module) is anonymous. The name is read off the class rather
                 // than dispatched to #name, which Ruby does not call here.
-                var result = MutableString.CreateMutable(RubyEncoding.Binary);
-                result.Append("#<struct ");
+                // MRI starts from an ASCII-8BIT buffer, and appending a non-ASCII (UTF-8) class or
+                // member name makes the result UTF-8; appending its chars to a binary string would
+                // write them as Latin-1 bytes.
                 string className = context.GetClassOf(self).GetName(context);
+                bool nonAscii = className != null && !IsAscii(className);
+                foreach (string member in self.GetNames()) {
+                    nonAscii |= !IsAscii(member);
+                }
+                var result = MutableString.CreateMutable(nonAscii ? RubyEncoding.UTF8 : RubyEncoding.Binary);
+                result.Append("#<struct ");
                 bool anonymous = String.IsNullOrEmpty(className) || className.StartsWith("#<") || className.StartsWith("::");
                 if (!anonymous) {
                     result.Append(className);
