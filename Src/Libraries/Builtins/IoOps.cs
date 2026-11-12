@@ -1228,6 +1228,7 @@ namespace IronRuby.Builtins {
             }
             Exception flushError = null;
             try {
+                FinishWriteConversion(self);
                 // Writes currently go straight to the descriptor, so WritePending is only the
                 // state MRI uses for buffering warnings. Do not probe a pipe merely because it
                 // was written: that manufactures EPIPE after its reader has consumed the data.
@@ -1245,6 +1246,30 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// A write converter to a stateful encoding (IO#__encode_for_write__ in ruby4.rb) owes
+        /// the bytes that return it to its initial state; MRI's finish_writeconv writes them
+        /// when the stream is closed.
+        /// </summary>
+        private static readonly string/*!*/ WriteConverterVariable = RubyUtils.GetCoreStateInstanceVariableName("@__write_ec__");
+
+        private static void FinishWriteConversion(RubyIO/*!*/ self) {
+            object ec;
+            if (!self.Context.TryGetInstanceVariable(self, WriteConverterVariable, out ec)) {
+                return;
+            }
+            self.Context.SetInstanceVariable(self, WriteConverterVariable, null);
+            var converter = ec as RubyEncodingOps.RubyConverter;
+            if (converter == null || converter.IsFinished || !self.Mode.CanWrite()) {
+                return;
+            }
+            var tail = converter.FinishConversion();
+            if (!tail.IsEmpty) {
+                self.WriteBytes(tail, 0, tail.GetByteCount());
+                self.Flush();
+            }
+        }
+
         [RubyMethod("close_read")]
         public static void CloseReader(RubyIO/*!*/ self) {
             if (self.Closed) {
@@ -1258,6 +1283,7 @@ namespace IronRuby.Builtins {
             if (self.Closed) {
                 return;
             }
+            FinishWriteConversion(self);
             self.CloseWriter();
         }
         

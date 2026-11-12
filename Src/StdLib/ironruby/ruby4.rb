@@ -10365,7 +10365,18 @@ class IO
     target = external_encoding
     return text if target.nil? || target == ::Encoding::BINARY || text.encoding == target
     return text if text.ascii_only? && target.ascii_compatible?
-    text.encode(target, **options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) })
+    options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
+    if target.dummy?
+      # A stateful encoding (ISO-2022-JP) keeps its shift state from one write to the
+      # next, as MRI's writeconv does: the text goes to UTF-8 and through one converter
+      # the IO keeps, and IO#close writes what #finish owes (the closing ESC ( B).
+      ec = @__write_ec__
+      unless ec && ec.destination_encoding == target
+        ec = @__write_ec__ = ::Encoding::Converter.new(::Encoding::UTF_8, target, **options)
+      end
+      return ec.convert(text.encode(::Encoding::UTF_8, **options))
+    end
+    text.encode(target, **options)
   end
   private :__encode_for_write__
 
