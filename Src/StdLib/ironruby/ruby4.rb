@@ -1539,7 +1539,8 @@ class Array
   def __array_rand_index__(random, limit)
     value = random.rand(limit)
     value = value.to_int unless value.is_a?(Integer)
-    raise RangeError, "random number too big #{value}" if value < 0 || value >= limit
+    raise RangeError, "random number too small #{value}" if value < 0
+    raise RangeError, "random number too big #{value}" if value >= limit
     value
   end
 
@@ -4476,7 +4477,8 @@ class Array
     unless value.is_a?(::Integer)
       ::Kernel.raise(::NoMethodError, "undefined method 'to_int' for #{value.inspect}")
     end
-    ::Kernel.raise(::RangeError, "random number too big #{value}") if value < 0 || value >= limit
+    ::Kernel.raise(::RangeError, "random number too small #{value}") if value < 0
+    ::Kernel.raise(::RangeError, "random number too big #{value}") if value >= limit
     value
   end
   private :__sample_index__
@@ -8973,6 +8975,9 @@ unless defined?(Random)
     private_class_method :__mt_class__
 
     def initialize(seed = Random.new_seed)
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
       # A seed is an Integer however it was given: Random.new(42.5) and Random.new(42)
       # are the same generator, and #seed answers 42 for both.
       unless seed.respond_to?(:to_int)
@@ -9007,52 +9012,23 @@ unless defined?(Random)
         @__mt__.state_equals(other.__send__(:__ir_hidden_ivar__, :@__mt__)) && seed == other.seed
     end
 
-    def rand(limit = nil)
-      case limit
-      when nil then @__mt__.genrand_real(true)
-      when ::Range then __rand_in_range__(limit)
-      when ::Float
-        unless limit > 0
-          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
-        end
-        @__mt__.genrand_real(true) * limit
-      else
-        n = limit.to_int
-        unless n > 0
-          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
-        end
-        __rand_below__(n)
-      end
+    # random_rand: rand_random, then check_random_number.
+    def rand(*args)
+      v = __ir_rand_random__(args)
+      __ir_check_random_number__(v, args)
     end
 
-    # An Integer uniformly in 0...n: limited_rand on n - 1.
-    def __rand_below__(n)
-      @__mt__.limited_rand(n - 1)
+    # The generator's own draws, which Formatter's rand_random is built on: a Float in
+    # [0, 1) (or [0, 1]) and an Integer in 0..limit (limited_rand).
+    def __ir_real__(excl)
+      @__mt__.genrand_real(excl)
     end
-    private :__rand_below__
+    private :__ir_real__
 
-    # MRI drives this entirely off `end - begin`, which is what makes it work for
-    # Time and for any object that answers #-, #+ and #to_int or #to_f. nil comes
-    # back for a range that cannot produce a value.
-    def __rand_in_range__(range)
-      first = range.begin
-      last = range.end
-      return nil if first.nil? || last.nil?
-
-      span = last - first
-      if !span.is_a?(::Float) && span.respond_to?(:to_int)
-        n = span.to_int
-        n += 1 unless range.exclude_end?
-        return nil if n <= 0
-        first + __rand_below__(n)
-      else
-        width = span.to_f
-        return nil if width < 0 || (width == 0 && range.exclude_end?)
-        # random_real: [0, 1) for an exclusive range, [0, 1] for an inclusive one.
-        first + @__mt__.genrand_real(range.exclude_end?) * width
-      end
+    def __ir_below__(limit)
+      @__mt__.limited_rand(limit)
     end
-    private :__rand_in_range__
+    private :__ir_below__
 
     def bytes(count)
       @__mt__.genrand_bytes(count.to_int).to_a.pack("C*")
@@ -9064,9 +9040,19 @@ unless defined?(Random)
     end
     private :marshal_dump
 
+    # rand_mt_load
     def marshal_load(data)
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
+      unless ::Array === data
+        ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(data)} (expected Array)")
+      end
+      ::Kernel.raise(::ArgumentError, "wrong dump data") unless (1..3).cover?(data.size)
       state, left, seed = data
-      @__seed__ = seed
+      left = ::Kernel.Integer(left)
+      ::Kernel.raise(::ArgumentError, "wrong value") if left <= 0 || left > 624
+      @__seed__ = seed.to_int
       @__mt__ = ::Random.__send__(:__mt_class__).new(0)
       @__mt__.set_state(state, left)
       self
@@ -9083,9 +9069,19 @@ unless defined?(Random)
     end
     private_class_method :__default__
 
-    def self.rand(limit = nil)
-      ::Random.__send__(:__default__).rand(limit)
+    def self.rand(*args)
+      ::Random.__send__(:__default__).rand(*args)
     end
+
+    # Random.random_number (Formatter's, on the class) draws from the default generator.
+    def self.__ir_real__(excl)
+      ::Random.__send__(:__default__).__send__(:__ir_real__, excl)
+    end
+
+    def self.__ir_below__(limit)
+      ::Random.__send__(:__default__).__send__(:__ir_below__, limit)
+    end
+    private_class_method :__ir_real__, :__ir_below__
 
     def self.bytes(count)
       ::Random.__send__(:__default__).bytes(count)
@@ -9102,6 +9098,189 @@ unless defined?(Random)
       previous
     end
   end
+end
+
+# Random::Formatter is random.c's: #random_number and #rand (rand_random_number) for anything
+# that mixes it in, drawing from a Random's generator or, for any other object, from its
+# #bytes. Random includes it and extends itself with it; random/formatter.rb adds the rest.
+class Random
+  module Formatter
+    def random_number(*args)
+      v = __ir_rand_random__(args)
+      if v.nil?
+        v = __ir_rand_random__([])
+      elsif v == false
+        __ir_invalid_argument__(args[0])
+      end
+      v
+    end
+    alias rand random_number
+
+    private
+
+    # rand_random: the number, nil for an argument that gives no range to draw from, or false
+    # for one that is not a number or a Range at all.
+    def __ir_rand_random__(args)
+      if args.size > 1
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+      end
+      return __ir_real__(true) if args.empty?
+      vmax = args[0]
+      return nil if vmax.nil?
+      unless ::Float === vmax
+        v = __ir_check_to_int__(vmax)
+        return __ir_rand_int__(v) unless v.nil?
+      end
+      v = __ir_check_to_float__(vmax)
+      unless v.nil?
+        max = __ir_float_value__(v)
+        return nil if max < 0.0
+        r = __ir_real__(true)
+        r *= max if max > 0.0
+        return r
+      end
+      __ir_rand_range__(vmax)
+    end
+
+    # rand_int (restrictive)
+    def __ir_rand_int__(n)
+      return nil if n <= 0
+      __ir_below__(n - 1)
+    end
+
+    # rand_range
+    def __ir_rand_range__(range)
+      return false unless ::Range === range
+      first = range.begin
+      last = range.end
+      excl = range.exclude_end?
+      ::Kernel.raise(::Errno::EDOM) if first.nil? || last.nil?
+      return false unless __ir_responds_to__(last, :-)
+      vmax = last - first
+
+      v = nil
+      if !(::Float === vmax) && !(n = __ir_check_to_int__(vmax)).nil?
+        max = n - (excl ? 1 : 0)
+        v = __ir_below__(max) if max >= 0
+      elsif !(f = __ir_check_to_float__(vmax)).nil?
+        scale = 1
+        max = f
+        mid = 0.5
+        if max.infinite?
+          min = __ir_float_value__(__ir_to_float__(first)) / 2.0
+          max = __ir_float_value__(__ir_to_float__(last)) / 2.0
+          scale = 2
+          mid = max + min
+          max -= min
+        elsif max.nan?
+          ::Kernel.raise(::Errno::EDOM)
+        end
+        if max > 0.0
+          r = __ir_real__(excl)
+          return ((r - 0.5) * max) * scale + mid if scale > 1
+          v = r * max
+        elsif max == 0.0 && !excl
+          v = 0.0
+        end
+      end
+
+      return nil if v.nil?
+      if ::Float === v
+        f = __ir_check_to_float__(first)
+        return v + f unless f.nil?
+      end
+      first + v
+    end
+
+    # check_random_number
+    def __ir_check_random_number__(v, args)
+      if v == false
+        ::Kernel.Integer(args[0]) if ::Integer === args[0] || __ir_responds_to__(args[0], :to_int)
+        if args[0].nil?
+          ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer")
+        end
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_message_type_name__(args[0])} into Integer")
+      elsif v.nil?
+        __ir_invalid_argument__(args[0])
+      end
+      v
+    end
+
+    def __ir_invalid_argument__(arg)
+      ::Kernel.raise(::ArgumentError, "invalid argument - #{arg}")
+    end
+
+    # rb_check_to_int and rb_check_to_float: nil when there is no such conversion
+    def __ir_check_to_int__(v)
+      return v if ::Integer === v
+      return nil unless __ir_responds_to__(v, :to_int)
+      r = v.to_int
+      return r if ::Integer === r || r.nil?
+      ::Kernel.raise(::TypeError, "can't convert #{v.class} to Integer (#{v.class}#to_int gives #{r.class})")
+    end
+
+    def __ir_check_to_float__(v)
+      return v if ::Float === v
+      return nil unless ::Numeric === v
+      v.to_f
+    end
+
+    def __ir_to_float__(v)
+      return v if ::Float === v
+      unless ::Numeric === v
+        ::Kernel.raise(::TypeError, "can't convert #{__ir_message_type_name__(v)} into Float")
+      end
+      v.to_f
+    end
+
+    # float_value: a non-finite Float is a domain error
+    def __ir_float_value__(x)
+      ::Kernel.raise(::Errno::EDOM) unless x.finite?
+      x
+    end
+
+    # random_real without a generator: two 32-bit words from #bytes (int_pair_to_real).
+    def __ir_real__(excl)
+      a, b = bytes(8).unpack("L<2")
+      if excl
+        ((a >> 5) * 67108864 + (b >> 6)) * (1.0 / 9007199254740992.0)
+      else
+        (((a << 32) | b) * ((1 << 53) + 1) >> 64).to_f / (1 << 53).to_f
+      end
+    end
+
+    # random_ulong_limited without a generator: masked words from #bytes, retried until the
+    # value is within 0..limit; a limit past 64 bits is drawn the same way, bytes at a time.
+    def __ir_below__(limit)
+      return 0 if limit == 0
+      w = limit.bit_length
+      if w <= 64
+        n = w > 32 ? 8 : 4
+        mask = (1 << w) - 1
+        full = (1 << (n * 8)) - 1
+        bits = rest = 0
+        loop do
+          if mask & ~rest != 0
+            bits = bytes(n).unpack1(n == 4 ? "L<" : "Q<")
+            rest = full
+          end
+          val = bits & mask
+          bits >>= w
+          rest >>= w
+          return val unless limit < val
+        end
+      end
+      count = (w + 7) / 8
+      mask = (1 << w) - 1
+      loop do
+        val = bytes(count).unpack("C*").each_with_index.sum { |byte, i| byte << (8 * i) } & mask
+        return val unless limit < val
+      end
+    end
+  end
+
+  include Formatter
+  extend Formatter
 end
 
 # nil converts to the zero of every numeric kind and to the empty Hash.
@@ -9173,7 +9352,11 @@ module Kernel
     # what Random.srand seeds.
     def rand(limit = nil)
       return ::Random.rand if limit.nil?
-      return ::Random.rand(limit) if limit.is_a?(::Range)
+      # rb_f_rand: a Range is rand_range's, nil for one with nothing to draw from
+      if limit.is_a?(::Range)
+        v = ::Random.__send__(:__default__).__send__(:__ir_rand_range__, limit)
+        return v unless v == false
+      end
 
       unless limit.respond_to?(:to_int)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{limit.class} into Integer")
@@ -12418,17 +12601,6 @@ class LoadError
   end unless method_defined?(:path)
 end
 
-class Random
-  # 2.0's Random#random_number: rand's behaviour, but a bare call always answers
-  # a Float and an out-of-range argument is an ArgumentError rather than nil.
-  def random_number(limit = nil)
-    limit.nil? ? rand : rand(limit)
-  end unless method_defined?(:random_number)
-
-  def self.random_number(limit = nil)
-    limit.nil? ? rand : rand(limit)
-  end unless respond_to?(:random_number)
-end
 
 # CRuby raises a class named for the errno whenever a non-blocking operation
 # would have had to wait, so that a rescue can tell "nothing yet" from a real
