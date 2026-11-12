@@ -2981,8 +2981,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "replace", 0x51, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Replace)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Builtins.Hash, System.Object, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Replace)
             );
             
             DefineLibraryMethod(module, "slice", 0x51, 
