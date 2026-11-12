@@ -1979,6 +1979,12 @@ namespace IronRuby.Builtins {
         /// "\n" chomps a UTF-16 receiver and a UTF-16 "\n" a UTF-32 one, without the two being
         /// compatible. Any other separator has to be compatible with the receiver.
         /// </summary>
+        private static byte[]/*!*/ Slice(byte[]/*!*/ bytes, int count) {
+            var result = new byte[count];
+            Array.Copy(bytes, result, count);
+            return result;
+        }
+
         private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
                 return self.CloneDerived();
@@ -2005,13 +2011,22 @@ namespace IronRuby.Builtins {
                     result.Remove(length - 1, 1);
                 }
             } else if (result.EndsWith(separator)) {
-                // EndsWith may have switched either string to bytes, so the lengths are taken
-                // afterwards, in the same representation
-                result.PrepareForCharacterRead();
-                separator.PrepareForCharacterRead();
-                length = result.GetCharCount();
-                int separatorLength = separator.GetCharCount();
-                result.Remove(length - separatorLength, separatorLength);
+                // MRI's chompped_length compares bytes and then requires the separator to start
+                // on a character boundary (at_char_boundary): "\x8F\xA1\xA1" in EUC-JP is one
+                // character and does not end with the character "\xA1\xA1".
+                byte[] bytes = self.ToByteArray();
+                int keep = bytes.Length - separator.GetByteCount();
+                var prefix = MutableString.CreateBinary(Slice(bytes, keep), self.Encoding);
+                var whole = MutableString.CreateBinary(bytes, self.Encoding);
+                var tail = MutableString.CreateBinary(separator.ToByteArray(), self.Encoding);
+                // a valid string splits into two valid ones exactly at a character boundary
+                bool boundary = whole.ContainsInvalidCharacters()
+                    ? prefix.GetCharCount() + tail.GetCharCount() == whole.GetCharCount()
+                    : !prefix.ContainsInvalidCharacters();
+                if (boundary) {
+                    result = self.CreateDerived();
+                    result.Append(bytes, 0, keep);
+                }
             }
 
             return result;
