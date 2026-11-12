@@ -2700,7 +2700,18 @@ namespace IronRuby.Builtins {
 
             bool positive = !Read('^');
 
-            var result = ParseCharacterGroupIntersections();
+            // Onigmo (fetch_token_in_cc) reads a ']' straight after '[' or '[^' as a literal member
+            // when another ']' follows to close the class: [ ]a] (without the space) is ']' or 'a'.
+            CharacterSet leadingBracket = null;
+            if (Peek() == ']' && _rubyPattern.IndexOf(']', _index + 1) >= 0) {
+                Read(']');
+                leadingBracket = CharacterSet.MakeCharacter(']', @"\]");
+            }
+
+            var result = (leadingBracket != null && Peek() == ']') ? leadingBracket : ParseCharacterGroupIntersections();
+            if (leadingBracket != null && result != leadingBracket) {
+                result = leadingBracket.Union(result);
+            }
             if (!positive) {
                 result = result.Complement();
             }
