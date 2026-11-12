@@ -3663,6 +3663,8 @@ class String
   # Replaces every byte that is not part of a valid character with the given
   # replacement (the encoding's own replacement character by default).
   def scrub(replacement = nil, &block)
+    # MRI refuses the pair before it looks at the string, valid or not
+    ::Kernel.raise(::ArgumentError, "both of block and replacement given") if block && !replacement.nil?
     # String, not the receiver's class: since Ruby 3.0 only #dup, #clone and #+@ carry a
     # String subclass over to the result.
     return __ir_plain_copy__ if valid_encoding?
@@ -3688,7 +3690,7 @@ class String
     # The other multibyte encodings (EUC-JP, GB18030, Big5, ...) get the runs of bytes to
     # replace from C#, which finds them in the bytes the way MRI does: in GB18030 "\xA1\x39"
     # is one run although "\x39" alone is a valid character (see MutableString.GetScrubRuns).
-    runs = source.__send__(:__ir_scrub_runs__)
+    runs = __ir_wide_scrub_runs__(source) || source.__send__(:__ir_scrub_runs__)
     if runs
       pos = 0
       size = source.bytesize
@@ -3723,6 +3725,59 @@ class String
     flush.call
     out
   end unless method_defined?(:scrub)
+
+  # UTF-16 and UTF-32 are scrubbed a code unit at a time, as MRI's enc_strlen reads them:
+  # each lone surrogate, out-of-range unit or left-over byte is one replacement, and a
+  # high surrogate is a character only together with the low one after it. Answers the
+  # [offset, length] pairs of the bad runs, or nil for any other encoding.
+  def __ir_wide_scrub_runs__(source)
+    enc = source.encoding
+    big = enc == ::Encoding::UTF_16BE || enc == ::Encoding::UTF_32BE
+    if enc == ::Encoding::UTF_16BE || enc == ::Encoding::UTF_16LE
+      unit = ->(i) { big ? (source.getbyte(i) << 8) | source.getbyte(i + 1) : (source.getbyte(i + 1) << 8) | source.getbyte(i) }
+      runs = []
+      size = source.bytesize
+      i = 0
+      while i < size
+        if i + 2 > size
+          runs << i << size - i
+          break
+        end
+        u = unit.(i)
+        if u >= 0xD800 && u <= 0xDBFF
+          if i + 4 <= size && (0xDC00..0xDFFF).cover?(unit.(i + 2))
+            i += 4
+          else
+            runs << i << 2
+            i += 2
+          end
+        elsif u >= 0xDC00 && u <= 0xDFFF
+          runs << i << 2
+          i += 2
+        else
+          i += 2
+        end
+      end
+      runs
+    elsif enc == ::Encoding::UTF_32BE || enc == ::Encoding::UTF_32LE
+      runs = []
+      size = source.bytesize
+      i = 0
+      while i < size
+        if i + 4 > size
+          runs << i << size - i
+          break
+        end
+        b = (0..3).map { |k| source.getbyte(i + k) }
+        b.reverse! unless big
+        u = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+        runs << i << 4 if u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)
+        i += 4
+      end
+      runs
+    end
+  end
+  private :__ir_wide_scrub_runs__
 
   # The replacement character of the encoding: U+FFFD where there is one, "?" elsewhere.
   def __ir_scrub_default__
@@ -6309,6 +6364,12 @@ class String
         ::Kernel.raise(::Encoding::CompatibilityError,
           "incompatible character encodings: #{encoding} and #{separator.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : separator.encoding}")
       end
+    end
+    # rb_str_enumerate_lines checks a separator that was given against a receiver that is
+    # not empty (rb_enc_check), whichever its encoding
+    if !args.empty? && !separator.nil? && !empty? && !::Encoding.compatible?(self, separator)
+      names = [encoding, separator.encoding].map { |e| e == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : e.to_s }
+      ::Kernel.raise(::Encoding::CompatibilityError, "incompatible character encodings: #{names[0]} and #{names[1]}")
     end
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
@@ -10161,17 +10222,29 @@ class IO
 
       # "BOM|<encoding>" means "read the byte-order mark if there is one, and let it
       # name the encoding"; the mode parser underneath does not know the prefix.
+      # The prefix can come in the encoding: option as well as in the mode.
       bom = mode.is_a?(::String) && mode =~ /:\s*BOM\|/i
       mode = mode.sub(/BOM\|/i, "") if bom
+      if enc.is_a?(::String) && enc =~ /\ABOM\|/i
+        bom = true
+        enc = enc.sub(/\ABOM\|/i, "")
+      end
 
       result = ::File.open(name, mode) do |io|
         io.set_encoding(enc) if enc
         # "BOM|enc" means the mark names the encoding if there is one and enc does
         # otherwise, so the mark is read past either way - which is not what
         # #set_encoding_by_bom is for: that one refuses once an encoding is set.
+        # The internal encoding the mode asked for ("rb:BOM|UTF-8:UTF-8") stays.
         if bom
           from_bom = io.__ir_skip_bom__
-          io.set_encoding(from_bom) if from_bom
+          if from_bom
+            # an internal encoding equal to the external one reads back as nil, so it is
+            # taken from the mode string
+            to = io.internal_encoding
+            to ||= ::Encoding.find($1) if mode.is_a?(::String) && mode =~ /\A[^:]*:[^:]*:([^:]+)\z/
+            to && to != from_bom ? io.set_encoding(from_bom, to) : io.set_encoding(from_bom)
+          end
         end
         io.seek(offset) if offset && offset > 0
         length ? io.read(length) : io.read
@@ -10223,7 +10296,7 @@ class IO
     args.first(2).each do |name|
       next unless name.is_a?(::String)
       unless name.encoding.ascii_compatible?
-        ::Kernel.raise(::ArgumentError, "invalid name encoding (non ASCII)")
+        ::Kernel.raise(::ArgumentError, "invalid encoding name (non ASCII)")
       end
     end
     # Anything string-shaped names an encoding, and one name may carry both sides.
@@ -10357,15 +10430,22 @@ class IO
   # "\n") are for the way out only: MRI reads a stream opened with them as it is.
   def __decorate_newlines__(text, options, reading)
     newline = options[:newline]
+    # UTF-16 and UTF-32 text spells the newlines in its own code units
+    enc = text.encoding
+    if enc.ascii_compatible? || enc.dummy?
+      cr, lf, crlf = "\r", "\n", "\r\n"
+    else
+      cr, lf, crlf = "\r".encode(enc), "\n".encode(enc), "\r\n".encode(enc)
+    end
     if reading
       if options[:universal_newline] || newline == :universal
-        return text.gsub("\r\n", "\n").gsub("\r", "\n")
+        return text.gsub(crlf, lf).gsub(cr, lf)
       end
       return text
     end
-    return text.gsub("\n", "\r\n") if options[:crlf_newline] || newline == :crlf
-    return text.gsub("\n", "\r") if options[:cr_newline] || newline == :cr
-    return text.gsub("\r\n", "\n").gsub("\r", "\n") if options[:lf_newline] || newline == :lf
+    return text.gsub(lf, crlf) if options[:crlf_newline] || newline == :crlf
+    return text.gsub(lf, cr) if options[:cr_newline] || newline == :cr
+    return text.gsub(crlf, lf).gsub(cr, lf) if options[:lf_newline] || newline == :lf
     text
   end
   private :__decorate_newlines__
@@ -10421,11 +10501,43 @@ class IO
     options = __encode_options__
     text = __decorate_newlines__(text, options, false) if __decorated__(options, false)
     target = external_encoding
+    return __xml_encode_for_write__(text, target, options) if options[:xml]
     return text if target.nil? || target == ::Encoding::BINARY || text.encoding == target
     return text if text.ascii_only? && target.ascii_compatible?
-    text.encode(target, **options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) })
+    options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
+    if target.dummy?
+      # A stateful encoding (ISO-2022-JP) keeps its shift state from one write to the
+      # next, as MRI's writeconv does: the text goes to UTF-8 and through one converter
+      # the IO keeps, and IO#close writes what #finish owes (the closing ESC ( B).
+      ec = @__write_ec__
+      unless ec && ec.destination_encoding == target
+        ec = @__write_ec__ = ::Encoding::Converter.new(::Encoding::UTF_8, target, **options)
+      end
+      return ec.convert(text.encode(::Encoding::UTF_8, **options))
+    end
+    text.encode(target, **options)
   end
   private :__encode_for_write__
+
+  # xml: :attr puts quotes around everything the IO writes, so like a stateful encoding
+  # it needs one converter for the life of the IO (IO#close writes the closing quote).
+  def __xml_encode_for_write__(text, target, options)
+    options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
+    ec = @__write_ec__
+    unless ec
+      if target.nil? || target == ::Encoding::BINARY || target == ::Encoding::UTF_8
+        ec = ::Encoding::Converter.new("", "", **options)
+      else
+        ec = ::Encoding::Converter.new(::Encoding::UTF_8, target, **options)
+      end
+      @__write_ec__ = ec
+    end
+    unless ec.source_encoding.nil? && (target.nil? || target == ::Encoding::BINARY)
+      text = text.encode(::Encoding::UTF_8, **options.reject { |key, _| key == :xml })
+    end
+    ec.convert(text.b)
+  end
+  private :__xml_encode_for_write__
 
   # chomp: is a keyword, so a Hash sitting in the last positional slot is a
   # separator argument - a TypeError - and not options. MRI tolerates keywords it
@@ -10508,7 +10620,18 @@ class IO
         return to_enum(:foreach, name, *args, **options) { nil }
       end
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
-      ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
+      open_args = options[:open_args]
+      if open_args
+        # :open_args is the whole argument list of the open (MRI's open_key_args), and
+        # displaces every other open option
+        open_args = open_args.to_ary
+        open_opts = open_args.last.is_a?(::Hash) ? open_args.last : {}
+        open_pos = open_opts.equal?(open_args.last) ? open_args[0...-1] : open_args
+      else
+        open_pos = []
+        open_opts = options.reject { |k, _| k == :chomp }
+      end
+      ::File.open(name, *open_pos, **open_opts) do |io|
         io.each_line(*args, **chomp, &block)
       end
       # MRI's IO.foreach answers nil when it was given a block.
@@ -10564,6 +10687,9 @@ class IO
       end
       options = nil if options.empty?
       external, internal = args
+      if external.is_a?(::String) && !external.encoding.ascii_compatible?
+        ::Kernel.raise(::ArgumentError, "invalid encoding name (non ASCII)")
+      end
       if external.is_a?(::String) && external.include?(":")
         external, internal = external.split(":", 2)
       end
@@ -10577,7 +10703,10 @@ class IO
 
       read_end, write_end = __ir_pipe__
       if external
-        internal ? read_end.set_encoding(external, internal) : read_end.set_encoding(external)
+        # the conversion options (invalid:, undef:, replace:...) go with the encodings to
+        # the read end, which is where MRI's pipe_open applies them
+        conv = options ? options.reject { |k, _| k == :encoding || k == :external_encoding || k == :internal_encoding } : {}
+        internal ? read_end.set_encoding(external, internal, **conv) : read_end.set_encoding(external, **conv)
       end
 
       return [read_end, write_end] unless block_given?

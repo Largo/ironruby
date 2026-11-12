@@ -805,7 +805,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
             // rb_str_concat narrows the Integer to an unsigned 32 bit code point and, unlike
-            // Integer#chr, reports a wider one by its value.
+            // Integer#chr, reports a wider one by its value; one past a C long is a bignum to it.
+            if (c < Int64.MinValue || c > Int64.MaxValue) {
+                throw RubyExceptions.CreateRangeError("bignum out of char range");
+            }
             if (c.Sign < 0 || c > UInt32.MaxValue) {
                 throw RubyExceptions.CreateRangeError("{0} out of char range", c);
             }
@@ -1202,7 +1205,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
             self.RequireCompatibleEncoding(searchStr);
-            return (!IsBrokenNeedle(searchStr) && self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
+            // #include? decides it: a match has to start on a character boundary (MRI's
+            // rb_str_index), which a search of content held as bytes does not see -
+            // "\xC2\xA1\xC2\xA2"["\xA1\xC2"] in EUC-JP is nil
+            return (!IsBrokenNeedle(searchStr) && Include(self, searchStr)) ? searchStr.CloneDerived() : null;
         }
 
         [RubyMethod("[]")]
@@ -1363,9 +1369,19 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateIndexError("index {0} out of string", index);
         }
 
+        // MRI's rb_str_setbyte takes the low byte of any Integer (rb_int_and(value, 0xff)).
+        [RubyMethod("setbyte")]
+        public static object SetByte(MutableString/*!*/ self, [DefaultProtocol]int index, [NotNull]BigInteger/*!*/ value) {
+            SetByte(self, index, (int)(value & 0xff));
+            return value;
+        }
+
         [RubyMethod("[]=")]
         public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
             [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+
+            // MRI's rb_str_update checks the encodings (rb_enc_check) before the index.
+            self.RequireCompatibleEncoding(value);
 
             // The index counts characters: content left as bytes by a byte operation (#bytesize,
             // #getbyte, ...) is switched back first, or a multibyte character would be split.
@@ -1400,6 +1416,7 @@ namespace IronRuby.Builtins {
             if (charsToOverwrite < 0) {
                 throw RubyExceptions.CreateIndexError("negative length {0}", charsToOverwrite);
             }
+            self.RequireCompatibleEncoding(value);
 
             int length = GetCharacterLength(self);
             if (System.Math.Abs((long)start) > length) {
@@ -1776,6 +1793,26 @@ namespace IronRuby.Builtins {
 
         private static MutableString/*!*/ DownCaseAscii(MutableString/*!*/ str) {
             byte[] bytes = str.ToByteArray();
+            var encoding = str.Encoding;
+            if (encoding.MaxBytesPerChar > 1 && encoding.IsAsciiIdentity && !encoding.IsUnicodeEncoding) {
+                // MRI's str_casecmp folds ASCII characters only: the trail byte of a Shift_JIS
+                // character ("\x81\x41") is not an "A" to fold.
+                var strict = encoding.StrictEncoding;
+                byte[] folded = (byte[])bytes.Clone();
+                int pos = 0;
+                while (pos < folded.Length) {
+                    int l = PreciseCharLength(strict, folded, pos, folded.Length - pos);
+                    if (l <= 1) {
+                        if (folded[pos] >= (byte)'A' && folded[pos] <= (byte)'Z') {
+                            folded[pos] += 0x20;
+                        }
+                        pos++;
+                    } else {
+                        pos += l;
+                    }
+                }
+                return MutableString.CreateBinary(folded, encoding);
+            }
             return MutableString.CreateBinary(MapAsciiBytes(bytes, CaseMappingKind.DownCase) ?? bytes, str.Encoding);
         }
 
@@ -1992,6 +2029,12 @@ namespace IronRuby.Builtins {
         /// "\n" chomps a UTF-16 receiver and a UTF-16 "\n" a UTF-32 one, without the two being
         /// compatible. Any other separator has to be compatible with the receiver.
         /// </summary>
+        private static byte[]/*!*/ Slice(byte[]/*!*/ bytes, int count) {
+            var result = new byte[count];
+            Array.Copy(bytes, result, count);
+            return result;
+        }
+
         private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
                 return self.CloneDerived();
@@ -2018,13 +2061,22 @@ namespace IronRuby.Builtins {
                     result.Remove(length - 1, 1);
                 }
             } else if (result.EndsWith(separator)) {
-                // EndsWith may have switched either string to bytes, so the lengths are taken
-                // afterwards, in the same representation
-                result.PrepareForCharacterRead();
-                separator.PrepareForCharacterRead();
-                length = result.GetCharCount();
-                int separatorLength = separator.GetCharCount();
-                result.Remove(length - separatorLength, separatorLength);
+                // MRI's chompped_length compares bytes and then requires the separator to start
+                // on a character boundary (at_char_boundary): "\x8F\xA1\xA1" in EUC-JP is one
+                // character and does not end with the character "\xA1\xA1".
+                byte[] bytes = self.ToByteArray();
+                int keep = bytes.Length - separator.GetByteCount();
+                var prefix = MutableString.CreateBinary(Slice(bytes, keep), self.Encoding);
+                var whole = MutableString.CreateBinary(bytes, self.Encoding);
+                var tail = MutableString.CreateBinary(separator.ToByteArray(), self.Encoding);
+                // a valid string splits into two valid ones exactly at a character boundary
+                bool boundary = whole.ContainsInvalidCharacters()
+                    ? prefix.GetCharCount() + tail.GetCharCount() == whole.GetCharCount()
+                    : !prefix.ContainsInvalidCharacters();
+                if (boundary) {
+                    result = self.CreateDerived();
+                    result.Append(bytes, 0, keep);
+                }
             }
 
             return result;
@@ -2752,6 +2804,12 @@ namespace IronRuby.Builtins {
 
                         case "replace":
                             result.Replacement = entry.Value as MutableString;
+                            // MRI's rb_econv_prepare_options refuses a broken replacement up
+                            // front, whether or not anything will need replacing
+                            if (result.Replacement != null && result.Replacement.ContainsInvalidCharacters()) {
+                                throw RubyExceptions.CreateArgumentError("replacement string is broken: {0} as {1}",
+                                    context.Inspect(result.Replacement).ToString(), result.Replacement.Encoding.Name);
+                            }
                             break;
 
                         case "fallback":
@@ -2965,9 +3023,11 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // #error_char is the character as the failing leg read it: UTF-8 on the way from
+            // EUC-JP to ISO-8859-1, not EUC-JP
             byte[] charBytes = null;
             try {
-                charBytes = from.TranscodingEncoding.GetBytes(piece);
+                charBytes = path[stage].TranscodingEncoding.GetBytes(piece);
             } catch (EncoderFallbackException) {
                 // The character came out of the receiver's own bytes, so this should not happen;
                 // if the source encoding cannot spell it again, #error_char has nothing to show.
@@ -3019,7 +3079,7 @@ namespace IronRuby.Builtins {
                         byte[] errorBytes = (e.BytesUnknown != null && e.BytesUnknown.Length > 0)
                             ? e.BytesUnknown
                             : new byte[] { bytes[Math.Min(Math.Max(e.Index, 0), bytes.Length - 1)] };
-                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, false);
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, null, false);
                     }
                 }
             }
@@ -3077,7 +3137,7 @@ namespace IronRuby.Builtins {
 
 
                     if (replacement == null) {
-                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, readAgain, false);
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, readAgain, false);
                     }
                     result.Append(replacement);
                     continue;
@@ -3096,12 +3156,20 @@ namespace IronRuby.Builtins {
                 var errorBytes = new byte[pending];
                 Array.Copy(bytes, bytes.Length - pending, errorBytes, 0, pending);
                 if (replacement == null) {
-                    throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, true);
+                    throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, null, true);
                 }
                 result.Append(replacement);
             }
 
             return result.ToString();
+        }
+
+        /// <summary>
+        /// Invalid bytes fail on the first leg of the conversion, and MRI's error names that leg:
+        /// EUC-JP to UTF-8 when the conversion was asked for from EUC-JP to ISO-8859-1.
+        /// </summary>
+        private static RubyEncoding/*!*/ FirstLegDestination(RubyEncoding/*!*/ from, RubyEncoding/*!*/ to) {
+            return RubyExceptions.ConversionPath(from, to)[1];
         }
 
         private static bool CanEncode(RubyEncoding/*!*/ encoding, string/*!*/ str) {
@@ -3242,10 +3310,11 @@ namespace IronRuby.Builtins {
             }
 
             // copy upfront so that no modifications to the input string are included in the result:
-            result = input.CloneDerived();
+            var snapshot = input.CloneDerived();
             matchScope.CurrentMatch = match;
 
             if (block.Yield(match.GetValue(), out blockResult)) {
+                result = snapshot;
                 return true;
             }
 
@@ -3255,8 +3324,15 @@ namespace IronRuby.Builtins {
 
             MutableString replacement = Protocols.ConvertToString(tosConversion, blockResult);
 
-            // Note - we don't interpolate special sequences like \1 in block return value
-            result.Replace(match.Index, match.Length, replacement);
+            // Note - we don't interpolate special sequences like \1 in block return value.
+            // The result is built piece by piece, as for a replacement string, so that only the
+            // parts of the input that survive have to be compatible with the replacement:
+            // "\x80".b.sub(/\x80/n) { "\u0080" } is "\u0080".
+            result = snapshot.CreateDerived();
+            AppendInputPiece(result, snapshot, 0, match.Index);
+            result.Append(replacement);
+            int offset = match.Index + match.Length;
+            AppendInputPiece(result, snapshot, offset, snapshot.Length - offset);
 
             blockResult = null;
             return false;
@@ -4275,6 +4351,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("insert")]
         public static MutableString Insert(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+            // rb_str_update, like #[]=, checks the encodings before the index
+            self.RequireCompatibleEncoding(value);
             return self.Insert(self.ToClrIndex(NormalizeInsertIndex(start, GetCharacterLength(self))), value);
         }
 
@@ -4454,7 +4532,10 @@ namespace IronRuby.Builtins {
             bool unicode = str.Encoding.IsUnicodeEncoding;
             // A binary string has no letters outside ASCII: "a\xFF".succ is "b\xFF", the
             // 0xFF byte is not a (Latin-1 letter) to be stepped.
-            bool binary = str.Encoding == RubyEncoding.Binary;
+            // Nor has a multibyte encoding other than Unicode: Onigmo's EUC-JP, Shift_JIS, GBK,
+            // Big5... answer ALNUM for ASCII only, so "\xA1\xB4" in EUC-JP steps its bytes
+            // rather than its (Lm) code point.
+            bool binary = str.Encoding == RubyEncoding.Binary || (!unicode && str.Encoding.MaxBytesPerChar > 1);
             for (int i = index; i >= 0; --i) {
                 char c = str.GetChar(i);
                 if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : (!binary || c < 0x80) && Char.IsLetterOrDigit(c))
@@ -4583,6 +4664,115 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// MRI's rb_enc_precise_mbclen over bytes[start, start + count): the length of the
+        /// character there, 0 if the bytes are only the start of one, -1 if they are invalid.
+        /// </summary>
+        private static int PreciseCharLength(Encoding/*!*/ strict, byte[]/*!*/ bytes, int start, int count) {
+            var decoder = strict.GetDecoder();
+            var chars = new char[8];
+            for (int k = 0; k < count; k++) {
+                int produced;
+                try {
+                    produced = decoder.GetChars(bytes, start + k, 1, chars, 0, false);
+                } catch (DecoderFallbackException) {
+                    return -1;
+                } catch (ArgumentException) {
+                    return -1;
+                }
+                if (produced > 0) {
+                    return k + 1;
+                }
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// MRI's enc_succ_char for an encoding whose characters are one byte or more: steps the
+        /// bytes of the character as a big-endian number until they spell a valid character of
+        /// the same length. Returns false when that wrapped around through all-zero bytes.
+        /// </summary>
+        private static bool SuccCharacterBytes(Encoding/*!*/ strict, byte[]/*!*/ p, int start, int len) {
+            // the walk only ever goes up, so it ends; the cap is a guard against an encoding
+            // whose decoder never accepts a character of this length
+            for (int guard = 0; guard < (1 << 20); guard++) {
+                int i;
+                for (i = len - 1; i >= 0 && p[start + i] == 0xff; i--) {
+                    p[start + i] = 0;
+                }
+                if (i < 0) {
+                    return false;
+                }
+                p[start + i]++;
+                int l = PreciseCharLength(strict, p, start, len);
+                if (l > 0) {
+                    if (l == len) {
+                        return true;
+                    }
+                    for (int j = l; j < len; j++) {
+                        p[start + j] = 0xff;
+                    }
+                } else if (l < 0 && i < len - 1) {
+                    int len2;
+                    for (len2 = len - 1; len2 > 0; len2--) {
+                        if (PreciseCharLength(strict, p, start, len2) >= 0) {
+                            break;
+                        }
+                    }
+                    for (int j = len2 + 1; j < len; j++) {
+                        p[start + j] = 0xff;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// MRI's str_succ for a string with no alphanumeric character, in an ASCII-compatible
+        /// encoding: the rightmost valid character is stepped to the next valid character of
+        /// the same byte length, carrying into the one before it when it wraps, and "\x01"
+        /// goes in front once every character has wrapped. Invalid bytes are passed over. The
+        /// bytes are what is stepped, not the code point: "\xA1\xFE" in EUC-JP is followed by
+        /// "\xA2\xA1", and "\uFFFF" by "\x01\u0800".
+        /// </summary>
+        private static void SuccNonAlphaNumeric(MutableString/*!*/ self) {
+            var strict = self.Encoding.StrictEncoding;
+            byte[] bytes = self.ToByteArray();
+
+            var starts = new List<int>();
+            var lengths = new List<int>();
+            int pos = 0;
+            while (pos < bytes.Length) {
+                int l = PreciseCharLength(strict, bytes, pos, bytes.Length - pos);
+                if (l > 0) {
+                    starts.Add(pos);
+                    lengths.Add(l);
+                    pos += l;
+                } else {
+                    pos++;
+                }
+            }
+
+            bool done = false;
+            for (int c = starts.Count - 1; c >= 0 && !done; c--) {
+                int start = starts[c], len = lengths[c];
+                if (SuccCharacterBytes(strict, bytes, start, len)) {
+                    done = true;
+                } else if (PreciseCharLength(strict, bytes, start, len) != len) {
+                    // wrapped to \0...\0: search the next valid character
+                    SuccCharacterBytes(strict, bytes, start, len);
+                }
+            }
+
+            var encoding = self.Encoding;
+            self.Clear();
+            if (!done) {
+                self.Append((byte)1);
+            }
+            self.Append(bytes);
+            self.ForceEncoding(encoding);
+        }
+
         [RubyMethod("succ!")]
         [RubyMethod("next!")]
         public static MutableString/*!*/ SuccInPlace(MutableString/*!*/ self) {
@@ -4597,7 +4787,9 @@ namespace IronRuby.Builtins {
             // characters, so a multi-byte string walked off the end of itself.
             int last = self.GetCharCount() - 1;
             int index = GetIndexOfRightmostAlphaNumericCharacter(self, last);
-            if (index == -1) {
+            if (index == -1 && self.Encoding != RubyEncoding.Binary && self.Encoding.IsAsciiIdentity) {
+                SuccNonAlphaNumeric(self);
+            } else if (index == -1) {
                 // MRI passes over bytes that are not valid in the encoding (held as escapes, see
                 // EscapingEncoding) and steps the rightmost character; with none, "\x01" goes in
                 // front: "\xE3\x81".succ is "\x01\xE3\x81".
@@ -5493,14 +5685,6 @@ namespace IronRuby.Builtins {
                 anyCharacterMaps = false;
                 return inplace ? src : src.CloneDerived();
             }
-            RequireValidEncoding(src);
-
-            if (from.IsEmpty) {
-                anyCharacterMaps = false;
-                return inplace ? src : src.CloneDerived();
-            }
-            RequireValidEncoding(from);
-            RequireValidEncoding(to);
 
             // MRI's tr_trans: the result is in the encoding the receiver shares with both character
             // sets, and an incompatible pair raises. It differs from the receiver's own only when the
@@ -5512,6 +5696,17 @@ namespace IronRuby.Builtins {
             RubyEncoding e2 = src.RequireCompatibleEncoding(to);
             RubyEncoding encoding = (e1 == e2) ? e1 : from.RequireCompatibleEncoding(to);
             RubyEncoding originalEncoding = src.Encoding;
+
+            // tr_trans settles the encodings (rb_enc_check) before it reads anything: an
+            // incompatible set is an Encoding::CompatibilityError even when it, or the receiver,
+            // is also broken, or the from-set is empty
+            RequireValidEncoding(src);
+            if (from.IsEmpty) {
+                anyCharacterMaps = false;
+                return inplace ? src : src.CloneDerived();
+            }
+            RequireValidEncoding(from);
+            RequireValidEncoding(to);
 
             MutableString dst;
             if (inplace) {

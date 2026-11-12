@@ -8704,8 +8704,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "setbyte", 0x51, 
-                0x00030000U, 
-                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.SetByte)
+                0x00030000U, 0x00010004U, 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.SetByte), 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.MutableStringOps.SetByte)
             );
             
             DefineLibraryMethod(module, "size", 0x51, 
