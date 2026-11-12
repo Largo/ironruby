@@ -517,58 +517,44 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's 'M' case in pack_unpack_internal: "=XX" is a byte and "=\n" (or "=\r\n") a soft
+        // line break. Anything else after an "=" - a non-hex digit, or the end of the data - ends
+        // decoding, and the rest of the data from that "=" on is appended as it is.
         private static MutableString/*!*/ ReadQuotedPrintable(MutableString/*!*/ data, ref int index) {
             MutableString result = MutableString.CreateBinary();
-            int length = data.GetByteCount();
-            int i = index;
-            while (i < length) {
-                byte c = data.GetByte(i++);
+            int send = data.GetByteCount();
+            int s = index;
+            int ss = s;
+            while (s < send) {
+                byte c = data.GetByte(s);
                 if (c == '=') {
-                    // An "=" that does not begin a complete escape is not an error and does not
-                    // end the string: it was never an escape, so it and whatever followed it
-                    // stay exactly as they were found.
-                    if (i >= length) {
-                        result.Append((byte)'=');
+                    if (++s == send) {
                         break;
                     }
-
-                    c = data.GetByte(i);
-                    if (c == '\n') {
-                        i++;
-                        continue;
-                    } 
-                    if (c == '\r' && i + 1 < length && data.GetByte(i + 1) == '\n') {
-                        i += 2;
-                        continue;
+                    if (s + 1 < send && data.GetByte(s) == '\r' && data.GetByte(s + 1) == '\n') {
+                        s++;
                     }
-
-                    int hi = Tokenizer.ToDigit(c);
-                    if (hi >= 16) {
-                        result.Append((byte)'=');
-                        continue;
+                    if (data.GetByte(s) != '\n') {
+                        int hi = Tokenizer.ToDigit(data.GetByte(s));
+                        if (hi >= 16 || ++s == send) {
+                            break;
+                        }
+                        int lo = Tokenizer.ToDigit(data.GetByte(s));
+                        if (lo >= 16) {
+                            break;
+                        }
+                        result.Append((byte)((hi << 4) | lo));
                     }
-                    i++;
-
-                    if (i >= length) {
-                        result.Append((byte)'=');
-                        result.Append(c);
-                        break;
-                    }
-
-                    int lo = Tokenizer.ToDigit(data.GetByte(i));
-                    if (lo >= 16) {
-                        result.Append((byte)'=');
-                        result.Append(c);
-                        continue;
-                    }
-
-                    i++;
-                    result.Append((byte)((hi << 4) | lo));
                 } else {
                     result.Append(c);
                 }
+                s++;
+                ss = s;
             }
-            index = i;
+            for (int k = ss; k < send; k++) {
+                result.Append(data.GetByte(k));
+            }
+            index = send;
             return result;
         }
 
