@@ -4014,6 +4014,10 @@ class Numeric
   # which is the error the specs ask for.
   def __step_scan_args__(args, kw)
     to, unit = __step_extract_args__(args, kw)
+    # num_step_check_fix_args: "compatibility" - a nil step given positionally
+    if unit.nil? && args.size > 1 && !(kw && kw.key?(:by))
+      ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer")
+    end
     unit = 1 if unit.nil?
     ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
     # Ordering it against 0 is what rejects a step that cannot be compared at all:
