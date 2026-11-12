@@ -711,7 +711,9 @@ namespace IronRuby.Builtins {
             // MRI: ignores ModuleFunction scope flag (doesn't create singleton methods):
 
             if (!Tokenizer.IsVariableName(name)) {
-                throw RubyExceptions.CreateNameError("invalid attribute name '{0}'", name);
+                // MRI's rb_attr names the attribute in NameError#name, with the module as the receiver
+                throw RubyExceptions.WithNameAndReceiver(scope.RubyContext,
+                    RubyExceptions.CreateNameError("invalid attribute name '{0}'", name), name, self);
             }
 
             var varName = "@" + name;
