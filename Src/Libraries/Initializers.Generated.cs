@@ -9125,11 +9125,12 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "match", 0x51, 
-                0x00000010U, 0x00080010U, 0x00080008U, 0x000c0008U, 
+                new[] { 0x00000010U, 0x00080010U, 0x00080008U, 0x000c0008U, 0x80000100U}, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.SymbolOps.Match), 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.SymbolOps.Match), 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyRegex, System.Int32, System.Object>(IronRuby.Builtins.SymbolOps.Match), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.SymbolOps.Match)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.SymbolOps.Match), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, System.Object, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.SymbolOps.Match)
             );
             
             DefineLibraryMethod(module, "name", 0x51, 
