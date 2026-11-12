@@ -1014,7 +1014,24 @@ namespace IronRuby.Runtime.Jit {
         /// is the value stored. An element read as an operand of op is speculated to be an Integer, or
         /// next to a Float an Integer or a Float.
         /// </summary>
-        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, out JT type) {
+        // ---- the store a method ends with -------------------------------------------------
+        // An element store is logged so that a deopt after it can take it back before the generic
+        // body runs the method again; each helper deopts only before it stores. The store that is the
+        // method body's last statement has nothing after it that could deopt, so it needs no log - and
+        // a method whose only store it is needs none at all, which saves its entry taking the thread's
+        // log and marking and releasing it on every call. Not in a loop, whose iteration is re-run, nor
+        // in a body that calls itself (see TryCompile), which a deopt of the caller re-runs.
+
+        private bool _noUnloggedWrites;
+        private bool _unloggedWrite;
+
+        private bool IsLastStatement(RExpr/*!*/ node) {
+            if (_loop != null || _ast == null || _noUnloggedWrites) { return false; }
+            var statements = _ast.Body.Statements;
+            return statements != null && statements.Count > 0 && statements.Last == node;
+        }
+
+        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, bool last, out JT type) {
             var args = element.Arguments.Expressions;
             if (element.Block != null || args.Length != 1 || args[0] is SplattedArgument) { throw Bail("[]= with " + args.Length + " arguments"); }
             if (op != null && !JitScreen.IsBinaryOperator(op)) { throw Bail("[] " + op + "="); }
@@ -1069,18 +1086,25 @@ namespace IronRuby.Runtime.Jit {
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("[]= of a value that jumps away"); }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
             _canDeopt = true;
-            _hashWrite = true;
-            if (_undoLog == null) {
-                // in loop mode the entry sets both up; in a method the body reads the log on entry
-                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
-                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            MSA.Expression log;
+            if (last) {
+                _unloggedWrite = true;
+                log = Ast.Constant(null, typeof(JitUndoLog));
+            } else {
+                _hashWrite = true;
+                if (_undoLog == null) {
+                    // in loop mode the entry sets both up; in a method the body reads the log on entry
+                    _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                    _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+                }
+                log = _undoLog;
             }
             type = valueType;
             var store = (indexType == JT.Obj)
                 ? Ast.Call(JitRuntime.M("IndexStoreObj"), Ast.Constant(_context), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(arrays), Ast.Constant(hashes), _undoLog)
+                    Ast.Constant(arrays), Ast.Constant(hashes), log)
                 : Ast.Call(JitRuntime.M("IndexStore" + suffix), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(arrays), Ast.Constant(hashes), _undoLog);
+                    Ast.Constant(arrays), Ast.Constant(hashes), log);
             return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
                 Ast.Assign(recvTemp, recv),
                 Ast.Assign(indexTemp, index),

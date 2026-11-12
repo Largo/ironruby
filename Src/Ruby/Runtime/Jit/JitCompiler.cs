@@ -470,11 +470,13 @@ namespace IronRuby.Runtime.Jit {
             // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
             bool arrayParameters = true;
+            bool unloggedWrites = true;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._hints = hints;
                 c._refinements = refinements;
                 c._noArrayLocals = !arrayParameters;
+                c._noUnloggedWrites = !unloggedWrites;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -499,6 +501,14 @@ namespace IronRuby.Runtime.Jit {
                 // the load deopts, which only a pure body may: if not, compile it without.
                 if (c._arrayParameters != null && ((c._canDeopt && !c._pure) || Assigns(body, c._arrayParameters))) {
                     arrayParameters = false;
+                    round--;
+                    continue;
+                }
+
+                // A self-call runs the body nested in this one, under this one's undo log: a deopt here
+                // after it returns re-runs it, so the store it ends with has to be logged after all.
+                if (c._unloggedWrite && c._selfCall) {
+                    unloggedWrites = false;
                     round--;
                     continue;
                 }
@@ -1045,7 +1055,7 @@ namespace IronRuby.Runtime.Jit {
             if (op == "&&" || op == "||") { throw JitBailout.Instance; }
 
             var element = node.Left as ArrayItemAccess;
-            if (element != null) { return EmitIndexWrite(element, op, node.Right, out type); }
+            if (element != null) { return EmitIndexWrite(element, op, node.Right, IsLastStatement(node), out type); }
 
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {

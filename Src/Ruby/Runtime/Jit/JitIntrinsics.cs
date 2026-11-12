@@ -528,9 +528,11 @@ namespace IronRuby.Runtime.Jit {
         }
 
         // ---- Array#[]=, Hash#[]= -------------------------------------------------------------
+        // Each deopts only before it stores. A null log: the store is the last statement of its method
+        // (JitCompiler.IsLastStatement), and no deopt can come after it to take it back.
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static void IndexStoreInt(object recv, int index, object value, bool arrays, bool hashes, JitUndoLog/*!*/ log) {
+        public static void IndexStoreInt(object recv, int index, object value, bool arrays, bool hashes, JitUndoLog log) {
             if (recv != null) {
                 Type t = recv.GetType();
                 if (t == typeof(RubyArray) && arrays) {
@@ -538,8 +540,8 @@ namespace IronRuby.Runtime.Jit {
                     int position;
                     object old;
                     // an index out of range grows the array or raises, which the generic code does
-                    if (log.IsFull || !array.JitReplaceElement(index, value, out position, out old)) { throw Deopt(); }
-                    log.Replaced(array, position, old);
+                    if (log != null && log.IsFull || !array.JitReplaceElement(index, value, out position, out old)) { throw Deopt(); }
+                    if (log != null) { log.Replaced(array, position, old); }
                     return;
                 }
                 if (t == typeof(Hash) && hashes) {
@@ -550,7 +552,7 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
-        public static void IndexStoreLong(object recv, long index, object value, bool arrays, bool hashes, JitUndoLog/*!*/ log) {
+        public static void IndexStoreLong(object recv, long index, object value, bool arrays, bool hashes, JitUndoLog log) {
             if (index >= Int32.MinValue && index <= Int32.MaxValue) {
                 IndexStoreInt(recv, (int)index, value, arrays, hashes, log);
                 return;
@@ -559,7 +561,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         public static void IndexStoreObj(RubyContext/*!*/ context, object recv, object index, object value, bool arrays, bool hashes,
-            JitUndoLog/*!*/ log) {
+            JitUndoLog log) {
             if (index is int) {
                 IndexStoreInt(recv, (int)index, value, arrays, hashes, log);
                 return;
@@ -577,7 +579,7 @@ namespace IronRuby.Runtime.Jit {
         /// RubyUtils.SetHashElement does.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static void HashStoreObj(RubyContext/*!*/ context, object recv, object key, object value, JitUndoLog/*!*/ log) {
+        public static void HashStoreObj(RubyContext/*!*/ context, object recv, object key, object value, JitUndoLog log) {
             if (key is int) {
                 HashStoreInt(recv, (int)key, value, log);
                 return;
@@ -586,9 +588,9 @@ namespace IronRuby.Runtime.Jit {
             if (hash == null || recv.GetType() != typeof(Hash) || hash.IsFrozen || key == null) { throw Deopt(); }
             int hashCode;
             int i = hash.JitFind(key, out hashCode);
-            if (i == Hash.JitUndecided || log.IsFull) { throw Deopt(); }
+            if (i == Hash.JitUndecided || log != null && log.IsFull) { throw Deopt(); }
             if (i >= 0) {
-                log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
+                ReplaceHashValue(hash, i, value, log);
                 return;
             }
             // a new key while the hash is iterated is the generic code's RuntimeError
@@ -599,25 +601,33 @@ namespace IronRuby.Runtime.Jit {
                 hashCode = key.GetHashCode();
             }
             hash.JitAppend(key, hashCode, value);
-            log.Appended(hash, key);
+            if (log != null) { log.Appended(hash, key); }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static void HashStoreInt(object recv, int key, object value, JitUndoLog/*!*/ log) {
+        public static void HashStoreInt(object recv, int key, object value, JitUndoLog log) {
             var hash = recv as Hash;
             if (hash == null || recv.GetType() != typeof(Hash) || hash.IsFrozen) { throw Deopt(); }
             int hashCode;
             int i = hash.JitFindFixnum(key, out hashCode);
-            if (i == Hash.JitUndecided || log.IsFull) { throw Deopt(); }
+            if (i == Hash.JitUndecided || log != null && log.IsFull) { throw Deopt(); }
             if (i >= 0) {
-                log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
+                ReplaceHashValue(hash, i, value, log);
                 return;
             }
             if (hash.IsIterating) { throw Deopt(); }
             // `h[i] = i': the key is the box the value already is, as it is in the generic code
             object boxed = (value is int && (int)value == key) ? value : ScriptingRuntimeHelpers.Int32ToObject(key);
             hash.JitAppend(boxed, hashCode, value);
-            log.Appended(hash, boxed);
+            if (log != null) { log.Appended(hash, boxed); }
+        }
+
+        private static void ReplaceHashValue(Hash/*!*/ hash, int i, object value, JitUndoLog log) {
+            if (log == null) {
+                hash.JitReplaceAt(i, value);
+            } else {
+                log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
+            }
         }
 
 
