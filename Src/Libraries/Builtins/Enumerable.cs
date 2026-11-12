@@ -1063,9 +1063,9 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("attempt to take negative size");
             }
             // MRI allocates the result up front (rb_ary_new_capa) and so refuses a count no array
-            // can hold; a large count that can be held is not worth reserving before #each says
+            // can hold (here, past the CLR's longest array); a large count that can be held is not worth reserving before #each says
             // how many elements there are.
-            if (count > IListOps.MaxArraySize) {
+            if (count > Array.MaxLength) {
                 throw RubyExceptions.CreateArgumentError("array size too big");
             }
 
