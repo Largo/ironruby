@@ -2948,9 +2948,11 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // #error_char is the character as the failing leg read it: UTF-8 on the way from
+            // EUC-JP to ISO-8859-1, not EUC-JP
             byte[] charBytes = null;
             try {
-                charBytes = from.TranscodingEncoding.GetBytes(piece);
+                charBytes = path[stage].TranscodingEncoding.GetBytes(piece);
             } catch (EncoderFallbackException) {
                 // The character came out of the receiver's own bytes, so this should not happen;
                 // if the source encoding cannot spell it again, #error_char has nothing to show.
@@ -3002,7 +3004,7 @@ namespace IronRuby.Builtins {
                         byte[] errorBytes = (e.BytesUnknown != null && e.BytesUnknown.Length > 0)
                             ? e.BytesUnknown
                             : new byte[] { bytes[Math.Min(Math.Max(e.Index, 0), bytes.Length - 1)] };
-                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, false);
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, null, false);
                     }
                 }
             }
@@ -3060,7 +3062,7 @@ namespace IronRuby.Builtins {
 
 
                     if (replacement == null) {
-                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, readAgain, false);
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, readAgain, false);
                     }
                     result.Append(replacement);
                     continue;
@@ -3079,12 +3081,20 @@ namespace IronRuby.Builtins {
                 var errorBytes = new byte[pending];
                 Array.Copy(bytes, bytes.Length - pending, errorBytes, 0, pending);
                 if (replacement == null) {
-                    throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, true);
+                    throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, null, true);
                 }
                 result.Append(replacement);
             }
 
             return result.ToString();
+        }
+
+        /// <summary>
+        /// Invalid bytes fail on the first leg of the conversion, and MRI's error names that leg:
+        /// EUC-JP to UTF-8 when the conversion was asked for from EUC-JP to ISO-8859-1.
+        /// </summary>
+        private static RubyEncoding/*!*/ FirstLegDestination(RubyEncoding/*!*/ from, RubyEncoding/*!*/ to) {
+            return RubyExceptions.ConversionPath(from, to)[1];
         }
 
         private static bool CanEncode(RubyEncoding/*!*/ encoding, string/*!*/ str) {
