@@ -3384,7 +3384,7 @@ namespace IronRuby.Builtins {
                         if (Char.IsDigit(c)) {
                             AppendGroupByIndex(match, c - '0', result);
                         } else if (c == '&') {
-                            AppendGroupByIndex(match, match.GroupCount - 1, result);
+                            AppendGroupByIndex(match, 0, result); // \& is the whole match, \0's other spelling
                         } else if (c == '`') {
                             // Replace with everything in the input string BEFORE the match
                             AppendInputPiece(result, input, 0, match.Index);
