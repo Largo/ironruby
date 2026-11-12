@@ -258,6 +258,10 @@ namespace IronRuby.Compiler.Ast {
             bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
                 !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
+            // The same holds for the Proc of the literal (see BlockDispatcher.ReusesProc).
+            bool reusesProc = !isLambda && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+
             body = gen.Traceable
                 ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
                 : gen.AddReturnTarget(body);
@@ -327,6 +331,7 @@ namespace IronRuby.Compiler.Ast {
             var attributes = _parameters.GetBlockSignatureAttributes();
 
             var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
+            blockDispatcher.ReusesProc = reusesProc;
             blockDispatcher.ParameterSignature = _parameters.Signature;
             if (outerVariables != null) {
                 blockDispatcher.OuterVariableNames = outerVariables.ToArray();
@@ -343,7 +348,12 @@ namespace IronRuby.Compiler.Ast {
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode);
 
-            return Ast.Coalesce(
+            // A literal that may reuse its Proc keeps the last one in a variable of the frame that makes it (the enclosing
+            // method's or block's call): only that frame, on its own thread, ever makes the Proc again (Proc.TryReuse).
+            MSA.Expression previousProc = reusesProc ? gen.CurrentScope.DefineHiddenVariable("#proc", typeof(Proc)) : null;
+
+            MSA.Expression instance = Ast.Coalesce(
+                reusesProc ? Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher) :
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
@@ -356,6 +366,7 @@ namespace IronRuby.Compiler.Ast {
                     )
                 )
             );
+            return reusesProc ? Ast.Assign(previousProc, instance) : instance;
         }
 
         // MRI labels a block frame "block in <enclosing>", and counts the nesting once there

@@ -241,6 +241,11 @@ namespace IronRuby.Runtime {
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static RuntimeFlowControl/*!*/ EnterLightMethod(Proc blockParameter) {
             RubyUtils.SafePoint();
+            // A light frame can only yield to its block: a literal one may be made again once the call returns (Proc.TryReuse).
+            if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
+                blockParameter.ConvertAsLightFrame();
+                return blockParameter;
+            }
             return CreateRfcForMethod(blockParameter);
         }
 
@@ -289,6 +294,10 @@ namespace IronRuby.Runtime {
             RubyModule/*!*/ declaringModule, MutableTuple locals, object selfObject, Proc blockParameter,
             InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
 
+            // the scope holds the block, and whatever asked for the scope may keep it
+            if (blockParameter != null) {
+                blockParameter.ClearReusable();
+            }
             return new RubyMethodScope(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
                 interpretedFrame, rfc, calleeName);
         }
@@ -701,6 +710,19 @@ namespace IronRuby.Runtime {
             return dispatcher.HasMethod ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
         }
 
+        /// <summary>
+        /// InstantiateBlock of a literal that may reuse its Proc (BlockDispatcher.ReusesProc): <paramref name="previous"/> is the
+        /// Proc this frame made for the literal last time, kept in a variable of the frame, made again if nothing kept it.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        public static Proc InstantiateReusableBlock(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
+            if (previous != null && previous.TryReuse()) {
+                return previous;
+            }
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
             return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
@@ -718,6 +740,8 @@ namespace IronRuby.Runtime {
         public static void InitializeBlock(Proc/*!*/ proc) {
             Assert.NotNull(proc);
             proc.Kind = ProcKind.Block;
+            // a retried call may hand the block to a method that keeps it: only a light frame marks it reusable again
+            proc.ClearReusable();
         }
 
         /// <summary>

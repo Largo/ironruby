@@ -431,6 +431,16 @@ namespace IronRuby.Runtime {
                 previous.ResetForNextYield();
                 return previous;
             }
+            // A Proc made again for the next call (Proc.TryReuse) yields through the BlockParam of the last call as well:
+            // only the scopes of its calls held that, and none of them was captured, or the Proc would not be reusable.
+            if (proc != null && proc.IsReusable) {
+                var reused = proc.YieldBlockParam;
+                if (reused != null) {
+                    reused.ResetForNextYield();
+                    return reused;
+                }
+                return proc.YieldBlockParam = CreateBfcForYield(proc);
+            }
             return CreateBfcForYield(proc);
         }
 
