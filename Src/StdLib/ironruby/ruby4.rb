@@ -6252,6 +6252,12 @@ class String
           "incompatible character encodings: #{encoding} and #{separator.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : separator.encoding}")
       end
     end
+    # rb_str_enumerate_lines checks a separator that was given against a receiver that is
+    # not empty (rb_enc_check), whichever its encoding
+    if !args.empty? && !separator.nil? && !empty? && !::Encoding.compatible?(self, separator)
+      names = [encoding, separator.encoding].map { |e| e == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : e.to_s }
+      ::Kernel.raise(::Encoding::CompatibilityError, "incompatible character encodings: #{names[0]} and #{names[1]}")
+    end
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
 
