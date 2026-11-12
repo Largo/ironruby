@@ -10103,17 +10103,29 @@ class IO
 
       # "BOM|<encoding>" means "read the byte-order mark if there is one, and let it
       # name the encoding"; the mode parser underneath does not know the prefix.
+      # The prefix can come in the encoding: option as well as in the mode.
       bom = mode.is_a?(::String) && mode =~ /:\s*BOM\|/i
       mode = mode.sub(/BOM\|/i, "") if bom
+      if enc.is_a?(::String) && enc =~ /\ABOM\|/i
+        bom = true
+        enc = enc.sub(/\ABOM\|/i, "")
+      end
 
       result = ::File.open(name, mode) do |io|
         io.set_encoding(enc) if enc
         # "BOM|enc" means the mark names the encoding if there is one and enc does
         # otherwise, so the mark is read past either way - which is not what
         # #set_encoding_by_bom is for: that one refuses once an encoding is set.
+        # The internal encoding the mode asked for ("rb:BOM|UTF-8:UTF-8") stays.
         if bom
           from_bom = io.__ir_skip_bom__
-          io.set_encoding(from_bom) if from_bom
+          if from_bom
+            # an internal encoding equal to the external one reads back as nil, so it is
+            # taken from the mode string
+            to = io.internal_encoding
+            to ||= ::Encoding.find($1) if mode.is_a?(::String) && mode =~ /\A[^:]*:[^:]*:([^:]+)\z/
+            to && to != from_bom ? io.set_encoding(from_bom, to) : io.set_encoding(from_bom)
+          end
         end
         io.seek(offset) if offset && offset > 0
         length ? io.read(length) : io.read
@@ -10299,15 +10311,22 @@ class IO
   # "\n") are for the way out only: MRI reads a stream opened with them as it is.
   def __decorate_newlines__(text, options, reading)
     newline = options[:newline]
+    # UTF-16 and UTF-32 text spells the newlines in its own code units
+    enc = text.encoding
+    if enc.ascii_compatible? || enc.dummy?
+      cr, lf, crlf = "\r", "\n", "\r\n"
+    else
+      cr, lf, crlf = "\r".encode(enc), "\n".encode(enc), "\r\n".encode(enc)
+    end
     if reading
       if options[:universal_newline] || newline == :universal
-        return text.gsub("\r\n", "\n").gsub("\r", "\n")
+        return text.gsub(crlf, lf).gsub(cr, lf)
       end
       return text
     end
-    return text.gsub("\n", "\r\n") if options[:crlf_newline] || newline == :crlf
-    return text.gsub("\n", "\r") if options[:cr_newline] || newline == :cr
-    return text.gsub("\r\n", "\n").gsub("\r", "\n") if options[:lf_newline] || newline == :lf
+    return text.gsub(lf, crlf) if options[:crlf_newline] || newline == :crlf
+    return text.gsub(lf, cr) if options[:cr_newline] || newline == :cr
+    return text.gsub(crlf, lf).gsub(cr, lf) if options[:lf_newline] || newline == :lf
     text
   end
   private :__decorate_newlines__
