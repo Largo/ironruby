@@ -6,6 +6,7 @@
 #
 # <out>/<name>.log holds a file's output and <out>/<name>.status its exit status (124: timed out).
 # JOBS (default: the processor count) files run at once, each for at most TIMEOUT seconds (600).
+# The tests run with -v, so the log of a file that hung or crashed ends at the test that did it.
 # It measures the in-place build, as ir.sh does: do not rebuild while it runs.
 set -u
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -16,7 +17,7 @@ export root cruby out TIMEOUT=${TIMEOUT:-600}
 run_one() {
   name=$(basename "$1" .rb)
   cd "$root" || exit 1
-  timeout -k 10 "$TIMEOUT" ./ir.sh Util/cruby-test/runner.rb "$cruby" "$1" > "$out/$name.log" 2>&1 < /dev/null
+  timeout -k 10 "$TIMEOUT" ./ir.sh Util/cruby-test/runner.rb "$cruby" -v "$1" > "$out/$name.log" 2>&1 < /dev/null
   echo $? > "$out/$name.status"
 }
 export -f run_one
