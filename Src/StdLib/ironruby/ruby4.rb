@@ -11934,19 +11934,30 @@ class Range
   def bsearch(&block)
     b = self.begin
     e = self.end
-    integral = (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
-    numeric = (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
-    unless numeric
-      # MRI refuses before it would hand back an enumerator.
+    integral = (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer)) && !(b.nil? && e.nil?)
+    floating = b.is_a?(::Float) || e.is_a?(::Float)
+    unless integral || floating
+      # MRI refuses before it would hand back an enumerator: only Integer and Float ranges
+      # can be searched (a Rational one cannot).
       ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
     end
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    return to_enum(:bsearch) unless block
     if integral
-      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
+      # the built-in searches between two Fixnums only
+      if respond_to?(:__ir_bsearch__, true) && __int32__(b) && __int32__(e)
+        __ir_bsearch__(&block)
+      else
+        __bsearch_int__(block)
+      end
     else
       __bsearch_float__(block)
     end
   end
+
+  def __int32__(x)
+    ::Integer === x && x >= -2147483648 && x <= 2147483647
+  end
+  private :__int32__
 
   # Answers :found, true (go left, remember) or false (go right). MRI accepts any
   # Numeric from the block, not just an Integer, so a block that answers a Float
