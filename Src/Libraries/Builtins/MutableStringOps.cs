@@ -3235,10 +3235,11 @@ namespace IronRuby.Builtins {
             }
 
             // copy upfront so that no modifications to the input string are included in the result:
-            result = input.CloneDerived();
+            var snapshot = input.CloneDerived();
             matchScope.CurrentMatch = match;
 
             if (block.Yield(match.GetValue(), out blockResult)) {
+                result = snapshot;
                 return true;
             }
 
@@ -3248,8 +3249,15 @@ namespace IronRuby.Builtins {
 
             MutableString replacement = Protocols.ConvertToString(tosConversion, blockResult);
 
-            // Note - we don't interpolate special sequences like \1 in block return value
-            result.Replace(match.Index, match.Length, replacement);
+            // Note - we don't interpolate special sequences like \1 in block return value.
+            // The result is built piece by piece, as for a replacement string, so that only the
+            // parts of the input that survive have to be compatible with the replacement:
+            // "\x80".b.sub(/\x80/n) { "\u0080" } is "\u0080".
+            result = snapshot.CreateDerived();
+            AppendInputPiece(result, snapshot, 0, match.Index);
+            result.Append(replacement);
+            int offset = match.Index + match.Length;
+            AppendInputPiece(result, snapshot, offset, snapshot.Length - offset);
 
             blockResult = null;
             return false;
