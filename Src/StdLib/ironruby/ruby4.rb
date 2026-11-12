@@ -6804,6 +6804,8 @@ class Enumerator
         i = from
         loop { yield i; i += unit }
       end
+      # a beginless one fails where MRI works out its length, at `end - begin`
+      _ = to - from if from.nil? && !to.nil?
       desc = unit < 0
       if to.nil?
         inf = true
@@ -6893,6 +6895,7 @@ class Enumerator
 
     def first(n = nil)
       if n.nil?
+        return nil if @__begin__.nil?
         __arith_each__ { |v| return v }
         return nil
       end
