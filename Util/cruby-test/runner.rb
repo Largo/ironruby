@@ -29,4 +29,10 @@ class LeakChecker
   def check(test_name) = false
 end
 
+# Util/cruby-test/excludes/TestFoo.rb holds `exclude(:test_bar, "why")` lines, as CRuby's
+# test/.excludes does: tests that hang or kill the process and cannot pass on IronRuby (they
+# test CRuby's VM, GC or fork), so that the rest of their file is counted.
+excludes = File.expand_path("excludes", __dir__)
+ARGV.unshift("--excludes-dir=#{excludes}") if File.directory?(excludes)
+
 exit Test::Unit::AutoRunner.run(true, File.join(cruby, "test"))

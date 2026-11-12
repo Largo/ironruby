@@ -16,8 +16,9 @@ if [ $# -eq 0 ]; then set -- "$cruby"/test/ruby/test_*.rb; fi
 export root cruby out TIMEOUT=${TIMEOUT:-600}
 run_one() {
   name=$(basename "$1" .rb)
-  cd "$root" || exit 1
-  timeout -k 10 "$TIMEOUT" ./ir.sh Util/cruby-test/runner.rb "$cruby" -v "$1" > "$out/$name.log" 2>&1 < /dev/null
+  # The tests run in a directory of their own: some leave files in the working directory.
+  mkdir -p "$out/cwd/$name" && cd "$out/cwd/$name" || exit 1
+  timeout -k 10 "$TIMEOUT" "$root/ir.sh" "$root"/Util/cruby-test/runner.rb "$cruby" -v "$1" > "$out/$name.log" 2>&1 < /dev/null
   echo $? > "$out/$name.status"
 }
 export -f run_one
