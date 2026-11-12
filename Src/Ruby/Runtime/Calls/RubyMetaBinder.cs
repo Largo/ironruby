@@ -164,11 +164,20 @@ namespace IronRuby.Runtime.Calls {
 
             DynamicMetaObject interopBinding;
             if (IsForeignMetaObject(callArgs.MetaTarget) && (interopBinding = InteropBind(metaBuilder, callArgs)) != null) {
-                return interopBinding;
+                if (!callArgs.ScopeRead) {
+                    return interopBinding;
+                }
+            } else {
+                Build(metaBuilder, callArgs, true);
+                if (!callArgs.ScopeRead) {
+                    return metaBuilder.CreateMetaObject(this);
+                }
             }
 
-            Build(metaBuilder, callArgs, true);
-            return metaBuilder.CreateMetaObject(this);
+            // A site with a light scope whose rule would read the scope gets one that hands the call back to the method, which
+            // makes its scope and calls through an ordinary site (MethodDefinition.LightFrameRewriter). It holds for any
+            // receiver, so it has no test.
+            return new DynamicMetaObject(AstUtils.Constant(RubyOps.LightScopeRequired, ReturnType), BindingRestrictions.Empty);
         }
 
         protected virtual DynamicMetaObjectBinder GetInteropBinder(RubyContext/*!*/ context, IList<DynamicMetaObject/*!*/>/*!*/ args,

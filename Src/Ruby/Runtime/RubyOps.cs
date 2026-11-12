@@ -50,6 +50,10 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static readonly object ForwardToBase = new object();
 
+        // Returned by the rule of a call site in a light-frame method that would have read the method's scope
+        // (RubyCallFlags.HasLightScope): the method makes the scope and calls through an ordinary site.
+        public static readonly object LightScopeRequired = new object();
+
         // How many refine blocks are running in the process (RubyUtils.EvaluateRefinementBlock). While none is, no Proc
         // has a refine block's override, so the lexical walk steps over block scopes (RubyScope.GetLexicalRefinements),
         // and the rule of a refined call made in a block written in a method can test the method's record instead
