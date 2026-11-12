@@ -545,7 +545,10 @@ namespace IronRuby.Builtins {
         }
 
         private static string/*!*/ Escape(int c) {
-            return IsMetaCharacter(c) ? "\\" + (char)c : ((char)c).ToString();
+            // Any whitespace is escaped too: the CLR's x mode skips every Char.IsWhiteSpace
+            // character, so a literal \f, \v or U+00A0 (from an escape or Regexp.quote) would vanish,
+            // where Onigmo keeps all of them.
+            return IsMetaCharacter(c) || Char.IsWhiteSpace((char)c) ? "\\" + (char)c : ((char)c).ToString();
         }
 
         private static bool IsMetaCharacter(int c) {
