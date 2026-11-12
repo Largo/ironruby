@@ -603,6 +603,14 @@ namespace IronRuby.Builtins {
                             break;
                         }
 
+                        // MRI's no-conversion converter copies straight from the source buffer
+                        // into the destination, so a full destination leaves the rest unread
+                        // rather than parked in the converter.
+                        if (_noConversion && written.Count >= limit) {
+                            status = "destination_buffer_full";
+                            break;
+                        }
+
                         int unit = Math.Min(_sourceUnitSize, input.Length - consumed);
                         int bytesUsed, charsUsed;
                         bool completed;
