@@ -1469,46 +1469,108 @@ class Array
   # The core #shuffle takes no arguments; MRI's takes a :random generator and
   # must hand back a plain Array.  Defined unconditionally for that reason.
   def shuffle(random: Random)
-    result = [].concat(self)
-    index = result.size - 1
-    while index > 0
-      swap = __array_rand_index__(random, index + 1)
-      result[index], result[swap] = result[swap], result[index]
-      index -= 1
-    end
-    result
+    [].concat(self).shuffle!(random: random)
   end
 
+  # MRI's rb_ary_shuffle_bang: in place, and a generator that changes the array's
+  # length is caught ("modified during shuffle") before the swap it would break.
   def shuffle!(random: Random)
     __array_check_frozen__
-    replace(shuffle(random: random))
+    len = i = size
+    while i > 1
+      j = __array_rand_index__(random, i)
+      raise RuntimeError, "modified during shuffle" if size != len
+      i -= 1
+      self[i], self[j] = self[j], self[i]
+    end
+    self
   end
 
+  # MRI's ary_sample, step for step, so that a given generator picks the same
+  # elements: the random numbers are drawn first, then the array is read again, and
+  # what the generator emptied in the meantime is not there to sample.
   def sample(*args, random: Random)
     if args.size > 1
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
+    len = size
     if args.empty?
-      return nil if empty?
-      return self[__array_rand_index__(random, size)]
+      return self[len < 2 ? 0 : __array_rand_index__(random, len)]
     end
 
     # an explicit nil is not "no count": sample(nil) is a TypeError
-    count = __array_to_int__(args[0])
-    raise ArgumentError, "negative sample number" if count < 0
-    total = size
-    count = total if count > total
-
-    pool = [].concat(self)
-    result = []
-    index = 0
-    while index < count
-      swap = index + __array_rand_index__(random, total - index)
-      pool[index], pool[swap] = pool[swap], pool[index]
-      result << pool[index]
-      index += 1
+    n = __array_to_int__(args[0])
+    raise ArgumentError, "negative sample number" if n < 0
+    n = len if n > len
+    rnds = n <= 10 ? Array.new(n) { |i| __array_rand_index__(random, len - i) } : nil
+    k = len
+    len = size
+    return [] if len < k && rnds && rnds.any? { |r| r >= len }
+    n = len if n > len
+    case n
+    when 0
+      return []
+    when 1
+      return [self[rnds[0]]]
+    when 2
+      i, j = rnds
+      j += 1 if j >= i
+      return [self[i], self[j]]
+    when 3
+      i, j, k = rnds
+      l, g = j, i
+      if j >= i
+        l = i
+        g = (j += 1)
+      end
+      k += 1 if k >= l && (k += 1) >= g
+      return [self[i], self[j], self[k]]
     end
-    result
+    memo_threshold =
+      if len < 2560 then len / 128
+      elsif len < 5120 then len / 64
+      elsif len < 10240 then len / 32
+      else len / 16
+      end
+    if rnds
+      sorted = [rnds[0]]
+      idx = [rnds[0]]
+      (1...n).each do |i|
+        k = rnds[i]
+        j = 0
+        while j < i
+          break if k < sorted[j]
+          k += 1
+          j += 1
+        end
+        sorted.insert(j, k)
+        idx << k
+      end
+      idx.map { |x| self[x] }
+    elsif n <= memo_threshold / 2
+      picks = Array.new(n) { |i| __array_rand_index__(random, len - i) + i }
+      len = size
+      if len <= picks.max
+        n = 0
+      elsif n > len
+        n = len
+      end
+      memo = {}
+      Array.new(n) do |i|
+        j = picks[i]
+        i2 = memo.fetch(i, i)
+        j2 = memo.fetch(j, j)
+        memo[j] = i2
+        self[j2]
+      end
+    else
+      result = [].concat(self)
+      n.times do |i|
+        j = __array_rand_index__(random, len - i) + i
+        result[i], result[j] = result[j], result[i]
+      end
+      result.first(n)
+    end
   end unless method_defined?(:sample)
 
   # --- helpers -----------------------------------------------------------
