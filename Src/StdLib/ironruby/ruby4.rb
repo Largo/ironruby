@@ -10450,7 +10450,18 @@ class IO
         return to_enum(:foreach, name, *args, **options) { nil }
       end
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
-      ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
+      open_args = options[:open_args]
+      if open_args
+        # :open_args is the whole argument list of the open (MRI's open_key_args), and
+        # displaces every other open option
+        open_args = open_args.to_ary
+        open_opts = open_args.last.is_a?(::Hash) ? open_args.last : {}
+        open_pos = open_opts.equal?(open_args.last) ? open_args[0...-1] : open_args
+      else
+        open_pos = []
+        open_opts = options.reject { |k, _| k == :chomp }
+      end
+      ::File.open(name, *open_pos, **open_opts) do |io|
         io.each_line(*args, **chomp, &block)
       end
       # MRI's IO.foreach answers nil when it was given a block.
