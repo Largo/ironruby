@@ -8653,8 +8653,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "replace", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Replace)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Replace)
             );
             
             DefineLibraryMethod(module, "reverse", 0x51, 

@@ -5397,14 +5397,21 @@ namespace IronRuby.Builtins {
         #region replace, reverse, reverse!
 
         [RubyMethod("replace")]
-        public static MutableString/*!*/ Replace(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
-            // Handle case where objects are the same identity
-            if (ReferenceEquals(self, other)) {
-                self.RequireNotFrozen();
+        public static MutableString/*!*/ Replace(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, object other) {
+            // rb_str_replace checks the receiver before it converts the argument, so a frozen
+            // string raises FrozenError even for an argument that is not a String.
+            self.RequireNotFrozen();
+            var str = other as MutableString ?? Protocols.CastToString(stringCast, other);
+            if (ReferenceEquals(self, str)) {
                 return self;
             }
 
-            return self.Replace(other);
+            return self.Replace(str);
+        }
+
+        public static MutableString/*!*/ Replace(MutableString/*!*/ self, [NotNull]MutableString/*!*/ other) {
+            self.RequireNotFrozen();
+            return ReferenceEquals(self, other) ? self : self.Replace(other);
         }
 
         [RubyMethod("reverse")]
