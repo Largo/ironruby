@@ -650,7 +650,26 @@ namespace IronRuby.Prism {
 
                 case Pm.ArrayNode array: {
                     var items = new List<Expression>();
-                    foreach (var element in array.Elements) items.Add(Argument(element));
+                    foreach (var element in array.Elements) {
+                        if (element is Pm.KeywordHashNode elementHash) {
+                            // `[1, a: 1]` holds a plain Hash, not keyword arguments that a later
+                            // `f(*ary)` would pass as such; and `[**h]` holds nothing when h is empty
+                            var elementSpan = Span(element);
+                            var plain = HashExpression(elementHash.Elements, false, elementSpan);
+                            if (IsSplattedKeywordHash(element)) {
+                                var temp = NewTemp(plain, elementSpan, out var assignment);
+                                items.Add(new SplattedArgument(new ConditionalExpression(
+                                    new MethodCall(assignment, "empty?", null, elementSpan),
+                                    new ArrayConstructor(new Arguments(new Expression[0]), elementSpan),
+                                    new ArrayConstructor(new Arguments(new Expression[] { temp }), elementSpan),
+                                    elementSpan)));
+                            } else {
+                                items.Add(plain);
+                            }
+                        } else {
+                            items.Add(Argument(element));
+                        }
+                    }
                     return new ArrayConstructor(new Arguments(items.ToArray()), span);
                 }
                 case Pm.HashNode hash:
