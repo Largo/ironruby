@@ -1932,14 +1932,40 @@ namespace IronRuby.Builtins {
 
         #region values_at
 
+        /// <summary>
+        /// rb_range_values: an object that is not an Integer but has #begin, #end and #exclude_end?
+        /// stands for the Range they describe. Null for anything else.
+        /// </summary>
+        private static Range RangeLike(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage, object value) {
+
+            if (value == null || value is int || value is long || value is System.Numerics.BigInteger || value is bool ||
+                !Protocols.RespondTo(respondToStorage, value, "begin") ||
+                !Protocols.RespondTo(respondToStorage, value, "end") ||
+                !Protocols.RespondTo(respondToStorage, value, "exclude_end?")) {
+                return null;
+            }
+            var beginSite = beginStorage.GetCallSite("begin", 0);
+            var endSite = endStorage.GetCallSite("end", 0);
+            var excludeEndSite = excludeEndStorage.GetCallSite("exclude_end?", 0);
+            object begin = beginSite.Target(beginSite, value);
+            object end = endSite.Target(endSite, value);
+            return Range.CreateValidated(begin, end, RubyOps.IsTrue(excludeEndSite.Target(excludeEndSite, value)));
+        }
+
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast,
-            UnaryOpStorage/*!*/ allocateStorage,
+            UnaryOpStorage/*!*/ allocateStorage, RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage,
             IList/*!*/ self, params object[]/*!*/ values) {
             RubyArray result = new RubyArray();
 
             for (int i = 0; i < values.Length; i++) {
-                Range range = values[i] as Range;
+                Range range = values[i] as Range ?? RangeLike(respondToStorage, beginStorage, endStorage, excludeEndStorage, values[i]);
                 if (range != null) {
                     // MRI asks for the range with errors on: a range reaching past the end of
                     // the array is padded with nil out to its full length (values_at(0..9) on a
