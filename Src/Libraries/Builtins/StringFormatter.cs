@@ -1230,9 +1230,6 @@ namespace IronRuby.Builtins {
             if (precision == UnspecifiedPrecision) {
                 precision = (type == 'a' || type == 'A') ? -1 : 6;
             }
-            if (precision > 1000) {
-                precision = 1000;
-            }
 
             string body;
             string prefix = "";
@@ -1293,9 +1290,6 @@ namespace IronRuby.Builtins {
             if (precision == UnspecifiedPrecision) {
                 precision = 6;
             }
-            if (precision > 1000) {
-                precision = 1000;
-            }
 
             bool negative = numerator.Sign < 0;
             numerator = BigInteger.Abs(numerator);
@@ -1332,9 +1326,6 @@ namespace IronRuby.Builtins {
             int precision = _opts.Precision;
             if (precision == UnspecifiedPrecision) {
                 precision = 6;
-            }
-            if (precision > 1000) {
-                precision = 1000;
             }
 
             string body = ClrInteger.ToRadixString(BigInteger.Abs(value), 10);
