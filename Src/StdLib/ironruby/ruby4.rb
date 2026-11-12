@@ -5140,6 +5140,8 @@ class Enumerator
     if from.is_a?(::Float) || to.is_a?(::Float)
       n = (to - from).to_f
       return 0 if n < 0
+      # ruby_float_step_size: an endless count is Infinity
+      return n if n.infinite?
       return (n + n * ::Float::EPSILON).floor + 1
     end
     stop = cmp == :> ? to : from
@@ -5175,7 +5177,20 @@ class Enumerator
   end
   private :__inspect_detail__
 
+  # An enumerator met again while it is being inspected is "#<Enumerator: ...>", as
+  # MRI's inspect_enumerator (rb_exec_recursive) has it: [e] inside e.
   def inspect
+    seen = (::Thread.current[:__ir_enumerator_inspect__] ||= {}.compare_by_identity)
+    return "#<#{self.class}: ...>" if seen.key?(self)
+    seen[self] = true
+    begin
+      __inspect_unguarded__
+    ensure
+      seen.delete(self)
+    end
+  end
+
+  def __inspect_unguarded__
     if (info = @__inspect__)
       return "#<#{self.class}: #{__inspect_detail__(*info)}>"
     end
@@ -5197,6 +5212,7 @@ class Enumerator
     return "#<#{self.class}: uninitialized>" if recv.nil? && meth == :each && args.empty?
     "#<#{self.class}: #{__inspect_detail__(recv, meth, args)}>"
   end
+  private :__inspect_unguarded__
   alias :to_s :inspect
 
   # --- external iteration ------------------------------------------------
@@ -5957,7 +5973,8 @@ class Enumerator
       @__iterated__ = 0
       @__enums__.each do |enum|
         @__iterated__ += 1
-        enum.each { |*values| block.call(*values) }
+        # the block itself, as MRI's enum_chain_each hands it on: a lambda stays one
+        enum.each(&block)
       end
       self
     end
@@ -5998,8 +6015,12 @@ class Enumerator
     # MRI accepts anything here -- the arguments are only required to answer
     # #each_entry at the point #each actually walks them, which is what lets
     # Product wrap a plain Object that defines each_entry and nothing else.
-    def initialize(*enums)
+    def initialize(*enums, **options)
       __check_frozen__
+      # MRI takes keywords only to reject them
+      unless options.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{'s' if options.size > 1}: #{options.keys.map { |k| k.inspect }.join(', ')}")
+      end
       @__enums__ = enums
       self
     end
@@ -6044,21 +6065,23 @@ class Enumerator
 
     # nil for any size MRI cannot use (missing, non-Integer, NaN); zero short-circuits
     # even when another enumerable has an unknown size, and an infinite size carries.
+    #
+    # Past the zero check the sizes are taken in order, and the first unknown or infinite
+    # one decides: product("a".."c", 1..) is nil, product(1.., "a".."c") Infinity.
     def size
+      sizes = @__enums__.map { |enum| enum.respond_to?(:size) ? enum.size : nil }
+      return 0 if sizes.any? { |n| n.is_a?(::Integer) && n == 0 }
       total = 1
-      unknown = false
-      @__enums__.each do |enum|
-        n = enum.respond_to?(:size) ? enum.size : nil
+      sizes.each do |n|
         if n.is_a?(::Integer)
-          return 0 if n == 0
           total *= n
         elsif n.is_a?(::Float) && n.infinite?
-          total *= n
+          return total * n
         else
-          unknown = true
+          return nil
         end
       end
-      unknown ? nil : total
+      total
     end
 
     def rewind
@@ -12539,8 +12562,22 @@ class Enumerator
   class Generator
     include ::Enumerable
 
-    def initialize(&block)
-      ::Kernel.raise(::ArgumentError, "no block given") unless block
+    # MRI's generator_initialize also takes the proc as an argument.
+    def initialize(*args, &block)
+      if args.size > 1
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+      end
+      unless args.empty?
+        block = args[0]
+        unless block.is_a?(::Proc)
+          ::Kernel.raise(::TypeError, "wrong argument type #{block.class} (expected Proc)")
+        end
+      end
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
+      # rb_block_proc's error
+      ::Kernel.raise(::LocalJumpError, "no block given") unless block
       @__block__ = block
     end
 
