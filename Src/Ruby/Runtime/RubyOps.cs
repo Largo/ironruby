@@ -4518,7 +4518,11 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw InvalidFloatValue(original != null ? original.ToByteArray() : Encoding.UTF8.GetBytes(value));
+            // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding
+            if (original != null) {
+                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(original).ToString());
+            }
+            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
         }
 
         private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
