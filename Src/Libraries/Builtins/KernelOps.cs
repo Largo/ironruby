@@ -1973,7 +1973,9 @@ namespace IronRuby.Builtins {
 
             object value;
             if (!context.TryRemoveInstanceVariable(self, name, out value)) {
-                throw RubyExceptions.CreateNameError("instance variable {0} not defined", name);
+                // MRI's rb_name_err_raise: the error carries the variable and the object
+                throw RubyExceptions.WithNameAndReceiver(context,
+                    RubyExceptions.CreateNameError("instance variable {0} not defined", name), name, self);
             }
 
             return value;
