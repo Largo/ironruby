@@ -626,6 +626,15 @@ namespace IronRuby.Builtins {
                             break;
                         }
 
+                        if (IsWideSource) {
+                            string wideStatus = ConvertWideByte(input[consumed++], chars, written, limit, flags);
+                            if (wideStatus != null) {
+                                status = wideStatus;
+                                break;
+                            }
+                            continue;
+                        }
+
                         int unit = Math.Min(_sourceUnitSize, input.Length - consumed);
                         int bytesUsed, charsUsed;
                         bool completed;
@@ -830,6 +839,142 @@ namespace IronRuby.Builtins {
                     i += size;
                 }
                 return null;
+            }
+
+            private bool IsWideSource {
+                get {
+                    switch (DecodeStageSource.CodePage) {
+                        case RubyEncoding.CodePageUTF16LE:
+                        case RubyEncoding.CodePageUTF16BE:
+                        case RubyEncoding.CodePageUTF32LE:
+                        case RubyEncoding.CodePageUTF32BE:
+                            return !_noConversion;
+                        default:
+                            return false;
+                    }
+                }
+            }
+
+            /// <summary>
+            /// MRI's from_UTF_16BE/LE and from_UTF_32BE/LE transcoders, a byte at a time: answers
+            /// 0 while a character is still being read, the number of chars written to
+            /// <paramref name="chars"/> for a complete one, and -1 for an invalid sequence, with the
+            /// bytes in error and those to be read again. A lone low surrogate is one invalid
+            /// unit; a high surrogate followed by something other than a low one fails
+            /// on the first byte that rules it out (UTF-16BE) or on the unit (UTF-16LE), and the
+            /// bytes after the high surrogate are read again.
+            /// </summary>
+            private int DecodeWideByte(byte b, char[]/*!*/ chars, out byte[] errorBytes, out byte[] readAgain) {
+                errorBytes = readAgain = null;
+                _incomplete.Add(b);
+                var p = _incomplete;
+                int n = p.Count;
+                int cp = DecodeStageSource.CodePage;
+                if (cp == RubyEncoding.CodePageUTF32LE || cp == RubyEncoding.CodePageUTF32BE) {
+                    if (n < 4) {
+                        return 0;
+                    }
+                    long value = (cp == RubyEncoding.CodePageUTF32BE)
+                        ? ((long)p[0] << 24) | ((long)p[1] << 16) | ((long)p[2] << 8) | p[3]
+                        : ((long)p[3] << 24) | ((long)p[2] << 16) | ((long)p[1] << 8) | p[0];
+                    if (value > 0x10ffff || value >= 0xd800 && value <= 0xdfff) {
+                        errorBytes = p.ToArray();
+                        readAgain = EmptyBytes;
+                        p.Clear();
+                        return -1;
+                    }
+                    p.Clear();
+                    string s = Char.ConvertFromUtf32((int)value);
+                    s.CopyTo(0, chars, 0, s.Length);
+                    return s.Length;
+                }
+
+                bool big = cp == RubyEncoding.CodePageUTF16BE;
+                Func<int, int> unitAt = i => big ? (p[i] << 8) | p[i + 1] : (p[i + 1] << 8) | p[i];
+                switch (n) {
+                    case 1:
+                        return 0;
+
+                    case 2: {
+                            int u = unitAt(0);
+                            if (u >= 0xdc00 && u <= 0xdfff) {
+                                errorBytes = p.ToArray();
+                                readAgain = EmptyBytes;
+                                p.Clear();
+                                return -1;
+                            }
+                            if (u >= 0xd800 && u <= 0xdbff) {
+                                return 0;
+                            }
+                            p.Clear();
+                            chars[0] = (char)u;
+                            return 1;
+                        }
+
+                    case 3:
+                        if (big && (b < 0xdc || b > 0xdf)) {
+                            errorBytes = new[] { p[0], p[1] };
+                            readAgain = new[] { p[2] };
+                            p.Clear();
+                            return -1;
+                        }
+                        return 0;
+
+                    default: {
+                            int u2 = unitAt(2);
+                            if (u2 < 0xdc00 || u2 > 0xdfff) {
+                                errorBytes = new[] { p[0], p[1] };
+                                readAgain = new[] { p[2], p[3] };
+                                p.Clear();
+                                return -1;
+                            }
+                            chars[0] = (char)unitAt(0);
+                            chars[1] = (char)u2;
+                            p.Clear();
+                            return 2;
+                        }
+                }
+            }
+
+            /// <summary>
+            /// One byte of a UTF-16/32 source through the conversion. Returns null to go on, or the
+            /// status that ends the call.
+            /// </summary>
+            private string ConvertWideByte(byte b, char[]/*!*/ chars, List<byte>/*!*/ written, int limit, int flags) {
+                byte[] errorBytes, readAgain;
+                int produced = DecodeWideByte(b, chars, out errorBytes, out readAgain);
+                if (produced > 0) {
+                    string encodeStatus = EncodeChars(chars, produced, written, limit);
+                    if (encodeStatus != null) {
+                        return encodeStatus;
+                    }
+                    if ((flags & AfterOutputFlag) != 0 && written.Count > 0) {
+                        return "after_output";
+                    }
+                    return null;
+                }
+                if (produced == 0) {
+                    return null;
+                }
+
+                if ((_flags & InvalidMaskFlag) == InvalidReplaceFlag) {
+                    if (!Emit(_replacementBytes, written, limit)) {
+                        return "destination_buffer_full";
+                    }
+                    // the bytes after the error start over
+                    foreach (byte again in readAgain) {
+                        string againStatus = ConvertWideByte(again, chars, written, limit, flags);
+                        if (againStatus != null) {
+                            return againStatus;
+                        }
+                    }
+                    return null;
+                }
+
+                _putback.Clear();
+                _putback.AddRange(readAgain);
+                RecordInvalidByteSequence(errorBytes, readAgain, false);
+                return "invalid_byte_sequence";
             }
 
             private byte[]/*!*/ EncodeCodepoint(char[]/*!*/ chars, int index, int size) {
