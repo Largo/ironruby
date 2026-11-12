@@ -542,49 +542,45 @@ namespace IronRuby.Builtins {
             return Overlap(comparisonStorage, self, otherRange);
         }
 
+        // range_overlap, step for step
         private static bool Overlap(ComparisonStorage/*!*/ comparisonStorage, Range/*!*/ self, Range/*!*/ other) {
-            var compare = comparisonStorage.CompareSite;
-
-            if (IsEmpty(comparisonStorage, self) || IsEmpty(comparisonStorage, other)) {
+            if (IsEmptyRegion(comparisonStorage, self.Begin, other.End, other.ExcludeEnd) ||
+                IsEmptyRegion(comparisonStorage, other.Begin, self.End, self.ExcludeEnd)) {
                 return false;
             }
 
-            // they overlap unless one ends before the other begins
-            if (!EndsBefore(comparisonStorage, self.End, self.ExcludeEnd, other.Begin) &&
-                !EndsBefore(comparisonStorage, other.End, other.ExcludeEnd, self.Begin)) {
-                return true;
+            var compare = comparisonStorage.CompareSite;
+            if (self.Begin != null && other.Begin != null) {
+                object result = compare.Target(compare, self.Begin, other.Begin);
+                if (result == null) {
+                    return false;
+                }
+                // if both begin values are equal, no more comparisons are needed
+                if (Protocols.ConvertCompareResult(comparisonStorage, result) == 0) {
+                    return true;
+                }
+            } else if (self.Begin == null && self.End != null && other.Begin == null) {
+                // (..6).overlap?(nil..nil) is true in 4.0: an unbounded other covers it
+                return other.End == null || compare.Target(compare, self.End, other.End) != null;
             }
-            return false;
+
+            return !IsEmptyRegion(comparisonStorage, self.Begin, self.End, self.ExcludeEnd) &&
+                !IsEmptyRegion(comparisonStorage, other.Begin, other.End, other.ExcludeEnd);
         }
 
-        private static bool IsEmpty(ComparisonStorage/*!*/ comparisonStorage, Range/*!*/ range) {
-            if (range.Begin == null || range.End == null) {
+        // empty_region_p: begin after end - or not comparable with it at all (r_less's INT_MAX) -
+        // or equal to an exclusive end
+        private static bool IsEmptyRegion(ComparisonStorage/*!*/ comparisonStorage, object begin, object end, bool excludeEnd) {
+            if (begin == null || end == null) {
                 return false;
             }
             var compare = comparisonStorage.CompareSite;
-            object result = compare.Target(compare, range.Begin, range.End);
-            if (result == null) {
-                return false;
-            }
-            int beginToEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
-            return beginToEnd > (range.ExcludeEnd ? -1 : 0);
-        }
-
-        // Does a range ending at end (exclusive when excludeEnd) finish before begin starts?
-        // Endpoints that cannot be compared at all count as "before": MRI's
-        // empty_region_p treats a nil answer from #<=> as the widest possible gap, so
-        // (0..2).overlap?('a'..'d') is false rather than an exception.
-        private static bool EndsBefore(ComparisonStorage/*!*/ comparisonStorage, object end, bool excludeEnd, object begin) {
-            if (end == null || begin == null) {
-                return false;
-            }
-            var compare = comparisonStorage.CompareSite;
-            object result = compare.Target(compare, end, begin);
+            object result = compare.Target(compare, begin, end);
             if (result == null) {
                 return true;
             }
-            int endToBegin = Protocols.ConvertCompareResult(comparisonStorage, result);
-            return endToBegin < 0 || (excludeEnd && endToBegin == 0);
+            int less = Protocols.ConvertCompareResult(comparisonStorage, result);
+            return less > 0 || (excludeEnd && less == 0);
         }
 
         #endregion
