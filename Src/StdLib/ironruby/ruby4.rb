@@ -7779,6 +7779,7 @@ module Math
     return x if x.nan?
     __dom__("log1p") if x < -1.0
     return -::Float::INFINITY if x == -1.0
+    return x if x == ::Float::INFINITY
     # log(1+x) loses every significant digit for tiny x; the identity
     # x*log1p(u)/u with u = (1+x)-1 keeps them.
     u = 1.0 + x
