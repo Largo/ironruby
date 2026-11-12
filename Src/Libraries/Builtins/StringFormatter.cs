@@ -283,9 +283,16 @@ namespace IronRuby.Builtins {
                     if (widthSeen) {
                         throw RubyExceptions.CreateArgumentError("width given twice");
                     }
+                    if (precisionSeen) {
+                        throw RubyExceptions.CreateArgumentError("width after precision");
+                    }
                     widthSeen = true;
-                    int w = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex(), null));
+                    int w = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex("width"), null));
                     if (w < 0) {
+                        // MRI: -INT_MIN is still negative, and is "width too big"
+                        if (w == Int32.MinValue) {
+                            throw RubyExceptions.CreateArgumentError("width too big");
+                        }
                         _opts.LeftAdj = true;
                         w = -w;
                     }
@@ -302,7 +309,7 @@ namespace IronRuby.Builtins {
                     precisionSeen = true;
                     if (_index < _format.Length && _format[_index] == '*') {
                         _index++;
-                        int p = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex(), null));
+                        int p = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex("prec"), null));
                         _opts.Precision = (p < 0) ? UnspecifiedPrecision : p;
                     } else {
                         int p = 0;
@@ -337,12 +344,19 @@ namespace IronRuby.Builtins {
                         }
                         // numbered from here on: a "*" width in this directive may not be unnumbered
                         _useAbsolute = true;
-                        _opts.ArgIndex = int.Parse(digits, CultureInfo.InvariantCulture);
+                        int argIndex;
+                        if (!Int32.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out argIndex)) {
+                            throw RubyExceptions.CreateArgumentError("width too big");
+                        }
+                        _opts.ArgIndex = argIndex;
                         _index = end + 1;
                         argumentSeen = true;
                     } else {
                         if (widthSeen) {
                             throw RubyExceptions.CreateArgumentError("width given twice");
+                        }
+                        if (precisionSeen) {
+                            throw RubyExceptions.CreateArgumentError("width after precision");
                         }
                         widthSeen = true;
                         int width;
@@ -364,13 +378,13 @@ namespace IronRuby.Builtins {
                     }
                     string spelled = _format.Substring(_index, end - _index + 1); // with its brackets, as MRI quotes it
                     if (_opts.Name != null) {
-                        throw RubyExceptions.CreateArgumentError("named{0} after <{1}>", spelled, _opts.Name);
+                        throw NameError(RubyExceptions.FormatMessage("named{0} after <{1}>", spelled, _opts.Name));
                     }
                     if (_opts.ArgIndex.HasValue || (_useAbsolute.HasValue && _useAbsolute.Value)) {
-                        throw RubyExceptions.CreateArgumentError("named{0} after numbered", spelled);
+                        throw NameError(RubyExceptions.FormatMessage("named{0} after numbered", spelled));
                     }
                     if (_useAbsolute.HasValue) {
-                        throw RubyExceptions.CreateArgumentError("named{0} after unnumbered({1})", spelled, _relativeIndex.ToString());
+                        throw NameError(RubyExceptions.FormatMessage("named{0} after unnumbered({1})", spelled, _relativeIndex.ToString()));
                     }
                     _opts.Name = _format.Substring(_index + 1, end - _index - 1);
                     _opts.NameStyle = c;
@@ -409,14 +423,18 @@ namespace IronRuby.Builtins {
             WriteConversion(conversion);
         }
 
-        private int? TryReadStarArgumentIndex() {
+        // GETASTER: an argument number too big for an int is "width too big" or "prec too big"
+        private int? TryReadStarArgumentIndex(string/*!*/ what) {
             if (_index < _format.Length && _format[_index] >= '1' && _format[_index] <= '9') {
                 int end = _index;
                 while (end < _format.Length && _format[end] >= '0' && _format[end] <= '9') {
                     end++;
                 }
                 if (end < _format.Length && _format[end] == '$') {
-                    int result = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                    int result;
+                    if (!Int32.TryParse(_format.Substring(_index, end - _index), NumberStyles.None, CultureInfo.InvariantCulture, out result)) {
+                        throw RubyExceptions.CreateArgumentError("{0} too big", what);
+                    }
                     _index = end + 1;
                     return result;
                 }
@@ -485,11 +503,18 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateArgumentError("too few arguments");
         }
 
+        // MRI raises the errors that quote a name from the format in the format's encoding.
+        private Exception/*!*/ NameError(string/*!*/ message) {
+            var exception = RubyExceptions.CreateArgumentError(message);
+            RubyExceptionData.GetInstance(exception).Message = MutableString.Create(message, _encoding);
+            return exception;
+        }
+
         private object GetNamedData(string/*!*/ name) {
             if (_useAbsolute.HasValue) {
-                throw _useAbsolute.Value
-                    ? RubyExceptions.CreateArgumentError("named<{0}> after numbered", name)
-                    : RubyExceptions.CreateArgumentError("named<{0}> after unnumbered({1})", name, (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
+                throw NameError(_useAbsolute.Value
+                    ? RubyExceptions.FormatMessage("named<{0}> after numbered", name)
+                    : RubyExceptions.FormatMessage("named<{0}> after unnumbered({1})", name, (_relativeIndex == 0 ? 1 : _relativeIndex).ToString()));
             }
             _useNamed = true;
 
@@ -528,7 +553,7 @@ namespace IronRuby.Builtins {
             object keyErrorClass;
             if (_siteStorage != null && _context.ObjectClass.TryGetConstant(null, "KeyError", out keyErrorClass)) {
                 try {
-                    object instance = _siteStorage.New(keyErrorClass, MutableString.CreateMutable(message, RubyEncoding.UTF8));
+                    object instance = _siteStorage.New(keyErrorClass, MutableString.CreateMutable(message, _encoding));
                     Exception exception = instance as Exception;
                     if (exception != null) {
                         // KeyError#receiver and #key read these; see the KeyError
