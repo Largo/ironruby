@@ -5811,11 +5811,29 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("unpack")]
-        public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ format,
+        public static object Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, [Optional]BlockParam block,
+            MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            return RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            RubyArray values = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options), false, block == null);
+            if (block == null) {
+                return values;
+            }
+
+            // MRI's pack_unpack_internal yields each value instead of collecting them and answers
+            // nil. It reads the string as it goes and raises "string modified" once the block has
+            // changed its length (Bug #22315); the values here are read up front.
+            int length = self.GetByteCount();
+            foreach (object value in values) {
+                object blockResult;
+                if (block.Yield(value, out blockResult)) {
+                    return blockResult;
+                }
+                if (self.GetByteCount() != length) {
+                    throw RubyExceptions.CreateRuntimeError("string modified");
+                }
+            }
+            return null;
         }
 
         [RubyMethod("unpack1")]

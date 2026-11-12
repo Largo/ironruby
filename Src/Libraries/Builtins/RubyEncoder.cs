@@ -1664,8 +1664,12 @@ namespace IronRuby.Builtins {
         /// String#unpack1: stop after the first directive that yields a value, as MRI's UNPACK_1 does,
         /// rather than decoding the rest of the format for values that would be thrown away.
         /// </param>
+        /// <param name="padWithNils">
+        /// False for unpack with a block: MRI's PACK_ITEM_ADJUST fills in the nils of a directive that
+        /// ran out of data only when it collects an array, so a block never sees them.
+        /// </param>
         public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset,
-            bool firstOnly) {
+            bool firstOnly, bool padWithNils = true) {
 
             // The array grows with what is unpacked. It used to start at half the receiver's length,
             // which made every unpack of a large buffer - unpack1("E", offset: i) reading one double
@@ -1910,7 +1914,7 @@ namespace IronRuby.Builtins {
                         result.Add(ToHex(self, ref position, Math.Min(directive.Count ?? maxCount, maxCount), directive.Directive == 'h'));
                         break;
                 }
-                for (int i = 0; i < nilCount; i++) {
+                for (int i = 0; padWithNils && i < nilCount; i++) {
                     result.Add(null);
                 }
                 if (firstOnly && result.Count > 0) {
