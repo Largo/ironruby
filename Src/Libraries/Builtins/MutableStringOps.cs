@@ -804,7 +804,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
-            throw RubyExceptions.CreateRangeError("bignum out of char range");
+            // a code point above Int32 is still a code point (MRI's rb_str_concat takes an
+            // unsigned int): 0x8431A439 is a four-byte GB18030 character
+            if (c.Sign < 0 || c > UInt32.MaxValue) {
+                throw RubyExceptions.CreateRangeError("bignum out of char range");
+            }
+            return self.Append(Integer.ToChr(self.Encoding, self.Encoding, (uint)c));
         }
 
         // Ruby 1.9 gave #concat - but not #<< - any number of arguments. Each one is an
@@ -1344,6 +1349,13 @@ namespace IronRuby.Builtins {
             self.SetByte(at, unchecked((byte)value));
             // MRI answers the value that was written, not the receiver.
             return ScriptingRuntimeHelpers.Int32ToObject(value);
+        }
+
+        // MRI's rb_str_setbyte takes the low byte of any Integer (rb_int_and(value, 0xff)).
+        [RubyMethod("setbyte")]
+        public static object SetByte(MutableString/*!*/ self, [DefaultProtocol]int index, [NotNull]BigInteger/*!*/ value) {
+            SetByte(self, index, (int)(value & 0xff));
+            return value;
         }
 
         [RubyMethod("[]=")]
