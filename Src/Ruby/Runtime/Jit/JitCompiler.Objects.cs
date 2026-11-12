@@ -519,6 +519,44 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
+        internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
+            if (node.MethodName != "==" && node.MethodName != "!=") { return false; }
+            var args = node.Arguments;
+            if (node.Block != null || args == null || args.Expressions.Length != 1) { return false; }
+            var arg = args.Expressions[0];
+            return arg is StringLiteral && !(arg is SymbolLiteral);
+        }
+
+        /// <summary>
+        /// `v == "lit"': the generic code makes a new String for the literal on every evaluation and
+        /// dispatches == on v. For a v that is a String, String#== (and BasicObject#!=, which calls it)
+        /// being the library methods, that is a comparison of contents with no allocation
+        /// (JitRuntime.StringEqualsLiteral); anything else deopts, so only a pure body may do this.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitStringLiteralComparison(MethodCall/*!*/ node, out JT type) {
+            var stringClass = KindClass(JitRuntime.KindString);
+            bool negated = node.MethodName == "!=";
+            if (!IsPlainLibraryMethod(stringClass, "==") || !IsPublic(stringClass, "==") ||
+                negated && (!IsPlainLibraryMethod(stringClass, "!=") || !IsPublic(stringClass, "!="))) {
+                throw Bail("String#" + node.MethodName + " is not the built-in one");
+            }
+            Type observed = ObservedType(node.Target);
+            if (observed != null && observed != MixedTypes && observed != typeof(MutableString)) {
+                throw Bail(node.MethodName + " of a String literal on a " + ((observed == typeof(void)) ? "nil" : observed.Name));
+            }
+            JT vt;
+            var v = Emit(node.Target, out vt);
+            if (vt != JT.Obj) { throw Bail(node.MethodName + " of a String literal on a " + vt); }
+
+            var str = ((StringLiteral)node.Arguments.Expressions[0]).GetMutableString();
+            str.Freeze();
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("StringEqualsLiteral"), v, Ast.Constant(str));
+            return negated ? Ast.Not(test) : test;
+        }
+
         /// <summary>Instances of cls answer respond_to?(:to_str) false without calling Ruby code.</summary>
         private bool NoToStr(RubyClass/*!*/ cls) {
             return NoConversion(cls, "to_str");

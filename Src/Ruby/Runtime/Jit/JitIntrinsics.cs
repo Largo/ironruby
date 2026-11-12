@@ -280,6 +280,19 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `v == "lit"': String#== of a String whose class is String itself (a subclass may override
+        /// ==, and an instance with a singleton == is ruled out when compiling: JitCompiler.
+        /// HasPlainInstances) compares the contents. The literal is the one frozen copy the compiler
+        /// made: String#== does not keep its argument, so nothing can tell it from the fresh String
+        /// the generic code would have made. Any other receiver deopts, and the generic code makes
+        /// the call with a fresh literal.
+        /// </summary>
+        public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal) {
+            if (value != null && value.GetType() == typeof(MutableString)) { return ((MutableString)value).Equals(literal); }
+            throw Deopt();
+        }
+
+        /// <summary>
         /// `b..e === v' / `b...e === v' with Integer bounds, v an object: Range#=== compares an
         /// Integer, and a Float when Float#&lt;=&gt; is the library one; it is false for a value of a
         /// kind in <paramref name="noCoerce"/>, which `b &lt;=&gt; v' answers nil for (checked when

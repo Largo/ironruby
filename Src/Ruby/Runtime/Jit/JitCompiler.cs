@@ -1538,6 +1538,11 @@ namespace IronRuby.Runtime.Jit {
                 throw Bail("to_i on " + tt);
             }
 
+            // `s == "lit"', `s != "lit"' (JitCompiler.Objects.cs).
+            if (node.Target != null && argc == 1 && IsStringLiteralComparison(node)) {
+                return EmitStringLiteralComparison(node, out type);
+            }
+
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
             if (node.Target != null && argc == 1 && !(args.Expressions[0] is SplattedArgument)) {
                 JT lt, rt;
@@ -2391,6 +2396,9 @@ namespace IronRuby.Runtime.Jit {
 
             if (node.Target == null) {
                 if (node.IsVariableCall || node.MethodName != _methodName || argc != _arity) { return No(node); }
+            } else if (argc == 1 && JitCompiler.IsStringLiteralComparison(node)) {
+                // `s == "lit"' (JitCompiler.EmitStringLiteralComparison): s is any object
+                return Walk(node.Target);
             } else if (argc != 1 || !IsBinaryOperator(node.MethodName)) {
                 // Emit only reaches EmitBinary for a one-argument call on a target, and only
                 // EmitBinary's own operators survive there whatever the operand types are.
