@@ -99,6 +99,10 @@ namespace IronRuby.Runtime {
         public void MarkCaptured() {
             if (!IsCaptured) {
                 IsCaptured = true;
+                // The literal blocks this scope runs in are reachable from it now: their Procs are not made again (Proc.TryReuse).
+                for (RubyScope scope = this; scope is RubyBlockScope blockScope; scope = scope._parent) {
+                    blockScope.BlockFlowControl?.Proc.ClearReusable();
+                }
             }
         }
 

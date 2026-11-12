@@ -352,6 +352,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _InstantiateBlock;
         public static MethodInfo/*!*/ InstantiateLambda { get { return _InstantiateLambda ?? (_InstantiateLambda = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Builtins.Proc>(RubyOps.InstantiateLambda)); } }
         private static MethodInfo _InstantiateLambda;
+        public static MethodInfo/*!*/ InstantiateReusableBlock { get { return _InstantiateReusableBlock ?? (_InstantiateReusableBlock = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Builtins.Proc>(RubyOps.InstantiateReusableBlock)); } }
+        private static MethodInfo _InstantiateReusableBlock;
         public static MethodInfo/*!*/ IntegerValue_ToUInt32Unchecked { get { return _IntegerValue_ToUInt32Unchecked ?? (_IntegerValue_ToUInt32Unchecked = GetMethod(typeof(IntegerValue), "ToUInt32Unchecked")); } }
         private static MethodInfo _IntegerValue_ToUInt32Unchecked;
         public static MethodInfo/*!*/ IRubyObject_BaseEquals { get { return _IRubyObject_BaseEquals ?? (_IRubyObject_BaseEquals = GetMethod(typeof(IRubyObject), "BaseEquals")); } }
