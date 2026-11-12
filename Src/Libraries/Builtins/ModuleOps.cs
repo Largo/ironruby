@@ -1179,13 +1179,19 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ ClassVariables(RubyModule/*!*/ self, [DefaultParameterValue(true)]bool inherit) {
             var result = new RubyArray();
             var seen = new HashSet<string>();
+            Func<RubyModule, string, object, bool> add = (module, name, value) => {
+                if (name != null && seen.Add(name)) {
+                    result.Add(self.Context.StringifyIdentifier(name));
+                }
+                return false;
+            };
             using (self.Context.ClassHierarchyLocker()) {
-                self.ForEachClassVariable(inherit, (module, name, value) => {
-                    if (name != null && seen.Add(name)) {
-                        result.Add(self.Context.StringifyIdentifier(name));
-                    }
-                    return false;
-                });
+                if (inherit) {
+                    self.ForEachClassVariable(true, add);
+                } else {
+                    // MRI's mod_cvar_at: the module's own table, not its mixins' or prepends'
+                    self.EnumerateClassVariables(add);
+                }
             }
             return result;
         }
