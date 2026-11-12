@@ -3418,7 +3418,14 @@ namespace IronRuby.Builtins {
                             }
                         }
                     } else if (singletonMethods) {
-                        if (!inherited && module != this || classOwned.Contains(module)) {
+                        if (!inherited) {
+                            // only the singleton class's own: a module prepended to it comes
+                            // first in the walk and is passed over (Bug #8044)
+                            if (seenSelf) {
+                                return true;
+                            }
+                            seenSelf = ReferenceEquals(module, this);
+                        } else if (classOwned.Contains(module)) {
                             return true;
                         }
                     } else {
@@ -3426,7 +3433,8 @@ namespace IronRuby.Builtins {
                     }
 
                 } else if (!visited.ContainsKey(name)) {
-                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this))) {
+                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this)) ||
+                        singletonMethods && !inherited && !ReferenceEquals(module, this)) {
                         // a prepended module's member: not this module's, and it must not hide
                         // the one this module defines under the same name
                         return false;

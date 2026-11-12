@@ -2675,7 +2675,9 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            return ModuleOps.GetMethods(immediateClass, inherited, RubyMethodAttributes.Public | RubyMethodAttributes.Protected, foreignMembers);
+            // MRI's rb_obj_methods: methods(false) is singleton_methods(false)
+            return ModuleOps.GetMethods(immediateClass, inherited,
+                (inherited ? 0 : RubyMethodAttributes.Singleton) | RubyMethodAttributes.Public | RubyMethodAttributes.Protected, foreignMembers);
         }
 
         // thread-safe:
