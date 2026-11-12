@@ -5405,6 +5405,11 @@ class Enumerator
     end
     private :__chain__
 
+    def __mark_packed_pairs__
+      @__packed_pairs__ = true
+      self
+    end
+
     def __need_block__(name, block)
       return if block
       ::Kernel.raise(::ArgumentError, "tried to call lazy #{name} without a block")
@@ -5439,7 +5444,16 @@ class Enumerator
     def map(&block)
       __need_block__("map", block)
       source = self
-      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }.__set_inspect__(self, __callee__)
+      # each step answers the mapped value, which is what reaches a method enumerated
+      # through to_enum: lazy.to_enum(:take_while).map { ... } stops where the block says
+      packed = @__packed_pairs__
+      __chain__(size) do |y|
+        source.each do |*values|
+          value = packed && values.size == 1 ? block.call(*values[0]) : block.call(*values)
+          y << value
+          value
+        end
+      end.__set_inspect__(self, __callee__)
     end
     alias :collect :map
 
@@ -5456,7 +5470,8 @@ class Enumerator
           if array.is_a?(::Array)
             array.each { |item| y << item }
           elsif result.respond_to?(:each) && result.respond_to?(:force)
-            result.each { |item| y << item }
+            # the block answers the item, not the yielder, should the object keep it
+            result.each { |item| y << item; item }
           else
             y << result
           end
@@ -5537,7 +5552,8 @@ class Enumerator
       n = __to_int__(n)
       ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
       current = size
-      new_size = current.nil? ? n : (current < n ? current : n)
+      # an unknown size stays unknown: lazy.select {}.take(4).size is nil
+      new_size = current.nil? ? nil : (current < n ? current : n)
       return __chain__(0) { |y| } if n == 0
       source = self
       __chain__(new_size) do |y|
@@ -5612,18 +5628,28 @@ class Enumerator
           end
         end
       else
-        __chain__(size) do |y|
+        # one [value, index] pair, which a #map straight after takes as two arguments
+        # (MRI's packed memo), so a lambda of two parameters can be mapped over it
+        chain = __chain__(size) do |y|
           i = offset
           source.each do |*values|
             y << [values.size <= 1 ? values[0] : values, i]
             i += 1
           end
         end
+        chain.__mark_packed_pairs__
       end
     end
 
+    # Lazy only without a block; given one it runs the pipeline, as MRI's (which is
+    # Enumerator's) does, and answers what #each answers.
     def each_with_index(&block)
-      with_index(0, &block)
+      return with_index(0) unless block
+      i = 0
+      each do |*values|
+        block.call(__value__(values), i)
+        i += 1
+      end
     end
 
     def with_object(memo)
@@ -5653,7 +5679,7 @@ class Enumerator
         elsif other.respond_to?(:to_ary) && (converted = other.to_ary).is_a?(::Array)
           converted
         elsif other.respond_to?(:each)
-          other.to_enum(:each)
+          other
         else
           ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
         end
@@ -5661,10 +5687,13 @@ class Enumerator
 
       source = self
       __chain__(size) do |y|
+        # each run walks its own enumerators of the arguments, as MRI's lazy_zip does: a
+        # second pass starts them over, and two of the same object advance separately
+        enums = sources.map { |other| other.is_a?(::Array) ? other : other.to_enum(:each) }
         index = 0
         source.each do |*values|
           row = [values.size <= 1 ? values[0] : values]
-          sources.each do |other|
+          enums.each do |other|
             row << if other.is_a?(::Array)
                      other[index]
                    else
@@ -5786,8 +5815,12 @@ class Enumerator
     # The version of a method that Lazy overrides, from whichever ancestor defines it -
     # what `super' would reach. nil when Lazy does not override it at all.
     def __eager_method__(name)
+      # to_enum("with_index") names the method as a String just as well
+      name = name.to_sym if name.is_a?(::String)
       ancestors = ::Enumerator::Lazy.ancestors
       return nil unless ::Enumerator::Lazy.instance_methods(false).include?(name)
+      # Lazy's own is eager given a block, and Enumerator's would call Lazy#with_index
+      return nil if name == :each_with_index
       # Past Lazy itself (and whatever is prepended to it) to the eager definition.
       ancestors[(ancestors.index(::Enumerator::Lazy) + 1)..-1].each do |mod|
         return mod.instance_method(name) if mod.instance_methods(false).include?(name)
@@ -5867,7 +5900,11 @@ class Enumerator
     end
 
     def cycle(*args, &block)
-      return super(*args, &block) if block
+      if block
+        # eager with a block, and it answers nil (Enumerable#cycle)
+        super(*args, &block)
+        return nil
+      end
       enum = super(*args)
       to_enum(:cycle, *args) { enum.size }
     end
