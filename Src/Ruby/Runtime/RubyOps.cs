@@ -4698,20 +4698,58 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            int start = index;
             bool negative = false;
             if (str[index] == '+' || str[index] == '-') {
                 negative = (str[index] == '-');
                 index++;
             }
 
-            bool parsed = (index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X'))
+            bool hex = index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X');
+            bool parsed = hex
                 ? TryParseHexadecimalFloat(str, index + 2, end, out result)
                 : TryParseDecimalFloat(str, index, end, out result);
+
+            if (parsed && !hex && str.IndexOf('_', start, end - start) >= 0) {
+                string truncated = TruncateUnderscoredMantissa(str, start, end);
+                if (truncated != null) {
+                    return TryParseRubyFloat(truncated, out result);
+                }
+            }
 
             if (parsed && negative) {
                 result = -result;
             }
             return parsed;
+        }
+
+        // MRI's rb_cstr_to_dbl copies a number with underscores in it into a buffer of
+        // DBL_DIG * 4 characters before the exponent (sign and point included), dropping the
+        // rest of the mantissa: Float("1_1_..._1") with 10000 digits is 1.11...e+59, not
+        // Infinity. Null when nothing is dropped.
+        private static string TruncateUnderscoredMantissa(string/*!*/ str, int start, int end) {
+            const int MantissaLimit = 15 * 4;
+            var buffer = new StringBuilder(end - start);
+            int mantissaLength = 0;
+            bool inExponent = false, dropped = false;
+            for (int i = start; i < end; i++) {
+                char c = str[i];
+                if (c == '_') {
+                    continue;
+                }
+                if (!inExponent && (c == 'e' || c == 'E')) {
+                    inExponent = true;
+                }
+                if (inExponent) {
+                    buffer.Append(c);
+                } else if (mantissaLength < MantissaLimit) {
+                    buffer.Append(c);
+                    mantissaLength++;
+                } else {
+                    dropped = true;
+                }
+            }
+            return dropped ? buffer.ToString() : null;
         }
 
         private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
