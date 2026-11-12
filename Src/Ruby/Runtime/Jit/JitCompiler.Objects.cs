@@ -519,6 +519,116 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        // ---- Class#new ---------------------------------------------------------------------
+        // `def make(x) P.new(x, 0) end': the method JIT took no call but its own operators and
+        // intrinsics, so a factory method ran generically, scope and all, around the call of new.
+        // Calling new runs the class's initialize - Ruby code, which may do anything, including
+        // redefining a method the specialized body relies on - so it is only taken as the very last
+        // thing the method does: everything the body checked at its entry has been used by then.
+        // The initializer's effects are observable, so a body that can deopt is not specialized.
+
+        /// <summary>
+        /// The call `C.new(a, ...)' (C a constant, at most JitRuntime.MaxConstructionArity plain
+        /// arguments, no block) that is the last statement of the method's body, or null.
+        /// </summary>
+        internal static MethodCall TailConstruction(IronRuby.Compiler.Ast.MethodDefinition/*!*/ ast) {
+            var body = ast.Body;
+            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) { return null; }
+            var statements = body.Statements;
+            if (statements == null || statements.Count == 0) { return null; }
+            var call = statements.Last as MethodCall;
+            if (call == null || call.MethodName != "new" || call.Block != null || !(call.Target is ConstantVariable)) { return null; }
+            var args = call.Arguments;
+            if (args != null) {
+                if (args.Expressions.Length > JitRuntime.MaxConstructionArity) { return null; }
+                foreach (var arg in args.Expressions) {
+                    if (arg is SplattedArgument || arg is HashConstructor) { return null; }
+                }
+            }
+            return call;
+        }
+
+        /// <summary>
+        /// `C.new(a, b)': where C's new is Class#new, public, and the construction is the plain one
+        /// (RubyClass.TryGetObjectConstruction: a RubyObject and a Ruby initialize of mandatory
+        /// parameters, or of optional and rest ones the call plan binds), the construction made
+        /// directly (JitRuntime.Construct*).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitConstruction(MethodCall/*!*/ node, out JT type) {
+            var target = (ConstantVariable)node.Target;
+            var cls = ResolveConstant(target) as RubyClass;
+            if (cls == null) { throw Bail("new of a constant that is not a class"); }
+            int argc = (node.Arguments == null) ? 0 : node.Arguments.Expressions.Length;
+
+            // what the call site would call: resolved under the refinements active where the method
+            // was written, and as a site resolves it, so that a change that copies the method
+            // (private_class_method) moves the method version
+            var meta = JitRuntime.ClassOf(_context, cls);
+            var refined = meta.ResolveMethod("new", VisibilityContext.AllVisible, _refinements);
+            MethodResolutionResult resolved;
+            using (_context.ClassHierarchyLocker()) {
+                resolved = meta.ResolveMethodForSiteNoLock("new", VisibilityContext.AllVisible);
+            }
+            var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
+            if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
+                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                throw Bail("new is not Class#new");
+            }
+            var construction = cls.TryGetObjectConstruction(argc);
+            if (construction == null) { throw Bail("new of " + cls.Name + " is not a plain construction"); }
+
+            var callArgs = new List<MSA.Expression>(argc + 2);
+            callArgs.Add(Ast.Constant(new JitRuntime.ConstructionSite(_context, construction, argc)));
+            JT ct;
+            callArgs.Add(Coerce(EmitConstant(target, out ct), ct, JT.Obj));
+            for (int i = 0; i < argc; i++) {
+                JT at;
+                var a = Emit(node.Arguments.Expressions[i], out at);
+                callArgs.Add(BoxForStore(a, at));
+            }
+            _pure = false;
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
+        }
+
+        /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
+        internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
+            if (node.MethodName != "==" && node.MethodName != "!=") { return false; }
+            var args = node.Arguments;
+            if (node.Block != null || args == null || args.Expressions.Length != 1) { return false; }
+            var arg = args.Expressions[0];
+            return arg is StringLiteral && !(arg is SymbolLiteral);
+        }
+
+        /// <summary>
+        /// `v == "lit"': the generic code makes a new String for the literal on every evaluation and
+        /// dispatches == on v. For a v that is a String, String#== (and BasicObject#!=, which calls it)
+        /// being the library methods, that is a comparison of contents with no allocation
+        /// (JitRuntime.StringEqualsLiteral); anything else deopts, so only a pure body may do this.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitStringLiteralComparison(MethodCall/*!*/ node, out JT type) {
+            var stringClass = KindClass(JitRuntime.KindString);
+            bool negated = node.MethodName == "!=";
+            if (!IsPlainLibraryMethod(stringClass, "==") || !IsPublic(stringClass, "==") ||
+                negated && (!IsPlainLibraryMethod(stringClass, "!=") || !IsPublic(stringClass, "!="))) {
+                throw Bail("String#" + node.MethodName + " is not the built-in one");
+            }
+            Type observed = ObservedType(node.Target);
+            if (observed != null && observed != MixedTypes && observed != typeof(MutableString)) {
+                throw Bail(node.MethodName + " of a String literal on a " + ((observed == typeof(void)) ? "nil" : observed.Name));
+            }
+            JT vt;
+            var v = Emit(node.Target, out vt);
+            if (vt != JT.Obj) { throw Bail(node.MethodName + " of a String literal on a " + vt); }
+
+            var str = ((StringLiteral)node.Arguments.Expressions[0]).GetMutableString();
+            str.Freeze();
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("StringEqualsLiteral"), v, Ast.Constant(str));
+            return negated ? Ast.Not(test) : test;
+        }
+
         /// <summary>Instances of cls answer respond_to?(:to_str) false without calling Ruby code.</summary>
         private bool NoToStr(RubyClass/*!*/ cls) {
             return NoConversion(cls, "to_str");
@@ -904,7 +1014,24 @@ namespace IronRuby.Runtime.Jit {
         /// is the value stored. An element read as an operand of op is speculated to be an Integer, or
         /// next to a Float an Integer or a Float.
         /// </summary>
-        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, out JT type) {
+        // ---- the store a method ends with -------------------------------------------------
+        // An element store is logged so that a deopt after it can take it back before the generic
+        // body runs the method again; each helper deopts only before it stores. The store that is the
+        // method body's last statement has nothing after it that could deopt, so it needs no log - and
+        // a method whose only store it is needs none at all, which saves its entry taking the thread's
+        // log and marking and releasing it on every call. Not in a loop, whose iteration is re-run, nor
+        // in a body that calls itself (see TryCompile), which a deopt of the caller re-runs.
+
+        private bool _noUnloggedWrites;
+        private bool _unloggedWrite;
+
+        private bool IsLastStatement(RExpr/*!*/ node) {
+            if (_loop != null || _ast == null || _noUnloggedWrites) { return false; }
+            var statements = _ast.Body.Statements;
+            return statements != null && statements.Count > 0 && statements.Last == node;
+        }
+
+        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, bool last, out JT type) {
             var args = element.Arguments.Expressions;
             if (element.Block != null || args.Length != 1 || args[0] is SplattedArgument) { throw Bail("[]= with " + args.Length + " arguments"); }
             if (op != null && !JitScreen.IsBinaryOperator(op)) { throw Bail("[] " + op + "="); }
@@ -959,18 +1086,25 @@ namespace IronRuby.Runtime.Jit {
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("[]= of a value that jumps away"); }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
             _canDeopt = true;
-            _hashWrite = true;
-            if (_undoLog == null) {
-                // in loop mode the entry sets both up; in a method the body reads the log on entry
-                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
-                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            MSA.Expression log;
+            if (last) {
+                _unloggedWrite = true;
+                log = Ast.Constant(null, typeof(JitUndoLog));
+            } else {
+                _hashWrite = true;
+                if (_undoLog == null) {
+                    // in loop mode the entry sets both up; in a method the body reads the log on entry
+                    _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                    _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+                }
+                log = _undoLog;
             }
             type = valueType;
             var store = (indexType == JT.Obj)
                 ? Ast.Call(JitRuntime.M("IndexStoreObj"), Ast.Constant(_context), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(arrays), Ast.Constant(hashes), _undoLog)
+                    Ast.Constant(arrays), Ast.Constant(hashes), log)
                 : Ast.Call(JitRuntime.M("IndexStore" + suffix), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(arrays), Ast.Constant(hashes), _undoLog);
+                    Ast.Constant(arrays), Ast.Constant(hashes), log);
             return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
                 Ast.Assign(recvTemp, recv),
                 Ast.Assign(indexTemp, index),

@@ -1781,6 +1781,41 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        /// <summary>
+        /// The construction a specialized body makes (JitRuntime.Construct): no block, the arguments as they are. The caller has
+        /// checked <see cref="IsCurrent"/>.
+        /// </summary>
+        internal object/*!*/ Construct0() {
+            return Construct(System.Array.Empty<object>(), null);
+        }
+
+        internal object/*!*/ Construct1(object a0) {
+            object instance = Allocate();
+            return (_initializer == null) ? InitializeOther(new[] { a0 }, instance) :
+                RubyOps.PropagateRetrySingleton(instance, ((Func<object, Proc, object, object>)_initializer)(instance, null, a0));
+        }
+
+        internal object/*!*/ Construct2(object a0, object a1) {
+            object instance = Allocate();
+            return (_initializer == null) ? InitializeOther(new[] { a0, a1 }, instance) :
+                RubyOps.PropagateRetrySingleton(instance, ((Func<object, Proc, object, object, object>)_initializer)(instance, null, a0, a1));
+        }
+
+        internal object/*!*/ Construct3(object a0, object a1, object a2) {
+            object instance = Allocate();
+            return (_initializer == null) ? InitializeOther(new[] { a0, a1, a2 }, instance) :
+                RubyOps.PropagateRetrySingleton(instance, ((Func<object, Proc, object, object, object, object>)_initializer)(instance, null, a0, a1, a2));
+        }
+
+        private object/*!*/ Allocate() {
+            return (_allocator != null) ? _allocator(_class) : new RubyObject(_class);
+        }
+
+        // the initializer of optional or rest parameters, or none, of an instance already allocated
+        private object/*!*/ InitializeOther(object[]/*!*/ args, object/*!*/ instance) {
+            return (_initializerCall != null) ? RubyOps.PropagateRetrySingleton(instance, _initializerCall.Invoke(instance, null, args)) : instance;
+        }
+
         private object/*!*/ Construct(object[]/*!*/ args, Proc block) {
             // PropagateRetrySingleton(instance = new RubyObject(class), instance.initialize(args)):
             object instance = (_allocator != null) ? _allocator(_class) : new RubyObject(_class);

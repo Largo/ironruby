@@ -470,11 +470,13 @@ namespace IronRuby.Runtime.Jit {
             // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
             bool arrayParameters = true;
+            bool unloggedWrites = true;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._hints = hints;
                 c._refinements = refinements;
                 c._noArrayLocals = !arrayParameters;
+                c._noUnloggedWrites = !unloggedWrites;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -499,6 +501,14 @@ namespace IronRuby.Runtime.Jit {
                 // the load deopts, which only a pure body may: if not, compile it without.
                 if (c._arrayParameters != null && ((c._canDeopt && !c._pure) || Assigns(body, c._arrayParameters))) {
                     arrayParameters = false;
+                    round--;
+                    continue;
+                }
+
+                // A self-call runs the body nested in this one, under this one's undo log: a deopt here
+                // after it returns re-runs it, so the store it ends with has to be logged after all.
+                if (c._unloggedWrite && c._selfCall) {
+                    unloggedWrites = false;
                     round--;
                     continue;
                 }
@@ -1045,7 +1055,7 @@ namespace IronRuby.Runtime.Jit {
             if (op == "&&" || op == "||") { throw JitBailout.Instance; }
 
             var element = node.Left as ArrayItemAccess;
-            if (element != null) { return EmitIndexWrite(element, op, node.Right, out type); }
+            if (element != null) { return EmitIndexWrite(element, op, node.Right, IsLastStatement(node), out type); }
 
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
@@ -1536,6 +1546,16 @@ namespace IronRuby.Runtime.Jit {
                     return Ast.Call(JitRuntime.M("FloatToLong"), t);
                 }
                 throw Bail("to_i on " + tt);
+            }
+
+            // `C.new(a, b)' ending the method (JitCompiler.Objects.cs).
+            if (_ast != null && _loop == null && _keywords == null && node == TailConstruction(_ast)) {
+                return EmitConstruction(node, out type);
+            }
+
+            // `s == "lit"', `s != "lit"' (JitCompiler.Objects.cs).
+            if (node.Target != null && argc == 1 && IsStringLiteralComparison(node)) {
+                return EmitStringLiteralComparison(node, out type);
             }
 
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
@@ -2065,7 +2085,11 @@ namespace IronRuby.Runtime.Jit {
             _methodName = ast.Name;
             // a method with keywords is never called directly from its typed body (EmitCall)
             _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
+            _tailConstruction = (keywords != null) ? null : JitCompiler.TailConstruction(ast);
         }
+
+        // the `C.new(a, b)' the method ends with, if it does (JitCompiler.TailConstruction)
+        private readonly MethodCall _tailConstruction;
 
         /// <summary>
         /// False when no assignment of parameter types could ever make TryCompile succeed for
@@ -2389,8 +2413,21 @@ namespace IronRuby.Runtime.Jit {
                 return true;
             }
 
+            if (node == _tailConstruction) {
+                // `C.new(a, b)' ending the method (JitCompiler.EmitConstruction)
+                if (args != null) {
+                    foreach (var arg in args.Expressions) {
+                        if (!Walk(arg)) { return false; }
+                    }
+                }
+                return true;
+            }
+
             if (node.Target == null) {
                 if (node.IsVariableCall || node.MethodName != _methodName || argc != _arity) { return No(node); }
+            } else if (argc == 1 && JitCompiler.IsStringLiteralComparison(node)) {
+                // `s == "lit"' (JitCompiler.EmitStringLiteralComparison): s is any object
+                return Walk(node.Target);
             } else if (argc != 1 || !IsBinaryOperator(node.MethodName)) {
                 // Emit only reaches EmitBinary for a one-argument call on a target, and only
                 // EmitBinary's own operators survive there whatever the operand types are.
