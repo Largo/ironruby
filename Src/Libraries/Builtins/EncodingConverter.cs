@@ -290,6 +290,18 @@ namespace IronRuby.Builtins {
                 return RubyExceptions.ConversionPath(from, to);
             }
 
+            /// <summary>
+            /// The newline decorators exclude one another: MRI finds no converter that is both
+            /// universal_newline and crlf_newline.
+            /// </summary>
+            private static void RequireOneNewlineDecorator(ConversionStorage<MutableString>/*!*/ toStr,
+                object source, object destination, int flags) {
+                int newline = flags & (UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag);
+                if ((newline & (newline - 1)) != 0) {
+                    throw ConverterNotFound(EncodingName(toStr, source), EncodingName(toStr, destination), flags);
+                }
+            }
+
             private static string/*!*/ EncodingName(ConversionStorage<MutableString>/*!*/ toStr, object obj) {
                 var encoding = obj as RubyEncoding;
                 if (encoding != null) {
@@ -552,7 +564,10 @@ namespace IronRuby.Builtins {
                     return "finished";
                 }
 
-                int limit = byteLimit.HasValue ? Math.Max(byteLimit.Value, 0) : Int32.MaxValue;
+                if (byteLimit.HasValue && byteLimit.Value < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative output_bytesize");
+                }
+                int limit = byteLimit.HasValue ? byteLimit.Value : Int32.MaxValue;
                 var written = new List<byte>();
 
                 byte[] sourceBytes = source != null ? source.ToByteArray() : EmptyBytes;
@@ -735,6 +750,11 @@ namespace IronRuby.Builtins {
                 // rewrite the destination buffer: content up to the offset plus what we produced
                 var converted = ApplyOutputDecorators(written.ToArray());
                 if (status == "finished") {
+                    if (_pendingCarriageReturn) {
+                        // a CR at the very end has nothing left to pair with: it is a newline
+                        _pendingCarriageReturn = false;
+                        converted = Concat(converted, new byte[] { (byte)'\n' });
+                    }
                     var tail = FinishDecorators();
                     if (tail.Length > 0) {
                         var whole = new byte[converted.Length + tail.Length];
@@ -1239,6 +1259,7 @@ namespace IronRuby.Builtins {
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
+                RequireOneNewlineDecorator(toStr, source, destination, flags);
                 var path = ResolvePath(toStr, source, destination, flags, true);
 
                 var result = new RubyConverter(path, flags);
@@ -1255,6 +1276,7 @@ namespace IronRuby.Builtins {
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
+                RequireOneNewlineDecorator(toStr, source, destination, flags);
                 var path = ResolvePath(toStr, source, destination, flags, false);
                 return MakeConvPath(path, flags);
             }
