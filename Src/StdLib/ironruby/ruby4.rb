@@ -10177,7 +10177,7 @@ class IO
     args.first(2).each do |name|
       next unless name.is_a?(::String)
       unless name.encoding.ascii_compatible?
-        ::Kernel.raise(::ArgumentError, "invalid name encoding (non ASCII)")
+        ::Kernel.raise(::ArgumentError, "invalid encoding name (non ASCII)")
       end
     end
     # Anything string-shaped names an encoding, and one name may carry both sides.
@@ -10547,6 +10547,9 @@ class IO
       end
       options = nil if options.empty?
       external, internal = args
+      if external.is_a?(::String) && !external.encoding.ascii_compatible?
+        ::Kernel.raise(::ArgumentError, "invalid encoding name (non ASCII)")
+      end
       if external.is_a?(::String) && external.include?(":")
         external, internal = external.split(":", 2)
       end
