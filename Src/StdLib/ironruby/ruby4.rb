@@ -10563,7 +10563,10 @@ class IO
 
       read_end, write_end = __ir_pipe__
       if external
-        internal ? read_end.set_encoding(external, internal) : read_end.set_encoding(external)
+        # the conversion options (invalid:, undef:, replace:...) go with the encodings to
+        # the read end, which is where MRI's pipe_open applies them
+        conv = options ? options.reject { |k, _| k == :encoding || k == :external_encoding || k == :internal_encoding } : {}
+        internal ? read_end.set_encoding(external, internal, **conv) : read_end.set_encoding(external, **conv)
       end
 
       return [read_end, write_end] unless block_given?
