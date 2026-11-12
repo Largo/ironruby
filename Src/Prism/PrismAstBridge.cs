@@ -2467,6 +2467,11 @@ namespace IronRuby.Prism {
                         // `super` must not forward the hash taken only to be refused
                         _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
                     }
+                } else if (isMethod || !autoSplat) {
+                    // with optional or rest positionals the hash would land among them
+                    // (`def merge(*enums, **nil)`), so take the arguments apart by hand like a
+                    // keyword-accepting signature does, and refuse what is left as keywords
+                    return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
                 }
             } else if (node.KeywordRest != null) {
                 throw Unsupported(node.KeywordRest);
@@ -2768,6 +2773,14 @@ namespace IronRuby.Prism {
         /// </summary>
         private List<Expression>/*!*/ BindKeywordsFrom(Pm.ParametersNode/*!*/ node, LocalVariable/*!*/ kwVar, bool isMethod) {
             var span = Span(node);
+            if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
+                // `**nil`: MRI says "no keywords accepted" rather than naming the keywords
+                return new List<Expression> {
+                    new UnlessExpression(
+                        new MethodCall(kwVar, "empty?", null, span),
+                        new Statements(RaiseError("ArgumentError", "no keywords accepted", span)), null, span)
+                };
+            }
             var prologue = new List<Expression>();
             var names = new List<string>();
             var requiredNames = new List<string>();

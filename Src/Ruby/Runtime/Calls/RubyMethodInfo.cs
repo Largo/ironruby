@@ -177,6 +177,19 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        /// <summary>
+        /// Whether a call unmarks (or, under ruby2_keywords, marks) the trailing hash it leaves in
+        /// the rest parameter. Not for `def m(*a, **nil)`: its prologue has to see the keyword
+        /// arguments as such to refuse them, which MRI does even when the method is ruby2_keywords.
+        /// </summary>
+        internal bool NormalizesRest {
+            get {
+                var signature = _body.Ast.Parameters.Signature;
+                return _body.Ast.Parameters.Unsplat != null && KeepsTrailingHashInRest &&
+                    !(signature != null && signature.RefusesKeywords);
+            }
+        }
+
         public override int GetArity() {
             // the declared signature, when the front end recorded one, is the only thing that
             // knows about keywords: they are not in Parameters, having been lowered away
@@ -319,7 +332,7 @@ namespace IronRuby.Runtime.Calls {
             // method wants it marked the other way instead. The flag is read here, at call time,
             // rather than baked into the rule: ruby2_keywords can be applied to a method that has
             // already been called.
-            if (Parameters.Unsplat != null && KeepsTrailingHashInRest) {
+            if (NormalizesRest) {
                 int restIndex = argsBuilder.UnsplatParameterIndex;
                 boxedArguments[restIndex] = Methods.NormalizeRestArgument.OpCall(
                     AstUtils.Convert(boxedArguments[restIndex], typeof(RubyArray)),
