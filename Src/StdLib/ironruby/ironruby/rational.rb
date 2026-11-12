@@ -423,6 +423,10 @@ class Rational < Numeric
       if ::Symbol === half
         half.to_s
       elsif ::String === half
+        # rb_must_asciicompat
+        unless half.encoding.ascii_compatible?
+          ::Kernel.raise(::Encoding::CompatibilityError, "ASCII incompatible encoding: #{half.encoding}")
+        end
         half
       else
         nil
