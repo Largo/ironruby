@@ -395,14 +395,15 @@ namespace IronRuby.Builtins {
                     break;
 
                 case 12:
-                    if (padding != 2) {
+                    // MRI's strict decoder also rejects a final character whose unused bits are set
+                    if (padding != 2 || (buffer & 0xf) != 0) {
                         throw RubyExceptions.CreateArgumentError("invalid base64");
                     }
                     result.Append((byte)((buffer >> 4) & 0xff));
                     break;
 
                 case 18:
-                    if (padding != 1) {
+                    if (padding != 1 || (buffer & 0x3) != 0) {
                         throw RubyExceptions.CreateArgumentError("invalid base64");
                     }
                     result.Append((byte)((buffer >> 10) & 0xff));
