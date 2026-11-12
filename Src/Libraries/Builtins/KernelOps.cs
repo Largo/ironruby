@@ -2537,7 +2537,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
+            return DefinePublicSingletonMethod(scope, self, methodName, method.Info, method, method.Name);
         }
 
         // thread-safe:
@@ -2547,7 +2547,7 @@ namespace IronRuby.Builtins {
             [NotNull]ClrName/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
+            return DefinePublicSingletonMethod(scope, self, methodName, method.Info, method, method.Name);
         }
 
         // thread-safe:
@@ -2556,7 +2556,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
+            return DefinePublicSingletonMethod(scope, self, methodName, method.Info, method, method.Name);
         }
 
         // thread-safe:
@@ -2566,7 +2566,7 @@ namespace IronRuby.Builtins {
             [NotNull]ClrName/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
+            return DefinePublicSingletonMethod(scope, self, methodName, method.Info, method, method.Name);
         }
 
         // thread-safe:
@@ -2575,7 +2575,7 @@ namespace IronRuby.Builtins {
             object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, block, scope.RubyContext.GetOrCreateSingletonClass(self), methodName);
+            return DefinePublicSingletonMethod(scope, self, methodName, block.Proc);
         }
 
         // thread-safe:
@@ -2585,7 +2585,7 @@ namespace IronRuby.Builtins {
             object self, [NotNull]ClrName/*!*/ methodName) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, block, scope.RubyContext.GetOrCreateSingletonClass(self), methodName);
+            return DefinePublicSingletonMethod(scope, self, methodName, block.Proc);
         }
 
         // thread-safe:
@@ -2594,7 +2594,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, block);
+            return DefinePublicSingletonMethod(scope, self, methodName, block);
         }
 
         // thread-safe:
@@ -2603,7 +2603,39 @@ namespace IronRuby.Builtins {
             [NotNull]ClrName/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             RubyUtils.RequireDefinableSingleton(self);
-            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, block);
+            return DefinePublicSingletonMethod(scope, self, methodName, block);
+        }
+
+        // MRI's rb_obj_define_method defines the method public, whatever visibility the scope it
+        // is called from has: `class << o; private; o.define_singleton_method(:m) {}; end' makes
+        // a public o.m. A ClrName defines the mangled name and aliases the actual one to it.
+        private static RubySymbol/*!*/ DefinePublicSingletonMethod(RubyScope/*!*/ scope, object self, string/*!*/ methodName,
+            RubyMemberInfo/*!*/ info, object method, string/*!*/ sourceName) {
+            var singleton = scope.RubyContext.GetOrCreateSingletonClass(self);
+            var targetConstraint = (method is RubyMethod bound) ? bound.GetTargetClass() : ((UnboundMethod)method).TargetConstraint;
+            ModuleOps.DefineMethod(scope, singleton, methodName, info, targetConstraint, sourceName, true);
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
+        }
+
+        private static RubySymbol/*!*/ DefinePublicSingletonMethod(RubyScope/*!*/ scope, object self, ClrName/*!*/ methodName,
+            RubyMemberInfo/*!*/ info, object method, string/*!*/ sourceName) {
+            var result = DefinePublicSingletonMethod(scope, self, methodName.MangledName, info, method, sourceName);
+            if (methodName.HasMangledName) {
+                scope.RubyContext.GetOrCreateSingletonClass(self).AddMethodAlias(methodName.ActualName, methodName.MangledName);
+            }
+            return result;
+        }
+
+        private static RubySymbol/*!*/ DefinePublicSingletonMethod(RubyScope/*!*/ scope, object self, string/*!*/ methodName, Proc/*!*/ block) {
+            return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, block, true);
+        }
+
+        private static RubySymbol/*!*/ DefinePublicSingletonMethod(RubyScope/*!*/ scope, object self, ClrName/*!*/ methodName, Proc/*!*/ block) {
+            var result = DefinePublicSingletonMethod(scope, self, methodName.MangledName, block);
+            if (methodName.HasMangledName) {
+                scope.RubyContext.GetOrCreateSingletonClass(self).AddMethodAlias(methodName.ActualName, methodName.MangledName);
+            }
+            return result;
         }
 
         #endregion

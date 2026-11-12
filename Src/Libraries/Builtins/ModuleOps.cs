@@ -542,10 +542,10 @@ namespace IronRuby.Builtins {
         }
 
         internal static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
-            RubyModule/*!*/ targetConstraint, string sourceName = null) {
+            RubyModule/*!*/ targetConstraint, string sourceName = null, bool alwaysPublic = false) {
 
             bool isModuleFunction;
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, alwaysPublic, out isModuleFunction);
             self.WarnMethodRedefinition(methodName);
             using (self.Context.ClassHierarchyLocker()) {
                 // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
@@ -606,9 +606,18 @@ namespace IronRuby.Builtins {
         [RubyMethod("define_method")]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
+            return DefineMethod(scope, self, methodName, block, false);
+        }
+
+        /// <summary>
+        /// <paramref name="alwaysPublic"/>: Kernel#define_singleton_method, which MRI defines public
+        /// whatever visibility the scope it is called from has (rb_obj_define_method).
+        /// </summary>
+        internal static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, Proc/*!*/ block,
+            bool alwaysPublic) {
 
             bool isModuleFunction;
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, alwaysPublic, out isModuleFunction);
             var info = Proc.ToLambdaMethodInfo(block, methodName, visibility, self);
             self.WarnMethodRedefinition(methodName, block.Dispatcher.SourcePath);
             self.AddMethod(scope.RubyContext, methodName, info);
@@ -646,9 +655,12 @@ namespace IronRuby.Builtins {
         /// module function, whose singleton half is the public one.
         /// </summary>
         private static RubyMethodVisibility GetDefinedMethodVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ methodName,
-            out bool isModuleFunction) {
+            bool alwaysPublic, out bool isModuleFunction) {
 
             isModuleFunction = false;
+            if (alwaysPublic) {
+                return RubyMethodVisibility.Public;
+            }
 
             RubyMethodVisibility visibility;
             var attributesScope = scope.GetMethodAttributesDefinitionScope();
