@@ -5572,14 +5572,6 @@ namespace IronRuby.Builtins {
                 anyCharacterMaps = false;
                 return inplace ? src : src.CloneDerived();
             }
-            RequireValidEncoding(src);
-
-            if (from.IsEmpty) {
-                anyCharacterMaps = false;
-                return inplace ? src : src.CloneDerived();
-            }
-            RequireValidEncoding(from);
-            RequireValidEncoding(to);
 
             // MRI's tr_trans: the result is in the encoding the receiver shares with both character
             // sets, and an incompatible pair raises. It differs from the receiver's own only when the
@@ -5591,6 +5583,17 @@ namespace IronRuby.Builtins {
             RubyEncoding e2 = src.RequireCompatibleEncoding(to);
             RubyEncoding encoding = (e1 == e2) ? e1 : from.RequireCompatibleEncoding(to);
             RubyEncoding originalEncoding = src.Encoding;
+
+            // tr_trans settles the encodings (rb_enc_check) before it reads anything: an
+            // incompatible set is an Encoding::CompatibilityError even when it, or the receiver,
+            // is also broken, or the from-set is empty
+            RequireValidEncoding(src);
+            if (from.IsEmpty) {
+                anyCharacterMaps = false;
+                return inplace ? src : src.CloneDerived();
+            }
+            RequireValidEncoding(from);
+            RequireValidEncoding(to);
 
             MutableString dst;
             if (inplace) {
