@@ -85,6 +85,7 @@ namespace IronRuby.Runtime.Calls {
                 object precompiled = BindPrecompiled(delegateType, args);
                 if (precompiled != null) {
                     result = (T)precompiled;
+                    ChainDispatcher(site, result);
                     if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "pre";
                     CacheTarget(result);
                     return result;
@@ -122,6 +123,19 @@ namespace IronRuby.Runtime.Calls {
             result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
             CacheTarget(result);
             return result;
+        }
+
+        // Links a precompiled dispatcher to the one the site holds now, if that serves receivers this one does not (see MemberDispatcher.Next).
+        // The dispatcher is not published yet, so its fields need no synchronization: the DLR publishes the delegate as the site's target.
+        private static void ChainDispatcher<T>(CallSite<T>/*!*/ site, T/*!*/ result) where T : class {
+            var dispatcher = ((Delegate)(object)result).Target as MemberDispatcher;
+            var current = site.Target as Delegate;
+            var previous = current?.Target as MemberDispatcher;
+            if (dispatcher != null && previous != null && previous != dispatcher && previous.Version != dispatcher.Version &&
+                previous.ChainDepth < MemberDispatcher.MaxChainDepth && current.GetType() == typeof(T)) {
+                dispatcher.Next = current;
+                dispatcher.ChainDepth = previous.ChainDepth + 1;
+            }
         }
 
         /// <summary>
