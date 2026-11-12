@@ -12104,49 +12104,99 @@ class Range
         return self
       end
     end
-    # Ruby 3.4: a step that is not a number is not converted up front; iterating adds it
-    # with #+ (so an object answering #coerce works), and without a block the Enumerator is
-    # built regardless.
-    unit = args.empty? ? 1 : n
-    numeric = b.is_a?(::Numeric) && (e.nil? || e.is_a?(::Numeric)) && unit.is_a?(::Numeric)
-
-    if b.nil?
-      unless e.is_a?(::Numeric) && unit.is_a?(::Numeric)
-        ::Kernel.raise(::ArgumentError, "#step for non-numeric beginless ranges is meaningless")
+    # range_step (3.4). A step that is not a number is not converted up front; iterating adds
+    # it with #+ (so an object answering #coerce works). A String or Symbol beginning keeps
+    # the old walk for an Integer step.
+    b_num = b.is_a?(::Numeric)
+    e_num = e.is_a?(::Numeric)
+    str_b = ::String === b ? b : (b.nil? || !__ir_responds_to__(b, :to_str) ? nil : b.to_str)
+    sym_b = ::Symbol === b ? b.to_s : nil
+    if args.empty?
+      unless b_num || str_b || sym_b || (b.nil? && e_num)
+        ::Kernel.raise(::ArgumentError, "step is required for non-numeric ranges")
       end
-      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
-      if block
-        ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
-      end
-      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
     end
-
-    ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
+    unit = args.empty? ? 1 : n
+    step_num = unit.is_a?(::Numeric)
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if step_num && b_num && unit == 0
 
     unless block
-      if numeric
+      if step_num && ((b_num && (e.nil? || e_num)) || (b.nil? && e_num))
         # inspected the way it was written: ((1..10).step) or ((1..10).step(2))
         return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
+      end
+      if b.nil?
+        ::Kernel.raise(::ArgumentError, "#step for non-numeric beginless ranges is meaningless")
       end
       range = self
       return ::Enumerator.new { |y| range.step(*args) { |x| y << x } }.__set_inspect__(self, :step, args)
     end
 
-    if numeric
+    if b.nil?
+      ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
+    end
+
+    if b_num && step_num && (e.nil? || e_num) && (::Integer === b || ::Float === b || ::Float === e || ::Float === unit)
       ::Enumerator::ArithmeticSequence.__step_each__(b, e, unit, exclude_end?, &block)
-    elsif unit.is_a?(::Integer) && b.respond_to?(:succ)
-      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+    elsif (str_b || sym_b) && ::Integer === unit
       ::Kernel.raise(::ArgumentError, "step can't be negative") if unit < 0
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      walk = sym_b ? self : ::Range.new(str_b, e, exclude_end?)
       i = 0
-      each do |x|
+      walk.each do |x|
         block.call(x) if i % unit == 0
         i += 1
       end
-    else
-      __step_by_plus__(b, e, unit, &block)
+    elsif e.nil?
+      v = b
+      loop do
+        block.call(v)
+        v = v + unit
+      end
+    elsif b_num && step_num && __r_less__(unit, 0) < 0
+      # backwards, for consistency with ArithmeticSequence
+      v = b
+      if exclude_end?
+        while __r_less__(e, v) < 0
+          block.call(v)
+          v = v + unit
+        end
+      else
+        while (c = __r_less__(e, v)) <= 0
+          block.call(v)
+          break if c == 0
+          v = v + unit
+        end
+      end
+    elsif (dir = __r_less__(b, e)) == 0
+      block.call(b) unless exclude_end?
+    elsif dir == __r_less__(b, b + unit)
+      v = b
+      if exclude_end?
+        while __r_less__(v, e) == dir
+          block.call(v)
+          v = v + unit
+        end
+      else
+        while (c = __r_less__(v, e)) == dir || c == 0
+          block.call(v)
+          break if c == 0
+          v = v + unit
+        end
+      end
     end
     self
   end
+
+  # r_less: the sign of a <=> b, a failed comparison being an ArgumentError (rb_cmpint)
+  def __r_less__(a, b)
+    c = (a <=> b)
+    if c.nil?
+      ::Kernel.raise(::ArgumentError, "comparison of #{__ir_message_type_name__(a)} with #{__ir_message_type_name__(b)} failed")
+    end
+    c <=> 0
+  end
+  private :__r_less__
   private :__ir_range_step__
 
   def %(n)
