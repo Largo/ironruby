@@ -804,7 +804,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
-            throw RubyExceptions.CreateRangeError("bignum out of char range");
+            // rb_str_concat narrows the Integer to an unsigned 32 bit code point and, unlike
+            // Integer#chr, reports a wider one by its value.
+            if (c.Sign < 0 || c > UInt32.MaxValue) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
+            return self.Append(Integer.ToChr(self.Encoding, self.Encoding, (uint)c));
         }
 
         // Ruby 1.9 gave #concat - but not #<< - any number of arguments. Each one is an
