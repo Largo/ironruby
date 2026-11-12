@@ -753,7 +753,13 @@ namespace IronRuby.Runtime.Calls {
 
             MethodResolutionResult method;
             var targetClass = args.TargetClass;
-            var visibilityContext = GetVisibilityContext(args.Signature, args.Scope);
+            // Only a call with an explicit receiver asks the scope who self is, and only for a protected method. A site with a
+            // light scope does not have the caller's scope to ask, so it looks for a public method, which every caller sees; if
+            // there is none, the rule reads the scope after all and the call is made from a real one (CallArguments.ScopeRead).
+            var signature = args.Signature;
+            bool publicOnly = signature.HasLightScope && !signature.HasImplicitSelf && !signature.IsInteropCall;
+            var visibilityContext = publicOnly ? new VisibilityContext(RubyMethodAttributes.Public) :
+                GetVisibilityContext(signature, (signature.HasImplicitSelf || !signature.HasScope || signature.IsInteropCall) ? null : args.Scope);
             RefinementActivation refinements = null;
             using (targetClass.Context.ClassHierarchyLocker()) {
                 var versionSet = metaBuilder.TargetVersionSet;
@@ -785,6 +791,9 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 if (!method.Found) {
+                    if (publicOnly) {
+                        args.ScopeRead = true;
+                    }
                     methodMissing = targetClass.ResolveMethodMissingForSite(methodName, method.IncompatibleVisibility);
                 } else {
                     methodMissing = null;
