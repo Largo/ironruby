@@ -45,12 +45,42 @@ namespace IronRuby.Builtins {
         // in the function's domain. Anything else - a Bignum, a Rational, nil, a String, an object with
         // #to_f - and every domain error go to the Ruby definitions (__ir_<name>__ in ruby4.rb), which do
         // MRI's rb_to_float conversion and raise its errors.
-        private static bool TryGetDouble(object x, out double d) {
+        // A Fixnum is converted here only while Integer#to_f is the library's (rb_to_float's
+        // basic_to_f_p); a redefined #to_f is called, by the Ruby definitions.
+        private static bool TryGetDouble(RubyContext/*!*/ context, object x, out double d) {
             if (x is double) { d = (double)x; return true; }
-            if (x is int) { d = (int)x; return true; }
-            if (x is long) { d = (long)x; return true; }
+            if ((x is int || x is long) && IsIntegerToFBasic(context)) {
+                d = (x is int) ? (int)x : (long)x;
+                return true;
+            }
             d = 0.0;
             return false;
+        }
+
+        private sealed class ToFState {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly bool Basic;
+
+            internal ToFState(RubyContext/*!*/ context, int version, bool basic) {
+                Context = context;
+                Version = version;
+                Basic = basic;
+            }
+        }
+
+        private static volatile ToFState _toFState;
+
+        private static bool IsIntegerToFBasic(RubyContext/*!*/ context) {
+            var state = _toFState;
+            if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookup: a change that races with it leaves the state stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                var lookup = context.IntegerClass.ResolveMethod("to_f", VisibilityContext.AllVisible);
+                bool basic = lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass;
+                _toFState = state = new ToFState(context, version, basic);
+            }
+            return state.Basic;
         }
 
         private static object General(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, string/*!*/ name, object self, object x) {
@@ -156,7 +186,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("acos", RubyMethodAttributes.PublicSingleton)]
         public static object Acos(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (TryGetDouble(x, out d)) {
+            if (TryGetDouble(general.Context, x, out d)) {
                 if (double.IsNaN(d)) return d;
                 if (d >= -1.0 && d <= 1.0) return SM.Acos(d);
             }
@@ -174,7 +204,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("asin", RubyMethodAttributes.PublicSingleton)]
         public static object Asin(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (TryGetDouble(x, out d)) {
+            if (TryGetDouble(general.Context, x, out d)) {
                 if (double.IsNaN(d)) return d;
                 if (d >= -1.0 && d <= 1.0) return SM.Asin(d);
             }
@@ -185,21 +215,21 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("asinh", RubyMethodAttributes.PublicSingleton)]
         public static object Asinh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Asinh(d) : General(general, "__ir_asinh__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Asinh(d) : General(general, "__ir_asinh__", self, x);
         }
 
         [RubyMethodAttribute("atan", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("atan", RubyMethodAttributes.PublicSingleton)]
         public static object Atan(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Atan(d) : General(general, "__ir_atan__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Atan(d) : General(general, "__ir_atan__", self, x);
         }
 
         [RubyMethodAttribute("atan2", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("atan2", RubyMethodAttributes.PublicSingleton)]
         public static object Atan2(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object y, object x) {
             double dy, dx;
-            if (TryGetDouble(y, out dy) && TryGetDouble(x, out dx)) {
+            if (TryGetDouble(general.Context, y, out dy) && TryGetDouble(general.Context, x, out dx)) {
                 if (double.IsNaN(dy)) return dy;
                 if (double.IsNaN(dx)) return dx;
                 return SM.Atan2(dy, dx);
@@ -218,21 +248,21 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("cos", RubyMethodAttributes.PublicSingleton)]
         public static object Cos(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Cos(d) : General(general, "__ir_cos__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Cos(d) : General(general, "__ir_cos__", self, x);
         }
 
         [RubyMethodAttribute("cosh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("cosh", RubyMethodAttributes.PublicSingleton)]
         public static object Cosh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Cosh(d) : General(general, "__ir_cosh__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Cosh(d) : General(general, "__ir_cosh__", self, x);
         }
 
         [RubyMethodAttribute("cbrt", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("cbrt", RubyMethodAttributes.PublicSingleton)]
         public static object CubeRoot(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (!TryGetDouble(x, out d)) {
+            if (!TryGetDouble(general.Context, x, out d)) {
                 return General(general, "__ir_cbrt__", self, x);
             }
             double r = SM.Cbrt(d);
@@ -258,7 +288,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("exp", RubyMethodAttributes.PublicSingleton)]
         public static object Exp(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Exp(d) : General(general, "__ir_exp__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Exp(d) : General(general, "__ir_exp__", self, x);
         }
 
         [RubyMethodAttribute("gamma", RubyMethodAttributes.PrivateInstance)]
@@ -274,7 +304,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("hypot", RubyMethodAttributes.PublicSingleton)]
         public static object Hypot(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object x, object y) {
             double dx, dy;
-            if (!TryGetDouble(x, out dx) || !TryGetDouble(y, out dy)) {
+            if (!TryGetDouble(general.Context, x, out dx) || !TryGetDouble(general.Context, y, out dy)) {
                 return General(general, "__ir_hypot__", self, x, y);
             }
             return HypotDouble(dx, dy);
@@ -354,15 +384,15 @@ namespace IronRuby.Builtins {
         // or an Int64 is far below the 2**1024 from which those split the exponent off first.
         // Everything else - a negative number (DomainError), a Bignum, a Rational, nil, a base of
         // nil - goes to the Ruby definitions.
-        private static bool TryGetLogArgument(object x, out double d) {
-            return TryGetDouble(x, out d) && (d >= 0.0 || double.IsNaN(d));
+        private static bool TryGetLogArgument(RubyContext/*!*/ context, object x, out double d) {
+            return TryGetDouble(context, x, out d) && (d >= 0.0 || double.IsNaN(d));
         }
 
         [RubyMethodAttribute("log", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("log", RubyMethodAttributes.PublicSingleton)]
         public static object Log(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (TryGetLogArgument(x, out d)) {
+            if (TryGetLogArgument(general.Context, x, out d)) {
                 return double.IsNaN(d) ? d : SM.Log(d);
             }
             return General(general, "__ir_log__", self, x);
@@ -372,7 +402,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("log", RubyMethodAttributes.PublicSingleton)]
         public static object Log(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object x, object newBase) {
             double d, b;
-            if (TryGetLogArgument(x, out d) && TryGetLogArgument(newBase, out b)) {
+            if (TryGetLogArgument(general.Context, x, out d) && TryGetLogArgument(general.Context, newBase, out b)) {
                 if (double.IsNaN(d)) return d;
                 if (double.IsNaN(b)) return b;
                 return SM.Log(d) / SM.Log(b);
@@ -384,7 +414,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("log10", RubyMethodAttributes.PublicSingleton)]
         public static object Log10(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (TryGetLogArgument(x, out d)) {
+            if (TryGetLogArgument(general.Context, x, out d)) {
                 return double.IsNaN(d) ? d : SM.Log10(d);
             }
             return General(general, "__ir_log10__", self, x);
@@ -394,7 +424,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("log2", RubyMethodAttributes.PublicSingleton)]
         public static object Log2(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (TryGetLogArgument(x, out d)) {
+            if (TryGetLogArgument(general.Context, x, out d)) {
                 return double.IsNaN(d) ? d : SM.Log2(d);
             }
             return General(general, "__ir_log2__", self, x);
@@ -404,21 +434,21 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("sin", RubyMethodAttributes.PublicSingleton)]
         public static object Sin(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Sin(d) : General(general, "__ir_sin__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Sin(d) : General(general, "__ir_sin__", self, x);
         }
 
         [RubyMethodAttribute("sinh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("sinh", RubyMethodAttributes.PublicSingleton)]
         public static object Sinh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Sinh(d) : General(general, "__ir_sinh__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Sinh(d) : General(general, "__ir_sinh__", self, x);
         }
 
         [RubyMethodAttribute("sqrt", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("sqrt", RubyMethodAttributes.PublicSingleton)]
         public static object Sqrt(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            if (TryGetDouble(x, out d)) {
+            if (TryGetDouble(general.Context, x, out d)) {
                 if (d > 0.0) return SM.Sqrt(d);
                 if (d == 0.0) return 0.0;       // sqrt(-0.0) is -0.0 in IEEE but 0.0 in MRI
                 if (double.IsNaN(d)) return d;
@@ -430,14 +460,14 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("tan", RubyMethodAttributes.PublicSingleton)]
         public static object Tan(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Tan(d) : General(general, "__ir_tan__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Tan(d) : General(general, "__ir_tan__", self, x);
         }
 
         [RubyMethodAttribute("tanh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("tanh", RubyMethodAttributes.PublicSingleton)]
         public static object Tanh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
             double d;
-            return TryGetDouble(x, out d) ? (object)SM.Tanh(d) : General(general, "__ir_tanh__", self, x);
+            return TryGetDouble(general.Context, x, out d) ? (object)SM.Tanh(d) : General(general, "__ir_tanh__", self, x);
         }
 
         #endregion
