@@ -1156,6 +1156,7 @@ namespace IronRuby.Builtins {
                 }
 
                 int flags = 0;
+                int newlineOption = -1;
                 foreach (var entry in hash) {
                     switch (KeyName(entry.Key)) {
                         case "invalid":
@@ -1212,10 +1213,10 @@ namespace IronRuby.Builtins {
 
                         case "newline":
                             switch (SymbolName(entry.Value)) {
-                                case "universal": flags |= UniversalNewlineFlag; break;
-                                case "crlf": flags |= CrlfNewlineFlag; break;
-                                case "cr": flags |= CrNewlineFlag; break;
-                                case "lf": flags |= UniversalNewlineFlag; break;
+                                case "universal": newlineOption = UniversalNewlineFlag; break;
+                                case "crlf": newlineOption = CrlfNewlineFlag; break;
+                                case "cr": newlineOption = CrNewlineFlag; break;
+                                case "lf": newlineOption = UniversalNewlineFlag; break;
                                 default:
                                     throw RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}",
                                         (object)SymbolName(entry.Value) ?? toHash.Context.Inspect(entry.Value));
@@ -1234,6 +1235,15 @@ namespace IronRuby.Builtins {
                             }
                             break;
                     }
+                }
+
+                // MRI's econv_opts: newline: wins over the *_newline: flags, with a warning
+                if (newlineOption >= 0) {
+                    const int newlineMask = UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag;
+                    if ((flags & newlineMask) != 0) {
+                        toHash.Context.ReportWarning(":newline option precedes other newline options", true);
+                    }
+                    flags = (flags & ~newlineMask) | newlineOption;
                 }
                 return flags;
             }
