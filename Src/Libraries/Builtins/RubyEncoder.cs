@@ -1642,6 +1642,10 @@ namespace IronRuby.Builtins {
         /// </param>
         public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset,
             bool firstOnly, bool padWithNils = true) {
+            // pack_unpack_internal reads the format as ASCII (rb_must_asciicompat)
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError("ASCII incompatible encoding: " + format.Encoding.Name);
+            }
 
             // The array grows with what is unpacked. It used to start at half the receiver's length,
             // which made every unpack of a large buffer - unpack1("E", offset: i) reading one double
