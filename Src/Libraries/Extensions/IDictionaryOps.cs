@@ -748,6 +748,24 @@ namespace IronRuby.Builtins {
                 result.CompareByIdentity();
             }
 
+            // Like MRI, which copies the table and deletes from the copy, no key is asked for its
+            // #hash again (test_select_reject_will_not_rehash): the entries are copied with their
+            // hash codes and the ones not kept are dropped by position.
+            if (selfHash != null && result.TryCopyEntriesFrom(selfHash)) {
+                int index = 0;
+                object key, value;
+                while (result.TryGetNextEntry(ref index, out key, out value)) {
+                    object blockResult;
+                    if (block.Yield(CustomStringDictionary.ObjToNull(key), value, out blockResult)) {
+                        return blockResult;
+                    }
+                    if (RubyOps.IsTrue(blockResult) != keepWhen) {
+                        result.RemoveEntryAt(index - 1);
+                    }
+                }
+                return result;
+            }
+
             foreach (var pair in CopyKeyValuePairs(self)) {
                 object blockResult;
                 if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out blockResult)) {
