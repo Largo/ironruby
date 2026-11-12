@@ -307,6 +307,10 @@ namespace IronRuby.Builtins {
             if (repeat < 0) {
                 throw RubyExceptions.CreateArgumentError("negative argument");
             }
+            // rb_ary_times
+            if (repeat > 0 && self.Count > MaxArraySize / repeat) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
+            }
 
             IList result = CreateResultArray(allocateStorage, self);
             RubyArray array = result as RubyArray;
@@ -707,13 +711,20 @@ namespace IronRuby.Builtins {
             return SetElement(arrayTryCast, self, CastIndex(fixnumCast, index), CastIndex(fixnumCast, length), value);
         }
 
+        /// <summary>
+        /// MRI's ARY_MAX_SIZE, LONG_MAX / sizeof(VALUE), scaled to the CLR's Int32 lengths: the
+        /// longest array Ruby code may ask for (Array.new uses the same bound). Past it a store
+        /// or a fill is an error up front rather than an allocation that takes the process down.
+        /// </summary>
+        internal const int MaxArraySize = Int32.MaxValue / 8;
+
         public static object SetElement(RubyArray/*!*/ self, int index, object value) {
             index = NormalizeIndexThrowIfNegative(self, index);
 
             if (index >= self.Count) {
-                // MRI's rb_ary_store: an index the array cannot grow to (here, one past which
-                // the count would overflow) is an IndexError, not an arithmetic accident.
-                if (index == Int32.MaxValue) {
+                // MRI's rb_ary_store: an index the array cannot grow to is an IndexError, not an
+                // arithmetic accident or an out-of-memory.
+                if (index >= MaxArraySize) {
                     throw RubyExceptions.CreateIndexError("index {0} too big", index);
                 }
                 self.AddMultiple(index + 1 - self.Count, null);
@@ -745,6 +756,11 @@ namespace IronRuby.Builtins {
             IList valueAsList = value as IList;
             if (valueAsList == null) {
                 valueAsList = Protocols.TryCastToArray(arrayTryCast, value);
+            }
+
+            // rb_ary_splice: the array cannot be grown to put the values that far out
+            if (index > self.Count && (long)index > MaxArraySize - (valueAsList != null ? valueAsList.Count : 1)) {
+                throw RubyExceptions.CreateIndexError("index {0} too big", index);
             }
 
             if (valueAsList != null && valueAsList.Count == 0) {
@@ -1474,7 +1490,7 @@ namespace IronRuby.Builtins {
             // start + length overflowed Int32 and produced a negative bound, after which the
             // loop below appended one element at a time until the process died. MRI reports
             // "argument too big" for a size it cannot represent; the CLR's is Int32.MaxValue.
-            if (length > 0 && (long)start + length > Int32.MaxValue) {
+            if (length > 0 && (long)start + length > MaxArraySize) {
                 throw RubyExceptions.CreateArgumentError("argument too big");
             }
 
