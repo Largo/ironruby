@@ -1555,7 +1555,7 @@ namespace IronRuby.Builtins {
                 if (freeze != null) {
                     if (!(freeze is bool)) {
                         throw RubyExceptions.CreateArgumentError("unexpected value for freeze: {0}",
-                            RubyExceptions.MessageTypeName(context.GetClassName(freeze)));
+                            RubyExceptions.MessageTypeName(context.GetClassMessageName(freeze)));
                     }
                     return CloneWithFreeze(initializeCloneStorage, allocateStorage, self, (bool)freeze);
                 }
