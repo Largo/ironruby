@@ -4072,8 +4072,12 @@ end
 # Float has its own #fdiv (one method with #quo) and sign predicates in MRI; Integer has
 # Numeric's.
 class Float
+  # flo_quo calls #/ through num_funcall1, whose recursion guard turns `alias / quo` - #/
+  # calling itself - into a NameError ("1.0/2.0") rather than a SystemStackError.
   def fdiv(other)
     self / other
+  rescue ::SystemStackError
+    ::Kernel.raise(::NameError.new("#{inspect}/#{other.inspect}", :/))
   end
   alias :quo :fdiv
 
