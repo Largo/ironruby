@@ -546,6 +546,7 @@ namespace IronRuby.Builtins {
 
             bool isModuleFunction;
             var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
+            self.WarnMethodRedefinition(methodName);
             using (self.Context.ClassHierarchyLocker()) {
                 // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
                 // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
@@ -609,6 +610,7 @@ namespace IronRuby.Builtins {
             bool isModuleFunction;
             var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
             var info = Proc.ToLambdaMethodInfo(block, methodName, visibility, self);
+            self.WarnMethodRedefinition(methodName, block.Dispatcher.SourcePath);
             self.AddMethod(scope.RubyContext, methodName, info);
 
             if (isModuleFunction) {
@@ -731,10 +733,12 @@ namespace IronRuby.Builtins {
 
             if (readable) {
                 var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(visibility, name);
+                self.WarnMethodRedefinition(name);
                 self.AddMethod(scope.RubyContext, name, new RubyAttributeReaderInfo(flags, self, varName));
             }
             
             if (writable) {
+                self.WarnMethodRedefinition(name + "=");
                 self.AddMethod(scope.RubyContext, name + "=", new RubyAttributeWriterInfo((RubyMemberFlags)visibility, self, varName));
             }
         }

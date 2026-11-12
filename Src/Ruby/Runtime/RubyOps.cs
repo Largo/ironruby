@@ -1233,6 +1233,7 @@ namespace IronRuby.Runtime {
 
             // Do not trigger the add-method event just yet, we need to assign the result into closure before executing any user code.
             // If the method being defined is "method_added" itself, we would call that method before the info gets assigned to the closure.
+            owner.WarnMethodRedefinition(method.DefinitionName, method.Document.FileName);
             owner.SetMethodNoEvent(callerContext, method.DefinitionName, method);
 
             // expose RubyMethod in the scope (the method is bound to the main singleton instance):

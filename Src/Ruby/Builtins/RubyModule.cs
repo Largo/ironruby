@@ -2253,6 +2253,7 @@ namespace IronRuby.Builtins {
                 // aliases: MRI reports the module the alias was written in and the name the body
                 // was originally given.  DeclaringModule stays put so that `super' inside the
                 // body keeps resolving from where the body lives.
+                method.IsAliased = true;
                 var alias = method.Copy(flags, method.DeclaringModule);
                 alias.AliasOwner = this;
                 alias.OriginalName = method.OriginalName ?? oldName;
@@ -2272,6 +2273,62 @@ namespace IronRuby.Builtins {
             // written with, exactly as an alias does
             defined.OriginalName = method.OriginalName ?? sourceName;
             SetMethodNoEventNoLock(callerContext, name, defined);
+        }
+
+        /// <summary>
+        /// The warnings MRI's rb_method_entry_make gives when `def', define_method or attr_*
+        /// (re)defines a method here: "redefining 'object_id' may cause serious problems" whenever
+        /// warnings are on, and under $VERBOSE "method redefined; discarding old foo", pointing
+        /// at the previous definition, when this module's own entry is replaced. An entry that was
+        /// aliased (alias_count), is itself an alias, or is undefined or a super forwarder
+        /// (ZSUPER) discards nothing worth warning about. Called before the new entry is stored,
+        /// outside the class hierarchy lock: a warning runs Warning.warn, which may be Ruby code.
+        /// <paramref name="sourcePath"/> is the file the new definition is written in, when known.
+        /// </summary>
+        public void WarnMethodRedefinition(string/*!*/ name, string sourcePath = null) {
+            if (_context.Loader.IsLoadingCorePrelude || _context.Loader.IsIronRubyLibraryFile(sourcePath)) {
+                return;
+            }
+
+            if (name == "object_id" || name == "__id__" || name == "__send__") {
+                _context.ReportWarning("redefining '" + name + "' may cause serious problems");
+            }
+
+            if (!(_context.Verbose is bool verbose && verbose)) {
+                return;
+            }
+
+            RubyMemberInfo existing;
+            using (_context.ClassHierarchyLocker()) {
+                if (_methods == null || !_methods.TryGetValue(name, out existing) || existing == null || existing.IsUndefined ||
+                    existing.IsSuperForwarder || existing.IsAliased || existing.AliasOwner != null) {
+                    return;
+                }
+            }
+
+            string file = null;
+            int line = 0;
+            if (existing is RubyMethodInfo rubyMethod) {
+                file = rubyMethod.Document.FileName;
+                line = rubyMethod.SourceSpan.Start.Line;
+            } else if (existing is RubyLambdaMethodInfo lambdaMethod) {
+                file = lambdaMethod.Lambda.Dispatcher.SourcePath;
+                line = lambdaMethod.Lambda.Dispatcher.SourceLine;
+            }
+
+            // A method the prelude or an IronRuby library file wrote in Ruby is a C method in
+            // MRI, or not there at all until the library that replaces it is loaded (pp.rb's
+            // Kernel#pretty_print): either way no Ruby code of CRuby's is being discarded.
+            if (RubyStackTraceBuilder.IsInternalFile(file) || _context.Loader.IsIronRubyLibraryFile(file)) {
+                return;
+            }
+
+            _context.ReportWarning("method redefined; discarding old " + name, true);
+
+            // a C# method, as a C one, has no previous definition to point at
+            if (file != null) {
+                _context.ReportWarningAt(file, line, "previous definition of " + name + " was here");
+            }
         }
 
         // Module#module_function/private/protected/public:

@@ -267,6 +267,12 @@ namespace IronRuby.Runtime.Calls {
         public string OriginalName { get; internal set; }
 
         /// <summary>
+        /// Set once `alias' has given this entry another name (MRI's alias_count): redefining
+        /// the original name then discards nothing, so it is not warned about.
+        /// </summary>
+        internal bool IsAliased { get; set; }
+
+        /// <summary>
         /// The parameter list the method was written with, or null if it is not known (a CLR
         /// method, an attribute accessor, anything not defined by Ruby source).
         /// </summary>
