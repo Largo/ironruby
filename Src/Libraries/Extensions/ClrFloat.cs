@@ -620,6 +620,12 @@ namespace IronRuby.Builtins {
                     return 0.0;
                 }
 
+                // MRI: "pow(10, ndigits) may not be accurate" past 14 digits, so the result is the
+                // Rational one (rb_flo_round_by_rational): exact, then rounded to a Float once.
+                if (nd > 14) {
+                    return ScaleExactly(self, nd, flooring);
+                }
+
                 double f = System.Math.Pow(10, nd);
                 if (Double.IsInfinity(f)) {
                     return self;
@@ -668,6 +674,40 @@ namespace IronRuby.Builtins {
                 case RoundDirection.Ceiling: return NumericRounding.CeilInteger(big, nd);
                 default: return NumericRounding.TruncateInteger(big, nd);
             }
+        }
+
+        // floor (or ceil) of self * 10**nd, worked out exactly, divided by 10**nd and rounded to the nearest Float
+        private static double ScaleExactly(double self, int nd, bool flooring) {
+            long bits = BitConverter.DoubleToInt64Bits(self);
+            bool negative = bits < 0;
+            int exponent = (int)((bits >> 52) & 0x7ff);
+            long fraction = bits & 0xfffffffffffffL;
+            if (exponent == 0) {
+                exponent = 1;
+            } else {
+                fraction |= 1L << 52;
+            }
+            exponent -= 1075;
+
+            // |self| = fraction * 2**exponent; the scaled value is numerator / denominator
+            BigInteger numerator = new BigInteger(fraction) * BigInteger.Pow(10, nd);
+            BigInteger denominator = BigInteger.One;
+            if (exponent >= 0) {
+                numerator <<= exponent;
+            } else {
+                denominator <<= -exponent;
+            }
+            BigInteger remainder;
+            BigInteger quotient = BigInteger.DivRem(numerator, denominator, out remainder);
+            // rounding the magnitude: down unless the direction points away from zero
+            if (!remainder.IsZero && (negative == flooring)) {
+                quotient += 1;
+            }
+            if (quotient.IsZero) {
+                return 0.0;
+            }
+            string text = (negative ? "-" : "") + quotient.ToString(CultureInfo.InvariantCulture) + "E-" + nd.ToString(CultureInfo.InvariantCulture);
+            return Double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture);
         }
 
         private static BigInteger ToBigInteger(double integralValue) {
