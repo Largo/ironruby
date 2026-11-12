@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Globalization;
 using System.Numerics;
 using Microsoft.Scripting;
 using System.Runtime.InteropServices;
@@ -144,7 +145,7 @@ namespace IronRuby.Builtins {
         public static object Last(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ lastN, [NotNull]Range/*!*/ self, object count) {
             // (1..100).last(3) and (..5).last(2): the run __last_n__ counts back (MRI's rb_int_range_last), for a plain Range
             if ((self.Begin == null || self.Begin is int) && self.End is int end && count is int n && n >= 0 &&
-                self.GetType() == typeof(Range)) {
+                self.GetType() == typeof(Range) && IsEachBasic(lastN.Context)) {
                 long top = self.ExcludeEnd ? (long)end - 1 : end;
                 long first = top - n + 1;
                 if (self.Begin != null) {
@@ -156,6 +157,35 @@ namespace IronRuby.Builtins {
             }
             var site = lastN.GetCallSite("__last_n__", 1);
             return site.Target(site, self, count);
+        }
+
+        // rb_int_range_last counts back only while Range#each is the core one
+        // (rb_method_basic_definition_p); a redefined #each is what #last(n) takes from.
+        private sealed class EachState {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly bool Basic;
+
+            internal EachState(RubyContext/*!*/ context, int version, bool basic) {
+                Context = context;
+                Version = version;
+                Basic = basic;
+            }
+        }
+
+        private static volatile EachState _eachState;
+
+        private static bool IsEachBasic(RubyContext/*!*/ context) {
+            var state = _eachState;
+            if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookup: a change that races with it leaves the state stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                var rangeClass = context.GetClass(typeof(Range));
+                var lookup = rangeClass.ResolveMethod("each", VisibilityContext.AllVisible);
+                bool basic = lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == rangeClass;
+                _eachState = state = new EachState(context, version, basic);
+            }
+            return state.Basic;
         }
 
         /// <summary>
@@ -541,49 +571,45 @@ namespace IronRuby.Builtins {
             return Overlap(comparisonStorage, self, otherRange);
         }
 
+        // range_overlap, step for step
         private static bool Overlap(ComparisonStorage/*!*/ comparisonStorage, Range/*!*/ self, Range/*!*/ other) {
-            var compare = comparisonStorage.CompareSite;
-
-            if (IsEmpty(comparisonStorage, self) || IsEmpty(comparisonStorage, other)) {
+            if (IsEmptyRegion(comparisonStorage, self.Begin, other.End, other.ExcludeEnd) ||
+                IsEmptyRegion(comparisonStorage, other.Begin, self.End, self.ExcludeEnd)) {
                 return false;
             }
 
-            // they overlap unless one ends before the other begins
-            if (!EndsBefore(comparisonStorage, self.End, self.ExcludeEnd, other.Begin) &&
-                !EndsBefore(comparisonStorage, other.End, other.ExcludeEnd, self.Begin)) {
-                return true;
+            var compare = comparisonStorage.CompareSite;
+            if (self.Begin != null && other.Begin != null) {
+                object result = compare.Target(compare, self.Begin, other.Begin);
+                if (result == null) {
+                    return false;
+                }
+                // if both begin values are equal, no more comparisons are needed
+                if (Protocols.ConvertCompareResult(comparisonStorage, result) == 0) {
+                    return true;
+                }
+            } else if (self.Begin == null && self.End != null && other.Begin == null) {
+                // (..6).overlap?(nil..nil) is true in 4.0: an unbounded other covers it
+                return other.End == null || compare.Target(compare, self.End, other.End) != null;
             }
-            return false;
+
+            return !IsEmptyRegion(comparisonStorage, self.Begin, self.End, self.ExcludeEnd) &&
+                !IsEmptyRegion(comparisonStorage, other.Begin, other.End, other.ExcludeEnd);
         }
 
-        private static bool IsEmpty(ComparisonStorage/*!*/ comparisonStorage, Range/*!*/ range) {
-            if (range.Begin == null || range.End == null) {
+        // empty_region_p: begin after end - or not comparable with it at all (r_less's INT_MAX) -
+        // or equal to an exclusive end
+        private static bool IsEmptyRegion(ComparisonStorage/*!*/ comparisonStorage, object begin, object end, bool excludeEnd) {
+            if (begin == null || end == null) {
                 return false;
             }
             var compare = comparisonStorage.CompareSite;
-            object result = compare.Target(compare, range.Begin, range.End);
-            if (result == null) {
-                return false;
-            }
-            int beginToEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
-            return beginToEnd > (range.ExcludeEnd ? -1 : 0);
-        }
-
-        // Does a range ending at end (exclusive when excludeEnd) finish before begin starts?
-        // Endpoints that cannot be compared at all count as "before": MRI's
-        // empty_region_p treats a nil answer from #<=> as the widest possible gap, so
-        // (0..2).overlap?('a'..'d') is false rather than an exception.
-        private static bool EndsBefore(ComparisonStorage/*!*/ comparisonStorage, object end, bool excludeEnd, object begin) {
-            if (end == null || begin == null) {
-                return false;
-            }
-            var compare = comparisonStorage.CompareSite;
-            object result = compare.Target(compare, end, begin);
+            object result = compare.Target(compare, begin, end);
             if (result == null) {
                 return true;
             }
-            int endToBegin = Protocols.ConvertCompareResult(comparisonStorage, result);
-            return endToBegin < 0 || (excludeEnd && endToBegin == 0);
+            int less = Protocols.ConvertCompareResult(comparisonStorage, result);
+            return less > 0 || (excludeEnd && less == 0);
         }
 
         #endregion
@@ -787,9 +813,19 @@ namespace IronRuby.Builtins {
             } else if (self.Begin is int && self.End is int) {
                 return StepFixnum(block, self, (int)self.Begin, (int)self.End, 1);
             } else if (self.Begin is MutableString) {
-                return StepString(storage, block, self, (MutableString)self.Begin, (MutableString)self.End, 1);
+                var end = self.End as MutableString;
+                if (end == null) {
+                    // rb_str_upto_each takes the end through StringValue
+                    var cast = storage.StringCastSite;
+                    end = cast.Target(cast, self.End);
+                }
+                return StepString(storage, block, self, (MutableString)self.Begin, end, 1);
             } else if (self.Begin is RubySymbol && self.End is RubySymbol) {
                 return StepSymbol(storage, block, self, (RubySymbol)self.Begin, (RubySymbol)self.End, 1);
+            } else if (self.Begin != null && !(self.Begin is int) && Protocols.RespondTo(storage.RespondToSite, storage.Context, self.Begin, "to_str")) {
+                // range_each: rb_check_string_type(beg) - anything that converts to a String walks as one
+                var cast = storage.StringCastSite;
+                return StepString(storage, block, self, cast.Target(cast, self.Begin), cast.Target(cast, self.End), 1);
             } else {
                 return StepObject(storage, block, self, self.Begin, self.End, 1);
             }
@@ -938,6 +974,13 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // range_each: a beginning that converts with #to_str walks as that String (rb_str_upto_endless_each)
+            if (begin != null && !(begin is MutableString) && !(begin is RubySymbol) &&
+                Protocols.RespondTo(storage.RespondToSite, storage.Context, begin, "to_str")) {
+                var cast = storage.StringCastSite;
+                begin = cast.Target(cast, begin);
+            }
+
             CheckBegin(storage, begin);
             object current = begin;
             var succSite = storage.SuccSite;
@@ -958,6 +1001,20 @@ namespace IronRuby.Builtins {
         /// This method requires step to be a Fixnum.
         /// It uses a hybrid string comparison to prevent infinite loops and calls String#succ to get each item in the range.
         /// </remarks>
+        private static bool IsAllDigits(MutableString/*!*/ str) {
+            int count = str.GetByteCount();
+            if (count == 0) {
+                return false;
+            }
+            for (int i = 0; i < count; i++) {
+                int b = str.GetByte(i);
+                if (b < '0' || b > '9') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private static object StepString(EachStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self, MutableString begin, MutableString end, int step) {
             return StepStringCore(storage, block, self, begin, end, step, null);
         }
@@ -978,6 +1035,26 @@ namespace IronRuby.Builtins {
                 int from = begin.GetByte(0), to = end.GetByte(0);
                 for (int c = from; self.ExcludeEnd ? c < to : c <= to; c += step) {
                     var item = MutableString.CreateBinary(new byte[] { (byte)c }, begin.Encoding);
+                    if (block.Yield(wrap != null ? wrap(item) : item, out result)) {
+                        return result;
+                    }
+                }
+                return self;
+            }
+
+            // rb_str_upto_each: when both ends are all ASCII digits, the walk is over the numbers they
+            // spell, each written at the width of the beginning ("9".."10" is "9", "10"; "09".."10" is
+            // "09", "10"), where #succ would never get from "9" to "10".
+            if (begin.IsAscii() && end.IsAscii() && IsAllDigits(begin) && IsAllDigits(end)) {
+                BigInteger from = BigInteger.Parse(begin.ToString(), CultureInfo.InvariantCulture);
+                BigInteger to = BigInteger.Parse(end.ToString(), CultureInfo.InvariantCulture);
+                string format = "D" + begin.GetByteCount().ToString(CultureInfo.InvariantCulture);
+                int position = 0;
+                for (BigInteger i = from; self.ExcludeEnd ? i < to : i <= to; i++, position++) {
+                    if (position % step != 0) {
+                        continue;
+                    }
+                    var item = MutableString.CreateAscii(i.ToString(format, CultureInfo.InvariantCulture));
                     if (block.Yield(wrap != null ? wrap(item) : item, out result)) {
                         return result;
                     }
@@ -1035,7 +1112,7 @@ namespace IronRuby.Builtins {
             int comp;
 
             var succSite = storage.SuccSite;
-            while ((comp = Protocols.Compare(storage, item, end)) < 0) {
+            while ((comp = RLess(storage, item, end)) < 0) {
                 if (block.Yield(item, out result)) {
                     return result;
                 }
@@ -1051,6 +1128,14 @@ namespace IronRuby.Builtins {
                 }
             }
             return self;
+        }
+
+        // range.c's r_less: an answer of nil from #<=> is not an error but "greater" (INT_MAX),
+        // which ends range_each_func's walk.
+        private static int RLess(ComparisonStorage/*!*/ storage, object a, object b) {
+            var compare = storage.CompareSite;
+            object result = compare.Target(compare, a, b);
+            return (result == null) ? Int32.MaxValue : Protocols.ConvertCompareResult(storage, result);
         }
 
         /// <summary>

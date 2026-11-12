@@ -32,29 +32,35 @@ class Complex < Numeric
     ::Integer === x && x == 1
   end
 
+  # f_add, f_sub, f_mul: the shortcuts are taken only while the receiver's operator is the core
+  # one (rb_method_basic_definition_p); a redefined one is always called.
   def self.__f_add__(x, y)
-    if ::Integer === x
-      return y if x == 0
-      return x if __fix_zero__(y)
-    elsif ::Float === x || ::Rational === x
-      return x if __fix_zero__(y)
+    if __ir_basic_op__(x, :+)
+      if ::Integer === x
+        return y if x == 0
+        return x if __fix_zero__(y)
+      else
+        return x if __fix_zero__(y)
+      end
     end
     x + y
   end
 
   def self.__f_sub__(x, y)
-    return x if __fix_zero__(y)
+    return x if __ir_basic_op__(x, :-) && __fix_zero__(y)
     x - y
   end
 
   def self.__f_mul__(x, y)
-    if ::Integer === x
-      return 0 if __fix_zero__(y)
-      return 0 if x == 0 && ::Integer === y
-      return y if x == 1
-      return x if __fix_one__(y)
-    else
-      return x if __fix_one__(y)
+    if __ir_basic_op__(x, :*)
+      if ::Integer === x
+        return 0 if __fix_zero__(y)
+        return 0 if x == 0 && ::Integer === y
+        return y if x == 1
+        return x if __fix_one__(y)
+      else
+        return x if __fix_one__(y)
+      end
     end
     x * y
   end

@@ -33,6 +33,9 @@ namespace IronRuby.Builtins {
         public object End { get { return _end; } }
         public bool ExcludeEnd { get { return _excludeEnd; } }
 
+        /// <summary>False for an instance of Range.allocate that has not been initialized yet.</summary>
+        public bool IsInitialized { get { return _initialized; } }
+
         protected Range(SerializationInfo info, StreamingContext context) {
             // A record Marshal read may lack any of the three (MRI's range_loader takes what
             // is there): a missing end is an endless range, a missing excl is inclusive.
@@ -132,9 +135,10 @@ namespace IronRuby.Builtins {
         public void Initialize(BinaryOpStorage/*!*/ comparisonStorage,
             RubyContext/*!*/ context, object begin, object end, bool excludeEnd) {
 
-            if (_initialized) {
+            if (_initialized || IsFrozen) {
                 // A range is frozen the moment it is initialized, so a second call is
-                // a modification of a frozen object rather than a naming problem.
+                // a modification of a frozen object rather than a naming problem; so is
+                // a call on Range.allocate.freeze (range_modify's rb_check_frozen).
                 throw RubyExceptions.CreateObjectFrozenError(context, this);
             }
 

@@ -170,6 +170,75 @@ namespace IronRuby.Builtins {
             return FMul(a, b);
         }
 
+        // complex.c's f_add, f_sub and f_mul take their shortcuts (and the C arithmetic) only while
+        // rb_method_basic_definition_p says Integer's, Float's or Rational's operator is still the
+        // core one; a redefined one is called. The bits: Integer, Float, Rational times +, -, *.
+        private sealed class BasicOps {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly int Flags;
+
+            internal BasicOps(RubyContext/*!*/ context, int version, int flags) {
+                Context = context;
+                Version = version;
+                Flags = flags;
+            }
+        }
+
+        private static volatile BasicOps _basicOps;
+        private static readonly string[] _basicOpNames = new[] { "+", "-", "*" };
+
+        private static int GetBasicOps(RubyContext/*!*/ context) {
+            var ops = _basicOps;
+            if (ops == null || ops.Context != context || ops.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookups: a change that races with them leaves the flags stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                var classes = new[] { context.IntegerClass, context.GetClass(typeof(double)), context.GetClass(typeof(RubyRational)) };
+                int flags = 0;
+                for (int c = 0; c < classes.Length; c++) {
+                    for (int o = 0; o < _basicOpNames.Length; o++) {
+                        var lookup = classes[c].ResolveMethod(_basicOpNames[o], VisibilityContext.AllVisible);
+                        if (lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == classes[c]) {
+                            flags |= 1 << (c * 3 + o);
+                        }
+                    }
+                }
+                _basicOps = ops = new BasicOps(context, version, flags);
+            }
+            return ops.Flags;
+        }
+
+        private static int BasicOpIndex(object x, string/*!*/ op) {
+            int c;
+            if (x is int || x is long || x is BigInteger) {
+                c = 0;
+            } else if (x is double) {
+                c = 1;
+            } else if (x is RubyRational) {
+                c = 2;
+            } else {
+                return -1;
+            }
+            int o = Array.IndexOf(_basicOpNames, op);
+            return o < 0 ? -1 : c * 3 + o;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="x"/> is an Integer, Float or Rational whose <paramref name="op"/>
+        /// is still the core one (rb_method_basic_definition_p): complex.rb's f_add and friends.
+        /// </summary>
+        [RubyMethod("__ir_basic_op__", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsBasicOp(RubyContext/*!*/ context, object self, object x, [NotNull]RubySymbol/*!*/ op) {
+            int i = BasicOpIndex(x, op.ToString());
+            return i >= 0 && (GetBasicOps(context) & (1 << i)) != 0;
+        }
+
+        // the fast paths below compute Integer and Float +, - and * themselves
+        private static bool AreSimpleOpsBasic(RubyContext/*!*/ context) {
+            const int mask = 0x3f;
+            return (GetBasicOps(context) & mask) == mask;
+        }
+
         private RubyComplex/*!*/ Make(object real, object imaginary) {
             return new RubyComplex(ImmediateClass.GetNonSingletonClass(), real, imaginary);
         }
@@ -185,7 +254,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("+")]
         public static object Add(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyComplex/*!*/ self, object other) {
-            if (self.HasSimpleParts) {
+            if (self.HasSimpleParts && AreSimpleOpsBasic(slow.Context)) {
                 var c = other as RubyComplex;
                 if (c != null) {
                     if (c.HasSimpleParts) {
@@ -200,7 +269,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("-")]
         public static object Subtract(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyComplex/*!*/ self, object other) {
-            if (self.HasSimpleParts) {
+            if (self.HasSimpleParts && AreSimpleOpsBasic(slow.Context)) {
                 var c = other as RubyComplex;
                 if (c != null) {
                     if (c.HasSimpleParts) {
@@ -215,7 +284,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("*")]
         public static object Multiply(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slow, RubyComplex/*!*/ self, object other) {
-            if (self.HasSimpleParts) {
+            if (self.HasSimpleParts && AreSimpleOpsBasic(slow.Context)) {
                 var c = other as RubyComplex;
                 if (c != null) {
                     if (c.HasSimpleParts) {

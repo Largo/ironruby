@@ -4518,7 +4518,11 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw InvalidFloatValue(original != null ? original.ToByteArray() : Encoding.UTF8.GetBytes(value));
+            // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding
+            if (original != null) {
+                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(original).ToString());
+            }
+            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
         }
 
         private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
@@ -4698,20 +4702,58 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            int start = index;
             bool negative = false;
             if (str[index] == '+' || str[index] == '-') {
                 negative = (str[index] == '-');
                 index++;
             }
 
-            bool parsed = (index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X'))
+            bool hex = index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X');
+            bool parsed = hex
                 ? TryParseHexadecimalFloat(str, index + 2, end, out result)
                 : TryParseDecimalFloat(str, index, end, out result);
+
+            if (parsed && !hex && str.IndexOf('_', start, end - start) >= 0) {
+                string truncated = TruncateUnderscoredMantissa(str, start, end);
+                if (truncated != null) {
+                    return TryParseRubyFloat(truncated, out result);
+                }
+            }
 
             if (parsed && negative) {
                 result = -result;
             }
             return parsed;
+        }
+
+        // MRI's rb_cstr_to_dbl copies a number with underscores in it into a buffer of
+        // DBL_DIG * 4 characters before the exponent (sign and point included), dropping the
+        // rest of the mantissa: Float("1_1_..._1") with 10000 digits is 1.11...e+59, not
+        // Infinity. Null when nothing is dropped.
+        private static string TruncateUnderscoredMantissa(string/*!*/ str, int start, int end) {
+            const int MantissaLimit = 15 * 4;
+            var buffer = new StringBuilder(end - start);
+            int mantissaLength = 0;
+            bool inExponent = false, dropped = false;
+            for (int i = start; i < end; i++) {
+                char c = str[i];
+                if (c == '_') {
+                    continue;
+                }
+                if (!inExponent && (c == 'e' || c == 'E')) {
+                    inExponent = true;
+                }
+                if (inExponent) {
+                    buffer.Append(c);
+                } else if (mantissaLength < MantissaLimit) {
+                    buffer.Append(c);
+                    mantissaLength++;
+                } else {
+                    dropped = true;
+                }
+            }
+            return dropped ? buffer.ToString() : null;
         }
 
         private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
@@ -4803,8 +4845,9 @@ namespace IronRuby.Runtime {
             int scale = 0;
             if (index < end && str[index] == '.') {
                 index++;
+                // ruby_strtod takes "0x1." and "0x1.p+0": the point may end the digits, if any came before it
                 int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
-                if (fractionDigits <= 0) {
+                if (fractionDigits < 0 || (fractionDigits == 0 && integerDigits == 0)) {
                     return false;
                 }
                 scale = -4 * fractionDigits;
@@ -4832,6 +4875,22 @@ namespace IronRuby.Runtime {
             }
 
             long power = (long)exponent + scale;
+
+            // The mantissa is rounded to a double's 53 bits here, to nearest, ties to even (the
+            // BigInteger conversion truncates), and one too long for a double ("0x1f" and 268
+            // zeros) is no longer Infinity before it is scaled down.
+            long bitLength = (long)mantissa.GetBitLength();
+            if (bitLength > 53) {
+                int shift = (int)(bitLength - 53);
+                BigInteger dropped = mantissa & ((BigInteger.One << shift) - 1);
+                BigInteger half = BigInteger.One << (shift - 1);
+                mantissa >>= shift;
+                if (dropped > half || (dropped == half && !mantissa.IsEven)) {
+                    mantissa += 1;
+                }
+                power += shift;
+            }
+
             if (power > 99999) {
                 power = 99999;
             } else if (power < -99999) {

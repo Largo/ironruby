@@ -2192,12 +2192,12 @@ namespace IronRuby.Builtins {
         // encoding aware
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, MutableString/*!*/ self) {
-            // The result is written in the default external encoding - or in US-ASCII, when that
-            // one does not read an ASCII byte as itself - and a character it cannot write is
-            // escaped rather than emitted. So the same string inspects differently depending on
-            // where the answer is going: "\u3042" where the terminal is EUC-JP, the character
-            // itself where it is UTF-8.
-            RubyEncoding resultEncoding = context.DefaultExternalEncoding;
+            // The result is written in the default internal encoding, or the default external one
+            // when there is none (rb_str_inspect) - or in US-ASCII, when that one does not read an
+            // ASCII byte as itself - and a character it cannot write is escaped rather than
+            // emitted. So the same string inspects differently depending on where the answer is
+            // going: "\u3042" where the terminal is EUC-JP, the character itself where it is UTF-8.
+            RubyEncoding resultEncoding = context.DefaultInternalEncoding ?? context.DefaultExternalEncoding;
             if (resultEncoding == null || !resultEncoding.IsAsciiIdentity) {
                 resultEncoding = RubyEncoding.Ascii;
             }

@@ -877,6 +877,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadComplex_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_basic_op__", 0x61, 
+                0x00000008U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.RubySymbol, System.Boolean>(IronRuby.Builtins.RubyComplex.IsBasicOp)
+            );
+            
             DefineLibraryMethod(module, "__ir_scan__", 0x61, 
                 0x00000002U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyComplex.Scan)
@@ -3190,8 +3195,8 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "times", 0x51, 
                 0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Runtime.BlockParam, System.Int32, System.Object>(IronRuby.Builtins.Integer.Times), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Integer.Times)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BlockParam, System.Int32, System.Object>(IronRuby.Builtins.Integer.Times), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Integer.Times)
             );
             
             DefineLibraryMethod(module, "to_c", 0x51, 
