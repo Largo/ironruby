@@ -628,64 +628,53 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's 'u' case in pack_unpack_internal: a line with a length character, groups of four
+        // characters of which a missing or out-of-range one counts as zero, an optional checksum
+        // character and a line end. The output is capped at 3/4 of the input, so a length that
+        // promises more than the line holds gives zero bytes rather than reading on.
         private static MutableString/*!*/ ReadUU(MutableString/*!*/ data, ref int position) {
-            var input = new MutableStringStream(data);
-            var output = new MutableStringStream();
-            input.Position = position;
-            ReadUU(input, output);
-            position = (int)input.Position;
-            output.Dispose();
-            return output.String;
-        }
-
-        private static bool ReadUU(Stream/*!*/ input, Stream/*!*/ output) {
-            while (true) {
-                int lineLength = input.ReadByte();
-                if (lineLength == -1) {
-                    return true;
+            byte[] bytes = data.ToByteArray();
+            int s = position, send = bytes.Length;
+            int capacity = (send - s) * 3 / 4;
+            var buf = new byte[Math.Max(capacity, 0)];
+            int ptr = 0, total = 0;
+            while (s < send && bytes[s] > ' ' && bytes[s] < 'a') {
+                int len = (bytes[s++] - ' ') & 0x3f;
+                total += len;
+                if (total > capacity) {
+                    len -= total - capacity;
+                    total = capacity;
                 }
-
-                lineLength = DecodeUUByte(lineLength);
-
-                int remains = lineLength % 3;
-                int triples = lineLength / 3;
-
-                for (int i = 0; i < triples; i++) {
-                    int a = DecodeUUByte(input.ReadByte());
-                    int b = DecodeUUByte(input.ReadByte());
-                    int c = DecodeUUByte(input.ReadByte());
-                    int d = input.ReadByte();
-                    if (d == -1) {
-                        return false;
-                    }
-                    d = DecodeUUByte(d);
-
-                    output.WriteByte((byte)((a << 2 | b >> 4) & 0xff));
-                    output.WriteByte((byte)((b << 4 | c >> 2) & 0xff));
-                    output.WriteByte((byte)((c << 6 | d) & 0xff));
+                while (len > 0) {
+                    int mlen = len > 3 ? 3 : len;
+                    int a = UUDigit(bytes, ref s, send), b = UUDigit(bytes, ref s, send);
+                    int c = UUDigit(bytes, ref s, send), d = UUDigit(bytes, ref s, send);
+                    byte[] hunk = { (byte)(a << 2 | b >> 4), (byte)(b << 4 | c >> 2), (byte)(c << 6 | d) };
+                    Array.Copy(hunk, 0, buf, ptr, mlen);
+                    ptr += mlen;
+                    len -= mlen;
                 }
-
-                if (remains > 0) {
-                    int a = DecodeUUByte(input.ReadByte());
-                    int b = DecodeUUByte(input.ReadByte());
-                    int c = DecodeUUByte(input.ReadByte());
-                    int d = input.ReadByte();
-                    if (d == -1) {
-                        return false;
-                    }
-                    d = DecodeUUByte(d);
-
-                    output.WriteByte((byte)(a << 2 | b >> 4));
-
-                    if (remains == 2) {
-                        output.WriteByte((byte)(b << 4 | c >> 2));
-                    }
+                if (s < send && bytes[s] != '\r' && bytes[s] != '\n') {
+                    s++; // a possible checksum character
                 }
-
-                if (input.ReadByte() != '\n') {
-                    return false;
+                if (s < send && bytes[s] == '\r') {
+                    s++;
+                }
+                if (s < send && bytes[s] == '\n') {
+                    s++;
                 }
             }
+            position = s;
+            var result = new byte[total];
+            Array.Copy(buf, result, total);
+            return MutableString.CreateBinary(result);
+        }
+
+        private static int UUDigit(byte[]/*!*/ bytes, ref int s, int send) {
+            if (s < send && bytes[s] >= ' ' && bytes[s] < 'a') {
+                return (bytes[s++] - ' ') & 0x3f;
+            }
+            return 0;
         }
 
         private static void EncodeUUTriple(Stream/*!*/ output, int a, int b, int c) {
@@ -698,10 +687,6 @@ namespace IronRuby.Builtins {
         private static byte EncodeUUByte(int b) {
             Debug.Assert(b <= 0x3f);
             return (byte)((b == 0) ? '`' : (0x20 + b));
-        }
-
-        private static byte DecodeUUByte(int c) {
-            return (byte)((c - 0x20) & 0x3f);
         }
 
         #endregion
