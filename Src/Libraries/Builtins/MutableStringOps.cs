@@ -4967,10 +4967,17 @@ namespace IronRuby.Builtins {
                 return fields;
             }
 
+            // MRI's str_mod_check after each yield: the block must not change the receiver's
+            // buffer or length ("string modified"). A same-length rewrite keeps MRI's buffer and
+            // goes unnoticed there, so only the length is compared.
+            int length = self.GetByteCount();
             foreach (object field in fields) {
                 object blockResult;
                 if (block.Yield(field, out blockResult)) {
                     return blockResult;
+                }
+                if (self.GetByteCount() != length) {
+                    throw RubyExceptions.CreateRuntimeError("string modified");
                 }
             }
 
