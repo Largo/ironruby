@@ -1124,7 +1124,7 @@ class Range
       # path unless #each has been redefined (rb_method_basic_definition_p): a subclass with
       # an #each of its own gets to_a.last(n).
       # (..5).last(2) too: a beginless Integer range counts down from its end.
-      if (b.nil? || ::Integer === b) && ::Integer === e && (instance_of?(::Range) || method(:each).owner.equal?(::Range))
+      if (b.nil? || ::Integer === b) && ::Integer === e && method(:each).owner.equal?(::Range) && method(:each).source_location.nil?
         top = exclude_end? ? e - 1 : e
         first_value = top - n + 1
         first_value = b if !b.nil? && first_value < b

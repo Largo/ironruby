@@ -145,7 +145,7 @@ namespace IronRuby.Builtins {
         public static object Last(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ lastN, [NotNull]Range/*!*/ self, object count) {
             // (1..100).last(3) and (..5).last(2): the run __last_n__ counts back (MRI's rb_int_range_last), for a plain Range
             if ((self.Begin == null || self.Begin is int) && self.End is int end && count is int n && n >= 0 &&
-                self.GetType() == typeof(Range)) {
+                self.GetType() == typeof(Range) && IsEachBasic(lastN.Context)) {
                 long top = self.ExcludeEnd ? (long)end - 1 : end;
                 long first = top - n + 1;
                 if (self.Begin != null) {
@@ -157,6 +157,35 @@ namespace IronRuby.Builtins {
             }
             var site = lastN.GetCallSite("__last_n__", 1);
             return site.Target(site, self, count);
+        }
+
+        // rb_int_range_last counts back only while Range#each is the core one
+        // (rb_method_basic_definition_p); a redefined #each is what #last(n) takes from.
+        private sealed class EachState {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly bool Basic;
+
+            internal EachState(RubyContext/*!*/ context, int version, bool basic) {
+                Context = context;
+                Version = version;
+                Basic = basic;
+            }
+        }
+
+        private static volatile EachState _eachState;
+
+        private static bool IsEachBasic(RubyContext/*!*/ context) {
+            var state = _eachState;
+            if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookup: a change that races with it leaves the state stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                var rangeClass = context.GetClass(typeof(Range));
+                var lookup = rangeClass.ResolveMethod("each", VisibilityContext.AllVisible);
+                bool basic = lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == rangeClass;
+                _eachState = state = new EachState(context, version, basic);
+            }
+            return state.Basic;
         }
 
         /// <summary>
