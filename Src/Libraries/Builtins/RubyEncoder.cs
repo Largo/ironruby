@@ -1277,7 +1277,13 @@ namespace IronRuby.Builtins {
 
                 string formatString = format.ConvertToString();
                 ParsedFormat parsed = FormatDirective.Parse(formatString, true);
+                int formatLength = format.GetByteCount();
                 foreach (FormatDirective directive in parsed.Directives) {
+                    // MRI's pack_pack checks, before each directive, that a conversion (#to_int,
+                    // #to_str) has not resized the format it is reading.
+                    if (format.GetByteCount() != formatLength) {
+                        throw RubyExceptions.CreateRuntimeError("format string modified");
+                    }
                     int count = directive.Count ?? self.Count - i;
 
                     switch (directive.Directive) {
