@@ -1519,6 +1519,14 @@ namespace IronRuby.Builtins {
             private object/*!*/ ReadObject(int objectRef) {
                 RubyClass theClass = ReadType();
 
+                // Ruby 1.8 dumped a Complex (Rational) as an 'o' record of @real and @image
+                // (@numerator and @denominator); MRI still loads one, through the compat loader
+                // rb_marshal_define_compat gives the class (nucomp_loader, nurat_loader).
+                Type compatType = theClass.GetUnderlyingSystemType();
+                if (typeof(RubyComplex).IsAssignableFrom(compatType) || typeof(RubyRational).IsAssignableFrom(compatType)) {
+                    return ReadNumericCompat(theClass, typeof(RubyComplex).IsAssignableFrom(compatType), objectRef);
+                }
+
                 // The writing side refuses to put a class backed by a CLR object into an 'o'
                 // record, and the reading side refuses to take one out of it: an 'o' record is
                 // instance variables and nothing else, so it cannot rebuild a File.
@@ -1561,6 +1569,30 @@ namespace IronRuby.Builtins {
                     }
                     Context.SetInstanceVariable(obj, name, value);
                 }
+                return obj;
+            }
+
+            private object/*!*/ ReadNumericCompat(RubyClass/*!*/ theClass, bool isComplex, int objectRef) {
+                object obj = RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
+                int count = ReadInt32();
+                object first = null, second = null;
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    object value = ReadAnObject(false);
+                    if (name == (isComplex ? "@real" : "@numerator")) {
+                        first = value;
+                    } else if (name == (isComplex ? "@image" : "@denominator")) {
+                        second = value;
+                    }
+                }
+                // #marshal_load makes the same checks as the compat loader (nurat_int_check)
+                var parts = new RubyArray(2);
+                parts.Add(first);
+                parts.Add(second);
+                _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, parts);
                 return obj;
             }
 
