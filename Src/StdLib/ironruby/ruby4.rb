@@ -3070,19 +3070,33 @@ class Numeric
   # directions: remainder keeps the sign of the dividend where modulo keeps the
   # sign of the divisor. The order the operands are asked about their sign is
   # the order MRI asks in, which is what the specs watch.
+  # (num_remainder.) The signs are asked with < and > (rb_num_negative_int_p and
+  # rb_num_positive_int_p), and a value that has neither cannot be compared with 0.
+  # A Float divisor that is infinite leaves the dividend as it is.
   def remainder(other)
     x = self
     unless other.is_a?(::Numeric)
-      x, other = other.coerce(self)
+      x, other = __ir_do_coerce__(other, true)
     end
 
     z = x % other
-    if z != 0 && ((x < 0 && other > 0) || (x > 0 && other < 0))
+    if z != 0 && ((__ir_sign_p__(x, :<) && __ir_sign_p__(other, :>)) ||
+                  (__ir_sign_p__(x, :>) && __ir_sign_p__(other, :<)))
+      return x if ::Float === other && other.infinite?
       z - other
     else
       z
     end
   end
+  alias __ir_num_remainder__ remainder
+
+  def __ir_sign_p__(v, op)
+    unless __ir_responds_to__(v, op)
+      ::Kernel.raise(::ArgumentError, "comparison of #{__ir_class_of__(v)} with 0 failed")
+    end
+    v.__send__(op, 0)
+  end
+  private :__ir_sign_p__
 
   # A number is already what a copy of it would be - Rational and Complex included, which
   # MRI counts among its special objects too.
