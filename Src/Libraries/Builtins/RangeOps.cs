@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Globalization;
 using System.Numerics;
 using Microsoft.Scripting;
 using System.Runtime.InteropServices;
@@ -787,9 +788,19 @@ namespace IronRuby.Builtins {
             } else if (self.Begin is int && self.End is int) {
                 return StepFixnum(block, self, (int)self.Begin, (int)self.End, 1);
             } else if (self.Begin is MutableString) {
-                return StepString(storage, block, self, (MutableString)self.Begin, (MutableString)self.End, 1);
+                var end = self.End as MutableString;
+                if (end == null) {
+                    // rb_str_upto_each takes the end through StringValue
+                    var cast = storage.StringCastSite;
+                    end = cast.Target(cast, self.End);
+                }
+                return StepString(storage, block, self, (MutableString)self.Begin, end, 1);
             } else if (self.Begin is RubySymbol && self.End is RubySymbol) {
                 return StepSymbol(storage, block, self, (RubySymbol)self.Begin, (RubySymbol)self.End, 1);
+            } else if (self.Begin != null && !(self.Begin is int) && Protocols.RespondTo(storage.RespondToSite, storage.Context, self.Begin, "to_str")) {
+                // range_each: rb_check_string_type(beg) - anything that converts to a String walks as one
+                var cast = storage.StringCastSite;
+                return StepString(storage, block, self, cast.Target(cast, self.Begin), cast.Target(cast, self.End), 1);
             } else {
                 return StepObject(storage, block, self, self.Begin, self.End, 1);
             }
@@ -958,6 +969,20 @@ namespace IronRuby.Builtins {
         /// This method requires step to be a Fixnum.
         /// It uses a hybrid string comparison to prevent infinite loops and calls String#succ to get each item in the range.
         /// </remarks>
+        private static bool IsAllDigits(MutableString/*!*/ str) {
+            int count = str.GetByteCount();
+            if (count == 0) {
+                return false;
+            }
+            for (int i = 0; i < count; i++) {
+                int b = str.GetByte(i);
+                if (b < '0' || b > '9') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private static object StepString(EachStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self, MutableString begin, MutableString end, int step) {
             return StepStringCore(storage, block, self, begin, end, step, null);
         }
@@ -978,6 +1003,26 @@ namespace IronRuby.Builtins {
                 int from = begin.GetByte(0), to = end.GetByte(0);
                 for (int c = from; self.ExcludeEnd ? c < to : c <= to; c += step) {
                     var item = MutableString.CreateBinary(new byte[] { (byte)c }, begin.Encoding);
+                    if (block.Yield(wrap != null ? wrap(item) : item, out result)) {
+                        return result;
+                    }
+                }
+                return self;
+            }
+
+            // rb_str_upto_each: when both ends are all ASCII digits, the walk is over the numbers they
+            // spell, each written at the width of the beginning ("9".."10" is "9", "10"; "09".."10" is
+            // "09", "10"), where #succ would never get from "9" to "10".
+            if (begin.IsAscii() && end.IsAscii() && IsAllDigits(begin) && IsAllDigits(end)) {
+                BigInteger from = BigInteger.Parse(begin.ToString(), CultureInfo.InvariantCulture);
+                BigInteger to = BigInteger.Parse(end.ToString(), CultureInfo.InvariantCulture);
+                string format = "D" + begin.GetByteCount().ToString(CultureInfo.InvariantCulture);
+                int position = 0;
+                for (BigInteger i = from; self.ExcludeEnd ? i < to : i <= to; i++, position++) {
+                    if (position % step != 0) {
+                        continue;
+                    }
+                    var item = MutableString.CreateAscii(i.ToString(format, CultureInfo.InvariantCulture));
                     if (block.Yield(wrap != null ? wrap(item) : item, out result)) {
                         return result;
                     }
