@@ -1747,8 +1747,18 @@ class String
   end
   private :__affix__
 
+  # MRI's deleted_prefix_length skips the encoding check for a broken prefix when both
+  # sides are ASCII compatible: it compares the bytes and removes them only if they end
+  # on a character boundary of the receiver.
   def delete_prefix(prefix)
     prefix = __affix__(prefix)
+    if !prefix.valid_encoding? && encoding.ascii_compatible? && prefix.encoding.ascii_compatible?
+      n = prefix.bytesize
+      return dup if n == 0 || n > bytesize || byteslice(0, n).b != prefix.b
+      at = 0
+      each_char { |c| break if at >= n; at += c.bytesize }
+      return at == n ? byteslice(n, bytesize - n) : dup
+    end
     (!prefix.empty? && start_with?(prefix)) ? self[prefix.length..-1] : dup
   end unless method_defined?(:delete_prefix)
 
