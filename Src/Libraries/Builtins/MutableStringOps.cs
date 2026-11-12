@@ -1202,7 +1202,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
             self.RequireCompatibleEncoding(searchStr);
-            return (!IsBrokenNeedle(searchStr) && self.IndexOf(searchStr) != -1) ? searchStr.CloneDerived() : null;
+            // #include? decides it: a match has to start on a character boundary (MRI's
+            // rb_str_index), which a search of content held as bytes does not see -
+            // "\xC2\xA1\xC2\xA2"["\xA1\xC2"] in EUC-JP is nil
+            return (!IsBrokenNeedle(searchStr) && Include(self, searchStr)) ? searchStr.CloneDerived() : null;
         }
 
         [RubyMethod("[]")]
