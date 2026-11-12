@@ -336,6 +336,27 @@ namespace IronRuby.Builtins {
                     }
                     throw InvalidCodePoint(encoding, codepoint);
 
+                case 54936: // GB18030
+                    // Onigmo's gb18030.c: ASCII; two bytes 0x81-0xfe + 0x40-0x7e/0x80-0xfe; four
+                    // bytes 0x81-0xfe 0x30-0x39 0x81-0xfe 0x30-0x39. Anything else is invalid.
+                    if (codepoint <= 0x7f) {
+                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
+                    }
+                    if (codepoint > 0xff && codepoint <= 0xffff) {
+                        uint lead = codepoint >> 8, trail = codepoint & 0xff;
+                        if (lead >= 0x81 && lead <= 0xfe && trail >= 0x40 && trail <= 0xfe && trail != 0x7f) {
+                            return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
+                        }
+                    }
+                    if (codepoint > 0xffffff) {
+                        byte b1 = (byte)(codepoint >> 24), b2 = (byte)(codepoint >> 16), b3 = (byte)(codepoint >> 8), b4 = (byte)codepoint;
+                        if (b1 >= 0x81 && b1 <= 0xfe && b2 >= 0x30 && b2 <= 0x39 &&
+                            b3 >= 0x81 && b3 <= 0xfe && b4 >= 0x30 && b4 <= 0x39) {
+                            return MutableString.CreateBinary(new[] { b1, b2, b3, b4 }, resultEncoding);
+                        }
+                    }
+                    throw InvalidCodePoint(encoding, codepoint);
+
                 default:
                     if (codepoint <= 0xff) {
                         return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
