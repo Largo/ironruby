@@ -6799,6 +6799,11 @@ class Enumerator
 
     # MRI ruby_float_step / num_step / range_step iteration, shared.
     def self.__step_each__(from, to, unit, excl, &block)
+      # arith_seq_each: a Complex step skips the Float loop, and an endless sequence just adds it
+      if to.nil? && ::Complex === unit
+        i = from
+        loop { yield i; i += unit }
+      end
       desc = unit < 0
       if to.nil?
         inf = true
@@ -6887,7 +6892,10 @@ class Enumerator
     end
 
     def first(n = nil)
-      return __arith_each__ { |v| return v } if n.nil?
+      if n.nil?
+        __arith_each__ { |v| return v }
+        return nil
+      end
       ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
       return [] if n == 0
       result = []
