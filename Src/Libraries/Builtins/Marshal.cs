@@ -451,7 +451,8 @@ namespace IronRuby.Builtins {
                 // MRI writes the three attributes, in the order excl, begin, end, as an 'o' record of
                 // their own; the instance variables of a Range subclass's instance go in an "I" wrapper.
                 WriteSymbol("excl", RubyEncoding.Binary);
-                WriteAnObject(range.ExcludeEnd);
+                // an uninitialized one (Range.allocate) has no excl yet: nil
+                WriteAnObject(range.IsInitialized ? (object)range.ExcludeEnd : null);
                 WriteSymbol("begin", RubyEncoding.Binary);
                 WriteAnObject(range.Begin);
                 WriteSymbol("end", RubyEncoding.Binary);
@@ -1608,15 +1609,19 @@ namespace IronRuby.Builtins {
                     _objects[objectRef] = range;
                 }
                 object rangeBegin = null, rangeEnd = null;
-                bool excludeEnd = false;
+                bool excludeEnd = false, exclGiven = false;
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     object value = ReadAnObject(false);
                     switch (name) {
                         case "begin": rangeBegin = value; break;
                         case "end": rangeEnd = value; break;
-                        case "excl": excludeEnd = RubyOps.IsTrue(value); break;
+                        case "excl": excludeEnd = RubyOps.IsTrue(value); exclGiven = value != null; break;
                     }
+                }
+                // range_loader leaves a range whose excl is nil - the dump of Range.allocate - uninitialized
+                if (!exclGiven) {
+                    return range;
                 }
                 if (rangeBegin != null && rangeEnd != null) {
                     var compare = _sites.Compare;
