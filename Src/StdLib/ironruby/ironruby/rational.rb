@@ -1050,6 +1050,10 @@ class Numeric
     return fdiv(other) if ::Float === other
     x = self
     unless ::Rational === x
+      # rb_convert_type: no #to_r at all is "can't convert X into Rational"
+      unless __ir_responds_to__(self, :to_r)
+        ::Kernel.raise(::TypeError, "can't convert #{__ir_coerce_name__(self)} into Rational")
+      end
       x = to_r
       unless ::Rational === x
         ::Kernel.raise(::TypeError,
