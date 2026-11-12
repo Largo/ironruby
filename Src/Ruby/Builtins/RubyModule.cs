@@ -604,7 +604,9 @@ namespace IronRuby.Builtins {
             using (Context.ClassHierarchyLocker()) {
                 EnumerateConstants((module, constName, value) => {
                     var m = value as RubyModule;
-                    if (m != null && m != this && m.HasTemporaryName) {
+                    // an anonymous one too (set_temporary_name(nil) made N anonymous again; naming
+                    // M then names M::N, as MRI's set_sub_temporary_name does)
+                    if (m != null && m != this && !m.HasPermanentName) {
                         if (nested == null) {
                             nested = new List<KeyValuePair<string, RubyModule>>();
                         }
