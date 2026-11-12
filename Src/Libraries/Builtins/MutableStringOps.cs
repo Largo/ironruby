@@ -1763,6 +1763,26 @@ namespace IronRuby.Builtins {
 
         private static MutableString/*!*/ DownCaseAscii(MutableString/*!*/ str) {
             byte[] bytes = str.ToByteArray();
+            var encoding = str.Encoding;
+            if (encoding.MaxBytesPerChar > 1 && encoding.IsAsciiIdentity && !encoding.IsUnicodeEncoding) {
+                // MRI's str_casecmp folds ASCII characters only: the trail byte of a Shift_JIS
+                // character ("\x81\x41") is not an "A" to fold.
+                var strict = encoding.StrictEncoding;
+                byte[] folded = (byte[])bytes.Clone();
+                int pos = 0;
+                while (pos < folded.Length) {
+                    int l = PreciseCharLength(strict, folded, pos, folded.Length - pos);
+                    if (l <= 1) {
+                        if (folded[pos] >= (byte)'A' && folded[pos] <= (byte)'Z') {
+                            folded[pos] += 0x20;
+                        }
+                        pos++;
+                    } else {
+                        pos += l;
+                    }
+                }
+                return MutableString.CreateBinary(folded, encoding);
+            }
             return MutableString.CreateBinary(MapAsciiBytes(bytes, CaseMappingKind.DownCase) ?? bytes, str.Encoding);
         }
 
