@@ -3443,8 +3443,10 @@ namespace IronRuby.Builtins {
             while (end < replacement.Length && replacement.GetChar(end) != close) {
                 end++;
             }
-            if (end >= replacement.Length || end == start) {
-                return false;
+            // rb_reg_regsub: a "\k<" with no closing ">" is a malformed reference, and an empty
+            // name is one the pattern does not have
+            if (end >= replacement.Length) {
+                throw RubyExceptions.CreateRuntimeError("invalid group name reference format");
             }
 
             string name = replacement.GetSlice(start, end - start).ConvertToString();
