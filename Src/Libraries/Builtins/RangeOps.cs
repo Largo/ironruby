@@ -974,6 +974,13 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // range_each: a beginning that converts with #to_str walks as that String (rb_str_upto_endless_each)
+            if (begin != null && !(begin is MutableString) && !(begin is RubySymbol) &&
+                Protocols.RespondTo(storage.RespondToSite, storage.Context, begin, "to_str")) {
+                var cast = storage.StringCastSite;
+                begin = cast.Target(cast, begin);
+            }
+
             CheckBegin(storage, begin);
             object current = begin;
             var succSite = storage.SuccSite;
@@ -1105,7 +1112,7 @@ namespace IronRuby.Builtins {
             int comp;
 
             var succSite = storage.SuccSite;
-            while ((comp = Protocols.Compare(storage, item, end)) < 0) {
+            while ((comp = RLess(storage, item, end)) < 0) {
                 if (block.Yield(item, out result)) {
                     return result;
                 }
@@ -1121,6 +1128,14 @@ namespace IronRuby.Builtins {
                 }
             }
             return self;
+        }
+
+        // range.c's r_less: an answer of nil from #<=> is not an error but "greater" (INT_MAX),
+        // which ends range_each_func's walk.
+        private static int RLess(ComparisonStorage/*!*/ storage, object a, object b) {
+            var compare = storage.CompareSite;
+            object result = compare.Target(compare, a, b);
+            return (result == null) ? Int32.MaxValue : Protocols.ConvertCompareResult(storage, result);
         }
 
         /// <summary>
