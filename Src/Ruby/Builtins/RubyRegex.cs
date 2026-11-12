@@ -1477,10 +1477,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static bool TryHoistWholePatternGroup(ref MutableString/*!*/ pattern, ref RubyRegexOptions options) {
             int length = pattern.GetCharCount();
-            if (length < 4 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
-                return false;
-            }
-            if (FindGroupEnd(pattern, length) != length - 1) {
+            if (length < 3 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
                 return false;
             }
 
@@ -1517,7 +1514,15 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if (i >= length - 1 || pattern.GetChar(i) != ':') {
+            // A leading "(?opts)" sets the options for the rest of the pattern, and MRI's
+            // rb_reg_str_with_term folds it in the same way: /(?i)foo/ is "(?i-mx:foo)".
+            if (i > 2 && i < length && pattern.GetChar(i) == ')') {
+                options = hoisted;
+                pattern = pattern.GetSlice(i + 1, length - i - 1);
+                return true;
+            }
+
+            if (i >= length - 1 || pattern.GetChar(i) != ':' || FindGroupEnd(pattern, length) != length - 1) {
                 return false;
             }
 
