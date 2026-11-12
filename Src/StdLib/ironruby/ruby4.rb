@@ -331,11 +331,36 @@ module Enumerable
   end
   private :__enum_item__
 
+  # MRI yields an element to these blocks with rb_yield_force_blockarg: a lambda is called
+  # the way a plain block is, so one with several parameters takes an Array element apart
+  # (each_with_index.min_by(&->(x, i) { })). True when the block is such a lambda; the
+  # caller then splats Array elements into it.
+  def __enum_force_splat__?(block)
+    return false unless block.lambda?
+    parameters = block.parameters
+    # a Symbol's proc (group_by(&:itself)) is a lambda too, and takes the element whole
+    return false if parameters == [[:req], [:rest]]
+    positional = 0
+    rest = false
+    parameters.each do |kind, _|
+      case kind
+      when :req, :opt then positional += 1
+      when :rest then rest = true
+      end
+    end
+    positional >= 2 || (positional >= 1 && rest)
+  end
+  private :__enum_force_splat__?
+
   # Extra arguments are passed straight through to #each, which is how a
   # receiver whose #each takes parameters gets to see them.
   def each_entry(*args, &block)
     return to_enum(:each_entry, *args) unless block
-    each(*args) { |*values| block.call(__enum_item__(values)) }
+    splat = __enum_force_splat__?(block)
+    each(*args) do |*values|
+      item = __enum_item__(values)
+      splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+    end
     self
   end unless method_defined?(:each_entry)
 
@@ -484,7 +509,12 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
-    each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
+    splat = __enum_force_splat__?(block)
+    each do |*values|
+      item = __enum_item__(values)
+      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+      (result[key] ||= []) << item
+    end
     result
   end unless method_defined?(:group_by)
 
@@ -515,9 +545,10 @@ module Enumerable
     best = nil
     best_key = nil
     found = false
+    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      key = block.call(item)
+      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
       if found
         c = (key <=> best_key)
         if c.nil?
@@ -528,6 +559,7 @@ module Enumerable
       found = true
       best_key = key
       best = item
+      nil
     end
     best
   end
@@ -560,12 +592,22 @@ module Enumerable
   def __sort_by_key__(block)
     decorated = []
     index = 0
+    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      decorated << [block.call(item), index, item]
+      decorated << [splat && item.is_a?(Array) ? block.call(*item) : block.call(item), index, item]
       index += 1
+      # the block #each was given answers nil, as MRI's does, should #each keep it and call it
+      nil
     end
-    decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
+    decorated.sort do |a, b|
+      c = (a[0] <=> b[0])
+      # the keys that will not compare are named, not the triples carrying them
+      if c.nil?
+        raise ArgumentError, "comparison of #{a[0].class} with #{::Comparable.__cmp_operand__(b[0])} failed"
+      end
+      c == 0 ? (a[1] <=> b[1]) : c
+    end.map { |triple| triple[2] }
   end
   private :__sort_by_key__
 
@@ -614,12 +656,13 @@ module Enumerable
     __ir_same_method__(:collect_concat, :flat_map)
   end
 
-  def uniq
+  def uniq(&block)
     seen = {}
     result = []
     each do |*values|
       item = __enum_item__(values)
-      key = block_given? ? yield(item) : item
+      # MRI's uniq_iter yields the values as they came (rb_yield_values2), not the packed item
+      key = block ? block.call(*values) : item
       next if seen.key?(key)
       seen[key] = true
       result << item
@@ -968,6 +1011,7 @@ module Enumerable
         end
       end
       result = block ? nil : []
+      splat = block && __enum_force_splat__?(block)
       index = 0
       each do |*values|
         row = [__enum_item__(values)]
@@ -985,7 +1029,11 @@ module Enumerable
                  end
         end
         index += 1
-        block ? block.call(row) : result << row
+        if block
+          splat ? block.call(*row) : block.call(row)
+        else
+          result << row
+        end
       end
       result
     end
