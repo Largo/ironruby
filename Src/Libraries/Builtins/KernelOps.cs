@@ -1987,7 +1987,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("global_variables", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("global_variables", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetGlobalVariableNames(RubyContext/*!*/ context, object self) {
+        public static RubyArray/*!*/ GetGlobalVariableNames(RubyScope/*!*/ scope, object self) {
+            var context = scope.RubyContext;
             RactorIsolation.CheckGlobalVariables(context);
             RubyArray result = new RubyArray();
             lock (context.GlobalVariablesLock) {
@@ -1996,6 +1997,17 @@ namespace IronRuby.Builtins {
                         // The table keys the variables without the sigil, because that is what the
                         // compiler passes around, but the names are `$stdin`, `$-I`, `$~`.
                         result.Add(context.StringifyIdentifier("$" + global.Key));
+                    }
+                }
+            }
+
+            // MRI's rb_f_global_variables adds $1, $2... for the groups of the caller's $~ that
+            // matched.
+            var match = scope.GetInnerMostClosureScope().CurrentMatch;
+            if (match != null) {
+                for (int i = 1; i < match.GroupCount; i++) {
+                    if (match.GroupSuccess(i)) {
+                        result.Add(context.StringifyIdentifier("$" + i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                     }
                 }
             }
