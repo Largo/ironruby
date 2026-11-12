@@ -4348,6 +4348,26 @@ namespace IronRuby.Builtins {
             return RegexpOps.Match(scope, block, new RubyRegex(converted, RubyRegexOptions.NONE), self, start);
         }
 
+        // rb_str_match_m hands any further arguments on to the pattern's own #match, so a Regexp
+        // whose #match takes more than (str, pos) gets them; a plain Regexp raises ArgumentError.
+        [RubyMethod("match")]
+        public static object Match(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
+            ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            MutableString/*!*/ self, object pattern, object arg1, object arg2, [NotNull]params object[]/*!*/ rest) {
+            RubyRegex regex = pattern as RubyRegex;
+            if (regex == null) {
+                MutableString converted = (pattern is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, pattern);
+                if (converted == null) {
+                    throw RubyExceptions.CreateUnexpectedTypeError(scope.RubyContext, pattern, "Regexp");
+                }
+                regex = new RubyRegex(converted, RubyRegexOptions.NONE);
+            }
+            var args = new RubyArray(3 + rest.Length) { self, arg1, arg2 };
+            args.AddRange(rest);
+            var site = storage.GetCallSite("match", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument));
+            return YieldMatch(block, site.Target(site, regex, args));
+        }
+
         private static object YieldMatch(BlockParam block, object match) {
             if (block == null || match == null) {
                 return match;
