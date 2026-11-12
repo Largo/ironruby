@@ -3641,7 +3641,8 @@ class String
   def __undump_cp__(hex)
     ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless hex =~ /\A[0-9a-fA-F]+\z/
     cp = hex.to_i(16)
-    ::Kernel.raise(::RuntimeError, "invalid Unicode codepoint") if cp > 0x10ffff
+    # MRI's undump_after_backslash rejects surrogates as well as values past U+10FFFF.
+    ::Kernel.raise(::RuntimeError, "invalid Unicode codepoint") if cp > 0x10ffff || (0xd800..0xdfff).include?(cp)
     # pack("U") hands back an ASCII-8BIT string here; the bytes are UTF-8.
     ch = [cp].pack("U")
     ch.force_encoding(::Encoding::UTF_8) if ch.respond_to?(:force_encoding)
