@@ -583,6 +583,10 @@ namespace IronRuby.Builtins {
                 return;
             }
 
+            // MRI's pack.c caps a 'u' line at 63 bytes, the largest length one UU character can encode.
+            if (bytesPerLine > 63) {
+                bytesPerLine = 63;
+            }
             bytesPerLine = bytesPerLine - bytesPerLine % 3;
 
             int remains = input.Length % bytesPerLine;
