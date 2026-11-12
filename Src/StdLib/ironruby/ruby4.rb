@@ -3953,6 +3953,7 @@ class String
   # has no clusters to find, so MRI's answer there is one element per
   # character.
   def __ir_grapheme_clusters__
+    return __ir_broken_grapheme_clusters__ if encoding == ::Encoding::UTF_8 && !valid_encoding?
     return chars unless valid_encoding? && UNICODE_ENCODINGS__.include?(encoding)
     source = (encoding == ::Encoding::UTF_8 || encoding == ::Encoding::US_ASCII) ? self : encode(::Encoding::UTF_8)
     result = []
@@ -3966,6 +3967,52 @@ class String
     result
   end
   private :__ir_grapheme_clusters__
+
+  # MRI segments a broken UTF-8 string with its grapheme regexp: each invalid byte is a
+  # cluster of its own, the valid runs between them cluster as usual, and a truncated
+  # character at the very end (MBCLEN_NEEDMORE) never matches, so it is left out.
+  def __ir_broken_grapheme_clusters__
+    bytes = self.bytes
+    n = bytes.size
+    (1..[3, n].min).each do |k|
+      lead = bytes[n - k]
+      need = if lead >= 0xc2 && lead <= 0xdf then 2
+             elsif lead >= 0xe0 && lead <= 0xef then 3
+             elsif lead >= 0xf0 && lead <= 0xf4 then 4
+             end
+      next unless need
+      if k < need && bytes[(n - k + 1)..].all? { |b| b >= 0x80 && b <= 0xbf } &&
+         (k < 2 || __ir_utf8_second_byte_ok__(lead, bytes[n - k + 1]))
+        n -= k
+      end
+      break
+    end
+    result = []
+    run = +""
+    byteslice(0, n).each_char do |c|
+      if c.valid_encoding?
+        run << c
+      else
+        result.concat(run.__send__(:__ir_grapheme_clusters__)) unless run.empty?
+        run = +""
+        result << c
+      end
+    end
+    result.concat(run.__send__(:__ir_grapheme_clusters__)) unless run.empty?
+    result
+  end
+  private :__ir_broken_grapheme_clusters__
+
+  def __ir_utf8_second_byte_ok__(lead, b)
+    case lead
+    when 0xe0 then b >= 0xa0
+    when 0xed then b <= 0x9f
+    when 0xf0 then b >= 0x90
+    when 0xf4 then b <= 0x8f
+    else true
+    end
+  end
+  private :__ir_utf8_second_byte_ok__
 
 end
 
