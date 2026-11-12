@@ -725,8 +725,45 @@ namespace IronRuby.Builtins {
         // JIT would otherwise fold a forwarder this small into a compiled call-site rule.
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public static object Times(BlockParam/*!*/ block, int self) {
-            return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
+        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam/*!*/ block, int self) {
+            if (block == null) {
+                return new Enumerator(self, "times");
+            }
+            // numeric.rb's Integer#times is `while i < self; yield i; i = i.succ; end`, whose
+            // `<` and `succ` are calls once either has been redefined (#times on a Bignum does the same)
+            return AreTimesOpsBasic(lessThanStorage.Context)
+                ? TimesImpl(block, self)
+                : TimesImpl(lessThanStorage, succStorage, block, self);
+        }
+
+        private sealed class TimesOpsState {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly bool Basic;
+
+            internal TimesOpsState(RubyContext/*!*/ context, int version, bool basic) {
+                Context = context;
+                Version = version;
+                Basic = basic;
+            }
+        }
+
+        private static volatile TimesOpsState _timesOps;
+
+        private static bool AreTimesOpsBasic(RubyContext/*!*/ context) {
+            var state = _timesOps;
+            if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookups: a change that races with them leaves the state stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                bool basic = IsLibraryMethod(context, "<") && IsLibraryMethod(context, "succ");
+                _timesOps = state = new TimesOpsState(context, version, basic);
+            }
+            return state.Basic;
+        }
+
+        private static bool IsLibraryMethod(RubyContext/*!*/ context, string/*!*/ name) {
+            var lookup = context.IntegerClass.ResolveMethod(name, VisibilityContext.AllVisible);
+            return lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass;
         }
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
@@ -755,17 +792,17 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self</returns>
         /// <remarks>
-        /// Dynamically invokes "+" operator to find next item.
+        /// Dynamically invokes "succ" to find next item.
         /// Dynamically invokes "&lt;" operator to check if we have reached self - 1.
         /// </remarks>
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
-            return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
+        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam block, object/*!*/ self) {
+            return (block != null) ? TimesImpl(lessThanStorage, succStorage, block, self) : 
                 new Enumerator(self, "times");
         }
 
-        public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam/*!*/ block, object/*!*/ self) {
+        public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam/*!*/ block, object/*!*/ self) {
             object i = 0;
             var lessThan = lessThanStorage.GetCallSite("<");
             while (RubyOps.IsTrue(lessThan.Target(lessThan, i, self))) {
@@ -774,8 +811,8 @@ namespace IronRuby.Builtins {
                     return result;
                 }
 
-                var add = addStorage.GetCallSite("+");
-                i = add.Target(add, i, 1);
+                var succ = succStorage.GetCallSite("succ");
+                i = succ.Target(succ, i);
             }
             return self;
         }
