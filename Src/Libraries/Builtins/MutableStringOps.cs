@@ -2789,6 +2789,12 @@ namespace IronRuby.Builtins {
 
                         case "replace":
                             result.Replacement = entry.Value as MutableString;
+                            // MRI's rb_econv_prepare_options refuses a broken replacement up
+                            // front, whether or not anything will need replacing
+                            if (result.Replacement != null && result.Replacement.ContainsInvalidCharacters()) {
+                                throw RubyExceptions.CreateArgumentError("replacement string is broken: {0} as {1}",
+                                    context.Inspect(result.Replacement).ToString(), result.Replacement.Encoding.Name);
+                            }
                             break;
 
                         case "fallback":
