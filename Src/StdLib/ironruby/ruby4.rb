@@ -4636,10 +4636,14 @@ class Array
         other.to_ary
       elsif other.respond_to?(:each)
         collected = []
-        # several yielded values make one element, as Enumerator#next would pack them
-        other.each do |*element|
-          break if collected.size >= length
-          collected << (element.size <= 1 ? element[0] : element)
+        # several yielded values make one element, as Enumerator#next would pack them;
+        # MRI's take_i stops as soon as it has the receiver's length, without asking for one
+        # more (an Enumerator.produce is called exactly that many times)
+        if length > 0
+          other.each do |*element|
+            collected << (element.size <= 1 ? element[0] : element)
+            break if collected.size >= length
+          end
         end
         collected
       else
