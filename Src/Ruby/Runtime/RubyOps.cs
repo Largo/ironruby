@@ -942,6 +942,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object YieldSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            // yield x, *[] passes one argument, which a proc auto-splats and a lambda takes as it is,
+            // exactly as yield x does: {|*, a|} gets nil for yield [], *nil, and lambda {|a,|} gets [].
+            if (splattee.Count == 0) {
+                return Yield1(arg1, procArg, self, blockParam);
+            }
             object result;
             var proc = blockParam.Proc;
             RequireLambdaArity(proc, 1 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg1);
