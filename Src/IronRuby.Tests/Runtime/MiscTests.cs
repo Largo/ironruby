@@ -3221,7 +3221,7 @@ too few arguments
 ASCII incompatible encoding: UTF-16LE
 12354 out of char range
 incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
-invalid value for Float(): ""\xC2\xBD.5""
+invalid value for Float(): """ + "\u00BD" + @".5""
 ");
         }
 
