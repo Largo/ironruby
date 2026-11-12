@@ -4803,8 +4803,9 @@ namespace IronRuby.Runtime {
             int scale = 0;
             if (index < end && str[index] == '.') {
                 index++;
+                // ruby_strtod takes "0x1." and "0x1.p+0": the point may end the digits, if any came before it
                 int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
-                if (fractionDigits <= 0) {
+                if (fractionDigits < 0 || (fractionDigits == 0 && integerDigits == 0)) {
                     return false;
                 }
                 scale = -4 * fractionDigits;
