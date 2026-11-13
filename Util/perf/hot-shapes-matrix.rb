@@ -28,6 +28,12 @@ class A
   def mm(o); o.nosuch(1); end
   def last_new; A.new(7); end
   def seq(s); s == "abc"; end
+  def aset(o, x); o.v = x; @h[:k] = "s#{x}"; o.v; end   # attribute and element assignments, interpolation
+  def interp(o); "<#{o}|#{@v}>"; end
+  def kase(x); case x when Integer then :int when "a", :b then "ab" else [x, :other] end; end
+  def loop1(n); i = 0; t = 0; while i < n; t += getter == :c ? 1 : i; i += 1; end; t; end
+  def loop2(n); i = 0; while i < n; i += 1; local_variables.size if i == 2; end; [i, binding.local_variable_get(:i)]; end
+  def loop3(n); i = 0; t = 0; until i >= n; t += K; i += 1; end; t; end
   def store(i); @arr[i] = i; end
   def hstore(k); @h[k] = k; end
   def rec(n); n == 0 ? 0 : 1 + rec(n - 1); end
@@ -40,6 +46,8 @@ class A
   def method_missing(n, *a); n == :nosuch ? [:mm, a] : super; end
   def respond_to_missing?(*) = true
 end
+K = 1
+class Wrap; def initialize(x); @x = x; end; def to_s; "w#{@x}"; end; end
 class B < A; def getter; :b; end; end
 class C < A; def getter; :c; end; end
 out = []
@@ -49,7 +57,9 @@ procs = []
   o = objs[i % 4]
   r = [a.getter, o.getter, a.cmp(i % 7), a.y1 { |x| x * 2 }, a.y2 { |x| procs << proc { x } if i % 5000 == 0; x },
        a.bg, a.bg { 1 }, a.prot(o), a.priv(o), a.mm(o), a.last_new.v, a.seq("abc"), a.seq(:abc), a.seq("abd"),
-       a.store(i % 5), a.hstore(i % 3), a.lv(1), a.b.local_variables, a.b.receiver.equal?(a)]
+       a.store(i % 5), a.hstore(i % 3), a.lv(1), a.b.local_variables, a.b.receiver.equal?(a),
+       a.aset(o, i % 9), a.interp(Wrap.new(i % 4)), a.kase(i % 3 == 0 ? i : (i % 3 == 1 ? "a" : 1.5)), a.loop1(3), a.loop2(4),
+       (i % 2000 == 0 ? a.loop3(5000) : 0)]
   out << r if i % 3333 == 0
   case i
   when 5000 then class A; def getter; :redefined; end; end
@@ -59,6 +69,9 @@ procs = []
   when 12000 then class A; def initialize(v = 1); @v = v * 2; @arr = []; @h = {}; end; end
   when 13000 then B.class_eval { def cmp(o); :bcmp; end }; objs << B.new
   when 15000 then a.instance_variable_get(:@arr).freeze
+  when 16000 then Wrap.class_eval { def to_s; "W#{@x}"; end }; Integer.class_eval { alias old_eqq ===; def ===(o); o == 1.5 || old_eqq(o); end }
+  when 17000 then Object.send(:remove_const, :K); Object.const_set(:K, 2); A.class_eval { def getter; :c; end }
+  when 18000 then Integer.class_eval { alias === old_eqq }
   end
 rescue => e
   out << [i, e.class, e.message]

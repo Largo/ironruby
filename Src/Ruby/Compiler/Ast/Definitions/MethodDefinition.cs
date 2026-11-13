@@ -436,7 +436,8 @@ namespace IronRuby.Compiler.Ast {
         /// but only for its runtime and its lexical chain, which the declaring scope has too (LightFrameRewriter.ScopeOperandIndex).
         /// A call without a block takes the scope too, but makes it only when the method it binds to would read it
         /// (LightFrameRewriter.LightScopeCall), so `def getter; a; end', `def cmp(o); @x < o; end' and conditions over
-        /// such calls are light as well. Global variables and string interpolation need the scope.
+        /// such calls are light as well, and so are the attribute and element assignments, string interpolation, `case/when'
+        /// and `while' loops made of them (a loop's OSR site gets the scope made on demand). Global variables need the scope.
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
@@ -492,6 +493,10 @@ namespace IronRuby.Compiler.Ast {
         }
 
         private static bool IsScopeFree(Expression/*!*/ node) {
+            // `def f = [[[...]]]' a thousand deep: such a body is not worth a light frame, nor a stack overflow to find out
+            if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
+                return false;
+            }
             if (node is LocalVariable || node is Literal || node is SelfReference || node is InstanceVariable) {
                 return true;
             }
@@ -502,10 +507,60 @@ namespace IronRuby.Compiler.Ast {
             var assignment = node as SimpleAssignmentExpression;
             if (assignment != null) {
                 // `@x += @v' is a call of + between a read and a write
-                return (assignment.Operation == null || LightCallsEnabled) &&
-                    (assignment.Left is LocalVariable || assignment.Left is InstanceVariable) && IsScopeFree(assignment.Right);
+                if (!IsScopeFree(assignment.Right)) {
+                    return false;
+                }
+                if (assignment.Left is LocalVariable || assignment.Left is InstanceVariable) {
+                    return assignment.Operation == null || LightCallsEnabled;
+                }
+                // `o.x = v', `a[i] = v' (and their op-assigns): calls of x= and []=
+                var attribute = assignment.Left as AttributeAccess;
+                if (attribute != null) {
+                    return LightCallsEnabled && !attribute.IsSafeNavigation && IsScopeFree(attribute.Qualifier);
+                }
+                var item = assignment.Left as ArrayItemAccess;
+                return item != null && LightCallsEnabled && item.Block == null && IsScopeFree(item.Array) && AreScopeFree(item.Arguments);
+            }
+            // a String literal is a constant, or a copy of one; a Symbol literal is a constant
+            if (node is StringLiteral) {
+                return true;
             }
             if (LightCallsEnabled) {
+                var array = node as ArrayConstructor;
+                if (array != null) {
+                    return AreScopeFree(array.Arguments);
+                }
+                // "#{x}" converts each part through a to_s site
+                var interpolation = node as StringConstructor;
+                if (interpolation != null && interpolation.Kind == StringKind.Mutable) {
+                    foreach (var part in interpolation.Parts) {
+                        if (!IsScopeFree(part)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                var loop = node as WhileLoopExpression;
+                if (loop != null) {
+                    return IsScopeFree(loop.Condition) && AreScopeFree(loop.Statements);
+                }
+                var caseExpression = node as CaseExpression;
+                if (caseExpression != null) {
+                    if (caseExpression.Value != null && !IsScopeFree(caseExpression.Value) || !AreScopeFree(caseExpression.ElseStatements)) {
+                        return false;
+                    }
+                    foreach (var clause in caseExpression.WhenClauses) {
+                        foreach (var comparison in clause.Comparisons) {
+                            if (!IsScopeFree(comparison)) {
+                                return false;
+                            }
+                        }
+                        if (!AreScopeFree(clause.Statements)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
                 var call = node as MethodCall;
                 if (call != null) {
                     return call.Block == null && (call.Target == null || IsScopeFree(call.Target)) && AreScopeFree(call.Arguments);
@@ -626,9 +681,10 @@ namespace IronRuby.Compiler.Ast {
             });
             light.MakeScope = () => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
-            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, light.MakeScope()));
+            var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
+            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope(), inLoop)));
 
-            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, HasBlockGuard);
+            var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard);
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
                 Console.Error.WriteLine("[light] {0} {1} ({2}:{3})", rewriter.NeedsScope ? "needs scope:" : "light:", _name, gen.SourcePath, Location.Start.Line);
@@ -646,8 +702,13 @@ namespace IronRuby.Compiler.Ast {
         /// at the scope made on demand. Any other use of the scope, or a node it cannot look into, means the body needs
         /// its scope after all.
         /// </summary>
+        private static readonly MethodInfo/*!*/ _LightScopeInLoop = typeof(RubyOps).GetMethod("LightScopeInLoop");
+        private static readonly MethodInfo/*!*/ _EnterLightLoop = typeof(RubyOps).GetMethod("EnterLightLoop");
+        private static readonly MethodInfo/*!*/ _LeaveLightLoop = typeof(RubyOps).GetMethod("LeaveLightLoop");
+
         private sealed class LightFrameRewriter : MSA.ExpressionVisitor {
             private readonly MSA.ParameterExpression/*!*/ _scope;
+            private readonly MSA.Expression/*!*/ _inLoop;
             private readonly MSA.Expression/*!*/ _lazyScope;
             private readonly MSA.Expression/*!*/ _rfc;
             private readonly MSA.Expression/*!*/ _declaringScope;
@@ -663,7 +724,8 @@ namespace IronRuby.Compiler.Ast {
             internal bool MakesCalls;
 
             internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc,
-                MSA.Expression/*!*/ declaringScope, bool lazyUses) {
+                MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ inLoop, bool lazyUses) {
+                _inLoop = inLoop;
                 _lazyUses = lazyUses;
                 _scope = scope;
                 _lazyScope = lazyScope;
@@ -691,6 +753,15 @@ namespace IronRuby.Compiler.Ast {
                 return -1;
             }
 
+            public override MSA.Expression Visit(MSA.Expression node) {
+                // a deeply nested body (see IsScopeFree) keeps its scope rather than overflow the stack here
+                if (NeedsScope || !System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
+                    NeedsScope = true;
+                    return node;
+                }
+                return base.Visit(node);
+            }
+
             protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
                 if (node == _scope) {
                     if (_inTraceHook > 0 || _lazyUses) {
@@ -705,6 +776,24 @@ namespace IronRuby.Compiler.Ast {
                 if (node.Method == Methods.MethodYield && node.Arguments.Count == 3 && node.Arguments[0] == _scope) {
                     // the raw scope variable, which is null unless a hook made the scope
                     return Methods.LightMethodYield.OpCall(_rfc, _scope, Visit(node.Arguments[1]), Visit(node.Arguments[2]));
+                }
+                // the outermost `while' marks the scope as in a loop (EvalBreak), and the frame, for a scope made in it later
+                if ((node.Method == Methods.EnterLoop || node.Method == Methods.LeaveLoop) && node.Arguments.Count == 1 && node.Arguments[0] == _scope) {
+                    bool enter = node.Method == Methods.EnterLoop;
+                    return Ast.Block(
+                        Ast.Assign(_inLoop, AstUtils.Constant(enter)),
+                        Ast.Call(enter ? _EnterLightLoop : _LeaveLightLoop, _scope)
+                    );
+                }
+                if (node.Method == IronRuby.Runtime.Osr.OsrLoopSite.RunMethod) {
+                    // -X:OSR: a loop that has taken enough back edges hands its specialized copy the scope (for its constants
+                    // and the sites it binds), made on demand like a TracePoint hook's - once per loop entry that gets that far
+                    _inTraceHook++;
+                    try {
+                        return base.VisitMethodCall(node);
+                    } finally {
+                        _inTraceHook--;
+                    }
                 }
                 int index = ScopeOperandIndex(node.Method);
                 if (index >= 0 && index < node.Arguments.Count && node.Arguments[index] == _scope &&
