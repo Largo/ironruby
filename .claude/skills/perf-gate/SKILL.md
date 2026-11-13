@@ -16,8 +16,12 @@ Run the steps in order and stop at the first failure: the cheap ones catch most 
 ## 1. The diff is what it says it is
 
 ```sh
+git -C <tree> status --short          # must print nothing: the gate judges commits
 git -C <tree> diff --stat <base>...HEAD
 ```
+
+- Uncommitted changes in the candidate tree are built and tested but are in neither this
+  diff nor the merge that follows: commit them (or stash and rebuild) before going on.
 
 - Whole-file churn means line endings or a BOM were rewritten: fix that first (CLAUDE.md).
 - A `*.Generated.cs` in the diff must come from its generator. A `[RubyMethod]`,
@@ -37,8 +41,12 @@ git -C <tree> diff --stat <base>...HEAD
 set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
   -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
-(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; tail -1 results.txt; grep '^> FAILED' results.txt)
+(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt)
 ```
+
+Do the same in the baseline checkout (its own Release test build) and `diff` the two
+`failed.txt`: a name only the candidate has fails the gate. Do not go by "one failure, as
+before" - a different test failing in place of the known one would look the same.
 
 Then, whichever apply to the code the diff touches (each file's header says how to run it
 and what "same" means; most compare JIT/OSR on against off, or IronRuby against CRuby):
@@ -94,11 +102,13 @@ timing run is going.
 
 ## 4. Nothing got slower
 
-Back to back, twice, on a quiet machine (`uptime`):
+Back to back, twice, on a quiet machine (`uptime`), with both trees named by absolute path:
+`./ir.sh` is whichever tree the shell happens to be in, and step 2 left it in the candidate.
 
 ```sh
-ruby Util/perf/micro-table.rb "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release <tree>/ir.sh"
-ruby Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release <tree>/ir.sh"
+BASE=/abs/path/to/baseline NEW=/abs/path/to/candidate
+ruby $BASE/Util/perf/micro-table.rb "base=env IR_CONFIG=Release $BASE/ir.sh" "new=env IR_CONFIG=Release $NEW/ir.sh"
+ruby $BASE/Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release $BASE/ir.sh" "new=env IR_CONFIG=Release $NEW/ir.sh"
 ```
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which

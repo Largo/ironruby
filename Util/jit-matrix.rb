@@ -2736,7 +2736,8 @@ nt.h = bang; nt.p = true; nt.w = 1
 t('! of an object with its own #!') { nt.sp_waiting_with_packet }
 nt.h = false; nt.p = false; nt.w = true
 warm { |i| nt.sp_holding_or_waiting }
-class FalseClass; def ! = :false_bang; end
+# false, where the built-in gives true: a body that ignored the replacement would answer differently
+class FalseClass; def ! = false; end
 t('FalseClass#! redefined') { nt.sp_holding_or_waiting }
 class FalseClass; remove_method :!; end
 t('and removed') { nt.sp_holding_or_waiting }
@@ -2974,3 +2975,45 @@ class JitTrampMatrix::Holder
   define_method(:tr_declined) { |x| [:defined, x] }
 end
 t('tramp: aliased and define_method') { [tm.tr_spec(2), tm.tr_declined(4), tm.method(:tr_spec).name, tm.method(:tr_spec).original_name] }
+# ---------------------------------------------------------------- second review of #215
+# The hash query's helper deopts after its arguments have run: an argument with an effect
+# must not be evaluated a second time by the generic body.
+class JitFetchDefault
+  attr_reader :n
+  def initialize = (@n = 0)
+  def no_fetch_default(h, k) = h.fetch(k, @n += 1)
+end
+fd = JitFetchDefault.new; fh = { a: 1 }
+warm { fd.no_fetch_default(fh, :a) }
+t('fetch(nil, @n += 1): the default evaluated once') { [fd.no_fetch_default(fh, nil), fd.n] }
+t('fetch(:zz, @n += 1)') { [fd.no_fetch_default(fh, :zz), fd.n] }
+
+# A construction ends its own invocation, not the outer ones of a body that calls itself:
+# an initialize that redefines an operator must be seen by them.
+$jit_redef_plus = false
+class JitCtorRedef
+  attr_reader :x
+  def initialize(x)
+    @x = x
+    if $jit_redef_plus && x == 1.0
+      $jit_redef_plus = false
+      Float.class_eval { alias_method :__jit_old_plus, :+; def +(o) = 100.0 }
+    end
+  end
+end
+class JitCtorMaker
+  def no_make(n)
+    no_make(n - 1.0) if n > 0.0
+    JitCtorRedef.new(n + 1.0)
+  end
+end
+cm = JitCtorMaker.new
+warm { cm.no_make(2.0) }
+$jit_redef_plus = true
+ctor_x = cm.no_make(2.0).x
+Float.class_eval { alias_method :+, :__jit_old_plus; remove_method :__jit_old_plus }
+t('Float#+ redefined by an inner initialize') { ctor_x }
+
+# An initialize that constructs again recurses through the direct construction: SystemStackError.
+class JitCtorDeep; def initialize(n) = JitCtorDeep.new(n + 1); end
+t('initialize constructing without end') { begin; JitCtorDeep.new(0); :returned; rescue SystemStackError => e; e.class; end }

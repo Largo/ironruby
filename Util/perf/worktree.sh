@@ -9,7 +9,7 @@
 # native libraries the session hook built here (they are not tracked), and a DLR copy of
 # its own: worktrees sharing one DLR checkout share its obj/ and fail with bogus CS0246
 # when they build at the same time. Prints the build command for the new tree.
-set -e
+set -e -o pipefail      # an incomplete tar of the DLR must stop the script, not be extracted and built
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
 UP="$(dirname "$ROOT")"
 DLR="${DLR_SOURCE_DIR:-$UP/dlr/src/core}"; DLR="${DLR%/}"; DLR_TOP="${DLR%/src/core}"

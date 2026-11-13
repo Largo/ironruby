@@ -60,7 +60,8 @@ procs = []
        a.store(i % 5), a.hstore(i % 3), a.lv(1), a.b.local_variables, a.b.receiver.equal?(a),
        a.aset(o, i % 9), a.interp(Wrap.new(i % 4)), a.kase(i % 3 == 0 ? i : (i % 3 == 1 ? "a" : 1.5)), a.loop1(3), a.loop2(4),
        (i % 2000 == 0 ? a.loop3(5000) : 0)]
-  out << r if i % 3333 == 0
+  # rows at the multiples of 2000 too, where loop3 runs: after K is replaced its result has to change
+  out << r if i % 3333 == 0 || i % 2000 == 0
   case i
   when 5000 then class A; def getter; :redefined; end; end
   when 7000 then def a.getter; :singleton; end
@@ -177,7 +178,9 @@ ivo = IV.new; others = [IV2.new, IV.new]; ivout = []
   o = i.odd? ? ivo : others[i % 2]
   begin
     o.wr(i)
-    ivout << [i, o.rd, ivo.via(o), o.instance_variables] if i % 2500 == 1 || (i > 14_990 && i < 15_010 && i.odd?)
+    # via runs on every iteration, on both receivers, so that its attribute sites are hot; rows at both parities
+    read = o.rd; via = ivo.via(o)
+    ivout << [i, read, via, o.instance_variables] if i % 2500 < 2 || (i > 14_990 && i < 15_010)
   rescue => e
     ivout << [i, e.class, e.message[/can.t modify frozen IV/]] if i < 15_010
   end
@@ -343,7 +346,8 @@ idout = []
   r = idrecv[i % idrecv.size]
   row = [id.nq(r), id.eq(r, r), id.eq(r, plain), id.ne(r, plain), id.ne(r, r), id.eql(r, r), id.eql(r, 5),
          id.nqo(plain), id.eqo(plain), id.eqo(id), (id.nqo(IDPriv.new) rescue :private), same.eqs(same)]
-  idout << [i, row.map { |x| x.inspect }] if i % 2000 == 7 || (i > 9_995 && i < 10_010)
+  # and the iterations right after each redefinition below (x001), one per receiver, while it is in force
+  idout << [i, row.map { |x| x.inspect }] if i % 2000 == 7 || (i > 9_995 && i < 10_010) || (i % 1000).between?(2, 12)
   case i
   when 3001 then class Object; def nil?; :objnil; end; end
   when 4001 then class Object; remove_method :nil?; end
@@ -472,4 +476,33 @@ lambda do
     s += un.(rr.d1(i)) if i.odd?
   end
   p s, (rr.d6(1) rescue $!.message)
+end.call
+
+# ---- a block that leaves the method through its block parameter (second review of #215) ----
+# `def capture(&b); b; end' is a light frame, but not one that "can only yield to its block":
+# each evaluation of the literal must give a Proc of its own.
+lambda do
+  kb = Class.new do
+    def capture(&b); b; end
+    def capture2(&b) = b
+    def keep(&b); @kept = b; nil; end
+    def forward(&b); capture(&b); end
+    attr_reader :kept
+  end.new
+  saved = []
+  i = 0
+  while i < 3
+    saved << kb.capture { i }
+    i += 1
+  end
+  p saved[0].equal?(saved[1]), saved.map(&:object_id).uniq.size, saved.map(&:call)
+  s2 = []; s3 = []; s4 = []
+  5000.times do |k|
+    pr = kb.capture2 { k }
+    s2 << pr if k % 1000 == 0
+    kb.keep { k * 2 }
+    s3 << kb.kept if k % 1000 == 1
+    s4 << kb.forward { k + 1 } if k % 1000 == 2
+  end
+  p s2.map(&:call), s3.map(&:call), s4.map(&:call), (s2 + s3 + s4).map(&:object_id).uniq.size
 end.call
