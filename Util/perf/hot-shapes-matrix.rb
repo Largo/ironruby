@@ -450,3 +450,26 @@ lambda do
   overflow = ->(&call) { begin; call.(); :returned; rescue SystemStackError => e; e.class; end }
   p overflow.() { rb.deep }, overflow.() { rb.deeper(0) }, overflow.() { rb.each_deep([1]) }
 end.call
+
+# ---- return from a block literal of a light-frame method called with a literal block ----
+# The scope such a method makes for its block literal has the call's flow-control frame, the
+# caller's literal block, and a return in the block literal targets that: the method has to
+# take it as its own return (`def d; [1].each { return 5 }; end; d { }' leaked an uncaught
+# MethodUnwinder), however it gets there - an iterator, a yield before it, a nested block.
+lambda do
+  rr = Class.new do
+    def d1(i) = [i].each { |v| return v * 2 if v.odd?; v }
+    def d2(i) = [i].each { |v| [v].each { |w| return w * 3 if w.odd? }; v }
+    def d3(i) = i.times { |v| return v if v == 2 }
+    def d4(i) = [i].map { |v| break 7 if v == 3; return v if v.odd?; v }
+    def d6(i) = [i].each { |v| return yield(v) if v.odd? }
+  end.new
+  un = ->(x) { x.is_a?(Array) ? x[0] : x }
+  s = 0
+  20_000.times do |i|
+    s += un.(rr.d1(i) { 1 }) + un.(rr.d2(i) { 1 }) + rr.d3(i % 5) { 1 } + un.(rr.d4(i % 7) { 1 })
+    s += un.(rr.d6(i % 9) { |x| x + 1 }) + un.(rr.d6(i % 9, &->(x) { x + 2 })) + un.(rr.d1(i, &:itself))
+    s += un.(rr.d1(i)) if i.odd?
+  end
+  p s, (rr.d6(1) rescue $!.message)
+end.call

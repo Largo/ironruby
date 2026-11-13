@@ -559,7 +559,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static object MethodPropagateReturn(RubyScope/*!*/ scope, Proc block, BlockReturnResult/*!*/ unwinder) {
-            if (unwinder.TargetFrame == scope) {
+            // A light-frame method's scope, made on demand for a block literal, has the call's flow-control frame - the literal
+            // block the method was called with (RubyOps.EnterLightMethod) - and a return in that block literal targets that
+            // frame, not the scope: returned to the caller instead, it reached a frame it does not belong to (`def d; [1].each
+            // { return 5 }; end; d { }' ended with a MethodUnwinder nothing caught).
+            if (unwinder.TargetFrame == scope || (scope is RubyMethodScope && unwinder.TargetFrame == scope.FlowControlScope)) {
                 return unwinder.ReturnValue;
             } else if (block != null) {
                 return unwinder;
