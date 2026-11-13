@@ -51,6 +51,7 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | Integer/Float arithmetic | `Util/int-matrix.rb` |
 | Hash, Struct | `Util/hash-order-matrix.rb`, `Util/hash-struct-matrix.rb` |
 | exceptions, backtraces | `Util/raise-matrix.rb`, `Util/full-message-matrix.rb` |
+| calls, blocks, scopes, dispatch | `Util/perf/hot-shapes-matrix.rb` |
 
 And always, because an optimization that is only wrong when hot passes everything above:
 
@@ -63,8 +64,8 @@ Write one new differential case for the shortcut itself: the shape it accelerate
 (a few thousand iterations, past the JIT thresholds), with the thing that must invalidate
 it happening in the middle - the method redefined, a singleton method added to the cached
 receiver, the block captured with `&b`, `binding` called, an exception raised through it -
-and compare the output with CRuby 4.0's. If the tree has a matrix for the area, add the
-case there; otherwise add a registered test in `Src/IronRuby.Tests` (CLAUDE.md, "Tests").
+and compare the output with CRuby 4.0's. If the tree has a matrix for the area (`Util/perf/hot-shapes-matrix.rb`
+for calls and blocks), add the case there; otherwise add a registered test in `Src/IronRuby.Tests` (CLAUDE.md, "Tests").
 
 ## 3. ruby/spec
 
