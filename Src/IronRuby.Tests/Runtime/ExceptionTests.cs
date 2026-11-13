@@ -1259,7 +1259,8 @@ true
         /// <summary>
         /// A const_missing that reads a missing constant of its own recurses through the constant lookup alone: its body is a
         /// light frame with no call site, so nothing in it checked the stack, and the recursion ended the process with a CLR
-        /// stack overflow. CRuby raises SystemStackError there too (and cannot rescue it, so its output is that error).
+        /// stack overflow. So did an #inspect that reads a constant qualified by an object that is no module, through the
+        /// TypeError's message. CRuby raises SystemStackError for both (and cannot rescue it, so its output is that error).
         /// </summary>
         public void Exception_StackLevelTooDeepConstMissing1() {
             TestOutput(@"
@@ -1270,9 +1271,18 @@ rescue SystemStackError => e
   p e.class
 end
 p Thread.new { begin; ConstMissingDeep::Foo; rescue SystemStackError; :caught; end }.value
+# the TypeError of a qualifier that is no module calls #inspect, which reads the constant again
+class NotModuleDeep; def inspect = NotModuleObj::X; end
+NotModuleObj = NotModuleDeep.new
+begin
+  NotModuleObj::X
+rescue SystemStackError => e
+  p e.class
+end
 ", @"
 SystemStackError
 :caught
+SystemStackError
 ");
         }
 

@@ -1593,6 +1593,10 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static object GetQualifiedConstant(RubyScope/*!*/ scope, ConstantSiteCache/*!*/ cache, string/*!*/[]/*!*/ qualifiedName, bool isGlobal) {
+            // The lookup may call Ruby code - #inspect for the TypeError of a qualifier that is no module, const_missing - from a
+            // light frame that has no call site and so checked no stack at its entry (MethodDefinition.LightFrame.MakesCalls):
+            // `def inspect = Obj::X' with Obj not a module recurses through here alone. Only a read the cache cannot answer gets here.
+            RequireSufficientStack();
             var globalScope = scope.GlobalScope;
             var context = globalScope.Context;
 
