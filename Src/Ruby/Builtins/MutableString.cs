@@ -1385,6 +1385,18 @@ namespace IronRuby.Builtins {
             return CompareTo(other) == 0;
         }
 
+        /// <summary>
+        /// Whether this String equals a literal whose characters are <paramref name="ascii"/>, all ASCII, in
+        /// an ASCII-compatible encoding: 1 or 0, or -1 when only Equals can tell. When this String holds
+        /// characters in an encoding where ASCII is its own bytes, every non-ASCII character is non-ASCII
+        /// bytes too, so the two are equal exactly when the characters are (JitRuntime.CaseString).
+        /// </summary>
+        internal int EqualsAsciiLiteral(string/*!*/ ascii) {
+            var content = _content as StringContent;
+            if (content == null || !_encoding.IsAsciiIdentity) { return -1; }
+            return String.Equals(content.Data, ascii) ? 1 : 0;
+        }
+
         public int CompareTo(object other) {
             var ms = other as MutableString;
             if (ms != null) {

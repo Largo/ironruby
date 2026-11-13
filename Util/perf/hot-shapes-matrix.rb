@@ -473,3 +473,46 @@ lambda do
   end
   p s, (rr.d6(1) rescue $!.message)
 end.call
+
+# ---- `"lit" == v' and `"lit" != v' in a method-JIT body, and `v == "lit"' ----
+# The JIT compares a String v with an ASCII literal by its characters when v holds them in an
+# encoding where ASCII is its own bytes (MutableString.EqualsAsciiLiteral), and through
+# String#== otherwise. v of every kind: other encodings (binary, US-ASCII, UTF-16LE, an
+# invalid byte, a one-byte slice of a multi-byte character), a String subclass, nil, an
+# Integer, an object with to_str; in the middle NilClass gains to_str and String#== is replaced.
+lambda do
+  rl = Class.new do
+    def initialize; @c = nil; end
+    attr_writer :c
+    def ws; ' ' == @c || "\t" == @c || "\n" == @c || "\r" == @c; end
+    def ne; "a" != @c; end
+    def em; "" == @c; end
+    def fw; @c == "ab"; end
+    def u8; "é" == @c; end
+  end.new
+  sub = Class.new(String)
+  ts = Object.new
+  def ts.to_str; "a"; end
+  def ts.==(o); o == "a"; end
+  vals = [" ", "\t", "x", "a", "ab", "", nil, 1, :a, " ".b, "a".b, "a".encode("US-ASCII"), "a".encode("UTF-16LE"),
+          "\xFF".b, "\xFF", "é"[0].b, "é".b[0], "é", "é".b, "é".encode("ISO-8859-1"), sub.new("a"), sub.new(" "), ts,
+          "ab".force_encoding("UTF-16LE"), +"a"]
+  out = []
+  20_000.times do |i|
+    v = vals[i % vals.size]
+    rl.c = v
+    r = [rl.ws, rl.ne, rl.em, rl.fw, rl.u8]
+    out << [i % vals.size, r] if i >= 20_000 - vals.size
+    if i == 10_000
+      NilClass.class_eval { def to_str; "a"; end; def ==(o); :nil_eq; end }
+    elsif i == 12_000
+      NilClass.class_eval { remove_method :to_str; remove_method :== }
+    elsif i == 14_000
+      String.class_eval { alias_method :__eq, :==; def ==(o); __eq(o) || o.equal?(:a); end }
+    elsif i == 16_000
+      String.class_eval { alias_method :==, :__eq; remove_method :__eq }
+    end
+    out << [:mid, i, r] if i == 11_000 || i == 15_000
+  end
+  out.each { |x| p x }
+end.call

@@ -528,7 +528,7 @@ namespace IronRuby.Runtime.Jit {
                     var str = literal.GetMutableString();
                     str.Freeze();
                     _canDeopt = true;
-                    return Ast.Call(JitRuntime.M("CaseString"), subject.Value, Ast.Constant(str), Ast.Constant(plainFalse));
+                    return Ast.Call(JitRuntime.M("CaseString"), subject.Value, Ast.Constant(str), AsciiLiteral(str), Ast.Constant(plainFalse));
                 default:
                     throw Bail("when of a String on a " + subject.Type);
             }
@@ -613,7 +613,16 @@ namespace IronRuby.Runtime.Jit {
             var args = node.Arguments;
             if (node.Block != null || args == null || args.Expressions.Length != 1) { return false; }
             var arg = args.Expressions[0];
-            return arg is StringLiteral && !(arg is SymbolLiteral);
+            return IsPlainStringLiteral(arg) || IsPlainStringLiteral(node.Target) && !(arg is SplattedArgument);
+        }
+
+        /// <summary>`"lit" == v' or `"lit" != v': the receiver, not the argument, is the literal.</summary>
+        internal static bool IsReversedStringLiteralComparison(MethodCall/*!*/ node) {
+            return !IsPlainStringLiteral(node.Arguments.Expressions[0]);
+        }
+
+        private static bool IsPlainStringLiteral(Expression node) {
+            return node is StringLiteral && !(node is SymbolLiteral);
         }
 
         /// <summary>
@@ -629,6 +638,9 @@ namespace IronRuby.Runtime.Jit {
                 negated && (!IsPlainLibraryMethod(stringClass, "!=") || !IsPublic(stringClass, "!="))) {
                 throw Bail("String#" + node.MethodName + " is not the built-in one");
             }
+            if (IsReversedStringLiteralComparison(node)) {
+                return EmitReversedStringLiteralComparison(node, negated, out type);
+            }
             Type observed = ObservedType(node.Target);
             if (observed != null && observed != MixedTypes && observed != typeof(MutableString)) {
                 throw Bail(node.MethodName + " of a String literal on a " + ((observed == typeof(void)) ? "nil" : observed.Name));
@@ -641,8 +653,35 @@ namespace IronRuby.Runtime.Jit {
             str.Freeze();
             _canDeopt = true;
             type = JT.Bool;
-            MSA.Expression test = Ast.Call(JitRuntime.M("StringEqualsLiteral"), v, Ast.Constant(str));
+            MSA.Expression test = Ast.Call(JitRuntime.M("StringEqualsLiteral"), v, Ast.Constant(str), AsciiLiteral(str));
             return negated ? Ast.Not(test) : test;
+        }
+
+        /// <summary>
+        /// `"lit" == v', `"lit" != v' (Json's `' ' == @current'): String#== of the literal, a fresh String
+        /// nothing else can see (so no singleton == of its own), is String#=== - the contents of a String
+        /// v, false for a v that does not respond to to_str - which JitRuntime.CaseString computes as it
+        /// does for `when "lit"'. A v it cannot answer for deopts; the generic code makes the literal then.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitReversedStringLiteralComparison(MethodCall/*!*/ node, bool negated, out JT type) {
+            JT vt;
+            var v = Emit(node.Arguments.Expressions[0], out vt);
+            if (vt != JT.Obj) { throw Bail(node.MethodName + " of a String literal with a " + vt); }
+            bool plainFalse = NoToStr(KindClass(JitRuntime.KindNil)) && NoToStr(KindClass(JitRuntime.KindTrue))
+                && NoToStr(KindClass(JitRuntime.KindFalse)) && NoToStr(KindClass(JitRuntime.KindFixnum))
+                && NoToStr(KindClass(JitRuntime.KindFloat)) && NoToStr(KindClass(JitRuntime.KindSymbol));
+            var str = ((StringLiteral)node.Target).GetMutableString();
+            str.Freeze();
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("CaseString"), v, Ast.Constant(str), AsciiLiteral(str), Ast.Constant(plainFalse));
+            return negated ? Ast.Not(test) : test;
+        }
+
+        /// <summary>A String literal's characters for MutableString.EqualsAsciiLiteral, or null if it is not ASCII in an ASCII-compatible encoding.</summary>
+        private static MSA.Expression/*!*/ AsciiLiteral(MutableString/*!*/ literal) {
+            string ascii = (literal.Encoding.IsAsciiIdentity && literal.IsAscii()) ? literal.ToString() : null;
+            return Ast.Constant(ascii, typeof(string));
         }
 
         /// <summary>Instances of cls answer respond_to?(:to_str) false without calling Ruby code.</summary>
