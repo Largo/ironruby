@@ -2676,9 +2676,10 @@ unless defined?(Fiber)
           @prev = cur
           cur.__set_resuming__(self)
           msg = ::Thread.__fiber_switch__(cur.__core__, @core, MSG_RESUME, args, false, held)
-        rescue ::Exception
+        ensure
+          # also on a way out that is no exception to rescue (a throw, the thread's end); after
+          # the switch it does nothing, the switch has ended the hold
           ::Thread.__fiber_unhold__(held)
-          ::Kernel.raise
         end
         cur.__act__(msg)
       end
@@ -2696,9 +2697,10 @@ unless defined?(Fiber)
           __start__
           cur.__set_transferred__
           msg = ::Thread.__fiber_switch__(cur.__core__, @core, MSG_TRANSFER, args, resumed, held)
-        rescue ::Exception
+        ensure
+          # also on a way out that is no exception to rescue (a throw, the thread's end); after
+          # the switch it does nothing, the switch has ended the hold
           ::Thread.__fiber_unhold__(held)
-          ::Kernel.raise
         end
         cur.__act__(msg)
       end
@@ -2757,9 +2759,10 @@ unless defined?(Fiber)
         begin
           __adopt__(cur)
           ::Thread.__fiber_switch__(cur.__core__, @core, kind, payload, false, held)
-        rescue ::Exception
+        ensure
+          # also on a way out that is no exception to rescue (a throw, the thread's end); after
+          # the switch it does nothing, the switch has ended the hold
           ::Thread.__fiber_unhold__(held)
-          ::Kernel.raise
         end
       end
 
@@ -2834,9 +2837,8 @@ unless defined?(Fiber)
       #   begin
       #     bookkeeping
       #     msg = ::Thread.__fiber_switch__(cur's core, target's core, kind, payload, cur resumed?, held)
-      #   rescue ::Exception
+      #   ensure
       #     ::Thread.__fiber_unhold__(held)
-      #     ::Kernel.raise
       #   end
       #
       # The bookkeeping records who resumed whom and starts the target's thread (#__start__). It
@@ -2902,13 +2904,13 @@ unless defined?(Fiber)
           target.__set_resuming__(nil)
           @yielded = true
           msg = ::Thread.__fiber_switch__(@core, target.__core__, MSG_YIELD, args, false, held)
-        rescue ::Exception
+        ensure
+          # also on a way out that is no exception to rescue (a throw, the thread's end); after
+          # the switch it does nothing, the switch has ended the hold
           ::Thread.__fiber_unhold__(held)
           # also when the switch raises a Thread#raise as control comes back: the fiber runs
           @yielded = false
-          ::Kernel.raise
         end
-        @yielded = false
         __act__(msg)
       end
 

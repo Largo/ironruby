@@ -590,7 +590,12 @@ namespace IronRuby.Builtins {
             info.Group = creator.Group;
             info.Ractor = creator.Ractor;
             // The pool is the process's, and the thread may have been parked by another runtime: it
-            // belongs to this one now, whose end kills it (TerminateAllThreads) and no other's.
+            // belongs to this one now, whose end kills it (TerminateAllThreads) and no other's -
+            // which that end only does for a runtime that has the callback AllocateThread installs,
+            // and this one may not have created a thread of its own yet.
+            if (context.ThreadTerminator == null) {
+                context.ThreadTerminator = CreateThreadTerminator(context);
+            }
             info.Context = context;
             info.IsIdleFiberWorker = false;
             worker.Jobs.Post(fiber);
