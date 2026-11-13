@@ -611,6 +611,25 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `o.x = v' in a method (JitCompiler.EmitMethodAttrWrite): the store the attr_writer does, once the
+        /// site finds it to be that writer on o's class under the global method version. Anything else, and a
+        /// frozen o (the real call raises its FrozenError), deopts before writing. Another thread may freeze o
+        /// or redefine x= after the check: the store is then as if made just before, as a call already past
+        /// its lookup would.
+        /// </summary>
+        public static void WriteAttr(RubyContext/*!*/ context, object self, object value, SelfAttrSite/*!*/ site) {
+            var obj = self as RubyObject;
+            if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
+                throw Deopt();
+            }
+            var data = obj._instanceData;
+            if (data != null && data._frozen) {
+                throw Deopt();
+            }
+            SetIVar(context, self, value, site.Variable);
+        }
+
+        /// <summary>
         /// The write an attr_writer does, under the same checks as ReadSelfAttr's, of a variable the
         /// object already has: the slot's old value goes into the undo log, so a deopt later in the
         /// iteration takes the write back (JitUndoLog.Rollback) and the restart is invisible. Anything
@@ -749,6 +768,13 @@ namespace IronRuby.Runtime.Jit {
 
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
         // unboxed while it holds the type it held when the loop was compiled, a deopt once it does not.
+
+        /// <summary>`!x' of an x speculated to be true, false or nil (JitCompiler.EmitNot).</summary>
+        public static bool NotBoolean(object value) {
+            if (value == null) { return true; }
+            if (value is bool) { return !(bool)value; }
+            throw Deopt();
+        }
 
         public static int GuardInt(object value) {
             if (value is int) { return (int)value; }

@@ -2678,3 +2678,144 @@ warm { |i| js.sp_count(i % 5) }
 t('self-call defined before the refinement') { js.sp_count(3) }
 warm { |i| js.no_count_refined(i % 5) }
 t('a call of the refined name where it is used') { js.no_count_refined(2) }
+
+# Instance variables as operands: typed by what the receiver's variable held when the method
+# turned hot, read through a guard that deopts when it holds anything else.
+class JitIVarOperands
+  def initialize(a, b); @a = a; @b = b; end
+  attr_writer :a, :b
+  def sp_sum; @a + @b; end
+  def sp_mod; @a % @b; end
+  def sp_same; @a == @b; end
+  def sp_less(o); @a < o; end
+  def sp_scaled; @a * 3 + @b; end
+  def sp_div; @a / @b; end
+end
+io = JitIVarOperands.new(9, 4)
+warm { |i| io.sp_sum; io.sp_same; io.sp_less(i); io.sp_scaled; io.sp_div }
+t('ivar operands, Integers') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 2**62; io.b = -(2**62)
+t('ivar operands overflowing into Bignum') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 2**80
+t('ivar operand a Bignum') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled] }
+io.a = 7.5; io.b = 2
+t('ivar operand a Float') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 7; io.b = 0
+t('ivar divisor zero') { io.sp_div }
+io.a = nil
+t('ivar operand nil') { io.sp_sum }
+io.a = "s"
+t('ivar operand a String') { [io.sp_same, io.sp_scaled] }
+io.a = 1; io.b = 1
+warm { |i| io.sp_mod; io.sp_same }
+class Integer; alias_method :jit_iv_mod, :%; def %(o) = :redefined_mod; end
+t('Integer#% redefined under an ivar operand') { io.sp_mod }
+class Integer; alias_method :%, :jit_iv_mod; end
+t('and restored') { io.sp_mod }
+fo = JitIVarOperands.new(5, 1).freeze
+t('frozen receiver reads') { [fo.sp_sum, fo.sp_less(6)] }
+class JitIVarOperandsSub < JitIVarOperands
+  def sp_sum; super * 10; end
+end
+t('subclass overriding the method') { JitIVarOperandsSub.new(5, 1).sp_sum }
+
+# `!@x': speculated true/false/nil, whose #! is BasicObject's.
+class JitIVarNot
+  def initialize; @h = false; @p = true; @w = false; end
+  attr_writer :h, :p, :w
+  def sp_holding_or_waiting; @h || (!@p && @w); end
+  def sp_waiting_with_packet; @p && @w && !@h; end
+end
+nt = JitIVarNot.new
+warm { |i| nt.sp_holding_or_waiting; nt.sp_waiting_with_packet }
+t('! of ivars') { [nt.sp_holding_or_waiting, nt.sp_waiting_with_packet] }
+nt.h = nil; nt.p = nil; nt.w = :x
+t('! of nil ivars') { [nt.sp_holding_or_waiting, nt.sp_waiting_with_packet] }
+bang = Object.new; def bang.! = :custom_bang
+nt.h = bang; nt.p = true; nt.w = 1
+t('! of an object with its own #!') { nt.sp_waiting_with_packet }
+nt.h = false; nt.p = false; nt.w = true
+warm { |i| nt.sp_holding_or_waiting }
+class FalseClass; def ! = :false_bang; end
+t('FalseClass#! redefined') { nt.sp_holding_or_waiting }
+class FalseClass; remove_method :!; end
+t('and removed') { nt.sp_holding_or_waiting }
+
+# Instance variable writes in a body that can deopt: allowed while every deopt comes before the
+# first write (no loop, no self-call); the guards here all run before the store.
+class JitIVarWrites
+  def initialize; @seed = 74755; @n = 0; @f = 1.0; @log = []; end
+  attr_accessor :seed, :n, :f
+  def sp_next; @seed = ((@seed * 1309) + 13849) & 65535; end
+  def sp_inc(d); @n += d; end
+  def sp_fscale; @f *= 2; end
+  def no_two_writes(d); @n += d; @seed += d; end   # the second guard is after the first write
+end
+iw = JitIVarWrites.new
+warm { |i| iw.sp_next; iw.sp_inc(1); iw.sp_fscale; iw.no_two_writes(1) }
+t('ivar writes, hot') { [iw.sp_next, iw.sp_inc(3), iw.n, iw.seed] }
+iw.n = 2**62
+t('ivar op-assign overflowing') { [iw.sp_inc(2**62), iw.n] }
+iw.n = 1.5
+t('ivar op-assign on a Float') { [iw.sp_inc(1), iw.n] }
+iw.n = "s"
+t('ivar op-assign on a String') { iw.sp_inc(1) }
+t('the String left alone') { iw.n }
+iw.n = 5; iw.seed = "x"
+t('second guard fails after the first write') { iw.no_two_writes(1) }
+t('first write kept') { iw.n }
+iw.n = 1; iw.seed = 1
+iw.freeze
+t('op-assign on a frozen receiver') { iw.sp_inc(1) }
+t('frozen value unchanged') { iw.n }
+
+# attr_reader / attr_writer calls in a method: the reader's instance variable read and the writer's
+# store, under a check of the receiver's class and the global method version on every call.
+class JitAttrVar
+  attr_accessor :value
+  def initialize(v); @value = v; end
+end
+class JitAttrUser
+  attr_reader :strength
+  def initialize(s, a, b); @strength = s; @a = a; @b = b; @dir = :forward; end
+  attr_writer :dir
+  def sp_stronger(o); @strength < o.strength; end
+  def sp_copy
+    if @dir == :forward
+      @b.value = @a.value
+    else
+      @a.value = @b.value
+    end
+  end
+  def sp_scale(k); @b.value = @a.value * k + 1; end
+  def sp_self_read; strength + 1; end
+end
+a1 = JitAttrVar.new(3); b1 = JitAttrVar.new(0)
+u1 = JitAttrUser.new(2, a1, b1); u2 = JitAttrUser.new(5, a1, b1)
+warm { |i| u1.sp_stronger(u2); u1.sp_copy; u1.sp_scale(i); u1.sp_self_read }
+t('attr reads and writes, hot') { [u1.sp_stronger(u2), u1.sp_copy, b1.value, u1.sp_scale(2), b1.value, u1.sp_self_read] }
+u1.dir = :back; b1.value = 9
+t('the other arm') { [u1.sp_copy, a1.value] }
+u1.dir = :forward
+a1.value = 2**62
+t('attr value overflowing') { [u1.sp_scale(4), b1.value] }
+a1.value = 1.5
+t('attr value a Float') { [u1.sp_scale(2), u1.sp_copy] }
+a1.value = 3
+other = Struct.new(:strength).new(7)
+t('a receiver of another class') { u1.sp_stronger(other) }
+def u2.strength = 100
+t('a singleton reader') { u1.sp_stronger(u2) }
+class JitAttrVar; def value = :redefined_value; end
+t('the reader redefined') { [u1.sp_copy, b1.instance_variable_get(:@value)] }
+class JitAttrVar; remove_method :value; attr_reader :value; end
+t('and restored') { u1.sp_copy }
+class JitAttrVar; private :value=; end
+t('the writer made private') { u1.sp_copy }
+class JitAttrVar; public :value=; end
+b1.freeze
+t('a frozen receiver of the writer') { u1.sp_copy }
+t('frozen value unchanged') { b1.value }
+class JitAttrVar; def method_missing(*) = :mm; end
+c1 = JitAttrUser.new(1, BasicObject.new, JitAttrVar.new(0))
+t('a BasicObject receiver') { c1.sp_copy }
