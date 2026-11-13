@@ -208,6 +208,12 @@ namespace IronRuby.Runtime.Calls {
         /// Called for each dispatcher made over <paramref name="method"/>, a delegate GetDelegate returned.
         /// </summary>
         internal void RegisterDispatcher(MethodDispatcher/*!*/ dispatcher, Delegate/*!*/ method) {
+            // A method the JIT stands in front of: the stub points the dispatcher at what it would call.
+            var stub = method.Target as IronRuby.Runtime.Jit.JitStub;
+            if (stub != null && method == stub.Trampoline) {
+                stub.AddDispatcher(dispatcher);
+                return;
+            }
             Delegate compiled;
             lock (this) {
                 if (method == _interpretedDelegate) {
@@ -224,6 +230,25 @@ namespace IronRuby.Runtime.Calls {
             }
             // compiled between GetDelegate and here:
             dispatcher.SetMethod(compiled);
+        }
+
+        /// <summary>
+        /// The JIT settled on the generic body for good (JitStub.Settle): the rules and dispatchers made from
+        /// now on call it rather than the trampoline in front of it, which would only ever forward to it.
+        /// </summary>
+        internal void ReplaceTrampoline(Delegate/*!*/ trampoline, Delegate/*!*/ generic, Delegate/*!*/ best) {
+            lock (this) {
+                // (the stub calls again with the compiled body when the light compiler makes it later)
+                if ((_delegate != trampoline && _delegate != generic) || _delegate == best) {
+                    return;
+                }
+                _delegate = best;
+                if (best == generic && _interpretedDelegate == null) {
+                    WatchLightCompilation(best);
+                } else if (best != generic) {
+                    _interpretedDelegate = null;
+                }
+            }
         }
 
         #endregion
@@ -340,6 +365,7 @@ namespace IronRuby.Runtime.Calls {
                     var ast = Precompiled.PrecompiledCode.ParseJitSource(jitContext, _jitSource, _ast, _document != null ? _document.FileName : null);
                     if (ast != null) {
                         compiled = IronRuby.Runtime.Jit.JitStub.Wrap(compiled, ast, jitContext, declaringModule, declaringScope, null);
+                        IronRuby.Runtime.Jit.JitStub.SetOwner(compiled, this);
                     }
                 }
                 return compiled;
@@ -404,6 +430,7 @@ namespace IronRuby.Runtime.Calls {
             var context = declaringScope.RubyContext;
             if (context.RubyOptions.Jit && _coverage == null) {
                 result = IronRuby.Runtime.Jit.JitStub.Wrap(result, ast, context, declaringModule, declaringScope, definitionRefinements, lambda.Name);
+                IronRuby.Runtime.Jit.JitStub.SetOwner(result, this);
             }
             return result;
         }
