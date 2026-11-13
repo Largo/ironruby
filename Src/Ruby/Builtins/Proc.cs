@@ -140,6 +140,11 @@ namespace IronRuby.Builtins {
         // [BlockNotKept] library method was given it with (RubyOps.CreateBfcForBlockNotKept).
         internal BlockParam YieldBlockParam;
 
+        // The BlockParam of the last Proc#call of this proc that finished normally and whose scope nothing captured, for the
+        // next call to take (RubyOps.TakeBfcForProcCall); null while a call has it, so a recursive call or one on another thread
+        // makes its own.
+        internal BlockParam CallBlockParam;
+
         /// <summary>
         /// The proc made again as a fresh literal block, if the light-frame call it was given to has returned and nothing else
         /// got hold of it (see ReusableFlag): it is the block of the next call the frame makes with the same literal, which
@@ -355,67 +360,82 @@ namespace IronRuby.Builtins {
         // AggressiveOptimization: see RubyOps.Yield0.
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg) {
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
-                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield0(procArg, _self, blockParam));
+                result = RubyOps.MethodProcCall(blockParam, RubyOps.Yield0(procArg, _self, blockParam));
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1) {
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
                 // lambda calls are weird:
-                var result = (Kind == ProcKind.Lambda) ?
+                var r = (Kind == ProcKind.Lambda) ?
                     RubyOps.YieldNoAutoSplat1(arg1, procArg, _self, blockParam) :
                     RubyOps.Yield1(arg1, procArg, _self, blockParam);
 
-                return RubyOps.MethodProcCall(blockParam, result);
+                result = RubyOps.MethodProcCall(blockParam, r);
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2) {
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
-                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield2(arg1, arg2, procArg, _self, blockParam));
+                result = RubyOps.MethodProcCall(blockParam, RubyOps.Yield2(arg1, arg2, procArg, _self, blockParam));
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2, object arg3) {
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
-                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield3(arg1, arg2, arg3, procArg, _self, blockParam));
+                result = RubyOps.MethodProcCall(blockParam, RubyOps.Yield3(arg1, arg2, arg3, procArg, _self, blockParam));
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2, object arg3, object arg4) {
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
-                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield4(arg1, arg2, arg3, arg4, procArg, _self, blockParam));
+                result = RubyOps.MethodProcCall(blockParam, RubyOps.Yield4(arg1, arg2, arg3, arg4, procArg, _self, blockParam));
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -428,26 +448,32 @@ namespace IronRuby.Builtins {
                 case 4: return Call(procArg, args[0], args[1], args[2], args[3]);
             }
 
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
-                return RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
+                result = RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         public object CallN(Proc procArg, object[]/*!*/ args) {
             Debug.Assert(args.Length > 4);
-            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            var blockParam = RubyOps.TakeBfcForProcCall(this);
+            object result;
             try {
-                return RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
+                result = RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
             } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
                 return unwinder.ReturnValue;
             } finally {
                 blockParam.IsActiveLambdaCall = false;
             }
+            RubyOps.ReturnBfcForProcCall(blockParam);
+            return result;
         }
 
         #endregion

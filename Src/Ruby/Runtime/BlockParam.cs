@@ -91,10 +91,17 @@ namespace IronRuby.Runtime {
         // call of a library method with a block, and for every yield and Proc#call.
         // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter;
         // bit 2: instance_eval/instance_exec - definitions go to self's singleton class, made when one needs it.
-        private byte _callerFlags;
+        internal byte _callerFlags;
         private const int CallFlag = 1;
         private const int LibProcConverterFlag = 2;
         private const int LazySingletonFlag = 4;
+        // bit 3: a scope the block ran in through this BlockParam was captured (RubyScope.MarkCaptured): it is reachable from
+        // there and is not handed to another call (RubyOps.ReturnBfcForProcCall).
+        internal const int KeptFlag = 8;
+
+        internal void MarkKept() {
+            _callerFlags |= KeptFlag;
+        }
 
         // filled by module_eval: if not null than method definition uses the module
         private RubyModule _methodLookupModule;
@@ -471,6 +478,36 @@ namespace IronRuby.Runtime {
                 return reused;
             }
             return proc.YieldBlockParam = new BlockParam(proc, BlockCallerKind.Yield, true);
+        }
+
+        /// <summary>
+        /// CreateBfcForProcCall for Proc#call, which takes the BlockParam of the proc's last call if that finished normally and
+        /// nothing captured a scope it ran in (see ReturnBfcForProcCall): its flow-control state is looked at only by the call
+        /// that runs through it, so nothing can tell it from a new one - and the scope that call parked on it (ParkScope) is
+        /// reused too. The take is atomic: a recursive call, or one on another thread, finds none and makes its own.
+        /// Not for a lambda, whose BlockParam a return in a block nested in it unwinds to (IsLambdaUnwinderTarget).
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public static BlockParam/*!*/ TakeBfcForProcCall(Proc/*!*/ proc) {
+            if (proc.Kind == ProcKind.Proc && proc.CallBlockParam != null) {
+                var reused = System.Threading.Interlocked.Exchange(ref proc.CallBlockParam, null);
+                if (reused != null) {
+                    reused.ResetForNextYield();
+                    return reused;
+                }
+            }
+            return CreateBfcForProcCall(proc);
+        }
+
+        /// <summary>
+        /// A Proc#call that returned normally hands its BlockParam back for the next call to take (TakeBfcForProcCall).
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public static void ReturnBfcForProcCall(BlockParam/*!*/ bfc) {
+            var proc = bfc.Proc;
+            if ((bfc._callerFlags & BlockParam.KeptFlag) == 0 && proc.Kind == ProcKind.Proc && bfc.ReturnReason == BlockReturnReason.Undefined) {
+                proc.CallBlockParam = bfc;
+            }
         }
 
         [Emitted]
