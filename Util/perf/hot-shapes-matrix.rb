@@ -276,3 +276,22 @@ rl = RL.new; rlout = []
   end
 end
 rlout.each { |r| p r }
+
+# Integer results past the DLR's box cache (shared boxes) and one-character slices of a String
+# (a shared CLR string under a new String): identity, mutation and frozen-ness of each result,
+# with Integer#+ and String#[] redefined and restored mid-run.
+src = +"ab\ncd"; chout = []
+20_000.times do |i|
+  n = 40_000 + i; m = (n + 1) - 1; x = (n ^ 0x55) ^ 0x55; d = (n * 2) / 2; sh = (n << 1) >> 1
+  c = src[i % 5]; c2 = src[i % 5]
+  same = c.equal?(c2); c << "!" if i.odd?
+  r = [m.equal?(n), x.object_id == n.object_id, d == sh, m.frozen?, c, c2, same, c.frozen?, src, (-1500 - i % 3) + 0]
+  chout << [i, r] if i % 2500 == 1 || (i > 9_998 && i < 10_002)
+  case i
+  when 5000 then Integer.class_eval { alias_method :__plus, :+; def +(o); __plus(o); end }
+  when 7000 then Integer.class_eval { alias_method :+, :__plus }
+  when 10000 then String.class_eval { alias_method :__aref, :[]; def [](*a); __aref(*a).upcase; end }
+  when 12000 then String.class_eval { alias_method :[], :__aref }
+  end
+end
+chout.each { |r| p r }

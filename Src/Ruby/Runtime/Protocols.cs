@@ -27,6 +27,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading;
 
 namespace IronRuby.Runtime {
     /// <summary>
@@ -40,6 +41,30 @@ namespace IronRuby.Runtime {
 
         #region Bignum/Fixnum Normalization
 
+        // The boxes BoxInt32 hands out: -BoxCacheNegative <= value < BoxCachePositive. Counters, indices into
+        // strings and arrays and hash-like arithmetic (Richards' queue counts and control word, Json's index into its
+        // input) go past the DLR's own cache (ScriptingRuntimeHelpers.Int32ToObject, -100..999), and each result was a
+        // new 24-byte box. 64K entries cover them for a 0.5 MB array, allocated on first use.
+        private const int BoxCacheNegative = 1024;
+        private const int BoxCachePositive = 65536;
+        private static object[] _boxCache;
+
+        /// <summary>
+        /// The value as a boxed Int32, a cached box when it is small enough. Sharing a box is unobservable: an Integer
+        /// has value identity (equal?, object_id) and boxes are immutable. The cache is filled lazily and racily, which is
+        /// harmless: two threads may each make a box for the same value, and either is right. It holds nothing but boxed
+        /// Int32s, so it is shared by every runtime in the process.
+        /// </summary>
+        public static object/*!*/ BoxInt32(int value) {
+            uint index = unchecked((uint)(value + BoxCacheNegative));
+            if (index >= BoxCacheNegative + BoxCachePositive) {
+                return value;
+            }
+            var cache = _boxCache ?? Interlocked.CompareExchange(ref _boxCache, new object[BoxCacheNegative + BoxCachePositive], null) ?? _boxCache;
+            return cache[index] ?? (cache[index] = value);
+        }
+
+
         /// <summary>
         /// Converts a BigInteger to int if it is small enough
         /// </summary>
@@ -51,7 +76,7 @@ namespace IronRuby.Runtime {
         public static object/*!*/ Normalize(BigInteger/*!*/ x) {
             int result;
             if (x.AsInt32(out result)) {
-                return ScriptingRuntimeHelpers.Int32ToObject(result);
+                return BoxInt32(result);
             }
             long wide;
             if (x.AsInt64(out wide)) {
@@ -62,7 +87,7 @@ namespace IronRuby.Runtime {
 
         public static object Normalize(long x) {
             if (x >= Int32.MinValue && x <= Int32.MaxValue) {
-                return ScriptingRuntimeHelpers.Int32ToObject((int)x);
+                return BoxInt32((int)x);
             } else {
                 return x;
             }
