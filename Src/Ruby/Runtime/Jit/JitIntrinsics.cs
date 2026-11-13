@@ -270,9 +270,13 @@ namespace IronRuby.Runtime.Jit {
         /// <paramref name="plainFalse"/> (checked when compiled). Anything else deopts.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static bool CaseString(object value, MutableString/*!*/ literal, bool plainFalse) {
+        public static bool CaseString(object value, MutableString/*!*/ literal, string ascii, bool plainFalse) {
             var str = value as MutableString;
-            if (str != null) { return literal.Equals(str); }
+            if (str != null) {
+                // ascii: the literal's characters when it is ASCII in an ASCII-compatible encoding (MutableString.EqualsAsciiLiteral).
+                int quick = (ascii != null) ? str.EqualsAsciiLiteral(ascii) : -1;
+                return (quick >= 0) ? quick != 0 : literal.Equals(str);
+            }
             if (plainFalse && (value == null || value is bool || value is int || value is long || value is double || value is RubySymbol)) {
                 return false;
             }
@@ -415,8 +419,12 @@ namespace IronRuby.Runtime.Jit {
         /// the generic code would have made. Any other receiver deopts, and the generic code makes
         /// the call with a fresh literal.
         /// </summary>
-        public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal) {
-            if (value != null && value.GetType() == typeof(MutableString)) { return ((MutableString)value).Equals(literal); }
+        public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal, string ascii) {
+            if (value != null && value.GetType() == typeof(MutableString)) {
+                var str = (MutableString)value;
+                int quick = (ascii != null) ? str.EqualsAsciiLiteral(ascii) : -1;
+                return (quick >= 0) ? quick != 0 : str.Equals(literal);
+            }
             throw Deopt();
         }
 
