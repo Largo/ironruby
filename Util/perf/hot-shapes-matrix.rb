@@ -75,3 +75,35 @@ def deep(n); deep(n + 1); end
 begin; deep(0); rescue SystemStackError => e; p e.class; end
 e = [1, 2, 3].each
 p a.y3 { |x| e.next + x }, a.y3 { |x| Fiber.new { Fiber.yield x; 9 }.resume }
+
+# Hot `@x` reads and writes (inlined shape check and slot access) and attr_reader/attr_writer
+# calls while the receiver's shape changes under the site: a variable added, one removed, the
+# object frozen, a singleton class, and objects of other classes with another slot order.
+class IV
+  attr_reader :x; attr_writer :y
+  def initialize; @x = 1; @y = 2; end
+  def rd; [@x, @y, @z]; end
+  def wr(v); @x = v; @y = v + 1; end
+  def via(o); o.y = 5; o.x; end
+end
+class IV2 < IV; def initialize; @y = 20; @q = 0; @x = 10; end; end
+ivo = IV.new; others = [IV2.new, IV.new]; ivout = []
+20_000.times do |i|
+  o = i.odd? ? ivo : others[i % 2]
+  begin
+    o.wr(i)
+    ivout << [i, o.rd, ivo.via(o), o.instance_variables] if i % 2500 == 1 || (i > 14_990 && i < 15_010 && i.odd?)
+  rescue => e
+    ivout << [i, e.class, e.message[/can.t modify frozen IV/]] if i < 15_010
+  end
+  case i
+  when 3001 then ivo.instance_variable_set(:@z, :added)
+  when 5001 then ivo.remove_instance_variable(:@x)
+  when 7001 then def ivo.extra; end
+  when 9001 then ivo.instance_variable_set(:@x, :back)
+  when 11001 then 30.times { |k| ivo.instance_variable_set(:"@v#{k}", k) }
+  when 15001 then ivo.freeze
+  end
+end
+ivout.each { |r| p r }
+p ivo.rd, others.map(&:rd)
