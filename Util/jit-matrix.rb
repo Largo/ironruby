@@ -2419,6 +2419,32 @@ cov_loop(50000)
 t('Coverage of hot methods and loops') { Coverage.result[cov_file][:lines] }
 File.delete(cov_file)
 
+# An attr read on a local assigned once from another attr read (`i = m.a; i.x'): the local is typed
+# by the profiled m's instance variable, and the read checks the class it finds there. Then a
+# receiver without the readers, an Integer, Bignums, the reader redefined, a singleton method.
+class JitLocV; attr_reader :x, :y; def initialize(x, y) = (@x = x; @y = y); end
+class JitLocM; attr_reader :a, :b; def initialize(a, b) = (@a = a; @b = b); end
+class JitLocW; def x; 7; end; def y; 1.5; end; end
+JIT_LOC_LIM = 100.0
+def sp_attr_of_local(v, m)
+  i = m.a
+  j = m.b
+  d = j.x - i.x
+  return false if v.x > JIT_LOC_LIM
+  d / (i.y + 1.0) < v.y
+end
+loc = []
+3000.times do |k|
+  m = JitLocM.new(JitLocV.new(k * 0.5, 2.0), JitLocV.new(k * 1.5, 3.0))
+  m = JitLocM.new(JitLocW.new, JitLocV.new(1, 2)) if k == 1500
+  m = JitLocM.new(JitLocV.new(2**70, 1.0), JitLocV.new(2**71, 0.5)) if k == 1700
+  JitLocV.class_eval { def x; @x + @x; end } if k == 2000
+  m.a.define_singleton_method(:y) { -5.0 } if k == 2500
+  loc << sp_attr_of_local(JitLocV.new(k % 150 * 1.0, k * 0.5), m) if k % 100 == 0 || (1490..1510).include?(k) || k == 1700
+end
+t('attr read of a local assigned from an attr read') { loc }
+t('... of a nil') { sp_attr_of_local(JitLocV.new(1.0, 1.0), JitLocM.new(JitLocV.new(nil, 1), JitLocV.new(1.0, 1))) }
+
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
 def sp_plus(a, b)
@@ -2915,3 +2941,4 @@ t('attr write on another object, then ivar write') { rv.value }
 rw.freeze
 t('the same with self frozen: one write, then FrozenError') { [(rw.no_attr_then_ivar(rv) rescue $!.class), rv.value] }
 t('C.new, then ivar write, self frozen') { rw.no_new_then_ivar rescue $!.class }
+
