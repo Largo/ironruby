@@ -2719,3 +2719,24 @@ class JitIVarOperandsSub < JitIVarOperands
 end
 t('subclass overriding the method') { JitIVarOperandsSub.new(5, 1).sp_sum }
 
+# `!@x': speculated true/false/nil, whose #! is BasicObject's.
+class JitIVarNot
+  def initialize; @h = false; @p = true; @w = false; end
+  attr_writer :h, :p, :w
+  def sp_holding_or_waiting; @h || (!@p && @w); end
+  def sp_waiting_with_packet; @p && @w && !@h; end
+end
+nt = JitIVarNot.new
+warm { |i| nt.sp_holding_or_waiting; nt.sp_waiting_with_packet }
+t('! of ivars') { [nt.sp_holding_or_waiting, nt.sp_waiting_with_packet] }
+nt.h = nil; nt.p = nil; nt.w = :x
+t('! of nil ivars') { [nt.sp_holding_or_waiting, nt.sp_waiting_with_packet] }
+bang = Object.new; def bang.! = :custom_bang
+nt.h = bang; nt.p = true; nt.w = 1
+t('! of an object with its own #!') { nt.sp_waiting_with_packet }
+nt.h = false; nt.p = false; nt.w = true
+warm { |i| nt.sp_holding_or_waiting }
+class FalseClass; def ! = :false_bang; end
+t('FalseClass#! redefined') { nt.sp_holding_or_waiting }
+class FalseClass; remove_method :!; end
+t('and removed') { nt.sp_holding_or_waiting }

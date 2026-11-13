@@ -750,6 +750,13 @@ namespace IronRuby.Runtime.Jit {
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
         // unboxed while it holds the type it held when the loop was compiled, a deopt once it does not.
 
+        /// <summary>`!x' of an x speculated to be true, false or nil (JitCompiler.EmitNot).</summary>
+        public static bool NotBoolean(object value) {
+            if (value == null) { return true; }
+            if (value is bool) { return !(bool)value; }
+            throw Deopt();
+        }
+
         public static int GuardInt(object value) {
             if (value is int) { return (int)value; }
             throw Deopt();

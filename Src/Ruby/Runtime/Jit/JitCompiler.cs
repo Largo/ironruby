@@ -871,16 +871,7 @@ namespace IronRuby.Runtime.Jit {
             if (unless != null) { return EmitUnless(unless, out type); }
 
             var not = node as NotExpression;
-            if (not != null) {
-                // `!x' is a call of x's #! - which the program may have redefined.
-                JT operandType;
-                var operand = EmitCondition(not.Expression, out operandType);
-                // an object's class may have its own #!
-                if (operandType == JT.Obj) { throw Bail("! of an object"); }
-                RequireBuiltin(operandType, "!");
-                type = JT.Bool;
-                return Ast.Not(operand);
-            }
+            if (not != null) { return EmitNot(not.Expression, out type); }
 
             var and = node as AndExpression;
             if (and != null) { return EmitAndOr(and.Left, and.Right, true, out type); }
@@ -1427,12 +1418,40 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(ClrType(type), new[] { value }, Ast.Assign(value, l), result);
         }
 
+        /// <summary>
+        /// `!x', `not x' - a call of x's #!, which the program may have redefined. An object - an
+        /// instance variable, say - is speculated to be true, false or nil, whose #! is
+        /// BasicObject's while RequireBuiltin says so (a redefinition later invalidates the body):
+        /// anything else deopts, as its class may have a #! of its own. The value is read once, so
+        /// another thread changing the variable in between cannot slip past the test.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitNot(RExpr/*!*/ operandNode, out JT type) {
+            JT operandType;
+            var operand = EmitCondition(operandNode, out operandType);
+            type = JT.Bool;
+            if (operandType == JT.Obj) {
+                var value = (operand is MSA.MethodCallExpression truth && truth.Method == IsTrueMethod) ? truth.Arguments[0] : null;
+                if (value == null) { throw Bail("! of an object"); }
+                RequireBuiltin(JT.Bool, "!");
+                if (!IsPublicBuiltin(_context.NilClass, "!")) { throw Bail("operator ! on nil is not the built-in one"); }
+                _canDeopt = true;
+                return Ast.Call(JitRuntime.M("NotBoolean"), value);
+            }
+            RequireBuiltin(operandType, "!");
+            return Ast.Not(operand);
+        }
+
         // ---- calls -------------------------------------------------------------------------
 
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
             if (node.Block != null) { throw Bail("call with a block: " + node.MethodName); }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
+
+            // `!x' written as a call (prism's form of `!@x')
+            if (node.Target != null && argc == 0 && node.MethodName == "!") {
+                return EmitNot(node.Target, out type);
+            }
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
@@ -2445,6 +2464,11 @@ namespace IronRuby.Runtime.Jit {
                     }
                 }
                 return true;
+            }
+
+            if (node.Target != null && argc == 0 && node.MethodName == "!") {
+                // `!x' (JitCompiler.EmitNot)
+                return WalkCondition(node.Target);
             }
 
             if (node.Target == null) {
