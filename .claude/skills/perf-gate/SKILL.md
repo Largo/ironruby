@@ -17,11 +17,15 @@ Run the steps in order and stop at the first failure: the cheap ones catch most 
 
 ```sh
 git -C <tree> status --short          # must print nothing: the gate judges commits
+git status --short -- Src Util        # nothing here either: the baseline is built from this checkout
 git -C <tree> diff --stat <base>...HEAD
 ```
 
 - Uncommitted changes in the candidate tree are built and tested but are in neither this
   diff nor the merge that follows: commit them (or stash and rebuild) before going on.
+- Uncommitted changes in the baseline checkout make the baseline something other than the
+  commit the candidate branched from, and every comparison below is against it: commit or
+  stash them, and rebuild the baseline, first.
 
 - Whole-file churn means line endings or a BOM were rewritten: fix that first (CLAUDE.md).
 - A `*.Generated.cs` in the diff must come from its generator. A `[RubyMethod]`,
@@ -41,8 +45,14 @@ git -C <tree> diff --stat <base>...HEAD
 set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
   -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
-(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt)
+(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; echo "exit $?"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt)
 ```
+
+The run is complete only if it ends as the driver ends it: `PASSED` (exit 0), or the
+numbered list of failures followed by a `Repro: ... IronRuby.Tests.dll /verbose Name...`
+line (exit 1). A run that crashed or was killed - the OOM killer has taken this suite
+when other builds ran beside it - ends anywhere, with another exit status, may have
+printed no failure name at all, and would compare as clean: run it again, alone.
 
 Do the same in the baseline checkout (its own Release test build) and `diff` the two
 `failed.txt`: a name only the candidate has fails the gate. Do not go by "one failure, as
