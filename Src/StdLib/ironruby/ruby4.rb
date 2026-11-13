@@ -68,8 +68,11 @@ class NoMatchingPatternKeyError < NoMatchingPatternError
   end
 
   # What a `case/in` or `=>` raises when the last thing that failed was a hash pattern's key.
-  def self.__missing_key__(matchee, key)
-    new("#{matchee.inspect}: key not found: #{key.inspect}", matchee: matchee, key: key)
+  # The message quotes the whole subject; #matchee is the hash that lacked the key, which for a
+  # nested pattern ({a: {bb:}}) is the inner one, as in MRI.
+  def self.__missing_key__(subject, missing)
+    key, matchee = missing
+    new("#{subject.inspect}: key not found: #{key.inspect}", matchee: matchee, key: key)
   end
 end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)

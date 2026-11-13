@@ -25,6 +25,7 @@ namespace IronRuby.Builtins {
     [UndefineMethod("append_features")]
     [UndefineMethod("prepend_features")]
     [UndefineMethod("module_function")]
+    [UndefineMethod("refine")]
     public sealed class ClassOps {
         #region initialize, initialize_copy, allocate, new, superclass, inherited
 
