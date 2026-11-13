@@ -6,82 +6,70 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-13, commit be96b9bb (round five merged), Release net10.0, 4 cores, load 1.1-1.5.
+2026-11-13, commit b0585dbe (round six merged), Release net10.0, 4 cores, load 0.9-1.2.
 CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM Native). The machine's speed
 differs between sessions by tens of percent (CRuby's own numbers move with it), so compare
 ratios, not microseconds.
 
 Are-We-Fast-Yet, steady state, µs per iteration (lower is better):
 
-| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | r4 | r3 | r2 | r1 | start |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DeltaBlue | 33593 | 41339 | (1320) | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
-| Richards | 250368 | 290033 | 12314 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
-| Json | 66218 | 74582 | 6296 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
-| Bounce | 72446 | 65864 | 1822 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
-| Towers | 89168 | 88004 | 3986 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
+| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | r5 | r4 | r3 | r2 | r1 | start |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DeltaBlue | 33418 | 42696 | 1329 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
+| Richards | 247807 | 284750 | 12280 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
+| Json | 66040 | 67392 | 6709 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
+| Bounce | 72676 | 66679 | 1817 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
+| Towers | 89810 | 84382 | 3879 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
 
-Geomean: IronRuby/CRuby 1.08 (1.13, 1.32, 1.36, 1.61, 1.86 before). TruffleRuby/CRuby
-about 0.05 on the four it ran normally; its DeltaBlue took 1.1 s per iteration in this run
-(1.3-12 ms in earlier ones - it had not reached compiled code within 12 s), so the figure
-in brackets is round three's.
+Geomean: IronRuby/CRuby 1.05 (1.08, 1.13, 1.32, 1.36, 1.61, 1.86 before; the fixes for
+the ten faults below cost nothing measurable). TruffleRuby/CRuby 0.046. DeltaBlue's ratio
+moves between 1.23 and 1.29 from run to run.
 
 Bytes allocated per iteration (`Util/perf/alloc.rb`; deterministic, unlike the timings):
-DeltaBlue 24.7 MB (40.8 after round four, 53.5 before it), Richards 19.6 (76.6, 168.9),
-Json 46.3 (55.9, 73.4), Bounce 11.0 (11.0, 71.1), Towers 0.16 (0.17, 89.3).
+DeltaBlue 24.7 MB (53.5 at the start of round four), Richards 19.6 (168.9), Json 35.8
+(73.4), Bounce 11.0 (71.1), Towers 0.14 (89.3).
 
 Per operation (`Util/perf/micro.rb`), ns:
 
 | op | CRuby | IronRuby | ratio | start |
 |---|---:|---:|---:|---:|
-| empty | 18.2 | 21.8 | 1.20 | 1.23 |
-| ivar_rw | 28.4 | 46.8 | 1.65 | 2.72 |
-| getter | 21.2 | 29.0 | 1.37 | 3.17 |
-| attr | 15.6 | 3.2 | 0.21 | 0.80 |
-| cmp | 22.8 | 28.5 | 1.25 | 3.58 |
-| abs | 27.0 | 45.2 | 1.67 | 3.07 |
-| arr | 32.3 | 36.7 | 1.14 | 1.82 |
-| nil? | 20.5 | 30.1 | 1.47 | 3.48 |
-| == | 22.1 | 27.7 | 1.25 | 3.35 |
-| yield | 32.3 | 45.9 | 1.42 | 2.57 |
-| each4 | 149.6 | 192.9 | 1.29 | 1.87 |
-| while10 | 154.7 | 34.3 | 0.22 | 0.23 |
-| new2 | 73.9 | 64.7 | 0.88 | 1.47 |
-| symcase | 24.8 | 25.0 | 1.01 | 1.03 |
-| str== | 81.1 | 45.8 | 0.56 | 1.44 |
-| poly2 | 45.4 | 50.2 | 1.11 | 2.11 |
-| blockeach | 48.4 | 41.9 | 0.87 | 2.33 |
+| empty | 17.6 | 21.3 | 1.21 | 1.23 |
+| ivar_rw | 28.5 | 40.4 | 1.42 | 2.72 |
+| getter | 22.2 | 25.6 | 1.15 | 3.17 |
+| attr | 16.9 | 3.2 | 0.19 | 0.80 |
+| cmp | 23.1 | 25.2 | 1.09 | 3.58 |
+| abs | 27.1 | 40.0 | 1.48 | 3.07 |
+| arr | 32.1 | 34.4 | 1.07 | 1.82 |
+| nil? | 20.9 | 28.5 | 1.36 | 3.48 |
+| == | 21.9 | 24.5 | 1.12 | 3.35 |
+| yield | 32.3 | 45.0 | 1.39 | 2.57 |
+| each4 | 167.8 | 187.0 | 1.11 | 1.87 |
+| while10 | 156.0 | 32.5 | 0.21 | 0.23 |
+| new2 | 75.2 | 61.5 | 0.82 | 1.47 |
+| symcase | 25.0 | 23.7 | 0.95 | 1.03 |
+| str== | 81.1 | 45.1 | 0.56 | 1.44 |
+| poly2 | 45.5 | 46.8 | 1.03 | 2.11 |
+| blockeach | 48.7 | 40.4 | 0.83 | 2.33 |
 
 Profile (`Util/perf/profile.sh`, self time):
 
-- DeltaBlue: `CallSite.Target` 22.2%, `jitentry$execute` 6.7%, libcoreclr 5.3%, block in
-  Vector#each 4.5%, JIT_WriteBarrier 3.4%, `RubyOps::TakeBfcForBlockYield` 2.6%,
-  Vector#append 2.2%, `jitentry$is_satisfied` 2.0%, Vector#each 2.0%,
-  `JitRuntime::IsIdentical` 2.0%, `JitStub0::Call` 1.8%.
-- Richards: `CallSite.Target` 31.5%, Scheduler#schedule 6.5%,
-  `jitentry$is_task_holding_or_waiting` 4.8%, TaskControlBlock#run_task 4.7%, the
-  create_handler block 3.4%, JIT_WriteBarrier 3.4%, `jitentry$is_waiting_with_packet` 3.1%,
-  `JitStub0::Call` 2.9%.
-- Json: `CallSite.Target` 26.0%, Parser#read 9.9%, MutableString::Equals 7.5%, libcoreclr
-  5.3%, Parser#read_string_internal 4.0%, JIT_WriteBarrier 2.8%.
-- Not leads (measured): the DLR miss path, `Proc#call` in Richards, tail calls in rules,
-  the light frame's own bookkeeping, the class lookup of identity sites (fixed).
+- DeltaBlue: `CallSite.Target` 24.5%, `jitentry$execute` 7.2%, libcoreclr 6.0%, block in
+  Vector#each 4.3%, JIT_WriteBarrier 3.0%, Vector#append 2.4%,
+  `RubyOps::TakeBfcForBlockYield` 2.3%, block in Plan#execute 2.0%.
+- Richards: `CallSite.Target` 32.0%, Scheduler#schedule 6.5%, TaskControlBlock#run_task
+  5.1%, `jitentry$is_task_holding_or_waiting` 4.9%, `jitentry$is_waiting_with_packet` 4.0%,
+  the create_handler block 3.5%, JIT_WriteBarrier 3.5%, `ProcOps::Call` 2.3%.
+- Json: `CallSite.Target` 25.7%, Parser#read 10.1%, MutableString::Equals 5.7%, libcoreclr
+  5.4%, Parser#read_string_internal 4.7%, JIT_WriteBarrier 3.0%.
+- Not leads (measured): the DLR miss path, tail calls in rules, the light frame's own
+  bookkeeping, the class lookup of identity sites (fixed), the JIT's trampoline (gone).
 
 ## Gaps, worst first
 
-1. **A method the JIT wrapped and then declined keeps its trampoline** (`JitStub.GiveUp`):
-   every later call pays one extra indirect hop for the rest of the process. Found when a
-   wider screen let Towers' `push_disk` and `move_disks` through to an emitter that
-   declined them: 9-11% of Towers. That was fixed by narrowing the screen, but the cost
-   applies to every hot method declined at emit time on this build too (run
-   `IR_JIT_VERBOSE=1` and count "declined"). Untried and cheap: on give-up, put the
-   original entry back (or have call sites bypass a retired stub). `JitStub0::Call` at
-   2-3% of Richards and DeltaBlue for *specialized* methods is the same hop: a call site
-   that knows its target is specialized could call the entry delegate directly.
-2. **Calls of other methods from hot bodies** (`CallSite.Target` 22-32%; `abs` 1.67,
-   `ivar_rw` 1.65, `nil?` 1.47, `yield` 1.42, `getter` 1.37). Richards' `run_task` and
-   `schedule` (11%), Towers' `push_disk`/`move_top_disk`, DeltaBlue's `remove_first` and
-   Bounce's `bounce` all fail one rule of the method JIT: nothing that can deopt may
+1. **Calls of other methods from hot bodies** (`CallSite.Target` 24-32% of every
+   benchmark; `abs` 1.48, `ivar_rw` 1.42, `yield` 1.39, `nil?` 1.36). Richards' `run_task`
+   and `schedule` (11.6%), Towers' `push_disk`/`move_top_disk`, DeltaBlue's `remove_first`
+   and Bounce's `bounce` all fail one rule of the method JIT: nothing that can deopt may
    follow an effect, because a deopt re-runs the generic body from the start. A second
    call, or a guard or ivar write after a call, is such a thing. See Rejected (perf/jcall)
    for the version that respects the rule and what it bought. What is needed is a guard
@@ -89,25 +77,26 @@ Profile (`Util/perf/profile.sh`, self time):
    operation) instead of deopting; for calls, a method scope made on demand from the JIT
    body (locals into the generic tuple layout, the method's block, which the stub's fast
    path drops today). `IR_JIT_VERBOSE=1` prints "a deopt after an effect (EmitXxx)" per
-   declined method.
-3. **Json: a MutableString and its content per character** from `@input[@index]` in
-   Parser#read (35% of Json's bytes), compared with one-character literals
-   (`MutableString::Equals` 7.5% of its time). A one-object single-character String, or a
-   content object without a per-owner back-pointer so that it can be shared, is untried.
-4. **Richards: the worker block that contains a nested block** (`DATA_SIZE.times { }`
+   declined method. Three of the ten faults below were in this rule's bookkeeping: any
+   work here needs the (effect, deopt, operand order) matrix extended first.
+2. **Rules bake the interpreted LightLambda of a method the JIT never wraps**
+   (`LightLambda::Run*`, ~1% of Richards' `schedule`): a rule-level read of the body's
+   current delegate, as b78ec3f5 did for stubs, would remove the hop once the body is
+   compiled. `ObjectConstruction` could read a stub's `Target` too.
+3. **Richards: the worker block that contains a nested block** (`DATA_SIZE.times { }`
    inside the create_worker block): its scope is never reused and the inner Proc is made
-   on every call, which defeats Proc, BlockParam and scope reuse for the inner block -
-   about 40% of what Richards still allocates. Needs `MarkCaptured` at block exit when a
-   nested Proc escaped, so that the block can otherwise keep its scope and that Proc.
-5. **Int32 boxes** (Json ~10% of bytes, Richards and DeltaBlue 3-6%): emitted
-   `AstUtils.Convert`/`Box` goes through the DLR's `Int32ToObject`, whose cache ends at
-   999; `BlockParam.Yield(int)`, `LibraryDispatcher`, `JitRuntime.NarrowLong`. Route them
-   through `Protocols.BoxInt32` (cached to 65535).
-6. **`TakeBfcForBlockYield` 2.6% of DeltaBlue**: the atomic exchange added in 94dc9169 to
-   reuse a BlockParam across yields. Cheaper when the frame is known to be the only user.
-7. **Light frames still exclude** `super` (6 hot `initialize` methods), `rescue`,
+   on every call - about 40% of what Richards still allocates. Needs reuse decided at
+   block exit (nothing called `MarkCaptured`), with every escape route of the nested Proc
+   checked first; `def capture(&b); b; end` (below) is what an unchecked one looks like.
+4. **Json**: the 40 B String per character read is what is left of `@input[@index]`
+   (its content is shared now); two Integer boxes per `read` (`@input.length`,
+   `@index += 1` - see Rejected, perf/box, for what caching them buys and costs);
+   `@input[a..b]` is 160 B with a Range per call; `MutableString::Equals` 5.7%.
+5. **`TakeBfcForBlockYield` 2.3% of DeltaBlue**: the atomic exchange of 94dc9169. Cheaper
+   only with a proof that no second thread or reentrant call can reach a frame-local Proc.
+6. **Light frames still exclude** `super` (6 hot `initialize` methods), `rescue`,
    keywords, `$~`, regex literals; `block_given?` still forces the scope.
-   `IR_LIGHT_FRAMES=why` lists them. Also: a Range per `(a..b).each`, and
+   `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
    RubyInstanceData + RubyObject as two objects per Ruby object.
 
 ## Landed
@@ -218,6 +207,25 @@ language plus 24 core directories (17983 examples, 80877 expectations on both).
   fast paths. Alone it measured flat overall (DeltaBlue 3-10% faster, Richards 2-4%
   slower); with perf/alloc2 the pair beat perf/alloc2 alone in every run.
 
+Round six, each measured alone against the working branch on a quiet machine, three AWFY
+runs, then together. Gate: 14 matrices with the JIT on and off against CRuby and the tree
+before, ivar-stress and block-scope-reuse-race, the reproductions of the faults below,
+IronRuby.Tests by failing name, ruby/spec language plus 32 directories (23065 examples,
+92368 expectations, identical on both trees).
+
+- **perf/str, 965aac8a - one-character ASCII slices share their content**: AWFY 0.979,
+  0.976, 0.982; Json 5-10% faster and 46.3 -> 35.9 MB. `s[i]` is a new MutableString on
+  one of 128 static, owner-less StringContents; `_content` became a property over
+  `_rawContent` that swaps in a content of the string's own (compare-and-swap) before any
+  other read or any mutation. New code must not read `_rawContent` directly: a shared
+  content has no owner. 72 B -> 40 B per slice.
+- **perf/tramp, b78ec3f5 - a stub's callers read its current target**: AWFY 0.986, 0.978,
+  0.988. `JitStubN.Target` holds the specialized entry, or the generic body once the
+  method is declined or retired; rules read it and make one call
+  (`JitStub.CallCurrent`), dispatchers are re-pointed by `Install`, and a settled body's
+  delegate becomes the generic one. `JitStub*::Call` was 3.8% of Richards and 2.2% of
+  DeltaBlue; 2-7 hot methods per benchmark had been behind a dead trampoline.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -262,6 +270,15 @@ language plus 24 core directories (17983 examples, 80877 expectations on both).
 - **`x == "lit"` without allocating the literal, in code the method JIT does not
   compile**: 80 B less per comparison in a micro test, no change in AWFY bytes (Json's
   comparisons already go through the JIT). Reverted.
+
+- **perf/box 6fe39e6a bb4f0846 - int results of library methods through
+  `Protocols.BoxInt32`** (round six: rule results via `MetaObjectBuilder.ConvertResult`,
+  the block path of `RubyMethodGroupBase`, `BlockParam.Yield(int)`). Bytes per iteration:
+  Json 35.7 -> 29.6 MB, DeltaBlue 24.8 -> 23.8. AWFY time 0.995, 1.008, 1.009: nothing.
+  Its first version also changed `LibraryDispatcher.Box` and made Util/bench's
+  `str_interp` 40% slower on its one cold pass (and faster warm), which was not
+  explained; that edit was reverted. Not merged: it saves memory, not time. Worth taking
+  if allocation itself becomes the goal.
 
 ## Regressions
 
