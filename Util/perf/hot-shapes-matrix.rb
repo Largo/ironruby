@@ -478,6 +478,77 @@ lambda do
   p s, (rr.d6(1) rescue $!.message)
 end.call
 
+# ---- one-character slices: `s[i]' of an ASCII character shares one owner-less content ----
+# Every such String is still a String of its own: mutated in every way while others from the
+# same call site are alive, compared with ==/eql?/equal?/<=>/hash across encodings, with
+# String#== replaced and restored mid-run, and read and mutated from four threads at once.
+# A method, not a lambda: the threads' locals must not be the script's own (`e' above).
+def one_char_slices
+  srcs = ["abc\"\\ xé", "abc".b + "\xff".b, "abc".encode("US-ASCII"), ("ab" * 3) + "c",
+          "ab\xffc".dup.force_encoding("UTF-8"), "ab".encode("UTF-16LE"), "ab".encode("Shift_JIS"),
+          "ab".encode("EUC-JP")]
+  ops = [
+    ->(c) { c << "z" }, ->(c) { c.replace("q") }, ->(c) { c.force_encoding("UTF-16LE"); v = [c.valid_encoding?, c.bytesize]; c.force_encoding("UTF-8"); v },
+    ->(c) { c.setbyte(0, 0x7a) }, ->(c) { c.upcase! }, ->(c) { c.instance_variable_set(:@x, 1) },
+    ->(c) { def c.hi = :hi; c.hi }, ->(c) { c.freeze; (c << "x" rescue $!.class) },
+    ->(c) { c.dup << "d" }, ->(c) { c.clone << "e" }, ->(c) { c.encode("UTF-16BE") },
+    ->(c) { c.force_encoding("BINARY") }, ->(c) { c.prepend("p") }, ->(c) { c.clear },
+    ->(c) { c.insert(0, "é") }, ->(c) { c.squeeze!; c.succ! }, ->(c) { c.chop! },
+    ->(c) { {c => 1}.keys[0].frozen? }, ->(c) { Marshal.load(Marshal.dump(c)) },
+    ->(c) { c.to_sym.to_s }, ->(c) { c.unpack("C*") }, ->(c) { c.valid_encoding? },
+  ]
+  out = []
+  20_000.times do |i|
+    s = srcs[i % srcs.size]
+    k = i % s.size
+    a = s[k]; b = s[k]; c = s.slice(k); d = s[k]
+    r = ops[i % ops.size].(c) rescue $!.class
+    if i % 997 == 0 || i < srcs.size * ops.size
+      out << [i % srcs.size, k, a, b, c, d, r, a.encoding, c.encoding, a == b, a.eql?(b), a.equal?(b),
+              a == c, c == a, a.eql?(c), a <=> c, a.hash == b.hash, a.hash == c.hash, a.frozen?, c.frozen?,
+              a.valid_encoding?, a.ascii_only?, c.valid_encoding?, a.bytes, c.bytes, a == "a", "a" == a,
+              a == "a".b, a == "a".encode("UTF-16LE"), a != "b", a.instance_variables, b.singleton_methods,
+              a.class, d.size, d.bytesize]
+    end
+  end
+  out.each { |x| p x }
+  sub = Class.new(String)
+  q = sub.new("xyz")
+  p [q[1].class, q[1] == "y", "y" == q[1], q[1].equal?(q[1])]
+  w = ObjectSpace::WeakMap.new; k1 = "ab"[0]; k2 = "ab"[0]; w[k1] = 1
+  p [w.key?(k1), w.key?(k2), {k1 => 1}[k2], k1.hash == k2.hash]
+  # String#== redefined and restored while the slices compare hot
+  t = 0
+  20_000.times do |i|
+    if i == 7_000
+      String.class_eval { alias_method :__eq_saved, :==; def ==(o) = :redef }
+    elsif i == 14_000
+      String.class_eval { alias_method :==, :__eq_saved; remove_method :__eq_saved }
+    end
+    x = "ab"[i % 2]
+    v = (x == "a")
+    t += v == :redef ? 100 : (v ? 1 : 0)
+    t += 1000 if "b" == x && i.odd?
+  end
+  p t
+  # four threads: each mutates its own slices while comparing others from the same source
+  src = "abcdefgh" * 4
+  res = 4.times.map do |n|
+    Thread.new do
+      acc = []
+      5_000.times do |i|
+        c = src[(i + n) % src.size]
+        e = src[(i + n) % src.size]
+        c << n.to_s if i.even?
+        c.upcase! if i % 3 == 0
+        acc << [c, e == src[(i + n) % src.size], e.size] if i % 500 == 0
+      end
+      acc
+    end
+  end.map(&:value)
+  p res, src
+end
+one_char_slices
 # ---- a block that leaves the method through its block parameter (second review of #215) ----
 # `def capture(&b); b; end' is a light frame, but not one that "can only yield to its block":
 # each evaluation of the literal must give a Proc of its own.
