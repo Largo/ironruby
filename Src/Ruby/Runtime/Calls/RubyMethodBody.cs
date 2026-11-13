@@ -237,6 +237,7 @@ namespace IronRuby.Runtime.Calls {
         /// now on call it rather than the trampoline in front of it, which would only ever forward to it.
         /// </summary>
         internal void ReplaceTrampoline(Delegate/*!*/ trampoline, Delegate/*!*/ generic, Delegate/*!*/ best) {
+            List<MethodDispatcher> dispatchers = null;
             lock (this) {
                 // (the stub calls again with the compiled body when the light compiler makes it later)
                 if ((_delegate != trampoline && _delegate != generic) || _delegate == best) {
@@ -246,7 +247,21 @@ namespace IronRuby.Runtime.Calls {
                 if (best == generic && _interpretedDelegate == null) {
                     WatchLightCompilation(best);
                 } else if (best != generic) {
+                    // The compiled body has arrived by way of the stub, ahead of OnLightCompiled, which will find
+                    // _delegate moved on and do nothing: what it would have done is done here, or the dispatchers
+                    // made over the interpreted body since the stub settled would keep its extra hop for good.
                     _interpretedDelegate = null;
+                    if (best.GetType() == generic.GetType()) {
+                        _compiledFrom = generic;
+                        _compiledTo = best;
+                        dispatchers = _interpretedDispatchers;
+                    }
+                    _interpretedDispatchers = null;
+                }
+            }
+            if (dispatchers != null) {
+                foreach (var dispatcher in dispatchers) {
+                    dispatcher.SetMethod(best);
                 }
             }
         }
