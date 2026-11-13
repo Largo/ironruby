@@ -2768,3 +2768,54 @@ iw.n = 1; iw.seed = 1
 iw.freeze
 t('op-assign on a frozen receiver') { iw.sp_inc(1) }
 t('frozen value unchanged') { iw.n }
+
+# attr_reader / attr_writer calls in a method: the reader's instance variable read and the writer's
+# store, under a check of the receiver's class and the global method version on every call.
+class JitAttrVar
+  attr_accessor :value
+  def initialize(v); @value = v; end
+end
+class JitAttrUser
+  attr_reader :strength
+  def initialize(s, a, b); @strength = s; @a = a; @b = b; @dir = :forward; end
+  attr_writer :dir
+  def sp_stronger(o); @strength < o.strength; end
+  def sp_copy
+    if @dir == :forward
+      @b.value = @a.value
+    else
+      @a.value = @b.value
+    end
+  end
+  def sp_scale(k); @b.value = @a.value * k + 1; end
+  def sp_self_read; strength + 1; end
+end
+a1 = JitAttrVar.new(3); b1 = JitAttrVar.new(0)
+u1 = JitAttrUser.new(2, a1, b1); u2 = JitAttrUser.new(5, a1, b1)
+warm { |i| u1.sp_stronger(u2); u1.sp_copy; u1.sp_scale(i); u1.sp_self_read }
+t('attr reads and writes, hot') { [u1.sp_stronger(u2), u1.sp_copy, b1.value, u1.sp_scale(2), b1.value, u1.sp_self_read] }
+u1.dir = :back; b1.value = 9
+t('the other arm') { [u1.sp_copy, a1.value] }
+u1.dir = :forward
+a1.value = 2**62
+t('attr value overflowing') { [u1.sp_scale(4), b1.value] }
+a1.value = 1.5
+t('attr value a Float') { [u1.sp_scale(2), u1.sp_copy] }
+a1.value = 3
+other = Struct.new(:strength).new(7)
+t('a receiver of another class') { u1.sp_stronger(other) }
+def u2.strength = 100
+t('a singleton reader') { u1.sp_stronger(u2) }
+class JitAttrVar; def value = :redefined_value; end
+t('the reader redefined') { [u1.sp_copy, b1.instance_variable_get(:@value)] }
+class JitAttrVar; remove_method :value; attr_reader :value; end
+t('and restored') { u1.sp_copy }
+class JitAttrVar; private :value=; end
+t('the writer made private') { u1.sp_copy }
+class JitAttrVar; public :value=; end
+b1.freeze
+t('a frozen receiver of the writer') { u1.sp_copy }
+t('frozen value unchanged') { b1.value }
+class JitAttrVar; def method_missing(*) = :mm; end
+c1 = JitAttrUser.new(1, BasicObject.new, JitAttrVar.new(0))
+t('a BasicObject receiver') { c1.sp_copy }

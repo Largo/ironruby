@@ -1162,36 +1162,55 @@ namespace IronRuby.Runtime.Jit {
             return (_loop != null) ? StoreLoopSlot(p, rhs) : (MSA.Expression)Ast.Assign(p, rhs);
         }
 
+        // Branches are emitted in the order they run - conditions in turn, each arm from the purity
+        // the conditions before it left - and the purity after the construct is that of all its
+        // arms together, so _deoptAfterEffect sees each path as it runs, not one arm's write as
+        // coming before the other arm's deopt.
         private MSA.Expression/*!*/ EmitIf(IfExpression/*!*/ node, out JT type) {
             var clauses = node.ElseIfClauses;
+            int n = (clauses != null) ? clauses.Count : 0;
+            bool hasElse = n > 0 && clauses[n - 1].Condition == null;
+            int tests = 1 + (hasElse ? n - 1 : n);
+            var conds = new MSA.Expression[tests];
+            var arms = new MSA.Expression[tests];
+            var armTypes = new JT[tests];
+            bool pureAfterArms = true;
+            for (int i = 0; i < tests; i++) {
+                if (i > 0 && clauses[i - 1].Condition == null) { throw JitBailout.Instance; }
+                conds[i] = EmitCondition(i == 0 ? node.Condition : clauses[i - 1].Condition);
+                bool pureAfterTest = _pure;
+                arms[i] = EmitRegion(i == 0 ? node.Body : clauses[i - 1].Statements, out armTypes[i]);
+                pureAfterArms &= _pure;
+                _pure = pureAfterTest;
+            }
             MSA.Expression elseExpr = Ast.Constant(null, typeof(object));
             JT elseType = JT.Obj;
-            int i = (clauses != null) ? clauses.Count - 1 : -1;
-            if (i >= 0 && clauses[i].Condition == null) {
-                elseExpr = EmitRegion(clauses[i].Statements, out elseType);
-                i--;
+            if (hasElse) {
+                elseExpr = EmitRegion(clauses[n - 1].Statements, out elseType);
             }
-            for (; i >= 0; i--) {
-                if (clauses[i].Condition == null) { throw JitBailout.Instance; }
-                JT thenType;
-                var thenExpr = EmitRegion(clauses[i].Statements, out thenType);
-                elseExpr = Join(EmitCondition(clauses[i].Condition), thenExpr, thenType, elseExpr, elseType, out elseType);
+            _pure &= pureAfterArms;
+            for (int i = tests - 1; i >= 0; i--) {
+                elseExpr = Join(conds[i], arms[i], armTypes[i], elseExpr, elseType, out elseType);
             }
-            JT headType;
-            var head = EmitRegion(node.Body, out headType);
-            return Join(EmitCondition(node.Condition), head, headType, elseExpr, elseType, out type);
+            type = elseType;
+            return elseExpr;
         }
 
         private MSA.Expression/*!*/ EmitUnless(UnlessExpression/*!*/ node, out JT type) {
+            var test = Ast.Not(EmitCondition(node.Condition));
+            bool pureAfterTest = _pure;
             JT thenType;
             var thenExpr = EmitRegion(node.Statements, out thenType);
+            bool pureAfterThen = _pure;
+            _pure = pureAfterTest;
             MSA.Expression elseExpr = Ast.Constant(null, typeof(object));
             JT elseType = JT.Obj;
             if (node.ElseClause != null) {
                 if (node.ElseClause.Condition != null) { throw JitBailout.Instance; }
                 elseExpr = EmitRegion(node.ElseClause.Statements, out elseType);
             }
-            return Join(Ast.Not(EmitCondition(node.Condition)), thenExpr, thenType, elseExpr, elseType, out type);
+            _pure &= pureAfterThen;
+            return Join(test, thenExpr, thenType, elseExpr, elseType, out type);
         }
 
         /// <summary>
@@ -1314,9 +1333,13 @@ namespace IronRuby.Runtime.Jit {
 
         private MSA.Expression/*!*/ EmitIfLike(RExpr/*!*/ c, RExpr/*!*/ t, RExpr/*!*/ f, out JT type) {
             var test = EmitCondition(c);
+            bool pureAfterTest = _pure;
             JT tt, ft;
             var te = EmitRegion(t, out tt);
+            bool pureAfterThen = _pure;
+            _pure = pureAfterTest;
             var fe = EmitRegion(f, out ft);
+            _pure &= pureAfterThen;    // as EmitIf
             return Join(test, te, tt, fe, ft, out type);
         }
 
@@ -1615,6 +1638,12 @@ namespace IronRuby.Runtime.Jit {
                 JT tt;
                 var t = Emit(node.Target, out tt);
                 return EmitIdentityCall(node.MethodName, Coerce(t, tt, JT.Obj), null, out type);
+            }
+
+            // `x', `self.x', `@o.x', `o.x' in a method, x an attr_reader of the receiver (JitCompiler.Objects.cs).
+            if (argc == 0 && _loop == null) {
+                var read = EmitMethodAttrRead(node, out type);
+                if (read != null) { return read; }
             }
 
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
@@ -2385,6 +2414,14 @@ namespace IronRuby.Runtime.Jit {
                     if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
                     return Walk(assign.Right);
                 }
+                // `@o.x = v', `o.x = v', `self.x = v' in a method (JitCompiler.EmitAttributeWrite)
+                var attribute = assign.Left as AttributeAccess;
+                if (attribute != null) {
+                    if (op != null || attribute.IsSafeNavigation || _inKeywordDefault) { return No(node); }
+                    var q = attribute.Qualifier;
+                    if (!(q is SelfReference || q is InstanceVariable || q is LocalVariable) || !Walk(q)) { return No(node); }
+                    return Walk(assign.Right);
+                }
                 // `$x = v' (JitCompiler.EmitGlobalWrite)
                 if (assign.Left is AstGlobalVariable) {
                     if (op != null || _inKeywordDefault) { return No(node); }
@@ -2569,6 +2606,12 @@ namespace IronRuby.Runtime.Jit {
                 argc == 1 && !JitCompiler.IsStringLiteralComparison(node) && (node.MethodName == "equal?" || node.MethodName == "==" || node.MethodName == "!=") &&
                 !(args.Expressions[0] is SplattedArgument) && !IsElementRead(node.Target) && !IsElementRead(args.Expressions[0]))) {
                 return Walk(node.Target) && (argc == 0 || Walk(args.Expressions[0]));
+            }
+
+            if (argc == 0 && (node.Target == null || node.Target is SelfReference || node.Target is InstanceVariable ||
+                node.Target is LocalVariable) && !(node.Target == null && node.MethodName == _methodName && _arity == 0)) {
+                // `x', `self.x', `@o.x', `o.x': an attr_reader read if the profile finds one (JitCompiler.EmitMethodAttrRead)
+                return node.Target == null || Walk(node.Target) || No(node);
             }
 
             if (node.Target == null) {

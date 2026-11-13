@@ -113,6 +113,7 @@ namespace IronRuby.Runtime.Jit {
 
         // The receiver of the call that reached the threshold, while TrySpecialize runs (under _compiling).
         private object _selfSample;
+        private object[] _argSample;
         private RubyClass _receiverClass;
         private bool _polymorphicReceiver;
 
@@ -232,6 +233,7 @@ namespace IronRuby.Runtime.Jit {
                 // the receiver of this call is the instance variable profile (Hints); it is only
                 // held while compiling, so a stub keeps no object of the program alive
                 _selfSample = self;
+                _argSample = args;
                 if (!TrySpecialize()) {
                     GiveUp();
                 }
@@ -239,6 +241,7 @@ namespace IronRuby.Runtime.Jit {
                 GiveUp();
             } finally {
                 _selfSample = null;
+                _argSample = null;
                 Volatile.Write(ref _compiling, 0);
             }
         }
@@ -616,7 +619,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private JitCompiler.ReceiverHints/*!*/ Hints() {
-            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample };
+            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample };
         }
 
         private JT[]/*!*/ ProfiledTypes(int count) {
