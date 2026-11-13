@@ -2819,3 +2819,63 @@ t('frozen value unchanged') { b1.value }
 class JitAttrVar; def method_missing(*) = :mm; end
 c1 = JitAttrUser.new(1, BasicObject.new, JitAttrVar.new(0))
 t('a BasicObject receiver') { c1.sp_copy }
+
+# Identity compares on receivers of every kind at one site (JitRuntime.IsIdentical/IsNil): nil,
+# true, false and Symbols take their class without a lookup, Symbols under a binding of their own.
+class JitIdent
+  def initialize(d, x) = (@d = d; @x = x)
+  def sp_fwd = @d == :forward
+  def sp_nn = @x != nil
+  def sp_eq(o) = @x.equal?(o)
+  def sp_isnil = @x.nil?
+  def all = [sp_fwd, sp_nn, sp_eq(:forward), sp_isnil]
+end
+ids = [nil, true, false, :forward, :back, 1, 2**40, 1.5, "s", Object.new, JitIdent].map { |v| JitIdent.new(v, v) }
+warm { |i| ids[i % 4].all; ids[3].all }
+t('identity compares, mixed receivers') { ids.map { |o| o.all[0..1] + [o.sp_isnil] } }
+class NilClass; alias_method :jit_saved_nil?, :nil?; def nil? = :nil_redefined; end
+t('NilClass#nil? redefined') { ids.first(5).map(&:sp_isnil) }
+class NilClass; alias_method :nil?, :jit_saved_nil?; end
+t('and restored') { ids.first(5).map(&:sp_isnil) }
+class Symbol; alias_method :jit_saved_eq, :==; def ==(o) = :sym_eq; end
+t('Symbol#== redefined') { ids.map(&:sp_fwd) }
+class Symbol; alias_method :==, :jit_saved_eq; end
+t('and restored') { ids.map(&:sp_fwd) }
+class BasicObject; alias_method :jit_saved_eq, :==; def ==(o) = :bo_eq; end
+t('BasicObject#== redefined') { ids.map { |o| [o.sp_fwd, o.sp_nn] } }
+class BasicObject; alias_method :==, :jit_saved_eq; end
+t('and restored') { ids.map { |o| [o.sp_fwd, o.sp_nn] } }
+def nil.jit_probe = 1
+t('def nil.x then nil?') { [ids[0].sp_isnil, ids[0].sp_nn, nil.jit_probe] }
+t('a singleton on a Symbol') { sy = :forward; sy.define_singleton_method(:x) { 1 } rescue $!.class }
+
+# Inlined attr reads/writes (JitRuntime.ReadSelfAttr/WriteAttr fast paths): shape changes, a
+# removed variable, a frozen receiver, a subclass with another slot order.
+class JitIv
+  attr_accessor :a, :b
+  def initialize(a, b) = (@a = a; @b = b)
+end
+class JitIvSub < JitIv
+  def initialize(a, b) = (@z = 0; @b = b; @a = a)
+end
+class JitIvUser
+  def initialize(o) = (@o = o; @n = 0; @m = 1; @k = 2)
+  def sp_move
+    @o.b = @o.a
+    nil
+  end
+  attr_writer :o
+end
+iv = JitIv.new(1, 2); u = JitIvUser.new(iv)
+warm { u.sp_move }
+t('inline attr, hot') { iv.a = 4; [u.sp_move, iv.b] }
+u.o = JitIvSub.new(10, 0)
+t('a subclass with another slot order') { [u.sp_move, u.instance_variable_get(:@o).b] }
+iv.instance_variable_set(:@c, 5); u.o = iv
+t('a shape grown') { [u.sp_move, iv.b] }
+iv.remove_instance_variable(:@a)
+t('the read variable removed') { u.sp_move rescue $!.class }
+iv.a = 4; iv.remove_instance_variable(:@b)
+t('the written variable removed') { [u.sp_move, iv.b] }
+iv.freeze
+t('a frozen receiver') { [(u.sp_move rescue $!.class), iv.b] }
