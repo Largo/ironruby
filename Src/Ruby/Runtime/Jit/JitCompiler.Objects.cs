@@ -1218,8 +1218,68 @@ namespace IronRuby.Runtime.Jit {
                     sample = _hints.ArgSamples[i];
                     return true;
                 }
+                if (i < 0) { return TrySampleOfLocal(local, out sample); }
             }
             return false;
+        }
+
+        // The right sides of the method's locals that are assigned exactly once (`init = motion.pos_one'), by name.
+        private Dictionary<string, RExpr> _singleSources;
+        private int _sampleDepth;
+
+        /// <summary>
+        /// A local the method assigns once, from `p.a' (p something TrySample samples, a a public
+        /// attr_reader there), holds what the sampled p's instance variable holds now. A profile, like the
+        /// rest of TrySample: an attr read of the local checks the receiver's class and deopts on anything
+        /// else, and its value is typed through a guard, so a wrong sample is only a deopt. This is what lets
+        /// `init = motion.pos_one; fin.x - init.x' read init.x as a Float.
+        /// </summary>
+        private bool TrySampleOfLocal(LocalVariable/*!*/ local, out object sample) {
+            sample = null;
+            if (_ast == null || _ast.Body == null || _sampleDepth > 4) { return false; }
+            if (_singleSources == null) {
+                var walker = new SingleSourceWalker();
+                walker.Walk(_ast.Body);
+                _singleSources = walker.Sources();
+            }
+            RExpr source;
+            var call = _singleSources.TryGetValue(local.Name, out source) ? source as MethodCall : null;
+            if (call == null || call.Block != null || call.Target == null || call.Arguments != null && !call.Arguments.IsEmpty) { return false; }
+            object owner;
+            _sampleDepth++;
+            try {
+                if (!TrySample(call.Target, out owner) || !(owner is RubyObject)) { return false; }
+            } finally {
+                _sampleDepth--;
+            }
+            string variableName = JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, owner), call.MethodName, true);
+            return variableName != null && _context.TryGetInstanceVariable(owner, variableName, out sample);
+        }
+
+        /// <summary>
+        /// Collects the locals assigned once by a plain `x = v', with v. One assigned some other way as well
+        /// (a parallel assignment, a rescue) may be listed: the sample is only a profile (TrySampleOfLocal).
+        /// </summary>
+        private sealed class SingleSourceWalker : Walker {
+            private readonly Dictionary<string, RExpr>/*!*/ _sources = new Dictionary<string, RExpr>();
+            private readonly HashSet<string>/*!*/ _many = new HashSet<string>();
+
+            internal Dictionary<string, RExpr>/*!*/ Sources() {
+                foreach (var name in _many) { _sources.Remove(name); }
+                return _sources;
+            }
+
+            public override bool Enter(SimpleAssignmentExpression/*!*/ node) {
+                var target = node.Left as LocalVariable;
+                if (target != null) {
+                    if (node.Operation != null || _sources.ContainsKey(target.Name)) {
+                        _many.Add(target.Name);
+                    } else {
+                        _sources[target.Name] = node.Right;
+                    }
+                }
+                return true;
+            }
         }
 
         /// <summary>
