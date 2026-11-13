@@ -238,15 +238,20 @@ namespace IronRuby.Runtime {
         /// flow-control frame.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static RuntimeFlowControl/*!*/ EnterLightMethod(Proc blockParameter) {
             RubyUtils.SafePoint();
+            // a call without a block, the common case, is inlined into the method body
+            return (blockParameter == null) ? InactiveRfc : EnterLightMethodWithBlock(blockParameter);
+        }
+
+        private static RuntimeFlowControl/*!*/ EnterLightMethodWithBlock(Proc/*!*/ blockParameter) {
             // A light frame can only yield to its block: a literal one may be made again once the call returns (Proc.TryReuse).
-            if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
+            if (blockParameter.Kind == ProcKind.Block) {
                 blockParameter.ConvertAsLightFrame();
                 return blockParameter;
             }
-            return CreateRfcForMethod(blockParameter);
+            return InactiveRfc;
         }
 
         /// <summary>
@@ -254,15 +259,17 @@ namespace IronRuby.Runtime {
         /// scope; a light frame keeps it for the scope it may make). Taken either way, as CreateMethodScope does.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static string TakePendingCallee(string/*!*/ definitionName) {
-            if (_aliasCallSeen) {
-                string callee = _pendingCallee;
-                if (callee != null) {
-                    _pendingCallee = null;
-                    if (_pendingCalleeDefinition == definitionName) {
-                        return callee;
-                    }
+            return _aliasCallSeen ? TakePendingCalleeSlow(definitionName) : null;
+        }
+
+        private static string TakePendingCalleeSlow(string/*!*/ definitionName) {
+            string callee = _pendingCallee;
+            if (callee != null) {
+                _pendingCallee = null;
+                if (_pendingCalleeDefinition == definitionName) {
+                    return callee;
                 }
             }
             return null;
@@ -318,8 +325,15 @@ namespace IronRuby.Runtime {
         /// LeaveMethodFrame of a light-frame method: the call's frame, and the scope if one was made.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void LeaveLightMethodFrame(RuntimeFlowControl/*!*/ rfc, RubyScope scope) {
+            // nothing to do for a call without a block that made no scope, the common case, inlined into the method body
+            if (rfc._activeFlowControlScope != null || scope != null) {
+                LeaveLightMethodFrameSlow(rfc, scope);
+            }
+        }
+
+        private static void LeaveLightMethodFrameSlow(RuntimeFlowControl/*!*/ rfc, RubyScope scope) {
             LeaveMethodFrame(rfc);
             if (scope != null) {
                 if (scope.IsActiveMethod) {
