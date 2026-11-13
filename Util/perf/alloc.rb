@@ -46,5 +46,8 @@ INNER.each do |b, inner|
 end
 interps.each_with_index do |(name, _), k|
   r = cols[k].zip(cols[0]).select { |a, b| a && b && b > 0 }.map { |a, b| a.to_f / b }
+  # A benchmark that allocates next to nothing can come out at or below zero (the two runs' start-up
+  # differs by more than its iterations allocate): it has no ratio, and is left out of the geomean.
+  r = r.select { |x| x.finite? && x > 0 }
   printf "geomean %s/%s = %.3f\n", name, interps[0][0], Math.exp(r.sum { |x| Math.log(x) } / r.size) unless r.empty?
 end
