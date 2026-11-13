@@ -3292,12 +3292,16 @@ namespace IronRuby.Runtime {
 
         #region Booleans
 
+        // AggressiveInlining: the JIT left these calls in compiled method bodies (1.4% of Json and
+        // DeltaBlue in RubyOps.IsTrue alone), where a condition is a type test and a compare.
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsTrue(object obj) {
             return (obj is bool) ? (bool)obj == true : obj != null;
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsFalse(object obj) {
             return (obj is bool) ? (bool)obj == false : obj == null;
         }
@@ -5132,6 +5136,7 @@ namespace IronRuby.Runtime {
         /// Here rather than in the writer's rule, which is interpreted for its first calls.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object SetAttribute(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
             return SetInstanceVariable(self, ClearKeywordArguments(value), scope, site);
         }

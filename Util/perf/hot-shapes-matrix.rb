@@ -192,3 +192,25 @@ ivo = IV.new; others = [IV2.new, IV.new]; ivout = []
 end
 ivout.each { |r| p r }
 p ivo.rd, others.map(&:rd)
+# Attribute calls that a rule serves (not a dispatcher: send, a splat, a keyword hash to a
+# writer), with the reader redefined as a method, a singleton reader added and the variable
+# removed mid-run; and Array#== against non-arrays, whose respond_to?(:to_ary) symbol the
+# storage caches, while to_ary and respond_to? are defined on the operand's class.
+class AR; attr_accessor :a; def initialize; @a = 1; end; end
+class EqOp; end
+aro = AR.new; arout = []; arr = [1]; eqo = EqOp.new
+20_000.times do |i|
+  aro.send(:a=, i); aro.a = *[i]
+  r = [aro.send(:a), aro.a(*[]), aro.public_send(:a), arr == nil, arr == eqo, arr == [1], [] == eqo]
+  arout << [i, r] if i % 2500 == 1 || (i > 4_990 && i < 5_010) || (i > 9_990 && i < 10_010) || (i > 12_990 && i < 13_010)
+  case i
+  when 5000 then class AR; def a; [:method, @a]; end; end
+  when 7000 then def aro.a; :singleton; end
+  when 10000 then class EqOp; def to_ary; [1]; end; def ==(o); o == [1]; end; end
+  when 11000 then aro.singleton_class.send(:remove_method, :a); aro.remove_instance_variable(:@a)
+  when 13000 then class EqOp; def respond_to?(m, p = false); m == :to_ary ? false : super; end; end
+  when 15000 then class NilClass; def to_ary; []; end; end
+  end
+end
+arout.each { |r| p r }
+class NilClass; remove_method :to_ary; end

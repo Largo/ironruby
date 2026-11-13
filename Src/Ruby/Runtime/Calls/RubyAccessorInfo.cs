@@ -15,6 +15,7 @@
 
 using System;
 using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Reflection;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
@@ -65,6 +66,15 @@ namespace IronRuby.Runtime.Calls {
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return Array.Empty<MemberInfo>();
         }
+
+        // The DLR compiles a rule with tail calls (CallSiteBinder.Stitch), and the JIT does not inline the
+        // callee of an explicit tail call: the rule then jumps to the accessor helper and its cached
+        // read or store, written to be inlined, runs as a call. Through a local the call is not in
+        // tail position, and the helper's fast path is inlined into the rule.
+        internal static Expression/*!*/ NotInTailPosition(Expression/*!*/ call) {
+            var result = Expression.Variable(call.Type, "#result");
+            return Expression.Block(call.Type, new[] { result }, Expression.Assign(result, call), result);
+        }
     }
 
     public sealed class RubyAttributeReaderInfo : RubyAttributeAccessorInfo {
@@ -89,11 +99,11 @@ namespace IronRuby.Runtime.Calls {
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             RubyOverloadResolver.NormalizeArguments(metaBuilder, args, 0, 0);
             if (!metaBuilder.Error) {
-                metaBuilder.Result = Methods.GetInstanceVariable.OpCall(
+                metaBuilder.Result = NotInTailPosition(Methods.GetInstanceVariable.OpCall(
                     AstUtils.Convert(args.ContextScopeExpression, typeof(RubyScope)),
                     AstUtils.Box(args.TargetExpression),
                     AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
-                );
+                ));
             }
         }
 
@@ -127,12 +137,12 @@ namespace IronRuby.Runtime.Calls {
             var actualArgs = RubyOverloadResolver.NormalizeArguments(metaBuilder, args, 1, 1);
             if (!metaBuilder.Error) {
                 // the value is a positional argument, even a Hash passed as keywords (a.send(:x=, k: 1)): kept, it stops saying so
-                metaBuilder.Result = Methods.SetAttribute.OpCall(
+                metaBuilder.Result = NotInTailPosition(Methods.SetAttribute.OpCall(
                     AstUtils.Box(args.TargetExpression),
                     AstUtils.Box(actualArgs[0].Expression),
                     AstUtils.Convert(args.ContextScopeExpression, typeof(RubyScope)),
                     AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
-                );
+                ));
             }
         }
 
