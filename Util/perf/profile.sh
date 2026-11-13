@@ -20,7 +20,8 @@ set -e
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
 PERF_HOME="${PERF_HOME:-$(dirname "$ROOT")/ironruby-perf}"
 NAME="${1:?usage: profile.sh Benchmark [tree]}"; TREE="${2:-$ROOT}"; SECS="${PROFILE_SECS:-15}"
-PERF="${PERF:-$(command -v perf || ls /usr/lib/linux-tools-*/perf 2>/dev/null | tail -n 1)}"
+# /usr/bin/perf is a wrapper that refuses to run unless a build for the running kernel is installed: take the real one.
+PERF="${PERF:-$(ls /usr/lib/linux-tools-*/perf 2>/dev/null | tail -n 1)}"; PERF="${PERF:-$(command -v perf)}"
 [ -x "$PERF" ] || { echo "no perf: apt-get install -y linux-tools-generic" >&2; exit 1; }
 declare -A INNER=([DeltaBlue]=1200 [Richards]=10 [Json]=10 [CD]=100 [Bounce]=150 [List]=150 [Mandelbrot]=500
                   [NBody]=250000 [Permute]=100 [Queens]=100 [Sieve]=300 [Storage]=100 [Towers]=60)
