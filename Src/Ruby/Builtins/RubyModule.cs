@@ -398,6 +398,10 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, object, object>> _methodUndefinedCallbackSite;
 
         internal object ConstantMissing(string/*!*/ name) {
+            // A light frame checks the stack at its entry only if it has a call site (MethodDefinition.LightFrame.MakesCalls),
+            // and a constant read is none: `def self.const_missing(n) = Zork' recurses through here alone, which has to be a
+            // SystemStackError, not the end of the process.
+            RubyOps.RequireSufficientStack();
             return Context.Send(ref _constantMissingCallbackSite, "const_missing", this, name);
         }
 
