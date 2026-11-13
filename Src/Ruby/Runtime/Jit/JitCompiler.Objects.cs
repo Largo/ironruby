@@ -815,6 +815,9 @@ namespace IronRuby.Runtime.Jit {
         internal sealed class ReceiverHints {
             internal Type[] Parameters;
             internal Type Self;
+            // A method's receiver when it turned hot, whose instance variables are a type profile
+            // (JitCompiler.NumericIVar); null for a loop, which has its live self at hand anyway.
+            internal object SelfSample;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>

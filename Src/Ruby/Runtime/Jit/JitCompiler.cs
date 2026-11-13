@@ -202,7 +202,8 @@ namespace IronRuby.Runtime.Jit {
         // Loop mode: what an instance variable of the loop's self holds right now, as a type
         // (see NumericIVar). Null when the loop was entered without its self, which is then
         // unbound and the loop may not touch self or an instance variable.
-        private readonly Func<string, JT> _ivarProfile;
+        // Method mode: the same, of the receiver of the call that turned the method hot (ReceiverHints.SelfSample).
+        private Func<string, JT> _ivarProfile;
 
         // Loop mode: the instance variable a method name reads on the loop's self if that method
         // is an attr_reader there, else null (see EmitCall). Null when the loop has no self.
@@ -476,6 +477,7 @@ namespace IronRuby.Runtime.Jit {
                 c._hints = hints;
                 c._refinements = refinements;
                 c._noArrayLocals = !arrayParameters;
+                if (hints != null && hints.SelfSample != null) { c._ivarProfile = IVarProfile(context, hints.SelfSample); }
                 c._noUnloggedWrites = !unloggedWrites;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
@@ -1587,6 +1589,15 @@ namespace IronRuby.Runtime.Jit {
             throw Bail("call: " + node.MethodName + "/" + argc);
         }
 
+        /// <summary>What <paramref name="self"/>'s instance variables hold now, as types (NumericIVar).</summary>
+        internal static Func<string, JT>/*!*/ IVarProfile(RubyContext/*!*/ context, object self) {
+            return name => {
+                object value;
+                if (!context.TryGetInstanceVariable(self, name, out value)) { return JT.Obj; }
+                return (value is int) ? JT.Int : (value is long) ? JT.Lng : (value is double) ? JT.Dbl : JT.Obj;
+            };
+        }
+
         private static bool IsNumeric(JT t) {
             return t == JT.Int || t == JT.Lng || t == JT.Dbl;
         }
@@ -2072,6 +2083,9 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
+        // IR_JIT_VERBOSE: what the last rejection was, with the method or variable name.
+        [ThreadStatic] internal static string LastRejectionDetail;
+
         // Locals read anywhere other than straight into an instance variable (`@a = a') or an
         // element (`a[i] = v'), or assigned. A parameter not in here is only ever stored, so it is
         // best carried boxed: unboxing it on entry would only mean boxing it again for each store.
@@ -2134,7 +2148,15 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private bool No(object/*!*/ node) {
-            if (_rejectedBy == null) { _rejectedBy = node.GetType().Name; }
+            if (_rejectedBy == null) {
+                _rejectedBy = node.GetType().Name;
+                if (JitRuntime.Verbose) {
+                    var call = node as MethodCall;
+                    var ivar = node as InstanceVariable;
+                    LastRejectionDetail = (call != null) ? _rejectedBy + " " + call.MethodName + (call.Target == null ? " (self)" : "")
+                        : (ivar != null) ? _rejectedBy + " " + ivar.Name : _rejectedBy;
+                }
+            }
             return false;
         }
 
@@ -2175,11 +2197,13 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// An operand of a binary operator, or the right side of `x op= v': EmitCall and
-        /// EmitAssignment only go on when both sides are numeric, and an instance variable, self,
-        /// or a nil/true/false literal never is - `@count + 1' is refused whatever gets profiled.
+        /// EmitAssignment only go on when both sides are numeric, and self or a nil/true/false
+        /// literal never is. An instance variable may be: `@count + 1' is typed by what the
+        /// receiver's variable held when the method turned hot (JitCompiler.NumericIVar), and an
+        /// unprofiled one is speculated to be a number next to one that is.
         /// </summary>
         private bool WalkOperand(RExpr/*!*/ node) {
-            if (node is InstanceVariable || node is AstGlobalVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
+            if (node is AstGlobalVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
             // a Hash query is a Bool, never a number (an element read is speculated to be one)

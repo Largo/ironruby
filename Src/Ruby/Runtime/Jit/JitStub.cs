@@ -110,6 +110,9 @@ namespace IronRuby.Runtime.Jit {
         // intrinsic off a receiver with (JitCompiler.ObservedType); it is never relied on for a result.
         private readonly Type[]/*!*/ _argClrType;
         private Type _selfClrType;
+
+        // The receiver of the call that reached the threshold, while TrySpecialize runs (under _compiling).
+        private object _selfSample;
         private RubyClass _receiverClass;
         private bool _polymorphicReceiver;
 
@@ -226,12 +229,16 @@ namespace IronRuby.Runtime.Jit {
                 // A thread that read the empty fast slot before another one installed an entry
                 // can get here after that one has let go of _compiling.
                 if (_state != Profiling) { return; }
+                // the receiver of this call is the instance variable profile (Hints); it is only
+                // held while compiling, so a stub keeps no object of the program alive
+                _selfSample = self;
                 if (!TrySpecialize()) {
                     GiveUp();
                 }
             } catch (Exception) {
                 GiveUp();
             } finally {
+                _selfSample = null;
                 Volatile.Write(ref _compiling, 0);
             }
         }
@@ -609,7 +616,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private JitCompiler.ReceiverHints/*!*/ Hints() {
-            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType };
+            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample };
         }
 
         private JT[]/*!*/ ProfiledTypes(int count) {
@@ -1261,7 +1268,12 @@ namespace IronRuby.Runtime.Jit {
             int arity;
             string rejectedBy;
             if (!Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
-                if (rejectedBy != null) { JitRuntime.RecordScreenRejection(rejectedBy); }
+                if (rejectedBy != null) {
+                    JitRuntime.RecordScreenRejection(rejectedBy);
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] screen rejected {0}/{1}: {2}", declaringModule.Name ?? "main", ast.Name, JitScreen.LastRejectionDetail);
+                    }
+                }
                 return generic;
             }
             int mandatoryCount = ast.Parameters.Mandatory.Length;

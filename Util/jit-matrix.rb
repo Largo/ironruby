@@ -2678,3 +2678,44 @@ warm { |i| js.sp_count(i % 5) }
 t('self-call defined before the refinement') { js.sp_count(3) }
 warm { |i| js.no_count_refined(i % 5) }
 t('a call of the refined name where it is used') { js.no_count_refined(2) }
+
+# Instance variables as operands: typed by what the receiver's variable held when the method
+# turned hot, read through a guard that deopts when it holds anything else.
+class JitIVarOperands
+  def initialize(a, b); @a = a; @b = b; end
+  attr_writer :a, :b
+  def sp_sum; @a + @b; end
+  def sp_mod; @a % @b; end
+  def sp_same; @a == @b; end
+  def sp_less(o); @a < o; end
+  def sp_scaled; @a * 3 + @b; end
+  def sp_div; @a / @b; end
+end
+io = JitIVarOperands.new(9, 4)
+warm { |i| io.sp_sum; io.sp_same; io.sp_less(i); io.sp_scaled; io.sp_div }
+t('ivar operands, Integers') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 2**62; io.b = -(2**62)
+t('ivar operands overflowing into Bignum') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 2**80
+t('ivar operand a Bignum') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled] }
+io.a = 7.5; io.b = 2
+t('ivar operand a Float') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 7; io.b = 0
+t('ivar divisor zero') { io.sp_div }
+io.a = nil
+t('ivar operand nil') { io.sp_sum }
+io.a = "s"
+t('ivar operand a String') { [io.sp_same, io.sp_scaled] }
+io.a = 1; io.b = 1
+warm { |i| io.sp_mod; io.sp_same }
+class Integer; alias_method :jit_iv_mod, :%; def %(o) = :redefined_mod; end
+t('Integer#% redefined under an ivar operand') { io.sp_mod }
+class Integer; alias_method :%, :jit_iv_mod; end
+t('and restored') { io.sp_mod }
+fo = JitIVarOperands.new(5, 1).freeze
+t('frozen receiver reads') { [fo.sp_sum, fo.sp_less(6)] }
+class JitIVarOperandsSub < JitIVarOperands
+  def sp_sum; super * 10; end
+end
+t('subclass overriding the method') { JitIVarOperandsSub.new(5, 1).sp_sum }
+
