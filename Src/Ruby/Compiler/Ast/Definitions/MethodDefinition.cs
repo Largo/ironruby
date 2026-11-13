@@ -272,8 +272,13 @@ namespace IronRuby.Compiler.Ast {
             gen.CountParameterAssignments(_parameters);
             MSA.Expression statements = methodBody.TransformResult(gen, ResultOperation.Return);
 
-            // A body that never needs its scope makes none (see TransformLightFrame).
+            // A body that never needs its scope makes none (see TransformLightFrame). The optional parameters' defaults are
+            // rewritten with it (AreLightOptionals); they run first either way.
             LightFrame light = null;
+            if (_parameters.Optional.Length > 0) {
+                statements = Ast.Block(optionalsInitialization, statements);
+                optionalsInitialization = AstUtils.Empty();
+            }
             if (allowLightFrame && LightFramesEnabled && definitionRefinements == null && gen.Profiler == null && !gen.TraceEnabled &&
                 !gen.CompilerOptions.IsEval && !scope.HasClosures && IsLightFrameCandidate()) {
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
@@ -379,6 +384,11 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightCallsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_CALLS") != "0";
         /// <summary>
+        /// IR_LIGHT_OPTIONALS=0 keeps every method with an optional parameter out of light frames (see AreLightOptionals).
+        /// </summary>
+        internal static readonly bool LightOptionalsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_OPTIONALS") != "0";
+
+        /// <summary>
         /// IR_LIGHT_BLOCKS=0 keeps every method with a literal block out of light frames (see TransformLightFrame).
         /// </summary>
         internal static readonly bool LightBlocksEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCKS") != "0";
@@ -455,7 +465,7 @@ namespace IronRuby.Compiler.Ast {
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
-            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+            if (!AreLightOptionals() || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return false;
             }
@@ -489,7 +499,7 @@ namespace IronRuby.Compiler.Ast {
         /// that is not scope-free (its node type and line). Null if it is a candidate.
         /// </summary>
         private string WhyNotLightFrameCandidate() {
-            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+            if (!AreLightOptionals() || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return "optional, splat or post parameters";
             }
@@ -541,6 +551,26 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
             return false;
+        }
+
+        /// <summary>
+        /// Optional parameters a light frame takes: locals whose defaults are scope-free (`def initialize(size = 0)'), not followed
+        /// by keywords. Their initialization is rewritten with the body (see TransformLightFrame), and runs in the same order.
+        /// </summary>
+        private bool AreLightOptionals() {
+            var optional = _parameters.Optional;
+            if (optional.Length == 0) {
+                return true;
+            }
+            if (!LightOptionalsEnabled || _parameters.KeywordsAfterOptionals) {
+                return false;
+            }
+            foreach (var parameter in optional) {
+                if (!(parameter.Left is LocalVariable) || !IsScopeFree(parameter.Right, false)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private bool HasBlockGuard {
