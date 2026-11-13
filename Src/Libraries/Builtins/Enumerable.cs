@@ -149,6 +149,29 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// The same block, which also says whether the item is several values packed into an Array:
+        /// see <see cref="YieldItem"/>.
+        /// </summary>
+        internal static Proc/*!*/ PackingBlock(RubyContext/*!*/ context, Func<BlockParam, object, bool, object>/*!*/ body) {
+            return Proc.Create(context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
+                return body(selfBlock, PackValues(args), args.Count > 1);
+            });
+        }
+
+        /// <summary>
+        /// Yields an item of a <see cref="PackingBlock(RubyContext, Func{BlockParam, object, bool, object})"/> to the
+        /// user's block as MRI's enum_yield does: several values that were packed are taken by a block's rules even
+        /// by a lambda (rb_yield_force_blockarg), which takes no Array apart by itself and checks its argument count -
+        /// `each_with_index.select(&->(x, i) { })` raised "wrong number of arguments (given 1, expected 2)".
+        /// </summary>
+        internal static bool YieldItem(BlockParam/*!*/ block, object item, bool packed, out object blockResult) {
+            if (packed && block.Proc.Kind == ProcKind.Lambda) {
+                return block.YieldBlockArg(item, out blockResult);
+            }
+            return block.Yield(item, out blockResult);
+        }
+
+        /// <summary>
         /// The same block for the methods that hand a yield's values straight on to a user block.
         /// MRI forwards them unchanged there - `def each; yield 1, 2; end` makes `map { |a| a }`
         /// see 1, not [1, 2] - even where the same method packs the value it *stores*
@@ -328,10 +351,13 @@ namespace IronRuby.Builtins {
         public static object Find(CallSiteStorage<EachSite>/*!*/ each, CallSiteStorage<Func<CallSite, object, object>>/*!*/ callStorage,
             [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
             object result = Missing.Value;
+            // MRI's find asks #each not to pack its values (RB_BLOCK_NO_USE_PACKED_ARGS), and Hash#each then yields the
+            // key and the value as two: a lambda of two parameters finds a pair here, and in no other Enumerable method.
+            bool pairs = self is Hash;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item, bool packed) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (YieldItem(predicate, item, packed || pairs && item is RubyArray, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -496,9 +522,9 @@ namespace IronRuby.Builtins {
             RubyArray resultArray = new RubyArray();
             object result = resultArray;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item, bool packed) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (YieldItem(predicate, item, packed, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -857,9 +883,9 @@ namespace IronRuby.Builtins {
             pair.Add(falseSet);
             object result = pair;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item, bool packed) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (YieldItem(predicate, item, packed, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -1140,10 +1166,10 @@ namespace IronRuby.Builtins {
 
             bool dropping = true;
             object result = resultArray; 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item, bool packed) {
                 if (dropping) {
                     object blockResult;
-                    if (predicate.Yield(item, out blockResult)) {
+                    if (YieldItem(predicate, item, packed, out blockResult)) {
                         result = blockResult;
                         return selfBlock.PropagateFlow(predicate, blockResult);
                     }

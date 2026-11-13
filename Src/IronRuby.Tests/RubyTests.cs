@@ -1071,6 +1071,7 @@ namespace IronRuby.Tests {
                 Method_LightFrame1,
                 Method_LightFrame2,
                 Block_RegisterLocals1,
+                Enumerable_LambdaTakesPackedValues1,
                 Defined_ConditionNoFreeze1,
                 Block_OptionalBeforeRest1,
                 LoweredRaise_IgnoresOwnRaise1,

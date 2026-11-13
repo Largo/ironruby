@@ -839,6 +839,21 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// Yields one argument the way a block takes it, also to a lambda: an Array is spread over several parameters,
+        /// and the argument count is not checked. This is MRI's rb_yield_force_blockarg, which Enumerable's methods
+        /// yield with when #each passed several values.
+        /// </summary>
+        public static object YieldBlockArg(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            object result;
+            try {
+                result = blockParam.Proc.Dispatcher.Invoke(blockParam, self, procArg, arg1);
+            } catch (EvalUnwinder evalUnwinder) {
+                result = blockParam.GetUnwinderResult(evalUnwinder);
+            }
+            return result;
+        }
+
         // YieldNoAutoSplat1 uses InvokeNoAutoSplat instead of Invoke (used by Call1)
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal static object YieldNoAutoSplat1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {

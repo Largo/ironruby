@@ -336,6 +336,20 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Calls the proc with one argument taken by a block's rules, lambda or not (see RubyOps.YieldBlockArg).
+        /// </summary>
+        public object CallAsBlock(object arg1) {
+            var blockParam = RubyOps.CreateBfcForProcCall(this);
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.YieldBlockArg(arg1, null, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public object Call(Proc procArg, object arg1, object arg2) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);

@@ -7093,6 +7093,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadProc_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__call_as_block__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Proc, System.Object, System.Object>(IronRuby.Builtins.ProcOps.CallAsBlock)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x51, 
                 new[] { 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U}, 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.ProcOps.Call), 

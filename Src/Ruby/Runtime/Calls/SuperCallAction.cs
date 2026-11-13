@@ -79,6 +79,11 @@ namespace IronRuby.Runtime.Calls {
 
             if (scopeNesting == -1) {
                 metaBuilder.AddCondition(Methods.IsSuperOutOfMethodScope.OpCall(scopeExpr));
+                if (_signature.ResolveOnly) {
+                    // defined?(super) where there is no method to have a super is nil, not the error the call is
+                    metaBuilder.Result = AstUtils.Constant(false);
+                    return true;
+                }
                 metaBuilder.SetError(Methods.MakeTopLevelSuperException.OpCall());
                 return true;
             }

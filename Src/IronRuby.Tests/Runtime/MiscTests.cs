@@ -7083,6 +7083,49 @@ end
         }
 
         /// <summary>
+        /// Enumerable yields several values that #each passed, packed into one item, by a block's rules even to a
+        /// lambda (MRI's rb_yield_force_blockarg), and defined?(super) with no method around it is nil.
+        /// </summary>
+        public void Enumerable_LambdaTakesPackedValues1() {
+            TestOutput(@"
+require 'ruby4'
+class E3; include Enumerable; def each; yield 1, 2, 3; end; end
+e = [[1, 2], [3, 4]].each_with_index
+l = ->(x, i) { i == 1 }
+p e.find(&l), e.select(&l), e.reject(&l), e.partition(&l), e.group_by(&l), e.drop_while(&l)
+p e.min_by(&->(x, i) { -i }), e.sort_by(&->(x, i) { -i }), e.uniq(&l)
+p E3.new.select(&->(a) { p a; true })
+p E3.new.select(&->(a, b, c, d) { p [a, b, c, d]; true })
+p E3.new.group_by(&->(a, *r) { [a, r] })
+p({a: 1}.find(&->(k, v) { v }))
+begin; [[1, 2]].select(&->(a, b) { true }); rescue ArgumentError => err; puts err.message; end
+begin; {a: 1}.group_by(&->(k, v) { v }); rescue ArgumentError => err; puts err.message; end
+p defined?(super), [defined?(super())], proc { defined?(super) }.call
+", @"
+[[3, 4], 1]
+[[[3, 4], 1]]
+[[[1, 2], 0]]
+[[[[3, 4], 1]], [[[1, 2], 0]]]
+{false => [[[1, 2], 0]], true => [[[3, 4], 1]]}
+[[[1, 2], 0], [[3, 4], 1]]
+[[3, 4], 1]
+[[[3, 4], 1], [[1, 2], 0]]
+[[[1, 2], 0], [[3, 4], 1]]
+[1, 2, 3]
+[[1, 2, 3]]
+[1, 2, 3, nil]
+[[1, 2, 3]]
+{[1, [2, 3]] => [[1, 2, 3]]}
+[:a, 1]
+wrong number of arguments (given 1, expected 2)
+wrong number of arguments (given 1, expected 2)
+nil
+[nil]
+nil
+");
+        }
+
+        /// <summary>
         /// `defined?' in a condition makes no call to #freeze, as in CRuby: only whether the answer is nil counts, also for an
         /// operand of &amp;&amp; or || in a condition. Expected output is CRuby 4.0's.
         /// </summary>

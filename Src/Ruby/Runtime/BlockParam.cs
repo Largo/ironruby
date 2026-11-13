@@ -363,6 +363,13 @@ namespace IronRuby.Runtime {
             return BlockJumped(blockResult = RubyOps.Yield(args, null, Self, this));
         }
 
+        /// <summary>
+        /// Yields <paramref name="arg1"/> with a block's argument rules even if the block is a lambda (see RubyOps.YieldBlockArg).
+        /// </summary>
+        public bool YieldBlockArg(object arg1, out object blockResult) {
+            return BlockJumped(blockResult = RubyOps.YieldBlockArg(arg1, null, Self, this));
+        }
+
         public bool YieldSplat(IList/*!*/ args, out object blockResult) {
             return BlockJumped(blockResult = RubyOps.YieldSplat0(args, null, Self, this));
         }

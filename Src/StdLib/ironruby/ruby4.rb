@@ -334,11 +334,20 @@ module Enumerable
   end
   private :__enum_item__
 
+  # Hands an item to the block as MRI's enum_yield does: several values that were packed into
+  # an Array are taken by a block's rules even by a lambda (rb_yield_force_blockarg), which
+  # takes no Array apart by itself - `each_with_index.group_by(&->(x, i) { })` raised an
+  # ArgumentError.
+  def __yield_item__(block, values, item)
+    values.size > 1 && block.lambda? ? block.__send__(:__call_as_block__, item) : block.call(item)
+  end
+  private :__yield_item__
+
   # Extra arguments are passed straight through to #each, which is how a
   # receiver whose #each takes parameters gets to see them.
   def each_entry(*args, &block)
     return to_enum(:each_entry, *args) unless block
-    each(*args) { |*values| block.call(__enum_item__(values)) }
+    each(*args) { |*values| __yield_item__(block, values, __enum_item__(values)) }
     self
   end unless method_defined?(:each_entry)
 
@@ -487,7 +496,7 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
-    each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
+    each { |*values| item = __enum_item__(values); (result[__yield_item__(block, values, item)] ||= []) << item }
     result
   end unless method_defined?(:group_by)
 
@@ -520,7 +529,7 @@ module Enumerable
     found = false
     each do |*values|
       item = __enum_item__(values)
-      key = block.call(item)
+      key = __yield_item__(block, values, item)
       if found
         c = (key <=> best_key)
         if c.nil?
@@ -565,7 +574,7 @@ module Enumerable
     index = 0
     each do |*values|
       item = __enum_item__(values)
-      decorated << [block.call(item), index, item]
+      decorated << [__yield_item__(block, values, item), index, item]
       index += 1
     end
     decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
@@ -617,12 +626,12 @@ module Enumerable
     __ir_same_method__(:collect_concat, :flat_map)
   end
 
-  def uniq
+  def uniq(&block)
     seen = {}
     result = []
     each do |*values|
       item = __enum_item__(values)
-      key = block_given? ? yield(item) : item
+      key = block ? __yield_item__(block, values, item) : item
       next if seen.key?(key)
       seen[key] = true
       result << item

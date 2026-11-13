@@ -207,6 +207,13 @@ namespace IronRuby.Builtins {
 
         #region call, [],  ===, yield
 
+        // The prelude's Enumerable methods hand a packed item to the block with this (see Enumerable.YieldItem).
+        [RubyMethod("__call_as_block__", RubyMethodAttributes.PrivateInstance)]
+        [RubyStackTraceHidden]
+        public static object CallAsBlock(Proc/*!*/ self, object arg) {
+            return self.CallAsBlock(arg);
+        }
+
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self) {
