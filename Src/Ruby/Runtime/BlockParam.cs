@@ -435,13 +435,42 @@ namespace IronRuby.Runtime {
             // only the scopes of its calls held that, and none of them was captured, or the Proc would not be reusable.
             if (proc != null && proc.IsReusable) {
                 var reused = proc.YieldBlockParam;
-                if (reused != null) {
+                // (one a library method yielded through last time is a proc converter's: not this one's kind)
+                if (reused != null && !reused.IsLibProcConverter) {
                     reused.ResetForNextYield();
                     return reused;
                 }
                 return proc.YieldBlockParam = CreateBfcForYield(proc);
             }
             return CreateBfcForYield(proc);
+        }
+
+        /// <summary>
+        /// CreateBfcForLibraryMethod for a method that only yields to its block ([BlockNotKept]): a literal block is marked
+        /// reusable as for a light-frame method (Proc.ConvertAsLightFrame), and a Proc made again for this call (Proc.TryReuse)
+        /// takes the BlockParam of its last call too, with the scope that call parked on it (BlockParam.ParkScope).
+        /// </summary>
+        [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
+        public static BlockParam/*!*/ CreateBfcForBlockNotKept(Proc/*!*/ proc) {
+            Assert.NotNull(proc);
+            if (proc.Kind != ProcKind.Block) {
+                return new BlockParam(proc, BlockCallerKind.Yield, false);
+            }
+
+            proc.ConvertAsLightFrame();
+            if (!proc.IsReusable) {
+                return new BlockParam(proc, BlockCallerKind.Yield, true);
+            }
+
+            // Only the scopes of the last call held its BlockParam, and none of them was captured, or the Proc would not be
+            // reusable; the frame that made the Proc runs on this thread, as that call did.
+            var reused = proc.YieldBlockParam;
+            if (reused != null && reused.IsLibProcConverter) {
+                reused.ResetForNextYield();
+                return reused;
+            }
+            return proc.YieldBlockParam = new BlockParam(proc, BlockCallerKind.Yield, true);
         }
 
         [Emitted]

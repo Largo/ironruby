@@ -440,7 +440,19 @@ namespace IronRuby.Runtime.Jit {
 
         // Each `@x` in a compiled body has an inline cache of its own: the same shape-checked fast
         // path as the interpreter's and the DLR compiler's (see RubyInstanceData).
+        // The cached read of a plain Ruby object is inlined into the body (RubyOps.TryReadCached);
+        // a plain object needs no isolation check.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetIVar(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            object value;
+            if (self is RubyObject obj && RubyOps.TryReadCached(obj._instanceData, site, out value)) {
+                return value;
+            }
+            return GetIVarUncached(context, self, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object GetIVarUncached(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
             RequireIsolationCheckFree(context, self, site);
             return RubyOps.ReadInstanceVariable(context, self, site);
         }
@@ -641,7 +653,18 @@ namespace IronRuby.Runtime.Jit {
             log.Replaced(data, variable.Name, old);
         }
 
+        // The store into an existing variable of a plain Ruby object, at the slot the site has
+        // seen, is inlined into the body (RubyOps.TryWriteCached keeps RubyInstanceData's protocol).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
+            if (self is RubyObject obj && RubyOps.TryWriteCached(obj._instanceData, value, site)) {
+                return value;
+            }
+            return SetIVarUncached(context, self, value, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object SetIVarUncached(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
             var obj = self as RubyObject;
             if (obj != null) {
                 var data = obj._instanceData ?? RubyOps.GetInstanceData(ref obj._instanceData);

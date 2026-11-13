@@ -28,6 +28,12 @@ class A
   def mm(o); o.nosuch(1); end
   def last_new; A.new(7); end
   def seq(s); s == "abc"; end
+  def aset(o, x); o.v = x; @h[:k] = "s#{x}"; o.v; end   # attribute and element assignments, interpolation
+  def interp(o); "<#{o}|#{@v}>"; end
+  def kase(x); case x when Integer then :int when "a", :b then "ab" else [x, :other] end; end
+  def loop1(n); i = 0; t = 0; while i < n; t += getter == :c ? 1 : i; i += 1; end; t; end
+  def loop2(n); i = 0; while i < n; i += 1; local_variables.size if i == 2; end; [i, binding.local_variable_get(:i)]; end
+  def loop3(n); i = 0; t = 0; until i >= n; t += K; i += 1; end; t; end
   def store(i); @arr[i] = i; end
   def hstore(k); @h[k] = k; end
   def rec(n); n == 0 ? 0 : 1 + rec(n - 1); end
@@ -40,6 +46,8 @@ class A
   def method_missing(n, *a); n == :nosuch ? [:mm, a] : super; end
   def respond_to_missing?(*) = true
 end
+K = 1
+class Wrap; def initialize(x); @x = x; end; def to_s; "w#{@x}"; end; end
 class B < A; def getter; :b; end; end
 class C < A; def getter; :c; end; end
 out = []
@@ -49,7 +57,9 @@ procs = []
   o = objs[i % 4]
   r = [a.getter, o.getter, a.cmp(i % 7), a.y1 { |x| x * 2 }, a.y2 { |x| procs << proc { x } if i % 5000 == 0; x },
        a.bg, a.bg { 1 }, a.prot(o), a.priv(o), a.mm(o), a.last_new.v, a.seq("abc"), a.seq(:abc), a.seq("abd"),
-       a.store(i % 5), a.hstore(i % 3), a.lv(1), a.b.local_variables, a.b.receiver.equal?(a)]
+       a.store(i % 5), a.hstore(i % 3), a.lv(1), a.b.local_variables, a.b.receiver.equal?(a),
+       a.aset(o, i % 9), a.interp(Wrap.new(i % 4)), a.kase(i % 3 == 0 ? i : (i % 3 == 1 ? "a" : 1.5)), a.loop1(3), a.loop2(4),
+       (i % 2000 == 0 ? a.loop3(5000) : 0)]
   out << r if i % 3333 == 0
   case i
   when 5000 then class A; def getter; :redefined; end; end
@@ -59,6 +69,9 @@ procs = []
   when 12000 then class A; def initialize(v = 1); @v = v * 2; @arr = []; @h = {}; end; end
   when 13000 then B.class_eval { def cmp(o); :bcmp; end }; objs << B.new
   when 15000 then a.instance_variable_get(:@arr).freeze
+  when 16000 then Wrap.class_eval { def to_s; "W#{@x}"; end }; Integer.class_eval { alias old_eqq ===; def ===(o); o == 1.5 || old_eqq(o); end }
+  when 17000 then Object.send(:remove_const, :K); Object.const_set(:K, 2); A.class_eval { def getter; :c; end }
+  when 18000 then Integer.class_eval { alias === old_eqq }
   end
 rescue => e
   out << [i, e.class, e.message]
@@ -75,3 +88,107 @@ def deep(n); deep(n + 1); end
 begin; deep(0); rescue SystemStackError => e; p e.class; end
 e = [1, 2, 3].each
 p a.y3 { |x| e.next + x }, a.y3 { |x| Fiber.new { Fiber.yield x; 9 }.resume }
+
+# Blocks whose body makes calls, or reads the enclosing scope's locals, run without a scope until a call
+# needs one, and a literal given to an iterator that only yields (Array#each, Integer#times, Range#each,
+# map, select, Hash#each) reuses its Proc and BlockParam within a frame: a method called from the block
+# starts to read the caller's binding, protected and missing methods, a binding or proc taken in the
+# block on one call of the iterator and used after later calls, yield, break and return in such a block.
+class D
+  def initialize; @k = 2; end
+  def q(e); e + @k; end
+  protected def pr(e); e; end
+  def vec(i); r = 0; (0..2).each { |j| r += yield j }; return r if i.odd?; [1, 2].each { |e| return -e if yield(e) == :no }; r; end
+  def run(n, other)
+    s = 0; kept = []; seen = -> { s }
+    i = 0
+    while i < n
+      [1, 2].each { |e| r = q(e); s += r.is_a?(Binding) ? r.local_variable_get(:e) * 100 : r }
+      3.times { |e| s += other.pr(e) + @k }
+      (0..1).each { |e| kept << binding if i % 4000 == 7 && e == 1 }
+      s += [3, 4].map { |e| e * seen.call % 7 }.sum
+      {a: 1}.each { |k, v| s += v if k == :a }
+      s += vec(i) { |x| kept << binding if i % 4000 == 11 && x == 2; break 100 if i % 3000 == 5 && x == 1; x }
+      [5].select { |e| kept << proc { e + i } if i % 5000 == 3; e.odd? }
+      case i
+      when 6000 then D.class_eval { define_method(:q) { |e| binding } }
+      when 9000 then D.class_eval { def q(e); nosuch(e); end; def method_missing(n, *a) = n == :nosuch ? a[0] * 3 : super }
+      when 12000 then D.class_eval { def q(e); e - 1; end }
+      end
+      i += 1
+    end
+    [s, kept.map { |b| b.is_a?(Binding) ? [b.local_variable_get(b.local_variable_defined?(:e) ? :e : :x), b.local_variables.sort] : b.call }]
+  end
+end
+p D.new.run(15_000, D.new)
+t = (1..4).map { |k| Thread.new { s = 0; 20_000.times { |i| [k, i].each { |e| s += e.succ } }; s } }.map(&:value)
+p t
+
+# ---- blocks with loops, case, attribute and element assignment and literals in them ----
+lambda do
+  class Q
+    attr_accessor :n, :a
+    def initialize; @n = 0; @a = [0, 0, 0]; end
+    def kind(x); case x when Integer then :i when String then "s#{x}" else :o end; end
+  end
+  q = Q.new; out = []
+  kept = []
+  30_000.times do |i|
+    r = [1, 2, 3].map do |e|
+      k = 0
+      while k < e; k += 1; q.n += 1; break if k > 2 && i == 15_000; end
+      q.a[e - 1] = k
+      v = case e when 1 then :one when 2 then "two#{k}" else q.kind(e) end
+      kept << binding if i == 10_000 && e == 2
+      kept << proc { [k, e] } if i == 20_000 && e == 3
+      next :skipped if i == 12_000 && e == 1
+      [v, k, q.a.dup, "x" == v, v == :one]
+    end
+    out << r if i % 4999 == 0 || i == 12_000 || i == 15_000
+    case i
+    when 7000 then class Q; def kind(x); :redefined; end; end
+    when 9000 then class Integer; alias old_lt <; def <(o); old_lt(o); end; end
+    when 14_000 then class Integer; alias < old_lt; end
+    when 21_000 then q.a.freeze
+    end
+  rescue => ex
+    out << [i, ex.class, ex.message]; q.a = [0, 0, 0]
+  end
+  out.each { |r| p r }
+  p q.n, kept[0].local_variables.sort, kept[0].local_variable_get(:k), kept[1].call
+  p (1..4).map { |t| Thread.new { s = 0; 5000.times { [1, 2].each { |e| j = 0; while j < e; j += 1; s += t; end } }; s } }.map(&:value)
+  p [1, 2, 3].each { |e| x = 0; x += 1 while x < e; break x * 10 if e == 2 }
+  def m; [1, 2, 3].each { |e| i = 0; while i < 5; i += 1; return [e, i] if i == 3 && e == 2; end }; end
+  p m
+end.call
+# Hot `@x` reads and writes (inlined shape check and slot access) and attr_reader/attr_writer
+# calls while the receiver's shape changes under the site: a variable added, one removed, the
+# object frozen, a singleton class, and objects of other classes with another slot order.
+class IV
+  attr_reader :x; attr_writer :y
+  def initialize; @x = 1; @y = 2; end
+  def rd; [@x, @y, @z]; end
+  def wr(v); @x = v; @y = v + 1; end
+  def via(o); o.y = 5; o.x; end
+end
+class IV2 < IV; def initialize; @y = 20; @q = 0; @x = 10; end; end
+ivo = IV.new; others = [IV2.new, IV.new]; ivout = []
+20_000.times do |i|
+  o = i.odd? ? ivo : others[i % 2]
+  begin
+    o.wr(i)
+    ivout << [i, o.rd, ivo.via(o), o.instance_variables] if i % 2500 == 1 || (i > 14_990 && i < 15_010 && i.odd?)
+  rescue => e
+    ivout << [i, e.class, e.message[/can.t modify frozen IV/]] if i < 15_010
+  end
+  case i
+  when 3001 then ivo.instance_variable_set(:@z, :added)
+  when 5001 then ivo.remove_instance_variable(:@x)
+  when 7001 then def ivo.extra; end
+  when 9001 then ivo.instance_variable_set(:@x, :back)
+  when 11001 then 30.times { |k| ivo.instance_variable_set(:"@v#{k}", k) }
+  when 15001 then ivo.freeze
+  end
+end
+ivout.each { |r| p r }
+p ivo.rd, others.map(&:rd)

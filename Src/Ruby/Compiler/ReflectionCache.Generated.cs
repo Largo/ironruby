@@ -92,6 +92,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateArgumentsErrorForMissingBlock;
         public static MethodInfo/*!*/ CreateArgumentsErrorForProc { get { return _CreateArgumentsErrorForProc ?? (_CreateArgumentsErrorForProc = CallInstruction.CacheFunc<System.String, System.ArgumentException>(RubyOps.CreateArgumentsErrorForProc)); } }
         private static MethodInfo _CreateArgumentsErrorForProc;
+        public static MethodInfo/*!*/ CreateBfcForBlockNotKept { get { return _CreateBfcForBlockNotKept ?? (_CreateBfcForBlockNotKept = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.CreateBfcForBlockNotKept)); } }
+        private static MethodInfo _CreateBfcForBlockNotKept;
         public static MethodInfo/*!*/ CreateBfcForLibraryMethod { get { return _CreateBfcForLibraryMethod ?? (_CreateBfcForLibraryMethod = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.CreateBfcForLibraryMethod)); } }
         private static MethodInfo _CreateBfcForLibraryMethod;
         public static MethodInfo/*!*/ CreateBfcForProcCall { get { return _CreateBfcForProcCall ?? (_CreateBfcForProcCall = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.CreateBfcForProcCall)); } }

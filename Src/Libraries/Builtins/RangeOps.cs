@@ -781,6 +781,7 @@ namespace IronRuby.Builtins {
         /// (which means that you can�t iterate over ranges of Float objects). 
         /// </summary>
         [RubyMethod("each")]
+        [BlockNotKept]
         public static object Each(EachStorage/*!*/ storage, [NotNull]BlockParam/*!*/ block, Range/*!*/ self) {
             if (self.End == null) {
                 return StepEndless(storage, block, self, self.Begin, 1);
