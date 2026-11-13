@@ -253,3 +253,122 @@ ls = LS.new; recv = [1, 2.5, nil, "s", LT.new]; lsout = []
   end
 end
 lsout.each { |r| p r }
+
+# Light methods and scope-free blocks that make calls keep their locals in CLR variables until a
+# scope is made: a local written, then read after a call that starts to make the scope (eval,
+# binding, local_variable_set through the binding), the method JIT off and on, and the call
+# redefined mid-run so that the first scope appears with locals already assigned.
+class RL
+  def g(x); x + 1; end
+  def m1(x); y = g(x); z = y * 2; [x, y, z]; end
+  def m2(x); y = g(x); w = (x % 3 == 0 ? binding : nil); w&.local_variable_set(:y, -1); [y, w ? w.local_variables : 0]; end
+  def m3(x); y = g(x); s = eval("y + 100"); y += 1; [y, s, defined?(y)]; end
+  def m4(a); t = 0; a.each { |e| u = g(e); t += u; binding.local_variable_set(:u, 0) if e == 2; t += u }; t; end
+end
+rl = RL.new; rlout = []
+20_000.times do |i|
+  r = [rl.m1(i), rl.m2(i), rl.m3(i), rl.m4([1, 2, 3])]
+  rlout << [i, r] if i % 2500 == 3 || (i > 9_998 && i < 10_003)
+  case i
+  when 5000 then RL.class_eval { def g(x); [x].sum + 1; end }
+  when 10000 then RL.class_eval { def g(x); local_variables.size + x; end }
+  when 15000 then RL.class_eval { def g(x); x + 1; end }
+  end
+end
+rlout.each { |r| p r }
+
+# Integer results past the DLR's box cache (shared boxes) and one-character slices of a String
+# (a shared CLR string under a new String): identity, mutation and frozen-ness of each result,
+# with Integer#+ and String#[] redefined and restored mid-run.
+src = +"ab\ncd"; chout = []
+20_000.times do |i|
+  n = 40_000 + i; m = (n + 1) - 1; x = (n ^ 0x55) ^ 0x55; d = (n * 2) / 2; sh = (n << 1) >> 1
+  c = src[i % 5]; c2 = src[i % 5]
+  same = c.equal?(c2); c << "!" if i.odd?
+  r = [m.equal?(n), x.object_id == n.object_id, d == sh, m.frozen?, c, c2, same, c.frozen?, src, (-1500 - i % 3) + 0]
+  chout << [i, r] if i % 2500 == 1 || (i > 9_998 && i < 10_002)
+  case i
+  when 5000 then Integer.class_eval { alias_method :__plus, :+; def +(o); __plus(o); end }
+  when 7000 then Integer.class_eval { alias_method :+, :__plus }
+  when 10000 then String.class_eval { alias_method :__aref, :[]; def [](*a); __aref(*a).upcase; end }
+  when 12000 then String.class_eval { alias_method :[], :__aref }
+  end
+end
+chout.each { |r| p r }
+# The entry and exit of a light frame inline the common case - no block, no alias call pending, no scope made: a call
+# through an alias (__callee__ in a callee that makes its scope), a break from a literal block and a proc passed as the
+# block, through hot light methods, with a TracePoint switched on for a while and the frames still reported right.
+class LF
+  def plain(o); o.nil?; end
+  def callee_of; __callee__; end
+  def via(o); callee_of; end
+  alias via2 via
+  alias cal2 callee_of
+  def yld(x); yield x; end
+  def brk(x); yld(x) { |v| break v * 2 }; end
+  def ret(x); [1].each { |v| return v + x }; :none; end
+end
+lf = LF.new; lfout = []; pr = proc { |v| v + 1 }; calls = 0; tp = TracePoint.new(:call) { calls += 1 }
+20_000.times do |i|
+  row = [lf.plain(i), lf.via(i), lf.via2(i), lf.cal2, lf.callee_of, lf.brk(i), lf.yld(i, &pr), lf.ret(i)]
+  lfout << [i, row] if i % 2500 == 3
+  tp.enable if i == 10_000
+  tp.disable if i == 10_100
+end
+lfout.each { |r| p r }
+p calls > 0
+# the JIT's identity calls on any receiver - `o.nil?', `o == x', `o != x', `o.equal?(x)' -
+# at sites that see a plain object, nil, true, a Symbol, an Integer, a String, an object with its
+# own == / nil?, a BasicObject; while Kernel#nil? and BasicObject#== are redefined and restored,
+# a singleton method is added to the receiver, a subclass overrides, a module is prepended to
+# Kernel, nil? is made private in a subclass.
+class ID
+  def nq(o); o.nil?; end
+  def eq(o, x); o == x; end
+  def ne(o, x); o != x; end
+  def eql(o, x); o.equal?(x); end
+  def eqs(o); o == self; end
+  def nqo(o); o.nil?; end
+  def eqo(o); o == self; end
+end
+class IDSub < ID; end
+class IDOwn; def ==(o); :owneq; end; def nil?; :ownnil; end; end
+class IDPriv; private def nil?; true; end; end
+class IDBasic < BasicObject; def method_missing(n, *a); :"mm_#{n}"; end; end
+module IDPre; def nil?; :prenil; end; end
+id = ID.new; plain = Object.new; same = IDSub.new
+idrecv = [plain, nil, true, :sym, 5, "s", IDOwn.new, IDBasic.new, same, 2**70, 1.5]
+idout = []
+20_000.times do |i|
+  r = idrecv[i % idrecv.size]
+  row = [id.nq(r), id.eq(r, r), id.eq(r, plain), id.ne(r, plain), id.ne(r, r), id.eql(r, r), id.eql(r, 5),
+         id.nqo(plain), id.eqo(plain), id.eqo(id), (id.nqo(IDPriv.new) rescue :private), same.eqs(same)]
+  idout << [i, row.map { |x| x.inspect }] if i % 2000 == 7 || (i > 9_995 && i < 10_010)
+  case i
+  when 3001 then class Object; def nil?; :objnil; end; end
+  when 4001 then class Object; remove_method :nil?; end
+  when 5001 then class BasicObject; alias_method :__ideq, :==; def ==(o); :basiceq; end; end
+  when 6001 then class BasicObject; alias_method :==, :__ideq; end
+  when 7001 then def plain.nil?; :single; end; def plain.==(o); :singleeq; end
+  when 8001 then class IDSub; def ==(o); :subeq; end; end
+  when 9001 then Kernel.prepend(IDPre)
+  when 11001 then class NilClass; def nil?; :nilredef; end; end
+  when 12001 then class NilClass; remove_method :nil?; end
+  when 13001 then class Object; def ==(o); :objeq; end; end
+  when 14001 then class Object; remove_method :==; end
+  end
+end
+idout.each { |r| p r }
+
+# A refinement of nil? / == active in the calling method's file.
+module IDRefine
+  refine(Object) { def nil?; :refnil; end; def ==(o); :refeq; end }
+end
+using IDRefine
+class IDR
+  def nq(o); o.nil?; end
+  def eq(o); o == self; end
+end
+idr = IDR.new; idrout = []
+20_000.times { |i| idrout << [idr.nq(i.odd? ? idr : nil), idr.eq(idr)] if i % 5000 == 3 }
+p idrout

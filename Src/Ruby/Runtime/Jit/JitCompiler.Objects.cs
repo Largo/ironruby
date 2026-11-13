@@ -261,6 +261,30 @@ namespace IronRuby.Runtime.Jit {
                 subject = new CaseSubject(temp, st);
             }
 
+            // in the order they run, for _deoptAfterEffect (as EmitIf)
+            var tests = new MSA.Expression[whens.Length];
+            var thens = new MSA.Expression[whens.Length];
+            var thenTypes = new JT[whens.Length];
+            bool pureAfterArms = true;
+            for (int i = 0; i < whens.Length; i++) {
+                var comparisons = whens[i].Comparisons;
+                if (comparisons.Length == 0) { throw Bail("when without a comparison"); }
+                var parts = new MSA.Expression[comparisons.Length];
+                for (int j = 0; j < comparisons.Length; j++) {
+                    if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
+                    parts[j] = (subject != null) ? EmitWhenTest(comparisons[j], subject) : EmitCondition(comparisons[j]);
+                }
+                MSA.Expression test = null;
+                for (int j = comparisons.Length - 1; j >= 0; j--) {
+                    test = (test == null) ? parts[j] : Ast.OrElse(parts[j], test);
+                }
+                tests[i] = test;
+                bool pureAfterTest = _pure;
+                thens[i] = EmitRegion(whens[i].Statements, out thenTypes[i]);
+                pureAfterArms &= _pure;
+                _pure = pureAfterTest;
+            }
+
             JT resultType;
             MSA.Expression result;
             if (node.ElseStatements != null) {
@@ -269,19 +293,10 @@ namespace IronRuby.Runtime.Jit {
                 result = Ast.Constant(null, typeof(object));
                 resultType = JT.Obj;
             }
+            _pure &= pureAfterArms;
 
             for (int i = whens.Length - 1; i >= 0; i--) {
-                var comparisons = whens[i].Comparisons;
-                if (comparisons.Length == 0) { throw Bail("when without a comparison"); }
-                MSA.Expression test = null;
-                for (int j = comparisons.Length - 1; j >= 0; j--) {
-                    if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
-                    var t = (subject != null) ? EmitWhenTest(comparisons[j], subject) : EmitCondition(comparisons[j]);
-                    test = (test == null) ? t : Ast.OrElse(t, test);
-                }
-                JT thenType;
-                var then = EmitRegion(whens[i].Statements, out thenType);
-                result = Join(test, then, thenType, result, resultType, out resultType);
+                result = Join(tests[i], thens[i], thenTypes[i], result, resultType, out resultType);
             }
             type = resultType;
 
@@ -815,6 +830,11 @@ namespace IronRuby.Runtime.Jit {
         internal sealed class ReceiverHints {
             internal Type[] Parameters;
             internal Type Self;
+            // A method's receiver when it turned hot, whose instance variables are a type profile
+            // (JitCompiler.NumericIVar); null for a loop, which has its live self at hand anyway.
+            internal object SelfSample;
+            // The same call's positional arguments (JitCompiler.TrySample).
+            internal object[] ArgSamples;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
@@ -831,6 +851,14 @@ namespace IronRuby.Runtime.Jit {
         private Type ObservedType(RExpr/*!*/ receiver) {
             if (receiver is SelfReference) {
                 return (_hints != null) ? _hints.Self : null;
+            }
+            var ivar = receiver as InstanceVariable;
+            if (ivar != null) {
+                // what the receiver that turned the method hot holds there: a profile, not a promise
+                object sample = (_hints != null) ? _hints.SelfSample : null;
+                object value;
+                if (sample == null || !_context.TryGetInstanceVariable(sample, ivar.Name, out value)) { return null; }
+                return (value == null) ? typeof(void) : value.GetType();
             }
             var local = receiver as LocalVariable;
             if (local == null) { return null; }
@@ -1122,6 +1150,7 @@ namespace IronRuby.Runtime.Jit {
         /// adding the variable or raising deopts before it is made. The value is v.
         /// </summary>
         private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+            if (_loop == null) { return EmitMethodAttrWrite(node, op, right, out type); }
             var receiverLocal = node.Qualifier as LocalVariable;
             if (op != null || node.IsSafeNavigation || receiverLocal == null) {
                 throw Bail("attribute assignment " + node.Name);
@@ -1159,6 +1188,108 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Assign(valueTemp, value),
                 Ast.Call(JitRuntime.M("WriteSelfAttr"), peek.Value.Key, BoxForStore(valueTemp, valueType),
                     Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
+                valueTemp
+            );
+        }
+
+        // ---- attr_reader / attr_writer calls in a method --------------------------------------
+
+        /// <summary>
+        /// What a receiver held in the call that turned the method hot: self, one of self's instance
+        /// variables, or a parameter (ReceiverHints). A profile only: the code checks what it relies on.
+        /// </summary>
+        private bool TrySample(RExpr receiver, out object sample) {
+            sample = null;
+            if (_hints == null) { return false; }
+            if (receiver == null || receiver is SelfReference) {
+                sample = _hints.SelfSample;
+                return sample != null;
+            }
+            var ivar = receiver as InstanceVariable;
+            if (ivar != null) {
+                return _hints.SelfSample != null && _context.TryGetInstanceVariable(_hints.SelfSample, ivar.Name, out sample);
+            }
+            var local = receiver as LocalVariable;
+            if (local != null && _hints.ArgSamples != null && local.DefinitionLexicalDepth == _scopeDepth) {
+                int i = Array.IndexOf(_paramNames, local.Name);
+                if (i >= 0 && i < _hints.ArgSamples.Length) {
+                    // (a parameter the body assigns is not the argument where it is read: the read checks anyway)
+                    sample = _hints.ArgSamples[i];
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// `x', `self.x', `@o.x', `o.x' (o a parameter) in a method, where the profiled receiver's x is an
+        /// attr_reader (or a method that is one): the instance variable read the reader does
+        /// (JitRuntime.ReadSelfAttr), which checks the receiver's class and the global method version
+        /// on every read and deopts when either has moved - a redefinition, a singleton method, a
+        /// receiver of another class. A call with an explicit receiver can only reach a public reader.
+        /// A refinement active here could be what the call reaches, so none may be. The value is typed
+        /// by what the profiled receiver holds, through a guard (as NumericIVar). Null: not such a read.
+        /// </summary>
+        private MSA.Expression EmitMethodAttrRead(MethodCall/*!*/ node, out JT type) {
+            type = JT.None;
+            if (node.Block != null || !_refinements.IsEmpty) { return null; }
+            var target = node.Target;
+            object sample;
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) { return null; }
+            bool explicitReceiver = target != null && !(target is SelfReference);
+            string variableName = JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, sample), node.MethodName, explicitReceiver);
+            if (variableName == null) { return null; }
+
+            MSA.Expression receiver;
+            if (target == null) {
+                receiver = _self;
+            } else {
+                JT rt;
+                receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
+            }
+            _canDeopt = true;
+            MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), receiver,
+                Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, explicitReceiver)));
+            object value;
+            _context.TryGetInstanceVariable(sample, variableName, out value);
+            string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
+            if (guard == null) { type = JT.Obj; return read; }
+            type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
+            return Ast.Call(JitRuntime.M(guard), read);
+        }
+
+        /// <summary>
+        /// `@o.x = v', `o.x = v', `self.x = v' in a method, where the profiled receiver's x= is an attr_writer
+        /// (or a method that is one): the store (JitRuntime.WriteAttr), under ReadSelfAttr's checks, which
+        /// deopt before anything is written; a frozen receiver deopts too, so that its FrozenError comes
+        /// from the real call. The store is observable, so nothing emitted after it may deopt
+        /// (_deoptAfterEffect). `self.x = v' may call a private writer. The value is v.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitMethodAttrWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+            if (op != null || node.IsSafeNavigation || !_refinements.IsEmpty) { throw Bail("attribute assignment " + node.Name); }
+            var target = node.Qualifier;
+            object sample;
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
+            bool explicitReceiver = !(target is SelfReference);
+            string variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            if (variableName == null) { throw Bail("attribute assignment " + node.Name + " that is not an attr_writer"); }
+
+            JT rt;
+            var receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
+            JT valueType;
+            var value = Emit(right, out valueType);
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            var receiverTemp = Ast.Variable(typeof(object), "#receiver");
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _pure = false;
+            _ivarWrite = true;
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp },
+                Ast.Assign(receiverTemp, receiver),
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
+                    Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
                 valueTemp
             );
         }

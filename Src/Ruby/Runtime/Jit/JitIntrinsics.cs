@@ -280,6 +280,90 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// The call site of an identity method - `v.nil?', `v == w', `v != w', `v.equal?(w)' - on a
+        /// receiver of any type: the class the method was last found on to be one of the library
+        /// methods the compiler named (Kernel#nil? and NilClass#nil?; BasicObject#== and its
+        /// equal?/!=, and the == of nil, true, false and Symbol, which are identity too), under which global method version. A user nil? or == anywhere on the way -
+        /// a class's own, a singleton method (it gives the object a class of its own), a module
+        /// included or prepended, a private copy - resolves to something else, and the call deopts
+        /// (a refinement active at the call is refused when compiling). Replaced as a whole, so a
+        /// racing reader sees one consistent pair.
+        /// </summary>
+        public sealed class IdentityCallSite {
+            internal readonly string/*!*/ Name;
+            private readonly Calls.RubyMemberInfo[]/*!*/ _expected;
+
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            // `!=': BasicObject#!= calls ==, which must then be BasicObject's as well.
+            private readonly IdentityCallSite _calls;
+
+            internal IdentityCallSite(string/*!*/ name, Calls.RubyMemberInfo[]/*!*/ expected, IdentityCallSite calls) {
+                Name = name;
+                _expected = expected;
+                _calls = calls;
+            }
+
+            private bool Resolves(RubyClass/*!*/ cls) {
+                var resolved = cls.ResolveMethod(Name, Calls.VisibilityContext.AllVisible);
+                return resolved.Found && resolved.Info.IsPublic && Array.IndexOf(_expected, resolved.Info) >= 0
+                    && (_calls == null || _calls.Resolves(cls));
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal bool IsBoundTo(RubyClass/*!*/ cls) {
+                var b = _bound;
+                return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            internal bool Bind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (!Resolves(cls)) {
+                    return false;
+                }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void RequireIdentityMethod(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site) {
+            var obj = value as RubyObject;
+            RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, value);
+            if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
+                throw Deopt();
+            }
+        }
+
+        /// <summary>
+        /// `v.nil?': Kernel#nil? is false and NilClass#nil? true, which is whether v is nil, once the
+        /// site found v's class to answer nil? with one of them.
+        /// </summary>
+        public static bool IsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site) {
+            RequireIdentityMethod(context, value, site);
+            return value == null;
+        }
+
+        /// <summary>
+        /// `v == w', `v.equal?(w)', `v != w' (BasicObject#!= is !(v == w), and the site checks == too):
+        /// BasicObject's methods are identity (rb_obj_equal) for a plain object, nil, true, false and
+        /// a Symbol. BasicObject#== of any other CLR type is its Equals (a String's or an exception's
+        /// may compare contents), so that deopts.
+        /// </summary>
+        public static bool IsIdentical(RubyContext/*!*/ context, object value, object other, IdentityCallSite/*!*/ site) {
+            if (value != null && value.GetType() != typeof(RubyObject) && !(value is bool) && !(value is RubySymbol)) {
+                throw Deopt();
+            }
+            RequireIdentityMethod(context, value, site);
+            return (value is bool) ? value.Equals(other) : ReferenceEquals(value, other);
+        }
+
+        /// <summary>
         /// `v == "lit"': String#== of a String whose class is String itself (a subclass may override
         /// ==, and an instance with a singleton == is ruled out when compiling: JitCompiler.
         /// HasPlainInstances) compares the contents. The literal is the one frozen copy the compiler

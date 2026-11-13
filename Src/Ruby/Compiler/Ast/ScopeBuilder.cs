@@ -509,7 +509,7 @@ namespace IronRuby.Compiler.Ast {
             }
 
             protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
-                if (node is TraceLineExpression || node is TraceReturnExpression || node is CompiledFrameExpression) {
+                if (node is TraceLineExpression || node is TraceReturnExpression || node is CompiledFrameExpression || node is Microsoft.Scripting.Ast.LightDynamicExpression) {
                     return base.VisitExtension(node);
                 }
                 if (node is SourceLineMarker || node is EnterInterpretedFrameExpression) {
