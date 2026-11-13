@@ -14,12 +14,14 @@ The output is two tables and a ranked list of gaps in `Util/perf/LEDGER.md`, whi
 Util/perf/setup.sh          # TruffleRuby and AWFY into ../ironruby-perf, Release build if missing
 ```
 
-If the Release build exists but is older than `HEAD` (`git log -1 --format=%cd` against the
-date of `Src/Console/bin/Release/net10.0/IronRuby.dll`), rebuild it first: a stale build
-measures an old commit.
+Build before measuring, every time: the binaries under `Src/Console/bin/Release` say
+nothing about which sources they came from (another branch may have been built there since,
+or the tree may have uncommitted changes), and an incremental build of an up-to-date tree
+takes seconds. A stale build measures some other commit and records it under `HEAD`.
 
 ```sh
-dotnet build Src/Console/Ruby.Console.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 -v q | tail -3
+set -o pipefail
+dotnet build Src/Console/Ruby.Console.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 -v q | tail -3 || exit 1
 ```
 
 Never measure a Debug build: it is about 1.8x slower across the board.

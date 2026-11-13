@@ -29,11 +29,20 @@ PERF="${PERF:-$(ls /usr/lib/linux-tools-*/perf 2>/dev/null | tail -n 1)}"; PERF=
 declare -A INNER=([DeltaBlue]=1200 [Richards]=10 [Json]=10 [CD]=100 [Bounce]=150 [List]=150 [Mandelbrot]=500
                   [NBody]=250000 [Permute]=100 [Queens]=100 [Sieve]=300 [Storage]=100 [Towers]=60)
 OUT="$PERF_HOME/profiles"; mkdir -p "$OUT"
-DOTNET_PerfMapEnabled=1 DOTNET_EnableWriteXorExecute=0 IR_CONFIG=Release "$TREE/ir.sh" \
+# IR_SERVER=0: the launchers then exec the runtime itself (no warm pool), so $! is the benchmark -
+# no search by command line, which could find, and later kill, someone else's run of the same name.
+IR_SERVER=0 DOTNET_PerfMapEnabled=1 DOTNET_EnableWriteXorExecute=0 IR_CONFIG=Release "$TREE/ir.sh" \
   -r"$ROOT/Util/perf/sync.rb" "$PERF_HOME/awfy/benchmarks/Ruby/harness.rb" "$NAME" 100000 "${INNER[$NAME]}" > /dev/null 2>&1 &
+PID=$!
+# The benchmark would otherwise run on for its 100000 iterations if this script is interrupted,
+# and take a core from whatever is measured next.
+trap 'kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 sleep 10                                    # past start-up and the JIT tiers
-PID=$(pgrep -n -f "harness.rb $NAME 100000")
+kill -0 "$PID" 2>/dev/null || { echo "$NAME ended before sampling began" >&2; exit 1; }
 "$PERF" record -F 999 -g -e cpu-clock -p "$PID" -o "$OUT/$NAME.perf" -- sleep "$SECS" 2>&1 | tail -n 1
 kill "$PID" 2>/dev/null || true
+wait "$PID" 2>/dev/null || true
 "$PERF" script -i "$OUT/$NAME.perf" -F ip,sym,dso > "$OUT/$NAME.stacks" 2>/dev/null
 ruby "$ROOT/Util/perf/profile-agg.rb" "$OUT/$NAME.stacks" 25

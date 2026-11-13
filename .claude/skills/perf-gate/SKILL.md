@@ -34,8 +34,9 @@ git -C <tree> diff --stat <base>...HEAD
 
 ```sh
 # in the candidate tree, with the DLR copy Util/perf/worktree.sh made for it
+set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
-  -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3
+  -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
 (cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; tail -1 results.txt; grep '^> FAILED' results.txt)
 ```
 
@@ -46,7 +47,7 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 |---|---|
 | `Runtime/Jit/`, call sites | `Util/jit-matrix.rb` |
 | `Runtime/Osr/`, iterators | `Util/block-loop-matrix.rb`, `Util/osr-array-matrix.rb` |
-| block and scope reuse | `Util/block-scope-reuse-matrix.rb`, `-blockpass.rb`, `-race.rb` |
+| block and scope reuse | `Util/block-scope-reuse-matrix.rb`, `Util/block-scope-reuse-blockpass.rb`, `Util/block-scope-reuse-race.rb` |
 | instance variables, shapes | `Util/ivar-matrix.rb`, `Util/ivar-stress.rb` |
 | Integer/Float arithmetic | `Util/int-matrix.rb` |
 | Hash, Struct | `Util/hash-order-matrix.rb`, `Util/hash-struct-matrix.rb` |

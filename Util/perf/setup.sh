@@ -13,15 +13,18 @@ V="${TRUFFLE_VERSION:-40.0.0}"
 case "$(uname -m)" in aarch64|arm64) ARCH=aarch64 ;; *) ARCH=amd64 ;; esac
 mkdir -p "$PERF_HOME"
 
-if [ ! -x "$PERF_HOME/truffleruby/bin/truffleruby" ]; then
+# The requested version's own directory decides: `truffleruby` may point at another version
+# installed by an earlier run, and the benchmarks would then quietly use that one.
+if [ ! -x "$PERF_HOME/truffleruby-$V/bin/truffleruby" ] &&
+   ! { [ -x "$PERF_HOME/truffleruby/bin/truffleruby" ] && "$PERF_HOME/truffleruby/bin/truffleruby" -v 2>/dev/null | grep -q "truffleruby $V "; }; then
   # Unpacked in a directory of its own: a downloaded archive is not trusted with ours.
   mkdir -p "$PERF_HOME/truffleruby-$V"
   curl -fsSL -o "$PERF_HOME/truffleruby.tgz" \
     "https://github.com/truffleruby/truffleruby/releases/download/graal-$V/truffleruby-$V-linux-$ARCH.tar.gz"
   tar -xzf "$PERF_HOME/truffleruby.tgz" -C "$PERF_HOME/truffleruby-$V" --strip-components=1
   rm "$PERF_HOME/truffleruby.tgz"
-  ln -sfn "truffleruby-$V" "$PERF_HOME/truffleruby"
 fi
+[ -x "$PERF_HOME/truffleruby-$V/bin/truffleruby" ] && ln -sfn "truffleruby-$V" "$PERF_HOME/truffleruby"
 [ -d "$PERF_HOME/awfy" ] || git clone -q --depth 1 https://github.com/smarr/are-we-fast-yet "$PERF_HOME/awfy"
 
 if [ ! -x "$ROOT/Src/Console/bin/Release/net10.0/ir" ]; then

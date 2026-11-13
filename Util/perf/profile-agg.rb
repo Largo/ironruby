@@ -11,6 +11,14 @@ leaf_only = ARGV[2]&.start_with?('self:')
 callers = ARGV[2] && Regexp.new(ARGV[2].delete_prefix('self:'))
 # A compiled Ruby body is "IR|label|line|id|file(args)" (RubyStackTraceBuilder.EncodeMethodName):
 # shown as "label (file:line)", one entry for all of a method's compiled instances and tiers.
+# %XXXX is a UTF-16 code unit, so a character outside the BMP is two of them: decode the run
+# together (a surrogate alone is not a character, and chr would raise on it).
+unescape = lambda do |t|
+  t.gsub(/(?:%\h{4})+/) do |run|
+    run.scan(/%(\h{4})/).map { |h| h[0].hex }.pack('S<*').force_encoding(Encoding::UTF_16LE)
+       .encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+  end
+end
 name = lambda do |s|
   # profile.sh asks perf for the DSO too: an unresolved native frame is shown by its library
   # (libcoreclr.so is stripped: the GC and the allocation helpers).
@@ -18,8 +26,8 @@ name = lambda do |s|
     next "[unknown] #{File.basename(m[1])}"
   end
   if (m = s.match(/IR\|([^|]*)\|(\d+)\|\d+\|([^(]*)/))
-    label = m[1].gsub(/%(\h{4})/) { $1.hex.chr(Encoding::UTF_8) }
-    file = File.basename(m[3].gsub(/%(\h{4})/) { $1.hex.chr(Encoding::UTF_8) })
+    label = unescape.(m[1])
+    file = File.basename(unescape.(m[3]))
     next "#{label} (#{file}:#{m[2]})"[0, 110]
   end
   s = s.gsub(/\[(OptimizedTier1|Optimized|Tier1|Tier0|QuickJitted|PreJIT|InstrumentedTier\w*)\]/, '').sub(/\(.*/, '').strip

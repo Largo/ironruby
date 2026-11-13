@@ -34,8 +34,12 @@ INNER.each do |b, inner|
   next unless only.empty? || only.include?(b)
   row = interps.map do |_, cmd|
     out = IO.popen("LANG=C.UTF-8 timeout -s KILL #{secs} #{cmd} -r#{sync} #{dir}/harness.rb #{b} 100000 #{inner} 2>&1", &:read)
+    # The run is meant to end at the deadline, killed (137 from timeout). One that ended by itself with an
+    # error - a wrong answer raises - is a failure however many iterations it printed first.
+    st = $?
+    ended_as_meant = st.signaled? || [0, 137].include?(st.exitstatus)
     t = out.scan(/runtime: (\d+)us/).flatten.map(&:to_i)
-    t.empty? ? nil : t[t.size / 2..].sort.then { |h| h[h.size / 2] }
+    (t.empty? || !ended_as_meant) ? nil : t[t.size / 2..].sort.then { |h| h[h.size / 2] }
   end
   row.each_with_index { |v, k| cols[k] << v }
   printf fmt, b, *row.map { |v| v || 'FAIL' }

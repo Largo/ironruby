@@ -8,8 +8,12 @@
 # picks its next target from.
 interps = ARGV.map { |s| s.split('=', 2) }
 micro = File.join(__dir__, 'micro.rb')
-res = interps.map do |_, cmd|
-  IO.popen("LANG=C.UTF-8 #{cmd} #{micro} 2>&1", &:read).scan(/^(\S+)\s+([\d.]+) ns\/op/).to_h
+res = interps.map do |name, cmd|
+  out = IO.popen("LANG=C.UTF-8 #{cmd} #{micro} 2>&1", &:read)
+  # An interpreter that failed leaves a short column or none, which the table would show as dashes
+  # or not at all: say which one it was and what it printed instead.
+  abort "#{name} (#{cmd}) failed with #{$?.exitstatus || $?.termsig}:\n#{out.lines.last(15).join}" unless $?.success?
+  out.scan(/^(\S+)\s+([\d.]+) ns\/op/).to_h
 end
 printf "%-10s" + " %9s" * interps.size + "  %s\n", 'ns/op', *interps.map(&:first), interps.size > 1 ? "#{interps[1][0]}/#{interps[0][0]}" : ''
 res[0].each_key do |op|
