@@ -279,6 +279,13 @@ namespace IronRuby.Compiler.Ast {
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
                     visiblePrameterCountAndSignatureFlags, ref statements);
             }
+            if (LightFramesWhy && light == null) {
+                Console.Error.WriteLine("[light] why not: {0} ({1}:{2}): {3}", _name, gen.SourcePath, Location.Start.Line,
+                    !(allowLightFrame && LightFramesEnabled) ? "not allowed" :
+                    definitionRefinements != null ? "refinements" : gen.Profiler != null ? "profiler" : gen.TraceEnabled ? "trace" :
+                    gen.CompilerOptions.IsEval ? "eval" : scope.HasClosures ? "defines a closure (block literal)" :
+                    WhyNotLightFrameCandidate() ?? "body needs its scope after the rewrite");
+            }
 
             // The handler only takes the MethodUnwinder of a `return' from a block of this method. It
             // used to take every exception, for IsMethodUnwinderTargetFrame to capture the backtrace in,
@@ -361,15 +368,18 @@ namespace IronRuby.Compiler.Ast {
 
         /// <summary>
         /// IR_LIGHT_FRAMES=0 turns light frames off, to compare against or to rule them out; IR_LIGHT_FRAMES=verbose
-        /// names on stderr each method compiled as one, and each candidate whose transformed body needed its scope.
+        /// names on stderr each method compiled as one, and each candidate whose transformed body needed its scope;
+        /// IR_LIGHT_FRAMES=why also says, for each method that is not one, why not (WhyNotLightFrameCandidate).
         /// </summary>
         internal static readonly bool LightFramesEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") != "0";
+
 
         /// <summary>
         /// IR_LIGHT_CALLS=0 keeps every method that makes a call out of light frames (see LightFrameRewriter.LightScopeCall).
         /// </summary>
         internal static readonly bool LightCallsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_CALLS") != "0";
-        private static readonly bool LightFramesVerbose = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
+        private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
+        private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
         /// <summary>
         /// The pieces of a method body that runs without a RubyMethodScope (see TransformLightFrame).
@@ -468,6 +478,35 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// IR_LIGHT_FRAMES=why: what IsLightFrameCandidate refused - the parameters, a rescue/ensure, or the first statement
+        /// that is not scope-free (its node type and line). Null if it is a candidate.
+        /// </summary>
+        private string WhyNotLightFrameCandidate() {
+            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+                _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
+                return "optional, splat or post parameters";
+            }
+            var signature = _parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                return "keyword parameters";
+            }
+            var body = Body;
+            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
+                return "rescue, else or ensure";
+            }
+            if (body.Statements != null) {
+                bool first = true;
+                foreach (var statement in body.Statements) {
+                    if (!IsScopeFree(statement) && !(first && IsBlockGuard(statement))) {
+                        return String.Format("{0} at line {1}", statement.GetType().Name, statement.Location.Start.Line);
+                    }
+                    first = false;
+                }
+            }
+            return IsLightFrameCandidate() ? null : "parameters";
         }
 
         /// <summary>
