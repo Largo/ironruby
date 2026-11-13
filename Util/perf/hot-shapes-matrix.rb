@@ -88,3 +88,76 @@ def deep(n); deep(n + 1); end
 begin; deep(0); rescue SystemStackError => e; p e.class; end
 e = [1, 2, 3].each
 p a.y3 { |x| e.next + x }, a.y3 { |x| Fiber.new { Fiber.yield x; 9 }.resume }
+
+# Blocks whose body makes calls, or reads the enclosing scope's locals, run without a scope until a call
+# needs one, and a literal given to an iterator that only yields (Array#each, Integer#times, Range#each,
+# map, select, Hash#each) reuses its Proc and BlockParam within a frame: a method called from the block
+# starts to read the caller's binding, protected and missing methods, a binding or proc taken in the
+# block on one call of the iterator and used after later calls, yield, break and return in such a block.
+class D
+  def initialize; @k = 2; end
+  def q(e); e + @k; end
+  protected def pr(e); e; end
+  def vec(i); r = 0; (0..2).each { |j| r += yield j }; return r if i.odd?; [1, 2].each { |e| return -e if yield(e) == :no }; r; end
+  def run(n, other)
+    s = 0; kept = []; seen = -> { s }
+    i = 0
+    while i < n
+      [1, 2].each { |e| r = q(e); s += r.is_a?(Binding) ? r.local_variable_get(:e) * 100 : r }
+      3.times { |e| s += other.pr(e) + @k }
+      (0..1).each { |e| kept << binding if i % 4000 == 7 && e == 1 }
+      s += [3, 4].map { |e| e * seen.call % 7 }.sum
+      {a: 1}.each { |k, v| s += v if k == :a }
+      s += vec(i) { |x| kept << binding if i % 4000 == 11 && x == 2; break 100 if i % 3000 == 5 && x == 1; x }
+      [5].select { |e| kept << proc { e + i } if i % 5000 == 3; e.odd? }
+      case i
+      when 6000 then D.class_eval { define_method(:q) { |e| binding } }
+      when 9000 then D.class_eval { def q(e); nosuch(e); end; def method_missing(n, *a) = n == :nosuch ? a[0] * 3 : super }
+      when 12000 then D.class_eval { def q(e); e - 1; end }
+      end
+      i += 1
+    end
+    [s, kept.map { |b| b.is_a?(Binding) ? [b.local_variable_get(b.local_variable_defined?(:e) ? :e : :x), b.local_variables.sort] : b.call }]
+  end
+end
+p D.new.run(15_000, D.new)
+t = (1..4).map { |k| Thread.new { s = 0; 20_000.times { |i| [k, i].each { |e| s += e.succ } }; s } }.map(&:value)
+p t
+
+# ---- blocks with loops, case, attribute and element assignment and literals in them ----
+lambda do
+  class Q
+    attr_accessor :n, :a
+    def initialize; @n = 0; @a = [0, 0, 0]; end
+    def kind(x); case x when Integer then :i when String then "s#{x}" else :o end; end
+  end
+  q = Q.new; out = []
+  kept = []
+  30_000.times do |i|
+    r = [1, 2, 3].map do |e|
+      k = 0
+      while k < e; k += 1; q.n += 1; break if k > 2 && i == 15_000; end
+      q.a[e - 1] = k
+      v = case e when 1 then :one when 2 then "two#{k}" else q.kind(e) end
+      kept << binding if i == 10_000 && e == 2
+      kept << proc { [k, e] } if i == 20_000 && e == 3
+      next :skipped if i == 12_000 && e == 1
+      [v, k, q.a.dup, "x" == v, v == :one]
+    end
+    out << r if i % 4999 == 0 || i == 12_000 || i == 15_000
+    case i
+    when 7000 then class Q; def kind(x); :redefined; end; end
+    when 9000 then class Integer; alias old_lt <; def <(o); old_lt(o); end; end
+    when 14_000 then class Integer; alias < old_lt; end
+    when 21_000 then q.a.freeze
+    end
+  rescue => ex
+    out << [i, ex.class, ex.message]; q.a = [0, 0, 0]
+  end
+  out.each { |r| p r }
+  p q.n, kept[0].local_variables.sort, kept[0].local_variable_get(:k), kept[1].call
+  p (1..4).map { |t| Thread.new { s = 0; 5000.times { [1, 2].each { |e| j = 0; while j < e; j += 1; s += t; end } }; s } }.map(&:value)
+  p [1, 2, 3].each { |e| x = 0; x += 1 while x < e; break x * 10 if e == 2 }
+  def m; [1, 2, 3].each { |e| i = 0; while i < 5; i += 1; return [e, i] if i == 3 && e == 2; end }; end
+  p m
+end.call

@@ -492,7 +492,7 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
-        private static bool IsScopeFree(Expression/*!*/ node) {
+        internal static bool IsScopeFree(Expression/*!*/ node) {
             // `def f = [[[...]]]' a thousand deep: such a body is not worth a light frame, nor a stack overflow to find out
             if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
                 return false;
@@ -706,7 +706,7 @@ namespace IronRuby.Compiler.Ast {
         private static readonly MethodInfo/*!*/ _EnterLightLoop = typeof(RubyOps).GetMethod("EnterLightLoop");
         private static readonly MethodInfo/*!*/ _LeaveLightLoop = typeof(RubyOps).GetMethod("LeaveLightLoop");
 
-        private sealed class LightFrameRewriter : MSA.ExpressionVisitor {
+        internal sealed class LightFrameRewriter : MSA.ExpressionVisitor {
             private readonly MSA.ParameterExpression/*!*/ _scope;
             private readonly MSA.Expression/*!*/ _inLoop;
             private readonly MSA.Expression/*!*/ _lazyScope;
@@ -773,7 +773,8 @@ namespace IronRuby.Compiler.Ast {
             }
 
             protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
-                if (node.Method == Methods.MethodYield && node.Arguments.Count == 3 && node.Arguments[0] == _scope) {
+                // (a block's body, BlockDefinition.TransformLightCalls, has no flow-control frame of its own: _rfc is null)
+                if (_rfc != null && node.Method == Methods.MethodYield && node.Arguments.Count == 3 && node.Arguments[0] == _scope) {
                     // the raw scope variable, which is null unless a hook made the scope
                     return Methods.LightMethodYield.OpCall(_rfc, _scope, Visit(node.Arguments[1]), Visit(node.Arguments[2]));
                 }
@@ -796,6 +797,12 @@ namespace IronRuby.Compiler.Ast {
                     }
                 }
                 int index = ScopeOperandIndex(node.Method);
+                if (index < 0 && _rfc == null && (node.Method == Methods.GetMethodBlockParameter ||
+                    node.Method == Methods.GetMethodBlockParameterSelf || node.Method == Methods.BlockYield)) {
+                    // A yield in a block: the method's block is found from the scope the block was defined in as it is from
+                    // the block's own (the innermost method scope above either), and BlockYield takes the scope for nothing.
+                    index = 0;
+                }
                 if (index >= 0 && index < node.Arguments.Count && node.Arguments[index] == _scope &&
                     node.Method.GetParameters()[index].ParameterType == typeof(RubyScope) && node.Object == null) {
                     var arguments = new MSA.Expression[node.Arguments.Count];

@@ -136,7 +136,8 @@ namespace IronRuby.Builtins {
             get { return (_kind & ReusableFlag) != 0; }
         }
 
-        // The BlockParam the light-frame method yields to a reusable proc through (RubyOps.ReuseBfcForYield).
+        // The BlockParam the light-frame method yields to a reusable proc through (RubyOps.ReuseBfcForYield), or the one a
+        // [BlockNotKept] library method was given it with (RubyOps.CreateBfcForBlockNotKept).
         internal BlockParam YieldBlockParam;
 
         /// <summary>

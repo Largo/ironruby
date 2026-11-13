@@ -75,6 +75,12 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        // The same for a block that runs without its scope (BlockDefinition) and makes it inside a loop of its own.
+        public static RubyBlockScope/*!*/ LightBlockScopeInLoop(RubyBlockScope/*!*/ scope, bool inLoop) {
+            scope.InLoop = inLoop;
+            return scope;
+        }
+
         [Emitted]
         public static void EnterRescue(RubyScope/*!*/ scope) {
             scope.InRescue = true;
