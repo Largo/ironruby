@@ -4946,8 +4946,39 @@ namespace IronRuby.Runtime {
 
         // `@x`: a Ruby object whose shape the site has seen is a reference compare and an array
         // load. See RubyInstanceData for the layout and why no lock is needed.
+        //
+        // The cached case is inlined into the compiled method body (the JIT inlines it into the
+        // dynamic method): a type check, three loads, the acquire read of element 0, a compare and
+        // the slot load. Everything else - a cache miss, a module, a non-RubyObject - is a call to
+        // the out-of-line rest. It is RubyInstanceData's read protocol unchanged: one read of
+        // _ivars, an acquire read of its element 0, and a slot read the shape there vouches for.
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetInstanceVariable(RubyScope/*!*/ scope, object self, InstanceVariableSite/*!*/ site) {
+            object value;
+            if (self is RubyObject obj && TryReadCached(obj._instanceData, site, out value)) {
+                return value;
+            }
+            return GetInstanceVariableUncached(scope, self, site);
+        }
+
+        // The cached read of a variable of an object's instance data (null for no variables yet).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCached(RubyInstanceData data, InstanceVariableSite/*!*/ site, out object value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    value = RubyInstanceData.GetSlot(slots, entry.Index);
+                    return true;
+                }
+            }
+            value = null;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object GetInstanceVariableUncached(RubyScope/*!*/ scope, object self, InstanceVariableSite/*!*/ site) {
             RubyInstanceData data;
             var obj = self as RubyObject;
             if (obj != null) {
@@ -5043,8 +5074,39 @@ namespace IronRuby.Runtime {
 
         // `@x = v`: a Ruby object whose shape the site has seen stores without a lock; adding a
         // variable the site has seen added is a CAS. See RubyInstanceData.
+        //
+        // The store into a variable the object already has, at the slot the site has seen, is
+        // inlined into the compiled method; the rest (adding, a miss, frozen, other receivers) is
+        // out of line. It is RubyInstanceData's write protocol: store the slot, then re-read
+        // element 0 and redo the write the slow way if the shape changed under it - a Move's
+        // process-wide barrier makes either the store visible to its copy or the re-read see Moved.
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object SetInstanceVariable(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
+            if (self is RubyObject obj && TryWriteCached(obj._instanceData, value, site)) {
+                return value;
+            }
+            return SetInstanceVariableUncached(self, value, scope, site);
+        }
+
+        // The cached store into an existing variable of an object's instance data (null for no
+        // variables yet): false for a miss, an add, a frozen object or a shape changed under it.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryWriteCached(RubyInstanceData data, object value, InstanceVariableSite/*!*/ site) {
+            if (data != null && !data._frozen) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.Shape && entry.Next == null) {
+                    RubyInstanceData.SetSlot(slots, entry.Index, value);
+                    return RubyInstanceData.ShapeOf(slots) == shape;
+                }
+            }
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object SetInstanceVariableUncached(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
             var obj = self as RubyObject;
             if (obj != null) {
                 var data = obj._instanceData ?? GetInstanceData(ref obj._instanceData);

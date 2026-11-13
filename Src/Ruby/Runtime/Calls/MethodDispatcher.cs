@@ -353,6 +353,14 @@ namespace IronRuby.Runtime.Calls {
         
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self) {
             RubyClass cls;
+            // an exact RubyObject whose shape the site has seen: the cached read, inline
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                var robj = Unsafe.As<RubyObject>(self);
+                object value;
+                if (robj.ImmediateClass.Version.Method == Version && RubyOps.TryReadCached(robj._instanceData, Site, out value)) {
+                    return value;
+                }
+            }
             IRubyObject obj = GetRubyObject(self, out cls);
             if (obj != null && cls.Version.Method == Version) {
                 return RubyOps.ReadInstanceVariable(cls.Context, obj, Site);
@@ -377,6 +385,13 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, T0 arg0) {
             RubyClass cls;
+            // an exact RubyObject that has the variable at the slot the site has seen: the cached store, inline
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                var robj = Unsafe.As<RubyObject>(self);
+                if (robj.ImmediateClass.Version.Method == Version && RubyOps.TryWriteCached(robj._instanceData, (object)arg0, Site)) {
+                    return (object)arg0;
+                }
+            }
             IRubyObject obj = GetRubyObject(self, out cls);
             if (obj != null && cls.Version.Method == Version) {
                 return RubyOps.WriteInstanceVariable(cls.Context, obj, (object)arg0, Site);
