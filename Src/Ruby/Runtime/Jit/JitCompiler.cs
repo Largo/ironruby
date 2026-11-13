@@ -120,6 +120,8 @@ namespace IronRuby.Runtime.Jit {
         // first write, before anything observable" (see _ivarWrite), so its deopt on a frozen self would
         // restart a body that has already done something: such a write counts as a deopt after an effect.
         private bool _effectNotOnSelf;
+        // The body ends in a construction (EmitConstruction), which runs an initialize: arbitrary Ruby code.
+        private bool _construction;
         private bool _selfCall;
         // How many operands of conditions were values tested for truth rather than booleans (EmitCondition);
         // EmitNot compares it across an `&&'/`||' operand.
@@ -558,6 +560,11 @@ namespace IronRuby.Runtime.Jit {
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
                 // already done is observable (see _deoptAfterEffect).
                 if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) { return null; }
+                // The construction is the last thing its own invocation does, but not the last thing the body does
+                // when the body calls itself: the outer invocation goes on after the inner one's initialize has run,
+                // which may have redefined an operator the body has inlined. The self-call does not check the
+                // method version again, so such a body stays generic.
+                if (c._construction && c._selfCall) { return null; }
 
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {

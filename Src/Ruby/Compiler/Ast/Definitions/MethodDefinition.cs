@@ -414,7 +414,7 @@ namespace IronRuby.Compiler.Ast {
                 return Ast.Block(
                     StackCheck,
                     scope.MakeLocalsStorage(),
-                    Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
+                    Ast.Assign(Rfc, EnterMethod),
                     Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
                     MakeScopeIfTraced(scope.LocalsTupleVariable)
                 );
@@ -428,7 +428,7 @@ namespace IronRuby.Compiler.Ast {
                 return Ast.Block(
                     StackCheck,
                     scope.MakeRegisterLocalsStorage(),
-                    Ast.Assign(Rfc, Methods.EnterLightMethod.OpCall(_blockParameter)),
+                    Ast.Assign(Rfc, EnterMethod),
                     Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
                     Ast.Condition(Methods.IsMethodCallTraced.OpCall(),
                         MakeScopeIfTraced(scope.MaterializeLocals()),
@@ -447,6 +447,17 @@ namespace IronRuby.Compiler.Ast {
             internal bool MakesCalls;
 
             private static readonly MethodInfo/*!*/ _RequireSufficientStack = typeof(RubyOps).GetMethod("RequireSufficientStack");
+            private static readonly MethodInfo/*!*/ _EnterLightMethodNamingBlock = typeof(RubyOps).GetMethod("EnterLightMethodNamingBlock");
+
+            /// <summary>
+            /// Set if the method has a block parameter: its block may leave the method through it, so it is not one a
+            /// light frame "can only yield to" (RubyOps.EnterLightMethodNamingBlock).
+            /// </summary>
+            internal bool NamesBlock;
+
+            private MSA.Expression/*!*/ EnterMethod {
+                get { return NamesBlock ? Ast.Call(_EnterLightMethodNamingBlock, _blockParameter) : Methods.EnterLightMethod.OpCall(_blockParameter); }
+            }
 
             private MSA.Expression/*!*/ StackCheck {
                 get { return MakesCalls ? (MSA.Expression)Ast.Call(_RequireSufficientStack) : AstUtils.Empty(); }
@@ -767,6 +778,7 @@ namespace IronRuby.Compiler.Ast {
             light.Callee = scope.DefineHiddenVariable("#callee", typeof(string));
             light.Name = AstUtils.Constant(_name);
             light._blockParameter = blockParameter;
+            light.NamesBlock = _parameters.Block != null;
 
             var shape = Ast.Constant(new MethodFrameShape((string[])names.Value, visibleParameterCountAndSignatureFlags, _name));
             Func<MethodInfo, MSA.Expression, MSA.Expression> make = (method, locals) => method.OpCall(new AstExpressions {

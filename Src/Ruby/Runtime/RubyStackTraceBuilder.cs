@@ -1264,7 +1264,9 @@ namespace IronRuby.Runtime {
         }
 
         private static bool NeedsEscape(char c) {
-            return c < 0x20 || c > 0x7e || c == NamePartsSeparator || c == '%';
+            // '(' too: the runtime appends the argument list to the name in a perf map, so a reader of it
+            // (Util/perf/profile-agg.rb) takes the first '(' for the end of the name
+            return c < 0x20 || c > 0x7e || c == NamePartsSeparator || c == '%' || c == '(';
         }
 
         private static void AppendEscaped(StringBuilder/*!*/ result, string str) {
