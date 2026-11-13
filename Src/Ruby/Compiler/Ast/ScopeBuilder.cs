@@ -446,8 +446,14 @@ namespace IronRuby.Compiler.Ast {
                 return Ast.Equal(_tuple, AstUtils.Constant(null, _tuple.Type));
             }
 
+            // inside the arguments of a loop's OSR site (see VisitMethodCall)
+            private bool _inOsrArguments;
+
             protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
                 if (node == _tuple) {
+                    if (_inOsrArguments) {
+                        return _scope.MaterializeLocals();
+                    }
                     Failed = true;
                 }
                 return node;
@@ -504,6 +510,17 @@ namespace IronRuby.Compiler.Ast {
                         arguments[i] = (node.Arguments[i] == _tuple) ? _scope.MaterializeLocals() : Visit(node.Arguments[i]);
                     }
                     return Ast.Call(node.Method, arguments);
+                }
+                if (node.Method == IronRuby.Runtime.Osr.OsrLoopSite.RunMethod) {
+                    // -X:OSR: a loop that has taken enough back edges hands its specialized copy the locals tuple, which is
+                    // made there as for a scope - once per loop entry that gets that far; `while' in a light frame (a linked
+                    // list walk) allocated the tuple on every call for it
+                    _inOsrArguments = true;
+                    try {
+                        return base.VisitMethodCall(node);
+                    } finally {
+                        _inOsrArguments = false;
+                    }
                 }
                 return base.VisitMethodCall(node);
             }
