@@ -582,6 +582,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ReleaseScopeFrame;
         public static MethodInfo/*!*/ ReuseBfcForYield { get { return _ReuseBfcForYield ?? (_ReuseBfcForYield = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.ReuseBfcForYield)); } }
         private static MethodInfo _ReuseBfcForYield;
+        public static MethodInfo/*!*/ ReturnBfcForBlockYield { get { return _ReturnBfcForBlockYield ?? (_ReturnBfcForBlockYield = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Runtime.BlockParam>(RubyOps.ReturnBfcForBlockYield)); } }
+        private static MethodInfo _ReturnBfcForBlockYield;
+        public static MethodInfo/*!*/ TakeBfcForBlockYield { get { return _TakeBfcForBlockYield ?? (_TakeBfcForBlockYield = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.TakeBfcForBlockYield)); } }
+        private static MethodInfo _TakeBfcForBlockYield;
         public static MethodInfo/*!*/ RubyStruct_GetValue { get { return _RubyStruct_GetValue ?? (_RubyStruct_GetValue = CallInstruction.CacheFunc<IronRuby.Builtins.RubyStruct, System.Int32, System.Object>(RubyStruct.GetValue)); } }
         private static MethodInfo _RubyStruct_GetValue;
         public static MethodInfo/*!*/ RubyStruct_SetValue { get { return _RubyStruct_SetValue ?? (_RubyStruct_SetValue = CallInstruction.CacheFunc<IronRuby.Builtins.RubyStruct, System.Int32, System.Object, System.Object>(RubyStruct.SetValue)); } }

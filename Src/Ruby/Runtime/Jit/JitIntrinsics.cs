@@ -329,12 +329,56 @@ namespace IronRuby.Runtime.Jit {
                 _bound = new Binding(cls, version);
                 return true;
             }
+
+            // A Symbol's class, once a Symbol receiver resolved to an expected method, under which
+            // global method version: kept apart from _bound so a site that sees Symbols and other
+            // receivers in turn (`@dir == :forward' with @dir nil at first) does not look the
+            // Symbol's class up (a CLR type lookup, RubyContext.GetImmediateClassOfNonRubyObject) on
+            // every call. Every Symbol has that class: a Symbol cannot have a singleton class
+            // (TypeError), which Bind's HasInstancesWithOwnClass test makes sure of.
+            private volatile Binding _symbol;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal bool IsSymbolBound() {
+                var b = _symbol;
+                return b != null && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            internal bool BindSymbol(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (!Resolves(cls)) {
+                    return false;
+                }
+                if (!cls.HasInstancesWithOwnClass) {
+                    _symbol = new Binding(cls, version);
+                }
+                return true;
+            }
         }
 
+        // nil, true and false have fixed classes (RubyContext.TryGetValueClass returns them for any
+        // value of theirs: `def nil.x' defines on NilClass itself), so the class is a field load
+        // rather than the CLR type lookup of RubyContext.GetImmediateClassOfNonRubyObject.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void RequireIdentityMethod(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site) {
-            var obj = value as RubyObject;
-            RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, value);
+            RubyClass cls;
+            if (value == null) {
+                cls = context.NilClass;
+            } else {
+                var obj = value as RubyObject;
+                if (obj != null) {
+                    cls = obj.ImmediateClass;
+                } else if (value is bool) {
+                    cls = (bool)value ? context.TrueClass : context.FalseClass;
+                } else if (value is RubySymbol) {
+                    if (!site.IsSymbolBound() && !site.BindSymbol(ClassOf(context, value))) {
+                        throw Deopt();
+                    }
+                    return;
+                } else {
+                    cls = ClassOf(context, value);
+                }
+            }
             if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
                 throw Deopt();
             }
@@ -356,7 +400,7 @@ namespace IronRuby.Runtime.Jit {
         /// may compare contents), so that deopts.
         /// </summary>
         public static bool IsIdentical(RubyContext/*!*/ context, object value, object other, IdentityCallSite/*!*/ site) {
-            if (value != null && value.GetType() != typeof(RubyObject) && !(value is bool) && !(value is RubySymbol)) {
+            if (value != null && !(value is RubySymbol) && !(value is bool) && value.GetType() != typeof(RubyObject)) {
                 throw Deopt();
             }
             RequireIdentityMethod(context, value, site);
