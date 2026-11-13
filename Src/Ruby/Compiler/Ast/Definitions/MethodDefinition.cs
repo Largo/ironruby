@@ -942,6 +942,13 @@ namespace IronRuby.Compiler.Ast {
                     return node;
                 }
                 var dynamic = node as Microsoft.Scripting.Ast.LightDynamicExpression;
+                if (dynamic != null) {
+                    // Any site may run Ruby code that calls this method again - a call with a literal block, which
+                    // LightScopeCall leaves alone, as much as one without (`def f; f { }; end') - so the frame checks the
+                    // stack at entry (LightFrame.MakesCalls): too deep a recursion is a SystemStackError, not the end of
+                    // the process.
+                    MakesCalls = true;
+                }
                 if (dynamic != null && !_lazyUses && _inTraceHook == 0) {
                     var call = LightScopeCall(dynamic);
                     if (call != null) {

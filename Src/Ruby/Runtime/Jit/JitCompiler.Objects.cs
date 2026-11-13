@@ -602,6 +602,7 @@ namespace IronRuby.Runtime.Jit {
                 callArgs.Add(BoxForStore(a, at));
             }
             _pure = false;
+            _effectNotOnSelf = true;
             type = JT.Obj;
             return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
         }
@@ -1284,6 +1285,7 @@ namespace IronRuby.Runtime.Jit {
             _canDeopt = true;
             _pure = false;
             _ivarWrite = true;
+            if (explicitReceiver) { _effectNotOnSelf = true; }
             type = valueType;
             return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp },
                 Ast.Assign(receiverTemp, receiver),

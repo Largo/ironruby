@@ -115,7 +115,15 @@ namespace IronRuby.Runtime.Jit {
         // so that the generic body raises the FrozenError from a real frame; it is always the first
         // write that does, before anything observable, so the restart is safe whatever _pure says.
         private bool _ivarWrite;
+        // Something observable has happened that was not a write to self: an attribute written on another
+        // object, an object constructed. After it a write to self's instance variables is no longer "the
+        // first write, before anything observable" (see _ivarWrite), so its deopt on a frozen self would
+        // restart a body that has already done something: such a write counts as a deopt after an effect.
+        private bool _effectNotOnSelf;
         private bool _selfCall;
+        // How many operands of conditions were values tested for truth rather than booleans (EmitCondition);
+        // EmitNot compares it across an `&&'/`||' operand.
+        private int _conditionValueLeaves;
         private readonly HashSet<MSA.Expression>/*!*/ _selfCalls = new HashSet<MSA.Expression>();
         private int _nodes;
 
@@ -765,6 +773,7 @@ namespace IronRuby.Runtime.Jit {
                 stores.Add(Ast.Assign(Ast.ArrayAccess(slots, Ast.Constant(i + 1)), temps[i]));
                 oneByOne.Add(Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, temps[i], Ast.Constant(new InstanceVariableSite(names[i]))));
             }
+            if (_effectNotOnSelf) { _canDeopt = true; }
             _pure = false;
             _ivarWrite = true;
 
@@ -1088,6 +1097,7 @@ namespace IronRuby.Runtime.Jit {
                 } else {
                     v = Emit(node.Right, out vt);
                 }
+                if (_effectNotOnSelf) { _canDeopt = true; }     // SetIVar deopts on a frozen self, here after an effect elsewhere
                 _pure = false;      // an ivar write is observable: nothing emitted after it may deopt (_deoptAfterEffect)
                 _ivarWrite = true;
                 type = JT.Obj;
@@ -1436,9 +1446,9 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Bool: return e;
                 case JT.Int:
                 case JT.Lng:
-                case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
+                case JT.Dbl: _conditionValueLeaves++; return Ast.Block(e, Ast.Constant(true));
                 // anything but nil and false is true, and that is not a method call
-                case JT.Obj: return Ast.Call(IsTrueMethod, e);
+                case JT.Obj: _conditionValueLeaves++; return Ast.Call(IsTrueMethod, e);
                 default: throw Bail("condition of type " + t);
             }
         }
@@ -1481,7 +1491,12 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ EmitNot(RExpr/*!*/ operandNode, out JT type) {
             JT operandType;
+            int valueLeaves = _conditionValueLeaves;
             var operand = EmitCondition(operandNode, out operandType);
+            // `!(a && b)' calls #! on the value of `a && b', which is b's when a is truthy: only the truth of
+            // booleans stands for that value. With an object or a number among the operands the receiver of #!
+            // is not known to be true, false or nil, and its class may have a #! of its own.
+            if (operandType == JT.Bool && _conditionValueLeaves != valueLeaves) { throw Bail("! of && or || over values that are not booleans"); }
             type = JT.Bool;
             if (operandType == JT.Obj) {
                 var value = (operand is MSA.MethodCallExpression truth && truth.Method == IsTrueMethod) ? truth.Arguments[0] : null;

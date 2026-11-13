@@ -429,5 +429,24 @@ class IDR
   def eq(o); o == self; end
 end
 idr = IDR.new; idrout = []
-20_000.times { |i| idrout << [idr.nq(i.odd? ? idr : nil), idr.eq(idr)] if i % 5000 == 3 }
+# called on every iteration, so that both methods turn hot, with rows kept at both parities of i
+# (nq sees an object and nil)
+20_000.times do |i|
+  row = [idr.nq(i.odd? ? idr : nil), idr.eq(idr)]
+  idrout << row if i % 5000 < 2
+end
 p idrout
+
+# ---- recursion through a method that passes a literal block (review of #215) ----
+# Such a method is a light frame whose only call is one LightScopeCall leaves alone; it must
+# still check the stack, or this ends the process instead of raising.
+lambda do
+  rb = Class.new do
+    def deep; deep { }; end
+    def deeper(n); deeper(n + 1) { n }; end
+    def each_deep(a); a.each { |e| each_deep(a) }; end
+  end.new
+  # SystemStackError is not a StandardError: a rescue modifier would let it through
+  overflow = ->(&call) { begin; call.(); :returned; rescue SystemStackError => e; e.class; end }
+  p overflow.() { rb.deep }, overflow.() { rb.deeper(0) }, overflow.() { rb.each_deep([1]) }
+end.call

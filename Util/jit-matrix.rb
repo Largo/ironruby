@@ -2879,3 +2879,39 @@ iv.a = 4; iv.remove_instance_variable(:@b)
 t('the written variable removed') { [u.sp_move, iv.b] }
 iv.freeze
 t('a frozen receiver') { [(u.sp_move rescue $!.class), iv.b] }
+
+# ---------------------------------------------------------------- review of #215
+# `!(a && b)' calls #! on b's value when a is truthy: a compiled body may only take the truth
+# of booleans for it, not an object's, whose class can have a #! of its own.
+class JitNotOdd; def !; :custom; end; end
+class JitNotHolder
+  def initialize(x) = (@x = x)
+  def no_not_and = !(true && @x)
+  def no_not_or = !(false || @x)
+  def sp_not_bools(a, b) = !(a > 1 && b > 1)
+end
+nh = [JitNotHolder.new(JitNotOdd.new), JitNotHolder.new(nil), JitNotHolder.new(1), JitNotHolder.new(false)]
+warm { |i| nh[i % 4].no_not_and; nh[i % 4].no_not_or; nh[0].sp_not_bools(i, 2) }
+t('!(true && @x) with a #! of its own') { nh.map(&:no_not_and) }
+t('!(false || @x) with a #! of its own') { nh.map(&:no_not_or) }
+t('!(a > 1 && b > 1)') { [nh[0].sp_not_bools(2, 2), nh[0].sp_not_bools(0, 2)] }
+
+# An attribute written on another object, then a write to self that fails on a frozen self:
+# the body must not be run again from the start, which would write the attribute twice.
+class JitRwValue; attr_accessor :value; def initialize = (@value = 0); end
+class JitRwOwner
+  def no_attr_then_ivar(o)
+    o.value = o.value + 1
+    @x = 1
+  end
+  def no_new_then_ivar
+    @made = JitRwValue.new
+    @y = 2
+  end
+end
+rw = JitRwOwner.new; rv = JitRwValue.new
+warm { rw.no_attr_then_ivar(rv); rw.no_new_then_ivar }
+t('attr write on another object, then ivar write') { rv.value }
+rw.freeze
+t('the same with self frozen: one write, then FrozenError') { [(rw.no_attr_then_ivar(rv) rescue $!.class), rv.value] }
+t('C.new, then ivar write, self frozen') { rw.no_new_then_ivar rescue $!.class }
