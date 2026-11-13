@@ -6,7 +6,7 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-13, commit 7b0d0b1 (round two merged), Release net10.0, 4 cores, load 1.1-2.5.
+2026-11-13, commit 9270ac0 (round two merged), Release net10.0, 4 cores, load 1.1-2.5.
 CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM Native). The machine's speed
 differs between sessions by tens of percent (CRuby's own numbers move with it), so compare
 ratios, not microseconds.
