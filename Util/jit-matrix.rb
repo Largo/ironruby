@@ -2915,3 +2915,62 @@ t('attr write on another object, then ivar write') { rv.value }
 rw.freeze
 t('the same with self frozen: one write, then FrozenError') { [(rw.no_attr_then_ivar(rv) rescue $!.class), rv.value] }
 t('C.new, then ivar write, self frozen') { rw.no_new_then_ivar rescue $!.class }
+
+# The stub's three settled-or-not states, each changed after the fact: a method the JIT declined
+# (tr_declined: settled on its generic body, which call sites then call without the trampoline), one
+# retired for deopting on every call (tr_retired: cooling) and one specialized (tr_spec: call sites
+# call its entry). Each is then redefined, made private, given a singleton override, refined, and
+# called through send and Method objects taken before and after, with TracePoint on.
+module JitTrampMatrix
+  class Holder
+    def initialize = (@a = 1; @s = "abc")
+    def tr_spec = @a == 1
+    def tr_declined(x) = (@i = x; @s[0])
+    def tr_retired(x) = x * x * x * x
+  end
+  def self.probe(o, before)
+    [o.tr_spec, o.tr_declined(1), o.tr_retired(3), o.send(:tr_spec), o.__send__(:tr_declined, 2),
+     o.public_send(:tr_retired, 2), before.map(&:call), Holder.instance_method(:tr_spec).bind(o).call,
+     o.method(:tr_declined).call(5), o.method(:tr_spec).owner == Holder, o.method(:tr_declined).arity]
+  end
+end
+module JitTrampRefine
+  refine JitTrampMatrix::Holder do
+    def tr_spec = :refined
+    def tr_declined(x) = :refined
+  end
+end
+tm = JitTrampMatrix::Holder.new
+warm { |i| tm.tr_spec; tm.tr_declined(i); tm.tr_retired(2**20 + i) }
+tm_m = tm.method(:tr_declined)
+tm_before = [tm.method(:tr_spec), -> { tm_m.call(1) }, -> { tm.tr_retired(7) }]
+t('tramp: after warm-up') { JitTrampMatrix.probe(tm, tm_before) }
+tm_calls = []
+tm_tp = TracePoint.new(:call, :return) { |x| tm_calls << [x.event, x.method_id] if x.method_id.to_s.start_with?('tr_') }
+t('tramp: TracePoint on the hot methods') { tm_tp.enable { JitTrampMatrix.probe(tm, []) }; tm_calls.uniq }
+tm_s = JitTrampMatrix::Holder.new
+def tm_s.tr_spec = :single
+def tm_s.tr_declined(x) = :single
+def tm_s.tr_retired(x) = :single
+t('tramp: singleton overrides') { [JitTrampMatrix.probe(tm_s, []), JitTrampMatrix.probe(tm, [])] }
+t('tramp: refined') do
+  Module.new { using JitTrampRefine; tm.instance_variable_set(:@r, [tm.tr_spec, tm.tr_declined(1), tm.send(:tr_spec)]) }
+  tm.instance_variable_get(:@r) + [tm.tr_spec]
+end
+class JitTrampMatrix::Holder
+  private :tr_spec, :tr_declined, :tr_retired
+end
+t('tramp: made private') { [(tm.tr_spec rescue $!.class), (tm.tr_declined(1) rescue $!.class), (tm.tr_retired(1) rescue $!.class), tm.send(:tr_spec), tm_before[0].call] }
+class JitTrampMatrix::Holder
+  public :tr_spec, :tr_declined, :tr_retired
+  def tr_spec = :redefined
+  def tr_declined(x) = :redefined
+  def tr_retired(x) = :redefined
+end
+t('tramp: redefined, next call') { JitTrampMatrix.probe(tm, tm_before) rescue [$!.class, $!.message[0, 40]] }
+t('tramp: redefined, plain calls') { [tm.tr_spec, tm.tr_declined(1), tm.tr_retired(1), tm_before[0].call, tm_before[1].call] }
+class JitTrampMatrix::Holder
+  alias_method :tr_spec, :tr_retired
+  define_method(:tr_declined) { |x| [:defined, x] }
+end
+t('tramp: aliased and define_method') { [tm.tr_spec(2), tm.tr_declined(4), tm.method(:tr_spec).name, tm.method(:tr_spec).original_name] }
