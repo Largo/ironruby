@@ -6,89 +6,102 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-13, commit 9270ac0 (round two merged), Release net10.0, 4 cores, load 1.1-2.5.
+2026-11-13, commit 6940016 (round three merged), Release net10.0, 4 cores, load 1.3-3.
 CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM Native). The machine's speed
 differs between sessions by tens of percent (CRuby's own numbers move with it), so compare
 ratios, not microseconds.
 
 Are-We-Fast-Yet, steady state, µs per iteration (lower is better):
 
-| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | round one (4768b16) | start (22e3f91) |
-|---|---:|---:|---:|---:|---:|---:|
-| DeltaBlue | 33046 | 54136 | 10488 | 1.64 | 1.95 | 2.23 |
-| Richards | 244562 | 362743 | 12382 | 1.48 | 1.61 | 1.94 |
-| Json | 66726 | 85181 | 6669 | 1.28 | 1.56 | 1.64 |
-| Bounce | 74754 | 88381 | 1830 | 1.18 | 1.40 | 1.65 |
-| Towers | 89014 | 114014 | 4014 | 1.28 | 1.57 | 1.90 |
+| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | round two | round one | start |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| DeltaBlue | 33709 | 52674 | 1320 | 1.56 | 1.64 | 1.95 | 2.23 |
+| Richards | 246107 | 348616 | 12301 | 1.42 | 1.48 | 1.61 | 1.94 |
+| Json | 69779 | 83989 | 6941 | 1.20 | 1.28 | 1.56 | 1.64 |
+| Bounce | 74499 | 87186 | 1842 | 1.17 | 1.18 | 1.40 | 1.65 |
+| Towers | 89147 | 113134 | 3972 | 1.27 | 1.28 | 1.57 | 1.90 |
 
-Geomean: IronRuby/CRuby 1.36 (round one 1.61, start 1.86), TruffleRuby/CRuby 0.071
-(TruffleRuby's DeltaBlue had not finished warming up in 12 s; 0.045-0.057 in earlier runs).
+Geomean: IronRuby/CRuby 1.32 (round two 1.36, round one 1.61, start 1.86),
+TruffleRuby/CRuby 0.046.
 
 Per operation (`Util/perf/micro.rb`), ns:
 
-| op | CRuby | IronRuby | ratio | round one | start |
-|---|---:|---:|---:|---:|---:|
-| empty | 17.8 | 29.2 | 1.64 | 1.21 | 1.23 |
-| ivar_rw | 29.4 | 53.1 | 1.81 | 1.97 | 2.72 |
-| getter | 22.2 | 32.0 | 1.44 | 1.67 | 3.17 |
-| attr | 15.7 | 11.1 | 0.71 | 0.73 | 0.80 |
-| cmp | 22.5 | 48.1 | 2.14 | 1.93 | 3.58 |
-| abs | 27.5 | 49.7 | 1.81 | 1.84 | 3.07 |
-| arr | 32.5 | 37.7 | 1.16 | 1.24 | 1.82 |
-| nil? | 20.6 | 45.4 | 2.20 | 2.03 | 3.48 |
-| == | 22.0 | 45.9 | 2.09 | 1.94 | 3.35 |
-| yield | 32.7 | 46.5 | 1.42 | 1.71 | 2.57 |
-| each4 | 154.7 | 197.2 | 1.27 | 1.71 | 1.87 |
-| while10 | 160.3 | 36.1 | 0.23 | 0.22 | 0.23 |
-| new2 | 77.4 | 74.8 | 0.97 | 0.84 | 1.47 |
-| symcase | 24.8 | 27.1 | 1.09 | 1.13 | 1.03 |
-| str== | 82.2 | 52.5 | 0.64 | 0.59 | 1.44 |
-| poly2 | 45.7 | 63.7 | 1.39 | 1.37 | 2.11 |
-| blockeach | 49.4 | 75.4 | 1.53 | 1.60 | 2.33 |
+| op | CRuby | IronRuby | ratio | start |
+|---|---:|---:|---:|---:|
+| empty | 17.7 | 21.8 | 1.23 | 1.23 |
+| ivar_rw | 28.4 | 49.5 | 1.74 | 2.72 |
+| getter | 21.2 | 30.4 | 1.43 | 3.17 |
+| attr | 15.5 | 10.5 | 0.68 | 0.80 |
+| cmp | 22.6 | 41.8 | 1.85 | 3.58 |
+| abs | 27.3 | 49.2 | 1.80 | 3.07 |
+| arr | 32.3 | 37.3 | 1.15 | 1.82 |
+| nil? | 20.5 | 40.3 | 1.97 | 3.48 |
+| == | 22.3 | 42.8 | 1.92 | 3.35 |
+| yield | 32.3 | 45.8 | 1.42 | 2.57 |
+| each4 | 151.4 | 206.8 | 1.37 | 1.87 |
+| while10 | 155.2 | 34.6 | 0.22 | 0.23 |
+| new2 | 74.3 | 68.6 | 0.92 | 1.47 |
+| symcase | 24.8 | 26.4 | 1.06 | 1.03 |
+| str== | 81.6 | 47.9 | 0.59 | 1.44 |
+| poly2 | 45.8 | 61.1 | 1.33 | 2.11 |
+| blockeach | 48.7 | 65.3 | 1.34 | 2.33 |
 
-(`empty` at 1.64 is one noisy reading: 20-29 ns across this session's runs, CRuby 18-24.)
+Profile (`Util/perf/profile.sh`, self time, Ruby bodies now named):
 
-Where DeltaBlue's time is now (`Util/perf/profile.sh DeltaBlue`, self time): compiled Ruby
-bodies 45% (not attributable per method, see the script's header), DLR rule delegates
-(`CallSite.Target`) 20%, GC write barriers and allocation 8%, GetInstanceVariable 2.8%,
-Yield1 2.1%, IsTrue 1.5%, BlockDispatcher1 1.3%, SetAttribute 1.1%, CreateMethodScope 1.1%,
-RubyContext.CreateSymbol 1.0%. Before round two (Richards/DeltaBlue/Json): Ruby bodies
-41-42%, rule delegates 9-14%, ivar get/set ~10%, allocation ~10%, Ruby and attr
-dispatchers 4-12%, IsTrue/GetType/`!=` 4-5%, blocks 0.2-3%, method scopes 0.6-2%. The DLR
-miss path is ~0.25% (sites settle) and `Proc#call` in Richards 0.8%: neither is a lead.
+- DeltaBlue: `CallSite.Target` (DLR rule delegates) 25.8%, libcoreclr (GC, allocation
+  helpers) 8.8%, block in Vector#each (som.rb:100) 4.7%, EqualityConstraint#execute 4.0%,
+  JIT_WriteBarrier 4.0%, block in Plan#execute 2.6%, Vector#append 2.2%, memset 2.2%,
+  Yield1 1.8%, Vector#each 1.7%, BlockDispatcher1 1.7%.
+- Richards: `CallSite.Target` 32.9%, Scheduler#schedule 6.2%, TaskControlBlock#run_task
+  4.8%, JIT_WriteBarrier 4.5%, TaskState#is_task_holding_or_waiting 3.7%,
+  #is_waiting_with_packet 3.5%, the create_handler/create_device blocks 3.4% and 3.1%.
+- Json: `CallSite.Target` 22.4%, libcoreclr 9.5%, Parser#read 9.2%, MutableString::Equals
+  5.6%, Parser#read_string_internal 3.9%, JIT_WriteBarrier 3.4%.
+- `ruby Util/perf/profile-agg.rb X.stacks 10 'self:CallSite.Target'` says whose sites the
+  rule time is: in DeltaBlue it is spread thin - EqualityConstraint#execute 2.2%,
+  Planner#add_propagate 1.9%, block in Vector#each 1.7%, ScaleConstraint#execute 1.6% -
+  no one site to fix.
+- Not leads (measured): the DLR miss path (~0.25%, sites settle), `Proc#call` in Richards
+  (~1%), `Object.GetType` (0.1-0.6%, spread out).
 
 ## Gaps, worst first
 
-1. **Calls of core methods from compiled code go through generic DLR rules**
-   (`CallSite.Target` 20% of DeltaBlue; `nil?` 2.20, `cmp` 2.14, `==` 2.09). The rule share
-   doubled when light frames spread, because a light-scope site skips LibraryDispatcher
-   and the shared rules (both refuse `RubyCallFlags.HasLightScope`) and the precompiled
-   Ruby-method dispatchers. Untried, and the most promising next step: let those fast
-   paths accept the flag when the target does not take the scope. Also untried: which
-   sites the rule time belongs to (needs the perf map fixed, below).
-2. **The method JIT declines any body with an ordinary method call** (screen-rejected
-   `MethodCall`); a specialized body costs ~25 ns where a light one costs ~45. Needs a
-   deopt story for a body that has already had a side effect.
-3. **Tooling: Ruby method bodies are `[unknown]` in the profile**, 45% of samples. Their
-   perf-map lines come out damaged, probably because of the non-ASCII characters in the
-   DynamicMethod names. ASCII names when `DOTNET_PerfMapEnabled` is set would attribute
-   that time per Ruby method, and every other gap would then be chosen from data.
-4. **Blocks**: what is left is the method scope a method containing a block literal must
-   make (the Proc needs it as its parent), reuse that only works within one frame
-   (`#proc` is a frame variable), and loops of 16+ iterations, whose block is compiled
-   inside `BlockLoopSite`, not `BlockDefinition`. `block_given?` still forces the scope.
-5. **Light frames still exclude**: methods containing a block literal (about 20 of the
-   benchmarks' hot methods), optional parameters (`optionalsInitialization` is outside
-   the rewritten statements), `super`, `$~`, regex literals, `rescue`. A per-statement
-   reason printer behind `IR_LIGHT_FRAMES` found these in minutes; worth making permanent.
-6. **attr_reader/attr_writer calls** cost ~20 ns of dispatcher call whatever the ivar
-   code does; inlining them at the call site (as `ReadSelfAttr` does in JIT loops) is
-   where that gain is. `Object.GetType` (1%) comes from `TypeEqual` tests the expression
-   compiler emits. `RubyContext.CreateSymbol` at 1% of DeltaBlue's steady state should
-   not be there at all: something interns a symbol per call.
-7. **Allocation** (~10%, plus ~10% GC pause; DeltaBlue allocates ~900 MB/s). perf cannot
-   say where from; allocation counts (`System::GC.GetAllocatedBytesForCurrentThread`) can,
-   and separate real effects from noise much better than timings on a shared machine.
+1. **A method that makes a call pays for its light frame, and a rule per call**
+   (`nil?` 1.97, `==` 1.92, `cmp` 1.85, `abs` 1.80, `ivar_rw` 1.74; `CallSite.Target`
+   22-33% of every benchmark). What three experiments established:
+   - the rule itself is cheap: for `o.nil?` it is a type test, a version compare and the
+     call, ~2 ns of a 42 ns call. Most of the ~18 ns over an empty method (which the
+     method JIT compiles, frameless) is the light frame: `EnterLightMethod`/the
+     RuntimeFlowControl it makes, `TakePendingCallee`, `LeaveMethodFrame`, argument
+     temporaries, the `LightScopeRequired` compare, `IsTrue` on the result;
+   - hot calls of core methods are rule-bound from any site (LibraryDispatcher only
+     serves the first calls), so `HasLightScope` is not what keeps them off a fast path;
+   - taking rules' library calls out of tail position so the JIT can inline them
+     measured nothing while the frame is there.
+   Untried, in the order the evidence suggests: (a) make the light frame cheaper - what
+   of `EnterLightMethod`/RFC/`TakePendingCallee`/`LeaveMethodFrame` a body that cannot
+   raise through a block or be the target of `return` from a block actually needs;
+   (b) let the method JIT (frameless) take instance-variable operands in method bodies
+   with guards, as `NumericIVar` does in loops - `WalkOperand` refuses `InstanceVariable`,
+   which is what screen-rejects `@x < o`, `@v.abs` and much of DeltaBlue; (c) calls of
+   Ruby methods and attr readers from a JIT body, which the screen also rejects.
+2. **Allocation and GC**: JIT_WriteBarrier 3.4-4.7%, libcoreclr 9%, memset 2%, plus ~10%
+   GC pause; DeltaBlue allocates ~900 MB/s. Count with
+   `System::GC.GetAllocatedBytesForCurrentThread` per call of the hot methods the profile
+   names (Vector#append, the Vector#each block, EqualityConstraint#execute) to find what
+   is allocated: boxed Integers, RuntimeFlowControl, BlockParam, argument arrays.
+3. **Blocks**: Yield1 + BlockDispatcher1 + LightLambda::Run2 ~5% of DeltaBlue. A method
+   containing a block literal still makes its scope (18 of the benchmarks' 37 non-light
+   hot methods stop there; `IR_LIGHT_FRAMES=why` lists them); DeltaBlue's `execute` passes
+   its block to Vector#each, a Ruby method that is not light, so the Proc is never
+   reusable. Marking a literal reusable when the callee is a Ruby method that only yields
+   is untried. See Rejected for parked scopes.
+4. **Json string compares**: MutableString::Equals 5.6% from `c == " "` chains in
+   is_white_space/is_digit/read_value, which go through `ValueNotEquals` and a rule. A
+   one-character-literal fast path is untried (a general Equals fast path was, see Rejected).
+5. **Light frames still exclude** `super` (6 hot `initialize` methods), optional
+   parameters, `rescue`, `$~`, regex literals; `block_given?` still forces the scope.
+6. **Richards**: `WeakReference::get_Target` 1.3% on a hot path - find the reader.
 
 ## Landed
 
@@ -138,12 +151,46 @@ core/thread, where it varies from run to run on the baseline too), and matches C
   code, the method JIT's `GetIVar`/`SetIVar` and the attr dispatchers. A method doing many
   `@x` reads ~40% faster; ivar_rw 51 -> 46 ns; AWFY 0.982 in both runs.
 
+Round three, measured against 3237c08 on a quiet machine, three AWFY runs: geomean
+0.956, 0.953, 0.967. Same gate as round two (17025 examples, 78747 expectations, identical
+on both trees), plus raise-, full-message- and error-message-matrix identical to the baseline.
+
+- **perf/sym, 88cc224 - compiled Ruby bodies get ASCII names** (`IR|label|line|id|file`,
+  `RubyStackTraceBuilder.EncodeMethodName`/`TryParseRubyMethodName`). The runtime's
+  perf-map writer damaged every non-ASCII name; that was the 45% `[unknown]`.
+- **3c938e1 - `RespondToStorage` caches its symbol**: `Array#==` interned `:to_ary` per call.
+- **7c7ec90 - `IsTrue`, `IsFalse`, `SetAttribute` inlined; attr rules' helper out of tail
+  position.** The DLR compiles every rule with explicit tail calls, and the JIT never
+  inlines a tail-call target. CPU time of a fixed run 3-4.5% lower.
+- **f04fe5a - `IR_LIGHT_FRAMES=why`** prints why a method is not a light frame.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
   chains, 6% of Json). Its share fell to 4.7%, which no timing could show. Reverted.
 - **`[AggressiveInlining]` on `RubyOps.IsTrue`** removed its 0.9% from the profile with no
   measurable wall-clock gain. Not committed.
+
+- **Light-scope sites through the precompiled dispatchers, LibraryDispatcher and shared
+  rules** (round three; patch kept nowhere in the tree: add `HasLightScope` to the two
+  flag masks in `RubyCallAction.BindPrecompiled`/`BindShared`, public-only visibility,
+  decline overloads taking a RubyScope). Correct, all gates passed, but `CallSite.Target`
+  20.9% -> 11.4% just moved into the attr and method dispatchers (6.9% + 3.8%); no
+  benchmark faster in all of five runs. Reverted.
+- **Unboxed bools in rules, and rules' library calls out of tail position**: nothing
+  measurable on hot `@x < o`, `@v + o`, `absm` (see gap 1 for why).
+- **perf/lfb 22f83a0 - parked method scopes**: a method with block literals keeps its
+  scope and Procs in a per-body slot for the next call (CompareExchange, reinitialized).
+  280 B less per call, each4 217 -> 178 ns, all gates passed; AWFY 0.992, 1.050, 1.002.
+  Not merged: no benchmark moves, and a reused scope is only safe while everything that
+  can keep a method scope calls `MarkCaptured`. The branch's finding stands: the Proc of
+  a block passed to a non-light Ruby iterator is never reusable, which is why DeltaBlue
+  did not move.
+- **perf/disp 086e90d - `nil?`, `==`, `!=`, `equal?` on object operands in the method
+  JIT** (`JitRuntime.IdentityCallSite`). `==` 50 -> 27 ns, `nil?` 43 -> 35, but `str==`
+  52 -> 97 (the new screen case gets in the way of the `s == "lit"` intrinsic), AWFY
+  1.010, 1.007, 1.000: the benchmarks' hot `==`/`nil?` are on instance variables, which
+  the JIT refuses in method bodies. Worth redoing after gap 1(b), with the str== case fixed.
 
 ## Regressions
 
