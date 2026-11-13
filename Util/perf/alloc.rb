@@ -10,6 +10,7 @@
 # Unlike time it does not depend on the machine's load: a difference of a few bytes per
 # iteration is real. The last lines give each column's geomean relative to the first.
 # ALLOC_LO / ALLOC_HI override the iteration counts (default 20 and 60).
+require 'shellwords'
 INNER = { 'DeltaBlue' => 1200, 'Richards' => 10, 'Json' => 10, 'CD' => 100, 'Bounce' => 150,
           'List' => 150, 'Mandelbrot' => 500, 'NBody' => 250_000, 'Permute' => 100,
           'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60 }
@@ -35,8 +36,10 @@ INNER.each do |b, inner|
   next unless only.empty? || only.include?(b)
   row = interps.map do |_, cmd|
     n = [lo, hi].map do |iters|
-      out = IO.popen("LANG=C.UTF-8 #{cmd} -r#{probe} #{dir}/harness.rb #{b} #{iters} #{inner} 2>&1", &:read)
-      out[/ALLOCATED (\d+)/, 1]&.to_i if out =~ /#{b}: iterations=/
+      out = IO.popen("LANG=C.UTF-8 #{cmd} #{"-r#{probe}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} #{iters} #{inner} 2>&1", &:read)
+      # The probe prints from at_exit, so a run that raised - a wrong answer does - prints a count too:
+      # only a run that ended with status 0 is a sample.
+      out[/ALLOCATED (\d+)/, 1]&.to_i if $?.success? && out =~ /#{b}: iterations=/
     end
     n.all? ? (n[1] - n[0]) / (hi - lo) : nil
   end
