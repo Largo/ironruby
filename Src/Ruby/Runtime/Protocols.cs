@@ -430,7 +430,8 @@ namespace IronRuby.Runtime {
         }
 
         public static bool RespondTo(RespondToStorage/*!*/ respondToStorage, object target, string/*!*/ methodName) {
-            return RespondTo(respondToStorage.GetCallSite(), respondToStorage.Context, target, methodName);
+            var site = respondToStorage.GetCallSite();
+            return IsTrue(site.Target(site, target, respondToStorage.GetSymbol(methodName)));
         }
 
         public static bool RespondTo(CallSite<Func<CallSite, object, object, object>>/*!*/ respondToSite, RubyContext/*!*/ context, object target, string/*!*/ methodName) {
