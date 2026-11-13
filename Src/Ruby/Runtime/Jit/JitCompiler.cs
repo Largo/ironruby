@@ -96,7 +96,21 @@ namespace IronRuby.Runtime.Jit {
         // _pure: nothing in the body is observable part way through, so a deopt may restart it.
         // _canDeopt: the body contains an operation that can signal a deopt.
         private bool _pure = true;
-        private bool _canDeopt;
+        private bool _canDeoptValue;
+        private bool _canDeopt {
+            get { return _canDeoptValue; }
+            set {
+                _canDeoptValue = value;
+                if (value && !_pure) { _deoptAfterEffect = true; }
+            }
+        }
+        // A deopting operation was emitted after something observable. Emission follows evaluation
+        // order in a body with no loop and no self-call (a branch's effect emitted before the other
+        // branch's deopt only errs towards declining), so in such a body a deopt that is not after
+        // an effect still finds nothing done and may restart it. A loop's next iteration and a
+        // nested self-call run deopts emitted before effects that have already happened.
+        private bool _deoptAfterEffect;
+        private bool _hasLoop;
         // The body writes an instance variable. A write to a frozen object deopts (JitRuntime.SetIVar)
         // so that the generic body raises the FrozenError from a real frame; it is always the first
         // write that does, before anything observable, so the restart is safe whatever _pure says.
@@ -534,8 +548,8 @@ namespace IronRuby.Runtime.Jit {
                 actual = result;
 
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
-                // already done is observable.
-                if (c._canDeopt && !c._pure) { return null; }
+                // already done is observable (see _deoptAfterEffect).
+                if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) { return null; }
 
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {
@@ -1052,13 +1066,29 @@ namespace IronRuby.Runtime.Jit {
 
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
-                if (op != null) { throw JitBailout.Instance; }
                 // A write can raise (FrozenError), and an exception leaving an outlined loop
                 // part way through would leave the scope's locals as they were on entry.
                 if (_loop != null) { throw Bail("instance variable write in an outlined loop"); }
                 JT vt;
-                var v = Emit(node.Right, out vt);
-                _pure = false;      // an ivar write is observable, so the body may not deopt
+                MSA.Expression v;
+                if (op != null) {
+                    // `@x op= v'  ->  `@x = @x op v': the read and the operator are emitted (and may
+                    // deopt) before the write, as for `@x = @x op v' written out
+                    JT ct;
+                    var current = NumericIVar(ivarTarget, Emit(ivarTarget, out ct), ref ct);
+                    var operand = Emit(node.Right, out vt);
+                    operand = NumericIVar(node.Right, operand, ref vt);
+                    if (IsNumeric(ct) && IsNumeric(vt)) {
+                        v = EmitBinary(op, current, ct, operand, vt, out vt);
+                    } else if ((ct == JT.Obj && IsNumeric(vt)) || (IsNumeric(ct) && vt == JT.Obj)) {
+                        v = EmitSpeculatedBinary(op, current, ct, ivarTarget, operand, vt, node.Right, out vt);
+                    } else {
+                        throw Bail("instance variable op-assign on " + ct + ", " + vt);
+                    }
+                } else {
+                    v = Emit(node.Right, out vt);
+                }
+                _pure = false;      // an ivar write is observable: nothing emitted after it may deopt (_deoptAfterEffect)
                 _ivarWrite = true;
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
@@ -1170,6 +1200,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ EmitWhile(WhileLoopExpression/*!*/ node, out JT type) {
             if (node.IsPostTest) { throw JitBailout.Instance; }
+            _hasLoop = true;
             var exit = Ast.Label("#while-exit");
             var cont = Ast.Label("#while-continue");
             var savedBreak = _breakLabel;
@@ -2289,7 +2320,7 @@ namespace IronRuby.Runtime.Jit {
 
                 var ivarTarget = assign.Left as InstanceVariable;
                 if (ivarTarget != null) {
-                    if (op != null) { return No(node); }
+                    if (op != null) { return WalkOperand(assign.Right); }
                     var stored = assign.Right as LocalVariable;
                     if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
                     return Walk(assign.Right);

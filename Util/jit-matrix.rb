@@ -2740,3 +2740,31 @@ class FalseClass; def ! = :false_bang; end
 t('FalseClass#! redefined') { nt.sp_holding_or_waiting }
 class FalseClass; remove_method :!; end
 t('and removed') { nt.sp_holding_or_waiting }
+
+# Instance variable writes in a body that can deopt: allowed while every deopt comes before the
+# first write (no loop, no self-call); the guards here all run before the store.
+class JitIVarWrites
+  def initialize; @seed = 74755; @n = 0; @f = 1.0; @log = []; end
+  attr_accessor :seed, :n, :f
+  def sp_next; @seed = ((@seed * 1309) + 13849) & 65535; end
+  def sp_inc(d); @n += d; end
+  def sp_fscale; @f *= 2; end
+  def no_two_writes(d); @n += d; @seed += d; end   # the second guard is after the first write
+end
+iw = JitIVarWrites.new
+warm { |i| iw.sp_next; iw.sp_inc(1); iw.sp_fscale; iw.no_two_writes(1) }
+t('ivar writes, hot') { [iw.sp_next, iw.sp_inc(3), iw.n, iw.seed] }
+iw.n = 2**62
+t('ivar op-assign overflowing') { [iw.sp_inc(2**62), iw.n] }
+iw.n = 1.5
+t('ivar op-assign on a Float') { [iw.sp_inc(1), iw.n] }
+iw.n = "s"
+t('ivar op-assign on a String') { iw.sp_inc(1) }
+t('the String left alone') { iw.n }
+iw.n = 5; iw.seed = "x"
+t('second guard fails after the first write') { iw.no_two_writes(1) }
+t('first write kept') { iw.n }
+iw.n = 1; iw.seed = 1
+iw.freeze
+t('op-assign on a frozen receiver') { iw.sp_inc(1) }
+t('frozen value unchanged') { iw.n }
