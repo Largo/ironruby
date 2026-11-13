@@ -102,6 +102,7 @@ namespace IronRuby.Runtime.Jit {
             set {
                 _canDeoptValue = value;
                 if (value && !_pure) { _deoptAfterEffect = true; }
+                if (value && _unloggedStoreBefore) { _deoptAfterUnloggedStore = true; }
             }
         }
         // A deopting operation was emitted after something observable. Emission follows evaluation
@@ -494,6 +495,7 @@ namespace IronRuby.Runtime.Jit {
             JT guess = JT.None;
             bool arrayParameters = true;
             bool unloggedWrites = true;
+            bool unloggedEarlyWrites = true;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._hints = hints;
@@ -501,6 +503,7 @@ namespace IronRuby.Runtime.Jit {
                 c._noArrayLocals = !arrayParameters;
                 if (hints != null && hints.SelfSample != null) { c._ivarProfile = IVarProfile(context, hints.SelfSample); }
                 c._noUnloggedWrites = !unloggedWrites;
+                c._noUnloggedEarlyWrites = !unloggedEarlyWrites;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -533,6 +536,16 @@ namespace IronRuby.Runtime.Jit {
                 // after it returns re-runs it, so the store it ends with has to be logged after all.
                 if (c._unloggedWrite && c._selfCall) {
                     unloggedWrites = false;
+                    round--;
+                    continue;
+                }
+
+                // An element store before the last statement went unlogged on the promise that nothing after it
+                // deopts (EmitIndexWrite): if something does, a loop could run a deopt emitted before it again, or an
+                // instance variable write could deopt on a frozen self (SetIVar),
+                // compile it logged.
+                if (c._unloggedStoreBefore && (c._deoptAfterUnloggedStore || c._hasLoop || c._ivarWrite)) {
+                    unloggedEarlyWrites = false;
                     round--;
                     continue;
                 }
@@ -1071,7 +1084,7 @@ namespace IronRuby.Runtime.Jit {
             if (op == "&&" || op == "||") { throw JitBailout.Instance; }
 
             var element = node.Left as ArrayItemAccess;
-            if (element != null) { return EmitIndexWrite(element, op, node.Right, IsLastStatement(node), out type); }
+            if (element != null) { return EmitIndexWrite(element, op, node.Right, IsLastStatement(node), IsEarlyTopStatement(node), out type); }
 
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {

@@ -2942,3 +2942,29 @@ rw.freeze
 t('the same with self frozen: one write, then FrozenError') { [(rw.no_attr_then_ivar(rv) rescue $!.class), rv.value] }
 t('C.new, then ivar write, self frozen') { rw.no_new_then_ivar rescue $!.class }
 
+# A swap: the first element store goes unlogged and the last one may not deopt, so a store the
+# fast path cannot make after the first (growing the array, an index that raises, a frozen
+# array, Array#[]= redefined) is an ordinary call of []=, and the first store is not made twice.
+class JitSwapLast
+  attr_accessor :v
+  def initialize = (@v = [0, 1, 2, 3, 4, 5])
+  def sp_swap(i, j)
+    tmp = @v[i]
+    @v[i] = @v[j]
+    @v[j] = tmp
+  end
+  def sp_swap_then_ivar(i, j)
+    tmp = @v[i]
+    @v[i] = @v[j]
+    @w = 1
+    @v[j] = tmp
+  end
+end
+sw = JitSwapLast.new
+warm { sw.sp_swap(1, 4); sw.sp_swap_then_ivar(2, 3) }
+t('swap that grows the array') { sw.v = (0..5).to_a; sw.sp_swap(1, 9); sw.v }
+t('swap whose last index raises') { sw.v = (0..5).to_a; [(sw.sp_swap(2, -20) rescue $!.class), sw.v] }
+t('swap on a Hash') { sw.v = { 1 => :a, 2 => :b }; sw.sp_swap(1, 2); sw.v }
+t('swap then ivar write, self frozen') { s2 = JitSwapLast.new; s2.freeze; [(s2.sp_swap_then_ivar(0, 1) rescue $!.class), s2.v] }
+class JitSwapArray < Array; def []=(i, x); super(i, x * 10); end; end
+t('swap on an Array subclass') { sw.v = JitSwapArray[1, 2, 3]; sw.sp_swap(0, 2); sw.v }

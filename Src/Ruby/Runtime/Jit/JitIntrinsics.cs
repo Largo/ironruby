@@ -680,6 +680,39 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        /// <summary>
+        /// The store a method ends with when an earlier element store went unlogged (JitCompiler.IsLastStatement):
+        /// this one may not deopt, since the generic body would run the earlier store again. An element of a
+        /// plain Array that is there is replaced; anything else - a Hash, a frozen array, an index that grows the
+        /// array or raises, another receiver - is an ordinary call of []=, which does what Ruby does.
+        /// </summary>
+        public sealed class StoreSite {
+            internal readonly CallSite<Func<CallSite, object, object, object, object>>/*!*/ Fallback;
+
+            internal StoreSite(RubyContext/*!*/ context) {
+                Fallback = CallSite<Func<CallSite, object, object, object, object>>.Create(
+                    Calls.RubyCallAction.Make(context, "[]=", Calls.RubyCallSignature.Simple(2)));
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        public static void IndexStoreIntOrCall(StoreSite/*!*/ site, object recv, int index, object value, bool arrays) {
+            if (arrays && recv != null && recv.GetType() == typeof(RubyArray)) {
+                int position;
+                object old;
+                if (((RubyArray)recv).JitReplaceElement(index, value, out position, out old)) { return; }
+            }
+            site.Fallback.Target(site.Fallback, recv, ScriptingRuntimeHelpers.Int32ToObject(index), value);
+        }
+
+        public static void IndexStoreObjOrCall(StoreSite/*!*/ site, object recv, object index, object value, bool arrays) {
+            if (index is int) {
+                IndexStoreIntOrCall(site, recv, (int)index, value, arrays);
+                return;
+            }
+            site.Fallback.Target(site.Fallback, recv, index, value);
+        }
+
         public static void IndexStoreLong(object recv, long index, object value, bool arrays, bool hashes, JitUndoLog log) {
             if (index >= Int32.MinValue && index <= Int32.MaxValue) {
                 IndexStoreInt(recv, (int)index, value, arrays, hashes, log);

@@ -1054,13 +1054,35 @@ namespace IronRuby.Runtime.Jit {
         private bool _noUnloggedWrites;
         private bool _unloggedWrite;
 
+        // ---- stores before the last one ------------------------------------------------------
+        // `t = a[i]; a[i] = a[j]; a[j] = t': the first store is logged only so that the second one's deopt
+        // could take it back. A top-level store of a method body with no loop goes unlogged instead when
+        // nothing emitted after it can deopt, and the store the body ends with then never deopts: what it
+        // cannot do itself it hands to an ordinary call of []= (JitRuntime.IndexStoreIntOrCall). Anything
+        // after it that may deopt compiles the method again with the store logged (TryCompile).
+
+        private bool _noUnloggedEarlyWrites;
+        // An unlogged store has been emitted that is not the body's last statement.
+        private bool _unloggedStoreBefore;
+        private bool _deoptAfterUnloggedStore;
+
+        private bool IsEarlyTopStatement(RExpr/*!*/ node) {
+            if (_loop != null || _ast == null || _noUnloggedWrites || _noUnloggedEarlyWrites) { return false; }
+            var statements = _ast.Body.Statements;
+            if (statements == null || statements.Count == 0 || statements.Last == node) { return false; }
+            foreach (var statement in statements) {
+                if (statement == node) { return true; }
+            }
+            return false;
+        }
+
         private bool IsLastStatement(RExpr/*!*/ node) {
             if (_loop != null || _ast == null || _noUnloggedWrites) { return false; }
             var statements = _ast.Body.Statements;
             return statements != null && statements.Count > 0 && statements.Last == node;
         }
 
-        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, bool last, out JT type) {
+        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, bool last, bool early, out JT type) {
             var args = element.Arguments.Expressions;
             if (element.Block != null || args.Length != 1 || args[0] is SplattedArgument) { throw Bail("[]= with " + args.Length + " arguments"); }
             if (op != null && !JitScreen.IsBinaryOperator(op)) { throw Bail("[] " + op + "="); }
@@ -1114,11 +1136,28 @@ namespace IronRuby.Runtime.Jit {
             }
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("[]= of a value that jumps away"); }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            if (last && _unloggedStoreBefore && op == null && indexType != JT.Lng) {
+                // after an unlogged store: no deopt (see IsEarlyTopStatement)
+                type = valueType;
+                var site = Ast.Constant(new JitRuntime.StoreSite(_context));
+                var call = (indexType == JT.Obj)
+                    ? Ast.Call(JitRuntime.M("IndexStoreObjOrCall"), site, recvTemp, indexTemp, BoxForStore(valueTemp, valueType), Ast.Constant(arrays))
+                    : Ast.Call(JitRuntime.M("IndexStoreIntOrCall"), site, recvTemp, indexTemp, BoxForStore(valueTemp, valueType), Ast.Constant(arrays));
+                return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
+                    Ast.Assign(recvTemp, recv),
+                    Ast.Assign(indexTemp, index),
+                    Ast.Assign(valueTemp, value),
+                    call,
+                    valueTemp
+                );
+            }
             _canDeopt = true;
+            early &= !last && op == null;
             MSA.Expression log;
-            if (last) {
+            if (last || early) {
                 _unloggedWrite = true;
                 log = Ast.Constant(null, typeof(JitUndoLog));
+                if (early) { _unloggedStoreBefore = true; }
             } else {
                 _hashWrite = true;
                 if (_undoLog == null) {
