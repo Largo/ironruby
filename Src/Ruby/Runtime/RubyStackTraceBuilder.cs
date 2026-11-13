@@ -17,6 +17,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -1175,25 +1176,65 @@ namespace IronRuby.Runtime {
         }
 
         internal const string TopLevelMethodName = "#"; 
-        // Not ':': since 3.4 a method frame's label carries the owner ("M::C#foo"), which
-        // contains colons, and the parser below splits on the first separator it finds.
-        // U+2236 cannot occur in a label.
-        private const char NamePartsSeparator = '\u2236';
-        private const string RubyMethodPrefix = "\u2111\u211c:";
+        // The name of a compiled Ruby body (a DynamicMethod or interpreted lambda) is
+        // "IR|{label}|{line}|{unique-id}|{file}", ASCII only: the runtime's perf map writer
+        // (DOTNET_PerfMapEnabled, Util/perf/profile.sh) damages lines whose names are not ASCII,
+        // which used to leave every Ruby body [unknown] in a profile. A label carries the owner
+        // ("M::C#foo") and may be any method name, so the label and the file escape the
+        // separator, '%' and everything outside printable ASCII as %XXXX (a UTF-16 code unit).
+        private const char NamePartsSeparator = '|';
+        private const string RubyMethodPrefix = "IR|";
         private static int _Id = 0;
         internal const int MaxDebugModePathSize = 256; // PDB limit
 
         internal static string/*!*/ EncodeMethodName(string/*!*/ methodName, string sourcePath, SourceSpan location, bool debugMode) {
-            return new StringBuilder().
-                Append(RubyMethodPrefix).
-                Append(methodName).
+            var result = new StringBuilder().Append(RubyMethodPrefix);
+            AppendEscaped(result, methodName);
+            result.
                 Append(NamePartsSeparator).
                 Append(location.IsValid ? location.Start.Line : 0).
                 Append(NamePartsSeparator).
                 Append(Interlocked.Increment(ref _Id)).
-                Append(NamePartsSeparator).
-                Append(debugMode && sourcePath != null && sourcePath.Length > MaxDebugModePathSize ? sourcePath.Substring(0, MaxDebugModePathSize) : sourcePath).
-                ToString();
+                Append(NamePartsSeparator);
+            AppendEscaped(result, debugMode && sourcePath != null && sourcePath.Length > MaxDebugModePathSize ? sourcePath.Substring(0, MaxDebugModePathSize) : sourcePath);
+            return result.ToString();
+        }
+
+        private static bool NeedsEscape(char c) {
+            return c < 0x20 || c > 0x7e || c == NamePartsSeparator || c == '%';
+        }
+
+        private static void AppendEscaped(StringBuilder/*!*/ result, string str) {
+            if (str == null) {
+                return;
+            }
+            foreach (char c in str) {
+                if (NeedsEscape(c)) {
+                    result.Append('%').Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
+                } else {
+                    result.Append(c);
+                }
+            }
+        }
+
+        private static string/*!*/ Unescape(string/*!*/ encoded, int start, int end) {
+            int pct = encoded.IndexOf('%', start, end - start);
+            if (pct < 0) {
+                return encoded.Substring(start, end - start);
+            }
+            var result = new StringBuilder(end - start);
+            int i = start;
+            while (i < end) {
+                char c = encoded[i];
+                if (c == '%' && i + 4 < end && Int32.TryParse(encoded.Substring(i + 1, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out int code)) {
+                    result.Append((char)code);
+                    i += 5;
+                } else {
+                    result.Append(c);
+                    i++;
+                }
+            }
+            return result.ToString();
         }
         
         /// <summary>Whether the encoded name is a class, module or singleton class body's (ModuleDefinition).</summary>
@@ -1203,10 +1244,10 @@ namespace IronRuby.Runtime {
             }
             int s = RubyMethodPrefix.Length;
             return String.CompareOrdinal(name, s, "<class:", 0, 7) == 0 || String.CompareOrdinal(name, s, "<module:", 0, 8) == 0 ||
-                String.CompareOrdinal(name, s, "singleton class\u2236", 0, 16) == 0;
+                String.CompareOrdinal(name, s, "singleton class|", 0, 16) == 0;
         }
 
-        // \u2111\u211c:{method-name}:{line-number}:{unique-id}:{file-name}
+        // IR|{method-name}|{line-number}|{unique-id}|{file-name}
         internal static bool TryParseRubyMethodName(ref string methodName, ref string fileName, ref int line) {
             if (methodName != null && methodName.StartsWith(RubyMethodPrefix, StringComparison.Ordinal)) {
                 string encoded = methodName;
@@ -1217,7 +1258,7 @@ namespace IronRuby.Runtime {
                 if (e < 0) {
                     return false;
                 }
-                methodName = encoded.Substring(s, e - s);
+                methodName = Unescape(encoded, s, e);
                 if (methodName == TopLevelMethodName) {
                     methodName = null;
                 }
@@ -1240,7 +1281,7 @@ namespace IronRuby.Runtime {
                 }
                 
                 if (fileName == null) {
-                    fileName = encoded.Substring(e + 1);
+                    fileName = Unescape(encoded, e + 1, encoded.Length);
                 }
                 return true;
             }

@@ -12,10 +12,13 @@
 # Use this and not dotnet-trace to say where time goes: EventPipe's sampler stops threads
 # at GC safepoints, so it blames allocation sites (it put 80% of Json in Array.new).
 # DOTNET_EnableWriteXorExecute=0 is what makes JIT frames resolve (otherwise they are all
-# /memfd:doublemapper). Compiled Ruby method bodies still come out as [unknown], about 40%
-# of the samples: their perf-map lines are damaged, probably by the non-ASCII characters in
-# the DynamicMethod names. Until that is fixed the profile attributes the runtime's
-# helpers, not Ruby methods.
+# /memfd:doublemapper). Compiled Ruby bodies are DynamicMethods named
+# "IR|label|line|id|file" (RubyStackTraceBuilder.EncodeMethodName), which profile-agg.rb
+# prints as "label (file:line)", merging a method's several compiled instances and tiers;
+# the method JIT's entry stubs are jitentry$name, and the DLR's rules are CallSite.Target /
+# lambda_methodN. The names must stay ASCII: the runtime's perf-map writer damages a line
+# whose name is not (the names used to carry U+2111 U+211C and U+2236, and 40% of the
+# samples came out [unknown]).
 set -e
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
 PERF_HOME="${PERF_HOME:-$(dirname "$ROOT")/ironruby-perf}"
@@ -32,5 +35,5 @@ sleep 10                                    # past start-up and the JIT tiers
 PID=$(pgrep -n -f "harness.rb $NAME 100000")
 "$PERF" record -F 999 -g -e cpu-clock -p "$PID" -o "$OUT/$NAME.perf" -- sleep "$SECS" 2>&1 | tail -n 1
 kill "$PID" 2>/dev/null || true
-"$PERF" script -i "$OUT/$NAME.perf" -F ip,sym > "$OUT/$NAME.stacks" 2>/dev/null
+"$PERF" script -i "$OUT/$NAME.perf" -F ip,sym,dso > "$OUT/$NAME.stacks" 2>/dev/null
 ruby "$ROOT/Util/perf/profile-agg.rb" "$OUT/$NAME.stacks" 25

@@ -1,12 +1,34 @@
-# Self and inclusive time per frame from `perf script -F ip,sym` (Util/perf/profile.sh).
+# Self and inclusive time per frame from `perf script -F ip,sym,dso` (Util/perf/profile.sh).
 #
 #   ruby Util/perf/profile-agg.rb X.stacks [top=25]            # top frames
 #   ruby Util/perf/profile-agg.rb X.stacks 10 'GetInstanceVar' # who calls the frames matching the regexp
+#   ruby Util/perf/profile-agg.rb X.stacks 10 'self:CallSite.Target' # ... only samples whose leaf matches (self time)
+#   ruby Util/perf/profile-agg.rb X.stacks 10 'Scheduler#wait'  # Ruby methods by label too
 #
-# The input is blocks of "address symbol" lines, leaf first, separated by blank lines.
-file, top, callers = ARGV[0], (ARGV[1] || 25).to_i, ARGV[2] && Regexp.new(ARGV[2])
+# The input is blocks of "address symbol (dso)" lines, leaf first, separated by blank lines.
+file, top = ARGV[0], (ARGV[1] || 25).to_i
+leaf_only = ARGV[2]&.start_with?('self:')
+callers = ARGV[2] && Regexp.new(ARGV[2].delete_prefix('self:'))
+# A compiled Ruby body is "IR|label|line|id|file(args)" (RubyStackTraceBuilder.EncodeMethodName):
+# shown as "label (file:line)", one entry for all of a method's compiled instances and tiers.
 name = lambda do |s|
-  s.gsub(/\[(OptimizedTier1|Optimized|Tier1|Tier0|QuickJitted|PreJIT)\]/, '').sub(/\(.*/, '').strip[0, 110]
+  # profile.sh asks perf for the DSO too: an unresolved native frame is shown by its library
+  # (libcoreclr.so is stripped: the GC and the allocation helpers).
+  if (m = s.match(/\A\[unknown\] \((.*)\)\z/))
+    next "[unknown] #{File.basename(m[1])}"
+  end
+  if (m = s.match(/IR\|([^|]*)\|(\d+)\|\d+\|([^(]*)/))
+    label = m[1].gsub(/%(\h{4})/) { $1.hex.chr(Encoding::UTF_8) }
+    file = File.basename(m[3].gsub(/%(\h{4})/) { $1.hex.chr(Encoding::UTF_8) })
+    next "#{label} (#{file}:#{m[2]})"[0, 110]
+  end
+  s = s.gsub(/\[(OptimizedTier1|Optimized|Tier1|Tier0|QuickJitted|PreJIT|InstrumentedTier\w*)\]/, '').sub(/\(.*/, '').strip
+  # "instance object [IronRuby] IronRuby.Runtime.RubyOps::GetInstanceVariable" -> "RubyOps::GetInstanceVariable";
+  # a DLR rule is "CallSite.Target" (all rules share the name: see who calls it with the third argument).
+  s = s.sub(/\A.*?\[[^\]]+\] (?:dynamicClass::)?/, '').sub(/\A[\w.`]*\.(?=[\w`]+(\[[^\]]*\])?::)/, '')
+  # The runtime names the patched write barrier code after the first stub it maps.
+  s = 'JIT_WriteBarrier' if s.include?('JIT_CopiedWriteBarriers')
+  s[0, 110]
 end
 selfc = Hash.new(0); incl = Hash.new(0); chains = Hash.new(0); n = 0
 File.read(file, encoding: 'utf-8', invalid: :replace).split(/\n\s*\n/).each do |block|
@@ -15,7 +37,7 @@ File.read(file, encoding: 'utf-8', invalid: :replace).split(/\n\s*\n/).each do |
   n += 1
   selfc[st[0]] += 1
   st.uniq.each { |f| incl[f] += 1 }
-  if callers && (i = st.index { |f| f =~ callers })
+  if callers && (i = leaf_only ? (st[0] =~ callers ? 0 : nil) : st.index { |f| f =~ callers })
     chains[st[i, 4].join(' <- ')] += 1
   end
 end
