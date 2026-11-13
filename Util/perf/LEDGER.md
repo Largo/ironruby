@@ -310,6 +310,28 @@ JIT off on hundreds of small programs:
   reports). What the hunts did not cover: Windows, net11.0, several runtimes in one
   process, and the full spec sweep.
 
+A second review (CodeRabbit) then found four more, all real, the first of them in the
+one area the hunt had called sound:
+
+- **`def capture(&b); b; end` handed out the same Proc on every evaluation of a literal**
+  (fd94bce, once light frames took bodies that read a parameter). "A light frame can only
+  yield to its block" was the premise of marking the block reusable, and a block
+  parameter breaks it. The hunt had tried `&b` stored and forwarded, in methods that were
+  not light. A premise stated in a comment is a thing to test when the set of bodies it
+  speaks about is widened.
+- **`h.fetch(k, @n += 1)` evaluated the default twice** (the hash intrinsics, with
+  6347585): the emitter marked its deopt before emitting the arguments, so an effect in
+  an argument did not count as preceding it. The hunt's 400 effect/deopt pairs put the
+  effect before or after an operation, never inside its operands.
+- **A final `C.new` in a self-recursive body** left the outer invocations with operators
+  an inner `initialize` had redefined (38a149b): "last statement" is last for one
+  invocation only.
+- **`def initialize(n); C.new(n + 1); end` ended the process** (38a149b): the direct
+  construction has no call site and no scope, hence no stack check. The fourth recursion
+  without a check; the question to ask of any new direct path into Ruby code.
+
+Ten faults in all after the gate had passed: seven found by review, three by the hunt.
+
 Not from this work, found on the way and still open: a self-recursive method with a
 logged Hash store slows down about 1000x past 65,536 levels of recursion (the shared
 `JitUndoLog` fills, the outer entry deopts, and `OnDeopt` never retires it because no

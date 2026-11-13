@@ -16,6 +16,7 @@
 INNER = { 'DeltaBlue' => 1200, 'Richards' => 10, 'Json' => 10, 'CD' => 100, 'Bounce' => 150,
           'List' => 150, 'Mandelbrot' => 500, 'NBody' => 250_000, 'Permute' => 100,
           'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60 }
+require 'shellwords'
 root = File.expand_path('../..', __dir__)
 home = ENV['PERF_HOME'] || File.join(File.dirname(root), 'ironruby-perf')
 dir = File.join(home, 'awfy/benchmarks/Ruby')
@@ -33,7 +34,8 @@ cols = Array.new(interps.size) { [] }
 INNER.each do |b, inner|
   next unless only.empty? || only.include?(b)
   row = interps.map do |_, cmd|
-    out = IO.popen("LANG=C.UTF-8 timeout -s KILL #{secs} #{cmd} -r#{sync} #{dir}/harness.rb #{b} 100000 #{inner} 2>&1", &:read)
+    # cmd is a command line, as documented; the paths this script adds are quoted (a checkout or PERF_HOME with a space)
+    out = IO.popen("LANG=C.UTF-8 timeout -s KILL #{secs} #{cmd} #{"-r#{sync}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} 100000 #{inner} 2>&1", &:read)
     # The run is meant to end at the deadline, killed (137 from timeout). One that ended by itself with an
     # error - a wrong answer raises - is a failure however many iterations it printed first.
     st = $?
