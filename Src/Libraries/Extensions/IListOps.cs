@@ -249,10 +249,16 @@ namespace IronRuby.Builtins {
 
         #region initialize_copy, replace, clear, to_a, to_ary
 
+        // frozen is checked first, before the argument is converted and even for the no-op below
+        // (MRI: rb_ary_modify_check), so a frozen array's replace(42) is a FrozenError
         [RubyMethod("replace")]
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
-        public static IList/*!*/ Replace(IList/*!*/ self, [NotNull, DefaultProtocol]IList/*!*/ other) {
-            // frozen is checked first, even for the no-op below (MRI: rb_ary_modify_check)
+        public static IList/*!*/ Replace(ConversionStorage<IList>/*!*/ arrayCast, IList/*!*/ self, object other) {
+            RequireNotFrozen(self);
+            return Replace(self, Protocols.CastToArray(arrayCast, other));
+        }
+
+        public static IList/*!*/ Replace(IList/*!*/ self, [NotNull]IList/*!*/ other) {
             RequireNotFrozen(self);
             // ary.replace(ary) has to be a no-op, and clearing first would make it empty the
             // array instead.  Rails runs into exactly this: Rails::Command#with_argv does
@@ -300,6 +306,10 @@ namespace IronRuby.Builtins {
         public static IList/*!*/ Repeat(UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ self, int repeat) {
             if (repeat < 0) {
                 throw RubyExceptions.CreateArgumentError("negative argument");
+            }
+            // rb_ary_times
+            if (repeat > 0 && self.Count > MaxArraySize / repeat) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
             }
 
             IList result = CreateResultArray(allocateStorage, self);
@@ -422,17 +432,20 @@ namespace IronRuby.Builtins {
             }
 
             // MRI refuses to even start building a product whose size doesn't fit into a native integer.
-            // Without this check (0..100).to_a.product(a, a, ... ) loops essentially forever.
-            long size = self.Count;
-            for (int i = 0; i < arrays.Length; i++) {
-                long count = arrays[i].Count;
-                if (size > Int64.MaxValue / count) {
+            // Without this check (0..100).to_a.product(a, a, ... ) loops essentially forever. Only the
+            // result array has a size: given a block, rb_ary_product yields however many there are.
+            if (block == null) {
+                long size = self.Count;
+                for (int i = 0; i < arrays.Length; i++) {
+                    long count = arrays[i].Count;
+                    if (size > Int64.MaxValue / count) {
+                        throw RubyExceptions.CreateRangeError("too big to product");
+                    }
+                    size *= count;
+                }
+                if (size > Int32.MaxValue) {
                     throw RubyExceptions.CreateRangeError("too big to product");
                 }
-                size *= count;
-            }
-            if (size > Int32.MaxValue) {
-                throw RubyExceptions.CreateRangeError("too big to product");
             }
 
             int[] indices = new int[1 + arrays.Length];
@@ -698,13 +711,20 @@ namespace IronRuby.Builtins {
             return SetElement(arrayTryCast, self, CastIndex(fixnumCast, index), CastIndex(fixnumCast, length), value);
         }
 
+        /// <summary>
+        /// MRI's ARY_MAX_SIZE, LONG_MAX / sizeof(VALUE), scaled to the CLR's Int32 lengths: the
+        /// longest array Ruby code may ask for (Array.new uses the same bound). Past it a store
+        /// or a fill is an error up front rather than an allocation that takes the process down.
+        /// </summary>
+        internal const int MaxArraySize = Int32.MaxValue / 8;
+
         public static object SetElement(RubyArray/*!*/ self, int index, object value) {
             index = NormalizeIndexThrowIfNegative(self, index);
 
             if (index >= self.Count) {
-                // MRI's rb_ary_store: an index the array cannot grow to (here, one past which
-                // the count would overflow) is an IndexError, not an arithmetic accident.
-                if (index == Int32.MaxValue) {
+                // MRI's rb_ary_store: an index the array cannot grow to is an IndexError, not an
+                // arithmetic accident or an out-of-memory.
+                if (index >= MaxArraySize) {
                     throw RubyExceptions.CreateIndexError("index {0} too big", index);
                 }
                 self.AddMultiple(index + 1 - self.Count, null);
@@ -736,6 +756,11 @@ namespace IronRuby.Builtins {
             IList valueAsList = value as IList;
             if (valueAsList == null) {
                 valueAsList = Protocols.TryCastToArray(arrayTryCast, value);
+            }
+
+            // rb_ary_splice: the array cannot be grown to put the values that far out
+            if (index > self.Count && (long)index > MaxArraySize - (valueAsList != null ? valueAsList.Count : 1)) {
+                throw RubyExceptions.CreateIndexError("index {0} too big", index);
             }
 
             if (valueAsList != null && valueAsList.Count == 0) {
@@ -1465,7 +1490,7 @@ namespace IronRuby.Builtins {
             // start + length overflowed Int32 and produced a negative bound, after which the
             // loop below appended one element at a time until the process died. MRI reports
             // "argument too big" for a size it cannot represent; the CLR's is Int32.MaxValue.
-            if (length > 0 && (long)start + length > Int32.MaxValue) {
+            if (length > 0 && (long)start + length > MaxArraySize) {
                 throw RubyExceptions.CreateArgumentError("argument too big");
             }
 
@@ -1657,8 +1682,9 @@ namespace IronRuby.Builtins {
                     // push a work item that will process the items following the nested list:
                     worklist.Push((list, nestedIndex + 1, depth));
 
-                    // yield items preceding the nested list:
-                    for (int i = start; i < nestedIndex; i++) {
+                    // yield items preceding the nested list (a #to_ary may have shortened the list since
+                    // they were looked at - Bug #22318):
+                    for (int i = start; i < nestedIndex && i < list.Count; i++) {
                         yield return list[i];
                     }
 
@@ -1682,7 +1708,7 @@ namespace IronRuby.Builtins {
                 depth = workitem.Depth;
 
                 // finishing nested list:
-                if (start == list.Count) {
+                if (start >= list.Count) {
                     recursionPath.Remove(list);
                     goto next;
                 }
@@ -1734,13 +1760,27 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("flatten!")]
         public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, DynamicNull maxDepth) {
-            return FlattenInPlace(tryToAry, self, -1);
+            return FlattenInPlace(tryToAry, self);
         }
 
         [RubyMethod("flatten!")]
-        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, [DefaultProtocol, DefaultParameterValue(-1)] int maxDepth) {
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self) {
+            self.RequireNotFrozen();
+            return FlattenInPlace(tryToAry, (IList)self, -1);
+        }
+
+        [RubyMethod("flatten!")]
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, int maxDepth) {
             self.RequireNotFrozen();
             return FlattenInPlace(tryToAry, (IList)self, maxDepth);
+        }
+
+        // frozen is checked before the depth is converted (MRI: rb_ary_modify_check first)
+        [RubyMethod("flatten!")]
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, ConversionStorage<int>/*!*/ fixnumCast,
+            RubyArray/*!*/ self, object maxDepth) {
+            self.RequireNotFrozen();
+            return FlattenInPlace(tryToAry, (IList)self, Protocols.CastToFixnum(fixnumCast, maxDepth));
         }
         
         [RubyMethod("flatten!")]
@@ -1892,14 +1932,40 @@ namespace IronRuby.Builtins {
 
         #region values_at
 
+        /// <summary>
+        /// rb_range_values: an object that is not an Integer but has #begin, #end and #exclude_end?
+        /// stands for the Range they describe. Null for anything else.
+        /// </summary>
+        private static Range RangeLike(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage, object value) {
+
+            if (value == null || value is int || value is long || value is System.Numerics.BigInteger || value is bool ||
+                !Protocols.RespondTo(respondToStorage, value, "begin") ||
+                !Protocols.RespondTo(respondToStorage, value, "end") ||
+                !Protocols.RespondTo(respondToStorage, value, "exclude_end?")) {
+                return null;
+            }
+            var beginSite = beginStorage.GetCallSite("begin", 0);
+            var endSite = endStorage.GetCallSite("end", 0);
+            var excludeEndSite = excludeEndStorage.GetCallSite("exclude_end?", 0);
+            object begin = beginSite.Target(beginSite, value);
+            object end = endSite.Target(endSite, value);
+            return Range.CreateValidated(begin, end, RubyOps.IsTrue(excludeEndSite.Target(excludeEndSite, value)));
+        }
+
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast,
-            UnaryOpStorage/*!*/ allocateStorage,
+            UnaryOpStorage/*!*/ allocateStorage, RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage,
             IList/*!*/ self, params object[]/*!*/ values) {
             RubyArray result = new RubyArray();
 
             for (int i = 0; i < values.Length; i++) {
-                Range range = values[i] as Range;
+                Range range = values[i] as Range ?? RangeLike(respondToStorage, beginStorage, endStorage, excludeEndStorage, values[i]);
                 if (range != null) {
                     // MRI asks for the range with errors on: a range reaching past the end of
                     // the array is padded with nil out to its full length (values_at(0..9) on a
@@ -1933,10 +1999,19 @@ namespace IronRuby.Builtins {
         private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, List<MutableString/*!*/>/*!*/ parts, 
             ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
-            foreach (object item in list) {
+            // the length is read again on every step, as MRI's ary_join_1 does: a #to_str or #to_ary
+            // may change the array
+            for (int i = 0; i < list.Count; i++) {
+                JoinItem(conversions, list, list[i], parts, ref isBinary, ref seen);
+            }
+        }
+
+        private static void JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, List<MutableString/*!*/>/*!*/ parts,
+            ref bool? isBinary, ref Dictionary<object, bool> seen) {
+            {
                 if (item == null) {
                     parts.Add(null);
-                    continue;
+                    return;
                 }
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
@@ -1955,7 +2030,7 @@ namespace IronRuby.Builtins {
                     seen.Add(item, true);
                     JoinRecursive(conversions, listItem, parts, ref isBinary, ref seen);
                     seen.Remove(item);
-                    continue;
+                    return;
                 }
 
                 // try to_str first, then to_s:
@@ -1970,8 +2045,33 @@ namespace IronRuby.Builtins {
             bool? isBinary = (separator != null) ? separator.IsBinary : (bool?)null;
             Dictionary<object, bool> seen = null;
             
-            // build a list of strings to join:
-            JoinRecursive(conversions, self, parts, ref isBinary, ref seen);
+            // build a list of strings to join, the way MRI's rb_ary_join does: it scans the leading
+            // Strings, asking the first element that is not one for #to_str, then takes the Strings
+            // still in front of it (the #to_str may have changed the array) and joins the rest one
+            // by one, rereading the array as it goes.
+            int scanned = 0;
+            while (scanned < self.Count) {
+                object item = self[scanned];
+                if (item is MutableString) {
+                    scanned++;
+                    continue;
+                }
+                if (item != null) {
+                    conversions.ToStr.Target(conversions.ToStr, item);
+                }
+                break;
+            }
+            int index = 0;
+            for (; index < scanned && index < self.Count; index++) {
+                var str = self[index] as MutableString;
+                if (str == null) {
+                    break;
+                }
+                JoinItem(conversions, self, str, parts, ref isBinary, ref seen);
+            }
+            for (; index < self.Count; index++) {
+                JoinItem(conversions, self, self[index], parts, ref isBinary, ref seen);
+            }
             if (parts.Count == 0) {
                 return MutableString.CreateEmpty(RubyEncoding.Ascii);
             }

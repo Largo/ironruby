@@ -331,11 +331,36 @@ module Enumerable
   end
   private :__enum_item__
 
+  # MRI yields an element to these blocks with rb_yield_force_blockarg: a lambda is called
+  # the way a plain block is, so one with several parameters takes an Array element apart
+  # (each_with_index.min_by(&->(x, i) { })). True when the block is such a lambda; the
+  # caller then splats Array elements into it.
+  def __enum_force_splat__?(block)
+    return false unless block.lambda?
+    parameters = block.parameters
+    # a Symbol's proc (group_by(&:itself)) is a lambda too, and takes the element whole
+    return false if parameters == [[:req], [:rest]]
+    positional = 0
+    rest = false
+    parameters.each do |kind, _|
+      case kind
+      when :req, :opt then positional += 1
+      when :rest then rest = true
+      end
+    end
+    positional >= 2 || (positional >= 1 && rest)
+  end
+  private :__enum_force_splat__?
+
   # Extra arguments are passed straight through to #each, which is how a
   # receiver whose #each takes parameters gets to see them.
   def each_entry(*args, &block)
     return to_enum(:each_entry, *args) unless block
-    each(*args) { |*values| block.call(__enum_item__(values)) }
+    splat = __enum_force_splat__?(block)
+    each(*args) do |*values|
+      item = __enum_item__(values)
+      splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+    end
     self
   end unless method_defined?(:each_entry)
 
@@ -484,7 +509,12 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
-    each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
+    splat = __enum_force_splat__?(block)
+    each do |*values|
+      item = __enum_item__(values)
+      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+      (result[key] ||= []) << item
+    end
     result
   end unless method_defined?(:group_by)
 
@@ -515,9 +545,10 @@ module Enumerable
     best = nil
     best_key = nil
     found = false
+    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      key = block.call(item)
+      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
       if found
         c = (key <=> best_key)
         if c.nil?
@@ -528,6 +559,7 @@ module Enumerable
       found = true
       best_key = key
       best = item
+      nil
     end
     best
   end
@@ -560,12 +592,22 @@ module Enumerable
   def __sort_by_key__(block)
     decorated = []
     index = 0
+    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      decorated << [block.call(item), index, item]
+      decorated << [splat && item.is_a?(Array) ? block.call(*item) : block.call(item), index, item]
       index += 1
+      # the block #each was given answers nil, as MRI's does, should #each keep it and call it
+      nil
     end
-    decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
+    decorated.sort do |a, b|
+      c = (a[0] <=> b[0])
+      # the keys that will not compare are named, not the triples carrying them
+      if c.nil?
+        raise ArgumentError, "comparison of #{a[0].class} with #{::Comparable.__cmp_operand__(b[0])} failed"
+      end
+      c == 0 ? (a[1] <=> b[1]) : c
+    end.map { |triple| triple[2] }
   end
   private :__sort_by_key__
 
@@ -614,12 +656,13 @@ module Enumerable
     __ir_same_method__(:collect_concat, :flat_map)
   end
 
-  def uniq
+  def uniq(&block)
     seen = {}
     result = []
     each do |*values|
       item = __enum_item__(values)
-      key = block_given? ? yield(item) : item
+      # MRI's uniq_iter yields the values as they came (rb_yield_values2), not the packed item
+      key = block ? block.call(*values) : item
       next if seen.key?(key)
       seen[key] = true
       result << item
@@ -968,6 +1011,7 @@ module Enumerable
         end
       end
       result = block ? nil : []
+      splat = block && __enum_force_splat__?(block)
       index = 0
       each do |*values|
         row = [__enum_item__(values)]
@@ -985,7 +1029,11 @@ module Enumerable
                  end
         end
         index += 1
-        block ? block.call(row) : result << row
+        if block
+          splat ? block.call(*row) : block.call(row)
+        else
+          result << row
+        end
       end
       result
     end
@@ -1469,46 +1517,108 @@ class Array
   # The core #shuffle takes no arguments; MRI's takes a :random generator and
   # must hand back a plain Array.  Defined unconditionally for that reason.
   def shuffle(random: Random)
-    result = [].concat(self)
-    index = result.size - 1
-    while index > 0
-      swap = __array_rand_index__(random, index + 1)
-      result[index], result[swap] = result[swap], result[index]
-      index -= 1
-    end
-    result
+    [].concat(self).shuffle!(random: random)
   end
 
+  # MRI's rb_ary_shuffle_bang: in place, and a generator that changes the array's
+  # length is caught ("modified during shuffle") before the swap it would break.
   def shuffle!(random: Random)
     __array_check_frozen__
-    replace(shuffle(random: random))
+    len = i = size
+    while i > 1
+      j = __array_rand_index__(random, i)
+      raise RuntimeError, "modified during shuffle" if size != len
+      i -= 1
+      self[i], self[j] = self[j], self[i]
+    end
+    self
   end
 
+  # MRI's ary_sample, step for step, so that a given generator picks the same
+  # elements: the random numbers are drawn first, then the array is read again, and
+  # what the generator emptied in the meantime is not there to sample.
   def sample(*args, random: Random)
     if args.size > 1
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
+    len = size
     if args.empty?
-      return nil if empty?
-      return self[__array_rand_index__(random, size)]
+      return self[len < 2 ? 0 : __array_rand_index__(random, len)]
     end
 
     # an explicit nil is not "no count": sample(nil) is a TypeError
-    count = __array_to_int__(args[0])
-    raise ArgumentError, "negative sample number" if count < 0
-    total = size
-    count = total if count > total
-
-    pool = [].concat(self)
-    result = []
-    index = 0
-    while index < count
-      swap = index + __array_rand_index__(random, total - index)
-      pool[index], pool[swap] = pool[swap], pool[index]
-      result << pool[index]
-      index += 1
+    n = __array_to_int__(args[0])
+    raise ArgumentError, "negative sample number" if n < 0
+    n = len if n > len
+    rnds = n <= 10 ? Array.new(n) { |i| __array_rand_index__(random, len - i) } : nil
+    k = len
+    len = size
+    return [] if len < k && rnds && rnds.any? { |r| r >= len }
+    n = len if n > len
+    case n
+    when 0
+      return []
+    when 1
+      return [self[rnds[0]]]
+    when 2
+      i, j = rnds
+      j += 1 if j >= i
+      return [self[i], self[j]]
+    when 3
+      i, j, k = rnds
+      l, g = j, i
+      if j >= i
+        l = i
+        g = (j += 1)
+      end
+      k += 1 if k >= l && (k += 1) >= g
+      return [self[i], self[j], self[k]]
     end
-    result
+    memo_threshold =
+      if len < 2560 then len / 128
+      elsif len < 5120 then len / 64
+      elsif len < 10240 then len / 32
+      else len / 16
+      end
+    if rnds
+      sorted = [rnds[0]]
+      idx = [rnds[0]]
+      (1...n).each do |i|
+        k = rnds[i]
+        j = 0
+        while j < i
+          break if k < sorted[j]
+          k += 1
+          j += 1
+        end
+        sorted.insert(j, k)
+        idx << k
+      end
+      idx.map { |x| self[x] }
+    elsif n <= memo_threshold / 2
+      picks = Array.new(n) { |i| __array_rand_index__(random, len - i) + i }
+      len = size
+      if len <= picks.max
+        n = 0
+      elsif n > len
+        n = len
+      end
+      memo = {}
+      Array.new(n) do |i|
+        j = picks[i]
+        i2 = memo.fetch(i, i)
+        j2 = memo.fetch(j, j)
+        memo[j] = i2
+        self[j2]
+      end
+    else
+      result = [].concat(self)
+      n.times do |i|
+        j = __array_rand_index__(random, len - i) + i
+        result[i], result[j] = result[j], result[i]
+      end
+      result.first(n)
+    end
   end unless method_defined?(:sample)
 
   # --- helpers -----------------------------------------------------------
@@ -4711,10 +4821,14 @@ class Array
         other.to_ary
       elsif other.respond_to?(:each)
         collected = []
-        # several yielded values make one element, as Enumerator#next would pack them
-        other.each do |*element|
-          break if collected.size >= length
-          collected << (element.size <= 1 ? element[0] : element)
+        # several yielded values make one element, as Enumerator#next would pack them;
+        # MRI's take_i stops as soon as it has the receiver's length, without asking for one
+        # more (an Enumerator.produce is called exactly that many times)
+        if length > 0
+          other.each do |*element|
+            collected << (element.size <= 1 ? element[0] : element)
+            break if collected.size >= length
+          end
         end
         collected
       else
@@ -5277,6 +5391,8 @@ class Enumerator
     if from.is_a?(::Float) || to.is_a?(::Float)
       n = (to - from).to_f
       return 0 if n < 0
+      # ruby_float_step_size: an endless count is Infinity
+      return n if n.infinite?
       return (n + n * ::Float::EPSILON).floor + 1
     end
     stop = cmp == :> ? to : from
@@ -5312,7 +5428,20 @@ class Enumerator
   end
   private :__inspect_detail__
 
+  # An enumerator met again while it is being inspected is "#<Enumerator: ...>", as
+  # MRI's inspect_enumerator (rb_exec_recursive) has it: [e] inside e.
   def inspect
+    seen = (::Thread.current[:__ir_enumerator_inspect__] ||= {}.compare_by_identity)
+    return "#<#{self.class}: ...>" if seen.key?(self)
+    seen[self] = true
+    begin
+      __inspect_unguarded__
+    ensure
+      seen.delete(self)
+    end
+  end
+
+  def __inspect_unguarded__
     if (info = @__inspect__)
       return "#<#{self.class}: #{__inspect_detail__(*info)}>"
     end
@@ -5334,6 +5463,7 @@ class Enumerator
     return "#<#{self.class}: uninitialized>" if recv.nil? && meth == :each && args.empty?
     "#<#{self.class}: #{__inspect_detail__(recv, meth, args)}>"
   end
+  private :__inspect_unguarded__
   alias :to_s :inspect
 
   # --- external iteration ------------------------------------------------
@@ -5542,6 +5672,11 @@ class Enumerator
     end
     private :__chain__
 
+    def __mark_packed_pairs__
+      @__packed_pairs__ = true
+      self
+    end
+
     def __need_block__(name, block)
       return if block
       ::Kernel.raise(::ArgumentError, "tried to call lazy #{name} without a block")
@@ -5576,7 +5711,16 @@ class Enumerator
     def map(&block)
       __need_block__("map", block)
       source = self
-      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }.__set_inspect__(self, __callee__)
+      # each step answers the mapped value, which is what reaches a method enumerated
+      # through to_enum: lazy.to_enum(:take_while).map { ... } stops where the block says
+      packed = @__packed_pairs__
+      __chain__(size) do |y|
+        source.each do |*values|
+          value = packed && values.size == 1 ? block.call(*values[0]) : block.call(*values)
+          y << value
+          value
+        end
+      end.__set_inspect__(self, __callee__)
     end
     alias :collect :map
 
@@ -5593,7 +5737,8 @@ class Enumerator
           if array.is_a?(::Array)
             array.each { |item| y << item }
           elsif result.respond_to?(:each) && result.respond_to?(:force)
-            result.each { |item| y << item }
+            # the block answers the item, not the yielder, should the object keep it
+            result.each { |item| y << item; item }
           else
             y << result
           end
@@ -5674,7 +5819,8 @@ class Enumerator
       n = __to_int__(n)
       ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
       current = size
-      new_size = current.nil? ? n : (current < n ? current : n)
+      # an unknown size stays unknown: lazy.select {}.take(4).size is nil
+      new_size = current.nil? ? nil : (current < n ? current : n)
       return __chain__(0) { |y| } if n == 0
       source = self
       __chain__(new_size) do |y|
@@ -5749,18 +5895,28 @@ class Enumerator
           end
         end
       else
-        __chain__(size) do |y|
+        # one [value, index] pair, which a #map straight after takes as two arguments
+        # (MRI's packed memo), so a lambda of two parameters can be mapped over it
+        chain = __chain__(size) do |y|
           i = offset
           source.each do |*values|
             y << [values.size <= 1 ? values[0] : values, i]
             i += 1
           end
         end
+        chain.__mark_packed_pairs__
       end
     end
 
+    # Lazy only without a block; given one it runs the pipeline, as MRI's (which is
+    # Enumerator's) does, and answers what #each answers.
     def each_with_index(&block)
-      with_index(0, &block)
+      return with_index(0) unless block
+      i = 0
+      each do |*values|
+        block.call(__value__(values), i)
+        i += 1
+      end
     end
 
     def with_object(memo)
@@ -5790,7 +5946,7 @@ class Enumerator
         elsif other.respond_to?(:to_ary) && (converted = other.to_ary).is_a?(::Array)
           converted
         elsif other.respond_to?(:each)
-          other.to_enum(:each)
+          other
         else
           ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
         end
@@ -5798,10 +5954,13 @@ class Enumerator
 
       source = self
       __chain__(size) do |y|
+        # each run walks its own enumerators of the arguments, as MRI's lazy_zip does: a
+        # second pass starts them over, and two of the same object advance separately
+        enums = sources.map { |other| other.is_a?(::Array) ? other : other.to_enum(:each) }
         index = 0
         source.each do |*values|
           row = [values.size <= 1 ? values[0] : values]
-          sources.each do |other|
+          enums.each do |other|
             row << if other.is_a?(::Array)
                      other[index]
                    else
@@ -5923,8 +6082,12 @@ class Enumerator
     # The version of a method that Lazy overrides, from whichever ancestor defines it -
     # what `super' would reach. nil when Lazy does not override it at all.
     def __eager_method__(name)
+      # to_enum("with_index") names the method as a String just as well
+      name = name.to_sym if name.is_a?(::String)
       ancestors = ::Enumerator::Lazy.ancestors
       return nil unless ::Enumerator::Lazy.instance_methods(false).include?(name)
+      # Lazy's own is eager given a block, and Enumerator's would call Lazy#with_index
+      return nil if name == :each_with_index
       # Past Lazy itself (and whatever is prepended to it) to the eager definition.
       ancestors[(ancestors.index(::Enumerator::Lazy) + 1)..-1].each do |mod|
         return mod.instance_method(name) if mod.instance_methods(false).include?(name)
@@ -6004,7 +6167,11 @@ class Enumerator
     end
 
     def cycle(*args, &block)
-      return super(*args, &block) if block
+      if block
+        # eager with a block, and it answers nil (Enumerable#cycle)
+        super(*args, &block)
+        return nil
+      end
       enum = super(*args)
       to_enum(:cycle, *args) { enum.size }
     end
@@ -6057,7 +6224,8 @@ class Enumerator
       @__iterated__ = 0
       @__enums__.each do |enum|
         @__iterated__ += 1
-        enum.each { |*values| block.call(*values) }
+        # the block itself, as MRI's enum_chain_each hands it on: a lambda stays one
+        enum.each(&block)
       end
       self
     end
@@ -6098,8 +6266,12 @@ class Enumerator
     # MRI accepts anything here -- the arguments are only required to answer
     # #each_entry at the point #each actually walks them, which is what lets
     # Product wrap a plain Object that defines each_entry and nothing else.
-    def initialize(*enums)
+    def initialize(*enums, **options)
       __check_frozen__
+      # MRI takes keywords only to reject them
+      unless options.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{'s' if options.size > 1}: #{options.keys.map { |k| k.inspect }.join(', ')}")
+      end
       @__enums__ = enums
       self
     end
@@ -6144,21 +6316,23 @@ class Enumerator
 
     # nil for any size MRI cannot use (missing, non-Integer, NaN); zero short-circuits
     # even when another enumerable has an unknown size, and an infinite size carries.
+    #
+    # Past the zero check the sizes are taken in order, and the first unknown or infinite
+    # one decides: product("a".."c", 1..) is nil, product(1.., "a".."c") Infinity.
     def size
+      sizes = @__enums__.map { |enum| enum.respond_to?(:size) ? enum.size : nil }
+      return 0 if sizes.any? { |n| n.is_a?(::Integer) && n == 0 }
       total = 1
-      unknown = false
-      @__enums__.each do |enum|
-        n = enum.respond_to?(:size) ? enum.size : nil
+      sizes.each do |n|
         if n.is_a?(::Integer)
-          return 0 if n == 0
           total *= n
         elsif n.is_a?(::Float) && n.infinite?
-          total *= n
+          return total * n
         else
-          unknown = true
+          return nil
         end
       end
-      unknown ? nil : total
+      total
     end
 
     def rewind
@@ -12956,8 +13130,22 @@ class Enumerator
   class Generator
     include ::Enumerable
 
-    def initialize(&block)
-      ::Kernel.raise(::ArgumentError, "no block given") unless block
+    # MRI's generator_initialize also takes the proc as an argument.
+    def initialize(*args, &block)
+      if args.size > 1
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+      end
+      unless args.empty?
+        block = args[0]
+        unless block.is_a?(::Proc)
+          ::Kernel.raise(::TypeError, "wrong argument type #{block.class} (expected Proc)")
+        end
+      end
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
+      # rb_block_proc's error
+      ::Kernel.raise(::LocalJumpError, "no block given") unless block
       @__block__ = block
     end
 

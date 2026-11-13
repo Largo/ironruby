@@ -65,7 +65,7 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < self.Count; i++) {
                 object item = self[i];
                 object key;
-                if (block.Yield(item, out key)) {
+                if (block.YieldForceBlockArg(item, out key)) {
                     return key;
                 }
                 object group;
@@ -208,7 +208,7 @@ namespace IronRuby.Builtins {
                     object item = array[i];
                     if (predicate != null) {
                         object blockResult;
-                        if (predicate.Yield(item, out blockResult)) {
+                        if (predicate.YieldForceBlockArg(item, out blockResult)) {
                             return blockResult;
                         }
                         item = blockResult;
@@ -331,7 +331,7 @@ namespace IronRuby.Builtins {
 
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldForceBlockArg(item, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -498,7 +498,7 @@ namespace IronRuby.Builtins {
 
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldForceBlockArg(item, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -549,7 +549,7 @@ namespace IronRuby.Builtins {
                     : RubyOps.IsTrue(site.Target(site, pattern, item));
 
                 if (matches == accepting) {
-                    if (action != null && action.Yield(item, out item)) {
+                    if (action != null && action.YieldForceBlockArg(item, out item)) {
                         result = item;
                         return selfBlock.PropagateFlow(action, item);
                     }
@@ -859,7 +859,7 @@ namespace IronRuby.Builtins {
 
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldForceBlockArg(item, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -898,7 +898,7 @@ namespace IronRuby.Builtins {
                 }
 
                 object key;
-                if (keySelector.Yield(item, out key)) {
+                if (keySelector.YieldForceBlockArg(item, out key)) {
                     keyValuePairs = null;
                     result = key;
                     return selfBlock.PropagateFlow(keySelector, key);
@@ -952,7 +952,7 @@ namespace IronRuby.Builtins {
 
                 if (block != null) {
                     object blockResult;
-                    if (block.Yield(array, out blockResult)) {
+                    if (block.YieldForceBlockArg(array, out blockResult)) {
                         result = blockResult;
                         return selfBlock.PropagateFlow(block, blockResult);
                     }
@@ -1062,8 +1062,14 @@ namespace IronRuby.Builtins {
             if (count < 0) {
                 throw RubyExceptions.CreateArgumentError("attempt to take negative size");
             }
+            // MRI allocates the result up front (rb_ary_new_capa) and so refuses a count no array
+            // can hold (here, past the CLR's longest array); a large count that can be held is not worth reserving before #each says
+            // how many elements there are.
+            if (count > Array.MaxLength) {
+                throw RubyExceptions.CreateArgumentError("array size too big");
+            }
 
-            var result = new RubyArray(count);
+            var result = new RubyArray(Math.Min(count, 1024));
             if (count == 0) {
                 return result;
             }
@@ -1143,7 +1149,7 @@ namespace IronRuby.Builtins {
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (dropping) {
                     object blockResult;
-                    if (predicate.Yield(item, out blockResult)) {
+                    if (predicate.YieldForceBlockArg(item, out blockResult)) {
                         result = blockResult;
                         return selfBlock.PropagateFlow(predicate, blockResult);
                     }
@@ -1188,7 +1194,7 @@ namespace IronRuby.Builtins {
             // call "each" only in the first iteration:
             object result = null;
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
-                if (block.Yield(item, out result)) {
+                if (block.YieldForceBlockArg(item, out result)) {
                     iterations = -1;
                     return selfBlock.PropagateFlow(block, result);
                 }
@@ -1208,7 +1214,7 @@ namespace IronRuby.Builtins {
             // the rest of the iterations read from cached values:
             while (iterations == Int32.MaxValue || --iterations > 0) {
                 foreach (var item in items) {
-                    if (block.Yield(item, out result)) {
+                    if (block.YieldForceBlockArg(item, out result)) {
                         return result;
                     }
                 }

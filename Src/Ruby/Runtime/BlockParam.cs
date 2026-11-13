@@ -363,6 +363,23 @@ namespace IronRuby.Runtime {
             return BlockJumped(blockResult = RubyOps.Yield(args, null, Self, this));
         }
 
+        /// <summary>
+        /// MRI's rb_yield_force_blockarg, which Enumerable yields an element with: a lambda is called
+        /// the way a plain block would be, so one that declares several parameters takes an Array
+        /// element apart (each_with_index.select(&amp;->(x, i) { })) instead of refusing it.
+        /// </summary>
+        public bool YieldForceBlockArg(object arg, out object blockResult) {
+            // a Symbol's proc (group_by(&:itself)) is a lambda as well, and takes the element whole
+            if (_proc.Kind == ProcKind.Lambda && _proc.SymbolName == null) {
+                var list = arg as IList;
+                var signature = _proc.Dispatcher.ParameterSignature;
+                if (list != null && signature != null && signature.AutoSplatsSingleArray) {
+                    return YieldSplat(list, out blockResult);
+                }
+            }
+            return Yield(arg, out blockResult);
+        }
+
         public bool YieldSplat(IList/*!*/ args, out object blockResult) {
             return BlockJumped(blockResult = RubyOps.YieldSplat0(args, null, Self, this));
         }
