@@ -3427,14 +3427,30 @@ namespace IronRuby.Runtime {
             return CanRescueCore(scope, exception, true, null, frameDepth);
         }
 
+        // What NoteHandledException noted for the CanRescueAfterClauses that follows it on this thread.
+        [ThreadStatic]
+        private static Exception _handledInClauses;
+
         /// <summary>
-        /// CanRescue of the handler around a body's rescue and else clauses (Body.TransformExceptionHandling).
-        /// <paramref name="handled"/> is the exception the rescue clauses ran for, if they ran: an exception they raise is raised
-        /// while $! is that one, which is its cause (MRI), but the clauses' finally block has restored $! by the time this runs.
+        /// Run by the finally block of a body's rescue clauses, before it restores $! (Body.TransformExceptionHandling): notes the
+        /// exception the clauses ran for - $!, if they ran - for the handler around them, which is the next thing to run in the
+        /// frame if the clauses raised.
+        /// </summary>
+        public static void NoteHandledException(RubyScope/*!*/ scope, bool clausesRan) {
+            _handledInClauses = clausesRan ? scope.RubyContext.CurrentExceptionNoExpose : null;
+        }
+
+        /// <summary>
+        /// CanRescue of the handler around a body's rescue and else clauses (Body.TransformExceptionHandling). If the rescue
+        /// clauses ran, the exception they ran for is what NoteHandledException noted: an exception they raise is raised while
+        /// $! is that one, which is its cause (MRI), but the clauses' finally block has restored $! by the time this runs.
+        /// (An exception out of the else clause finds a note of whatever body ran last, which is not this one's.)
         /// Kernel#raise has decided the cause of its own exceptions already; this is for those C# threw - `1/0', `nil.foo', a
         /// rescue class list that is not a class (`rescue 42').
         /// </summary>
-        public static bool CanRescueAfterClauses(RubyScope/*!*/ scope, Exception/*!*/ exception, Exception handled) {
+        public static bool CanRescueAfterClauses(RubyScope/*!*/ scope, Exception/*!*/ exception, bool clausesRan) {
+            Exception handled = clausesRan ? _handledInClauses : null;
+            _handledInClauses = null;
             return CanRescueCore(scope, exception, false, handled, -1);
         }
 

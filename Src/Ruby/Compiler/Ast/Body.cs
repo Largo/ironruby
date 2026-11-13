@@ -44,6 +44,7 @@ namespace IronRuby.Compiler.Ast {
         private static readonly System.Reflection.MethodInfo/*!*/ _RescueDefaultCannotMatch = typeof(RubyOps).GetMethod(nameof(RubyOps.RescueDefaultCannotMatch));
         private static readonly System.Reflection.MethodInfo/*!*/ _RescuePassCommit = typeof(RubyOps).GetMethod(nameof(RubyOps.RescuePassCommit));
         private static readonly System.Reflection.MethodInfo/*!*/ _CanRescueAfterClauses = typeof(RubyOps).GetMethod(nameof(RubyOps.CanRescueAfterClauses));
+        private static readonly System.Reflection.MethodInfo/*!*/ _NoteHandledException = typeof(RubyOps).GetMethod(nameof(RubyOps.NoteHandledException));
         private static readonly System.Reflection.MethodInfo/*!*/ _SetCauseLeavingEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.SetCauseLeavingEnsure));
         private static readonly System.Reflection.MethodInfo/*!*/ _SetCauseLeavingInterpretedEnsure = typeof(RubyOps).GetMethod(nameof(RubyOps.SetCauseLeavingInterpretedEnsure));
 
@@ -281,10 +282,12 @@ namespace IronRuby.Compiler.Ast {
             var retryLabel = Ast.Label("retry");
             ConstantSiteCache[][] rescueSites = null;
 
-            // The exception the rescue clauses ran for, once they are left: the cause of an exception they raise that has none
-            // yet (one C# threw), which the handler around them decides after the finally below has restored $!.
-            MSA.Expression handledVariable = (_rescueClauses != null) ?
-                gen.CurrentScope.DefineHiddenVariable("#handled-exception", typeof(Exception)) : null;
+            // The exception the rescue clauses ran for, once they are left, is the cause of an exception they raise that has none
+            // yet (one C# threw), which the handler around them decides after the finally below has restored $!. The finally
+            // notes it for the handler (RubyOps.NoteHandledException) - not in a local of this frame: .NET 10's JIT dropped the
+            // store to one written in the finally and read only in the handler around it, when the calls next to it were inlined
+            // (a Release build), and the cause was lost.
+            bool notesHandled = _rescueClauses != null;
 
             // make rescue clause:
             MSA.Expression transformedRescue;
@@ -375,8 +378,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.IfThen(exceptionThrownVariable, transformedRescue),
                     AstUtils.Empty()
                 ).Finally(
-                    Ast.Assign(handledVariable, Ast.Condition(exceptionThrownVariable,
-                        Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable), AstUtils.Constant(null, typeof(Exception)))),
+                    Ast.Call(_NoteHandledException, gen.CurrentScopeVariable, exceptionThrownVariable),
                     // restore previous exception if the current one has been handled:
                     AstUtils.Unless(exceptionRethrowVariable,
                         Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
@@ -396,8 +398,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.IfThen(exceptionThrownVariable, transformedRescue),
                     AstUtils.Empty()
                 ).Finally(
-                    Ast.Assign(handledVariable, Ast.Condition(exceptionThrownVariable,
-                        Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable), AstUtils.Constant(null, typeof(Exception)))),
+                    Ast.Call(_NoteHandledException, gen.CurrentScopeVariable, exceptionThrownVariable),
                     // restore previous exception if the current one has been handled:
                     AstUtils.Unless(exceptionRethrowVariable,
                         Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
@@ -455,7 +456,7 @@ namespace IronRuby.Compiler.Ast {
                         new RubyFilterExpression(
                             protectedBody,
                             exceptionVariable,
-                            Ast.Call(_CanRescueAfterClauses, gen.CurrentScopeVariable, exceptionVariable, handledVariable),
+                            Ast.Call(_CanRescueAfterClauses, gen.CurrentScopeVariable, exceptionVariable, exceptionThrownVariable),
                             Ast.Block(Ast.Assign(exceptionRethrowVariable, AstUtils.Constant(true)), AstUtils.Empty()),
                             Ast.ReferenceEqual(passingVariable, exceptionVariable)
                         )
@@ -474,8 +475,8 @@ namespace IronRuby.Compiler.Ast {
                     protectedBody
                 ).FilterIf((_rescueClauses != null || _elseStatements != null),
                     exceptionVariable = Ast.Parameter(typeof(Exception), "#e"), 
-                    (handledVariable != null) ?
-                        Ast.Call(_CanRescueAfterClauses, gen.CurrentScopeVariable, exceptionVariable, handledVariable) :
+                    notesHandled ?
+                        Ast.Call(_CanRescueAfterClauses, gen.CurrentScopeVariable, exceptionVariable, exceptionThrownVariable) :
                         Methods.CanRescue.OpCall(gen.CurrentScopeVariable, exceptionVariable),
 
                     Ast.Assign(exceptionRethrowVariable, AstUtils.Constant(true)),
