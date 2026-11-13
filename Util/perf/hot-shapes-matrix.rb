@@ -360,6 +360,65 @@ idout = []
 end
 idout.each { |r| p r }
 
+# Proc#call and a yield in a block hand a BlockParam on from one call of the proc to the next
+# (RubyOps.TakeBfcForProcCall, TakeBfcForBlockYield): recursion, a captured scope (binding,
+# a proc made in the body), break/next/return, lambdas, threads, and a redefinition mid-run.
+class PC
+  def initialize; @keep = []; @f = proc { |a, b| a + b }; @g = proc { |n| n <= 1 ? 1 : n * @g.call(n - 1) }; end
+  def run(i); [@f.call(i, 1), @g.call(i % 6)]; end
+  def kept(i); pr = proc { |x| y = x * 2; @keep << binding if x % 4000 == 0; y }; [pr.call(i), pr.call(i + 1)]; end
+  def kept_values; @keep.map { |b| b.local_variable_get(:y) }; end
+  def nxt(i); pr = proc { |x| next :odd if x.odd?; x }; pr.call(i); end
+  def brk(i); pr = proc { |x| break x }; pr.call(i); rescue LocalJumpError => e; [e.reason, e.exit_value]; end
+  def lam(i); l = lambda { |x| return x * 3 }; l.call(i) + l.(1); end
+  def each2; (0..1).each { |k| yield k }; end
+  def ysum(i); s = 0; each2 { |k| s += k + i }; s; end
+  def ykeep(i); r = nil; each2 { |k| r = binding if k == 1 && i % 5000 == 1 }; r && r.local_variable_get(:k); end
+  def ybrk(i); each2 { |k| break [:b, k] if k == i % 2 }; end
+  def yret(i); each2 { |k| return [:r, k] if k == 1 }; :none; end
+end
+pc = PC.new; pcout = []
+th = 3.times.map { |t| Thread.new { f = proc { |a| a * 2 }; s = 0; 5000.times { |i| s += f.call(i) + pc.ysum(t) }; s } }.map(&:value)
+20_000.times do |i|
+  r = [pc.run(i), pc.kept(i), pc.nxt(i), pc.brk(i), pc.lam(i), pc.ysum(i), pc.ykeep(i), pc.ybrk(i), pc.yret(i)]
+  pcout << [i, r] if i % 3000 == 1 || (i > 9_998 && i < 10_003)
+  if i == 10_000
+    class PC; def each2; (0..2).each { |k| yield k * 10 }; end; end
+  end
+end
+pcout.each { |r| p r }
+p pc.kept_values, th
+
+# Light frames with a while loop (locals in registers until the OSR site wants a tuple), with a
+# literal block (the scope is made where the block is), with optional parameters (rewritten
+# defaults): closures, binding, return/break from the block, defaults with side effects, that
+# refer to earlier parameters or raise, and a redefinition mid-run.
+$lfside = 0
+class LF
+  def initialize(size = 0, extra = [size]); @s = size == 0 ? nil : Array.new(size); @e = extra; end
+  def info; [@s && @s.size, @e]; end
+  def walk(n); i = 0; acc = 0; while i < n; acc += i; i += 1; end; [i, acc]; end
+  def grow(n); a = n; if n.odd?; [1, 2].each_index { |k| a += k }; end; a; end
+  def clo(n); b = n; pr = proc { b += 1 }; pr.call; [b, pr.call, b]; end
+  def bnd(n); x = n * 2; bs = [0].map { |_| binding }; bs[0].local_variable_set(:x, 7) if n % 2 == 0; x; end
+  def ret(n); [1, 2, 3].each { |v| return v * 10 if v == n % 4 }; :none; end
+  def brk(n); [1, 2, 3].each { |v| break v if v == n % 4 }; end
+  def opt(a, b = a + 1, c = ($lfside += 1)); [a, b, c - c]; end
+  def optr(a = (raise ArgumentError, "no a")); a; end
+  def opts(s = "lit"); s << "!"; s; end
+end
+lf = LF.new; lfout = []
+20_000.times do |i|
+  r = [LF.new(i % 3).info, lf.walk(i % 50), lf.grow(i), lf.clo(i), lf.bnd(i), lf.ret(i), lf.brk(i), lf.opt(i),
+       lf.opt(i, 2), (lf.optr rescue $!.message), lf.optr(i), lf.opts, lf.opts("x".dup)]
+  lfout << [i, r] if i % 3000 == 2 || (i > 9_998 && i < 10_003)
+  if i == 10_000
+    class LF; def grow(n); n.odd? ? [7].map { |k| k + n } : n; end; end
+  end
+end
+lfout.each { |r| p r }
+p $lfside
+
 # A refinement of nil? / == active in the calling method's file.
 module IDRefine
   refine(Object) { def nil?; :refnil; end; def ==(o); :refeq; end }
