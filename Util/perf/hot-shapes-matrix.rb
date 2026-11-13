@@ -253,3 +253,26 @@ ls = LS.new; recv = [1, 2.5, nil, "s", LT.new]; lsout = []
   end
 end
 lsout.each { |r| p r }
+
+# The entry and exit of a light frame inline the common case - no block, no alias call pending, no scope made: a call
+# through an alias (__callee__ in a callee that makes its scope), a break from a literal block and a proc passed as the
+# block, through hot light methods, with a TracePoint switched on for a while and the frames still reported right.
+class LF
+  def plain(o); o.nil?; end
+  def callee_of; __callee__; end
+  def via(o); callee_of; end
+  alias via2 via
+  alias cal2 callee_of
+  def yld(x); yield x; end
+  def brk(x); yld(x) { |v| break v * 2 }; end
+  def ret(x); [1].each { |v| return v + x }; :none; end
+end
+lf = LF.new; lfout = []; pr = proc { |v| v + 1 }; calls = 0; tp = TracePoint.new(:call) { calls += 1 }
+20_000.times do |i|
+  row = [lf.plain(i), lf.via(i), lf.via2(i), lf.cal2, lf.callee_of, lf.brk(i), lf.yld(i, &pr), lf.ret(i)]
+  lfout << [i, row] if i % 2500 == 3
+  tp.enable if i == 10_000
+  tp.disable if i == 10_100
+end
+lfout.each { |r| p r }
+p calls > 0
