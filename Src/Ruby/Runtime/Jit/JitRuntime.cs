@@ -501,6 +501,7 @@ namespace IronRuby.Runtime.Jit {
                 Variable = new InstanceVariableSite(variableName);
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             internal bool IsBoundTo(RubyClass/*!*/ cls) {
                 var b = _bound;
                 return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
@@ -589,22 +590,28 @@ namespace IronRuby.Runtime.Jit {
         /// so a redefinition, a singleton method or a different self deopts to the generic loop,
         /// which then makes the call. A read is not observable, so the deopt is invisible.
         /// </summary>
+        // The fast path - a plain Ruby object of the bound class, the variable at the slot the
+        // site has seen - is inlined into the body (as GetIVar's is): RubyOps.TryReadCached keeps
+        // RubyInstanceData's read protocol. Everything else, binding included, is out of line.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object ReadSelfAttr(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            object value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCached(obj._instanceData, site.Variable, out value)) {
+                return value;
+            }
+            return ReadSelfAttrUncached(context, self, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object ReadSelfAttrUncached(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
             var obj = self as RubyObject;
             RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
             if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
                 throw Deopt();
             }
             if (obj != null) {
-                // RubyOps.ReadInstanceVariable's fast path, the RubyObject test already made
                 var data = obj._instanceData;
-                if (data == null) { return null; }
-                object[] slots = data._ivars;
-                var entry = site.Variable.Cache;
-                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                    return RubyInstanceData.GetSlot(slots, entry.Index);
-                }
-                return data.GetInstanceVariable(site.Variable);
+                return (data != null) ? data.GetInstanceVariable(site.Variable) : null;
             }
             RequireIsolationCheckFree(context, self, site.Variable);
             return RubyOps.ReadInstanceVariable(context, self, site.Variable);
@@ -617,7 +624,19 @@ namespace IronRuby.Runtime.Jit {
         /// or redefine x= after the check: the store is then as if made just before, as a call already past
         /// its lookup would.
         /// </summary>
+        // The fast path - the bound class, a store into an existing variable at the slot the site has
+        // seen - is inlined into the body; RubyOps.TryWriteCached refuses a frozen object and keeps
+        // RubyInstanceData's write protocol.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void WriteAttr(RubyContext/*!*/ context, object self, object value, SelfAttrSite/*!*/ site) {
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryWriteCached(obj._instanceData, value, site.Variable)) {
+                return;
+            }
+            WriteAttrUncached(context, self, value, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void WriteAttrUncached(RubyContext/*!*/ context, object self, object value, SelfAttrSite/*!*/ site) {
             var obj = self as RubyObject;
             if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
                 throw Deopt();
@@ -776,19 +795,28 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        // The guards are inlined into the body; the deopt is thrown out of line.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GuardInt(object value) {
             if (value is int) { return (int)value; }
-            throw Deopt();
+            return ThrowDeopt<int>();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long GuardLong(object value) {
             if (value is int) { return (int)value; }
             if (value is long) { return (long)value; }
-            throw Deopt();
+            return ThrowDeopt<long>();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double GuardDouble(object value) {
             if (value is double) { return (double)value; }
+            return ThrowDeopt<double>();
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static T ThrowDeopt<T>() {
             throw Deopt();
         }
 
