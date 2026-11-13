@@ -714,6 +714,7 @@ namespace IronRuby.Builtins {
             module.UndefineMethodNoEvent("extend_object");
             module.UndefineMethodNoEvent("module_function");
             module.UndefineMethodNoEvent("prepend_features");
+            module.UndefineMethodNoEvent("refine");
             DefineRuleGenerator(module, "allocate", 0x51, IronRuby.Builtins.ClassOps.Allocate());
             
             DefineLibraryMethod(module, "attached_object", 0x51, 
