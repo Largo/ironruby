@@ -10710,6 +10710,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.FiberPost)
             );
             
+            DefineLibraryMethod(module, "__fiber_reclaim__", 0x61, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberCore, System.Object>(IronRuby.Builtins.ThreadOps.FiberReclaim)
+            );
+            
             DefineLibraryMethod(module, "__fiber_release_locks__", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.ReleaseFiberLocks)

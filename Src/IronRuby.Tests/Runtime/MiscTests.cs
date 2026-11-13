@@ -7056,9 +7056,9 @@ mixed: [[:viaresp, [3]], TypeError, [:viaresp, [4]], 3]
         }
 
         /// <summary>
-        /// Enumerator#rewind when an ensure clause of the abandoned iteration raises: the receiver's #rewind still
-        /// runs and the next iteration starts over, as on CRuby 4.0.9. (The error itself then comes out of #rewind
-        /// here and not on MRI, which runs no such clause; the test does not look at that.)
+        /// Enumerator#rewind forgets the iteration without running its ensure clauses, as MRI does (it was killed, and
+        /// an error one of them raised came out of #rewind), after the receiver's #rewind - and if that raises, the
+        /// iteration goes on where it was. Expected output is CRuby 4.0.9's.
         /// </summary>
         public void Enumerator_RewindEnsureRaises1() {
             TestOutput(@"
@@ -7072,13 +7072,28 @@ end
 [RuntimeError, NotImplementedError, Class.new(Exception)].each do |k|
   c = Class.new(Src2) { define_method(:each) { |&b| begin; @items.each(&b); ensure; raise k, ""x""; end } }
   s = c.new; e = s.to_enum; e.next
-  begin; e.rewind; rescue Exception; end
-  p [s.rew, (e.next rescue $!.class)]
+  r = begin; e.rewind.class; rescue Exception; $!.class; end
+  p [s.rew, r, (e.next rescue $!.class)]
 end
+# the ensure clauses of an iteration that is rewound never run, and a #rewind that raises leaves it where it was
+$log = []
+e = Enumerator.new { |y| begin; y << 1; y << 2; ensure; $log << :ensure; end }
+e.next; e.rewind
+p $log, e.next
+o = Object.new
+def o.each; yield 1; yield 2; end
+def o.rewind; raise ""rewind raised""; end
+e = o.to_enum
+p e.next, (e.rewind rescue $!.message), e.next
 ", @"
-[1, 1]
-[1, 1]
-[1, 1]
+[1, Enumerator, 1]
+[1, Enumerator, 1]
+[1, Enumerator, 1]
+[]
+1
+1
+""rewind raised""
+2
 ");
         }
 

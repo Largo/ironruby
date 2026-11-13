@@ -719,6 +719,17 @@ namespace IronRuby.Builtins {
         /// method, not a call to <see cref="FiberCore.Post"/> from Ruby: a CLR Object parameter would
         /// turn a Ruby String into a System.String, and the resumer would get a new UTF-8 String.
         /// </summary>
+        /// <summary>
+        /// Discards a suspended fiber the way the collection of an unreachable one does (FiberRegistration): its thread
+        /// unwinds without running the Ruby ensure clauses on its stack, as MRI frees a fiber's stack. Enumerator#rewind
+        /// does this to the iteration it forgets, so that its thread does not wait for a garbage collection.
+        /// </summary>
+        [RubyMethod("__fiber_reclaim__", RubyMethodAttributes.PublicSingleton)]
+        public static object FiberReclaim(object self, [NotNull]FiberCore/*!*/ core) {
+            core.RequestReclaim();
+            return null;
+        }
+
         [RubyMethod("__fiber_core_post__", RubyMethodAttributes.PublicSingleton)]
         public static object FiberCorePost(object self, [NotNull]FiberCore/*!*/ core, int kind, object payload) {
             core.Post(kind, payload);

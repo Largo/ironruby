@@ -2507,6 +2507,9 @@ unless defined?(Fiber)
     ruby2_keywords def resume(*args); Fiber.__switched__(__state__.resume(*args)); end
     ruby2_keywords def transfer(*args); Fiber.__switched__(__state__.transfer(*args)); end
     def kill; __state__.kill; self; end
+    # Discards the suspended fiber without running the ensure clauses on its stack (Enumerator#rewind).
+    def __reclaim__; ::Thread.__fiber_reclaim__(__state__.__core__); self; end
+    private :__reclaim__
     ruby2_keywords def raise(*args); __state__.raise(*args); end
 
     def self.yield(*args); __switched__(State.yield(*args)); end
@@ -5340,23 +5343,15 @@ class Enumerator
     end
     target = (@__generator__ ? nil : __enum_target__)
     receiver = target && target[0]
-    # Unwind the abandoned fiber, so that its thread exits. That runs the ensure clauses of the
-    # receiver's #each, which MRI never runs (it only forgets the fiber): before the receiver's
-    # #rewind, so that an ensure cannot undo what #rewind sets up. The price is that the iteration
-    # is forgotten even when #rewind raises, where MRI's would go on. An error one of those ensure
-    # clauses raises does not stop the receiver's #rewind, and then comes out of this method, where MRI
-    # has none to show: it cannot be told from a Thread#raise that reached this thread while the fiber
-    # ran, which must not be lost.
+    # If the receiver's #rewind raises, the iteration goes on where it was, as in MRI.
+    receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
+    # MRI only forgets the fiber: the ensure clauses of the receiver's #each never run. The
+    # abandoned fiber is discarded the same way here, at once rather than when it is collected,
+    # so that its thread exits. (It used to be killed, which ran those clauses and raised their
+    # errors out of #rewind.)
     fiber = @__fiber__
-    begin
-      begin
-        fiber.kill if fiber && fiber.alive?
-      ensure
-        receiver.__send__(:rewind) if receiver && receiver.respond_to?(:rewind, true)
-      end
-    ensure
-      __iter_forget__
-    end
+    __iter_forget__
+    fiber.__send__(:__reclaim__) if fiber && fiber.alive?
     self
   end
 
