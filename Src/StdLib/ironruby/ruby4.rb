@@ -9206,10 +9206,17 @@ class SignalException
   # message: a number may be given a message alongside it, a name may not, and
   # anything that is neither is an ArgumentError. The CLR-backed class carries only
   # the message, so the number and the name it was built from are kept here.
-  def initialize(signal = (missing = true), message = (no_message = true))
-    if missing
+  # MRI's signal_exception_init takes (*args) and checks the count itself: no argument is
+  # "expected 1", too many "expected 1..2".
+  def initialize(*args)
+    if args.empty?
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1)")
+    elsif args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
+    signal = args[0]
+    no_message = args.size == 1
+    message = args[1]
 
     case signal
     when ::Integer

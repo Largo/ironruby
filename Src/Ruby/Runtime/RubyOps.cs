@@ -1140,8 +1140,11 @@ namespace IronRuby.Runtime {
                 } else {
                     body.SetDefinedWithoutRefinements();
                 }
+                // Object's copy of the scope's method: a redefinition is warned about once, for the
+                // scope's - each host scope is a top level of its own, as a file is
                 SetMethod(scope.RubyContext, objectMethod =
-                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags)
+                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags),
+                    warnRedefinition: false
                 );
             }
 
@@ -1233,11 +1236,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method) {
+        private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method, bool warnRedefinition = true) {
             var owner = method.DeclaringModule;
 
             // Do not trigger the add-method event just yet, we need to assign the result into closure before executing any user code.
             // If the method being defined is "method_added" itself, we would call that method before the info gets assigned to the closure.
+            if (warnRedefinition) {
+                owner.WarnMethodRedefinition(method.DefinitionName, method.Document.FileName, method.SourceSpan.Start.Line);
+            }
             owner.SetMethodNoEvent(callerContext, method.DefinitionName, method);
 
             // expose RubyMethod in the scope (the method is bound to the main singleton instance):
@@ -4942,7 +4948,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static Exception/*!*/ CreateNotSymbolNorStringError(RubyContext/*!*/ context, object obj) {
-            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToAsciiString());
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToString());
         }
 
         /// <summary>

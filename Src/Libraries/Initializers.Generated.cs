@@ -4917,7 +4917,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "global_variables", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetGlobalVariableNames)
+                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetGlobalVariableNames)
             );
             
             DefineLibraryMethod(module, "hash", 0x51, 
@@ -5404,7 +5404,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "global_variables", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetGlobalVariableNames)
+                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetGlobalVariableNames)
             );
             
             DefineLibraryMethod(module, "Integer", 0x61, 

@@ -3694,7 +3694,7 @@ p((1.instance_eval { M13.send(:module_function); def x13; end; :ok } rescue $!))
 true
 [true, true]
 #<TypeError: can't define singleton>
-");
+", 0, 5);
         }
 
         /// <summary>
@@ -4103,7 +4103,7 @@ Float(""1.5""): 1.5
 Float(nil): ""TypeError: can't convert nil into Float""
 Integer base: ""ArgumentError: base specified for non string value""
 redefined **: [9, 9]
-");
+", 0, 1);
         }
 
         /// <summary>

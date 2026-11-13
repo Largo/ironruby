@@ -157,7 +157,7 @@ namespace IronRuby.Runtime {
                 }
             }
             return ((FrozenError)new FrozenError(String.Format(CultureInfo.InvariantCulture, "can't modify frozen {0}: {1}",
-                context.GetClassDisplayName(obj), inspect))).SetReceiver(obj);
+                context.GetClassMessageName(obj), inspect))).SetReceiver(obj);
         }
 
         /// <summary>

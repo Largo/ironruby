@@ -163,6 +163,25 @@ namespace IronRuby.Runtime {
         /// </summary>
         private string _ironRubyLibraryPath;
 
+        /// <summary>
+        /// A file IronRuby ships as part of its implementation rather than CRuby's library: one
+        /// in its library directory, or RubyGems' IronRuby defaults (the operating_system.rb a
+        /// packager adds).  Code there stands in for MRI's C code, so what it redefines is not
+        /// the user's doing.
+        /// </summary>
+        internal bool IsIronRubyLibraryFile(string file) {
+            if (file == null) {
+                return false;
+            }
+            file = file.Replace('\\', '/');
+            if (file.EndsWith("/rubygems/defaults/ironruby.rb", StringComparison.Ordinal)) {
+                return true;
+            }
+            string dir = _ironRubyLibraryPath;
+            return dir != null && file.Length > dir.Length && file[dir.Length] == '/' &&
+                file.StartsWith(dir, StringComparison.OrdinalIgnoreCase);
+        }
+
         private string/*!*/ CanonicalDirectory(string/*!*/ dir) {
             try {
                 if (dir.Length > 0 && !Platform.IsAbsolutePath(dir)) {

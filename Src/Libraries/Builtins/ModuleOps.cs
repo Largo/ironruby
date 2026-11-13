@@ -328,11 +328,24 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// MRI's scope_visibility_check: `private' (and the rest) with no arguments sets the default
+        /// visibility of the scope it is called from, which in a method body is the method's
+        /// own - almost certainly not what was meant, so it is warned about.
+        /// </summary>
+        private static void CheckScopeVisibility(RubyScope/*!*/ scope, string/*!*/ methodName, object[]/*!*/ methodNames) {
+            if (methodNames.Length == 0 && scope.Kind == ScopeKind.Method) {
+                scope.RubyContext.ReportWarning(
+                    "calling " + methodName + " without arguments inside a method may not have the intended effect");
+            }
+        }
+
         // thread-safe:
         [RubyMethod("private", RubyMethodAttributes.PrivateInstance)]
         public static object SetPrivateVisibility(ConversionStorage<string>/*!*/ stringCast,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
 
+            CheckScopeVisibility(scope, "private", methodNames);
             // overwrites methods to instance:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PrivateInstance);
             return VisibilityResult(methodNames);
@@ -342,6 +355,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("protected", RubyMethodAttributes.PrivateInstance)]
         public static object SetProtectedVisibility(ConversionStorage<string>/*!*/ stringCast,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            CheckScopeVisibility(scope, "protected", methodNames);
             // overwrites methods to instance:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ProtectedInstance);
             return VisibilityResult(methodNames);
@@ -351,6 +365,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("public", RubyMethodAttributes.PrivateInstance)]
         public static object SetPublicVisibility(ConversionStorage<string>/*!*/ stringCast,
             RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            CheckScopeVisibility(scope, "public", methodNames);
             // overwrites methods to instance:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PublicInstance);
             return VisibilityResult(methodNames);
@@ -384,6 +399,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("module_function must be called for modules");
             }
             
+            CheckScopeVisibility(scope, "module_function", methodNames);
             // overwrites visibility to public:
             SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ModuleFunction);
             return VisibilityResult(methodNames);
@@ -542,10 +558,11 @@ namespace IronRuby.Builtins {
         }
 
         internal static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
-            RubyModule/*!*/ targetConstraint, string sourceName = null) {
+            RubyModule/*!*/ targetConstraint, string sourceName = null, bool alwaysPublic = false) {
 
             bool isModuleFunction;
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, alwaysPublic, out isModuleFunction);
+            self.WarnMethodRedefinition(methodName);
             using (self.Context.ClassHierarchyLocker()) {
                 // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
                 // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
@@ -605,10 +622,20 @@ namespace IronRuby.Builtins {
         [RubyMethod("define_method")]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
+            return DefineMethod(scope, self, methodName, block, false);
+        }
+
+        /// <summary>
+        /// <paramref name="alwaysPublic"/>: Kernel#define_singleton_method, which MRI defines public
+        /// whatever visibility the scope it is called from has (rb_obj_define_method).
+        /// </summary>
+        internal static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, Proc/*!*/ block,
+            bool alwaysPublic) {
 
             bool isModuleFunction;
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, alwaysPublic, out isModuleFunction);
             var info = Proc.ToLambdaMethodInfo(block, methodName, visibility, self);
+            self.WarnMethodRedefinition(methodName, block.Dispatcher.SourcePath);
             self.AddMethod(scope.RubyContext, methodName, info);
 
             if (isModuleFunction) {
@@ -644,9 +671,12 @@ namespace IronRuby.Builtins {
         /// module function, whose singleton half is the public one.
         /// </summary>
         private static RubyMethodVisibility GetDefinedMethodVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ methodName,
-            out bool isModuleFunction) {
+            bool alwaysPublic, out bool isModuleFunction) {
 
             isModuleFunction = false;
+            if (alwaysPublic) {
+                return RubyMethodVisibility.Public;
+            }
 
             RubyMethodVisibility visibility;
             var attributesScope = scope.GetMethodAttributesDefinitionScope();
@@ -697,7 +727,9 @@ namespace IronRuby.Builtins {
             // MRI: ignores ModuleFunction scope flag (doesn't create singleton methods):
 
             if (!Tokenizer.IsVariableName(name)) {
-                throw RubyExceptions.CreateNameError("invalid attribute name '{0}'", name);
+                // MRI's rb_attr names the attribute in NameError#name, with the module as the receiver
+                throw RubyExceptions.WithNameAndReceiver(scope.RubyContext,
+                    RubyExceptions.CreateNameError("invalid attribute name '{0}'", name), name, self);
             }
 
             var varName = "@" + name;
@@ -731,10 +763,12 @@ namespace IronRuby.Builtins {
 
             if (readable) {
                 var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(visibility, name);
+                self.WarnMethodRedefinition(name);
                 self.AddMethod(scope.RubyContext, name, new RubyAttributeReaderInfo(flags, self, varName));
             }
             
             if (writable) {
+                self.WarnMethodRedefinition(name + "=");
                 self.AddMethod(scope.RubyContext, name + "=", new RubyAttributeWriterInfo((RubyMemberFlags)visibility, self, varName));
             }
         }
@@ -1161,13 +1195,19 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ ClassVariables(RubyModule/*!*/ self, [DefaultParameterValue(true)]bool inherit) {
             var result = new RubyArray();
             var seen = new HashSet<string>();
+            Func<RubyModule, string, object, bool> add = (module, name, value) => {
+                if (name != null && seen.Add(name)) {
+                    result.Add(self.Context.StringifyIdentifier(name));
+                }
+                return false;
+            };
             using (self.Context.ClassHierarchyLocker()) {
-                self.ForEachClassVariable(inherit, (module, name, value) => {
-                    if (name != null && seen.Add(name)) {
-                        result.Add(self.Context.StringifyIdentifier(name));
-                    }
-                    return false;
-                });
+                if (inherit) {
+                    self.ForEachClassVariable(true, add);
+                } else {
+                    // MRI's mod_cvar_at: the module's own table, not its mixins' or prepends'
+                    self.EnumerateClassVariables(add);
+                }
             }
             return result;
         }
