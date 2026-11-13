@@ -214,3 +214,42 @@ aro = AR.new; arout = []; arr = [1]; eqo = EqOp.new
 end
 arout.each { |r| p r }
 class NilClass; remove_method :to_ary; end
+
+# light-scope sites served by the fast dispatchers: a core method redefined and restored under
+# a hot site, a receiver switching between Integer/Float/nil/String/a user object, private and
+# protected targets on an explicit receiver, and a target that starts to need the caller's
+# scope (block_given?, binding, $~) while the site is hot.
+class LS
+  def lt(a, b); a < b; end
+  def nq(o); o.nil?; end
+  def eq(o); o == 1; end
+  def call1(o); o.t1(2); end
+  def call0(o); o.t0; end
+  def match(s); s =~ /b(c)/; $~ && $~[1]; end
+  def p_on(o); o.pv rescue :nomethod; end
+  def pr_on(o); o.pt rescue :nomethod; end
+  def pt_from_self; pr_on(self); end
+  def own; t0; end
+  def t0; :t0; end
+  protected def pt; :prot; end
+  private def pv; :priv; end
+end
+class LT; def t1(x); x * 3; end; def t0; :lt0; end; def ==(o); :usereq; end; def nil?; :usernil; end; end
+ls = LS.new; recv = [1, 2.5, nil, "s", LT.new]; lsout = []
+20_000.times do |i|
+  r = recv[i % 5]
+  row = [ls.lt(i, 9_000), ls.nq(r), ls.eq(r), ls.call1(LT.new), ls.call0(i.odd? ? LT.new : ls),
+         ls.match("abc#{i % 3}"), ls.p_on(ls), ls.pr_on(ls), ls.pt_from_self, ls.own]
+  lsout << [i, row] if i % 2000 == 7 || (i > 9_995 && i < 10_010)
+  case i
+  when 4001 then class Integer; alias_method :__lt, :<; def <(o); :redef; end; end
+  when 6001 then class Integer; alias_method :<, :__lt; end
+  when 8001 then class NilClass; def nil?; :nilredef; end; end
+  when 9001 then class NilClass; def nil?; true; end; end
+  when 10001 then class LT; def t1(x); block_given? ? :blk : binding.local_variable_get(:x); end; end
+  when 12001 then class LT; def t0; [__method__, caller(0, 1).size]; end; end
+  when 14001 then class LS; public :pv; end
+  when 16001 then def ls.t0; :single; end
+  end
+end
+lsout.each { |r| p r }
