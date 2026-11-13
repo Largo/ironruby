@@ -84,12 +84,16 @@ namespace IronRuby.Runtime.Calls {
         private readonly Parameter _block;
         private readonly int _blockIndex;
 
+        // the overload is [BlockNotKept]: a literal block given to it may be made again (RubyOps.CreateBfcForBlockNotKept)
+        private readonly bool _blockNotKept;
+
         // whether a keyword Hash the call passes stops saying it is keyword arguments, as the rule has it
         // (RubyMethodGroupBase.BuildCallNoFlow): the overload does not receive keywords
         private readonly bool _clearsKeywords;
 
         private LibraryCallPlan(LibraryFunctionCall function, CallInstruction call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
-            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block, bool clearsKeywords) {
+            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block, bool clearsKeywords,
+            bool blockNotKept) {
             Debug.Assert((function != null) != (call != null));
             _function = function;
             _call = call;
@@ -102,6 +106,7 @@ namespace IronRuby.Runtime.Calls {
             _block = block;
             _blockIndex = Array.IndexOf(parameters, block);
             _clearsKeywords = clearsKeywords;
+            _blockNotKept = blockNotKept;
         }
 
         /// <summary>
@@ -248,7 +253,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (_block != null && block != null) {
                 // RubyMethodGroupBase.RuleControlFlowBuilder:
-                bfc = RubyOps.CreateBfcForLibraryMethod(block);
+                bfc = _blockNotKept ? RubyOps.CreateBfcForBlockNotKept(block) : RubyOps.CreateBfcForLibraryMethod(block);
                 clrArgs[_blockIndex] = bfc;
                 try {
                     return Call(clrArgs);
@@ -450,7 +455,7 @@ namespace IronRuby.Runtime.Calls {
 
             return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount,
                 (positionalLimit >= 0) ? positionalLimit : positionalCount, paramsParameter, block,
-                !RubyOverloadResolver.ReceivesKeywordArguments(method));
+                !RubyOverloadResolver.ReceivesKeywordArguments(method), block != null && BlockNotKeptAttribute.IsDefinedOn(method));
         }
 
         private static bool IsPlainParameterType(Type/*!*/ type) {

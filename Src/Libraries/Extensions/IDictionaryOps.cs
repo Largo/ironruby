@@ -336,11 +336,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_pair")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [SameRubyMethod("Each")]
+        [BlockNotKept]
         public static object EachPair(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             return Each(context, block, self);
         }
 
         [RubyMethod("each")]
+        [BlockNotKept]
         public static object Each(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
                 bool yieldPair = IsPairYieldOptimizable(block);

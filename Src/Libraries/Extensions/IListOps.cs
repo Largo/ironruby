@@ -1189,6 +1189,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("each")]
+        [BlockNotKept]
         public static object Each([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
             var array = self as RubyArray;
             if (array != null) {
@@ -1245,11 +1246,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("collect")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [SameRubyMethod("Map")]
+        [BlockNotKept]
         public static object Collect([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
             return Map(collector, self);
         }
 
         [RubyMethod("map")]
+        [BlockNotKept]
         public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
             var result = new RubyArray(self.Count);
             var array = self as RubyArray;
@@ -1280,11 +1283,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("filter")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [SameRubyMethod("Select")]
+        [BlockNotKept]
         public static object Filter([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             return Select(predicate, self);
         }
 
         [RubyMethod("select")]
+        [BlockNotKept]
         public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
             var result = new RubyArray();
             var array = self as RubyArray;
@@ -1317,6 +1322,7 @@ namespace IronRuby.Builtins {
         }
         
         [RubyMethod("each_index")]
+        [BlockNotKept]
         public static object EachIndex([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
             int i = 0;
             while (i < self.Count) {

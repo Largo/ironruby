@@ -725,6 +725,7 @@ namespace IronRuby.Builtins {
         // JIT would otherwise fold a forwarder this small into a compiled call-site rule.
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
         public static object Times(BlockParam/*!*/ block, int self) {
             return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
         }
@@ -760,6 +761,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
         public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
             return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
                 new Enumerator(self, "times");
