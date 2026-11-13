@@ -1067,14 +1067,63 @@ namespace IronRuby.Runtime.Jit {
         private bool _deoptAfterUnloggedStore;
 
         private bool IsEarlyTopStatement(RExpr/*!*/ node) {
-            if (_loop != null || _ast == null || _noUnloggedWrites || _noUnloggedEarlyWrites) { return false; }
+            if (_loop != null || _ast == null || _noUnloggedWrites || _noUnloggedEarlyWrites || !_refinements.IsEmpty) { return false; }
             var statements = _ast.Body.Statements;
             if (statements == null || statements.Count == 0 || statements.Last == node) { return false; }
+            var receiver = LastStoreReceiver();
+            if (receiver == null) { return false; }
+            // From this store to the last one, nothing may run Ruby code (which could assign the last store's
+            // receiver) or assign the receiver itself: its value read here is then the value the last store meets.
+            bool found = false;
             foreach (var statement in statements) {
-                if (statement == node) { return true; }
+                if (statement == node) { found = true; }
+                if (found && !IsPureForLastStore(statement, receiver)) { return false; }
+            }
+            return found;
+        }
+
+        // The receiver of the store the body ends with - `@v[j] = x' or `a[j] = x', a an untyped local - or null.
+        private RExpr LastStoreReceiver() {
+            var assign = _ast.Body.Statements.Last as SimpleAssignmentExpression;
+            var element = (assign != null && assign.Operation == null) ? assign.Left as ArrayItemAccess : null;
+            if (element == null || element.Block != null || element.Arguments.Expressions.Length != 1 ||
+                element.Arguments.Expressions[0] is SplattedArgument) {
+                return null;
+            }
+            return (element.Array is InstanceVariable || element.Array is LocalVariable) ? element.Array : null;
+        }
+
+        // Locals, instance variables, literals, element reads (`x[i]') and stores and local assignments made of them:
+        // the element helpers either do their work without calling Ruby or deopt.
+        private static bool IsPureForLastStore(RExpr node, RExpr/*!*/ receiver) {
+            if (node is LocalVariable || node is InstanceVariable || node is Literal) { return true; }
+            var element = node as ArrayItemAccess;
+            if (element != null) {
+                var args = element.Arguments.Expressions;
+                return element.Block == null && args.Length == 1 && !(args[0] is SplattedArgument)
+                    && IsPureForLastStore(element.Array, receiver) && IsPureForLastStore(args[0], receiver);
+            }
+            var call = node as MethodCall;
+            if (call != null) {
+                // `x[i]': EmitIndexRead's helper, or a builtin's on numbers
+                var args = (call.Arguments != null) ? call.Arguments.Expressions : null;
+                return call.MethodName == "[]" && call.Target != null && call.Block == null && args != null && args.Length == 1
+                    && !(args[0] is SplattedArgument) && IsPureForLastStore(call.Target, receiver) && IsPureForLastStore(args[0], receiver);
+            }
+            var assign = node as SimpleAssignmentExpression;
+            if (assign != null && assign.Operation == null) {
+                var local = assign.Left as LocalVariable;
+                if (local != null) {
+                    var receiverLocal = receiver as LocalVariable;
+                    return (receiverLocal == null || receiverLocal.Name != local.Name) && IsPureForLastStore(assign.Right, receiver);
+                }
+                return assign.Left is ArrayItemAccess && IsPureForLastStore(assign.Left, receiver) && IsPureForLastStore(assign.Right, receiver);
             }
             return false;
         }
+
+        // The last store's receiver, read and checked to be a plain Array before the first unlogged store.
+        private MSA.ParameterExpression _lastStoreArray;
 
         private bool IsLastStatement(RExpr/*!*/ node) {
             if (_loop != null || _ast == null || _noUnloggedWrites) { return false; }
@@ -1136,7 +1185,7 @@ namespace IronRuby.Runtime.Jit {
             }
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("[]= of a value that jumps away"); }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
-            if (last && _unloggedStoreBefore && op == null && indexType != JT.Lng) {
+            if (last && _unloggedStoreBefore && _lastStoreArray != null && arrays && op == null && indexType != JT.Lng) {
                 // after an unlogged store: no deopt (see IsEarlyTopStatement)
                 type = valueType;
                 var site = Ast.Constant(new JitRuntime.StoreSite(_context));
@@ -1144,7 +1193,7 @@ namespace IronRuby.Runtime.Jit {
                     ? Ast.Call(JitRuntime.M("IndexStoreObjOrCall"), site, recvTemp, indexTemp, BoxForStore(valueTemp, valueType), Ast.Constant(arrays))
                     : Ast.Call(JitRuntime.M("IndexStoreIntOrCall"), site, recvTemp, indexTemp, BoxForStore(valueTemp, valueType), Ast.Constant(arrays));
                 return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
-                    Ast.Assign(recvTemp, recv),
+                    Ast.Assign(recvTemp, _lastStoreArray),
                     Ast.Assign(indexTemp, index),
                     Ast.Assign(valueTemp, value),
                     call,
@@ -1153,6 +1202,23 @@ namespace IronRuby.Runtime.Jit {
             }
             _canDeopt = true;
             early &= !last && op == null;
+            MSA.Expression hoist = null;
+            if (early && _lastStoreArray == null) {
+                // The last store's receiver, read now, before anything is written: a plain Array while Array#[]= is
+                // the public builtin, or a deopt here. The last store then stores into it, and what its fast path
+                // cannot do is a call of []= no scope could see differently (JitRuntime.IndexStoreIntOrCall).
+                bool lastArrays, lastHashes;
+                RequireElementMethod("[]=", null, out lastArrays, out lastHashes);
+                JT lastRecvType = JT.None;
+                var lastRecv = lastArrays ? Emit(LastStoreReceiver(), out lastRecvType) : null;
+                if (lastRecv == null || lastRecvType != JT.Obj) {
+                    early = false;
+                } else {
+                    _lastStoreArray = Ast.Variable(typeof(RubyArray), "#last-array");
+                    _declared[0].Add(_lastStoreArray);
+                    hoist = Ast.Assign(_lastStoreArray, Ast.Call(JitRuntime.M("ExactArray"), lastRecv));
+                }
+            }
             MSA.Expression log;
             if (last || early) {
                 _unloggedWrite = true;
@@ -1174,6 +1240,7 @@ namespace IronRuby.Runtime.Jit {
                 : Ast.Call(JitRuntime.M("IndexStore" + suffix), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
                     Ast.Constant(arrays), Ast.Constant(hashes), log);
             return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
+                hoist ?? (MSA.Expression)Ast.Empty(),
                 Ast.Assign(recvTemp, recv),
                 Ast.Assign(indexTemp, index),
                 Ast.Assign(valueTemp, value),
