@@ -835,6 +835,14 @@ namespace IronRuby.Runtime.Jit {
             if (receiver is SelfReference) {
                 return (_hints != null) ? _hints.Self : null;
             }
+            var ivar = receiver as InstanceVariable;
+            if (ivar != null) {
+                // what the receiver that turned the method hot holds there: a profile, not a promise
+                object sample = (_hints != null) ? _hints.SelfSample : null;
+                object value;
+                if (sample == null || !_context.TryGetInstanceVariable(sample, ivar.Name, out value)) { return null; }
+                return (value == null) ? typeof(void) : value.GetType();
+            }
             var local = receiver as LocalVariable;
             if (local == null) { return null; }
             if (_loop != null) {

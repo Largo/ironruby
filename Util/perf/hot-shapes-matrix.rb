@@ -253,3 +253,59 @@ ls = LS.new; recv = [1, 2.5, nil, "s", LT.new]; lsout = []
   end
 end
 lsout.each { |r| p r }
+
+# the JIT's identity calls on any receiver - `o.nil?', `o == x', `o != x', `o.equal?(x)' -
+# at sites that see a plain object, nil, true, a Symbol, an Integer, a String, an object with its
+# own == / nil?, a BasicObject; while Kernel#nil? and BasicObject#== are redefined and restored,
+# a singleton method is added to the receiver, a subclass overrides, a module is prepended to
+# Kernel, nil? is made private in a subclass.
+class ID
+  def nq(o); o.nil?; end
+  def eq(o, x); o == x; end
+  def ne(o, x); o != x; end
+  def eql(o, x); o.equal?(x); end
+  def eqs(o); o == self; end
+  def nqo(o); o.nil?; end
+  def eqo(o); o == self; end
+end
+class IDSub < ID; end
+class IDOwn; def ==(o); :owneq; end; def nil?; :ownnil; end; end
+class IDPriv; private def nil?; true; end; end
+class IDBasic < BasicObject; def method_missing(n, *a); :"mm_#{n}"; end; end
+module IDPre; def nil?; :prenil; end; end
+id = ID.new; plain = Object.new; same = IDSub.new
+idrecv = [plain, nil, true, :sym, 5, "s", IDOwn.new, IDBasic.new, same, 2**70, 1.5]
+idout = []
+20_000.times do |i|
+  r = idrecv[i % idrecv.size]
+  row = [id.nq(r), id.eq(r, r), id.eq(r, plain), id.ne(r, plain), id.ne(r, r), id.eql(r, r), id.eql(r, 5),
+         id.nqo(plain), id.eqo(plain), id.eqo(id), (id.nqo(IDPriv.new) rescue :private), same.eqs(same)]
+  idout << [i, row.map { |x| x.inspect }] if i % 2000 == 7 || (i > 9_995 && i < 10_010)
+  case i
+  when 3001 then class Object; def nil?; :objnil; end; end
+  when 4001 then class Object; remove_method :nil?; end
+  when 5001 then class BasicObject; alias_method :__ideq, :==; def ==(o); :basiceq; end; end
+  when 6001 then class BasicObject; alias_method :==, :__ideq; end
+  when 7001 then def plain.nil?; :single; end; def plain.==(o); :singleeq; end
+  when 8001 then class IDSub; def ==(o); :subeq; end; end
+  when 9001 then Kernel.prepend(IDPre)
+  when 11001 then class NilClass; def nil?; :nilredef; end; end
+  when 12001 then class NilClass; remove_method :nil?; end
+  when 13001 then class Object; def ==(o); :objeq; end; end
+  when 14001 then class Object; remove_method :==; end
+  end
+end
+idout.each { |r| p r }
+
+# A refinement of nil? / == active in the calling method's file.
+module IDRefine
+  refine(Object) { def nil?; :refnil; end; def ==(o); :refeq; end }
+end
+using IDRefine
+class IDR
+  def nq(o); o.nil?; end
+  def eq(o); o == self; end
+end
+idr = IDR.new; idrout = []
+20_000.times { |i| idrout << [idr.nq(i.odd? ? idr : nil), idr.eq(idr)] if i % 5000 == 3 }
+p idrout

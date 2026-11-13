@@ -1610,13 +1610,36 @@ namespace IronRuby.Runtime.Jit {
                 return EmitStringLiteralComparison(node, out type);
             }
 
+            // `v.nil?' on any object (JitRuntime.IsNil).
+            if (node.Target != null && argc == 0 && node.MethodName == "nil?") {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                return EmitIdentityCall(node.MethodName, Coerce(t, tt, JT.Obj), null, out type);
+            }
+
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
             if (node.Target != null && argc == 1 && !(args.Expressions[0] is SplattedArgument)) {
                 JT lt, rt;
                 var l = Emit(node.Target, out lt);
                 var r = Emit(args.Expressions[0], out rt);
+                // an instance variable the profile saw hold a number is one (NumericIVar), before == is taken for identity
                 l = NumericIVar(node.Target, l, ref lt);
                 r = NumericIVar(args.Expressions[0], r, ref rt);
+                if (node.MethodName == "equal?" || lt == JT.Obj && !IsNumeric(rt) && (node.MethodName == "==" || node.MethodName == "!=") &&
+                    !(HoldsIntegerElements(node.Target) && HoldsIntegerElements(args.Expressions[0]))) {
+                    // `v == w', `v != w', `v.equal?(w)' on an object (JitRuntime.IsIdentical), which the
+                    // profile does not see to be one that has == of its own (a String, a number)
+                    if (lt != JT.Obj) { throw Bail(node.MethodName + " on " + lt); }
+                    // An expression's value is unknown here, and one of a class with an == of its own (a
+                    // number, an Array) would deopt on every call. An instance variable is typed by the receiver
+                    // that turned the method hot (ObservedType).
+                    Type observed = ObservedType(node.Target);
+                    if (observed == null || observed != typeof(RubyObject) && observed != typeof(void) &&
+                        observed != typeof(bool) && observed != typeof(RubySymbol)) {
+                        throw Bail(node.MethodName + " on a " + ((observed == null) ? "receiver of unknown type" : observed.Name));
+                    }
+                    return EmitIdentityCall(node.MethodName, l, Coerce(r, rt, JT.Obj), out type);
+                }
                 if (IsNumeric(lt) && IsNumeric(rt)) {
                     return EmitBinary(node.MethodName, l, lt, r, rt, out type);
                 }
@@ -1646,6 +1669,43 @@ namespace IronRuby.Runtime.Jit {
                 if (!context.TryGetInstanceVariable(self, name, out value)) { return JT.Obj; }
                 return (value is int) ? JT.Int : (value is long) ? JT.Lng : (value is double) ? JT.Dbl : JT.Obj;
             };
+        }
+
+        /// <summary>
+        /// `v.nil?', `v == w', `v != w', `v.equal?(w)' where v is any object: the library method's answer,
+        /// once the site finds v's class to resolve the name to the library method named here
+        /// (JitRuntime.IdentityCallSite), and a deopt otherwise. A refinement of the method active at
+        /// the call would be what the call reaches instead, so none may be.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitIdentityCall(string/*!*/ name, MSA.Expression/*!*/ value, MSA.Expression other, out JT type) {
+            if (!_refinements.IsEmpty) { throw Bail(name + " with refinements active"); }
+            JitRuntime.IdentityCallSite site;
+            if (name == "nil?") {
+                site = new JitRuntime.IdentityCallSite(name, LibraryMethods(name, _context.ObjectClass, _context.NilClass), null);
+            } else {
+                var equals = new JitRuntime.IdentityCallSite("==", LibraryMethods("==", _context.BasicObjectClass, KindClass(JitRuntime.KindNil),
+                    KindClass(JitRuntime.KindTrue), KindClass(JitRuntime.KindFalse), KindClass(JitRuntime.KindSymbol)), null);
+                site = (name == "==") ? equals : new JitRuntime.IdentityCallSite(name, LibraryMethods(name, _context.BasicObjectClass),
+                    (name == "!=") ? equals : null);
+            }
+            _canDeopt = true;
+            type = JT.Bool;
+            if (other == null) {
+                return Ast.Call(JitRuntime.M("IsNil"), Ast.Constant(_context), value, Ast.Constant(site));
+            }
+            MSA.Expression test = Ast.Call(JitRuntime.M("IsIdentical"), Ast.Constant(_context), value, other, Ast.Constant(site));
+            return (name == "!=") ? Ast.Not(test) : test;
+        }
+
+        // The library methods `name' resolves to on the classes: the first must be one, the others are
+        // left out when they are not.
+        private RubyMemberInfo[]/*!*/ LibraryMethods(string/*!*/ name, RubyClass/*!*/ first, params RubyClass[]/*!*/ others) {
+            if (!IsBuiltinMethod(first, name)) { throw Bail(first.Name + "#" + name + " is not the built-in one"); }
+            var result = new List<RubyMemberInfo> { first.ResolveMethod(name, VisibilityContext.AllVisible).Info };
+            foreach (var cls in others) {
+                if (IsBuiltinMethod(cls, name)) { result.Add(cls.ResolveMethod(name, VisibilityContext.AllVisible).Info); }
+            }
+            return result.ToArray();
         }
 
         private static bool IsNumeric(JT t) {
@@ -2500,6 +2560,15 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target != null && argc == 0 && node.MethodName == "!") {
                 // `!x' (JitCompiler.EmitNot)
                 return WalkCondition(node.Target);
+            }
+
+            // `v.nil?', `v == w', `v != w', `v.equal?(w)' on any object (JitCompiler.EmitIdentityCall); `=='
+            // and `!=' between numbers stay EmitBinary's, and `s == "lit"' is EmitStringLiteralComparison's,
+            // which this must not pre-empt (a String literal is no operand Walk takes).
+            if (node.Target != null && ((argc == 0 && node.MethodName == "nil?") ||
+                argc == 1 && !JitCompiler.IsStringLiteralComparison(node) && (node.MethodName == "equal?" || node.MethodName == "==" || node.MethodName == "!=") &&
+                !(args.Expressions[0] is SplattedArgument) && !IsElementRead(node.Target) && !IsElementRead(args.Expressions[0]))) {
+                return Walk(node.Target) && (argc == 0 || Walk(args.Expressions[0]));
             }
 
             if (node.Target == null) {
