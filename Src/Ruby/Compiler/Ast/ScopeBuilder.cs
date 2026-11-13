@@ -541,6 +541,30 @@ namespace IronRuby.Compiler.Ast {
             return Ast.Block(_hiddenVariables, body);
         }
 
+        /// <summary>
+        /// CreateScope of a block whose scope is made on demand (BlockDefinition.TransformLightCalls): the scope initializer
+        /// may leave the scope null, so the closures - the enclosing scopes' locals - are read from the scope the block was
+        /// defined in, <paramref name="parentScope"/>, which is assigned <paramref name="parentInitializer"/> first. That is
+        /// the parent the block's scope has when one is made (RubyBlockScope: its Proc's LocalScope).
+        /// </summary>
+        public MSA.Expression/*!*/ CreateScopeWithParent(MSA.Expression/*!*/ scopeVariable, MSA.Expression/*!*/ scopeInitializer,
+            MSA.Expression/*!*/ parentScope, MSA.Expression/*!*/ parentInitializer, MSA.Expression/*!*/ body) {
+
+            var result = new AstExpressions();
+            result.Add(Ast.Assign(parentScope, parentInitializer));
+            if (_closures != null) {
+                MSA.Expression tempScope = (_closures.Count > 1) ? DefineHiddenVariable("#s", typeof(RubyScope)) : null;
+                for (int i = 0; i < _closures.Count; i++) {
+                    MSA.Expression closureScope = (i == 0) ? parentScope :
+                        Ast.Assign(tempScope, Methods.GetParentScope.OpCall(i == 1 ? parentScope : tempScope));
+                    result.Add(Ast.Assign(_closures[i], AstUtils.Convert(Methods.GetLocals.OpCall(closureScope), _closures[i].Type)));
+                }
+            }
+            result.Add(Ast.Assign(scopeVariable, scopeInitializer));
+            result.Add(body);
+            return Ast.Block(_hiddenVariables, result);
+        }
+
         public MSA.Expression/*!*/ CreateScope(MSA.Expression/*!*/ scopeVariable, MSA.Expression/*!*/ scopeInitializer, MSA.Expression/*!*/ body) {
             // #locals variable already assigned (in MakeClosureDefinition).
             // We need to initialize #closureN variables.
