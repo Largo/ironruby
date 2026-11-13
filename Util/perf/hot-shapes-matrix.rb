@@ -253,3 +253,26 @@ ls = LS.new; recv = [1, 2.5, nil, "s", LT.new]; lsout = []
   end
 end
 lsout.each { |r| p r }
+
+# Light methods and scope-free blocks that make calls keep their locals in CLR variables until a
+# scope is made: a local written, then read after a call that starts to make the scope (eval,
+# binding, local_variable_set through the binding), the method JIT off and on, and the call
+# redefined mid-run so that the first scope appears with locals already assigned.
+class RL
+  def g(x); x + 1; end
+  def m1(x); y = g(x); z = y * 2; [x, y, z]; end
+  def m2(x); y = g(x); w = (x % 3 == 0 ? binding : nil); w&.local_variable_set(:y, -1); [y, w ? w.local_variables : 0]; end
+  def m3(x); y = g(x); s = eval("y + 100"); y += 1; [y, s, defined?(y)]; end
+  def m4(a); t = 0; a.each { |e| u = g(e); t += u; binding.local_variable_set(:u, 0) if e == 2; t += u }; t; end
+end
+rl = RL.new; rlout = []
+20_000.times do |i|
+  r = [rl.m1(i), rl.m2(i), rl.m3(i), rl.m4([1, 2, 3])]
+  rlout << [i, r] if i % 2500 == 3 || (i > 9_998 && i < 10_003)
+  case i
+  when 5000 then RL.class_eval { def g(x); [x].sum + 1; end }
+  when 10000 then RL.class_eval { def g(x); local_variables.size + x; end }
+  when 15000 then RL.class_eval { def g(x); x + 1; end }
+  end
+end
+rlout.each { |r| p r }
