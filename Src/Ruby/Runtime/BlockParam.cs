@@ -92,8 +92,8 @@ namespace IronRuby.Runtime {
         // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter;
         // bit 2: instance_eval/instance_exec - definitions go to self's singleton class, made when one needs it.
         internal byte _callerFlags;
-        private const int CallFlag = 1;
-        private const int LibProcConverterFlag = 2;
+        internal const int CallFlag = 1;
+        internal const int LibProcConverterFlag = 2;
         private const int LazySingletonFlag = 4;
         // bit 3: a scope the block ran in through this BlockParam was captured (RubyScope.MarkCaptured): it is reachable from
         // there and is not handed to another call (RubyOps.ReturnBfcForProcCall).
@@ -491,7 +491,8 @@ namespace IronRuby.Runtime {
         public static BlockParam/*!*/ TakeBfcForProcCall(Proc/*!*/ proc) {
             if (proc.Kind == ProcKind.Proc && proc.CallBlockParam != null) {
                 var reused = System.Threading.Interlocked.Exchange(ref proc.CallBlockParam, null);
-                if (reused != null) {
+                // (one a yield left is of the other kind: dropped)
+                if (reused != null && reused.CallerKind == BlockCallerKind.Call) {
                     reused.ResetForNextYield();
                     return reused;
                 }
@@ -508,6 +509,41 @@ namespace IronRuby.Runtime {
             if ((bfc._callerFlags & BlockParam.KeptFlag) == 0 && proc.Kind == ProcKind.Proc && bfc.ReturnReason == BlockReturnReason.Undefined) {
                 proc.CallBlockParam = bfc;
             }
+        }
+
+        /// <summary>
+        /// The BlockParam of a yield in a block: a block runs once per element of whatever calls it, and its yield made a new
+        /// BlockParam every time (`(a..b).each { |i| yield @s[i] }'), as the BlockParam of the last run of the yield is out of
+        /// reach. It takes the one the last yield to the proc from a block handed back (ReturnBfcForBlockYield), as Proc#call
+        /// does (TakeBfcForProcCall), with the same conditions.
+        /// </summary>
+        [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
+        public static BlockParam/*!*/ TakeBfcForBlockYield(Proc proc) {
+            if (proc != null && proc.CallBlockParam != null && proc.Kind != ProcKind.Lambda) {
+                var reused = System.Threading.Interlocked.Exchange(ref proc.CallBlockParam, null);
+                // (one a Proc#call left is of the other kind: dropped)
+                if (reused != null && reused.CallerKind == BlockCallerKind.Yield) {
+                    reused.ResetForNextYield();
+                    return reused;
+                }
+            }
+            return CreateBfcForYield(proc);
+        }
+
+        /// <summary>
+        /// A yield in a block whose block returned normally hands its BlockParam back (TakeBfcForBlockYield); the variable that
+        /// held it is cleared with the result, so the block does not use it again once another yield may have taken it.
+        /// </summary>
+        [Emitted]
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public static BlockParam ReturnBfcForBlockYield(BlockParam/*!*/ bfc) {
+            var proc = bfc.Proc;
+            if ((bfc._callerFlags & (BlockParam.KeptFlag | BlockParam.CallFlag | BlockParam.LibProcConverterFlag)) == 0 &&
+                proc.Kind != ProcKind.Lambda && bfc.ReturnReason == BlockReturnReason.Undefined) {
+                proc.CallBlockParam = bfc;
+            }
+            return null;
         }
 
         [Emitted]

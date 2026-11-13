@@ -140,9 +140,9 @@ namespace IronRuby.Builtins {
         // [BlockNotKept] library method was given it with (RubyOps.CreateBfcForBlockNotKept).
         internal BlockParam YieldBlockParam;
 
-        // The BlockParam of the last Proc#call of this proc that finished normally and whose scope nothing captured, for the
-        // next call to take (RubyOps.TakeBfcForProcCall); null while a call has it, so a recursive call or one on another thread
-        // makes its own.
+        // The BlockParam of the last Proc#call of this proc, or of the last yield to it from a block, that finished normally and
+        // whose scope nothing captured, for the next such call to take (RubyOps.TakeBfcForProcCall, TakeBfcForBlockYield); null
+        // while a call has it, so a recursive call or one on another thread makes its own.
         internal BlockParam CallBlockParam;
 
         /// <summary>
