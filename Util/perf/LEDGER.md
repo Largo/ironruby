@@ -285,3 +285,36 @@ gate asks for (`.claude/skills/perf-gate`), not in running it more often:
   been true until attribute writes on other objects became possible. Every new kind of
   effect has to be checked against every operation that can deopt, including those that
   were sound only because nothing came before them.
+
+A hunt for more of the same followed (three agents, one per area: light frames, the
+method JIT, block and Proc reuse), each comparing CRuby, IronRuby and IronRuby with the
+JIT off on hundreds of small programs:
+
+- **`def d(i); [i].each { |v| return 5 }; end; d(1) { 9 }` threw MethodUnwinder** (round
+  five, 50318082), on the first call, no warm-up. The scope a light frame makes on demand
+  takes the call's flow-control frame - the caller's literal block - and
+  `MethodPropagateReturn` compared the return's target with the scope object only. Found
+  by the hunt through block reuse, in code that hunt was not about: the commonest shapes
+  (`return` from a block, in a method given a block) were in no matrix.
+- **`const_missing` recursing through a constant read, and `#inspect` recursing through a
+  qualified constant read, ended the process** (light frames since c9a17e2). A constant
+  read is not a dynamic site, so the frame had no entry check, but the helper behind it
+  runs Ruby code. The slow paths (`RubyModule.ConstantMissing`,
+  `RubyOps.GetQualifiedConstant`) now check the stack. The general form of the question:
+  which runtime helpers reachable from a light frame can run Ruby code without going
+  through a call site?
+- The method JIT's widening survived about 420 programs, among them every pairing of
+  eight effects with nine deopts in five shapes; 150 of those ran specialized. Block,
+  Proc and BlockParam reuse survived every keeping path, `[BlockNotKept]` path and
+  reentrancy shape tried (the lists are in the commits' merge messages and the hunt
+  reports). What the hunts did not cover: Windows, net11.0, several runtimes in one
+  process, and the full spec sweep.
+
+Not from this work, found on the way and still open: a self-recursive method with a
+logged Hash store slows down about 1000x past 65,536 levels of recursion (the shared
+`JitUndoLog` fills, the outer entry deopts, and `OnDeopt` never retires it because no
+generic call has completed); `NilClass#nil?` removed still answers true; `equal?` is true
+for equal Bignums and Floats; `local_variables` lists block-locals before parameters;
+backtrace lines of multi-line statements point at the statement's first line;
+`method(:binding).call` works where CRuby refuses; a thread dying of SystemStackError
+prints its whole backtrace.
