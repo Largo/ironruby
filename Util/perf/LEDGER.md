@@ -265,4 +265,23 @@ language plus 24 core directories (17983 examples, 80877 expectations on both).
 
 ## Regressions
 
-None.
+None in speed.
+
+## Faults the gate missed
+
+Found by review of #215 (Greptile), all three real, all fixed with cases added to the
+matrices. Each came from a shape nobody had put in a matrix, so the lesson is in what the
+gate asks for (`.claude/skills/perf-gate`), not in running it more often:
+
+- **`def f; f { }; end` killed the process** instead of raising SystemStackError (round
+  five, 50318082). A light frame checked the stack only if `LightScopeCall` had rewritten
+  one of its calls, and it does not rewrite a call with a block. Every frame shape that is
+  newly light needs a recursion case: the entry check is what stands between deep
+  recursion and the end of the process.
+- **`!(true && @x)` answered false** for an `@x` with a `#!` of its own (round four,
+  9ca993d). The truth of a condition is not the value an operator is called on.
+- **`o.value = o.value + 1; @x = 1` on a frozen self wrote `o.value` twice** (round four,
+  d88766c with 6347585). "A write to self deopts only as the first observable thing" had
+  been true until attribute writes on other objects became possible. Every new kind of
+  effect has to be checked against every operation that can deopt, including those that
+  were sound only because nothing came before them.

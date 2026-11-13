@@ -61,6 +61,17 @@ ruby Util/perf/awfy.rb 8 "new=env IR_CONFIG=Release <tree>/ir.sh"     # any FAIL
 <tree>/ir.sh -X:NoJIT -X:NoOSR <a script the change speeds up>         # same output as with them on
 ```
 
+Three shapes got past this gate once and were found in review (`Util/perf/LEDGER.md`,
+"Faults the gate missed"). Ask each of them of every change:
+- Can a frame that this makes cheaper recurse - directly, through a block it passes, through
+  a callee - without passing a stack check? Run it a million deep: it must raise
+  SystemStackError, not end the process.
+- Does a compiled path use something *about* a value (its truth, its type at one moment) in
+  place of the value an operation is defined on?
+- If a fast path can fail part way (a deopt, a fallback, a retry), what has already been
+  done when it does, and is that done twice? Look at every operation that can fail *after*
+  each new effect, including ones that used to be safe because nothing came before them.
+
 Write one new differential case for the shortcut itself: the shape it accelerates, run hot
 (a few thousand iterations, past the JIT thresholds), with the thing that must invalidate
 it happening in the middle - the method redefined, a singleton method added to the cached
