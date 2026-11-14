@@ -971,6 +971,8 @@ namespace IronRuby.Runtime.Jit {
         internal sealed class ReceiverHints {
             internal Type[] Parameters;
             internal Type Self;
+            // Set by the compiler: a call it could have inlined is of a method still being profiled (JitStub.InlinableBody).
+            internal bool CalleeNotReady;
             // A method's receiver when it turned hot, whose instance variables are a type profile
             // (JitCompiler.NumericIVar); null for a loop, which has its live self at hand anyway.
             internal object SelfSample;
