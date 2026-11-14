@@ -1068,6 +1068,28 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("one?")]
         public static object One(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ equals, BlockParam comparer, object self) {
+            // An Array's #one? is its own in MRI (rb_ary_one_p): it walks the array, re-reading its length, and does not
+            // call an #each a subclass defines.
+            var array = self as RubyArray;
+            if (array != null) {
+                bool found = false;
+                for (int i = 0; i < array.Count; i++) {
+                    object item = array[i];
+                    if (comparer != null) {
+                        if (comparer.Yield(item, out item)) {
+                            return item;
+                        }
+                    }
+                    if (Protocols.IsTrue(item)) {
+                        if (found) {
+                            return ScriptingRuntimeHelpers.False;
+                        }
+                        found = true;
+                    }
+                }
+                return ScriptingRuntimeHelpers.BooleanToObject(found);
+            }
+
             int count = 0;
 
             object result = null;

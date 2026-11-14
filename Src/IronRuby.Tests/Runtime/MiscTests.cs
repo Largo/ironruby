@@ -7440,11 +7440,20 @@ r = []
 end
 p r.tally
 p({a: 1}.any?(Array), (1..4).one?(4), [[1, 2]].all? { |a, b| b == 2 })
+b = []
+p A[1, 2].one? { |x| x }, A[1, nil].one?, A[nil, 2].one? { |x| x }, A[1, 2].one? { |x| break :brk }
+p [1, 2].one? { |x| b << x; b.size < 4 ? (b << 9; false) : false }, b
 ", @"
 {[true, true, true, false, true] => 2501, [:redef, :redef, true, false, true] => 499}
 true
 true
 true
+false
+true
+true
+:brk
+false
+[1, 9, 2, 9]
 ");
         }
 
