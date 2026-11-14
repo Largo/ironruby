@@ -61,8 +61,9 @@ ruby Util/perf/awfy.rb 8 "new=env IR_CONFIG=Release <tree>/ir.sh"     # any FAIL
 <tree>/ir.sh -X:NoJIT -X:NoOSR <a script the change speeds up>         # same output as with them on
 ```
 
-Three shapes got past this gate once and were found in review (`Util/perf/LEDGER.md`,
-"Faults the gate missed"). Ask each of them of every change:
+Three shapes got past this gate once and were found in review, and a fourth got past its
+author's checks and was caught here (`Util/perf/LEDGER.md`, "Faults the gate missed").
+Ask each of them of every change:
 - Can a frame that this makes cheaper recurse - directly, through a block it passes, through
   a callee - without passing a stack check? Run it a million deep: it must raise
   SystemStackError, not end the process.
@@ -71,6 +72,13 @@ Three shapes got past this gate once and were found in review (`Util/perf/LEDGER
 - If a fast path can fail part way (a deopt, a fallback, a retry), what has already been
   done when it does, and is that done twice? Look at every operation that can fail *after*
   each new effect, including ones that used to be safe because nothing came before them.
+- Does a fast path make a call of its own in place of one the source makes (a fallback
+  site, a helper that dispatches)? A site made without the caller's scope sees private and
+  protected methods and no refinements (`RubyCallAction.GetVisibilityContext`), so it is
+  the source's call only for a receiver whose method is public and unrefined. Give it a
+  receiver with a private method of that name, one with a protected one called from an
+  unrelated class, one with `method_missing`, and a refinement active where the caller is
+  defined.
 
 Write one new differential case for the shortcut itself: the shape it accelerates, run hot
 (a few thousand iterations, past the JIT thresholds), with the thing that must invalidate
@@ -78,6 +86,20 @@ it happening in the middle - the method redefined, a singleton method added to t
 receiver, the block captured with `&b`, `binding` called, an exception raised through it -
 and compare the output with CRuby 4.0's. If the tree has a matrix for the area (`Util/perf/hot-shapes-matrix.rb`
 for calls and blocks), add the case there; otherwise add a registered test in `Src/IronRuby.Tests` (CLAUDE.md, "Tests").
+
+A case proves something only if it runs the path it is about. Three cases written for
+this gate did not at first: a method the JIT declined for another reason (an attribute
+read with an implicit self), a store that deopted before it reached the fallback it was
+meant to test, and a report built on `==` in a file where an earlier `using` had refined
+Object#==. So for every new case:
+
+- run it with `IR_JIT_VERBOSE=1` and see the method named as specialized (and, for a
+  fallback or a guard, that it did not simply deopt first);
+- make the probe reach the new code and nothing before it: a receiver that fails an
+  earlier check tests that check;
+- in `hot-shapes-matrix.rb`, everything after the `IDRefine` case runs with Object#== and
+  #nil? refined and a module prepended to Kernel: report values with `inspect`, not with
+  `==` or `nil?`, and look at the CRuby output once to see that it says what you meant.
 
 ## 3. ruby/spec
 
@@ -87,6 +109,12 @@ gives the pins), on both trees, and compare the summary lines and the failing ex
 ```sh
 IR_CONFIG=Release ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
 ```
+
+Run mspec from the root of a checkout, one run at a time per directory: `default.mspec`
+there tells mspec which implementation it is on (run from anywhere else, the `fixnum_max`
+helper raises and five examples of core/string and core/array fail on any build), and two
+runs in one directory share `rubyspec_temp`. Compare the names of the failing examples,
+not only the summary lines.
 
 A change in call dispatch, blocks, scopes or core classes has a wide reach: also sweep
 `core` for the classes it touches (`Util/parallel-sweep.sh new base-out`). Not while a
@@ -99,7 +127,15 @@ Back to back, twice, on a quiet machine (`uptime`):
 ```sh
 ruby Util/perf/micro-table.rb "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release <tree>/ir.sh"
 ruby Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release <tree>/ir.sh"
+ruby Util/perf/awfy.rb 12 "new=env IR_CONFIG=Release <tree>/ir.sh" "base=env IR_CONFIG=Release ./ir.sh"
 ```
+
+The second run has the columns the other way round on purpose. Which column runs first
+moves single benchmarks by more than the 5% this step allows: in four runs of round six
+Towers was 7-10% slower in whichever tree ran second and NBody 1-6% faster. A benchmark
+is slower only if it is slower in both orders. A cell of a tree that does not touch that
+benchmark's code still moves by about 5% from run to run (NBody by more), so before
+blaming a change for a slower line, say which of its code that benchmark runs.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.

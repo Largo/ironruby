@@ -81,6 +81,10 @@ run of those takes a minute. That subset is a hint, not a result. The whole suit
 Numbers an agent took while other builds were running are a hint. Before deciding, measure
 again yourself with nothing else running (`uptime`), twice, on all thirteen benchmarks: a
 change aimed at one benchmark is kept or rejected on what it does to the whole suite.
+Give awfy.rb the two trees in one order for the first run and the other order for the
+second (`/perf-gate`, step 4, says why), and put every candidate of a round in one
+invocation as extra columns: a column whose change cannot touch a benchmark shows how far
+that benchmark moves by itself.
 
 Keep the change only if all of these hold:
 
