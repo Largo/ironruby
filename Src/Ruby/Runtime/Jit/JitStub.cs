@@ -1406,6 +1406,7 @@ namespace IronRuby.Runtime.Jit {
                 if (info == null) { return false; }
                 var ps = info.GetSyntaxTree().Parameters;
                 if (ps.Optional.Length > 0 || ps.Unsplat != null || ps.Block != null || ps.Mandatory.Length > MaxArity) { return false; }
+                if (!JitInlineShape.IsInlinableShape(info.GetSyntaxTree())) { return false; }
                 string rejectedBy;
                 HashSet<string> otherUses;
                 return JitScreen.CanEverCompile(info.GetSyntaxTree(), null, null, out rejectedBy, out otherUses);

@@ -41,11 +41,10 @@ class P3; def foo; 2; end; end
 class PV; attr_reader :x; def initialize(x); @x = x; end; end
 class PM; attr_reader :a, :b; def initialize(a, b); @a = a; @b = b; end; end
 class PB; attr_accessor :x, :v, :c; def initialize; @x = 1.5; @v = 0.0; @c = 0; end; end
-# `ruby micro.rb NAME' runs that one shape only, in a process of its own: a shape that compiles
+# `ruby micro.rb NAME...' runs those shapes only, in a process of their own: a shape that compiles
 # differently once another has run is measured as it is alone.
-ONLY = ARGV[0]
 def t(name, n = 3_000_000)
-  return if ONLY && name != ONLY
+  return unless ARGV.empty? || ARGV.include?(name)
   best = 1e9
   5.times { t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC); yield n; d = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0; best = d if d < best }
   printf "%-12s %7.1f ns/op\n", name, best * 1e9 / n
