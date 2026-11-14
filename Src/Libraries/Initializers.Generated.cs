@@ -2952,6 +2952,14 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.SetDefaultValue)
             );
             
+            DefineLibraryMethod(module, "dig", 0x51, 
+                0x00000000U, 0x00000000U, 0x00000000U, 0x80000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.Hash, System.Object, System.Object>(IronRuby.Builtins.HashOps.Dig), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Hash, System.Object, System.Object, System.Object>(IronRuby.Builtins.HashOps.Dig), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Hash, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.HashOps.Dig), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Hash, System.Object, System.Object[], System.Object>(IronRuby.Builtins.HashOps.Dig)
+            );
+            
             DefineLibraryMethod(module, "except", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Builtins.Hash, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Except)
@@ -2988,6 +2996,12 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "slice", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.Slice)
+            );
+            
+            DefineLibraryMethod(module, "transform_values", 0x51, 
+                0x00000000U, 0x00000002U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.HashOps.TransformValues), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.HashOps.TransformValues)
             );
             
         }
