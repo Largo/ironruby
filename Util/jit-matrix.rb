@@ -3017,3 +3017,51 @@ t('Float#+ redefined by an inner initialize') { ctor_x }
 # An initialize that constructs again recurses through the direct construction: SystemStackError.
 class JitCtorDeep; def initialize(n) = JitCtorDeep.new(n + 1); end
 t('initialize constructing without end') { begin; JitCtorDeep.new(0); :returned; rescue SystemStackError => e; e.class; end }
+
+# The stub's states reached by keyword methods and constructors (hunt of round six): a keyword method
+# declined (settled, which JitKeywordCall takes for given up), an initialize, a retired method, each
+# called with and without keywords, through Method and UnboundMethod objects taken before warming,
+# through alias_method and define_method copies, a subclass's super, a singleton override, then
+# redefined, made private and given a prepended initialize.
+class JitSettleK
+  def initialize(a = 1) = (@i = a; @s = "abc"; @t = @s[0])
+  attr_reader :i, :t
+  def dc(x) = (@i = x; @s[0])
+  def kd(x, k: 1) = (@i = x; @s[k])
+  def rt(x) = x * x * x * x
+end
+sk = JitSettleK.new
+sk_early = [sk.method(:dc), JitSettleK.instance_method(:kd), sk.method(:rt).to_proc, JitSettleK.method(:new)]
+3.times { warm { |i| sk.dc(i); sk.kd(i); sk.kd(i, k: 2); sk.rt(2**20 + i); JitSettleK.new(i) } }
+t('settle: after warm-up') { [sk.dc(1), sk.kd(1), sk.kd(1, k: 0), sk.rt(3), JitSettleK.new(7).i, JitSettleK.new.t] }
+t('settle: Method objects taken before') { [sk_early[0].(2), sk_early[1].bind(sk).(1, k: 2), sk_early[2].(2), sk_early[3].(9).i] }
+class JitSettleK2 < JitSettleK; def dc(x) = [super, :sub]; def initialize(a = 1) = super(a + 1) end
+t('settle: subclass super') { [JitSettleK2.new(1).dc(1), JitSettleK2.new(1).i, JitSettleK2.new.kd(1, k: 2)] }
+sk_o = JitSettleK.new; def sk_o.kd(x, k: 5) = :single
+t('settle: singleton keyword override') { [sk_o.kd(1), sk_o.kd(1, k: 1), sk.kd(1)] }
+class JitSettleK; alias_method :dc2, :dc; define_method(:kd2, instance_method(:kd)); end
+t('settle: alias and define_method copies') { [sk.dc2(1), sk.kd2(1, k: 2), sk.kd2(1)] }
+class JitSettleK; def kd(x, k: 1) = :redef end
+t('settle: keyword method redefined') { [sk.kd(1), sk.kd(1, k: 2), sk.kd2(1, k: 2), sk_early[1].bind(sk).(1, k: 0)] }
+class JitSettleK; private :dc end
+t('settle: made private') { [(sk.dc(1) rescue :priv), sk.send(:dc, 1), sk.dc2(1)] }
+module JitSettlePre; def initialize(a = 1) = super(a * 10) end
+JitSettleK.prepend JitSettlePre
+t('settle: prepended initialize') { [JitSettleK.new(3).i, JitSettleK2.new(3).i] }
+t('settle: traced') do
+  ev = []
+  TracePoint.new(:call, :return) { |tp| ev << [tp.event, tp.method_id] }.enable { JitSettleK.new(1); sk.dc2(1); sk.kd2(1, k: 1); sk.rt(2) }
+  ev
+end
+
+# A method whose argument type flips between Integer, Bignum and Float on four threads while another
+# thread redefines it 300 times: every answer is one of the two definitions'.
+def jit_settle_threads
+  k = Class.new { def f(x) = x * x * x * x; def g(x, k: 0) = (@q = x; "ab"[k]) }
+  stop = false; bad = []
+  r = Thread.new { 300.times { |j| k.class_eval(j.even? ? "def f(x) = x * x * x * x" : "def f(x) = -(x * x * x * x)") }; stop = true }
+  ths = 4.times.map { Thread.new { o = k.new; until stop; [1, 2**40, 1.5, 3].each { |v| x = o.f(v); e = v * v * v * v; bad << x unless x == e || x == -e }; o.g(1, k: 1) == "b" or bad << :g end } }
+  r.join; ths.each(&:join)
+  bad.size
+end
+t('settle: redefined while four threads call it') { jit_settle_threads }
