@@ -85,6 +85,7 @@ namespace IronRuby.Runtime.Calls {
                 object precompiled = BindPrecompiled(delegateType, args);
                 if (precompiled != null) {
                     result = (T)precompiled;
+                    ChainDispatcher(site, result);
                     if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "pre";
                     CacheTarget(result);
                     return result;
@@ -122,6 +123,19 @@ namespace IronRuby.Runtime.Calls {
             result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
             CacheTarget(result);
             return result;
+        }
+
+        // Links a precompiled dispatcher to the one the site holds now, if that serves receivers this one does not (see MemberDispatcher.Next).
+        // The dispatcher is not published yet, so its fields need no synchronization: the DLR publishes the delegate as the site's target.
+        private static void ChainDispatcher<T>(CallSite<T>/*!*/ site, T/*!*/ result) where T : class {
+            var dispatcher = ((Delegate)(object)result).Target as MemberDispatcher;
+            var current = site.Target as Delegate;
+            var previous = current?.Target as MemberDispatcher;
+            if (dispatcher != null && previous != null && previous != dispatcher && previous.Version != dispatcher.Version &&
+                previous.ChainDepth < MemberDispatcher.MaxChainDepth && current.GetType() == typeof(T)) {
+                dispatcher.Next = current;
+                dispatcher.ChainDepth = previous.ChainDepth + 1;
+            }
         }
 
         /// <summary>
@@ -164,11 +178,20 @@ namespace IronRuby.Runtime.Calls {
 
             DynamicMetaObject interopBinding;
             if (IsForeignMetaObject(callArgs.MetaTarget) && (interopBinding = InteropBind(metaBuilder, callArgs)) != null) {
-                return interopBinding;
+                if (!callArgs.ScopeRead) {
+                    return interopBinding;
+                }
+            } else {
+                Build(metaBuilder, callArgs, true);
+                if (!callArgs.ScopeRead) {
+                    return metaBuilder.CreateMetaObject(this);
+                }
             }
 
-            Build(metaBuilder, callArgs, true);
-            return metaBuilder.CreateMetaObject(this);
+            // A site with a light scope whose rule would read the scope gets one that hands the call back to the method, which
+            // makes its scope and calls through an ordinary site (MethodDefinition.LightFrameRewriter). It holds for any
+            // receiver, so it has no test.
+            return new DynamicMetaObject(AstUtils.Constant(RubyOps.LightScopeRequired, ReturnType), BindingRestrictions.Empty);
         }
 
         protected virtual DynamicMetaObjectBinder GetInteropBinder(RubyContext/*!*/ context, IList<DynamicMetaObject/*!*/>/*!*/ args,

@@ -92,6 +92,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateArgumentsErrorForMissingBlock;
         public static MethodInfo/*!*/ CreateArgumentsErrorForProc { get { return _CreateArgumentsErrorForProc ?? (_CreateArgumentsErrorForProc = CallInstruction.CacheFunc<System.String, System.ArgumentException>(RubyOps.CreateArgumentsErrorForProc)); } }
         private static MethodInfo _CreateArgumentsErrorForProc;
+        public static MethodInfo/*!*/ CreateBfcForBlockNotKept { get { return _CreateBfcForBlockNotKept ?? (_CreateBfcForBlockNotKept = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.CreateBfcForBlockNotKept)); } }
+        private static MethodInfo _CreateBfcForBlockNotKept;
         public static MethodInfo/*!*/ CreateBfcForLibraryMethod { get { return _CreateBfcForLibraryMethod ?? (_CreateBfcForLibraryMethod = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.CreateBfcForLibraryMethod)); } }
         private static MethodInfo _CreateBfcForLibraryMethod;
         public static MethodInfo/*!*/ CreateBfcForProcCall { get { return _CreateBfcForProcCall ?? (_CreateBfcForProcCall = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.CreateBfcForProcCall)); } }
@@ -352,6 +354,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _InstantiateBlock;
         public static MethodInfo/*!*/ InstantiateLambda { get { return _InstantiateLambda ?? (_InstantiateLambda = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Builtins.Proc>(RubyOps.InstantiateLambda)); } }
         private static MethodInfo _InstantiateLambda;
+        public static MethodInfo/*!*/ InstantiateReusableBlock { get { return _InstantiateReusableBlock ?? (_InstantiateReusableBlock = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Builtins.Proc>(RubyOps.InstantiateReusableBlock)); } }
+        private static MethodInfo _InstantiateReusableBlock;
         public static MethodInfo/*!*/ IntegerValue_ToUInt32Unchecked { get { return _IntegerValue_ToUInt32Unchecked ?? (_IntegerValue_ToUInt32Unchecked = GetMethod(typeof(IntegerValue), "ToUInt32Unchecked")); } }
         private static MethodInfo _IntegerValue_ToUInt32Unchecked;
         public static MethodInfo/*!*/ IRubyObject_BaseEquals { get { return _IRubyObject_BaseEquals ?? (_IRubyObject_BaseEquals = GetMethod(typeof(IRubyObject), "BaseEquals")); } }
@@ -578,6 +582,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ReleaseScopeFrame;
         public static MethodInfo/*!*/ ReuseBfcForYield { get { return _ReuseBfcForYield ?? (_ReuseBfcForYield = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.ReuseBfcForYield)); } }
         private static MethodInfo _ReuseBfcForYield;
+        public static MethodInfo/*!*/ ReturnBfcForBlockYield { get { return _ReturnBfcForBlockYield ?? (_ReturnBfcForBlockYield = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Runtime.BlockParam>(RubyOps.ReturnBfcForBlockYield)); } }
+        private static MethodInfo _ReturnBfcForBlockYield;
+        public static MethodInfo/*!*/ TakeBfcForBlockYield { get { return _TakeBfcForBlockYield ?? (_TakeBfcForBlockYield = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.TakeBfcForBlockYield)); } }
+        private static MethodInfo _TakeBfcForBlockYield;
         public static MethodInfo/*!*/ RubyStruct_GetValue { get { return _RubyStruct_GetValue ?? (_RubyStruct_GetValue = CallInstruction.CacheFunc<IronRuby.Builtins.RubyStruct, System.Int32, System.Object>(RubyStruct.GetValue)); } }
         private static MethodInfo _RubyStruct_GetValue;
         public static MethodInfo/*!*/ RubyStruct_SetValue { get { return _RubyStruct_SetValue ?? (_RubyStruct_SetValue = CallInstruction.CacheFunc<IronRuby.Builtins.RubyStruct, System.Int32, System.Object, System.Object>(RubyStruct.SetValue)); } }

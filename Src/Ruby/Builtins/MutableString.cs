@@ -35,8 +35,50 @@ namespace IronRuby.Builtins {
     [Serializable]
     [DebuggerDisplay("{GetDebugValue()}", Type = "{GetDebugType()}")]
     public partial class MutableString : IEquatable<MutableString>, IComparable<MutableString>, IComparable, IRubyObjectState, IDuplicable {
-        private Content/*!*/ _content;
+        // Read through _content, except where a shared content is handled as it is (see SharedAsciiContents).
+        private Content/*!*/ _rawContent;
         private RubyEncoding/*!*/ _encoding;
+
+        private Content/*!*/ _content {
+            get {
+                var content = _rawContent;
+                return content.IsShared ? UnshareContent(content) : content;
+            }
+            set {
+                _rawContent = value;
+            }
+        }
+
+        // `s[i]' of one ASCII character, the way a parser reads its input, makes a String each time; its content is
+        // one of these, which hold no owner and never change, so it costs no object of its own. They are immutable
+        // CLR objects only, so several runtimes can share them. The first read of the string's content through
+        // _content - any operation but the few that look at the shared one (Equals) - replaces it with a content of
+        // the string's own, which a mutation then changes as usual.
+        private static readonly StringContent/*!*/[]/*!*/ SharedAsciiContents = MakeSharedAsciiContents();
+
+        private static StringContent/*!*/[]/*!*/ MakeSharedAsciiContents() {
+            var result = new StringContent[128];
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = new StringContent(String.Intern(((char)i).ToString()), null) { IsShared = true };
+            }
+            return result;
+        }
+
+        // Two threads may read the content of one string at once: the one that loses the exchange takes the
+        // winner's content, or what a mutation on the winner's thread has already replaced it with.
+        private Content/*!*/ UnshareContent(Content/*!*/ shared) {
+            var own = new StringContent(((StringContent)shared).Data, this);
+            var previous = System.Threading.Interlocked.CompareExchange(ref _rawContent, own, shared);
+            return ReferenceEquals(previous, shared) ? own : previous;
+        }
+
+        // The character of a string whose content is shared, or -1.
+        private int SharedAsciiChar {
+            get {
+                var content = _rawContent;
+                return content.IsShared ? ((StringContent)content).Data[0] : -1;
+            }
+        }
         
         private uint _flags = AsciiUnknownFlag | SurrogatesUnknownFlag | CharIndexChangedFlags;
 
@@ -188,6 +230,17 @@ namespace IronRuby.Builtins {
         // immutable:
         private MutableString(string/*!*/ str, RubyEncoding/*!*/ encoding)
             : this(new StringContent(str, null), encoding) {
+        }
+
+        // One ASCII character, in an encoding where ASCII is itself, on a shared content (SharedAsciiContents).
+        private MutableString(RubyEncoding/*!*/ encoding, StringContent/*!*/ shared) {
+            Debug.Assert(shared.IsShared && encoding.IsAsciiIdentity);
+            _encoding = encoding;
+            _rawContent = shared;
+            _flags = AsciiLiteralFlags;
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
         }
 
         // A string literal the compiler has found to be all ASCII, in an encoding where ASCII is
@@ -1371,6 +1424,20 @@ namespace IronRuby.Builtins {
         public bool Equals(MutableString other) {
             if (ReferenceEquals(other, null)) return false;
 
+            // A one-character ASCII slice (SharedAsciiContents) compared with a character literal, the way a parser
+            // compares what it read, without a content of its own: in two encodings where ASCII is itself, an ASCII
+            // character equals only the same character alone.
+            int c = SharedAsciiChar, d = other.SharedAsciiChar;
+            if (c >= 0 || d >= 0) {
+                if (c >= 0 && d >= 0) {
+                    return c == d;
+                }
+                var (shared, unshared) = c >= 0 ? (c, other) : (d, this);
+                if (unshared._encoding.IsAsciiIdentity && unshared._rawContent is StringContent str) {
+                    return str.Data.Length == 1 && str.Data[0] == shared;
+                }
+            }
+
             // MRI's rb_str_comparable: a zero-length string is comparable with any string,
             // whatever the two encodings are. "".b == "" is true.
             if (!IsEmpty && !other.IsEmpty &&
@@ -1885,6 +1952,16 @@ namespace IronRuby.Builtins {
         // The content is read once by the caller: a read on another thread can switch the string
         // between bytes and characters, and the indices are meant for the one the caller looked at.
         private MutableString/*!*/ GetSlice(Content/*!*/ content, int start, int count) {
+            // One ASCII character of a string held as characters, in an encoding where ASCII is itself: the
+            // character is its own byte whatever the rest of the string holds, and its content can be shared.
+            if (count == 1 && _encoding.IsAsciiIdentity && (content is StringContent || content is CharArrayContent) &&
+                start < content.Count) {
+                int c = content.GetChar(start);
+                if (c < SharedAsciiContents.Length) {
+                    return new MutableString(_encoding, SharedAsciiContents[c]);
+                }
+            }
+
             var result = CreateDerived(content.GetSlice(start, count), _encoding);
             // a part of an ASCII string is ASCII, and saying so spares the next operation a scan of it
             if ((_flags & (IsAsciiFlag | AsciiUnknownFlag)) == IsAsciiFlag) {

@@ -280,6 +280,147 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// The call site of an identity method - `v.nil?', `v == w', `v != w', `v.equal?(w)' - on a
+        /// receiver of any type: the class the method was last found on to be one of the library
+        /// methods the compiler named (Kernel#nil? and NilClass#nil?; BasicObject#== and its
+        /// equal?/!=, and the == of nil, true, false and Symbol, which are identity too), under which global method version. A user nil? or == anywhere on the way -
+        /// a class's own, a singleton method (it gives the object a class of its own), a module
+        /// included or prepended, a private copy - resolves to something else, and the call deopts
+        /// (a refinement active at the call is refused when compiling). Replaced as a whole, so a
+        /// racing reader sees one consistent pair.
+        /// </summary>
+        public sealed class IdentityCallSite {
+            internal readonly string/*!*/ Name;
+            private readonly Calls.RubyMemberInfo[]/*!*/ _expected;
+
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            // `!=': BasicObject#!= calls ==, which must then be BasicObject's as well.
+            private readonly IdentityCallSite _calls;
+
+            internal IdentityCallSite(string/*!*/ name, Calls.RubyMemberInfo[]/*!*/ expected, IdentityCallSite calls) {
+                Name = name;
+                _expected = expected;
+                _calls = calls;
+            }
+
+            private bool Resolves(RubyClass/*!*/ cls) {
+                var resolved = cls.ResolveMethod(Name, Calls.VisibilityContext.AllVisible);
+                return resolved.Found && resolved.Info.IsPublic && Array.IndexOf(_expected, resolved.Info) >= 0
+                    && (_calls == null || _calls.Resolves(cls));
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal bool IsBoundTo(RubyClass/*!*/ cls) {
+                var b = _bound;
+                return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            internal bool Bind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (!Resolves(cls)) {
+                    return false;
+                }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+
+            // A Symbol's class, once a Symbol receiver resolved to an expected method, under which
+            // global method version: kept apart from _bound so a site that sees Symbols and other
+            // receivers in turn (`@dir == :forward' with @dir nil at first) does not look the
+            // Symbol's class up (a CLR type lookup, RubyContext.GetImmediateClassOfNonRubyObject) on
+            // every call. Every Symbol has that class: a Symbol cannot have a singleton class
+            // (TypeError), which Bind's HasInstancesWithOwnClass test makes sure of.
+            private volatile Binding _symbol;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal bool IsSymbolBound() {
+                var b = _symbol;
+                return b != null && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            internal bool BindSymbol(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (!Resolves(cls)) {
+                    return false;
+                }
+                if (!cls.HasInstancesWithOwnClass) {
+                    _symbol = new Binding(cls, version);
+                }
+                return true;
+            }
+        }
+
+        // nil, true and false have fixed classes (RubyContext.TryGetValueClass returns them for any
+        // value of theirs: `def nil.x' defines on NilClass itself), so the class is a field load
+        // rather than the CLR type lookup of RubyContext.GetImmediateClassOfNonRubyObject.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void RequireIdentityMethod(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site) {
+            RubyClass cls;
+            if (value == null) {
+                cls = context.NilClass;
+            } else {
+                var obj = value as RubyObject;
+                if (obj != null) {
+                    cls = obj.ImmediateClass;
+                } else if (value is bool) {
+                    cls = (bool)value ? context.TrueClass : context.FalseClass;
+                } else if (value is RubySymbol) {
+                    if (!site.IsSymbolBound() && !site.BindSymbol(ClassOf(context, value))) {
+                        throw Deopt();
+                    }
+                    return;
+                } else {
+                    cls = ClassOf(context, value);
+                }
+            }
+            if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
+                throw Deopt();
+            }
+        }
+
+        /// <summary>
+        /// `v.nil?': Kernel#nil? is false and NilClass#nil? true, which is whether v is nil, once the
+        /// site found v's class to answer nil? with one of them.
+        /// </summary>
+        public static bool IsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site) {
+            RequireIdentityMethod(context, value, site);
+            return value == null;
+        }
+
+        /// <summary>
+        /// `v == w', `v.equal?(w)', `v != w' (BasicObject#!= is !(v == w), and the site checks == too):
+        /// BasicObject's methods are identity (rb_obj_equal) for a plain object, nil, true, false and
+        /// a Symbol. BasicObject#== of any other CLR type is its Equals (a String's or an exception's
+        /// may compare contents), so that deopts.
+        /// </summary>
+        public static bool IsIdentical(RubyContext/*!*/ context, object value, object other, IdentityCallSite/*!*/ site) {
+            if (value != null && !(value is RubySymbol) && !(value is bool) && value.GetType() != typeof(RubyObject)) {
+                throw Deopt();
+            }
+            RequireIdentityMethod(context, value, site);
+            return (value is bool) ? value.Equals(other) : ReferenceEquals(value, other);
+        }
+
+        /// <summary>
+        /// `v == "lit"': String#== of a String whose class is String itself (a subclass may override
+        /// ==, and an instance with a singleton == is ruled out when compiling: JitCompiler.
+        /// HasPlainInstances) compares the contents. The literal is the one frozen copy the compiler
+        /// made: String#== does not keep its argument, so nothing can tell it from the fresh String
+        /// the generic code would have made. Any other receiver deopts, and the generic code makes
+        /// the call with a fresh literal.
+        /// </summary>
+        public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal) {
+            if (value != null && value.GetType() == typeof(MutableString)) { return ((MutableString)value).Equals(literal); }
+            throw Deopt();
+        }
+
+        /// <summary>
         /// `b..e === v' / `b...e === v' with Integer bounds, v an object: Range#=== compares an
         /// Integer, and a Float when Float#&lt;=&gt; is the library one; it is false for a value of a
         /// kind in <paramref name="noCoerce"/>, which `b &lt;=&gt; v' answers nil for (checked when
@@ -515,9 +656,11 @@ namespace IronRuby.Runtime.Jit {
         }
 
         // ---- Array#[]=, Hash#[]= -------------------------------------------------------------
+        // Each deopts only before it stores. A null log: the store is the last statement of its method
+        // (JitCompiler.IsLastStatement), and no deopt can come after it to take it back.
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static void IndexStoreInt(object recv, int index, object value, bool arrays, bool hashes, JitUndoLog/*!*/ log) {
+        public static void IndexStoreInt(object recv, int index, object value, bool arrays, bool hashes, JitUndoLog log) {
             if (recv != null) {
                 Type t = recv.GetType();
                 if (t == typeof(RubyArray) && arrays) {
@@ -525,8 +668,8 @@ namespace IronRuby.Runtime.Jit {
                     int position;
                     object old;
                     // an index out of range grows the array or raises, which the generic code does
-                    if (log.IsFull || !array.JitReplaceElement(index, value, out position, out old)) { throw Deopt(); }
-                    log.Replaced(array, position, old);
+                    if (log != null && log.IsFull || !array.JitReplaceElement(index, value, out position, out old)) { throw Deopt(); }
+                    if (log != null) { log.Replaced(array, position, old); }
                     return;
                 }
                 if (t == typeof(Hash) && hashes) {
@@ -537,7 +680,7 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
-        public static void IndexStoreLong(object recv, long index, object value, bool arrays, bool hashes, JitUndoLog/*!*/ log) {
+        public static void IndexStoreLong(object recv, long index, object value, bool arrays, bool hashes, JitUndoLog log) {
             if (index >= Int32.MinValue && index <= Int32.MaxValue) {
                 IndexStoreInt(recv, (int)index, value, arrays, hashes, log);
                 return;
@@ -546,7 +689,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         public static void IndexStoreObj(RubyContext/*!*/ context, object recv, object index, object value, bool arrays, bool hashes,
-            JitUndoLog/*!*/ log) {
+            JitUndoLog log) {
             if (index is int) {
                 IndexStoreInt(recv, (int)index, value, arrays, hashes, log);
                 return;
@@ -564,7 +707,7 @@ namespace IronRuby.Runtime.Jit {
         /// RubyUtils.SetHashElement does.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static void HashStoreObj(RubyContext/*!*/ context, object recv, object key, object value, JitUndoLog/*!*/ log) {
+        public static void HashStoreObj(RubyContext/*!*/ context, object recv, object key, object value, JitUndoLog log) {
             if (key is int) {
                 HashStoreInt(recv, (int)key, value, log);
                 return;
@@ -573,9 +716,9 @@ namespace IronRuby.Runtime.Jit {
             if (hash == null || recv.GetType() != typeof(Hash) || hash.IsFrozen || key == null) { throw Deopt(); }
             int hashCode;
             int i = hash.JitFind(key, out hashCode);
-            if (i == Hash.JitUndecided || log.IsFull) { throw Deopt(); }
+            if (i == Hash.JitUndecided || log != null && log.IsFull) { throw Deopt(); }
             if (i >= 0) {
-                log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
+                ReplaceHashValue(hash, i, value, log);
                 return;
             }
             // a new key while the hash is iterated is the generic code's RuntimeError
@@ -586,25 +729,33 @@ namespace IronRuby.Runtime.Jit {
                 hashCode = key.GetHashCode();
             }
             hash.JitAppend(key, hashCode, value);
-            log.Appended(hash, key);
+            if (log != null) { log.Appended(hash, key); }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static void HashStoreInt(object recv, int key, object value, JitUndoLog/*!*/ log) {
+        public static void HashStoreInt(object recv, int key, object value, JitUndoLog log) {
             var hash = recv as Hash;
             if (hash == null || recv.GetType() != typeof(Hash) || hash.IsFrozen) { throw Deopt(); }
             int hashCode;
             int i = hash.JitFindFixnum(key, out hashCode);
-            if (i == Hash.JitUndecided || log.IsFull) { throw Deopt(); }
+            if (i == Hash.JitUndecided || log != null && log.IsFull) { throw Deopt(); }
             if (i >= 0) {
-                log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
+                ReplaceHashValue(hash, i, value, log);
                 return;
             }
             if (hash.IsIterating) { throw Deopt(); }
             // `h[i] = i': the key is the box the value already is, as it is in the generic code
             object boxed = (value is int && (int)value == key) ? value : ScriptingRuntimeHelpers.Int32ToObject(key);
             hash.JitAppend(boxed, hashCode, value);
-            log.Appended(hash, boxed);
+            if (log != null) { log.Appended(hash, boxed); }
+        }
+
+        private static void ReplaceHashValue(Hash/*!*/ hash, int i, object value, JitUndoLog log) {
+            if (log == null) {
+                hash.JitReplaceAt(i, value);
+            } else {
+                log.Replaced(hash, hash.JitKeyAt(i), i, hash.JitReplaceAt(i, value));
+            }
         }
 
 
@@ -689,6 +840,69 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The guard of code that folded constants: nothing has changed any constant since.</summary>
         public static bool ConstantsOk(RubyContext/*!*/ context, int snapshot) {
             return context.ConstantAccessVersion == snapshot;
+        }
+
+        // ---- Class#new (JitCompiler.EmitConstruction) -------------------------------------
+
+        /// <summary>
+        /// `C.new(a, b)' as the last thing a specialized method does: the construction the rule of the
+        /// call of new would make (RubyClass.TryGetObjectConstruction) - allocate, call C's Ruby
+        /// initialize - made directly. The construction checks the class's version itself, and while
+        /// :c_call is traced, or after anything has moved it, the call goes through an ordinary call
+        /// site of new instead: the initializer runs Ruby code, so the body cannot deopt around it.
+        /// </summary>
+        public sealed class ConstructionSite {
+            internal readonly Calls.ObjectConstruction/*!*/ Construction;
+            internal readonly int Arity;
+            internal readonly System.Runtime.CompilerServices.CallSite/*!*/ Fallback;
+
+            internal ConstructionSite(RubyContext/*!*/ context, Calls.ObjectConstruction/*!*/ construction, int arity) {
+                Construction = construction;
+                Arity = arity;
+                var action = Calls.RubyCallAction.Make(context, "new", Calls.RubyCallSignature.Simple(arity));
+                switch (arity) {
+                    case 0: Fallback = CallSite<Func<CallSite, object, object>>.Create(action); break;
+                    case 1: Fallback = CallSite<Func<CallSite, object, object, object>>.Create(action); break;
+                    case 2: Fallback = CallSite<Func<CallSite, object, object, object, object>>.Create(action); break;
+                    default: Fallback = CallSite<Func<CallSite, object, object, object, object, object>>.Create(action); break;
+                }
+            }
+
+            // The direct construction calls initialize with no call site and no scope in between, so it is where an
+            // initialize that constructs again - `def initialize(n); C.new(n + 1); end' - has to meet the stack check
+            // a call would have made: too deep a recursion is a SystemStackError, not the end of the process.
+            internal bool IsDirect {
+                get {
+                    RubyOps.RequireSufficientStack();
+                    return Construction.IsCurrent(Arity) && !TracePoint.CCallTracing;
+                }
+            }
+        }
+
+        internal const int MaxConstructionArity = 3;
+
+        public static object Construct0(ConstructionSite/*!*/ site, object cls) {
+            if (site.IsDirect) { return site.Construction.Construct0(); }
+            var s = (CallSite<Func<CallSite, object, object>>)site.Fallback;
+            return s.Target(s, cls);
+        }
+
+        public static object Construct1(ConstructionSite/*!*/ site, object cls, object a0) {
+            if (site.IsDirect) { return site.Construction.Construct1(a0); }
+            var s = (CallSite<Func<CallSite, object, object, object>>)site.Fallback;
+            return s.Target(s, cls, a0);
+        }
+
+        public static object Construct2(ConstructionSite/*!*/ site, object cls, object a0, object a1) {
+            if (site.IsDirect) { return site.Construction.Construct2(a0, a1); }
+            var s = (CallSite<Func<CallSite, object, object, object, object>>)site.Fallback;
+            return s.Target(s, cls, a0, a1);
+        }
+
+        public static object Construct3(ConstructionSite/*!*/ site, object cls, object a0, object a1, object a2) {
+            if (site.IsDirect) { return site.Construction.Construct3(a0, a1, a2); }
+            var s = (CallSite<Func<CallSite, object, object, object, object, object>>)site.Fallback;
+            return s.Target(s, cls, a0, a1, a2);
         }
     }
 }

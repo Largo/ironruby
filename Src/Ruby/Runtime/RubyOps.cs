@@ -50,6 +50,10 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static readonly object ForwardToBase = new object();
 
+        // Returned by the rule of a call site in a light-frame method that would have read the method's scope
+        // (RubyCallFlags.HasLightScope): the method makes the scope and calls through an ordinary site.
+        public static readonly object LightScopeRequired = new object();
+
         // How many refine blocks are running in the process (RubyUtils.EvaluateRefinementBlock). While none is, no Proc
         // has a refine block's override, so the lexical walk steps over block scopes (RubyScope.GetLexicalRefinements),
         // and the rule of a refined call made in a block written in a method can test the method's record instead
@@ -234,10 +238,34 @@ namespace IronRuby.Runtime {
         /// flow-control frame.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static RuntimeFlowControl/*!*/ EnterLightMethod(Proc blockParameter) {
             RubyUtils.SafePoint();
-            return CreateRfcForMethod(blockParameter);
+            // a call without a block, the common case, is inlined into the method body
+            return (blockParameter == null) ? InactiveRfc : EnterLightMethodWithBlock(blockParameter);
+        }
+
+        /// <summary>
+        /// EnterLightMethod of a method with a block parameter (`def m(&b)'): the body can hand the block on or keep
+        /// it without making a scope - `def capture(&b); b; end' - so the block is converted as any call's is, and is
+        /// never made again for the next evaluation of its literal.
+        /// </summary>
+        public static RuntimeFlowControl/*!*/ EnterLightMethodNamingBlock(Proc blockParameter) {
+            RubyUtils.SafePoint();
+            if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
+                blockParameter.ConvertAsFrame();
+                return blockParameter;
+            }
+            return InactiveRfc;
+        }
+
+        private static RuntimeFlowControl/*!*/ EnterLightMethodWithBlock(Proc/*!*/ blockParameter) {
+            // A light frame can only yield to its block: a literal one may be made again once the call returns (Proc.TryReuse).
+            if (blockParameter.Kind == ProcKind.Block) {
+                blockParameter.ConvertAsLightFrame();
+                return blockParameter;
+            }
+            return InactiveRfc;
         }
 
         /// <summary>
@@ -245,15 +273,17 @@ namespace IronRuby.Runtime {
         /// scope; a light frame keeps it for the scope it may make). Taken either way, as CreateMethodScope does.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static string TakePendingCallee(string/*!*/ definitionName) {
-            if (_aliasCallSeen) {
-                string callee = _pendingCallee;
-                if (callee != null) {
-                    _pendingCallee = null;
-                    if (_pendingCalleeDefinition == definitionName) {
-                        return callee;
-                    }
+            return _aliasCallSeen ? TakePendingCalleeSlow(definitionName) : null;
+        }
+
+        private static string TakePendingCalleeSlow(string/*!*/ definitionName) {
+            string callee = _pendingCallee;
+            if (callee != null) {
+                _pendingCallee = null;
+                if (_pendingCalleeDefinition == definitionName) {
+                    return callee;
                 }
             }
             return null;
@@ -285,6 +315,10 @@ namespace IronRuby.Runtime {
             RubyModule/*!*/ declaringModule, MutableTuple locals, object selfObject, Proc blockParameter,
             InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
 
+            // the scope holds the block, and whatever asked for the scope may keep it
+            if (blockParameter != null) {
+                blockParameter.ClearReusable();
+            }
             return new RubyMethodScope(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
                 interpretedFrame, rfc, calleeName);
         }
@@ -305,8 +339,15 @@ namespace IronRuby.Runtime {
         /// LeaveMethodFrame of a light-frame method: the call's frame, and the scope if one was made.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void LeaveLightMethodFrame(RuntimeFlowControl/*!*/ rfc, RubyScope scope) {
+            // nothing to do for a call without a block that made no scope, the common case, inlined into the method body
+            if (rfc._activeFlowControlScope != null || scope != null) {
+                LeaveLightMethodFrameSlow(rfc, scope);
+            }
+        }
+
+        private static void LeaveLightMethodFrameSlow(RuntimeFlowControl/*!*/ rfc, RubyScope scope) {
             LeaveMethodFrame(rfc);
             if (scope != null) {
                 if (scope.IsActiveMethod) {
@@ -697,6 +738,19 @@ namespace IronRuby.Runtime {
             return dispatcher.HasMethod ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
         }
 
+        /// <summary>
+        /// InstantiateBlock of a literal that may reuse its Proc (BlockDispatcher.ReusesProc): <paramref name="previous"/> is the
+        /// Proc this frame made for the literal last time, kept in a variable of the frame, made again if nothing kept it.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        public static Proc InstantiateReusableBlock(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
+            if (previous != null && previous.TryReuse()) {
+                return previous;
+            }
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
             return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
@@ -714,6 +768,8 @@ namespace IronRuby.Runtime {
         public static void InitializeBlock(Proc/*!*/ proc) {
             Assert.NotNull(proc);
             proc.Kind = ProcKind.Block;
+            // a retried call may hand the block to a method that keeps it: only a light frame marks it reusable again
+            proc.ClearReusable();
         }
 
         /// <summary>
@@ -1551,6 +1607,10 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static object GetQualifiedConstant(RubyScope/*!*/ scope, ConstantSiteCache/*!*/ cache, string/*!*/[]/*!*/ qualifiedName, bool isGlobal) {
+            // The lookup may call Ruby code - #inspect for the TypeError of a qualifier that is no module, const_missing - from a
+            // light frame that has no call site and so checked no stack at its entry (MethodDefinition.LightFrame.MakesCalls):
+            // `def inspect = Obj::X' with Obj not a module recurses through here alone. Only a read the cache cannot answer gets here.
+            RequireSufficientStack();
             var globalScope = scope.GlobalScope;
             var context = globalScope.Context;
 
@@ -3264,12 +3324,16 @@ namespace IronRuby.Runtime {
 
         #region Booleans
 
+        // AggressiveInlining: the JIT left these calls in compiled method bodies (1.4% of Json and
+        // DeltaBlue in RubyOps.IsTrue alone), where a condition is a type test and a compare.
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsTrue(object obj) {
             return (obj is bool) ? (bool)obj == true : obj != null;
         }
 
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsFalse(object obj) {
             return (obj is bool) ? (bool)obj == false : obj == null;
         }
@@ -4918,8 +4982,39 @@ namespace IronRuby.Runtime {
 
         // `@x`: a Ruby object whose shape the site has seen is a reference compare and an array
         // load. See RubyInstanceData for the layout and why no lock is needed.
+        //
+        // The cached case is inlined into the compiled method body (the JIT inlines it into the
+        // dynamic method): a type check, three loads, the acquire read of element 0, a compare and
+        // the slot load. Everything else - a cache miss, a module, a non-RubyObject - is a call to
+        // the out-of-line rest. It is RubyInstanceData's read protocol unchanged: one read of
+        // _ivars, an acquire read of its element 0, and a slot read the shape there vouches for.
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetInstanceVariable(RubyScope/*!*/ scope, object self, InstanceVariableSite/*!*/ site) {
+            object value;
+            if (self is RubyObject obj && TryReadCached(obj._instanceData, site, out value)) {
+                return value;
+            }
+            return GetInstanceVariableUncached(scope, self, site);
+        }
+
+        // The cached read of a variable of an object's instance data (null for no variables yet).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCached(RubyInstanceData data, InstanceVariableSite/*!*/ site, out object value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    value = RubyInstanceData.GetSlot(slots, entry.Index);
+                    return true;
+                }
+            }
+            value = null;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object GetInstanceVariableUncached(RubyScope/*!*/ scope, object self, InstanceVariableSite/*!*/ site) {
             RubyInstanceData data;
             var obj = self as RubyObject;
             if (obj != null) {
@@ -5015,8 +5110,39 @@ namespace IronRuby.Runtime {
 
         // `@x = v`: a Ruby object whose shape the site has seen stores without a lock; adding a
         // variable the site has seen added is a CAS. See RubyInstanceData.
+        //
+        // The store into a variable the object already has, at the slot the site has seen, is
+        // inlined into the compiled method; the rest (adding, a miss, frozen, other receivers) is
+        // out of line. It is RubyInstanceData's write protocol: store the slot, then re-read
+        // element 0 and redo the write the slow way if the shape changed under it - a Move's
+        // process-wide barrier makes either the store visible to its copy or the re-read see Moved.
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object SetInstanceVariable(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
+            if (self is RubyObject obj && TryWriteCached(obj._instanceData, value, site)) {
+                return value;
+            }
+            return SetInstanceVariableUncached(self, value, scope, site);
+        }
+
+        // The cached store into an existing variable of an object's instance data (null for no
+        // variables yet): false for a miss, an add, a frozen object or a shape changed under it.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryWriteCached(RubyInstanceData data, object value, InstanceVariableSite/*!*/ site) {
+            if (data != null && !data._frozen) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.Shape && entry.Next == null) {
+                    RubyInstanceData.SetSlot(slots, entry.Index, value);
+                    return RubyInstanceData.ShapeOf(slots) == shape;
+                }
+            }
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object SetInstanceVariableUncached(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
             var obj = self as RubyObject;
             if (obj != null) {
                 var data = obj._instanceData ?? GetInstanceData(ref obj._instanceData);
@@ -5042,6 +5168,7 @@ namespace IronRuby.Runtime {
         /// Here rather than in the writer's rule, which is interpreted for its first calls.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object SetAttribute(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
             return SetInstanceVariable(self, ClearKeywordArguments(value), scope, site);
         }

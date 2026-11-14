@@ -112,6 +112,19 @@ namespace IronRuby.Runtime {
         public CallSite<BinaryOp>/*!*/ GetCallSite() {
             return GetCallSite("respond_to?", 1);
         }
+
+        // The symbol of the name asked last: a storage belongs to one library method, which asks one
+        // name (Array#== asks "to_ary" of every non-array operand), and interning it each time showed
+        // as 1% of DeltaBlue. One field holding both, so that racing threads see a matching pair.
+        private Tuple<string, RubySymbol> _lastName;
+
+        internal RubySymbol/*!*/ GetSymbol(string/*!*/ methodName) {
+            var last = _lastName;
+            if (last == null || !ReferenceEquals(last.Item1, methodName) && last.Item1 != methodName) {
+                _lastName = last = Tuple.Create(methodName, Context.EncodeIdentifier(methodName));
+            }
+            return last.Item2;
+        }
     }
 
     public sealed class ConversionStorage<TResult> : CallSiteStorage<Func<CallSite, object, TResult>> {

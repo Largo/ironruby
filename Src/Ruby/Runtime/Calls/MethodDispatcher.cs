@@ -57,6 +57,28 @@ namespace IronRuby.Runtime.Calls {
 
         internal int Version;
 
+        // A polymorphic inline cache. A site whose receivers are of several classes resolving the call to different methods gets
+        // a dispatcher per class, and the DLR keeps only one of them as the site's target: every call of a class other than the
+        // last one bound missed it and went through the site's update (a matchmaker site allocated, the rules tried one by one,
+        // the target swapped), ~30-60 ns a call. Instead a dispatcher bound while the site's target is another dispatcher keeps
+        // that target, a delegate of the site's type, and hands it what it does not serve, so a site of N classes costs N-1 version
+        // compares more than a monomorphic one. Each link tests the receiver as before and falls back to the site's update at the
+        // end of the chain, so a stale link costs a compare and nothing else; the chain is cut at MaxChainDepth links, so a
+        // megamorphic site does not grow it without bound (see RubyMetaBinder.ChainDispatcher).
+        internal object Next;
+        internal int ChainDepth;
+
+        internal const int MaxChainDepth = 8;
+
+        /// <summary>
+        /// What a call this dispatcher does not serve goes to: the dispatcher bound before it at the site or the site's update.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal T/*!*/ Miss<T>(CallSite/*!*/ callSite) where T : class {
+            object next = Next;
+            return (next != null) ? Unsafe.As<T>(next) : ((CallSite<T>)callSite).Update;
+        }
+
         // A receiver that is not a Ruby object: nil (DynamicNull), true/false or a CLR object - its exact type, the version of its
         // class and, for true and false, the value (see MetaObjectBuilder.AddTargetTypeTest). Null for a Ruby object receiver.
         private Type _clrType;
@@ -331,11 +353,19 @@ namespace IronRuby.Runtime.Calls {
         
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self) {
             RubyClass cls;
+            // an exact RubyObject whose shape the site has seen: the cached read, inline
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                var robj = Unsafe.As<RubyObject>(self);
+                object value;
+                if (robj.ImmediateClass.Version.Method == Version && RubyOps.TryReadCached(robj._instanceData, Site, out value)) {
+                    return value;
+                }
+            }
             IRubyObject obj = GetRubyObject(self, out cls);
             if (obj != null && cls.Version.Method == Version) {
                 return RubyOps.ReadInstanceVariable(cls.Context, obj, Site);
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, object>>)callSite).Update(callSite, scope, self);
+                return Miss<Func<CallSite, TScope, object, object>>(callSite)(callSite, scope, self);
             }
         }
     }
@@ -355,11 +385,18 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, T0 arg0) {
             RubyClass cls;
+            // an exact RubyObject that has the variable at the slot the site has seen: the cached store, inline
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                var robj = Unsafe.As<RubyObject>(self);
+                if (robj.ImmediateClass.Version.Method == Version && RubyOps.TryWriteCached(robj._instanceData, (object)arg0, Site)) {
+                    return (object)arg0;
+                }
+            }
             IRubyObject obj = GetRubyObject(self, out cls);
             if (obj != null && cls.Version.Method == Version) {
                 return RubyOps.WriteInstanceVariable(cls.Context, obj, (object)arg0, Site);
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, T0, object>>)callSite).Update(callSite, scope, self, arg0);
+                return Miss<Func<CallSite, TScope, object, T0, object>>(callSite)(callSite, scope, self, arg0);
             }
         }
     }

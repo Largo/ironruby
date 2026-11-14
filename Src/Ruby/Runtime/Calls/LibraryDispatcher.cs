@@ -84,12 +84,16 @@ namespace IronRuby.Runtime.Calls {
         private readonly Parameter _block;
         private readonly int _blockIndex;
 
+        // the overload is [BlockNotKept]: a literal block given to it may be made again (RubyOps.CreateBfcForBlockNotKept)
+        private readonly bool _blockNotKept;
+
         // whether a keyword Hash the call passes stops saying it is keyword arguments, as the rule has it
         // (RubyMethodGroupBase.BuildCallNoFlow): the overload does not receive keywords
         private readonly bool _clearsKeywords;
 
         private LibraryCallPlan(LibraryFunctionCall function, CallInstruction call, Parameter/*!*/[]/*!*/ parameters, Type/*!*/ returnType,
-            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block, bool clearsKeywords) {
+            int mandatoryCount, int positionalCount, int positionalLimit, Parameter paramsParameter, Parameter block, bool clearsKeywords,
+            bool blockNotKept) {
             Debug.Assert((function != null) != (call != null));
             _function = function;
             _call = call;
@@ -102,6 +106,7 @@ namespace IronRuby.Runtime.Calls {
             _block = block;
             _blockIndex = Array.IndexOf(parameters, block);
             _clearsKeywords = clearsKeywords;
+            _blockNotKept = blockNotKept;
         }
 
         /// <summary>
@@ -248,7 +253,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (_block != null && block != null) {
                 // RubyMethodGroupBase.RuleControlFlowBuilder:
-                bfc = RubyOps.CreateBfcForLibraryMethod(block);
+                bfc = _blockNotKept ? RubyOps.CreateBfcForBlockNotKept(block) : RubyOps.CreateBfcForLibraryMethod(block);
                 clrArgs[_blockIndex] = bfc;
                 try {
                     return Call(clrArgs);
@@ -450,7 +455,7 @@ namespace IronRuby.Runtime.Calls {
 
             return new LibraryCallPlan(function, call, parameters, returnType, mandatoryCount, positionalCount,
                 (positionalLimit >= 0) ? positionalLimit : positionalCount, paramsParameter, block,
-                !RubyOverloadResolver.ReceivesKeywordArguments(method));
+                !RubyOverloadResolver.ReceivesKeywordArguments(method), block != null && BlockNotKeptAttribute.IsDefinedOn(method));
         }
 
         private static bool IsPlainParameterType(Type/*!*/ type) {
@@ -1779,6 +1784,41 @@ namespace IronRuby.Runtime.Calls {
             } finally {
                 RubyOps.LeaveMethodFrame(rfc);
             }
+        }
+
+        /// <summary>
+        /// The construction a specialized body makes (JitRuntime.Construct): no block, the arguments as they are. The caller has
+        /// checked <see cref="IsCurrent"/>.
+        /// </summary>
+        internal object/*!*/ Construct0() {
+            return Construct(System.Array.Empty<object>(), null);
+        }
+
+        internal object/*!*/ Construct1(object a0) {
+            object instance = Allocate();
+            return (_initializer == null) ? InitializeOther(new[] { a0 }, instance) :
+                RubyOps.PropagateRetrySingleton(instance, ((Func<object, Proc, object, object>)_initializer)(instance, null, a0));
+        }
+
+        internal object/*!*/ Construct2(object a0, object a1) {
+            object instance = Allocate();
+            return (_initializer == null) ? InitializeOther(new[] { a0, a1 }, instance) :
+                RubyOps.PropagateRetrySingleton(instance, ((Func<object, Proc, object, object, object>)_initializer)(instance, null, a0, a1));
+        }
+
+        internal object/*!*/ Construct3(object a0, object a1, object a2) {
+            object instance = Allocate();
+            return (_initializer == null) ? InitializeOther(new[] { a0, a1, a2 }, instance) :
+                RubyOps.PropagateRetrySingleton(instance, ((Func<object, Proc, object, object, object, object>)_initializer)(instance, null, a0, a1, a2));
+        }
+
+        private object/*!*/ Allocate() {
+            return (_allocator != null) ? _allocator(_class) : new RubyObject(_class);
+        }
+
+        // the initializer of optional or rest parameters, or none, of an instance already allocated
+        private object/*!*/ InitializeOther(object[]/*!*/ args, object/*!*/ instance) {
+            return (_initializerCall != null) ? RubyOps.PropagateRetrySingleton(instance, _initializerCall.Invoke(instance, null, args)) : instance;
         }
 
         private object/*!*/ Construct(object[]/*!*/ args, Proc block) {

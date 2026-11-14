@@ -39,6 +39,7 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#result", typeof(object));
             
             MSA.Expression postYield;
+            bool inBlock = false;
 
             if (gen.CompilerOptions.IsEval) {
                 // eval:
@@ -46,6 +47,7 @@ namespace IronRuby.Compiler.Ast {
             } else if (gen.CurrentBlock != null) {
                 // block:
                 postYield = Methods.BlockYield.OpCall(gen.CurrentScopeVariable, gen.CurrentBlock.BfcVariable, bfcVariable, resultVariable);
+                inBlock = true;
             } else {
                 // method:
                 postYield = Methods.MethodYield.OpCall(gen.CurrentScopeVariable, bfcVariable, resultVariable);
@@ -54,7 +56,10 @@ namespace IronRuby.Compiler.Ast {
             return new AstBlock {
                 gen.DebugMarker("#RB: yield begin"),
 
-                Ast.Assign(bfcVariable, Methods.ReuseBfcForYield.OpCall(bfcVariable, gen.MakeMethodBlockParameterRead())),
+                // a block runs once per call of it: the BlockParam of its yield is the proc's, handed on from one run to the next
+                inBlock ?
+                    Ast.Assign(bfcVariable, Methods.TakeBfcForBlockYield.OpCall(gen.MakeMethodBlockParameterRead())) :
+                    Ast.Assign(bfcVariable, Methods.ReuseBfcForYield.OpCall(bfcVariable, gen.MakeMethodBlockParameterRead())),
 
                 Ast.Assign(
                     resultVariable, 
@@ -62,6 +67,7 @@ namespace IronRuby.Compiler.Ast {
                 ),
 
                 AstUtils.IfThen(postYield, gen.Return(resultVariable)),
+                inBlock ? Ast.Assign(bfcVariable, Methods.ReturnBfcForBlockYield.OpCall(bfcVariable)) : AstUtils.Empty(),
 
                 gen.DebugMarker("#RB: yield end"),
 
