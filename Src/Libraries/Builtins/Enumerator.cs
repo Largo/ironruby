@@ -294,6 +294,57 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // Enumerable#each_slice and #each_cons (EachSlice) over a cursor of the receiver's #each: a new
+        // Array per slice; each_slice ends with the incomplete slice, each_cons drops it.
+        private sealed class SliceCursor : ExternalCursor {
+            private readonly ExternalCursor/*!*/ _inner;
+            private readonly int _size;
+            private readonly bool _includeIncomplete;
+            private RubyArray _slice;
+            private bool _done;
+
+            internal SliceCursor(object receiver, ExternalCursor/*!*/ inner, int size, bool includeIncomplete) : base(receiver) {
+                _inner = inner;
+                _size = size;
+                _includeIncomplete = includeIncomplete;
+            }
+
+            internal override bool MoveNext(out object value) {
+                while (!_done) {
+                    object item;
+                    if (!_inner.MoveNext(out item)) {
+                        _done = true;
+                        _inner.Finish();
+                        if (_slice != null && _includeIncomplete) {
+                            value = _slice;
+                            _slice = null;
+                            return true;
+                        }
+                        break;
+                    }
+                    if (_slice == null) {
+                        _slice = new RubyArray(_size);
+                    }
+                    _slice.Add(item);
+                    if (_slice.Count == _size) {
+                        RubyArray complete = _slice;
+                        if (_includeIncomplete) {
+                            _slice = null;
+                        } else {
+                            _slice = new RubyArray(_size);
+                            for (int i = 1; i < complete.Count; i++) {
+                                _slice.Add(complete[i]);
+                            }
+                        }
+                        value = complete;
+                        return true;
+                    }
+                }
+                value = null;
+                return false;
+            }
+        }
+
         // Array#each, #each_index: the length and the element are read afresh for every step, as
         // rb_ary_each does, so an Array that grows or shrinks half way through is walked the same.
         private sealed class ArrayCursor : ExternalCursor {
@@ -526,6 +577,8 @@ namespace IronRuby.Builtins {
         private sealed class PreludeMethods {
             internal RubyMemberInfo EachWithIndex;
             internal RubyMemberInfo StructEach;
+            internal RubyMemberInfo EachSlice;
+            internal RubyMemberInfo EachCons;
         }
 
         private static readonly object _preludeMethodsKey = new object();
@@ -547,6 +600,10 @@ namespace IronRuby.Builtins {
                     methods.EachWithIndex = method.Info;
                 } else if (name == "each") {
                     methods.StructEach = method.Info;
+                } else if (name == "each_slice") {
+                    methods.EachSlice = method.Info;
+                } else if (name == "each_cons") {
+                    methods.EachCons = method.Info;
                 }
             }
             return null;
@@ -595,6 +652,9 @@ namespace IronRuby.Builtins {
                 }
                 return null;
             }
+            if (args.Length == 1 && args[0] is int && (name == "each_slice" || name == "each_cons")) {
+                return TryCreateSliceCursor(context, target, name, (int)args[0]);
+            }
             if (args.Length != 0) {
                 return null;
             }
@@ -606,20 +666,7 @@ namespace IronRuby.Builtins {
             RubyStruct rubyStruct;
             switch (name) {
                 case "each":
-                    if ((array = target as RubyArray) != null) {
-                        return IsBuiltinMethod(context, target, name, typeof(IListOps), "Each") ? new ArrayCursor(array, false) : null;
-                    }
-                    if ((hash = target as Hash) != null) {
-                        return IsBuiltinMethod(context, target, name, typeof(IDictionaryOps), "Each", "EachPair") ? new HashCursor(hash, HashCursor.Pairs) : null;
-                    }
-                    if ((range = target as Range) != null) {
-                        return TryCreateRangeCursor(context, range);
-                    }
-                    if ((rubyStruct = target as RubyStruct) != null) {
-                        return IsPreludeMethod(context, target, name, GetPreludeMethods(context).StructEach) &&
-                            IsBuiltinMethod(context, target, "__struct_each__", typeof(RubyStructOps), "Each") ? new StructCursor(rubyStruct) : null;
-                    }
-                    return null;
+                    return TryCreateEachCursor(context, target);
 
                 case "each_pair":
                     return (hash = target as Hash) != null && IsBuiltinMethod(context, target, name, typeof(IDictionaryOps), "Each", "EachPair") ?
@@ -664,6 +711,45 @@ namespace IronRuby.Builtins {
                         new CharCursor(str) : null;
             }
             return null;
+        }
+
+        // The receiver's own #each, when it is a built-in one a cursor can do.
+        private static ExternalCursor TryCreateEachCursor(RubyContext/*!*/ context, object target) {
+            RubyArray array;
+            Hash hash;
+            Range range;
+            RubyStruct rubyStruct;
+            if ((array = target as RubyArray) != null) {
+                return IsBuiltinMethod(context, target, "each", typeof(IListOps), "Each") ? new ArrayCursor(array, false) : null;
+            }
+            if ((hash = target as Hash) != null) {
+                return IsBuiltinMethod(context, target, "each", typeof(IDictionaryOps), "Each", "EachPair") ? new HashCursor(hash, HashCursor.Pairs) : null;
+            }
+            if ((range = target as Range) != null) {
+                return TryCreateRangeCursor(context, range);
+            }
+            if ((rubyStruct = target as RubyStruct) != null) {
+                return IsPreludeMethod(context, target, "each", GetPreludeMethods(context).StructEach) &&
+                    IsBuiltinMethod(context, target, "__struct_each__", typeof(RubyStructOps), "Each") ? new StructCursor(rubyStruct) : null;
+            }
+            return null;
+        }
+
+        // Enumerable#each_slice / #each_cons (the prelude's, over the built-in ones) of a receiver whose
+        // #each a cursor can do: the slices are cut from that cursor's steps.
+        private static ExternalCursor TryCreateSliceCursor(RubyContext/*!*/ context, object target, string/*!*/ name, int size) {
+            if (size <= 0) {
+                return null;
+            }
+            var prelude = GetPreludeMethods(context);
+            bool slice = name == "each_slice";
+            if (!IsPreludeMethod(context, target, name, slice ? prelude.EachSlice : prelude.EachCons) ||
+                !IsBuiltinMethod(context, target, slice ? "__each_slice_without_self__" : "__each_cons_without_self__", typeof(Enumerable),
+                    slice ? "GetEachSliceEnumerator" : "GetEachConsEnumerator", slice ? "EachSlice" : "EachCons")) {
+                return null;
+            }
+            ExternalCursor inner = TryCreateEachCursor(context, target);
+            return inner != null ? new SliceCursor(target, inner, size, slice) : null;
         }
 
         // An Integer range whose end is an Integer that fits a long, or none: range_each's fixnum loops.
