@@ -82,13 +82,14 @@ namespace IronRuby.Runtime.Osr {
         internal readonly string/*!*/ Name;
         internal readonly BlockLoopSite[]/*!*/ Sites = new BlockLoopSite[KindCount];
         // the shortest run of Times, UpTo, DownTo, Range#each and Array#each worth entering the copy for
-        // (BlockLoopSite.MinRun, BlockLoopSite.MinLightRun)
+        // (BlockLoopSite.MinRun, BlockLoopSite.MinMediumRun, BlockLoopSite.MinLightRun)
         internal readonly int Floor;
 
         private BlockLoopInfo(BlockDefinition/*!*/ ast, RubyContext/*!*/ context, int depth, LocalVariable parameter,
             LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name, int calls) {
             Ast = ast;
-            Floor = (calls >= BlockLoopSite.HeavyBody) ? BlockLoopSite.MinRun : BlockLoopSite.MinLightRun;
+            Floor = (calls >= BlockLoopSite.HeavyBody) ? BlockLoopSite.MinRun :
+                (calls >= BlockLoopSite.MediumBody) ? BlockLoopSite.MinMediumRun : BlockLoopSite.MinLightRun;
             Locals = locals;
             Context = context;
             Depth = depth;
@@ -238,11 +239,24 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public const int MinRun = 1;
 
+        /// <summary>
+        /// The same for a block of MediumBody calls or more: `s += x * 3 + x * 5 - x / 2 + (x &amp; 7)' over one
+        /// element took 140-160 ns in the copy against 96-107 through the yield, over two the same, over
+        /// four 182 against 300.
+        /// </summary>
+        public const int MinMediumRun = 2;
+
         /// <summary>The same for a lighter block (`s += x'): measured, five is the shortest run no slower in the copy.</summary>
         public const int MinLightRun = 5;
 
-        /// <summary>Method calls (operators and attribute reads included) that make a block body heavy.</summary>
-        internal const int HeavyBody = 6;
+        /// <summary>
+        /// Method calls (operators and attribute reads included) that make a block body heavy: an entry
+        /// costs about 45 ns more than a yield, and a call the copy types saves 4 or 5.
+        /// </summary>
+        internal const int HeavyBody = 12;
+
+        /// <summary>Method calls that make a block body worth entering for two iterations.</summary>
+        internal const int MediumBody = 6;
 
         /// <summary>
         /// The same for Array#map, #select, #any?, #all? and #none?, whose entry also grows and trims
