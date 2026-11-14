@@ -70,13 +70,27 @@ Measure base and candidate back to back, same command line, more than once:
 ```sh
 ruby Util/perf/micro-table.rb "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release ../wt-NAME/ir.sh"
 ruby Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release ../wt-NAME/ir.sh" \
-     -- Bounce Richards Json DeltaBlue Towers
+     -- <the benchmarks the experiment is about>
 ```
+
+While iterating, name the two or three benchmarks the hypothesis is about after `--`: a
+run of those takes a minute. That subset is a hint, not a result. The whole suite (no
+`--`, all thirteen, about five minutes for two trees) is run:
+
+- before deciding (step 3), twice;
+- on the merged tree after every merge (step 4), against the tree before the merge;
+- at least after every third experiment in a loop even if nothing merged, against the
+  commit of the last recorded numbers, to catch drift nobody was looking for.
 
 ## 3. Decide
 
 Numbers an agent took while other builds were running are a hint. Before deciding, measure
-again yourself with nothing else running (`uptime`), twice.
+again yourself with nothing else running (`uptime`), twice, on all thirteen benchmarks: a
+change aimed at one benchmark is kept or rejected on what it does to the whole suite.
+Give awfy.rb the two trees in one order for the first run and the other order for the
+second (`/perf-gate`, step 4, says why), and put every candidate of a round in one
+invocation as extra columns: a column whose change cannot touch a benchmark shows how far
+that benchmark moves by itself.
 
 Keep the change only if all of these hold:
 

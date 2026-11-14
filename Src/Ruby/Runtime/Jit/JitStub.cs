@@ -110,6 +110,11 @@ namespace IronRuby.Runtime.Jit {
         // intrinsic off a receiver with (JitCompiler.ObservedType); it is never relied on for a result.
         private readonly Type[]/*!*/ _argClrType;
         private Type _selfClrType;
+        // The Ruby classes each argument has had while profiling, the first two (an object of a class of its own
+        // or one that is not a RubyObject counts as a third): which receivers an inlined call on a parameter
+        // dispatches between (JitCompiler.TryInlineCall). A hint, like the rest; the inlined call checks the class.
+        private readonly RubyClass[]/*!*/ _argClass1, _argClass2;
+        private readonly bool[]/*!*/ _argManyClasses;
 
         // The receiver of the call that reached the threshold, while TrySpecialize runs (under _compiling).
         private object _selfSample;
@@ -149,6 +154,9 @@ namespace IronRuby.Runtime.Jit {
             _typedCount = (keywords != null) ? _positional + keywords.Count : arity;
             _argKind = new int[_typedCount];
             _argClrType = new Type[_typedCount];
+            _argClass1 = new RubyClass[_typedCount];
+            _argClass2 = new RubyClass[_typedCount];
+            _argManyClasses = new bool[_typedCount];
         }
 
         protected abstract void SetFast(Delegate entry);
@@ -273,6 +281,11 @@ namespace IronRuby.Runtime.Jit {
             internal long DeoptCost;
             // The constant version the typed bodies were compiled under (JitCode.UsesConstants).
             internal int ConstantVersion;
+            // The one typed body (not per-count ones), the method version its entry checks and the class it
+            // pins self to, if any: what a caller that inlines it (JitStub.InlinableBody) has to check too.
+            internal JitCode Code;
+            internal int Version;
+            internal RubyClass PinnedClass;
 
             internal Specialization(JitStub/*!*/ stub) {
                 Stub = stub;
@@ -346,6 +359,17 @@ namespace IronRuby.Runtime.Jit {
 
         private void Observe(int i, object arg) {
             ObserveType(ref _argClrType[i], arg);
+            if (!_argManyClasses[i]) {
+                var obj = arg as RubyObject;
+                RubyClass cls = (obj != null) ? obj.ImmediateClass : null;
+                if (cls == null || cls.IsSingletonClass) {
+                    _argManyClasses[i] = true;
+                } else if (_argClass1[i] == null) {
+                    _argClass1[i] = cls;
+                } else if (_argClass1[i] != cls) {
+                    if (_argClass2[i] == null) { _argClass2[i] = cls; } else if (_argClass2[i] != cls) { _argManyClasses[i] = true; }
+                }
+            }
             int k = (arg is int) ? 1 : (arg is double) ? 2 : (arg is long) ? 4 : 3;
             if (_argKind[i] == 0) {
                 _argKind[i] = k;
@@ -391,6 +415,9 @@ namespace IronRuby.Runtime.Jit {
         // stale. A program that keeps defining methods (a `def obj.x' per object, define_method in
         // a loop) would otherwise pay a compile every Threshold calls for as long as it runs.
         private const int MaxRespecializations = 8;
+        // How many times deopts of an inlined call on a parameter sent the method back to profiling (OnDeopt).
+        private const int MaxReprofiles = 2;
+        private int _reprofiles;
         private int _respecializations;
 
         /// <summary>
@@ -538,6 +565,24 @@ namespace IronRuby.Runtime.Jit {
                 return;
             }
 
+            if (spec.Code != null && spec.Code.InlinedOnArgumentClass && _reprofiles < MaxReprofiles) {
+                // An inlined call on a parameter checks the one class the profile saw it hold (TryInlineCall), and
+                // the calls since have mostly had another: profile again, adding the classes seen now, and compile
+                // again, rather than retire a body that a second class would have fitted.
+                bool settled;
+                lock (_sync) {
+                    if (_state != Specialized || spec != _current) { return; }
+                    _reprofiles++;
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] profiling {0}/{1} arity {2} again: {3} deopts in {4} calls",
+                            _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries);
+                    }
+                    settled = Respecialize(spec);
+                }
+                if (settled) { NotifyOwner(); }
+                return;
+            }
+
             lock (_sync) {
                 if (_state != Specialized || spec != _current) { return; }
                 JitRuntime.DeoptRetired++;
@@ -672,13 +717,27 @@ namespace IronRuby.Runtime.Jit {
             int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
-            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, Hints()));
-            if (code == null) { return false; }
+            var hints = Hints();
+            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints));
+            if (code == null) {
+                // A call the body could inline is of a method that has not been specialized yet: a caller
+                // called once per call of its callee turns hot first. Profile on, a few times, rather than
+                // settling on the generic body for good.
+                if (hints.CalleeNotReady && ++_inlineWaits <= MaxInlineWaits) {
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] waiting for a callee of {0}/{1} to be specialized", _declaringModule.Name ?? "main", _ast.Name);
+                    }
+                    return true;
+                }
+                return false;
+            }
 
-            bool needsClassGuard = code.EmittedSelfCall;
+            bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null;
             if (needsClassGuard) {
                 if (_receiverClass == null || _polymorphicReceiver) { return false; }
-                if (!SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                // the inlined self-calls were resolved on the class of the sampled receiver
+                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { return false; }
             }
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the
@@ -696,6 +755,9 @@ namespace IronRuby.Runtime.Jit {
 
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
+            spec.Code = code;
+            spec.Version = version;
+            spec.PinnedClass = needsClassGuard ? _receiverClass : null;
             spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
@@ -721,8 +783,27 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        // How many times TrySpecialize went on profiling for a callee to be specialized (ReceiverHints.CalleeNotReady).
+        private const int MaxInlineWaits = 3;
+        private int _inlineWaits;
+
+        /// <summary>The method is still being profiled: it may yet be specialized.</summary>
+        internal bool IsProfiling {
+            get { return _state == Profiling; }
+        }
+
         private JitCompiler.ReceiverHints/*!*/ Hints() {
-            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample };
+            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample,
+                ArgClasses = ArgClasses() };
+        }
+
+        private RubyClass[][]/*!*/ ArgClasses() {
+            var result = new RubyClass[_typedCount][];
+            for (int i = 0; i < _typedCount; i++) {
+                if (_argManyClasses[i] || _argClass1[i] == null) { continue; }
+                result[i] = (_argClass2[i] == null) ? new[] { _argClass1[i] } : new[] { _argClass1[i], _argClass2[i] };
+            }
+            return result;
         }
 
         private JT[]/*!*/ ProfiledTypes(int count) {
@@ -824,6 +905,25 @@ namespace IronRuby.Runtime.Jit {
         /// The direct self-call is only correct if the name still resolves, from the profiled
         /// receiver class and under the body's refinements, to this very body.
         /// </summary>
+        /// <summary>
+        /// The typed body a caller compiled now may inline in place of a call of this method on an instance of
+        /// <paramref name="receiverClass"/> (JitCompiler.TryInlineCall), or null. It is the body the call would
+        /// enter now: the method specialized, its entry's method version the current one (the caller's entry
+        /// checks one no newer, so the two go stale together), and any class it pins self to this one.
+        /// </summary>
+        internal JitCode InlinableBody(RubyContext/*!*/ context, RubyClass/*!*/ receiverClass) {
+            if (context != _context || _perCountMandatory >= 0 || _keywords != null) { return null; }
+            Specialization spec;
+            lock (_sync) {
+                if (_state != Specialized) { return null; }
+                spec = _current;
+            }
+            if (spec == null || spec.Code == null || !spec.Code.Inlinable) { return null; }
+            if (spec.Version != RubyModule.GlobalMethodVersion) { return null; }
+            if (spec.PinnedClass != null && spec.PinnedClass != receiverClass) { return null; }
+            return spec.Code;
+        }
+
         private bool SelfCallResolvesHere(RubyClass/*!*/ cls, RefinementActivation/*!*/ refinements) {
             var resolved = cls.ResolveMethod(_ast.Name, VisibilityContext.AllVisible, refinements);
             if (!resolved.Found) { return false; }
@@ -1252,11 +1352,11 @@ namespace IronRuby.Runtime.Jit {
             bool perCount;
             int arity;
             string rejectedBy;
-            return Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy);
+            return Screen(ast, context, null, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy);
         }
 
         // The static part of Wrap's decision; rejectedBy is set when the screen (not the parameter list) refused the body.
-        private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, out JitKeywords keywords, out bool[] hasDefault,
+        private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule declaringModule, out JitKeywords keywords, out bool[] hasDefault,
             out object[] defaults, out bool perCount, out bool[] storedOnly, out int arity, out string rejectedBy) {
             keywords = null;
             hasDefault = null;
@@ -1318,7 +1418,9 @@ namespace IronRuby.Runtime.Jit {
             // into call site rules, so a method declined later still pays one extra indirect
             // call on every call for the life of the process.
             HashSet<string> otherUses;
-            if (!JitScreen.CanEverCompile(ast, keywords, out rejectedBy, out otherUses)) {
+            if (!JitScreen.CanEverCompile(ast, keywords,
+                // (no module: IsCandidate, which only asks whether the body may ever be wrapped)
+                (declaringModule != null) ? (name, onSelf) => IsLeafMethod(declaringModule, name, onSelf) : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses)) {
                 return false;
             }
 
@@ -1336,6 +1438,77 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// A call of <paramref name="name"/> is one the typed body may inline (JitCompiler.TryInlineCall): the method it
+        /// resolves to on the declaring module now is a Ruby method whose body calls nothing (JitScreen's leaf screen) -
+        /// for a call on another object, one of the declaring class's own kind (`other.compare_to(o)'), the only kind
+        /// this can see. A call on self of a method not defined yet may be of one defined further down. Only a hint, for the screen: the compiler resolves the call again on the receiver's class. Without it
+        /// every method calling another one would be wrapped, and a wrapped method declined later stays slower.
+        /// </summary>
+        private static bool IsLeafMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, bool onSelf) {
+            try {
+                var resolved = declaringModule.ResolveMethod(name, VisibilityContext.AllVisible);
+                if (!resolved.Found) {
+                    // a method defined further down the class body is not there yet when this one is defined
+                    if (onSelf) { return true; }
+                    // `key.compare_to(current.key)' in RedBlackTree: a method of another class, which only the profile
+                    // will name. Taken if some top-level class defines a method of that name that may be inlined.
+                    return IsLeafMethodOfSomeClass(declaringModule.Context, name);
+                }
+                // Nested only for a call on another object (`key.compare_to(k)'): taken for a call on self as well, it
+                // wrapped Json's HashIndexTable#add and #get over `hash_slot_for', whose own callee is never compiled.
+                return IsLeafMethod(resolved.Info as RubyMethodInfo, !onSelf);
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="nest"/>: the method may itself call, on self, methods of the leaf shape, which its typed body
+        /// inlines (JitInlineShape.IsInlinableShape) - one level, so `compare_to' calling `compare_numbers' is taken.
+        /// </summary>
+        private static bool IsLeafMethod(RubyMethodInfo info, bool nest) {
+            if (info == null) { return false; }
+            var ast = info.GetSyntaxTree();
+            var ps = ast.Parameters;
+            if (ps.Optional.Length > 0 || ps.Unsplat != null || ps.Block != null || ps.Mandatory.Length > MaxArity) { return false; }
+            RubyModule owner = info.DeclaringModule;
+            Func<string, bool> nested = null;
+            Func<string, bool, bool> nestedCallee = null;
+            if (nest) {
+                // the nested callee as the owner resolves it now; one defined further down is not taken
+                nested = n => {
+                    var r = owner.ResolveMethod(n, VisibilityContext.AllVisible);
+                    return r.Found && IsLeafMethod(r.Info as RubyMethodInfo, false);
+                };
+                nestedCallee = (n, onSelf) => onSelf && nested(n);
+            }
+            if (!JitInlineShape.IsInlinableShape(ast, nested)) { return false; }
+            string rejectedBy;
+            HashSet<string> otherUses;
+            return JitScreen.CanEverCompile(ast, null, nestedCallee, out rejectedBy, out otherUses);
+        }
+
+        /// <summary>A class that is a constant of Object defines a Ruby method of this name that may be inlined.</summary>
+        private static bool IsLeafMethodOfSomeClass(RubyContext/*!*/ context, string/*!*/ name) {
+            var candidates = new List<RubyMethodInfo>();
+            using (context.ClassHierarchyLocker()) {
+                context.ObjectClass.EnumerateConstants((module, constantName, value) => {
+                    var cls = value as RubyClass;
+                    RubyMemberInfo method;
+                    if (cls != null && cls.Context == context && !cls.IsSingletonClass && cls.TryGetDefinedMethod(name, out method)) {
+                        var info = method as RubyMethodInfo;
+                        if (info != null) { candidates.Add(info); }
+                    }
+                    return false;
+                });
+            }
+            foreach (var info in candidates) {
+                if (IsLeafMethod(info, true)) { return true; }
+            }
+            return false;
         }
 
         /// <summary>
@@ -1373,7 +1546,7 @@ namespace IronRuby.Runtime.Jit {
             bool perCount;
             int arity;
             string rejectedBy;
-            if (!Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
+            if (!Screen(ast, context, declaringModule, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
                 if (rejectedBy != null) {
                     JitRuntime.RecordScreenRejection(rejectedBy);
                     if (JitRuntime.Verbose) {

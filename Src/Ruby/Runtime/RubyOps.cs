@@ -4059,14 +4059,16 @@ namespace IronRuby.Runtime {
 
         #region Ranges
 
+        // A Range literal takes its context from the comparison storage, which the literal's own code made for its runtime: it
+        // needs no scope, so a method whose body makes one, `(@first..(@last - 1)).each { }', can be a light frame.
         [Emitted]
-        public static Range/*!*/ CreateInclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
-            return new Range(comparisonStorage, scope.RubyContext, begin, end, false);
+        public static Range/*!*/ CreateInclusiveRange(object begin, object end, BinaryOpStorage/*!*/ comparisonStorage) {
+            return new Range(comparisonStorage, comparisonStorage.Context, begin, end, false);
         }
 
         [Emitted]
-        public static Range/*!*/ CreateExclusiveRange(object begin, object end, RubyScope/*!*/ scope, BinaryOpStorage/*!*/ comparisonStorage) {
-            return new Range(comparisonStorage, scope.RubyContext, begin, end, true);
+        public static Range/*!*/ CreateExclusiveRange(object begin, object end, BinaryOpStorage/*!*/ comparisonStorage) {
+            return new Range(comparisonStorage, comparisonStorage.Context, begin, end, true);
         }
 
         #endregion

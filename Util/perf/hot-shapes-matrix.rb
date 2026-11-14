@@ -578,6 +578,168 @@ lambda do
   p s2.map(&:call), s3.map(&:call), s4.map(&:call), (s2 + s3 + s4).map(&:object_id).uniq.size
 end.call
 
+# ---- `"lit" == v' and `"lit" != v' in a method-JIT body, and `v == "lit"' ----
+# The JIT compares a String v with an ASCII literal by its characters when v holds them in an
+# encoding where ASCII is its own bytes (MutableString.EqualsAsciiLiteral), and through
+# String#== otherwise. v of every kind: other encodings (binary, US-ASCII, UTF-16LE, an
+# invalid byte, a one-byte slice of a multi-byte character), a String subclass, nil, an
+# Integer, an object with to_str; in the middle NilClass gains to_str and String#== is replaced.
+lambda do
+  rl = Class.new do
+    def initialize; @c = nil; end
+    attr_writer :c
+    def ws; ' ' == @c || "\t" == @c || "\n" == @c || "\r" == @c; end
+    def ne; "a" != @c; end
+    def em; "" == @c; end
+    def fw; @c == "ab"; end
+    def u8; "é" == @c; end
+  end.new
+  sub = Class.new(String)
+  ts = Object.new
+  def ts.to_str; "a"; end
+  def ts.==(o); o == "a"; end
+  vals = [" ", "\t", "x", "a", "ab", "", nil, 1, :a, " ".b, "a".b, "a".encode("US-ASCII"), "a".encode("UTF-16LE"),
+          "\xFF".b, "\xFF", "é"[0].b, "é".b[0], "é", "é".b, "é".encode("ISO-8859-1"), sub.new("a"), sub.new(" "), ts,
+          "ab".force_encoding("UTF-16LE"), +"a"]
+  out = []
+  20_000.times do |i|
+    v = vals[i % vals.size]
+    rl.c = v
+    r = [rl.ws, rl.ne, rl.em, rl.fw, rl.u8]
+    out << [i % vals.size, r] if i >= 20_000 - vals.size
+    if i == 10_000
+      NilClass.class_eval { def to_str; "a"; end; def ==(o); :nil_eq; end }
+    elsif i == 12_000
+      NilClass.class_eval { remove_method :to_str; remove_method :== }
+    elsif i == 14_000
+      String.class_eval { alias_method :__eq, :==; def ==(o); __eq(o) || o.equal?(:a); end }
+    elsif i == 16_000
+      String.class_eval { alias_method :==, :__eq; remove_method :__eq }
+    end
+    out << [:mid, i, r] if i == 11_000 || i == 15_000
+  end
+  out.each { |x| p x }
+end.call
+
+# ---- the same comparisons with v in many encodings, retagged and transcoded ----
+# The character comparison is only right where ASCII characters are their own bytes: not in
+# UTF-16/32, not in a dummy encoding (UTF-7, ISO-2022-JP), not in EBCDIC. Each String is made
+# both ways - force_encoding keeps the bytes, encode keeps the characters - and compared hot.
+lambda do
+  le = Class.new do
+    attr_writer :c
+    def rev; 'a' == @c; end
+    def revn; 'a' != @c; end
+    def fwd; @c == 'a'; end
+    def two; 'ab' == @c; end
+    def emp; '' == @c; end
+    def cas; case @c when 'a' then 1 when 'ab' then 2 else 3 end; end
+  end.new
+  le.c = "a"
+  20_000.times { le.rev; le.revn; le.fwd; le.two; le.emp; le.cas }
+  probe = lambda do |v|
+    le.c = v
+    # (inspect, not `x == true': this file's `using IDRefine' above makes Object#== answer :refeq from here on)
+    [le.rev, le.revn, le.fwd, le.two, le.emp, le.cas].map { |x| x.inspect[0] }.join
+  end
+  %w[UTF-8 US-ASCII BINARY ISO-8859-1 Windows-1252 Shift_JIS EUC-JP Windows-31J GB18030 Big5 KOI8-R
+     UTF-16LE UTF-16BE UTF-32LE UTF-16 UTF-32 UTF-7 ISO-2022-JP CP50221 IBM037].each do |name|
+    enc = Encoding.find(name)
+    row = ["a", "ab", "b", ""].flat_map do |s|
+      [(probe.(s.dup.force_encoding(enc)) rescue $!.class), (probe.(s.encode(enc)) rescue $!.class)]
+    end
+    puts "#{name} #{row.join(' ')}"
+  end
+  [[97].pack('C'), (+"x").replace("a"), (+"") << "a", (+"").b << "a", :a.to_s, "a\0", "A", "ａ", "á"].each { |v| p [v, probe.(v)] }
+end.call
+
+# ---- a one-character slice compared with literals in compiled methods, then changed ----
+# `s[i]' of an ASCII character has a shared content (SharedAsciiContents); the compiled
+# comparisons read it as it is (MutableString.EqualsAsciiLiteral). The slice is still a
+# String of its own: appended to, replaced and retagged while the parser's next slices
+# and its source are compared again.
+lambda do
+  pr = Class.new do
+    def initialize(s); @input = s; @i = 0; @current = nil; end
+    def read; @current = @input[@i]; @i = (@i + 1) % @input.size; @current; end
+    def ws; ' ' == @current || "\t" == @current || "\n" == @current || "\r" == @current; end
+    def digit; '0' == @current || '5' == @current || '9' == @current; end
+    def fwd; @current == "a"; end
+    def ne; "a" != @current; end
+    def cas; case @current when 'a' then 1 when ' ' then 2 else 3 end; end
+    def all; [ws, digit, fwd, ne, cas].map { |x| x.inspect[0] }.join; end
+    attr_reader :input
+  end.new("a 5\tz9\nA".dup)
+  out = []
+  30_000.times do |k|
+    c = pr.read
+    r = pr.all
+    out << [c.bytes, r] if k >= 30_000 - 8
+    next unless k % 7_000 == 6_999
+    c << "!"; out << [:appended, c.bytes, pr.all]
+    c.replace(" "); out << [:replaced, c.bytes, pr.all]
+    c.force_encoding("UTF-16LE"); out << [:retagged, c.bytes, c.encoding.name, pr.all]
+    c.force_encoding("BINARY"); out << [:binary, c.bytes, pr.all]
+  end
+  out.each { |x| p x }
+  p pr.input
+end.call
+
+# Range literals (round nine): a method whose body makes a Range is a light frame, and Range#initialize does not
+# call <=> for two Fixnums (MRI's range_init); Bignum and other bounds still ask, a nil answer still raises, and
+# recursion through <=> from a light frame ends in SystemStackError. Integer#<=> and Range.new are redefined last.
+class RCmp; include Comparable; attr_reader :v; def initialize(v); @v = v; end; def <=>(o); $cmps += 1; o.is_a?(RCmp) ? @v <=> o.v : nil; end; end
+$cmps = 0
+class RK
+  def initialize; @s = "abcdefghijklmnop"; @a = 2; end
+  def r(a, b) = (a..b)
+  def rx(a, b); (a...b); end
+  def sl(e); @s[@a..e]; end
+  def sum(a, b); s = 0; i = a; r = (a..b); r.each { |x| s += x }; s; end
+  def lit; (1..3); end
+end
+k = RK.new
+res = []
+3000.times do |i|
+  res << k.r(i, i + 2).inspect if i % 1000 == 0
+  res << k.rx(i, i + 1).size if i % 999 == 0
+  res << k.sl(i % 10) if i % 777 == 0
+  res << k.sum(i, i + 3) if i % 1500 == 0
+  res << k.lit.equal?(k.lit)
+end
+p res.uniq.size, res.first(12)
+# frozen, identity of each made Range
+a = k.r(1, 2); b = k.r(1, 2); p [a.frozen?, a.equal?(b), a.eql?(b)]
+# non-integer bounds through the hot site: <=> is called, nil raises
+p k.r(RCmp.new(1), RCmp.new(2)).begin.v, $cmps
+begin; k.r(RCmp.new(1), 3); rescue ArgumentError => e; p e.message; end
+begin; k.r(1, "a"); rescue ArgumentError => e; p e.message; end
+p k.r(1.5, 2), k.r(nil, 3), k.r(3, nil), k.r("a", "c")
+p k.r(2**61, 2**62), k.r(1, 2**64)
+# Integer#<=> redefined: Fixnum bounds are not asked (MRI's range_init), Bignum ones are
+class Integer; alias __c <=>; def <=>(o); $ic = ($ic || 0) + 1; __c(o); end; end
+x = k.r(1, 2); x = k.r(2**61, 2**62 - 1); x = k.r(-(2**62), 2**40); p $ic.inspect
+x = k.r(1, 2**62); p $ic
+x = k.r(-(2**62) - 1, 0); p $ic
+x = k.r(1, 1.5); p $ic
+class Integer; alias <=> __c; end
+# exception from <=> passes through, frames as before
+class Bad; def <=>(o); raise "boom"; end; end
+begin; k.r(Bad.new, Bad.new); rescue => e; p e.message; end
+# recursion through <=> from a light frame
+def lr(a, b) = (a..b)
+class Rec2; def <=>(o); lr(self, o); 0; end; end
+begin; x = lr(Rec2.new, Rec2.new); p x; rescue SystemStackError => e; p e.class; end
+# Range.new redefined is not called for a literal
+class Range; def self.new(*) = raise("no"); end
+p k.r(4, 5)
+# binding/local_variables in a method with a range
+def bm(a, b); r = (a..b); binding.local_variable_get(:r); end
+p 2000.times.map { |i| bm(i, i+1) }.last
+# caller frames from inside <=>
+class Cf; def <=>(o); $fr = caller(0, 3).map { |l| l[/'.*'/] }; 0; end; end
+k.r(Cf.new, Cf.new); p $fr
+
 # ---- `a != b' bound as a negated builtin `==' (DispatchIntrinsics.TryBuildNotEquals) ----
 # BasicObject#!= calls `==': for nil, true, false, a plain object, two Integers and two Strings
 # the rule compares itself. Hot, with what must undo it in the middle: `==' defined in the

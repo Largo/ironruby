@@ -815,6 +815,20 @@ namespace IronRuby.Runtime.Jit {
             return ThrowDeopt<double>();
         }
 
+        /// <summary>The receiver of an inlined call (JitCompiler.TryInlineCall) is of the class the call was resolved on.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void GuardClass(RubyContext/*!*/ context, object value, RubyClass/*!*/ cls) {
+            IRubyObject obj = value as IRubyObject;
+            if (obj == null || !ReferenceEquals(obj.ImmediateClass, cls)) { ThrowDeopt<int>(); }
+        }
+
+        /// <summary>Which of two classes an inlined call's receiver is of (JitCompiler.TryInlineCall).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsOfClass(object value, RubyClass/*!*/ cls) {
+            IRubyObject obj = value as IRubyObject;
+            return obj != null && ReferenceEquals(obj.ImmediateClass, cls);
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static T ThrowDeopt<T>() {
             throw Deopt();

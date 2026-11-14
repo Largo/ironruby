@@ -25,6 +25,7 @@ using IronRuby.Compiler.Generation;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using IronRuby.Runtime.Conversions;
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Builtins {
     using UnaryOp = Func<CallSite, object, object>;
@@ -786,7 +787,7 @@ namespace IronRuby.Builtins {
             if (self.End == null) {
                 return StepEndless(storage, block, self, self.Begin, 1);
             } else if (self.Begin is int && self.End is int) {
-                return StepFixnum(block, self, (int)self.Begin, (int)self.End, 1);
+                return EachFixnum(block, self, (int)self.Begin, (int)self.End);
             } else if (self.Begin is MutableString) {
                 return StepString(storage, block, self, (MutableString)self.Begin, (MutableString)self.End, 1);
             } else if (self.Begin is RubySymbol && self.End is RubySymbol) {
@@ -898,24 +899,53 @@ namespace IronRuby.Builtins {
         /// This method is optimized for direct integer operations using &lt; and + directly.
         /// It is not used if either begin or end are outside Fixnum bounds.
         /// </remarks>
-        private static object StepFixnum(BlockParam/*!*/ block, Range/*!*/ self, int begin, int end, int step) {
+        private static object EachFixnum(BlockParam/*!*/ block, Range/*!*/ self, int begin, int end) {
             Assert.NotNull(block, self);
-            CheckStep(step);
 
             object result;
-            int item = begin;
-            while (item < end) {
-                if (block.Yield(item, out result)) {
-                    return result;
+            if ((long)end - begin <= BlockLoopSite.MinRun) {
+                // A run too short to be outlined is the loop it always was, with nothing to count.
+                int item = begin;
+                while (item < end) {
+                    if (block.Yield(item, out result)) {
+                        return result;
+                    }
+                    item++;
                 }
-                item += step;
+                if (item == end && !self.ExcludeEnd) {
+                    if (block.Yield(item, out result)) {
+                        return result;
+                    }
+                }
+                return self;
             }
 
-            if (item == end && !self.ExcludeEnd) {
-                if (block.Yield(item, out result)) {
+            // the last element: end, or end - 1 for begin...end (none at all for begin...Int32.MinValue)
+            int last = end;
+            if (self.ExcludeEnd) {
+                if (end == Int32.MinValue) { return self; }
+                last = end - 1;
+            }
+
+            // -X:OSR: once the block is hot, the rest of the loop runs in a typed copy of the loop this and
+            // the block make together, which is Integer#upto's (BlockLoopSite); one too short to be
+            // outlined never asks for it.
+            int i = begin;
+            var loop = BlockLoopSite.For(block, BlockLoopKind.UpTo, (long)last - begin);
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
+            while (i <= last) {
+                if (--countdown <= 0 && (long)last - i >= loop.Floor) {
+                    i = loop.Run(block, i, last, ref countdown);
+                    if (i > last) { break; }
+                }
+                if (block.Yield(i, out result)) {
                     return result;
                 }
+                // i++ would wrap round when last is Int32.MaxValue
+                if (i == last) { break; }
+                i++;
             }
+            if (loop != null) { loop.Leave(countdown); }
             return self;
         }
 

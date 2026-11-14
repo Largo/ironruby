@@ -199,3 +199,121 @@ t('times: Thread#kill') do
   th.join.status
 end
 t('times: enumerator') { [5.times.to_a, 3.upto(6).to_a, 6.downto(3).to_a] }
+
+# ---------------------------------------------------------------- attr reads on a local the block assigns
+# `b = a[i % n]; s += b.x * b.y': the block's own local b is fresh on every yield, so the copy takes
+# what reader x is from an element of a (JitCompiler.NoteLoopSample) and checks each b's class as it
+# reads. An element of another class (one whose x reads another variable, one whose x is a method, nil,
+# one whose x is private), one element with a singleton x, and the reader redefined between runs.
+class BlAttrP; attr_reader :x, :y; def initialize(x, y) = (@x = x; @y = y); end
+class BlAttrQ; attr_reader :y; def x = @y * 10; def initialize(y) = (@y = y); end
+class BlAttrR; attr_reader :x, :y; def initialize(x) = (@x = @y = x); end
+class BlAttrPriv; attr_reader :y; private attr_reader :x; def initialize = (@x = @y = 1.0); end
+bl_attr = ->(a) { s = 0.0; N.times { |i| b = a[i % a.size]; s += b.x * b.y }; s }
+bl_attr_each = ->(a, k) { s = 0.0; k.times { a.each { |b| s += b.x - b.y } }; s }
+bl_ps = Array.new(4) { |k| BlAttrP.new(k * 1.5, k + 0.25) }
+t('attr reads on a block local') { bl_attr.(bl_ps) }
+t('... Integers') { bl_attr.(Array.new(4) { |k| BlAttrP.new(k, k + 1) }) }
+t('... an element whose reader reads another variable') { a = bl_ps.dup; a[N % 4 + 0] = BlAttrR.new(2.0); a << BlAttrR.new(3.0); bl_attr.(a) }
+t('... an element whose x is a method') { bl_attr.(bl_ps + [BlAttrQ.new(1.5)]) }
+t('... nil') { bl_attr.(bl_ps + [nil]) }
+t('... a private x') { bl_attr.(bl_ps + [BlAttrPriv.new]) }
+t('... a singleton x on one element') { o = BlAttrP.new(1.0, 2.0); def o.x = 100.0; bl_attr.(bl_ps + [o]) }
+t('... in each') { bl_attr_each.(bl_ps * 1000, 2) }
+t('... in each, nil at the end') { bl_attr_each.(bl_ps * 1000 + [nil], 1) }
+t('... a Float turning into a String') { a = bl_ps + [BlAttrP.new("s", 1.0)]; bl_attr.(a) }
+class BlAttrP; def x = 7.0; end
+t('... the reader redefined') { [bl_attr.(bl_ps), bl_attr_each.(bl_ps * 1000, 2)] }
+t('... in a while loop') { a = Array.new(4) { |k| BlAttrR.new(k + 0.5) }; s = 0.0; i = 0; while i < N; b = a[i % 4]; s += b.x * b.y; i += 1; end; s }
+
+# ---------------------------------------------------------------- attr op-assign on block locals
+# `b.v -= d; c.v += d', b and c elements the block loads: the read, the operator and the store the
+# writer does (JitCompiler.EmitMemberOpAssign), the first store logged so that a deopt at the second
+# restarts the iteration with nothing written twice. Met by a frozen element (FrozenError from the
+# real call), a writer that counts its calls, a singleton writer on one element, an element of another
+# class, an Integer leaving Int64, and the writer redefined between runs.
+class BlOpP; attr_accessor :v, :w; def initialize(v) = (@v = v; @w = 1.0); end
+class BlOpCount; attr_accessor :w; attr_reader :v, :n; def initialize(v) = (@v = v; @w = 1.0; @n = 0); def v=(x); @n += 1; @v = x; end; end
+class BlOpOther; attr_accessor :w, :v; def initialize(v) = (@v = v; @w = 2.0); end
+bl_op = ->(a, k = N) { k.times { |i| b = a[i % a.size]; c = a[(i + 1) % a.size]; d = b.w * 0.5; b.v -= d; c.v += d * c.w }; a.map(&:v) }
+bl_op_ps = -> { Array.new(4) { |k| BlOpP.new(k * 1.0) } }
+t('attr op-assign on block locals') { bl_op.(bl_op_ps.()) }
+t('... a frozen element') { a = bl_op_ps.(); a << BlOpP.new(9.0).freeze; r = (bl_op.(a) rescue $!.class); [r, a.map(&:v)] }
+t('... frozen part way') { a = Array.new(4000) { |k| BlOpP.new(k * 1.0) }; a[3500].freeze; r = (bl_op.(a, 3600) rescue $!.class); [r, a.sum(&:v)] }
+t('... a writer that counts its calls') { o = BlOpCount.new(1.0); a = bl_op_ps.() + [o]; [bl_op.(a), o.n] }
+t('... a singleton writer on one element') { o = BlOpP.new(1.0); def o.v=(x); @v = x * 2; end; [bl_op.(bl_op_ps.() + [o])] }
+t('... an element of another class') { bl_op.(bl_op_ps.() + [BlOpOther.new(5.0)]) }
+t('... Integers leaving Int64') { a = Array.new(3) { BlOpP.new(1) }; a.each { |o| o.w = 2**50 }; N.times { |i| b = a[i % 3]; b.v += b.w; b.w += 1125899906842624 }; a.map { |o| [o.v, o.w] } }
+t('... in a while loop') { a = bl_op_ps.(); i = 0; while i < N; b = a[i % 4]; b.v += i * 0.5; i += 1; end; a.map(&:v) }
+class BlOpP; def v=(x); @v = -x; end; end
+t('... the writer redefined') { bl_op.(bl_op_ps.()) }
+
+# ---------------------------------------------------------------- Range#each over Integers
+# Outlined as Integer#upto's loop (RangeOps.EachFixnum): inclusive and exclusive, bounds at the
+# ends of Int32, a bound past it, Float and endless and beginless ranges, break and next with values,
+# a frozen Range, a Range subclass with its own each, and a Range#each redefined.
+class BlRangeSub < Range; def each; yield :sub; self; end; end
+t('Range#each: inclusive') { s = 0; (1..N).each { |i| s += i }; s }
+t('... exclusive') { s = 0; (1...N).each { |i| s += i }; s }
+t('... value') { r = (3..N); r.each { |i| i }.equal?(r) }
+t('... to Int32 max') { s = 0; (2**31 - 3000..2**31 - 1).each { |i| s += 1 }; s }
+t('... exclusive to Int32 max') { s = 0; (2**31 - 3000...2**31 - 1).each { |i| s += 1 }; s }
+t('... from Int32 min') { s = 0; (-2**31...-2**31 + 3000).each { |i| s += i }; s }
+t('... exclusive to Int32 min') { s = 0; (-2**31...-2**31).each { |i| s += 1 }; s }
+t('... past Int32') { s = 0; (2**31 - 2000..2**31 + 2000).each { |i| s += i }; [s, s.class] }
+t('... into Int64') { s = 0; (2**31 - 5000..2**31 - 1).each { |i| s += i * i }; s }
+t('... Float begin') { s = 0; (1.0..N).each { |i| s += i } rescue $!.class }
+t('... endless') { s = 0; (1..).each { |i| s += i; break s if i == N } }
+t('... beginless') { (..N).each { } rescue $!.class }
+t('... break with a value') { s = 0; (1..N).each { |i| s += i; break [s, i] if i == N - 7 } }
+t('... next with a value') { s = 0; (1..N).each { |i| next 5 if i.odd?; s += i }; s }
+t('... a frozen Range') { s = 0; (1..N).freeze.each { |i| s += i }; s }
+t('... a Range subclass with its own each') { a = []; BlRangeSub.new(1, N).each { |i| a << i }; a }
+t('... a Float accumulator') { f = 0.0; (0...N).each { |i| f += i * 0.25 }; f }
+t('... an Integer overflowing') { s = 2**62; (1..N).each { |i| s += 4503599627370496 }; [s, s.class] }
+t('... nested in times') { s = 0; 30.times { |k| (k...k + 300).each { |i| s += i } }; s }
+class Range; alias_method :__bl_each, :each; def each; yield :redefined; self; end; end
+t('... Range#each redefined') { a = []; (1..N).each { |i| a << i }; a }
+class Range; alias_method :each, :__bl_each; remove_method :__bl_each; end
+t('... and restored') { s = 0; (1..N).each { |i| s += i }; s }
+
+# Short runs (BlockLoopSite.MinRun is five): the copy is entered for an Array of five, run after run,
+# with the site's argument array and tuple reused. A FrozenError out of the copy, a run handed back
+# by an Integer where Floats were, the Array resized between runs, and four threads running the
+# same site at once must each leave the next run starting clean.
+class BlShortP; attr_accessor :x, :v; def initialize(x); @x = x; @v = 0.5; end; end
+def bl_short_push(ps); s = 0.0; ps.each { |b| b.x = b.x + b.v; s += b.x }; s; end
+def bl_short_sum(a); t = 0.0; a.each { |x| t += x * 1.5 }; t; end
+def bl_short_up(n); s = 0.0; 1.upto(n) { |i| s += i * 0.5 }; s; end
+t('short runs: attr writes, frozen, retyped, resized') {
+  ps = [BlShortP.new(1.0), BlShortP.new(2.0), BlShortP.new(3.0), BlShortP.new(4.0), BlShortP.new(5.0)]
+  out = []
+  6000.times do |i|
+    if i == 3000
+      ps[1].freeze
+      out << (bl_short_push(ps) rescue $!.class)
+      ps[1] = BlShortP.new(9.0)
+    end
+    ps[2] = BlShortP.new(1) if i == 4000
+    ps << BlShortP.new(0.25) if i == 4500
+    out << bl_short_push(ps)
+  end
+  [out[2999], out[3000], out[3001], out[4000], out[4501], out[-1], ps.map(&:x)]
+}
+t('... the same site from four threads') {
+  4.times.map { |k| Thread.new { s = 0.0; 20000.times { s += bl_short_sum([1.0, 2.0, 3.0, 4.0, k.to_f]) }; s } }.map(&:value)
+}
+t('... upto over five') { s = 0.0; 6000.times { s += bl_short_up(5) }; s }
+# A heavy body (BlockLoopSite.HeavyBody calls or more) enters the copy for a run of one: NBody's inner
+# Range over the bodies after i, with a body frozen in the middle of the sweep.
+def bl_short_pairs(ps)
+  e = 0.0
+  ps.size.times { |i| a = ps[i]; ((i + 1)...ps.size).each { |j| b = ps[j]; d = a.x - b.x; e += d * d * a.v * b.v; b.x = b.x - d * 0.001 } }
+  e
+end
+t('... a heavy body over runs of 4, 3, 2, 1') {
+  ps = Array.new(5) { |i| BlShortP.new(i + 0.5) }
+  e = 0.0
+  3000.times { |k| ps[3].freeze if k == 2000; e += (bl_short_pairs(ps) rescue 1.0) }
+  [e.round(6), ps.map { |p| p.x.round(9) }]
+}

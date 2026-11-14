@@ -64,6 +64,7 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | Touched | Run |
 |---|---|
 | `Runtime/Jit/`, call sites | `Util/jit-matrix.rb` |
+| calls inlined by the method JIT | `Util/perf/inline-matrix.rb` (one case per process, see its header) |
 | `Runtime/Osr/`, iterators | `Util/block-loop-matrix.rb`, `Util/osr-array-matrix.rb` |
 | block and scope reuse | `Util/block-scope-reuse-matrix.rb`, `Util/block-scope-reuse-blockpass.rb`, `Util/block-scope-reuse-race.rb` |
 | instance variables, shapes | `Util/ivar-matrix.rb`, `Util/ivar-stress.rb` |
@@ -79,8 +80,9 @@ ruby Util/perf/awfy.rb 8 "new=env IR_CONFIG=Release <tree>/ir.sh"     # any FAIL
 <tree>/ir.sh -X:NoJIT -X:NoOSR <a script the change speeds up>         # same output as with them on
 ```
 
-Three shapes got past this gate once and were found in review (`Util/perf/LEDGER.md`,
-"Faults the gate missed"). Ask each of them of every change:
+Three shapes got past this gate once and were found in review, and a fourth got past its
+author's checks and was caught here (`Util/perf/LEDGER.md`, "Faults the gate missed").
+Ask each of them of every change:
 - Can a frame that this makes cheaper recurse - directly, through a block it passes, through
   a callee - without passing a stack check? Run it a million deep: it must raise
   SystemStackError, not end the process.
@@ -89,6 +91,13 @@ Three shapes got past this gate once and were found in review (`Util/perf/LEDGER
 - If a fast path can fail part way (a deopt, a fallback, a retry), what has already been
   done when it does, and is that done twice? Look at every operation that can fail *after*
   each new effect, including ones that used to be safe because nothing came before them.
+- Does a fast path make a call of its own in place of one the source makes (a fallback
+  site, a helper that dispatches)? A site made without the caller's scope sees private and
+  protected methods and no refinements (`RubyCallAction.GetVisibilityContext`), so it is
+  the source's call only for a receiver whose method is public and unrefined. Give it a
+  receiver with a private method of that name, one with a protected one called from an
+  unrelated class, one with `method_missing`, and a refinement active where the caller is
+  defined.
 
 Write one new differential case for the shortcut itself: the shape it accelerates, run hot
 (a few thousand iterations, past the JIT thresholds), with the thing that must invalidate
@@ -96,6 +105,25 @@ it happening in the middle - the method redefined, a singleton method added to t
 receiver, the block captured with `&b`, `binding` called, an exception raised through it -
 and compare the output with CRuby 4.0's. If the tree has a matrix for the area (`Util/perf/hot-shapes-matrix.rb`
 for calls and blocks), add the case there; otherwise add a registered test in `Src/IronRuby.Tests` (CLAUDE.md, "Tests").
+
+A case proves something only if it runs the path it is about. Three cases written for
+this gate did not at first: a method the JIT declined for another reason (an attribute
+read with an implicit self), a store that deopted before it reached the fallback it was
+meant to test, and a report built on `==` in a file where an earlier `using` had refined
+Object#==. So for every new case:
+
+- run it with `IR_JIT_VERBOSE=1` and see the method named as specialized (and, for a
+  fallback or a guard, that it did not simply deopt first);
+- make the probe reach the new code and nothing before it: a receiver that fails an
+  earlier check tests that check;
+- in `hot-shapes-matrix.rb`, everything after the `IDRefine` case runs with Object#== and
+  #nil? refined and a module prepended to Kernel: report values with `inspect`, not with
+  `==` or `nil?`, and look at the CRuby output once to see that it says what you meant;
+- threads in a probe use block-local names that occur nowhere else in the file. Ruby
+  threads run in parallel here, so three threads appending to an Array the script
+  happened to name at top level fail on every tree, the baseline included, while CRuby
+  prints the expected answer; and a value that depends on which thread ran first is not
+  a difference (a method whose callee another thread redefines may see either one).
 
 ## 3. ruby/spec
 
@@ -115,6 +143,13 @@ names something new, run that file on the baseline too before believing it. Not 
 timing run is going, and nothing else heavy while it runs: timing-sensitive examples flip
 under load.
 
+For a single directory run by hand (a comparison with the baseline, say), run mspec from
+the root of a checkout, one run at a time per directory: `default.mspec` there tells mspec
+which implementation it is on (run from anywhere else, the `fixnum_max` helper raises and
+five examples of core/string and core/array fail on any build), and two runs in one
+directory share `rubyspec_temp`. Compare the names of the failing examples, not only the
+summary lines.
+
 ## 4. Nothing got slower
 
 Back to back, twice, on a quiet machine (`uptime`), with both trees named by absolute path:
@@ -124,7 +159,42 @@ Back to back, twice, on a quiet machine (`uptime`), with both trees named by abs
 BASE=/abs/path/to/baseline NEW=/abs/path/to/candidate
 ruby $BASE/Util/perf/micro-table.rb "base=env IR_CONFIG=Release $BASE/ir.sh" "new=env IR_CONFIG=Release $NEW/ir.sh"
 ruby $BASE/Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release $BASE/ir.sh" "new=env IR_CONFIG=Release $NEW/ir.sh"
+ruby $BASE/Util/perf/awfy.rb 12 "new=env IR_CONFIG=Release $NEW/ir.sh" "base=env IR_CONFIG=Release $BASE/ir.sh"
 ```
+
+The second run has the columns the other way round on purpose. Which column runs first
+moves single benchmarks by more than the 5% this step allows: in four runs of round six
+Towers was 7-10% slower in whichever tree ran second and NBody 1-6% faster. A benchmark
+is slower only if it is slower in both orders. A cell of a tree that does not touch that
+benchmark's code still moves by about 5% from run to run (NBody by more), so before
+blaming a change for a slower line, say which of its code that benchmark runs.
+
+A line that is slower in both orders is looked at before it is believed or dismissed:
+compare the JIT's decisions on the two trees (`IR_JIT_VERBOSE=1`, sorted, times stripped),
+the bytes (`alloc.rb`) and the profile; then measure it in separate processes of a fixed
+length, the two trees taken alternately, eight of each, and compare the medians
+(`harness.rb NAME 120 INNER`, the median of the last sixty iterations of each process).
+Storage failed this step in four of seven awfy.rb runs in round seven and was the same
+on both trees measured that way.
+
+The same goes for a micro line. A script that times ten shapes one after another times
+the later ones in whatever state the earlier ones left the process in, and that state
+differs between two trees when one of them compiles an earlier shape and the other does
+not: in round eight three lines were 15% slower in every round of such a script and the
+same on both trees once each shape ran in a process of its own. Give a shape that looks
+slower its own process (a script that takes the shape as an argument), six or more
+alternating rounds, and compare medians and minima; a line that reaches the same minimum
+on both trees has a fast and a slow state, not a cost.
+
+A change to *when* a compiled path is entered (a floor, a threshold, a screen) is not
+covered by the benchmarks or by `alloc.rb`: measure the shapes the old rule kept out, just
+under the old limit and with the lightest body the path accepts, one shape and one length
+per process (`Util/perf/micro.rb s_each1 ...` has `each`, `times`, `map` and `any?` over 1,
+2 and 4 elements). In round nine a floor lowered from 16 to 1 made NBody 27% faster,
+allocated nothing more anywhere, and made `a.each { |x| s += x }` over one or two elements
+1.5 to 2 times slower. For a change to the method JIT's screen, compare the whole
+`[jit] specialized= rejected= screen-rejected=` line of every benchmark, not only what is
+newly specialized: a method that is newly wrapped and then declined is a cost.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.

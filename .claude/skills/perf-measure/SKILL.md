@@ -34,12 +34,16 @@ tens of percent: wait, or note the load next to the numbers.
 ```sh
 P=${PERF_HOME:-../ironruby-perf}
 ruby Util/perf/awfy.rb 12 cruby=ruby "ir=env IR_CONFIG=Release ./ir.sh" \
-     "truffle=$P/truffleruby/bin/truffleruby" -- Bounce Richards Json DeltaBlue Towers
+     "truffle=$P/truffleruby/bin/truffleruby"
 ruby Util/perf/micro-table.rb cruby=ruby "ir=env IR_CONFIG=Release ./ir.sh"
 ```
 
-- Leave out `-- ...` for all thirteen AWFY benchmarks (about 8 minutes at 12 s each on
-  three interpreters). The five named are the object-oriented ones, where the gap is largest.
+- That is all thirteen AWFY benchmarks (about 8 minutes at 12 s each on three
+  interpreters), and it is what goes into the ledger: the first five rounds measured only
+  the five object-oriented ones (`-- Bounce Richards Json DeltaBlue Towers`), which left
+  the worst one (Permute, 1.49 of CRuby) unseen and would have hidden a regression in
+  arrays, floats or closures. A subset is for iterating on one experiment
+  (`/perf-step`), never for the recorded numbers.
 - `FAIL` in the IronRuby column is a wrong answer or a crash, not a slow run. Run that
   benchmark alone, find the cause, and report it before anything else: correctness first.
 - TruffleRuby's micro column is not worth taking: it deletes these loops. Its AWFY column
