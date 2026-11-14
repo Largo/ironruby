@@ -62,3 +62,9 @@ is kept as well; it deopts on a frozen Struct so the FrozenError comes from the 
    non-RubyObject path (RubyModule's instance data, no inline shape cache).
 5. send_bmethod (2x): define_method methods called through `send` - the BlockDispatcher + Proc
    call per invocation.
+
+## Not verified
+
+The `Util/perf/*-matrix.rb` differential matrices were not run to completion (my invocation of
+hot-shapes-matrix with a `list` argument did not do what I assumed and was stopped). Neither matrix
+has Struct cases; the Struct paths are covered only by `dispatch/struct_check.rb` and mspec core/struct.
