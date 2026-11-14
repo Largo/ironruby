@@ -27,9 +27,14 @@ class P
   def sym_case(s); case s when :a then 1 when :b then 2 else 3 end; end
   def str_eq(s); s == "abc"; end
   def poly(o); o.foo; end
+  def ws(c); ' ' == c || "\t" == c || "\n" == c || "\r" == c; end
+  def swap(i, j); t = @arr[i]; @arr[i] = @arr[j]; @arr[j] = t; end
+  def locattr(m); a = m.a; b = m.b; b.x - a.x < 1.5; end
 end
 class P2; def initialize(a, b); @a = a; @b = b; end; def foo; 1; end; end
 class P3; def foo; 2; end; end
+class PV; attr_reader :x; def initialize(x); @x = x; end; end
+class PM; attr_reader :a, :b; def initialize(a, b); @a = a; @b = b; end; end
 def t(name, n = 3_000_000)
   best = 1e9
   5.times { t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC); yield n; d = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0; best = d if d < best }
@@ -53,3 +58,9 @@ t("symcase") { |n| i = 0; while i < n; o.sym_case(:b); i += 1; end }
 t("str==")   { |n| i = 0; while i < n; o.str_eq("abd"); i += 1; end }
 t("poly2")   { |n| i = 0; while i < n; o.poly(i.odd? ? p2 : p3); i += 1; end }
 t("blockeach") { |n| (n/4).times { a4.each { |e| o.cmp(e) } } }
+# round six's shapes: a literal as the receiver of == (Json's is_white_space), two element stores in a
+# method (Permute's swap), Float attr reads on locals assigned from attr reads (CD's is_in_voxel)
+sx = "x"; pm = PM.new(PV.new(1.5), PV.new(2.5))
+t("lit==")   { |n| i = 0; while i < n; o.ws(sx); i += 1; end }
+t("swap")    { |n| i = 0; while i < n; o.swap(1, 2); i += 1; end }
+t("locattr") { |n| i = 0; while i < n; o.locattr(pm); i += 1; end }
