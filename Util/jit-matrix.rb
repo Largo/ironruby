@@ -3245,3 +3245,45 @@ def jit_settle_threads
   bad.size
 end
 t('settle: redefined while four threads call it') { jit_settle_threads }
+
+# A cursor local first assigned from a parameter and then from its own attr read (List#is_shorter_than,
+# CD's tree_minimum): sampled through the parameter, so the reads in the loop are compiled attr reads,
+# which another class, a singleton reader, a redefined, private or removed reader, false and an
+# Integer in the list must each send back to the real call.
+class JitWalkNode
+  attr_accessor :nxt, :v
+  def initialize(n, v = 0) = (@nxt = n; @v = v)
+end
+class JitWalkOther; def initialize(n) = (@n = n); def nxt = @n; end
+def jit_walk_list(n) = (0...n).inject(nil) { |l, i| JitWalkNode.new(l, i) }
+def sp_walk_shorter(x, y)
+  xt = x
+  yt = y
+  while yt
+    return true unless xt
+    xt = xt.nxt
+    yt = yt.nxt
+  end
+  false
+end
+def sp_walk_last(x)
+  cur = x
+  cur = cur.nxt while cur.nxt
+  cur.v
+end
+wa = jit_walk_list(3); wb = jit_walk_list(5)
+3.times { warm { |i| sp_walk_shorter(wa, wb); sp_walk_shorter(wb, wa); sp_walk_last(wb) } }
+t('walk: after warm-up') { [sp_walk_shorter(wa, wb), sp_walk_shorter(wb, wa), sp_walk_last(wb)] }
+t('walk: another class') { [sp_walk_shorter(JitWalkOther.new(JitWalkOther.new(nil)), wb), sp_walk_shorter(wa, JitWalkOther.new(nil))] }
+wc = jit_walk_list(4); def wc.nxt = nil
+t('walk: a singleton reader') { [sp_walk_shorter(wc, wb), sp_walk_last(wc)] }
+t('walk: false and an Integer') { [sp_walk_shorter(false, wb), sp_walk_shorter(wa, false), sp_walk_shorter(wa, 5)] }
+JitWalkNode.class_eval { def nxt = @nxt && @nxt.nxt }
+t('walk: reader redefined') { [sp_walk_shorter(wa, wb), sp_walk_last(jit_walk_list(7))] }
+JitWalkNode.class_eval { private :nxt }
+t('walk: reader made private') { sp_walk_shorter(wa, wb) }
+JitWalkNode.class_eval { public :nxt; attr_reader :nxt }
+wd = jit_walk_list(6); wd.nxt.freeze
+t('walk: restored, a frozen node') { [sp_walk_shorter(jit_walk_list(2), jit_walk_list(2)), sp_walk_last(wd)] }
+JitWalkNode.send(:remove_method, :nxt)
+t('walk: reader removed') { sp_walk_last(jit_walk_list(3)) }
