@@ -125,3 +125,44 @@ namespace IronRuby.Runtime.Jit {
         }
     }
 }
+
+namespace IronRuby.Runtime.Jit {
+    internal static class JitInlineShape {
+        /// <summary>
+        /// As far as the syntax can tell, a body whose typed body JitCode.Inlinable will accept: no loop, no assignment
+        /// but to a local, no constant, no yield or super, and no call but an operator or a read of an attribute (`o.x',
+        /// `x') - no call with arguments, so no construction and no self-recursion. JitStub.IsLeafMethod asks it before
+        /// letting the screen wrap a caller of the method: a caller wrapped for a callee that can never be inlined is only
+        /// declined later, and stays slower than one never wrapped.
+        /// </summary>
+        internal static bool IsInlinableShape(IronRuby.Compiler.Ast.MethodDefinition/*!*/ ast) {
+            var check = new InlinableShape();
+            ast.Body.Walk(check);
+            return check.Ok;
+        }
+
+        private sealed class InlinableShape : IronRuby.Compiler.Ast.Walker {
+            internal bool Ok = true;
+            private bool No() { Ok = false; return false; }
+
+            public override bool Enter(IronRuby.Compiler.Ast.WhileLoopExpression node) { return No(); }
+            public override bool Enter(IronRuby.Compiler.Ast.ForLoopExpression node) { return No(); }
+            public override bool Enter(IronRuby.Compiler.Ast.YieldCall node) { return No(); }
+            public override bool Enter(IronRuby.Compiler.Ast.SuperCall node) { return No(); }
+            public override bool Enter(IronRuby.Compiler.Ast.ConstantVariable node) { return No(); }
+            public override bool Enter(IronRuby.Compiler.Ast.MemberAssignmentExpression node) { return No(); }
+
+            public override bool Enter(IronRuby.Compiler.Ast.SimpleAssignmentExpression node) {
+                return node.Left is IronRuby.Compiler.Ast.LocalVariable || No();
+            }
+
+            public override bool Enter(IronRuby.Compiler.Ast.MethodCall node) {
+                if (node.Block != null) { return No(); }
+                int argc = (node.Arguments == null) ? 0 : node.Arguments.Expressions.Length;
+                if (argc == 0) { return true; }
+                if (argc == 1 && node.Target != null && JitScreen.IsBinaryOperator(node.MethodName)) { return true; }
+                return No();
+            }
+        }
+    }
+}

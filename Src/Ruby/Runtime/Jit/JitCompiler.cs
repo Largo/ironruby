@@ -2702,11 +2702,12 @@ namespace IronRuby.Runtime.Jit {
                 (node.Target is LocalVariable || node.Target is InstanceVariable) && !IsBinaryOperator(node.MethodName) && node.MethodName != "[]") {
                 // `m(a)', `self.m(a)', `o.m(a)': a call the emitter inlines if m is a small pure specialized
                 // method when it compiles (JitCompiler.TryInlineCall), which only the profile can say for sure.
-                // Taken only of a method that calls nothing itself as far as the declaring module can tell, or on an
-                // instance variable (`@strength.stronger(s)', `@elements.size'): taken of anything, many methods that are
-                // declined in the end would be wrapped, which costs them (JitStub.IsLeafMethod).
-                if (_isLeafCallee == null || !_isLeafCallee(node.MethodName, node.Target == null || node.Target is SelfReference) &&
-                    !(node.Target is InstanceVariable)) {
+                // Taken only of a method the declaring module resolves the name to and whose body JitCode.Inlinable can
+                // accept as far as the syntax tells (JitStub.IsLeafMethod): taken of anything, many methods that are declined
+                // in the end would be wrapped, which costs them (Richards' add_input_and_check_priority calling `append').
+                // A call on an instance variable has no class to resolve on here; admitting it whatever the callee bought
+                // DeltaBlue's choose_method, and cost seven methods wrapped and declined and no measurable time.
+                if (_isLeafCallee == null || !_isLeafCallee(node.MethodName, node.Target == null || node.Target is SelfReference)) {
                     return No(node);
                 }
                 if (argc > JitStub.MaxArity || node.Target != null && !Walk(node.Target)) { return No(node); }
