@@ -981,6 +981,10 @@ namespace IronRuby.Runtime.Jit {
             var sequence = node as BlockExpression;
             if (sequence != null) { return EmitStatements(sequence.Statements, out type); }
 
+            // `o.x op= v' in an outlined loop (JitCompiler.Objects.cs)
+            var member = node as MemberAssignmentExpression;
+            if (member != null && _loop != null) { return EmitMemberOpAssign(member, out type); }
+
             throw Bail("node: " + node.GetType().Name);
         }
 

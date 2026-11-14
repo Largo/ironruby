@@ -225,3 +225,25 @@ t('... a Float turning into a String') { a = bl_ps + [BlAttrP.new("s", 1.0)]; bl
 class BlAttrP; def x = 7.0; end
 t('... the reader redefined') { [bl_attr.(bl_ps), bl_attr_each.(bl_ps * 1000, 2)] }
 t('... in a while loop') { a = Array.new(4) { |k| BlAttrR.new(k + 0.5) }; s = 0.0; i = 0; while i < N; b = a[i % 4]; s += b.x * b.y; i += 1; end; s }
+
+# ---------------------------------------------------------------- attr op-assign on block locals
+# `b.v -= d; c.v += d', b and c elements the block loads: the read, the operator and the store the
+# writer does (JitCompiler.EmitMemberOpAssign), the first store logged so that a deopt at the second
+# restarts the iteration with nothing written twice. Met by a frozen element (FrozenError from the
+# real call), a writer that counts its calls, a singleton writer on one element, an element of another
+# class, an Integer leaving Int64, and the writer redefined between runs.
+class BlOpP; attr_accessor :v, :w; def initialize(v) = (@v = v; @w = 1.0); end
+class BlOpCount; attr_accessor :w; attr_reader :v, :n; def initialize(v) = (@v = v; @w = 1.0; @n = 0); def v=(x); @n += 1; @v = x; end; end
+class BlOpOther; attr_accessor :w, :v; def initialize(v) = (@v = v; @w = 2.0); end
+bl_op = ->(a, k = N) { k.times { |i| b = a[i % a.size]; c = a[(i + 1) % a.size]; d = b.w * 0.5; b.v -= d; c.v += d * c.w }; a.map(&:v) }
+bl_op_ps = -> { Array.new(4) { |k| BlOpP.new(k * 1.0) } }
+t('attr op-assign on block locals') { bl_op.(bl_op_ps.()) }
+t('... a frozen element') { a = bl_op_ps.(); a << BlOpP.new(9.0).freeze; r = (bl_op.(a) rescue $!.class); [r, a.map(&:v)] }
+t('... frozen part way') { a = Array.new(4000) { |k| BlOpP.new(k * 1.0) }; a[3500].freeze; r = (bl_op.(a, 3600) rescue $!.class); [r, a.sum(&:v)] }
+t('... a writer that counts its calls') { o = BlOpCount.new(1.0); a = bl_op_ps.() + [o]; [bl_op.(a), o.n] }
+t('... a singleton writer on one element') { o = BlOpP.new(1.0); def o.v=(x); @v = x * 2; end; [bl_op.(bl_op_ps.() + [o])] }
+t('... an element of another class') { bl_op.(bl_op_ps.() + [BlOpOther.new(5.0)]) }
+t('... Integers leaving Int64') { a = Array.new(3) { BlOpP.new(1) }; a.each { |o| o.w = 2**50 }; N.times { |i| b = a[i % 3]; b.v += b.w; b.w += 1125899906842624 }; a.map { |o| [o.v, o.w] } }
+t('... in a while loop') { a = bl_op_ps.(); i = 0; while i < N; b = a[i % 4]; b.v += i * 0.5; i += 1; end; a.map(&:v) }
+class BlOpP; def v=(x); @v = -x; end; end
+t('... the writer redefined') { bl_op.(bl_op_ps.()) }
