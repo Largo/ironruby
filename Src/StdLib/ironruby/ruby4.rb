@@ -5378,7 +5378,13 @@ class Enumerator
         # A blockless #chunk: the block given here is the one it was waiting for.
         return @__deferred__.call(block)
       end
-      return super(&block) if args.empty?
+      if args.empty?
+        # A plain #lazy hands the block straight to its receiver's #each, as MRI's lazy_init_block
+        # does: no generator, Yielder and two splatting blocks in between for every element.
+        source = @__lazy_source__
+        return source.each(&block) if block && source && @__generator__.equal?(@__lazy_generator__)
+        return super(&block)
+      end
       generator = @__generator__
       lazy = Lazy.__raw__(@__size__) { |y| generator.call(y, *args) }
       block ? lazy.each(&block) : lazy
@@ -5395,6 +5401,14 @@ class Enumerator
       lazy = allocate
       lazy.__lazy_init__(size, &generator)
       lazy
+    end
+
+    # The receiver of a plain #lazy, and the generator that goes with it (an #initialize_copy or
+    # a re-#initialize that replaces the generator turns the shortcut off).
+    def __set_lazy_source__(source)
+      @__lazy_source__ = source
+      @__lazy_generator__ = @__generator__
+      self
     end
 
     def __lazy_init__(size, &generator)
@@ -6155,8 +6169,9 @@ module Enumerable
     source = self
     n = (size if respond_to?(:size))
     n = nil unless n.is_a?(::Numeric)
-    ::Enumerator::Lazy.__raw__(n) { |y, *args| source.each(*args) { |*values| y.yield(*values) } }
-      .__set_inspect__(self, nil)
+    lazy = ::Enumerator::Lazy.__raw__(n) { |y, *args| source.each(*args) { |*values| y.yield(*values) } }
+    lazy.__set_lazy_source__(source)
+    lazy.__set_inspect__(self, nil)
   end unless method_defined?(:lazy)
 end
 
