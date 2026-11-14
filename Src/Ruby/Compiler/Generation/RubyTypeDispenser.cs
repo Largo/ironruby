@@ -90,7 +90,9 @@ namespace IronRuby.Compiler.Generation {
                 // RubyObject is what a plain Ruby class's instances are, not a base for generated types: one derived from it
                 // would implement IRubyObject a second time, over fields of its own, and override its CreateInstance.
                 // The type of a subclass that adds interfaces derives from Object, as RubyObject itself does.
-                if (baseType == typeof(RubyObject)) {
+                // BasicObject is RubyObject under another name: a direct subclass of BasicObject that includes
+                // Enumerable (a SimpleDelegator subclass, say) lost the ivars its first write set the slow way.
+                if (baseType == typeof(RubyObject) || baseType == typeof(BasicObject)) {
                     baseType = typeof(object);
                 }
                 features = new ITypeFeature[] {
