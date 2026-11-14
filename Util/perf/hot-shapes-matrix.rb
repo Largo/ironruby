@@ -516,3 +516,35 @@ lambda do
   end
   out.each { |x| p x }
 end.call
+
+# ---- the same comparisons with v in many encodings, retagged and transcoded ----
+# The character comparison is only right where ASCII characters are their own bytes: not in
+# UTF-16/32, not in a dummy encoding (UTF-7, ISO-2022-JP), not in EBCDIC. Each String is made
+# both ways - force_encoding keeps the bytes, encode keeps the characters - and compared hot.
+lambda do
+  le = Class.new do
+    attr_writer :c
+    def rev; 'a' == @c; end
+    def revn; 'a' != @c; end
+    def fwd; @c == 'a'; end
+    def two; 'ab' == @c; end
+    def emp; '' == @c; end
+    def cas; case @c when 'a' then 1 when 'ab' then 2 else 3 end; end
+  end.new
+  le.c = "a"
+  20_000.times { le.rev; le.revn; le.fwd; le.two; le.emp; le.cas }
+  probe = lambda do |v|
+    le.c = v
+    # (inspect, not `x == true': this file's `using IDRefine' above makes Object#== answer :refeq from here on)
+    [le.rev, le.revn, le.fwd, le.two, le.emp, le.cas].map { |x| x.inspect[0] }.join
+  end
+  %w[UTF-8 US-ASCII BINARY ISO-8859-1 Windows-1252 Shift_JIS EUC-JP Windows-31J GB18030 Big5 KOI8-R
+     UTF-16LE UTF-16BE UTF-32LE UTF-16 UTF-32 UTF-7 ISO-2022-JP CP50221 IBM037].each do |name|
+    enc = Encoding.find(name)
+    row = ["a", "ab", "b", ""].flat_map do |s|
+      [(probe.(s.dup.force_encoding(enc)) rescue $!.class), (probe.(s.encode(enc)) rescue $!.class)]
+    end
+    puts "#{name} #{row.join(' ')}"
+  end
+  [[97].pack('C'), (+"x").replace("a"), (+"") << "a", (+"").b << "a", :a.to_s, "a\0", "A", "ａ", "á"].each { |v| p [v, probe.(v)] }
+end.call

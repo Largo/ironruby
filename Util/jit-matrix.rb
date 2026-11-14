@@ -2968,3 +2968,73 @@ t('swap on a Hash') { sw.v = { 1 => :a, 2 => :b }; sw.sp_swap(1, 2); sw.v }
 t('swap then ivar write, self frozen') { s2 = JitSwapLast.new; s2.freeze; [(s2.sp_swap_then_ivar(0, 1) rescue $!.class), s2.v] }
 class JitSwapArray < Array; def []=(i, x); super(i, x * 10); end; end
 t('swap on an Array subclass') { sw.v = JitSwapArray[1, 2, 3]; sw.sp_swap(0, 2); sw.v }
+
+# An attr WRITE on a local assigned once from an attr read (`c = h.a; c.v = x'): the profile that
+# types the local's reads types the receiver of the store too, and a store is an effect. The
+# leaf frozen (FrozenError, nothing written), a leaf with a writer method of its own, the writer
+# redefined, a singleton writer; and the shapes where something that can fail follows the store,
+# which must make it once.
+class JitLwLeaf; attr_accessor :v, :w; def initialize(v, w = 0) = (@v = v; @w = w); end
+class JitLwOther; attr_reader :n, :v; def initialize = (@n = 0; @v = 7); def v=(x); @n += 1; @v = x; end; end
+class JitLwHolder
+  attr_accessor :a, :b, :x
+  def initialize(a, b) = (@a = a; @b = b; @x = 0)
+  def sp_local_write(val); c = self.a; c.v = val; end
+  def sp_local_inc; c = self.a; c.v = c.v + 1; end
+  def no_local_inc_then_read; c = self.a; c.v = c.v + 1; d = self.b; d.w; end
+  def no_local_inc_then_ivar; c = self.a; c.v = c.v + 1; @x = 1; end
+end
+lw = JitLwHolder.new(JitLwLeaf.new(0), JitLwLeaf.new(2, 5))
+warm { |i| lw.sp_local_write(i); lw.sp_local_inc; lw.no_local_inc_then_read; lw.no_local_inc_then_ivar }
+t('attr write on a local assigned from an attr read') { lw.a.v }
+t('... read-modify-write') { [lw.sp_local_inc, lw.a.v] }
+lw.a.freeze
+t('... the leaf frozen: nothing written') { [(lw.sp_local_write(99) rescue $!.class), (lw.sp_local_inc rescue $!.class), lw.a.v] }
+lw.a = JitLwOther.new
+t('... a leaf with a writer method of its own') { lw.sp_local_write(5); lw.sp_local_inc; [lw.a.n, lw.a.v] }
+lw.a = JitLwLeaf.new(1)
+JitLwLeaf.class_eval { def v=(x); @v = x * 2; end }
+t('... the writer redefined') { lw.sp_local_write(3); lw.a.v }
+JitLwLeaf.class_eval { attr_writer :v }
+lw.a.define_singleton_method(:v=) { |x| @v = -x }
+t('... a singleton writer') { lw.sp_local_write(4); lw.a.v }
+lw.a = JitLwLeaf.new(0)
+lw.b = JitLwOther.new
+t('a store, then a call that fails: one store') { [(lw.no_local_inc_then_read rescue $!.class), lw.a.v] }
+lw.b = nil
+t('... on nil') { [(lw.no_local_inc_then_read rescue $!.class), lw.a.v] }
+lw.freeze
+t('a store, then an ivar write on a frozen self: one store') { [(lw.no_local_inc_then_ivar rescue $!.class), lw.a.v] }
+
+# The store a method ends with, after an unlogged first store, on a receiver the fast path
+# cannot store into: an ordinary call of []=, which must find a Hash's, a subclass's, one that
+# answers something else, a private one (NoMethodError), one that raises and method_missing,
+# and must leave the first store made, once. Then Array#[]= itself redefined and restored.
+class JitTwoSub < Array; def []=(i, x); super(i, [x]); end; end
+class JitTwoRet; def initialize = (@h = {}); def []=(i, x); @h[i] = x; :ret; end; def to_a = @h.sort; end
+class JitTwoPriv; private def []=(i, x); end; end
+class JitTwoRaise; def []=(i, x); raise ArgumentError, "no #{i}"; end; end
+class JitTwoMissing; attr_reader :l; def initialize = (@l = []); def method_missing(n, *a) = (@l << [n, a]; :mm); def respond_to_missing?(*) = true; end
+class JitTwo
+  attr_accessor :v, :w
+  def initialize = (@v = [1, 2, 3]; @w = [10, 20, 30])
+  def sp_two_stores(i, j, x); @v[i] = x; @w[j] = x; end
+end
+tw = JitTwo.new
+warm { |i| tw.sp_two_stores(i % 3, (i + 1) % 3, i) }
+two = ->(w, j = 1) { tw.v = [1, 2, 3]; tw.w = w; [(tw.sp_two_stores(0, j, 7) rescue $!.class), tw.v] }
+t('two stores, the last on another Array') { w = [10, 20, 30]; [two.(w), w] }
+t('... that grows it') { w = [10]; [two.(w, 4), w] }
+t('... an index too small') { w = [10]; [two.(w, -5), w] }
+t('... a frozen Array') { w = [10, 20].freeze; [two.(w), w] }
+t('... a Hash') { w = { 1 => :b }; [two.(w), w] }
+t('... an Array subclass with its own []=') { w = JitTwoSub.new([7, 8, 9]); [two.(w), w] }
+t('... an object whose []= answers something else') { w = JitTwoRet.new; [two.(w), w.to_a] }
+t('... a private []=') { two.(JitTwoPriv.new) }
+t('... a []= that raises') { two.(JitTwoRaise.new) }
+t('... method_missing') { w = JitTwoMissing.new; [two.(w), w.l] }
+t('... nil') { two.(nil) }
+t('... the first Array itself') { tw.v = [1, 2, 3]; tw.w = tw.v; [tw.sp_two_stores(0, 2, 7), tw.v] }
+class Array; alias_method :__jit_two_set, :[]=; def []=(*a); $jit_two_sets = ($jit_two_sets || 0) + 1; __jit_two_set(*a); end; end
+t('Array#[]= redefined: both stores call it') { w = [10, 20, 30]; r = two.(w); class Array; alias_method :[]=, :__jit_two_set; remove_method :__jit_two_set; end; [r, w, $jit_two_sets] }
+t('... and restored') { w = [10, 20, 30]; [two.(w), w, $jit_two_sets] }
