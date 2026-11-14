@@ -6,8 +6,10 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-14, the code of 55896883 (rounds eight and nine on top of round seven), Release
-net10.0, 4 cores, load 1.0. CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM
+2026-11-14, the code of a6b1c629 (round ten on top of round nine and of #215 through
+9b2936fa), Release net10.0, 4 cores, load 1.0. The container was restarted between rounds
+nine and ten and has been slower since (CRuby's NBody 1.61 s before, 1.93 s now), so
+this table's microseconds do not compare with round nine's; the ratios do. CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM
 Native). The machine's speed differs between sessions by tens of percent (CRuby's own
 numbers move with it), so compare ratios, not microseconds; and in this session one
 tree's figure for one benchmark moved by 10%, sometimes 20%, from one run to the next
@@ -18,23 +20,26 @@ microseconds are the last run's:
 
 | benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | two runs before |
 |---|---:|---:|---:|---:|---:|
-| Permute | 112541 | 144489 | 6993 | 1.28 | 1.25, 1.23 |
-| DeltaBlue | 45578 | 53727 | 12721 | 1.18 | 1.22, 1.25 |
-| Richards | 310862 | 346579 | 14905 | 1.11 | 1.29, 1.21 |
-| Json | 81286 | 82656 | 8253 | 1.02 | 0.87, 0.74 |
-| Towers | 108173 | 107495 | 4772 | 0.99 | 0.97, 0.95 |
-| Queens | 92999 | 85758 | 6267 | 0.92 | 0.86, 0.87 |
-| Bounce | 90158 | 81808 | 2200 | 0.91 | 0.90, 0.92 |
-| Sieve | 158325 | 135513 | 7091 | 0.86 | 0.88, 0.85 |
-| NBody | 1608916 | 1261527 | 16597 | 0.78 | 0.81, 0.78 |
-| CD | 766920 | 528169 | 39564 | 0.69 | 0.66, 0.68 |
-| List | 101338 | 68300 | 6699 | 0.67 | 0.85, 0.68 |
-| Storage | 152562 | 96518 | 21082 | 0.63 | 0.63, 0.65 |
-| Mandelbrot | 856679 | 131516 | 41813 | 0.15 | 0.17, 0.16 |
+| Richards | 341414 | 409318 | 17496 | 1.20 | 1.08, 1.29 |
+| DeltaBlue | 47759 | 56291 | 12896 | 1.18 | 1.22, 1.16 |
+| Permute | 133041 | 154267 | 7039 | 1.16 | 1.07, 1.22 |
+| Towers | 128759 | 123816 | 5352 | 0.96 | 1.04, 0.94 |
+| Bounce | 102599 | 93906 | 2528 | 0.92 | 1.06, 1.73 |
+| Json | 95510 | 86375 | 7709 | 0.90 | 1.04, 0.97 |
+| Queens | 107845 | 97480 | 7330 | 0.90 | 0.92, 0.86 |
+| Sieve | 170274 | 142517 | 8240 | 0.84 | 0.82, 0.86 |
+| NBody | 1928277 | 1551819 | 18804 | 0.80 | 0.68, 0.81 |
+| CD | 852830 | 601192 | 36126 | 0.70 | 0.65, 0.71 |
+| Storage | 179481 | 105347 | 18668 | 0.59 | 0.86, 0.58 |
+| List | 119618 | 44220 | 7720 | 0.37 | 0.40, 0.39 |
+| Mandelbrot | 1124512 | 154915 | 54940 | 0.14 | 0.13, 0.14 |
 
-Geomean of the thirteen: IronRuby/CRuby 0.785, and 0.800 and 0.768 in the two runs
-before; TruffleRuby/CRuby 0.057 (its DeltaBlue was 12.7 ms in this run and 3.6 in round
-seven's). CRuby's own figures move too: Json was 81, 93 and 106 ms in the three runs, which
+Geomean of the thirteen: IronRuby/CRuby 0.730, and 0.750 and 0.779 in the two runs
+before (the second has Bounce at 1.73, a cell that was 1.00 of the tree before in six
+alternating processes); TruffleRuby/CRuby 0.053. On the tree of round nine it was 0.785,
+0.800 and 0.768, and 0.785 again with #215's `!=` binding merged in (Permute 1.28 ->
+1.17); TruffleRuby's DeltaBlue has been 12.7-12.9 ms since round nine and was 3.6 in
+round seven's run. CRuby's own figures move too: Json was 81, 93 and 106 ms in the three runs, which
 is all of Json's 1.02, 0.87, 0.74. On the tree of round seven it was 0.804 and 0.787 (NBody
 1.21 and 1.08, CD 0.70 and 0.66), and on the
 tree of round five, at the start of the session, it was 0.872 (Permute 1.49, Richards
@@ -44,18 +49,18 @@ beyond the original five were run at all.
 The five measured from the start, IronRuby/CRuby; "now" is the three runs above, the
 other columns are what was recorded when each round landed, in other sessions:
 
-| benchmark | now | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DeltaBlue | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
-| Richards | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
-| Json | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
-| Bounce | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
-| Towers | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
-| geomean | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
+| benchmark | now | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DeltaBlue | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
+| Richards | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
+| Json | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
+| Bounce | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
+| Towers | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
+| geomean | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
 
-Rounds seven to nine changed none of these five on purpose (Json's allocation fell in
+Rounds seven to ten changed none of these five on purpose (Json's allocation fell in
 round nine); what they did is in the direct comparisons of the trees under "Landed" (CD
-and Permute in round seven, NBody, CD and Json in round nine).
+and Permute in round seven, NBody, CD and Json in round nine, List in round ten).
 
 Bytes allocated per iteration (`Util/perf/alloc.rb`; it moves by about 0.3% between
 invocations, unlike the timings), MB, round six -> round seven -> now: DeltaBlue 24.9 ->
@@ -66,54 +71,62 @@ Sieve 98.8 -> 98.8 -> 98.8, Storage 112.6 -> 112.6 -> 112.6, Towers 0.13 -> 0.13
 (Towers reads anything from 0.07 to 0.26 from one invocation to the next, on every tree).
 Round seven's change is CD's; round nine's are NBody's and Richards' (short runs in the
 compiled copy, where Floats and the block's frame are not allocated) and Json's (a Range
-literal of two Integers without the `<=>` call and its boxes).
+literal of two Integers without the `<=>` call and its boxes). Since then: Richards 13.9
+-> 3.2 with #215's `!=` binding merged in (measured on the tree before round ten and on
+this one; the tree before that merge gave 13.9), and List 8.2 -> 0.6 in round ten
+(`is_shorter_than` compiled: its two cursors are no longer read through call sites).
+The other eleven are where round nine left them.
 
 Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on the tree of
-round nine; a line moves by 15-20% from run to run on this machine, so a ratio is good to
+round ten; a line moves by 15-20% from run to run on this machine, so a ratio is good to
 about that:
 
 | op | CRuby | IronRuby | ratio | start |
 |---|---:|---:|---:|---:|
-| empty | 23.0 | 30.1 | 1.31 | 1.23 |
-| ivar_rw | 38.3 | 54.1 | 1.41 | 2.72 |
-| getter | 33.9 | 32.4 | 0.96 | 3.17 |
-| attr | 17.5 | 4.0 | 0.23 | 0.80 |
-| cmp | 26.7 | 30.4 | 1.14 | 3.58 |
-| abs | 31.5 | 49.1 | 1.56 | 3.07 |
-| arr | 37.5 | 42.3 | 1.13 | 1.82 |
-| nil? | 24.5 | 32.2 | 1.31 | 3.48 |
-| == | 26.4 | 29.4 | 1.11 | 3.35 |
-| yield | 40.7 | 57.1 | 1.40 | 2.57 |
-| each4 | 182.6 | 223.6 | 1.22 | 1.87 |
-| while10 | 185.1 | 38.6 | 0.21 | 0.23 |
-| new2 | 95.9 | 74.0 | 0.77 | 1.47 |
-| symcase | 31.2 | 28.8 | 0.92 | 1.03 |
-| str== | 98.8 | 56.1 | 0.57 | 1.44 |
-| poly2 | 54.0 | 69.5 | 1.29 | 2.11 |
-| blockeach | 57.6 | 50.7 | 0.88 | 2.33 |
-| lit== | 224.7 | 63.2 | 0.28 | 0.94 |
-| swap | 61.1 | 63.9 | 1.05 | 1.35 |
-| locattr | 55.0 | 42.6 | 0.77 | 1.38 |
-| sqrtw | 42.4 | 2.5 | 0.06 | 1.34 |
-| rangeeach | 49.2 | 1.8 | 0.04 | 0.87 |
-| blkattr | 78.4 | 61.5 | 0.78 | 1.12 |
-| selfcall | 82.0 | 31.0 | 0.38 | 0.99 |
-| veach4 | 357.0 | 484.7 | 1.36 | 1.38 |
-| veach100 | 5268.4 | 5214.2 | 0.99 | 1.04 |
-| rangelit | 162.7 | 90.0 | 0.55 | 0.87 |
-| short4 | 277.4 | 369.2 | 1.33 | 1.41 |
-| s_each1 | 78.7 | 166.4 | 2.11 |  |
-| s_times1 | 87.8 | 181.7 | 2.07 |  |
-| s_map1 | 100.6 | 194.4 | 1.93 |  |
-| s_any1 | 67.4 | 414.2 | 6.15 |  |
-| s_each2 | 111.5 | 189.0 | 1.70 |  |
-| s_times2 | 125.7 | 196.9 | 1.57 |  |
-| s_map2 | 150.1 | 193.9 | 1.29 |  |
-| s_any2 | 96.6 | 438.2 | 4.54 |  |
-| s_each4 | 182.5 | 228.7 | 1.25 |  |
-| s_times4 | 189.7 | 240.1 | 1.27 |  |
-| s_map4 | 235.4 | 247.6 | 1.05 |  |
-| s_any4 | 153.8 | 475.5 | 3.09 |  |
+| empty | 24.5 | 25.2 | 1.03 | 1.23 |
+| ivar_rw | 39.7 | 58.3 | 1.47 | 2.72 |
+| getter | 28.7 | 34.4 | 1.20 | 3.17 |
+| attr | 20.3 | 4.3 | 0.21 | 0.80 |
+| cmp | 29.5 | 34.4 | 1.17 | 3.58 |
+| abs | 35.7 | 58.4 | 1.64 | 3.07 |
+| arr | 43.9 | 46.6 | 1.06 | 1.82 |
+| nil? | 26.7 | 38.4 | 1.44 | 3.48 |
+| == | 29.6 | 32.6 | 1.10 | 3.35 |
+| yield | 42.4 | 65.3 | 1.54 | 2.57 |
+| each4 | 264.5 | 275.5 | 1.04 | 1.87 |
+| while10 | 212.8 | 43.6 | 0.20 | 0.23 |
+| new2 | 104.5 | 86.3 | 0.83 | 1.47 |
+| symcase | 36.3 | 34.3 | 0.94 | 1.03 |
+| str== | 121.2 | 59.1 | 0.49 | 1.44 |
+| poly2 | 62.1 | 43.7 | 0.70 | 2.11 |
+| blockeach | 78.2 | 59.4 | 0.76 | 2.33 |
+| lit== | 244.8 | 67.7 | 0.28 | 0.94 |
+| swap | 70.3 | 67.5 | 0.96 | 1.35 |
+| locattr | 73.8 | 47.6 | 0.64 | 1.38 |
+| sqrtw | 52.1 | 2.8 | 0.05 | 1.34 |
+| rangeeach | 72.9 | 2.1 | 0.03 | 0.87 |
+| blkattr | 88.7 | 76.8 | 0.87 | 1.12 |
+| selfcall | 114.6 | 35.1 | 0.31 | 0.99 |
+| veach1 | 235.2 | 379.6 | 1.61 | 1.59 |
+| veach2 | 327.0 | 448.6 | 1.37 | 1.37 |
+| veach4 | 504.7 | 592.2 | 1.17 | 1.38 |
+| veach100 | 8026.1 | 7087.8 | 0.88 | 1.04 |
+| rangelit | 190.2 | 103.0 | 0.54 | 0.87 |
+| short4 | 376.1 | 400.3 | 1.06 | 1.41 |
+| s_each1 | 87.8 | 193.8 | 2.21 | 2.11 |
+| s_times1 | 107.8 | 197.3 | 1.83 | 2.07 |
+| s_map1 | 124.1 | 207.3 | 1.67 | 1.93 |
+| s_any1 | 79.1 | 187.4 | 2.37 | 6.15 |
+| s_each2 | 127.1 | 222.2 | 1.75 | 1.70 |
+| s_times2 | 145.7 | 222.0 | 1.52 | 1.57 |
+| s_map2 | 169.3 | 239.6 | 1.42 | 1.29 |
+| s_any2 | 113.8 | 214.9 | 1.89 | 4.54 |
+| s_each4 | 209.5 | 265.1 | 1.27 | 1.25 |
+| s_times4 | 216.8 | 272.0 | 1.25 | 1.27 |
+| s_map4 | 269.7 | 291.2 | 1.08 | 1.05 |
+| s_any4 | 183.2 | 259.9 | 1.42 | 3.09 |
+| listwalk | 155.2 | 69.5 | 0.45 | 0.71 |
+| treefind | 1501.0 | 571.3 | 0.38 | 0.60 |
 
 `lit==`, `swap` and `locattr` are round seven's shapes, and their "start" is round six: a
 literal as the receiver of `==`, two element stores in one method, Float attr reads on
@@ -127,8 +140,11 @@ yields an ivar Array's elements from a `Range#each` block) summed over 4 and ove
 elements; a method making a Range of two Integers to slice with; an `Array#each` over
 four objects with Float arithmetic; and `each`, `times`, `map` and `any?` with a
 one-operation block over 1, 2 and 4 elements, called from a method (ns per call of the
-iterator). The last twelve are the cost of calling an iterator at all, which no round
-has worked on (gap 13).
+iterator); their "start" is round nine's ratio. Those twelve are the cost of calling an
+iterator at all (gap 13), of which round ten took `any?`'s share. `veach1`, `veach2`,
+`listwalk` and `treefind` are round ten's, with the tree of round nine as "start": SOM's
+`Vector#each` over one and two elements, a cursor walking a linked list, and a lookup in
+a binary tree of 300 keys whose `compare_to` calls a leaf on self.
 
 Profile (`Util/perf/profile.sh`, self time):
 
@@ -228,6 +244,13 @@ Profile (`Util/perf/profile.sh`, self time):
    the body (only a final construction compiles), `find_node` over `current.key`, an
    attr read on a local its `while` loop writes (method mode has no such read), and
    `put` over its `color` calls.
+   Round ten compiled `find_node` (see Landed): a micro lookup is 0.6 of before, the
+   share of `RedBlackTree#get` in CD's profile fell from 8.8% to 4.5% and
+   `CallSite.Target` from 25.3% to 21.6%, and CD's time moved by less than its noise
+   (598 against 598 ms in eight alternating pairs by its author, 611 against 578 in six
+   of the gate's). `tree_insert` is now rejected only at `Node.new`: a deopt after a
+   construction in the middle of a body would run `initialize` twice, so it needs the
+   allocation's effects logged, or the deopt that resumes mid-body of gap 1.
 4. **Permute: the `downto` block in `permute`** (the method is 15% self). `permute` is a
    light frame (`IR_LIGHT_FRAMES=why` says so; an earlier version of this entry said it
    was not, from the `RubyMethodScope::.ctor` line of the profile alone), and the method
@@ -254,11 +277,16 @@ Profile (`Util/perf/profile.sh`, self time):
    (`LightLambda::Run*`, ~1% of Richards' `schedule`): a rule-level read of the body's
    current delegate, as b78ec3f5 did for stubs, would remove the hop once the body is
    compiled. `ObjectConstruction` could read a stub's `Target` too.
+   Re-measured in round ten: `LightLambda::Run*` is about 0.8% of Richards' self time in
+   total. Too small for the bar; closed.
 6. **Richards: the worker block that contains a nested block** (`DATA_SIZE.times { }`
    inside the create_worker block): its scope is never reused and the inner Proc is made
    on every call - about 40% of what Richards still allocates. Needs reuse decided at
    block exit (nothing called `MarkCaptured`), with every escape route of the nested Proc
    checked first; `def capture(&b); b; end` (below) is what an unchecked one looks like.
+   Closed in round ten: with `DATA_SIZE.times { }` rewritten as a `while` loop Richards
+   allocates 3,204,249 bytes per iteration against 3,198,021 as written, so the inner
+   block costs nothing measurable any more (round nine runs it in the compiled copy).
 7. **Json**: the 40 B String per character read is what is left of `@input[@index]`
    (its content is shared now); two Integer boxes per `read` (`@input.length`,
    `@index += 1` - see Rejected, perf/box, for what caching them buys and costs);
@@ -288,6 +316,19 @@ Profile (`Util/perf/profile.sh`, self time):
     it cannot tell nil from an autoload that has not run). Richards' `NO_WORK = nil` and
     `NO_TASK = nil` keep three methods out. See Rejected for why fixing only that is not
     worth it yet.
+    Round ten built the fix and did not keep it (see Rejected): a nil constant is not
+    what keeps Richards' hot methods out. Its table of them, by `IR_JIT_VERBOSE` with the
+    first obstacle patched to see the second: `schedule` (94.9% inclusive, 7.4% self) a
+    general self-call (`trace`), then `run_task`; `run_task` (76.0 / 4.5) `@function.call`;
+    `queue_packet` (16.3 / 2.9) and `release` `find_task`, which raises;
+    `add_input_and_check_priority` (5.8 / 2.5), `device_in_add`, `work_in_add` `append`,
+    which has a loop; `append` (3.1 / 2.0) the nil constant, then a receiver of unknown
+    type, then - with those patched - a deopt after an effect (it starts with the store
+    `packet.link = NO_WORK` and then reads in a loop); `hold_self` (2.0 / 0.9) the same
+    (`@hold_count += 1`, then an attr write on another object); and five blocks
+    (`create_handler`, `create_device`, idler, worker: 23.2, 13.6, 9.8 and 7.0% inclusive),
+    which the method JIT does not take at all. So Richards waits on gap 1: general calls
+    from compiled code, and a deopt that does not restart the body.
 12. **One site, four receiver classes, two speeds**: `recv != other` in a loop over four
     plain classes takes about 105 ns or about 280 ns per iteration, the same binary, from
     one process to the next (three of six runs slow on 9f4d44f8). Two and three classes
@@ -303,6 +344,22 @@ Profile (`Util/perf/profile.sh`, self time):
     something of its own that nobody has looked at (a factor of six on one element).
     Short collections are most collections: DeltaBlue's `Vector#each` runs over one or
     two elements in most of its 20,592 calls per iteration.
+    Round ten: `any?` was the prelude's doing (see Landed) and is at 2.4 of CRuby over
+    one element, from 6.2. For `each`, `times` and `map` the fixed part was measured and
+    left: a method whose body has a literal block allocates 335 B per call against 23.5
+    without one - about 184 B for the method's scope, which it makes on every call once
+    it contains a block literal (50318082; the outer local the block writes adds 8 B),
+    and about 128 B per iterator call for a Proc and its BlockParam. `[BlockNotKept]`
+    reuse cannot help across calls: the previous Proc is kept in a hidden variable of the
+    frame that makes it, and each call is a new frame. In the profile of `s_each1`
+    allocating and filling scope, Proc and BlockParam is 30-35% of the 190 ns
+    (`JIT_WriteBarrier` 11%, allocation 12.6%, `RubyMethodScope..ctor` 4.7%, memset 4.2%).
+    Untried: the dispatcher keeps the last Proc with its BlockParam, taken with an atomic
+    exchange as `TakeBfcForProcCall` does and given back only after a normal return when
+    nothing captured it; then the light method's scope parked the same way. That is the
+    "parked scopes" idea of the Rejected list in a narrower form, in the area where five
+    of the ten faults were, so every escape route of the Proc is a case before it is a
+    change.
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
@@ -315,6 +372,13 @@ Profile (`Util/perf/profile.sh`, self time):
     The block-loop tier does not take the block: its body is a `yield`. Untried: a
     block-loop kind whose body is `yield <expr>`, or the method's Proc resolved once per
     iterator call.
+    Round ten tried the second and assessed the first (see Rejected): neither is where
+    DeltaBlue's time is. In a fresh profile of DeltaBlue itself the yield machinery is
+    6-7% of self time (`block in Vector#each` 4.3%, `TakeBfcForBlockYield` 2.8%, `Yield1`
+    2.2%, `Vector#each` 1.9%, `BlockDispatcher1::Invoke` 1.5%); the 10% shares above were
+    of a 100-element micro. What is left for DeltaBlue is gap 13 (the fixed cost of its
+    20,592 `Range#each` calls per iteration, most over one or two elements) and gap 1
+    (`CallSite.Target` 23% in `add_propagate`, `satisfy`, `Plan#execute`'s block).
 
 ## Landed
 
@@ -613,6 +677,62 @@ without a summary line.
   35.9 -> 30.7 MB. DeltaBlue, its target, does not move (see gap 14 for where its time
   is).
 
+Round ten: four experiments on the tree of round nine with #215 merged through 9b2936fa
+(the fixed cost of an iterator call, DeltaBlue's `Vector#each`, Richards, CD's tree
+lookup). Three changes kept, one of them a side find; `Vector#each` kept nothing. All
+thirteen against the tree before, both column orders: List 0.59 and 0.57; the other
+twelve inside the noise of a machine that was restarted between the rounds and has been
+uneven since (geomean 0.976 and 1.006, with Bounce at 1.10 and 1.92 and Json at 1.11
+and 1.08, slower in both orders). In separate processes taken alternately, medians of
+six, before and after: Json 91.4 and 89.7 ms, Bounce 98.7 and 98.8, Storage 105.8 and
+103.0, Queens 108.2 and 104.0, CD 611 and 578, NBody 1555 and 1598, Towers 114.6 and
+119.8 and then 125.3 and 123.2 over eight more; the JIT's decisions on those benchmarks
+are identical on the two trees. Gate against the tree before: IronRuby.Tests in Release
+(1254 tests; net10.0 the one known failure, net11.0 all pass); the full five-suite
+sweep (core 23130 examples, library 6011, language 2935, command_line 175, security 34:
+nothing that `Util/spec-known-failures.txt` does not list); jit- (684 lines),
+hot-shapes- (1264), ivar-, block-loop-, osr-array- and block-scope-reuse-matrix as CRuby
+with the tiers on and off, inline-matrix (50 cases) as CRuby but for one case that
+differs on every tree (`42.compare_to(x)` reaches `Int32.CompareTo`, see below), enum- and
+enumerable2-matrix as the tree before; ivar-stress and block-scope-reuse-race; four
+probe files of the gate's own (170, 19, 15 and 4 lines) shown by IR_JIT_VERBOSE to reach
+the new paths; six benchmarks verify with the tiers off; start-up CPU time level
+(1.31-1.38 s on both trees), and a file defining 15,000 methods in 3,000 classes loads
+in 2.2 s on both.
+
+- **perf/rich, f2ab0a9e - the method JIT samples a list cursor through the local it
+  starts from** (a side find of the Richards experiment). A local assigned more than
+  once had no sample, so `xt = x; while yt; ...; xt = xt.nxt` read `xt.nxt` through a
+  call site. Its first assignment in source order, when that is from another local,
+  now names where the sample comes from; it is a profile only, and every read checks
+  the receiver's class and the method version. `List#is_shorter_than` and CD's
+  `tree_minimum` compile: List 74 -> 44 ms (0.59 and 0.57 above; 0.37-0.40 of CRuby),
+  8.2 -> 0.6 MB per iteration; `listwalk` 108-121 -> 71-72 ns.
+- **perf/cdt2, 9a653abb - an inlined call on a parameter of up to two classes, one level
+  deep** (gap 3). Three things kept `RedBlackTree#find_node` generic: the screen
+  resolved `compare_to` on the tree's own class and took only leaf callees
+  (`Vector2D#compare_to` calls `compare_numbers`); `current`, assigned in the loop, had
+  no sample; and `key` has two classes in CD (CallSign and Vector2D), so a body compiled
+  for the first deopted on every call with the second and was retired. Now a call on
+  another object is admitted when some top-level class defines an inlinable method of
+  that name, such a callee may itself call one leaf on self, a first assignment from an
+  instance variable gives a cursor its sample (`current = @root`), the profile records
+  the first two Ruby classes of each argument and a call on a parameter with two
+  inlines both behind a class test (a third class deopts), and a body that inlined on
+  one class and deopts too often profiles again, twice at most, instead of being
+  retired. `treefind` 889-989 -> 529-548 ns (CRuby 1508); CD's time does not move
+  measurably (gap 3).
+- **perf/iter, 9bbc9157 6b4e5960 - the pattern forms of `all?`, `any?`, `none?` and `one?`
+  are C# overloads, not prelude wrappers** (gap 13). The C# `Array#any?` walked the
+  Array directly all along; the prelude redefined the four methods as `(*args, &block)`
+  wrappers for the pattern argument, so every block form paid a splat Array, a Proc, a
+  call of the argument check and a second call with `&block`. `a.any? { }` over 1, 2
+  and 4 elements 415-429, 453 and 490-513 ns -> 185-188, 212-214 and 258-265 (CRuby 79,
+  113, 183). Two differences from CRuby went with the wrappers: a private `===` on the
+  pattern is called (CRuby calls it with rb_funcall; the wrapper raised NoMethodError),
+  and an Array subclass's own `#each` is not (the wrapper called it; so did `one?` with
+  a block or without an argument, which now walks the Array as `rb_ary_one_p` does).
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -764,6 +884,32 @@ Round nine (all three experiments landed; these are the versions of them that di
 - **Range literals as scope-free in bodies with literal blocks**: makes `Vector#each` a
   light frame, 5-7% slower per call (`RubyMethodScope::.ctor` 2.5% -> 4.8%,
   `InstantiateReusableBlock` 0.8% -> 1.8%).
+
+Round ten:
+
+- **A `yield` inside a block reading the method's Proc once** (perf/veach, gap 14): the
+  yield kept the Proc in a hidden local and took its self from it, in place of the
+  second scope walk (`GetMethodBlockParameterSelf`). `Vector#each` over 1, 2, 4 and 100
+  elements and DeltaBlue each faster in about half the runs and slower in the other
+  half (DeltaBlue 62.4/59.5, 61.5/58.9, 64.7/68.8, 60.5/66.5, 57.9/57.1, 56.3/59.4 ms):
+  the walk is cheap. Reverted.
+- **A block whose body is `yield <expr>` run by the block-loop tier's copy**: not built.
+  The loop compiler cannot compile a `yield` at all (a plain `while ... yield(i)` loop
+  is "node: YieldCall, emitter gave up"), so it would first need the BlockParam and the
+  break/next/redo/return protocol in the emitter and a deopt after a yield that had
+  effects, and then a frame for `block in each`, which CRuby shows in backtraces and
+  `caller` and the copy removes. At most it takes one block invocation per element off
+  the 132 long runs.
+- **A nil-valued constant read in the method JIT** (perf/rich, gap 11): a constant whose
+  storage holds `ConstantSiteCache.WeakNull` is a real nil, while an autoload that has
+  not run resolves to an empty storage, and a constant receiver was typed by its folded
+  value. Richards went from 15 specialized and 4 rejected to 17 and 2: the two cold
+  `initialize` methods. `append` still fails on a deopt after an effect, so it gains
+  nothing; not committed.
+- **Nesting the inlined call for self-calls too** (perf/cdt2): wrapped Json's
+  `HashIndexTable#add` and `#get`, which were then declined. Nested only for a call on
+  another object. **Inlining only the sampled class on a parameter**: retired for good
+  in CD, whose keys have two classes; hence the two-class dispatch.
 
 ## Regressions
 
@@ -929,7 +1075,13 @@ about one run in three of the same script; c_call tracing reports an `==` for ea
 Integer element `Array#==` compares, which CRuby does not; `Math.sqrt(Complex(4, 0))` is
 2.0 (CRuby: (2.0+0.0i)), and the TypeError for `Math.sqrt(true)` names TrueClass where
 CRuby says true. From round nine: `a.any? { }` over one element takes six times what it
-does in CRuby (gap 13).
+does in CRuby (gap 13). From round ten: `42.compare_to(1)` is 1 and
+`42.respond_to?(:compare_to)` true (so for Float; String is right): .NET's
+`Int32.CompareTo` is reachable on Integer under its Ruby-style name, where CRuby raises
+NoMethodError; `%w[apple banana].any?(/(an)+/)` leaves `$~` nil where CRuby sets it in
+the caller; `[].method(:any?).owner` is Enumerable (CRuby: Array), and
+`Enumerable.instance_method(:any?).bind(arr).call(pattern)` walks an Array subclass
+without calling its `each`, which CRuby's Enumerable#any? does call.
 
 How far one benchmark moves by itself, measured in round eight: Bounce's iteration time
 wanders between 63 and 88 ms inside one process, in stretches of 25 to 50 iterations,
