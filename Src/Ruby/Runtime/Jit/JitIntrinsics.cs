@@ -836,6 +836,17 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        /// <summary>
+        /// Math.sqrt of a Float, as RubyMath.Sqrt answers it: sqrt(-0.0) is 0.0 as in MRI, NaN is NaN.
+        /// A negative argument deopts, so that the generic call raises Math::DomainError.
+        /// </summary>
+        public static double MathSqrt(double d) {
+            if (d > 0.0) { return Math.Sqrt(d); }
+            if (d == 0.0) { return 0.0; }
+            if (Double.IsNaN(d)) { return d; }
+            throw Deopt();
+        }
+
         /// <summary>An element read used as a Float operand: an Integer or a Float, as a double, or a deopt.</summary>
         public static double SpeculateDouble(object value) {
             if (value is double) { return (double)value; }

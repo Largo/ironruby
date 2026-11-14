@@ -769,6 +769,52 @@ namespace IronRuby.Runtime.Jit {
             return Ast.AndAlso(Ast.LessThanOrEqual(b, v), exclusive ? Ast.LessThan(v, e) : Ast.LessThanOrEqual(v, e));
         }
 
+        // ---- Math.sqrt ----------------------------------------------------------------------
+
+        /// <summary>`Math.sqrt(x)' or `::Math.sqrt(x)', x no splat: the shape EmitMathSqrt takes.</summary>
+        internal static bool IsMathSqrt(MethodCall/*!*/ node) {
+            var constant = node.Target as ConstantVariable;
+            return node.MethodName == "sqrt" && node.Block == null && constant != null && constant.Name == "Math" && constant.Qualifier == null &&
+                node.Arguments != null && node.Arguments.Expressions.Length == 1 && !(node.Arguments.Expressions[0] is SplattedArgument);
+        }
+
+        /// <summary>
+        /// `Math.sqrt(x)' on an Integer or a Float: the square root, with no call. Only while the
+        /// constant resolves to a module whose public singleton `sqrt' is RubyMath.Sqrt, the library
+        /// method, under the refinements active here: the constant is folded under the constant version
+        /// guard and the method checked now and kept by the global method version guard, as the
+        /// operators are (RequireBuiltin). An object argument is speculated to be a number, and a
+        /// negative one deopts (JitRuntime.MathSqrt), so the generic call raises what it raises.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitMathSqrt(MethodCall/*!*/ node, out JT type) {
+            var math = ResolveConstant((ConstantVariable)node.Target) as RubyModule;
+            if (math == null) { throw Bail("Math is not a module"); }
+            RubyClass singleton = math.GetOrCreateSingletonClass();
+            if (!IsPublicBuiltin(singleton, "sqrt")) { throw Bail("Math.sqrt is not the built-in one"); }
+            var resolved = singleton.ResolveMethod("sqrt", VisibilityContext.AllVisible, _refinements);
+            foreach (var member in ((RubyLibraryMethodInfo)resolved.Info).GetMembers()) {
+                if (member.DeclaringType == null || member.DeclaringType.FullName != "IronRuby.Builtins.RubyMath") {
+                    throw Bail("Math.sqrt is not the built-in one");
+                }
+            }
+
+            RExpr argument = node.Arguments.Expressions[0];
+            JT at;
+            var a = Emit(argument, out at);
+            a = NumericIVar(argument, a, ref at);
+            if (at == JT.Obj) {
+                RequireNumericObservation(argument, "sqrt");
+                a = Ast.Call(JitRuntime.M("SpeculateDouble"), a);
+            } else if (IsNumeric(at)) {
+                a = Coerce(a, at, JT.Dbl);
+            } else {
+                throw Bail("Math.sqrt of a " + at);
+            }
+            _canDeopt = true;
+            type = JT.Dbl;
+            return Ast.Call(JitRuntime.M("MathSqrt"), a);
+        }
+
         // ---- numbers out of objects ---------------------------------------------------------
 
         /// <summary>

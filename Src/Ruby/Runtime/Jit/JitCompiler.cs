@@ -1681,6 +1681,11 @@ namespace IronRuby.Runtime.Jit {
                 if (read != null) { return read; }
             }
 
+            // `Math.sqrt(x)' on a number (JitCompiler.Objects.cs).
+            if (argc == 1 && IsMathSqrt(node)) {
+                return EmitMathSqrt(node, out type);
+            }
+
             // Binary operators on Fixnum/Float, and Array#[] / Hash#[] on an object.
             if (node.Target != null && argc == 1 && !(args.Expressions[0] is SplattedArgument)) {
                 JT lt, rt;
@@ -2647,6 +2652,11 @@ namespace IronRuby.Runtime.Jit {
                 node.Target is LocalVariable) && !(node.Target == null && node.MethodName == _methodName && _arity == 0)) {
                 // `x', `self.x', `@o.x', `o.x': an attr_reader read if the profile finds one (JitCompiler.EmitMethodAttrRead)
                 return node.Target == null || Walk(node.Target) || No(node);
+            }
+
+            if (argc == 1 && JitCompiler.IsMathSqrt(node)) {
+                // `Math.sqrt(x)' (JitCompiler.EmitMathSqrt): x is a number, or an object speculated to be one
+                return WalkOperand(args.Expressions[0]);
             }
 
             if (node.Target == null) {
