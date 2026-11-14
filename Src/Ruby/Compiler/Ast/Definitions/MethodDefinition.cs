@@ -493,16 +493,22 @@ namespace IronRuby.Compiler.Ast {
             if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 return false;
             }
-            if (body.Statements != null) {
+            return FirstNotScopeFree(false) == null || LightBlocksEnabled && FirstNotScopeFree(true) == null;
+        }
+
+        // The first statement of the body that is not scope-free (blockLiterals: with literal blocks), or null.
+        private Expression FirstNotScopeFree(bool blockLiterals) {
+            var statements = Body.Statements;
+            if (statements != null) {
                 bool first = true;
-                foreach (var statement in body.Statements) {
-                    if (!IsScopeFree(statement, LightBlocksEnabled) && !(first && IsBlockGuard(statement))) {
-                        return false;
+                foreach (var statement in statements) {
+                    if (!IsScopeFree(statement, blockLiterals) && !(first && IsBlockGuard(statement))) {
+                        return statement;
                     }
                     first = false;
                 }
             }
-            return true;
+            return null;
         }
 
         /// <summary>
@@ -522,13 +528,10 @@ namespace IronRuby.Compiler.Ast {
             if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 return "rescue, else or ensure";
             }
-            if (body.Statements != null) {
-                bool first = true;
-                foreach (var statement in body.Statements) {
-                    if (!IsScopeFree(statement, LightBlocksEnabled) && !(first && IsBlockGuard(statement))) {
-                        return String.Format("{0} at line {1}", statement.GetType().Name, statement.Location.Start.Line);
-                    }
-                    first = false;
+            if (FirstNotScopeFree(false) != null) {
+                var statement = FirstNotScopeFree(LightBlocksEnabled);
+                if (statement != null) {
+                    return String.Format("{0} at line {1}", statement.GetType().Name, statement.Location.Start.Line);
                 }
             }
             return IsLightFrameCandidate() ? null : "parameters";
@@ -551,17 +554,7 @@ namespace IronRuby.Compiler.Ast {
 
         // Some statement of a light-frame candidate is scope-free only with its literal blocks (see LightFrameRewriter.BlockLiterals).
         private bool HasLightBlockLiteral() {
-            var statements = Body.Statements;
-            if (statements != null) {
-                bool first = true;
-                foreach (var statement in statements) {
-                    if (!IsScopeFree(statement, false) && !(first && IsBlockGuard(statement))) {
-                        return true;
-                    }
-                    first = false;
-                }
-            }
-            return false;
+            return FirstNotScopeFree(false) != null;
         }
 
         /// <summary>
@@ -634,6 +627,15 @@ namespace IronRuby.Compiler.Ast {
                 var array = node as ArrayConstructor;
                 if (array != null) {
                     return AreScopeFree(array.Arguments, blockLiterals);
+                }
+                // `(a..b)': the Range is made from its bounds and the literal's comparison storage (RubyOps.CreateInclusiveRange);
+                // Range#initialize checks the stack before the <=> it calls for bounds that are not two Integers. Not in a body
+                // with literal blocks: its light frame makes the scope before the Proc all the same, and SOM's
+                // `def each; (@first..(@last - 1)).each { |i| yield @s[i] }; end' was 5-7% slower per call as one than with
+                // the scope made on entry (`(a..b)' kept such a body out of light frames until then).
+                var range = node as RangeExpression;
+                if (range != null) {
+                    return !blockLiterals && IsScopeFree(range.Begin, false) && IsScopeFree(range.End, false);
                 }
                 // "#{x}" converts each part through a to_s site
                 var interpolation = node as StringConstructor;

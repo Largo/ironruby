@@ -684,3 +684,58 @@ lambda do
   out.each { |x| p x }
   p pr.input
 end.call
+
+# Range literals (round nine): a method whose body makes a Range is a light frame, and Range#initialize does not
+# call <=> for two Fixnums (MRI's range_init); Bignum and other bounds still ask, a nil answer still raises, and
+# recursion through <=> from a light frame ends in SystemStackError. Integer#<=> and Range.new are redefined last.
+class RCmp; include Comparable; attr_reader :v; def initialize(v); @v = v; end; def <=>(o); $cmps += 1; o.is_a?(RCmp) ? @v <=> o.v : nil; end; end
+$cmps = 0
+class RK
+  def initialize; @s = "abcdefghijklmnop"; @a = 2; end
+  def r(a, b) = (a..b)
+  def rx(a, b); (a...b); end
+  def sl(e); @s[@a..e]; end
+  def sum(a, b); s = 0; i = a; r = (a..b); r.each { |x| s += x }; s; end
+  def lit; (1..3); end
+end
+k = RK.new
+res = []
+3000.times do |i|
+  res << k.r(i, i + 2).inspect if i % 1000 == 0
+  res << k.rx(i, i + 1).size if i % 999 == 0
+  res << k.sl(i % 10) if i % 777 == 0
+  res << k.sum(i, i + 3) if i % 1500 == 0
+  res << k.lit.equal?(k.lit)
+end
+p res.uniq.size, res.first(12)
+# frozen, identity of each made Range
+a = k.r(1, 2); b = k.r(1, 2); p [a.frozen?, a.equal?(b), a.eql?(b)]
+# non-integer bounds through the hot site: <=> is called, nil raises
+p k.r(RCmp.new(1), RCmp.new(2)).begin.v, $cmps
+begin; k.r(RCmp.new(1), 3); rescue ArgumentError => e; p e.message; end
+begin; k.r(1, "a"); rescue ArgumentError => e; p e.message; end
+p k.r(1.5, 2), k.r(nil, 3), k.r(3, nil), k.r("a", "c")
+p k.r(2**61, 2**62), k.r(1, 2**64)
+# Integer#<=> redefined: Fixnum bounds are not asked (MRI's range_init), Bignum ones are
+class Integer; alias __c <=>; def <=>(o); $ic = ($ic || 0) + 1; __c(o); end; end
+x = k.r(1, 2); x = k.r(2**61, 2**62 - 1); x = k.r(-(2**62), 2**40); p $ic.inspect
+x = k.r(1, 2**62); p $ic
+x = k.r(-(2**62) - 1, 0); p $ic
+x = k.r(1, 1.5); p $ic
+class Integer; alias <=> __c; end
+# exception from <=> passes through, frames as before
+class Bad; def <=>(o); raise "boom"; end; end
+begin; k.r(Bad.new, Bad.new); rescue => e; p e.message; end
+# recursion through <=> from a light frame
+def lr(a, b) = (a..b)
+class Rec2; def <=>(o); lr(self, o); 0; end; end
+begin; x = lr(Rec2.new, Rec2.new); p x; rescue SystemStackError => e; p e.class; end
+# Range.new redefined is not called for a literal
+class Range; def self.new(*) = raise("no"); end
+p k.r(4, 5)
+# binding/local_variables in a method with a range
+def bm(a, b); r = (a..b); binding.local_variable_get(:r); end
+p 2000.times.map { |i| bm(i, i+1) }.last
+# caller frames from inside <=>
+class Cf; def <=>(o); $fr = caller(0, 3).map { |l| l[/'.*'/] }; 0; end; end
+k.r(Cf.new, Cf.new); p $fr

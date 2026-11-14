@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Numerics;
 using System.Runtime.Serialization;
 using IronRuby.Runtime;
 using System.Text;
@@ -141,11 +142,16 @@ namespace IronRuby.Builtins {
             // Range tests whether the items can be compared, and uses that to determine if the range is valid
             // Only a non-existent <=> method or a result of nil seems to trigger the exception.
             // A nil end (endless range, 2.6) or nil begin (beginless range, 2.7) skips the test.
-            if (begin != null && end != null) {
+            // MRI's range_init does not ask two Fixnums (Integers within 62 bits): a Range of them is made without a call of
+            // Integer#<=>, redefined or not.
+            if (begin != null && end != null && !(IsFixnum(begin) && IsFixnum(end))) {
                 object compareResult;
 
                 // An exception raised by #<=> belongs to the caller: MRI only turns a
-                // nil answer into "bad value for range".
+                // nil answer into "bad value for range". The call runs Ruby code without a call site of the
+                // literal's frame, which may be a light frame without an entry check: `def <=>(o) = (self..o)'
+                // has to end in SystemStackError, not take the process with it.
+                RubyOps.RequireSufficientStack();
                 var site = comparisonStorage.GetCallSite("<=>");
                 compareResult = site.Target(site, begin, end);
 
@@ -161,6 +167,25 @@ namespace IronRuby.Builtins {
             // Ruby 3.0 froze every Range on creation.
             _flags |= FrozenFlag;
         }
+
+        // An Integer MRI keeps as a Fixnum on a 64-bit platform: -2**62 ... 2**62 - 1.
+        private static bool IsFixnum(object value) {
+            if (value is int) {
+                return true;
+            }
+            if (value is long) {
+                long l = (long)value;
+                return l >= -(1L << 62) && l <= (1L << 62) - 1;
+            }
+            if (value is BigInteger) {
+                var big = (BigInteger)value;
+                return big >= FixnumMin && big <= FixnumMax;
+            }
+            return false;
+        }
+
+        private static readonly BigInteger FixnumMin = -(BigInteger.One << 62);
+        private static readonly BigInteger FixnumMax = (BigInteger.One << 62) - 1;
 
         #region IRubyObjectState Members
 
