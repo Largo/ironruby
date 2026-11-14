@@ -8208,6 +8208,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.InternFrozen)
             );
             
+            DefineLibraryMethod(module, "__ir_lines__", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetLines)
+            );
+            
             DefineLibraryMethod(module, "__ir_require_unchanged__", 0x52, 
                 0x00000000U, 
                 new Action<IronRuby.Builtins.MutableString, System.Int32>(IronRuby.Builtins.MutableStringOps.RequireUnchanged)
@@ -8625,6 +8630,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Match), 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Match), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.Match)
+            );
+            
+            DefineLibraryMethod(module, "match?", 0x51, 
+                0x00020002U, 0x00020002U, 0x00040000U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, System.Int32, System.Boolean>(IronRuby.Builtins.MutableStringOps.IsMatch), 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, System.Boolean>(IronRuby.Builtins.MutableStringOps.IsMatch), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MutableString, System.Object, System.Int32, System.Boolean>(IronRuby.Builtins.MutableStringOps.IsMatch)
             );
             
             DefineLibraryMethod(module, "next", 0x51, 
