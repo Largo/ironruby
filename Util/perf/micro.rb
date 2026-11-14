@@ -33,6 +33,7 @@ class P
   def sqrtw(n); i = 0; s = 0.0; f = 1.5; while i < n; s += Math.sqrt(f + i); i += 1; end; s; end
   def rangeeach(n); s = 0.0; (n / 1000).times { (0...1000).each { |i| s += i * 0.5 } }; s; end
   def blkattr(bs, n); (n / 20).times { 20.times { |i| b = bs[i]; b.v -= b.x; b.c += 2 } }; end
+  def short4(bs); s = 0.0; bs.each { |b| s += b.v * 0.5 + 0.25 }; s; end
 end
 class P2; def initialize(a, b); @a = a; @b = b; end; def foo; 1; end; end
 class P3; def foo; 2; end; end
@@ -74,3 +75,6 @@ pbs = Array.new(20) { PB.new }
 t("sqrtw")     { |n| o.sqrtw(n) }
 t("rangeeach") { |n| o.rangeeach(n) }
 t("blkattr")   { |n| o.blkattr(pbs, n) }
+# round nine's: a short run, an Array#each over four with Float arithmetic, called from a while (ns per call)
+pb4 = pbs.first(4)
+t("short4")    { |n| i = 0; while i < n; o.short4(pb4); i += 1; end }

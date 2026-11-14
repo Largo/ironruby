@@ -220,10 +220,12 @@ namespace IronRuby.Runtime.Osr {
     /// </summary>
     public sealed class BlockLoopSite {
         /// <summary>
-        /// Iterations an entry must have left for the copy to be worth entering: the entry allocates
-        /// the argument array and a tuple and runs the copy's guards, which a handful of yields beat.
+        /// Iterations an entry must have left for the copy to be worth entering. An entry reuses the
+        /// site's argument array and tuple (Run), so it allocates nothing and costs a few guards: even
+        /// a run of one or two yields (NBody's `each' over five bodies, called millions of times) is
+        /// cheaper in the copy than through BlockParam.Yield.
         /// </summary>
-        public const int MinRun = 16;
+        public const int MinRun = 1;
 
         private readonly BlockLoopInfo/*!*/ _info;
         private readonly BlockLoopKind _kind;
@@ -385,8 +387,7 @@ namespace IronRuby.Runtime.Osr {
         /// <summary>
         /// On the way out: what this entry did not spend, so that entries that leave early (a break, or a
         /// search that stops) still add up. A loop shorter than MinRun never gets here: its iterator does
-        /// not ask for the site at all, which keeps a hot short loop (`a.each { }' over a handful of
-        /// elements, nested in a long one) the code it was before.
+        /// not ask for the site at all (with MinRun one, that is only an empty one).
         /// </summary>
         public void Leave(long countdown) {
             if (_osr.Counting && countdown < _osr.Countdown) {
@@ -455,7 +456,38 @@ namespace IronRuby.Runtime.Osr {
             RubyScope scope = proc.LocalScope;
             int depth = _info.Depth;
 
-            var own = MutableTuple.MakeTuple(_tupleType, new object[_tupleSize]);
+            // The argument array and the block's tuple are kept for the next entry, so that a short run
+            // does not pay two allocations to get in. Ruby threads run in parallel and a run can re-enter
+            // its own site (a recursive method whose block loop is compiled), so an entry takes the pair
+            // for itself and allocates its own when another entry has it.
+            object[] args = Interlocked.Exchange(ref _spare, null);
+            MutableTuple own;
+            if (args != null) {
+                own = (MutableTuple)args[0];
+            } else {
+                own = MutableTuple.MakeTuple(_tupleType, new object[_tupleSize]);
+                args = new object[depth + 3];
+                args[0] = own;
+            }
+            try {
+                RunIn(args, own, block, scope, depth, from, limit, result, keptBefore, out resume, out kept);
+            } finally {
+                // Nothing a run held stays reachable from the site: the block's locals, the receiver,
+                // the result, self and the scopes. A copy that stopped part way (an exception, a throw)
+                // leaves its locals in the tuple too, which the next entry must not start from.
+                for (int i = 0; i < _tupleSize; i++) {
+                    own.SetNestedValue(_tupleSize, i, null);
+                }
+                Array.Clear(args, 1, args.Length - 1);
+                Volatile.Write(ref _spare, args);
+            }
+        }
+
+        // An argument array whose first element is the block's tuple, both cleared, for the next entry to take.
+        private object[] _spare;
+
+        private void RunIn(object[]/*!*/ args, MutableTuple/*!*/ own, BlockParam/*!*/ block, RubyScope scope, int depth,
+            int from, object limit, RubyArray result, int keptBefore, out int resume, out int kept) {
             own.SetNestedValue(_tupleSize, _counterIndex, ScriptingRuntimeHelpers.Int32ToObject(from));
             own.SetNestedValue(_tupleSize, _limitIndex, limit);
             own.SetNestedValue(_tupleSize, _resultIndex, result);
@@ -463,8 +495,6 @@ namespace IronRuby.Runtime.Osr {
 
             // the tuples by lexical depth, the block's own first, then the scopes it was defined in,
             // the same chain its compiled body walks with GetParentScope
-            var args = new object[depth + 3];
-            args[0] = own;
             RubyScope s = scope;
             for (int k = 1; k <= depth && s != null; k++) {
                 args[k] = s.Locals;

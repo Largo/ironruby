@@ -812,7 +812,7 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// Attribute reads and writes may go through a local the loop assigns: only in a core iterator's
-        /// loop, whose every entry runs BlockLoopSite.MinRun iterations or more (ReceiverHints.LongRuns).
+        /// loop, whose entry allocates nothing (BlockLoopSite.Run reuses its arguments; ReceiverHints.LongRuns).
         /// </summary>
         private bool WritesReceivers {
             get { return _hints != null && _hints.LongRuns; }
@@ -978,7 +978,7 @@ namespace IronRuby.Runtime.Jit {
             internal object[] ArgSamples;
             // An outlined loop's self as it is when the loop turns hot (JitCompiler.NoteLoopSample).
             internal object LoopSelf;
-            // The loop is a core iterator's, entered only for runs of BlockLoopSite.MinRun or more.
+            // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
             internal bool LongRuns;
         }
 
