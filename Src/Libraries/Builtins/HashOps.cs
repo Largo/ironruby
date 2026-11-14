@@ -22,6 +22,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
 using IronRuby.Runtime.Conversions;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Builtins {
 
@@ -263,6 +264,90 @@ namespace IronRuby.Builtins {
                 return site.Target(site, self, key);
             }
             return result;
+        }
+
+        // Hash#transform_values: a new hash of the same keys, in the same order, with the block's values;
+        // compare_by_identity carries over, the default does not. MRI walks self with
+        // rb_hash_stlike_foreach, which does not mark the hash as iterated: the block may add keys to it.
+        [RubyMethod("transform_values")]
+        public static Enumerator/*!*/ TransformValues(RubyContext/*!*/ context, Hash/*!*/ self) {
+            return new Enumerator(self, "transform_values") { SizeSource = self, SizeOp = "same" };
+        }
+
+        [RubyMethod("transform_values")]
+        public static object TransformValues(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, Hash/*!*/ self) {
+            var result = new Hash(context.EqualityComparer, self.Count);
+            if (self.ComparesByIdentity) {
+                result.CompareByIdentity();
+            }
+            int index = 0;
+            object key, value;
+            while (self.TryGetNextEntry(ref index, out key, out value)) {
+                object blockResult;
+                if (block.Yield(value, out blockResult)) {
+                    return blockResult;
+                }
+                result[key] = blockResult;
+            }
+            return result;
+        }
+
+        // Hash#dig (rb_hash_dig): self[key] - the default included, a redefined #[] not - and then #dig on
+        // what that found for the remaining keys (rb_obj_dig). Overloads of one, two and three keys pass
+        // the rest on through sites of a fixed arity, so `h.dig(:a, :b, :c)` builds no argument array.
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, Hash/*!*/ self, object key) {
+            return GetElement(defaultStorage, self, key);
+        }
+
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ digStorage,
+            Hash/*!*/ self, object key, object key2) {
+            object value = GetElement(defaultStorage, self, key);
+            if (value == null) {
+                return null;
+            }
+            RequireDig(respondTo, value);
+            var site = digStorage.GetCallSite("dig", 1);
+            return site.Target(site, value, key2);
+        }
+
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ digStorage,
+            Hash/*!*/ self, object key, object key2, object key3) {
+            object value = GetElement(defaultStorage, self, key);
+            if (value == null) {
+                return null;
+            }
+            RequireDig(respondTo, value);
+            var site = digStorage.GetCallSite("dig", 2);
+            return site.Target(site, value, key2, key3);
+        }
+
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ digStorage,
+            Hash/*!*/ self, object key, params object[]/*!*/ rest) {
+            object value = GetElement(defaultStorage, self, key);
+            if (rest.Length == 0 || value == null) {
+                return value;
+            }
+            RequireDig(respondTo, value);
+            var list = new RubyArray(rest.Length - 1);
+            for (int i = 1; i < rest.Length; i++) {
+                list.Add(rest[i]);
+            }
+            var site = digStorage.GetCallSite("dig", RubyCallSignature.WithSplat(1));
+            return site.Target(site, value, rest[0], list);
+        }
+
+        private static void RequireDig(RespondToStorage/*!*/ respondTo, object value) {
+            // a Hash or an Array is known to have #dig; anything else is asked (respond_to? may be overridden)
+            if (!(value is Hash || value is RubyArray) && !Protocols.RespondTo(respondTo, value, "dig")) {
+                throw RubyExceptions.CreateTypeError("{0} does not have #dig method", respondTo.Context.GetClassName(value));
+            }
         }
 
         [RubyMethod("default")]
