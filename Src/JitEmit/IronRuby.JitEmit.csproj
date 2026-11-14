@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- -X:JITMethods (a prototype, Src/Ruby/Runtime/Jit/JitMethodEmitter.cs): the expression compiler that emits a
+       tree into a MethodBuilder, which System.Linq.Expressions on .NET does not have. It is the port in
+       Util/aot/IronRuby.Aot/ExpressionCompiler, compiled here from the same files into a library with nothing
+       else in it; IronRuby.dll loads it from its own directory when the switch is given, and does not
+       reference it. The console copies it there when built with -p:IronRubyJitEmit=true. -->
+  <PropertyGroup>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
+    <AssemblyName>IronRuby.JitEmit</AssemblyName>
+    <RootNamespace>IronRuby.Aot.Compiler</RootNamespace>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>CS0105;$(NoWarn);CS1591;CS0618;CS8632;CS0162;CS0168;CS0219;CS0028;CS0414;SYSLIB0050;SYSLIB0051</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Util\aot\IronRuby.Aot\ExpressionCompiler\*.cs" Link="ExpressionCompiler\%(Filename)%(Extension)" />
+    <!-- for IronRuby.Runtime.Precompiled.Closure and RuntimeOps, which a nested lambda's code refers to -->
+    <ProjectReference Include="..\Ruby\Ruby.csproj" />
+  </ItemGroup>
+</Project>

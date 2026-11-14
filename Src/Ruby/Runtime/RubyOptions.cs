@@ -55,6 +55,7 @@ namespace IronRuby.Runtime {
         private readonly bool _objectSpace;
         private readonly bool _jit;
         private readonly bool _osr;
+        private readonly string _jitMethods;
 
 #if DEBUG
         public static bool CompileRegexps;
@@ -236,6 +237,14 @@ namespace IronRuby.Runtime {
             get { return _osr; }
         }
 
+        /// <summary>
+        /// -X:JITMethods[=options]: the method JIT emits its code as static methods of a runtime
+        /// assembly (Jit.JitMethodEmitter, a prototype). Null without the switch.
+        /// </summary>
+        public string JitMethods {
+            get { return _jitMethods; }
+        }
+
         public string StandardLibraryPath {
             get { return _standardLibraryPath; }
         }
@@ -295,6 +304,7 @@ namespace IronRuby.Runtime {
             // that would only hand them to System.Linq.Expressions' interpreter, so they default off.
             _jit = GetOption(options, "JIT", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _osr = GetOption(options, "OSR", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
+            _jitMethods = GetOption(options, "JITMethods", (string)null);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);

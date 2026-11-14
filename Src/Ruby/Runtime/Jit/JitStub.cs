@@ -574,8 +574,7 @@ namespace IronRuby.Runtime.Jit {
             // trampoline hop and the entry and nothing more.
             MSA.Expression callee;
             if (code.EmittedSelfCall) {
-                Delegate typed = code.Lambda.Compile();
-                code.SelfCell.Value = typed;
+                Delegate typed = CompileTyped(code);
                 callee = Ast.Constant(typed, typed.GetType());
             } else {
                 callee = code.Lambda;
@@ -583,7 +582,7 @@ namespace IronRuby.Runtime.Jit {
 
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
-            spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
+            spec.Entry = CompileEntry(BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec));
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
                 spec.Direct = BuildDirectEntry(code, callee, version, spec).Compile();
@@ -606,6 +605,24 @@ namespace IronRuby.Runtime.Jit {
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, needsClassGuard ? " (self-call)" : "");
             }
             return true;
+        }
+
+        /// <summary>
+        /// A typed body that calls itself, as a delegate. -X:JITMethods: a static method of a runtime
+        /// assembly whose self-calls are calls (JitMethodEmitter), and the cell is then not read at all.
+        /// </summary>
+        private Delegate/*!*/ CompileTyped(JitCode/*!*/ code) {
+            var emitter = JitMethodEmitter.For(_context);
+            Delegate typed = (emitter != null) ? emitter.EmitTyped(code) : null;
+            if (typed == null) { typed = code.Lambda.Compile(); }
+            code.SelfCell.Value = typed;
+            return typed;
+        }
+
+        private Delegate/*!*/ CompileEntry(MSA.LambdaExpression/*!*/ entry) {
+            var emitter = JitMethodEmitter.For(_context);
+            Delegate result = (emitter != null && emitter.Entries) ? emitter.EmitEntry(entry) : null;
+            return result ?? entry.Compile();
         }
 
         private JitCompiler.ReceiverHints/*!*/ Hints() {
@@ -674,8 +691,7 @@ namespace IronRuby.Runtime.Jit {
                 if (code == null) { continue; }
                 // as in TrySpecialize: a body of its own only when it calls itself
                 if (code.EmittedSelfCall) {
-                    Delegate typed = code.Lambda.Compile();
-                    code.SelfCell.Value = typed;
+                    Delegate typed = CompileTyped(code);
                     callees[k] = Ast.Constant(typed, typed.GetType());
                 } else {
                     callees[k] = code.Lambda;
@@ -685,7 +701,7 @@ namespace IronRuby.Runtime.Jit {
             // one Specialization for all the bodies: they retire, cool down and go stale together
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
-            spec.Entry = BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec).Compile();
+            spec.Entry = CompileEntry(BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec));
 
             lock (_sync) {
                 // as in TrySpecialize
