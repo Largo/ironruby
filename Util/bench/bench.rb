@@ -551,6 +551,13 @@ unless BENCH.key?(name)
   exit 1
 end
 b = BENCH[name]
-t = Time.now
-b.call
-printf("%.6f\n", Time.now - t)
+# BENCH_CLOCK=cpu: the seconds this thread spent on a CPU (Linux), for a machine too busy for the wall clock
+SCHEDSTAT = "/proc/thread-self/schedstat"
+CPU_CLOCK = ENV["BENCH_CLOCK"] == "cpu" && File.readable?(SCHEDSTAT)
+def now = CPU_CLOCK ? File.read(SCHEDSTAT).to_i / 1e9 : Time.now.to_f
+t = now
+value = b.call
+elapsed = now - t
+# BENCH_VALUE=1: what the benchmark computed, to compare between interpreters (nil for the loops)
+puts value.inspect if ENV["BENCH_VALUE"]
+printf("%.6f\n", elapsed)
