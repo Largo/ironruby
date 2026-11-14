@@ -76,6 +76,16 @@ namespace IronRuby.Runtime {
         public bool RaisedUnkept { get; set; }
 
         /// <summary>
+        /// Marks an exception a library method has just made, of a built-in class, and throws right away as one nothing can
+        /// have kept (<see cref="RaisedUnkept"/>): its catch-site walk may then wait for it to be exposed, as that of an
+        /// exception Kernel#raise made does. Only for a throw site that keeps no reference to the exception.
+        /// </summary>
+        public static Exception/*!*/ MarkUnkept(Exception/*!*/ exception) {
+            GetInstance(exception).RaisedUnkept = true;
+            return exception;
+        }
+
+        /// <summary>
         /// Whether <c>raise exceptionClass</c> makes the exception without running any Ruby code that could keep it: #exception,
         /// #new and #initialize of the class are IronRuby's own.
         /// </summary>
@@ -84,6 +94,22 @@ namespace IronRuby.Runtime {
             return IsBuiltin(singleton.ResolveMethod("exception", VisibilityContext.AllVisible).Info) &&
                 IsBuiltin(singleton.ResolveMethod("new", VisibilityContext.AllVisible).Info) &&
                 IsBuiltin(exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible).Info);
+        }
+
+        /// <summary>
+        /// Whether <c>exceptionClass.new(message)</c> runs only IronRuby's own code, for a class whose #initialize the core prelude
+        /// (ruby4.rb) defines and which calls the built-in one through super (KeyError): #new is built-in, #initialize is the
+        /// prelude's, declared in the class itself, and the #initialize above it is built-in. Then an exception a library method
+        /// makes that way and throws at once is one nothing can have kept (<see cref="MarkUnkept"/>).
+        /// </summary>
+        public static bool MakesUnkeptPreludeException(RubyClass/*!*/ exceptionClass) {
+            var init = exceptionClass.ResolveMethod("initialize", VisibilityContext.AllVisible).Info as RubyMethodInfo;
+            var super = exceptionClass.SuperClass;
+            return init != null && init.DeclaringModule == exceptionClass && super != null &&
+                init.Document != null && init.Document.FileName != null &&
+                init.Document.FileName.Replace('\\', '/').EndsWith("/ironruby/ruby4.rb", StringComparison.Ordinal) &&
+                IsBuiltin(exceptionClass.ImmediateClass.ResolveMethod("new", VisibilityContext.AllVisible).Info) &&
+                IsBuiltin(super.ResolveMethod("initialize", VisibilityContext.AllVisible).Info);
         }
 
         // a method of IronRuby's own, which runs no Ruby code: a library method, or one the runtime builds (Class#new, Exception.exception)

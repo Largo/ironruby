@@ -651,8 +651,9 @@ namespace IronRuby.Builtins {
         /// are not valid in its encoding escaped ("1\xFF"), everything else passed through.
         /// </summary>
         private static Exception/*!*/ InvalidIntegerValue(MutableString/*!*/ value) {
-            return RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
-                MutableStringOps.GetQuotedStringRepresentation(value, false, '"'));
+            // thrown at once by its callers, kept by nothing
+            return RubyExceptionData.MarkUnkept(RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
+                MutableStringOps.GetQuotedStringRepresentation(value, false, '"')));
         }
 
         private static bool IsIntegerWhitespace(char c) {

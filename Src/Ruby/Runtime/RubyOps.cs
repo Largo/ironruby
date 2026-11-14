@@ -3987,7 +3987,8 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Exception/*!*/ MakeMissingMethodError(RubyContext/*!*/ context, object self, string/*!*/ methodName) {
-            return RubyExceptions.CreateMethodMissing(context, self, methodName);
+            // the rule throws it at once (RubyCallAction.BuildMethodMissingAccess, SetMissingMethodArguments in between)
+            return RubyExceptionData.MarkUnkept(RubyExceptions.CreateMethodMissing(context, self, methodName));
         }
 
         // MRI's method_missing_reason: whether the call that is about to reach a user-defined
@@ -4047,7 +4048,8 @@ namespace IronRuby.Runtime {
             var error = RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
             // NameError#local_variables: the locals the name might have been meant as (did_you_mean)
             RubyExceptionData.GetInstance(error).LocalVariables = scope.GetLocalVariableSymbols();
-            return error;
+            // the rule throws it at once (RubyCallAction.BuildMethodMissingAccess)
+            return RubyExceptionData.MarkUnkept(error);
         }
 
         [Emitted]
@@ -4662,7 +4664,8 @@ namespace IronRuby.Runtime {
                         break;
                 }
             }
-            return RubyExceptions.CreateArgumentError("invalid value for Float(): \"{0}\"", text.ToString());
+            // thrown at once by its caller, kept by nothing
+            return RubyExceptionData.MarkUnkept(RubyExceptions.CreateArgumentError("invalid value for Float(): \"{0}\"", text.ToString()));
         }
 
         #region Kernel#Float string grammar

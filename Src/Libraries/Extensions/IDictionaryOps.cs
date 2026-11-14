@@ -560,6 +560,11 @@ namespace IronRuby.Builtins {
                 if (exception != null) {
                     context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__receiver__"), receiver);
                     context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__key__"), key);
+                    // its callers throw it at once: unless Ruby code of the program's took part in making it, nothing has kept it
+                    var cls = keyErrorClass as RubyClass;
+                    if (cls != null && RubyExceptionData.MakesUnkeptPreludeException(cls)) {
+                        RubyExceptionData.MarkUnkept(exception);
+                    }
                     return exception;
                 }
             }
