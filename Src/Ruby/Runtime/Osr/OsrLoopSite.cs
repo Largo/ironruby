@@ -123,6 +123,9 @@ namespace IronRuby.Runtime.Osr {
         // Where in the argument array the loop's RubyScope is: its constants resolve in it, and its
         // refinements resolve the copy's operators; -1 if it is not passed.
         internal int ScopeArgIndex = -1;
+        // Every entry runs at least BlockLoopSite.MinRun iterations (a core iterator's loop): the copy may
+        // take shapes whose speed only pays once its entry is spread over a run (JitCompiler.EmitCall).
+        internal bool LongRuns;
 
         private readonly object/*!*/ _lock = new object();
         private readonly string/*!*/ _name;
@@ -226,7 +229,7 @@ namespace IronRuby.Runtime.Osr {
 
                 long start = Stopwatch.GetTimestamp();
                 try {
-                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex);
+                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, LongRuns);
                 } catch (Exception e) {
                     if (Verbose) {
                         Console.Error.WriteLine("[osr] {0}: specialization failed: {1}", _name, e.Message);

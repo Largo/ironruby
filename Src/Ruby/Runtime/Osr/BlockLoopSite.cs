@@ -267,6 +267,7 @@ namespace IronRuby.Runtime.Osr {
             }
             _osr.LoopAst = MakeLoop(info, kind, depth, _counterIndex, _limitIndex, _resultIndex, _keptIndex);
             _osr.Context = info.Context;
+            _osr.LongRuns = true;
             _osr.ScopeDepth = depth;
             _osr.TupleArgIndex = tupleArgIndex;
             _osr.SelfArgIndex = depth + 1;

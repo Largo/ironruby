@@ -199,3 +199,29 @@ t('times: Thread#kill') do
   th.join.status
 end
 t('times: enumerator') { [5.times.to_a, 3.upto(6).to_a, 6.downto(3).to_a] }
+
+# ---------------------------------------------------------------- attr reads on a local the block assigns
+# `b = a[i % n]; s += b.x * b.y': the block's own local b is fresh on every yield, so the copy takes
+# what reader x is from an element of a (JitCompiler.NoteLoopSample) and checks each b's class as it
+# reads. An element of another class (one whose x reads another variable, one whose x is a method, nil,
+# one whose x is private), one element with a singleton x, and the reader redefined between runs.
+class BlAttrP; attr_reader :x, :y; def initialize(x, y) = (@x = x; @y = y); end
+class BlAttrQ; attr_reader :y; def x = @y * 10; def initialize(y) = (@y = y); end
+class BlAttrR; attr_reader :x, :y; def initialize(x) = (@x = @y = x); end
+class BlAttrPriv; attr_reader :y; private attr_reader :x; def initialize = (@x = @y = 1.0); end
+bl_attr = ->(a) { s = 0.0; N.times { |i| b = a[i % a.size]; s += b.x * b.y }; s }
+bl_attr_each = ->(a, k) { s = 0.0; k.times { a.each { |b| s += b.x - b.y } }; s }
+bl_ps = Array.new(4) { |k| BlAttrP.new(k * 1.5, k + 0.25) }
+t('attr reads on a block local') { bl_attr.(bl_ps) }
+t('... Integers') { bl_attr.(Array.new(4) { |k| BlAttrP.new(k, k + 1) }) }
+t('... an element whose reader reads another variable') { a = bl_ps.dup; a[N % 4 + 0] = BlAttrR.new(2.0); a << BlAttrR.new(3.0); bl_attr.(a) }
+t('... an element whose x is a method') { bl_attr.(bl_ps + [BlAttrQ.new(1.5)]) }
+t('... nil') { bl_attr.(bl_ps + [nil]) }
+t('... a private x') { bl_attr.(bl_ps + [BlAttrPriv.new]) }
+t('... a singleton x on one element') { o = BlAttrP.new(1.0, 2.0); def o.x = 100.0; bl_attr.(bl_ps + [o]) }
+t('... in each') { bl_attr_each.(bl_ps * 1000, 2) }
+t('... in each, nil at the end') { bl_attr_each.(bl_ps * 1000 + [nil], 1) }
+t('... a Float turning into a String') { a = bl_ps + [BlAttrP.new("s", 1.0)]; bl_attr.(a) }
+class BlAttrP; def x = 7.0; end
+t('... the reader redefined') { [bl_attr.(bl_ps), bl_attr_each.(bl_ps * 1000, 2)] }
+t('... in a while loop') { a = Array.new(4) { |k| BlAttrR.new(k + 0.5) }; s = 0.0; i = 0; while i < N; b = a[i % 4]; s += b.x * b.y; i += 1; end; s }

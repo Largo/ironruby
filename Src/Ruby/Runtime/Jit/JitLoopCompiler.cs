@@ -71,7 +71,7 @@ namespace IronRuby.Runtime.Jit {
         /// is args[<paramref name="scopeArgIndex"/>].
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
-            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex) {
+            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex, bool longRuns = false) {
 
             // The refinements active where the loop is written: the operators it inlines are resolved
             // under them, as its call sites would resolve them.
@@ -196,8 +196,10 @@ namespace IronRuby.Runtime.Jit {
             JitCompiler.JitLoopFacts facts;
             // what self is, as a hint for the Array and Hash intrinsics (JitCompiler.ObservedType)
             var hints = new JitCompiler.ReceiverHints();
+            hints.LongRuns = longRuns;
             if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
                 hints.Self = (args[selfArgIndex] == null) ? typeof(void) : args[selfArgIndex].GetType();
+                hints.LoopSelf = args[selfArgIndex];
             }
             MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, scope, hints,
                 refinements, out slots, out canDeopt, out facts);

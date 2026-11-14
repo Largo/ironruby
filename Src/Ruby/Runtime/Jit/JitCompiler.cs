@@ -1136,6 +1136,7 @@ namespace IronRuby.Runtime.Jit {
             var target = node.Left as LocalVariable;
             if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
             if (_inKeywordDefault) { throw Bail("keyword default assigns a local"); }
+            if (op == null) { NoteLoopSample(target, node.Right); }
 
             JT rhsType;
             var rhs = Emit(node.Right, out rhsType);
@@ -1583,20 +1584,31 @@ namespace IronRuby.Runtime.Jit {
             // `o.x' in an outlined loop, o a local holding an object whose x is an attr_reader: the
             // same read, of o as it is in its tuple slot (the loop may not write o), typed by what
             // the variable holds in o right now - a guarded unboxing for an Integer or a Float.
+            // A local the loop writes (`b = bodies[j]; b.x') is read from its object slot instead,
+            // and what its tuple slot holds now - the value of an iteration run before the loop was
+            // compiled - is only a profile: ReadSelfAttr checks each receiver's class anyway. Only in
+            // a core iterator's loop (WritesReceivers): a `while' that walks a linked structure
+            // (`y = y.parent' in CD's Node#successor) runs a few iterations per entry, which do not
+            // pay for the entry of a copy.
             var receiverLocal = node.Target as LocalVariable;
             if (argc == 0 && receiverLocal != null && _peekLocal != null && _refinements.IsEmpty) {
                 MSA.ParameterExpression bound;
                 JT boundType;
-                if (!TryLookup(Key(receiverLocal), out bound, out boundType)) {
+                bool written = TryLookup(Key(receiverLocal), out bound, out boundType);
+                if (!written || boundType == JT.Obj && WritesReceivers) {
                     var peek = _peekLocal(receiverLocal);
                     object live = peek.HasValue ? peek.Value.Value : null;
+                    if (live == null && written) { live = LoopSample(receiverLocal); }
                     string variableName = (live != null)
                         ? JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) : null;
                     if (variableName != null) {
                         _canDeopt = true;
-                        if (_peeked == null) { _peeked = new List<LocalVariable>(); }
-                        _peeked.Add(receiverLocal);
-                        MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), peek.Value.Key,
+                        if (!written) {
+                            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                            _peeked.Add(receiverLocal);
+                        }
+                        MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context),
+                            written ? (MSA.Expression)bound : peek.Value.Key,
                             Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, true)));
                         object value;
                         _context.TryGetInstanceVariable(live, variableName, out value);

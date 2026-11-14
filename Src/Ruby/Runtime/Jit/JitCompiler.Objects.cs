@@ -769,6 +769,60 @@ namespace IronRuby.Runtime.Jit {
             return Ast.AndAlso(Ast.LessThanOrEqual(b, v), exclusive ? Ast.LessThan(v, e) : Ast.LessThanOrEqual(v, e));
         }
 
+        // ---- samples of the objects a loop loads into its locals ------------------------------
+
+        // By Key: an element of the Array a local of an outlined loop is assigned from (NoteLoopSample).
+        private Dictionary<string, object> _loopSamples;
+
+        /// <summary>
+        /// `b = a[j]' or `b = @a[j]' in an outlined loop, a an Array whose elements, sampled, are all
+        /// objects of one class: one of them is what b holds, as a profile. A block's own local is fresh
+        /// on every call, so its tuple slot says nothing when the loop is compiled, and an attr read of b
+        /// (EmitCall) needs to know what reader it is. Only a profile: ReadSelfAttr checks the class of
+        /// every receiver it reads from and deopts on another.
+        /// </summary>
+        private void NoteLoopSample(LocalVariable/*!*/ target, RExpr/*!*/ right) {
+            if (_loop == null || _peekLocal == null) { return; }
+            var read = right as MethodCall;
+            if (read == null || read.MethodName != "[]" || read.Block != null || read.Arguments == null ||
+                read.Arguments.Expressions.Length != 1) { return; }
+            RubyArray array = null;
+            var local = read.Target as LocalVariable;
+            var ivar = read.Target as InstanceVariable;
+            if (local != null) {
+                var peek = _peekLocal(local);
+                array = peek.HasValue ? peek.Value.Value as RubyArray : null;
+            } else if (ivar != null && _hints != null && _hints.LoopSelf != null) {
+                object value;
+                if (_context.TryGetInstanceVariable(_hints.LoopSelf, ivar.Name, out value)) { array = value as RubyArray; }
+            }
+            if (array == null || array.Count == 0) { return; }
+            const int Samples = 16;
+            int step = Math.Max(1, array.Count / Samples);
+            object first = array[0];
+            if (!(first is RubyObject)) { return; }
+            RubyClass cls = ((RubyObject)first).ImmediateClass;
+            for (int i = step; i < array.Count; i += step) {
+                var element = array[i] as RubyObject;
+                if (element == null || element.ImmediateClass != cls) { return; }
+            }
+            if (_loopSamples == null) { _loopSamples = new Dictionary<string, object>(); }
+            _loopSamples[Key(target)] = first;
+        }
+
+        /// <summary>
+        /// Attribute reads and writes may go through a local the loop assigns: only in a core iterator's
+        /// loop, whose every entry runs BlockLoopSite.MinRun iterations or more (ReceiverHints.LongRuns).
+        /// </summary>
+        private bool WritesReceivers {
+            get { return _hints != null && _hints.LongRuns; }
+        }
+
+        private object LoopSample(LocalVariable/*!*/ local) {
+            object sample;
+            return (_loopSamples != null && _loopSamples.TryGetValue(Key(local), out sample)) ? sample : null;
+        }
+
         // ---- Math.sqrt ----------------------------------------------------------------------
 
         /// <summary>`Math.sqrt(x)' or `::Math.sqrt(x)', x no splat: the shape EmitMathSqrt takes.</summary>
@@ -922,6 +976,10 @@ namespace IronRuby.Runtime.Jit {
             internal object SelfSample;
             // The same call's positional arguments (JitCompiler.TrySample).
             internal object[] ArgSamples;
+            // An outlined loop's self as it is when the loop turns hot (JitCompiler.NoteLoopSample).
+            internal object LoopSelf;
+            // The loop is a core iterator's, entered only for runs of BlockLoopSite.MinRun or more.
+            internal bool LongRuns;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
