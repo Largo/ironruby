@@ -61,6 +61,26 @@ namespace IronRuby.Runtime.Jit {
         internal bool UsesConstants;
         // The body writes Hash elements (EmitIndexWrite): the entry brackets the call with the undo log.
         internal bool UsesUndoLog;
+
+        // -X:JITCalls. What a body that calls this one directly takes over from it (JitCompiler.EmitCall):
+        // Deopts and IvarWrite are the two halves of CanDeopt, Pure is JitCompiler._pure, and each
+        // includes what the bodies this one calls brought.
+        internal bool Deopts, IvarWrite, Pure;
+        // The body has a `while' loop, and so a safe point that runs Ruby code (JitRuntime.MethodSafePoint).
+        internal bool HasLoop;
+        // The body calls the typed bodies of other methods: the entry pins the receiver class they
+        // were resolved from.
+        internal bool DirectCalls;
+    }
+
+    /// <summary>
+    /// -X:JITCalls: another method of the receiver as a typed body calls it (JitStub.BindCallee).
+    /// </summary>
+    internal sealed class JitCallee {
+        internal JitCode/*!*/ Code;
+        // What the caller invokes with (self, typed arguments): the typed body's delegate, as a
+        // constant. -X:JITMethods emits a call of the method behind it (JitMethodEmitter.Lifter).
+        internal MSA.Expression/*!*/ Target;
     }
 
     internal sealed partial class JitCompiler {
@@ -104,6 +124,13 @@ namespace IronRuby.Runtime.Jit {
         private bool _selfCall;
         private readonly HashSet<MSA.Expression>/*!*/ _selfCalls = new HashSet<MSA.Expression>();
         private int _nodes;
+
+        // -X:JITCalls: finds the typed body of the method a name resolves to on the receiver, for a
+        // call with so many arguments; null where a body binds no such call (no switch, a loop, a
+        // receiver class the profile could not pin). See EmitDirectCall.
+        private Func<string, int, JitCallee> _callees;
+        private bool _directCalls;
+        private bool _hasLoop;
 
         // Explicit `return'. The label is created on the first one met, typed by the return type
         // the round is compiling under (_selfReturn); _returnUnion is what the values actually
@@ -464,6 +491,16 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
             RefinementActivation/*!*/ refinements, int supplied, RubyScope constantScope, ReceiverHints hints) {
+            return TryCompile(ast, context, paramTypes, keywords, refinements, supplied, constantScope, hints, null);
+        }
+
+        /// <summary>
+        /// <paramref name="callees"/>: -X:JITCalls, the typed bodies of the receiver's other methods
+        /// (JitStub.BindCallee); null if the body may not call one.
+        /// </summary>
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
+            RefinementActivation/*!*/ refinements, int supplied, RubyScope constantScope, ReceiverHints hints,
+            Func<string, int, JitCallee> callees) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
@@ -474,6 +511,7 @@ namespace IronRuby.Runtime.Jit {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._hints = hints;
                 c._refinements = refinements;
+                c._callees = callees;
                 c._noArrayLocals = !arrayParameters;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
@@ -525,6 +563,10 @@ namespace IronRuby.Runtime.Jit {
                 // already done is observable.
                 if (c._canDeopt && !c._pure) { return null; }
 
+                // A loop of a body called directly has a safe point that runs what is waiting where it
+                // is; this body's own deopt instead once it writes elements (MethodSafePoint).
+                if (c._hashWrite && c._directCalls && c._hasLoop) { return null; }
+
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {
                     body = new StackCheckPlacer(c._selfCalls).Visit(body);
@@ -567,6 +609,11 @@ namespace IronRuby.Runtime.Jit {
                     EmittedSelfCall = c._selfCall,
                     UsesConstants = c._usesConstants,
                     UsesUndoLog = c._hashWrite,
+                    Deopts = c._canDeopt,
+                    IvarWrite = c._ivarWrite,
+                    Pure = c._pure,
+                    HasLoop = c._hasLoop,
+                    DirectCalls = c._directCalls,
                 };
             }
             return null;
@@ -1167,6 +1214,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ EmitWhile(WhileLoopExpression/*!*/ node, out JT type) {
             if (node.IsPostTest) { throw JitBailout.Instance; }
+            _hasLoop = true;
             var exit = Ast.Label("#while-exit");
             var cont = Ast.Label("#while-continue");
             var savedBreak = _breakLabel;
@@ -1442,6 +1490,13 @@ namespace IronRuby.Runtime.Jit {
                 return selfCall;
             }
 
+            // -X:JITCalls: `norm(x, y)' or `self.norm(x, y)', norm another method of the receiver that
+            // has a typed body.
+            if (_callees != null && (node.Target == null || node.Target is SelfReference)) {
+                var callee = _callees(node.MethodName, argc);
+                if (callee != null) { return EmitDirectCall(node, callee, argc, out type); }
+            }
+
             // `x' or `self.x' in an outlined loop, where x is an attr_reader on the loop's self: the
             // instance variable read the reader does, and no call. JitRuntime.ReadSelfAttr checks
             // self's class and the global method version on each read and deopts when either has
@@ -1565,6 +1620,72 @@ namespace IronRuby.Runtime.Jit {
             }
 
             throw Bail("call: " + node.MethodName + "/" + argc);
+        }
+
+        /// <summary>
+        /// A call of another method of the receiver, as a call of that method's typed body: no call
+        /// site, no entry, and a typed result. JitStub.BindCallee resolved the name from the receiver
+        /// class the entry of this body pins, under the method version that entry guards on, so the
+        /// call is the one the generic body would make - as long as nothing redefines the method
+        /// while this body runs, which a typed body itself never does (it calls nothing but typed
+        /// bodies and helpers), but a trap handler run at a loop's safe point or another thread can.
+        /// What the callee's entry would have done falls to this body: its arguments arrive as the
+        /// types the callee was compiled for, and its deopts and effects become this body's.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitDirectCall(MethodCall/*!*/ node, JitCallee/*!*/ callee, int argc, out JT type) {
+            for (int i = 0; i < argc; i++) {
+                if (node.Arguments.Expressions[i] is SplattedArgument) { throw Bail("call with a splat: " + node.MethodName); }
+            }
+            var code = callee.Code;
+            if (code.ReturnType == JT.None || code.ReturnType == JT.Never) { throw Bail("call of a body without a value: " + node.MethodName); }
+
+            var callArgs = new MSA.Expression[argc + 1];
+            callArgs[0] = _self;
+            for (int i = 0; i < argc; i++) {
+                JT at;
+                var a = Emit(node.Arguments.Expressions[i], out at);
+                callArgs[i + 1] = CoerceArgument(a, at, code.ParameterTypes[i], node.MethodName);
+            }
+
+            // A deopt of the callee leaves through this body to its entry, which runs the generic
+            // body of this method from the top; the callee's effects are observable part way
+            // through this one.
+            if (code.Deopts) { _canDeopt = true; }
+            if (!code.Pure) { _pure = false; }
+            // The callee's self is this body's, so its first instance variable write is still the
+            // first one that could meet a frozen object.
+            if (code.IvarWrite) { _ivarWrite = true; }
+            if (code.UsesConstants) { _usesConstants = true; }
+            if (code.HasLoop) { _hasLoop = true; }
+            _directCalls = true;
+
+            type = code.ReturnType;
+            return Ast.Invoke(callee.Target, callArgs);
+        }
+
+        /// <summary>
+        /// An argument of a direct call, as the type the callee's body was compiled for - which is
+        /// its entry's type check moved to the caller. An Integer is one in either representation
+        /// and anything can be passed boxed; an object where the callee takes a number is unboxed
+        /// behind a guard. No other pair converts: an Integer passed where the profile saw a Float
+        /// is not that Float.
+        /// </summary>
+        private MSA.Expression/*!*/ CoerceArgument(MSA.Expression/*!*/ e, JT from, JT to, string/*!*/ name) {
+            if (from == to || from == JT.Never || to == JT.Obj || (IsIntegral(from) && IsIntegral(to))) {
+                return Coerce(e, from, to);
+            }
+            if (from == JT.Obj) {
+                switch (to) {
+                    case JT.Int: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardInt"), e);
+                    case JT.Lng: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardLong"), e);
+                    case JT.Dbl: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardDouble"), e);
+                }
+            }
+            throw Bail("call: " + name + " takes " + to + ", passed " + from);
+        }
+
+        private static bool IsIntegral(JT t) {
+            return t == JT.Int || t == JT.Lng;
         }
 
         private static bool IsNumeric(JT t) {
@@ -2060,6 +2181,9 @@ namespace IronRuby.Runtime.Jit {
         // walking a keyword default, which may not assign a local (JitCompiler.EmitKeywordDefaults)
         private bool _inKeywordDefault;
 
+        // -X:JITCalls: a call of any method on self may turn out to have a typed body (EmitDirectCall)
+        private bool _calls;
+
         private JitScreen(MethodDeclaration/*!*/ ast, JitKeywords keywords) {
             _scopeDepth = ast.DefinedScope.Depth;
             _methodName = ast.Name;
@@ -2081,7 +2205,14 @@ namespace IronRuby.Runtime.Jit {
         /// instance variable or element assignment, or assigns.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, out string rejectedBy, out HashSet<string> otherUses) {
+            return CanEverCompile(ast, keywords, false, out rejectedBy, out otherUses);
+        }
+
+        /// <summary><paramref name="calls"/>: -X:JITCalls is on.</summary>
+        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, bool calls, out string rejectedBy,
+            out HashSet<string> otherUses) {
             var s = new JitScreen(ast, keywords);
+            s._calls = calls;
             otherUses = s._otherUses;
             bool ok;
             try {
@@ -2389,7 +2520,9 @@ namespace IronRuby.Runtime.Jit {
                 return true;
             }
 
-            if (node.Target == null) {
+            if (_calls && (node.Target == null || (node.Target is SelfReference && !(argc == 1 && IsBinaryOperator(node.MethodName))))) {
+                // the self-call, or a call EmitDirectCall binds if the method it finds has a typed body
+            } else if (node.Target == null) {
                 if (node.IsVariableCall || node.MethodName != _methodName || argc != _arity) { return No(node); }
             } else if (argc != 1 || !IsBinaryOperator(node.MethodName)) {
                 // Emit only reaches EmitBinary for a one-argument call on a target, and only
@@ -2404,6 +2537,7 @@ namespace IronRuby.Runtime.Jit {
             // The self-call: each argument is coerced to its parameter's profiled type, which is
             // a question about types, so any argument Emit can emit at all will do.
             for (int i = 0; i < argc; i++) {
+                if (args.Expressions[i] is SplattedArgument) { return No(node); }
                 if (!Walk(args.Expressions[i])) { return false; }
             }
             return true;

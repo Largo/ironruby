@@ -730,6 +730,12 @@ namespace IronRuby.Hosting {
                         case "JITMethods":
                             LanguageSetup.Options["JITMethods"] = "run";
                             return;
+
+                        // a prototype: a typed body calls the typed bodies of other methods of its
+                        // receiver directly (Runtime/Jit/JitStub.cs, BindCallee)
+                        case "JITCalls":
+                            LanguageSetup.Options["JITCalls"] = ScriptingRuntimeHelpers.True;
+                            return;
                     }
 
                     if (optionValue != null && optionValue.StartsWith("JITMethods=", StringComparison.Ordinal)) {

@@ -406,5 +406,83 @@ nil
 99
 ");
         }
+
+        /// <summary>
+        /// -X:JITCalls (a prototype, off by default): a method the JIT compiles calls the typed bodies of the
+        /// other methods it calls on self directly. What the callee's entry would have guarded falls to the
+        /// caller's: a callee redefined, overridden in a subclass, deopting, or passed a type it was not
+        /// compiled for still gives CRuby 4.0's output.
+        /// </summary>
+        public void JitCalls1() {
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITCalls"] = true; });
+            AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitCallsExpected);
+            AreEqual(Engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitCallsExpected);
+        }
+
+        /// <summary>
+        /// -X:JITMethods (a prototype, off by default): the method JIT's typed bodies as static methods of a runtime
+        /// assembly, in each of its modes, alone and with -X:JITCalls, whose direct calls are then calls of those
+        /// methods. The tree compiler is IronRuby.JitEmit.dll, which this project references so that it sits next
+        /// to IronRuby.dll; without it the switch would compile as before, so the test checks that bodies were emitted.
+        /// </summary>
+        public void JitMethods1() {
+            var modes = new[] { "run", "run+", "run,tiered", "run,tiered+", "collect+", "dynamic+", "run,entry,readonly+" };
+            foreach (string mode in modes) {
+                int emitted = IronRuby.Runtime.Jit.JitMethodEmitter.Emitted;
+                int failed = IronRuby.Runtime.Jit.JitMethodEmitter.Failed;
+                var engine = IronRuby.Ruby.CreateEngine((setup) => {
+                    setup.Options["JITMethods"] = mode.TrimEnd('+');
+                    // with -X:JITCalls
+                    if (mode.EndsWith("+")) { setup.Options["JITCalls"] = true; }
+                });
+                AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitmethods.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                    JitCallsExpected);
+                Assert(IronRuby.Runtime.Jit.JitMethodEmitter.Emitted > emitted);
+                Assert(IronRuby.Runtime.Jit.JitMethodEmitter.Failed == failed);
+            }
+        }
+
+        // Callers and callees made hot, then probed where a direct call has to give way; the output is CRuby 4.0's.
+        private const string JitCallsScript = @"
+def fib(k) = k < 2 ? k : fib(k - 1) + fib(k - 2)
+def sq(x) = x * x
+def norm2(x, y) = sq(x) + sq(y)
+def sum(n)
+  s = 0; i = 0
+  while i < n
+    s += norm2(i, 7)
+    i += 1
+  end
+  s
+end
+def small?(k) = k < 2
+def fibh(k) = small?(k) ? k : fibh(k - 1) + fibh(k - 2)
+def quot(a, b) = a / b
+def ratio(a, b) = quot(a, b) + 1
+class Shape
+  def scale = 2
+  def side(x) = x * scale
+  def area(x) = side(x) * side(x)
+end
+class Wide < Shape
+  def scale = 3
+end
+r = []
+100.times { r << sum(50) << fibh(15) << ratio(10, 3) << Shape.new.area(4) }
+r = r.uniq
+r << norm2(4_000_000_000, 4_000_000_000) << norm2(1.5, 2)
+r << (ratio(1, 0) rescue $!.class)
+r << Wide.new.area(4)
+Object.send(:remove_method, :sq)
+def sq(x) = x + 1
+r << sum(50) << norm2(1, 2)
+Object.send(:remove_method, :small?)
+def small?(k) = k < 3
+r << fibh(15) << fib(20)
+r.join(',')
+";
+        private const string JitCallsExpected = "42875,610,4,64,32000000000000000000,6.25,ZeroDivisionError,144,1675,5,987,6765";
     }
 }

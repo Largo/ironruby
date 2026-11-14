@@ -385,6 +385,8 @@ namespace IronRuby.Tests {
                 WhileModifier2,
                 UntilModifier2,
                 JitGlobals1,
+                JitCalls1,
+                JitMethods1,
 
                 RangeConditionInclusive1,
                 RangeConditionExclusive1,

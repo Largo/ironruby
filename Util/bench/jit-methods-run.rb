@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
-# Times the method JIT with -X:JITMethods off and in each of its modes, and prints a table.
+# Times the method JIT with -X:JITMethods and -X:JITCalls off and in each of their modes, and
+# prints a table.
 # Run it with CRuby, on a Release build that has IronRuby.JitEmit.dll
 # (dotnet build Src/Console/Ruby.Console.csproj -c Release -p:IronRubyJitEmit=true ...):
 #
@@ -19,7 +20,9 @@
 # The seconds are CPU time of the benchmark's thread (BENCH_CLOCK=wall for the wall clock): on
 # a machine other people are using, the wall time of a run says more about them.
 #
-#   MODES="off run run,entry"   the modes to run (off, or the options after -X:JITMethods=)
+#   MODES="off run run,entry"   the modes to run: off, or the options after -X:JITMethods=;
+#                               `calls' is -X:JITCalls, alone or joined to a -X:JITMethods
+#                               mode by a + ("run,tiered+calls")
 #   CPUS=5,6                    the CPUs to pin to
 #   IR_TFM=net11.0              the framework, as for ir.sh
 HERE = File.dirname(File.expand_path(__FILE__))
@@ -69,7 +72,9 @@ names.each do |name|
   steady = Hash.new { |h, k| h[k] = [] }
   reps.times do |r|
     MODES.rotate(r).each do |mode|
-      options = (mode == "off") ? [] : ["-X:JITMethods=#{mode}"]
+      options = (mode == "off") ? [] : mode.split("+").map do |m|
+        (m == "calls") ? "-X:JITCalls" : "-X:JITMethods=#{m}"
+      end
       value, t1, t2 = run([IR, *options], name)
       if value == expected
         first[mode] << t1

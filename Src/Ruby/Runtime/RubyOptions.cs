@@ -56,6 +56,7 @@ namespace IronRuby.Runtime {
         private readonly bool _jit;
         private readonly bool _osr;
         private readonly string _jitMethods;
+        private readonly bool _jitCalls;
 
 #if DEBUG
         public static bool CompileRegexps;
@@ -245,6 +246,14 @@ namespace IronRuby.Runtime {
             get { return _jitMethods; }
         }
 
+        /// <summary>
+        /// -X:JITCalls: a method the method JIT compiles calls the compiled bodies of other methods
+        /// of its receiver directly (Jit.JitStub.BindCallee, a prototype).
+        /// </summary>
+        public bool JitCalls {
+            get { return _jitCalls; }
+        }
+
         public string StandardLibraryPath {
             get { return _standardLibraryPath; }
         }
@@ -305,6 +314,7 @@ namespace IronRuby.Runtime {
             _jit = GetOption(options, "JIT", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _osr = GetOption(options, "OSR", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _jitMethods = GetOption(options, "JITMethods", (string)null);
+            _jitCalls = GetOption(options, "JITCalls", false);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);
