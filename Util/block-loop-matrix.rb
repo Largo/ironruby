@@ -247,3 +247,32 @@ t('... Integers leaving Int64') { a = Array.new(3) { BlOpP.new(1) }; a.each { |o
 t('... in a while loop') { a = bl_op_ps.(); i = 0; while i < N; b = a[i % 4]; b.v += i * 0.5; i += 1; end; a.map(&:v) }
 class BlOpP; def v=(x); @v = -x; end; end
 t('... the writer redefined') { bl_op.(bl_op_ps.()) }
+
+# ---------------------------------------------------------------- Range#each over Integers
+# Outlined as Integer#upto's loop (RangeOps.EachFixnum): inclusive and exclusive, bounds at the
+# ends of Int32, a bound past it, Float and endless and beginless ranges, break and next with values,
+# a frozen Range, a Range subclass with its own each, and a Range#each redefined.
+class BlRangeSub < Range; def each; yield :sub; self; end; end
+t('Range#each: inclusive') { s = 0; (1..N).each { |i| s += i }; s }
+t('... exclusive') { s = 0; (1...N).each { |i| s += i }; s }
+t('... value') { r = (3..N); r.each { |i| i }.equal?(r) }
+t('... to Int32 max') { s = 0; (2**31 - 3000..2**31 - 1).each { |i| s += 1 }; s }
+t('... exclusive to Int32 max') { s = 0; (2**31 - 3000...2**31 - 1).each { |i| s += 1 }; s }
+t('... from Int32 min') { s = 0; (-2**31...-2**31 + 3000).each { |i| s += i }; s }
+t('... exclusive to Int32 min') { s = 0; (-2**31...-2**31).each { |i| s += 1 }; s }
+t('... past Int32') { s = 0; (2**31 - 2000..2**31 + 2000).each { |i| s += i }; [s, s.class] }
+t('... into Int64') { s = 0; (2**31 - 5000..2**31 - 1).each { |i| s += i * i }; s }
+t('... Float begin') { s = 0; (1.0..N).each { |i| s += i } rescue $!.class }
+t('... endless') { s = 0; (1..).each { |i| s += i; break s if i == N } }
+t('... beginless') { (..N).each { } rescue $!.class }
+t('... break with a value') { s = 0; (1..N).each { |i| s += i; break [s, i] if i == N - 7 } }
+t('... next with a value') { s = 0; (1..N).each { |i| next 5 if i.odd?; s += i }; s }
+t('... a frozen Range') { s = 0; (1..N).freeze.each { |i| s += i }; s }
+t('... a Range subclass with its own each') { a = []; BlRangeSub.new(1, N).each { |i| a << i }; a }
+t('... a Float accumulator') { f = 0.0; (0...N).each { |i| f += i * 0.25 }; f }
+t('... an Integer overflowing') { s = 2**62; (1..N).each { |i| s += 4503599627370496 }; [s, s.class] }
+t('... nested in times') { s = 0; 30.times { |k| (k...k + 300).each { |i| s += i } }; s }
+class Range; alias_method :__bl_each, :each; def each; yield :redefined; self; end; end
+t('... Range#each redefined') { a = []; (1..N).each { |i| a << i }; a }
+class Range; alias_method :each, :__bl_each; remove_method :__bl_each; end
+t('... and restored') { s = 0; (1..N).each { |i| s += i }; s }

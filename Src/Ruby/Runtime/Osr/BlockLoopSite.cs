@@ -12,6 +12,7 @@
  *
  *     n.times { |i| body }           while #i < #n;     i = #i;      body; #i += 1; end
  *     a.upto(b) { |i| body }         while #i <= #n;    i = #i;      body; #i += 1; end
+ *     (a..b).each { |i| body }       the same, Range#each over Integers (a...b: #n is b - 1)
  *     a.downto(b) { |i| body }       while #i >= #n;    i = #i;      body; #i -= 1; end
  *     array.each { |x| body }        while #i < #a.size; x = #a[#i]; body; #i += 1; end
  *
