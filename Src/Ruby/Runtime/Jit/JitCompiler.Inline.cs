@@ -38,6 +38,8 @@ namespace IronRuby.Runtime.Jit {
     internal sealed partial class JitCompiler {
         // The class of self the inlined self-calls were resolved on (JitCode.InlinedSelfClass).
         private RubyClass _inlinedSelfClass;
+        // A call was inlined on a parameter under a check of the one class the profile saw it hold (JitCode).
+        private bool _inlinedOnArgumentClass;
 
         /// <summary>
         /// The call inlined (see the file header), or null if it is not a call of an inlinable
@@ -62,16 +64,26 @@ namespace IronRuby.Runtime.Jit {
             // an explicit receiver is one the guard below checks the class of: an object of a Ruby class
             if (!selfReceiver && !(sample is RubyObject)) { return null; }
 
-            var resolved = cls.ResolveMethod(node.MethodName, VisibilityContext.AllVisible);
-            if (!resolved.Found) { return null; }
-            var info = resolved.Info as RubyMethodInfo;
-            if (info == null) { return null; }
-            if (!selfReceiver && info.Visibility != RubyMethodVisibility.Public) { return null; }
-            var stub = info.GetDelegate().Target as JitStub;
-            if (stub == null) { return null; }
-            var code = stub.InlinableBody(_context, cls);
-            if (code == null && stub.IsProfiling) { _hints.CalleeNotReady = true; }
-            if (code == null || code.ParameterTypes.Length != args.Length) { return null; }
+            var code = InlinableCallee(cls, node.MethodName, selfReceiver, args.Length);
+            if (code == null) { return null; }
+
+            // A parameter the profile saw hold objects of two classes (`key' in find_node, a CallSign or a Vector2D):
+            // both callees, each under a check of its own class, if their bodies take and give the same types.
+            RubyClass otherCls = null;
+            JitCode otherCode = null;
+            var receiverLocal = node.Target as LocalVariable;
+            if (receiverLocal != null && _hints.ArgClasses != null && receiverLocal.DefinitionLexicalDepth == _scopeDepth) {
+                int p = Array.IndexOf(_paramNames, receiverLocal.Name);
+                var seen = (p >= 0 && p < _hints.ArgClasses.Length) ? _hints.ArgClasses[p] : null;
+                if (seen != null && seen.Length == 2 && (seen[0] == cls || seen[1] == cls)) {
+                    RubyClass c2 = (seen[0] == cls) ? seen[1] : seen[0];
+                    var code2 = (c2.Context == _context) ? InlinableCallee(c2, node.MethodName, false, args.Length) : null;
+                    if (code2 != null && code2.ReturnType == code.ReturnType && SameTypes(code2.ParameterTypes, code.ParameterTypes)) {
+                        otherCls = c2;
+                        otherCode = code2;
+                    }
+                }
+            }
 
             // the receiver, then the arguments, in order, each once; then the class check, then the body
             var temps = new System.Collections.Generic.List<MSA.ParameterExpression>();
@@ -109,19 +121,59 @@ namespace IronRuby.Runtime.Jit {
                 body.Add(Ast.Assign(v, Coerce(a, at, pt)));
                 invokeArgs[i + 1] = v;
             }
-            if (!selfReceiver) {
-                _canDeopt = true;
-                body.Add(Ast.Call(JitRuntime.M("GuardClass"), Ast.Constant(_context), receiver, Ast.Constant(cls, typeof(RubyClass))));
-            } else {
-                _inlinedSelfClass = cls;
-            }
             if (code.CanDeopt) { _canDeopt = true; }
-            body.Add(Ast.Invoke(code.Lambda, invokeArgs));
+            if (otherCode != null) {
+                // the class the sample had first; the other one's check deopts on a third
+                _canDeopt = true;
+                if (otherCode.CanDeopt) { _canDeopt = true; }
+                body.Add(Ast.Condition(
+                    Ast.Call(JitRuntime.M("IsOfClass"), receiver, Ast.Constant(cls, typeof(RubyClass))),
+                    Ast.Invoke(code.Lambda, invokeArgs),
+                    Ast.Block(
+                        Ast.Call(JitRuntime.M("GuardClass"), Ast.Constant(_context), receiver, Ast.Constant(otherCls, typeof(RubyClass))),
+                        Ast.Invoke(otherCode.Lambda, invokeArgs)
+                    ),
+                    ClrType(code.ReturnType)
+                ));
+            } else {
+                if (!selfReceiver) {
+                    _canDeopt = true;
+                    if (receiverLocal != null && Array.IndexOf(_paramNames, receiverLocal.Name) >= 0) { _inlinedOnArgumentClass = true; }
+                    body.Add(Ast.Call(JitRuntime.M("GuardClass"), Ast.Constant(_context), receiver, Ast.Constant(cls, typeof(RubyClass))));
+                } else {
+                    _inlinedSelfClass = cls;
+                }
+                body.Add(Ast.Invoke(code.Lambda, invokeArgs));
+            }
             if (JitRuntime.Verbose) {
                 Console.Error.WriteLine("[jit]   inlined {0}#{1} into {2}", cls.Name, node.MethodName, _ast.Name);
+                if (otherCode != null) { Console.Error.WriteLine("[jit]   inlined {0}#{1} into {2}", otherCls.Name, node.MethodName, _ast.Name); }
             }
             type = code.ReturnType;
             return Ast.Block(ClrType(type), temps, body);
+        }
+
+        /// <summary>The typed body a call of <paramref name="name"/> on an object of <paramref name="cls"/> may inline, or null.</summary>
+        private JitCode InlinableCallee(RubyClass/*!*/ cls, string/*!*/ name, bool selfReceiver, int argc) {
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+            if (!resolved.Found) { return null; }
+            var info = resolved.Info as RubyMethodInfo;
+            if (info == null) { return null; }
+            if (!selfReceiver && info.Visibility != RubyMethodVisibility.Public) { return null; }
+            var stub = info.GetDelegate().Target as JitStub;
+            if (stub == null) { return null; }
+            var code = stub.InlinableBody(_context, cls);
+            if (code == null && stub.IsProfiling) { _hints.CalleeNotReady = true; }
+            if (code == null || code.ParameterTypes.Length != argc) { return null; }
+            return code;
+        }
+
+        private static bool SameTypes(JT[]/*!*/ a, JT[]/*!*/ b) {
+            if (a.Length != b.Length) { return false; }
+            for (int i = 0; i < a.Length; i++) {
+                if (a[i] != b[i]) { return false; }
+            }
+            return true;
         }
     }
 }
@@ -136,13 +188,26 @@ namespace IronRuby.Runtime.Jit {
         /// declined later, and stays slower than one never wrapped.
         /// </summary>
         internal static bool IsInlinableShape(IronRuby.Compiler.Ast.MethodDefinition/*!*/ ast) {
+            return IsInlinableShape(ast, null);
+        }
+
+        /// <summary>
+        /// <paramref name="selfCallee"/>: whether a call on self with arguments (`compare_numbers(@x, other.x)') is of a
+        /// method that is itself of this shape - one level of nesting: the typed body of a method whose only such calls
+        /// were inlined (TryInlineCall) has no call left at run time, so it is as inlinable as a leaf. Null: none.
+        /// </summary>
+        internal static bool IsInlinableShape(IronRuby.Compiler.Ast.MethodDefinition/*!*/ ast, Func<string, bool> selfCallee) {
             var check = new InlinableShape();
+            check.SelfCallee = selfCallee;
+            check.Name = ast.Name;
             ast.Body.Walk(check);
             return check.Ok;
         }
 
         private sealed class InlinableShape : IronRuby.Compiler.Ast.Walker {
             internal bool Ok = true;
+            internal Func<string, bool> SelfCallee;
+            internal string Name;
             private bool No() { Ok = false; return false; }
 
             public override bool Enter(IronRuby.Compiler.Ast.WhileLoopExpression node) { return No(); }
@@ -161,6 +226,10 @@ namespace IronRuby.Runtime.Jit {
                 int argc = (node.Arguments == null) ? 0 : node.Arguments.Expressions.Length;
                 if (argc == 0) { return true; }
                 if (argc == 1 && node.Target != null && JitScreen.IsBinaryOperator(node.MethodName)) { return true; }
+                if (SelfCallee != null && (node.Target == null && !node.IsVariableCall || node.Target is IronRuby.Compiler.Ast.SelfReference) &&
+                    node.MethodName != Name && SelfCallee(node.MethodName)) {
+                    return true;
+                }
                 return No();
             }
         }

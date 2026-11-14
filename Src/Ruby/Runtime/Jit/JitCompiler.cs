@@ -66,6 +66,8 @@ namespace IronRuby.Runtime.Jit {
         internal bool Inlinable;
         // The class of self that a call this body inlined was resolved on: the entry pins self's class to it.
         internal RubyClass InlinedSelfClass;
+        // A call inlined on a parameter checks the one class the profile saw the parameter hold (TryInlineCall).
+        internal bool InlinedOnArgumentClass;
     }
 
     internal sealed partial class JitCompiler {
@@ -631,6 +633,7 @@ namespace IronRuby.Runtime.Jit {
                         ast.Parameters.Optional.Length == 0 && ast.Parameters.Unsplat == null && ast.Parameters.Block == null &&
                         ast.Parameters.Mandatory.Length == paramTypes.Length,
                     InlinedSelfClass = c._inlinedSelfClass,
+                    InlinedOnArgumentClass = c._inlinedOnArgumentClass,
                 };
             }
             return null;
