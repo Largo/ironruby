@@ -9120,22 +9120,13 @@ end
 end
 
 class Random
-  # Real entropy from the OS. /dev/urandom is the same source MRI uses on Unix.
-  # Windows has no such file - and reading one that does not exist is how
-  # Tempfile, Dir.mktmpdir, SecureRandom and net/http all used to die there - so
-  # off Unix this goes to .NET's CSPRNG instead. System.Security.Cryptography is
-  # not one of the assemblies the host pre-references, hence the load_assembly.
+  # Real entropy from the OS CSPRNG (getrandom/urandom on Unix, BCrypt on Windows),
+  # the source MRI uses: Kernel.__ir_urandom__ (KernelOps.Urandom). Opening
+  # /dev/urandom for each call cost ~47 us where MRI takes ~0.4, and SecureRandom -
+  # session ids, CSRF masks, request ids - calls it several times a request.
   unless respond_to?(:urandom)
-    if ::File.exist?("/dev/urandom")
-      def self.urandom(count)
-        File.open("/dev/urandom", "rb") { |f| f.read(count) }
-      end
-    else
-      load_assembly "System.Security.Cryptography"
-      def self.urandom(count)
-        count = ::Kernel.Integer(count)
-        ::System::Security::Cryptography::RandomNumberGenerator.get_bytes(count).to_a.pack("C*")
-      end
+    def self.urandom(count)
+      ::Kernel.__send__(:__ir_urandom__, count)
     end
   end
 end
