@@ -61,6 +61,11 @@ namespace IronRuby.Runtime.Jit {
         internal bool UsesConstants;
         // The body writes Hash elements (EmitIndexWrite): the entry brackets the call with the undo log.
         internal bool UsesUndoLog;
+        // The body may become part of a caller's body (JitCompiler.TryInlineCall): it has no effect, no call
+        // that runs Ruby code, no loop, no self-call, and takes exactly its mandatory parameters.
+        internal bool Inlinable;
+        // The class of self that a call this body inlined was resolved on: the entry pins self's class to it.
+        internal RubyClass InlinedSelfClass;
     }
 
     internal sealed partial class JitCompiler {
@@ -621,6 +626,11 @@ namespace IronRuby.Runtime.Jit {
                     EmittedSelfCall = c._selfCall,
                     UsesConstants = c._usesConstants,
                     UsesUndoLog = c._hashWrite,
+                    Inlinable = c._pure && !c._selfCall && !c._hasLoop && !c._construction && !c._ivarWrite && !c._usesConstants &&
+                        !c._hashWrite && c._undoLog == null && c._arrayLoads == null && keywords == null && supplied < 0 &&
+                        ast.Parameters.Optional.Length == 0 && ast.Parameters.Unsplat == null && ast.Parameters.Block == null &&
+                        ast.Parameters.Mandatory.Length == paramTypes.Length,
+                    InlinedSelfClass = c._inlinedSelfClass,
                 };
             }
             return null;
@@ -1567,6 +1577,13 @@ namespace IronRuby.Runtime.Jit {
                 return selfCall;
             }
 
+            // `m(a, b)', `self.m(a)', `o.m(a)', m a small pure specialized method (JitCompiler.Inline.cs).
+            if (node.Target == null || node.Target is SelfReference || ((node.Target is LocalVariable || node.Target is InstanceVariable) &&
+                !JitScreen.IsBinaryOperator(node.MethodName) && node.MethodName != "[]")) {
+                var inlined = TryInlineCall(node, out type);
+                if (inlined != null) { return inlined; }
+            }
+
             // `x' or `self.x' in an outlined loop, where x is an attr_reader on the loop's self: the
             // instance variable read the reader does, and no call. JitRuntime.ReadSelfAttr checks
             // self's class and the global method version on each read and deopts when either has
@@ -2300,21 +2317,27 @@ namespace IronRuby.Runtime.Jit {
         // the `C.new(a, b)' the method ends with, if it does (JitCompiler.TailConstruction)
         private readonly MethodCall _tailConstruction;
 
+        // Whether a call on self of a name is of a method the typed body may inline (JitStub.IsLeafMethod); null
+        // when screening a callee, which may call nothing itself.
+        private Func<string, bool, bool> _isLeafCallee;
+
         /// <summary>
         /// False when no assignment of parameter types could ever make TryCompile succeed for
         /// this body. <paramref name="rejectedBy"/> names the node kind that decided it.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy) {
             HashSet<string> otherUses;
-            return CanEverCompile(ast, null, out rejectedBy, out otherUses);
+            return CanEverCompile(ast, null, null, out rejectedBy, out otherUses);
         }
 
         /// <summary>
         /// <paramref name="otherUses"/>: the locals the body reads other than as the value of an
         /// instance variable or element assignment, or assigns.
         /// </summary>
-        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, out string rejectedBy, out HashSet<string> otherUses) {
+        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, Func<string, bool, bool> isLeafCallee,
+            out string rejectedBy, out HashSet<string> otherUses) {
             var s = new JitScreen(ast, keywords);
+            s._isLeafCallee = isLeafCallee;
             otherUses = s._otherUses;
             bool ok;
             try {
@@ -2673,6 +2696,24 @@ namespace IronRuby.Runtime.Jit {
             if (argc == 1 && JitCompiler.IsMathSqrt(node)) {
                 // `Math.sqrt(x)' (JitCompiler.EmitMathSqrt): x is a number, or an object speculated to be one
                 return WalkOperand(args.Expressions[0]);
+            }
+
+            if ((node.Target == null && !node.IsVariableCall || node.Target is SelfReference) && node.MethodName != _methodName ||
+                (node.Target is LocalVariable || node.Target is InstanceVariable) && !IsBinaryOperator(node.MethodName) && node.MethodName != "[]") {
+                // `m(a)', `self.m(a)', `o.m(a)': a call the emitter inlines if m is a small pure specialized
+                // method when it compiles (JitCompiler.TryInlineCall), which only the profile can say for sure.
+                // Taken only of a method that calls nothing itself as far as the declaring module can tell, or on an
+                // instance variable (`@strength.stronger(s)', `@elements.size'): taken of anything, many methods that are
+                // declined in the end would be wrapped, which costs them (JitStub.IsLeafMethod).
+                if (_isLeafCallee == null || !_isLeafCallee(node.MethodName, node.Target == null || node.Target is SelfReference) &&
+                    !(node.Target is InstanceVariable)) {
+                    return No(node);
+                }
+                if (argc > JitStub.MaxArity || node.Target != null && !Walk(node.Target)) { return No(node); }
+                for (int i = 0; i < argc; i++) {
+                    if (args.Expressions[i] is SplattedArgument || !Walk(args.Expressions[i])) { return No(node); }
+                }
+                return true;
             }
 
             if (node.Target == null) {

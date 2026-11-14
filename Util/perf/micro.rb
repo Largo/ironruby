@@ -32,6 +32,8 @@ class P
   def locattr(m); a = m.a; b = m.b; b.x - a.x < 1.5; end
   def sqrtw(n); i = 0; s = 0.0; f = 1.5; while i < n; s += Math.sqrt(f + i); i += 1; end; s; end
   def rangeeach(n); s = 0.0; (n / 1000).times { (0...1000).each { |i| s += i * 0.5 } }; s; end
+  def half(f); f < 0.0 ? 0.0 : f * 0.5; end
+  def selfcall(f); half(f) + half(f + 1.0); end
   def blkattr(bs, n); (n / 20).times { 20.times { |i| b = bs[i]; b.v -= b.x; b.c += 2 } }; end
 end
 class P2; def initialize(a, b); @a = a; @b = b; end; def foo; 1; end; end
@@ -39,7 +41,11 @@ class P3; def foo; 2; end; end
 class PV; attr_reader :x; def initialize(x); @x = x; end; end
 class PM; attr_reader :a, :b; def initialize(a, b); @a = a; @b = b; end; end
 class PB; attr_accessor :x, :v, :c; def initialize; @x = 1.5; @v = 0.0; @c = 0; end; end
+# `ruby micro.rb NAME' runs that one shape only, in a process of its own: a shape that compiles
+# differently once another has run is measured as it is alone.
+ONLY = ARGV[0]
 def t(name, n = 3_000_000)
+  return if ONLY && name != ONLY
   best = 1e9
   5.times { t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC); yield n; d = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0; best = d if d < best }
   printf "%-12s %7.1f ns/op\n", name, best * 1e9 / n
@@ -74,3 +80,5 @@ pbs = Array.new(20) { PB.new }
 t("sqrtw")     { |n| o.sqrtw(n) }
 t("rangeeach") { |n| o.rangeeach(n) }
 t("blkattr")   { |n| o.blkattr(pbs, n) }
+# round nine's shape: a method calling a small pure Float method on self twice (CD's compare_to)
+t("selfcall")  { |n| i = 0; f = 1.5; while i < n; o.selfcall(f); i += 1; end }
