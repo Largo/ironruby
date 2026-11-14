@@ -360,13 +360,9 @@ module Enumerable
   ::Enumerator.__iter_cursor_method__(self, :each_with_index)
 
   # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
-  # The built-ins only know the block form, and because they are defined on
-  # Enumerable they shadow rather than extend, so wrap them.
-  unless method_defined?(:__all_without_pattern__?)
-    alias :__all_without_pattern__? :all?
-    alias :__any_without_pattern__? :any?
-    alias :__none_without_pattern__? :none?
-    alias :__one_without_pattern__? :one?
+  # The built-ins (Enumerable.cs) take the block form themselves and hand a
+  # pattern argument to these, so the common call needs no Ruby wrapper.
+  unless method_defined?(:__all_with_pattern__, false) || private_method_defined?(:__all_with_pattern__, false)
 
     def __check_pattern_args__(args, block = nil)
       if args.size > 1
@@ -383,33 +379,29 @@ module Enumerable
     end
     private :__check_pattern_args__
 
-    def all?(*args, &block)
+    def __all_with_pattern__(*args, &block)
       __check_pattern_args__(args, block)
-      return __all_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false unless pattern === __enum_item__(values) }
       true
     end
 
-    def any?(*args, &block)
+    def __any_with_pattern__(*args, &block)
       __check_pattern_args__(args, block)
-      return __any_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return true if pattern === __enum_item__(values) }
       false
     end
 
-    def none?(*args, &block)
+    def __none_with_pattern__(*args, &block)
       __check_pattern_args__(args, block)
-      return __none_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false if pattern === __enum_item__(values) }
       true
     end
 
-    def one?(*args, &block)
+    def __one_with_pattern__(*args, &block)
       __check_pattern_args__(args, block)
-      return __one_without_pattern__?(&block) if args.empty?
       pattern = args[0]
       found = false
       each do |*values|
@@ -419,6 +411,7 @@ module Enumerable
       end
       found
     end
+    private :__all_with_pattern__, :__any_with_pattern__, :__none_with_pattern__, :__one_with_pattern__
   end
 
   # The method-name form of #inject reports a bad name the way MRI does - by
@@ -1310,17 +1303,7 @@ class Array
   # All of these hand back a plain Array, never the receiver's subclass, which
   # is what MRI does and what ruby/spec asserts.
 
-  def rotate(count = 1)
-    count = __array_to_int__(count)
-    return [].concat(self) if empty?
-    count %= size
-    [].concat(self[count..-1]).concat(self[0, count])
-  end unless method_defined?(:rotate)
-
-  def rotate!(count = 1)
-    __array_check_frozen__
-    replace(rotate(count))
-  end unless method_defined?(:rotate!)
+  # rotate and rotate! are ArrayOps.Rotate and ArrayOps.InPlaceRotate.
 
   # The deletions have to be visible if the block raises part way through, so
   # this compacts in place rather than building a new array and swapping it in.
