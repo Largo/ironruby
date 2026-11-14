@@ -3140,3 +3140,60 @@ t('... the first Array itself') { tw.v = [1, 2, 3]; tw.w = tw.v; [tw.sp_two_stor
 class Array; alias_method :__jit_two_set, :[]=; def []=(*a); $jit_two_sets = ($jit_two_sets || 0) + 1; __jit_two_set(*a); end; end
 t('Array#[]= redefined: both stores call it') { w = [10, 20, 30]; r = two.(w); class Array; alias_method :[]=, :__jit_two_set; remove_method :__jit_two_set; end; [r, w, $jit_two_sets] }
 t('... and restored') { w = [10, 20, 30]; [two.(w), w, $jit_two_sets] }
+
+# ---------------------------------------------------------------- Math.sqrt
+# Inlined (JitCompiler.EmitMathSqrt) while the constant Math resolves to a module whose public
+# singleton sqrt is the library one. Every edge of RubyMath.Sqrt: an Integer, a Bignum, -0.0, NaN,
+# a negative argument (a deopt, then Math::DomainError), nil and a String (TypeError), a Rational;
+# then Math.sqrt redefined and restored, Math shadowed by a constant in an enclosing module,
+# a refinement of Math's singleton class, and the singleton method removed.
+puts '--- Math.sqrt ---'
+class JitSqrtV; def initialize(x) = (@x = x); def sp_sqrt_ivar = Math.sqrt(@x * @x + 1.0); end
+def sp_sqrt(x) = Math.sqrt(x)
+def sp_sqrt_global(x) = ::Math.sqrt(x) + 1
+def sp_sqrt_loop(a)
+  s = 0.0
+  i = 0
+  while i < a.size
+    s += Math.sqrt(a[i])
+    i += 1
+  end
+  s
+end
+module JitSqrtScope; def self.sp_sqrt(x) = Math.sqrt(x); end
+module JitSqrtRef
+  refine Math.singleton_class do
+    def sqrt(x) = :refined
+  end
+end
+module JitSqrtRefUser; using JitSqrtRef; def self.no_sqrt(x) = Math.sqrt(x); end
+sv = JitSqrtV.new(3.0)
+warm { |i| sp_sqrt(i * 1.5); sp_sqrt_global(i * 0.5); sv.sp_sqrt_ivar; sp_sqrt_loop([1.0, 4.0, i, 9.0]); JitSqrtScope.sp_sqrt(i * 2.0); JitSqrtRefUser.no_sqrt(i * 1.0) }
+t('Math.sqrt of a Float') { sp_sqrt(2.0) }
+t('... of an Integer') { sp_sqrt(16) }
+t('... of a large Integer') { sp_sqrt(2**62 + 1) }
+t('... of a Bignum') { sp_sqrt(2**70) }
+t('... of -0.0') { sp_sqrt(-0.0) }
+t('... of NaN') { sp_sqrt(Float::NAN).nan? }
+t('... of Infinity') { sp_sqrt(Float::INFINITY) }
+t('... of a negative Float') { sp_sqrt(-1.0) }
+t('... of a negative Integer') { sp_sqrt(-4) }
+t('... the DomainError message') { begin; sp_sqrt(-2.5); rescue Math::DomainError => e; e.message; end }
+t('... of nil') { sp_sqrt(nil) }
+t('... of a String') { sp_sqrt("4") }
+t('... of a Rational') { sp_sqrt(1/4r) }
+t('::Math.sqrt') { sp_sqrt_global(9) }
+t('... on an instance variable') { sv.sp_sqrt_ivar }
+t('... in a while loop') { sp_sqrt_loop([1.0, 4.0, 9, 2**70]) }
+t('... in a while loop, a negative element') { sp_sqrt_loop([1.0, 4.0, -9.0]) }
+t('... in a while loop, nil') { sp_sqrt_loop([1.0, nil]) }
+t('... under a refinement of Math') { JitSqrtRefUser.no_sqrt(4.0) }
+class << Math; alias_method :__jit_sqrt, :sqrt; def sqrt(x) = :redefined; end
+t('Math.sqrt redefined') { [sp_sqrt(4.0), (sp_sqrt_loop([1.0]) rescue $!.class), sv.sp_sqrt_ivar, (sp_sqrt_global(1) rescue $!.class)] }
+class << Math; alias_method :sqrt, :__jit_sqrt; remove_method :__jit_sqrt; end
+t('... and restored') { [sp_sqrt(4.0), sp_sqrt_loop([1.0, 4.0]), sv.sp_sqrt_ivar] }
+module JitSqrtScope; Math = Struct.new(:k) { def sqrt(x) = [:shadow, x] }.new(1); end
+t('Math shadowed in an enclosing module') { JitSqrtScope.sp_sqrt(4.0) }
+warm { |i| sp_sqrt(i * 1.5) }
+Math.singleton_class.send(:remove_method, :sqrt)
+t('Math.sqrt removed') { sp_sqrt(4.0) }
