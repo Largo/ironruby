@@ -22,6 +22,8 @@ namespace IronRuby.Runtime.Calls {
     internal sealed class RubyCustomMethodInfo : RubyMemberInfo {
         private readonly RuleGenerator/*!*/ _ruleGenerator;
         private readonly int? _arity;
+        // a Struct member's reader (arity 0) or writer (arity 1): the member's index, else -1
+        private readonly int _structMember = -1;
 
         public RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule)
             : this(ruleGenerator, flags, declaringModule, null) {
@@ -38,6 +40,15 @@ namespace IronRuby.Runtime.Calls {
             _ruleGenerator = ruleGenerator;
             _arity = arity;
         }
+
+        internal RubyCustomMethodInfo(RuleGenerator/*!*/ ruleGenerator, RubyMemberFlags flags, RubyModule/*!*/ declaringModule, int? arity, int structMember)
+            : this(ruleGenerator, flags, declaringModule, arity) {
+            _structMember = structMember;
+        }
+
+        /// <summary>The index of the Struct member this method reads (writes, if IsStructWriter), or -1.</summary>
+        internal int StructMember { get { return _structMember; } }
+        internal bool IsStructWriter { get { return _structMember >= 0 && _arity == 1; } }
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             _ruleGenerator(metaBuilder, args, name);
@@ -71,7 +82,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity);
+            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity, _structMember);
         }
 
         /// <summary>
