@@ -157,6 +157,14 @@ is slower only if it is slower in both orders. A cell of a tree that does not to
 benchmark's code still moves by about 5% from run to run (NBody by more), so before
 blaming a change for a slower line, say which of its code that benchmark runs.
 
+A line that is slower in both orders is looked at before it is believed or dismissed:
+compare the JIT's decisions on the two trees (`IR_JIT_VERBOSE=1`, sorted, times stripped),
+the bytes (`alloc.rb`) and the profile; then measure it in separate processes of a fixed
+length, the two trees taken alternately, eight of each, and compare the medians
+(`harness.rb NAME 120 INNER`, the median of the last sixty iterations of each process).
+Storage failed this step in four of seven awfy.rb runs in round seven and was the same
+on both trees measured that way.
+
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.
 
