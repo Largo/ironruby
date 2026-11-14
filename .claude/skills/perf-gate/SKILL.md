@@ -64,6 +64,7 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | Touched | Run |
 |---|---|
 | `Runtime/Jit/`, call sites | `Util/jit-matrix.rb` |
+| calls inlined by the method JIT | `Util/perf/inline-matrix.rb` (one case per process, see its header) |
 | `Runtime/Osr/`, iterators | `Util/block-loop-matrix.rb`, `Util/osr-array-matrix.rb` |
 | block and scope reuse | `Util/block-scope-reuse-matrix.rb`, `Util/block-scope-reuse-blockpass.rb`, `Util/block-scope-reuse-race.rb` |
 | instance variables, shapes | `Util/ivar-matrix.rb`, `Util/ivar-stress.rb` |
@@ -117,7 +118,12 @@ Object#==. So for every new case:
   earlier check tests that check;
 - in `hot-shapes-matrix.rb`, everything after the `IDRefine` case runs with Object#== and
   #nil? refined and a module prepended to Kernel: report values with `inspect`, not with
-  `==` or `nil?`, and look at the CRuby output once to see that it says what you meant.
+  `==` or `nil?`, and look at the CRuby output once to see that it says what you meant;
+- threads in a probe use block-local names that occur nowhere else in the file. Ruby
+  threads run in parallel here, so three threads appending to an Array the script
+  happened to name at top level fail on every tree, the baseline included, while CRuby
+  prints the expected answer; and a value that depends on which thread ran first is not
+  a difference (a method whose callee another thread redefines may see either one).
 
 ## 3. ruby/spec
 
@@ -173,6 +179,16 @@ same on both trees once each shape ran in a process of its own. Give a shape tha
 slower its own process (a script that takes the shape as an argument), six or more
 alternating rounds, and compare medians and minima; a line that reaches the same minimum
 on both trees has a fast and a slow state, not a cost.
+
+A change to *when* a compiled path is entered (a floor, a threshold, a screen) is not
+covered by the benchmarks or by `alloc.rb`: measure the shapes the old rule kept out, just
+under the old limit and with the lightest body the path accepts, one shape and one length
+per process (`Util/perf/micro.rb s_each1 ...` has `each`, `times`, `map` and `any?` over 1,
+2 and 4 elements). In round nine a floor lowered from 16 to 1 made NBody 27% faster,
+allocated nothing more anywhere, and made `a.each { |x| s += x }` over one or two elements
+1.5 to 2 times slower. For a change to the method JIT's screen, compare the whole
+`[jit] specialized= rejected= screen-rejected=` line of every benchmark, not only what is
+newly specialized: a method that is newly wrapped and then declined is a cost.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.
