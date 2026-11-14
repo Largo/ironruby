@@ -123,8 +123,9 @@ namespace IronRuby.Runtime.Osr {
         // Where in the argument array the loop's RubyScope is: its constants resolve in it, and its
         // refinements resolve the copy's operators; -1 if it is not passed.
         internal int ScopeArgIndex = -1;
-        // Every entry runs at least BlockLoopSite.MinRun iterations (a core iterator's loop): the copy may
-        // take shapes whose speed only pays once its entry is spread over a run (JitCompiler.EmitCall).
+        // A core iterator's loop, whose entry allocates nothing (BlockLoopSite.Run reuses its arguments):
+        // the copy may take shapes that would not pay if every entry allocated, as a `while' loop's does
+        // (JitCompiler.EmitCall).
         internal bool LongRuns;
 
         private readonly object/*!*/ _lock = new object();

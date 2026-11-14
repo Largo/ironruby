@@ -931,10 +931,10 @@ namespace IronRuby.Builtins {
             // the block make together, which is Integer#upto's (BlockLoopSite); one too short to be
             // outlined never asks for it.
             int i = begin;
-            var loop = ((long)last - begin >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.UpTo) : null;
+            var loop = BlockLoopSite.For(block, BlockLoopKind.UpTo, (long)last - begin);
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i <= last) {
-                if (--countdown <= 0 && (long)last - i >= BlockLoopSite.MinRun) {
+                if (--countdown <= 0 && (long)last - i >= loop.Floor) {
                     i = loop.Run(block, i, last, ref countdown);
                     if (i > last) { break; }
                 }

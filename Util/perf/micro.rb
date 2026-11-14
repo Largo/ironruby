@@ -37,6 +37,11 @@ class P
   def half(f); f < 0.0 ? 0.0 : f * 0.5; end
   def selfcall(f); half(f) + half(f + 1.0); end
   def blkattr(bs, n); (n / 20).times { 20.times { |i| b = bs[i]; b.v -= b.x; b.c += 2 } }; end
+  def short4(bs); s = 0.0; bs.each { |b| s += b.v * 0.5 + 0.25 }; s; end
+  def sh_each(a); s = 0; a.each { |x| s += x }; s; end
+  def sh_times(k); s = 0; k.times { |j| s += j }; s; end
+  def sh_map(a); a.map { |x| x + 1 }; end
+  def sh_any(a); a.any? { |x| x > 1000 }; end
 end
 # round nine's shapes: SOM's Vector#each (a Ruby each yielding the elements of an ivar Array through Range#each's
 # block, as DeltaBlue, CD, Json and Havlak iterate), and a method that makes a Range from its operands (Json's
@@ -97,3 +102,15 @@ v4 = PVec.new(4); v100 = PVec.new(100)
 t("veach4", 1_000_000) { |n| i = 0; while i < n; v4.sum; i += 1; end }
 t("veach100", 50_000)  { |n| i = 0; while i < n; v100.sum; i += 1; end }
 t("rangelit")          { |n| i = 0; while i < n; v4.slice(2); i += 1; end }
+# a short run, an Array#each over four with Float arithmetic, called from a while (ns per call)
+pb4 = pbs.first(4)
+t("short4")    { |n| i = 0; while i < n; o.short4(pb4); i += 1; end }
+# short runs of the core iterators at k = 1, 2, 4 (below the block's floor, BlockLoopInfo.Floor, the generic
+# yield loop, at or above it the compiled copy): ns per call of the iterator, entry included
+[1, 2, 4].each do |k|
+  ak = Array.new(k) { |j| j + 1 }
+  t("s_each#{k}")  { |n| i = 0; while i < n; o.sh_each(ak); i += 1; end }
+  t("s_times#{k}") { |n| i = 0; while i < n; o.sh_times(k); i += 1; end }
+  t("s_map#{k}")   { |n| i = 0; while i < n; o.sh_map(ak); i += 1; end }
+  t("s_any#{k}")   { |n| i = 0; while i < n; o.sh_any(ak); i += 1; end }
+end

@@ -50,6 +50,7 @@ using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
+using O = System.Object;
 
 namespace IronRuby.Runtime.Osr {
     public enum BlockLoopKind {
@@ -80,10 +81,15 @@ namespace IronRuby.Runtime.Osr {
         internal readonly LocalVariable/*!*/[]/*!*/ Locals;
         internal readonly string/*!*/ Name;
         internal readonly BlockLoopSite[]/*!*/ Sites = new BlockLoopSite[KindCount];
+        // the shortest run of Times, UpTo, DownTo, Range#each and Array#each worth entering the copy for
+        // (BlockLoopSite.MinRun, BlockLoopSite.MinMediumRun, BlockLoopSite.MinLightRun)
+        internal readonly int Floor;
 
         private BlockLoopInfo(BlockDefinition/*!*/ ast, RubyContext/*!*/ context, int depth, LocalVariable parameter,
-            LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name) {
+            LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name, int calls) {
             Ast = ast;
+            Floor = (calls >= BlockLoopSite.HeavyBody) ? BlockLoopSite.MinRun :
+                (calls >= BlockLoopSite.MediumBody) ? BlockLoopSite.MinMediumRun : BlockLoopSite.MinLightRun;
             Locals = locals;
             Context = context;
             Depth = depth;
@@ -117,10 +123,11 @@ namespace IronRuby.Runtime.Osr {
             }
 
             List<LocalVariable> locals;
-            if (ast.Body.Count == 0 || !Screen.Accepts(ast.Body, depth, parameter, out locals)) {
+            int calls;
+            if (ast.Body.Count == 0 || !Screen.Accepts(ast.Body, depth, parameter, out locals, out calls)) {
                 return null;
             }
-            return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), name);
+            return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), name, calls);
         }
 
         internal BlockLoopSite/*!*/ GetSite(BlockLoopKind kind) {
@@ -137,6 +144,7 @@ namespace IronRuby.Runtime.Osr {
             private readonly int _depth;
             private readonly LocalVariable _parameter;
             private int _loops;
+            private int _calls;
             private bool _rejected;
 
             private Screen(int depth, LocalVariable parameter) {
@@ -148,9 +156,10 @@ namespace IronRuby.Runtime.Osr {
             // body's own, `x = v', before anything else in the body mentions it (see Enter(LocalVariable)).
             private readonly List<LocalVariable>/*!*/ _locals = new List<LocalVariable>();
 
-            internal static bool Accepts(Statements/*!*/ body, int depth, LocalVariable parameter, out List<LocalVariable> locals) {
+            internal static bool Accepts(Statements/*!*/ body, int depth, LocalVariable parameter, out List<LocalVariable> locals, out int calls) {
                 var screen = new Screen(depth, parameter);
                 locals = screen._locals;
+                calls = 0;
                 foreach (var statement in body) {
                     var assignment = statement as SimpleAssignmentExpression;
                     var target = (assignment != null && assignment.Operation == null) ? assignment.Left as LocalVariable : null;
@@ -163,6 +172,7 @@ namespace IronRuby.Runtime.Osr {
                     }
                     if (screen._rejected) { return false; }
                 }
+                calls = screen._calls;
                 return true;
             }
 
@@ -198,7 +208,7 @@ namespace IronRuby.Runtime.Osr {
             // never see one: catch it at the call. The loop emitter cannot take a call with a block either
             // (JitCompiler: "call with a block"), so without this a block like `n.times { a.each { } }' was
             // let through, and the first entry spent a whole OSR compile (~25ms) only to retire the site.
-            public override bool Enter(MethodCall/*!*/ node) { return node.Block != null ? Reject() : !_rejected; }
+            public override bool Enter(MethodCall/*!*/ node) { _calls++; return node.Block != null ? Reject() : !_rejected; }
 
             public override bool Enter(LocalVariable/*!*/ node) {
                 // A local of the block's own is nil at the top of every iteration, which a loop slot
@@ -220,10 +230,39 @@ namespace IronRuby.Runtime.Osr {
     /// </summary>
     public sealed class BlockLoopSite {
         /// <summary>
-        /// Iterations an entry must have left for the copy to be worth entering: the entry allocates
-        /// the argument array and a tuple and runs the copy's guards, which a handful of yields beat.
+        /// Iterations an entry must have left for the copy to be worth entering (Times, UpTo, DownTo,
+        /// Range#each, Array#each), for a block of HeavyBody calls or more: NBody's float arithmetic over
+        /// attribute reads, whose inner `((i + 1)...n).each' runs 4, 3, 2, 1. An entry reuses the site's
+        /// argument array and tuple (Run), so it allocates nothing, but it still costs about what three or
+        /// four yields of a light block do (the copy's guards and its Array check, the tuple, the scope
+        /// chain); a heavy body saves more than that in its first iteration.
         /// </summary>
-        public const int MinRun = 16;
+        public const int MinRun = 1;
+
+        /// <summary>
+        /// The same for a block of MediumBody calls or more: `s += x * 3 + x * 5 - x / 2 + (x &amp; 7)' over one
+        /// element took 140-160 ns in the copy against 96-107 through the yield, over two the same, over
+        /// four 182 against 300.
+        /// </summary>
+        public const int MinMediumRun = 2;
+
+        /// <summary>The same for a lighter block (`s += x'): measured, five is the shortest run no slower in the copy.</summary>
+        public const int MinLightRun = 5;
+
+        /// <summary>
+        /// Method calls (operators and attribute reads included) that make a block body heavy: an entry
+        /// costs about 45 ns more than a yield, and a call the copy types saves 4 or 5.
+        /// </summary>
+        internal const int HeavyBody = 12;
+
+        /// <summary>Method calls that make a block body worth entering for two iterations.</summary>
+        internal const int MediumBody = 6;
+
+        /// <summary>
+        /// The same for Array#map, #select, #any?, #all? and #none?, whose entry also grows and trims
+        /// the result (map, select) or ends a search early: below sixteen they measured slower.
+        /// </summary>
+        public const int MinCollectRun = 16;
 
         private readonly BlockLoopInfo/*!*/ _info;
         private readonly BlockLoopKind _kind;
@@ -250,7 +289,11 @@ namespace IronRuby.Runtime.Osr {
             _limitIndex = first + 1;
             _resultIndex = first + 2;
             _keptIndex = first + 3;
-            _tupleSize = first + 4;
+            // Every slot an object, to a power of two, rather than padded with DynamicNull: the tuple is
+            // then a MutableTuple<object, ...> whose slots Clear, Store and Load reach directly.
+            int size = 4;
+            while (size < first + 4) { size *= 2; }
+            _tupleSize = size;
             var types = new Type[_tupleSize];
             for (int i = 0; i < types.Length; i++) { types[i] = typeof(object); }
             _tupleType = MutableTuple.MakeTupleType(types);
@@ -377,6 +420,23 @@ namespace IronRuby.Runtime.Osr {
             return info.GetSite(kind);
         }
 
+        /// <summary>
+        /// For, for an iterator of Times, UpTo, DownTo or Each whose run is <paramref name="run"/> long:
+        /// null too when the run is shorter than the block's floor (MinRun, MinLightRun), which then
+        /// never asks for the site. The iterator enters the copy only with Floor iterations or more left.
+        /// </summary>
+        public static BlockLoopSite For(BlockParam/*!*/ block, BlockLoopKind kind, long run) {
+            var proc = block.Proc;
+            var info = proc.Dispatcher.LoopInfo;
+            if (info == null || proc.Kind == ProcKind.Lambda || run < info.Floor) { return null; }
+            return info.GetSite(kind);
+        }
+
+        /// <summary>The shortest run left this site's iterator enters the copy for (For).</summary>
+        public int Floor {
+            get { return _info.Floor; }
+        }
+
         /// <summary>Yields left before the next entry asks for the copy.</summary>
         public long Countdown {
             get { return _osr.Countdown; }
@@ -384,7 +444,7 @@ namespace IronRuby.Runtime.Osr {
 
         /// <summary>
         /// On the way out: what this entry did not spend, so that entries that leave early (a break, or a
-        /// search that stops) still add up. A loop shorter than MinRun never gets here: its iterator does
+        /// search that stops) still add up. A loop shorter than the block's Floor never gets here: its iterator does
         /// not ask for the site at all, which keeps a hot short loop (`a.each { }' over a handful of
         /// elements, nested in a long one) the code it was before.
         /// </summary>
@@ -455,16 +515,96 @@ namespace IronRuby.Runtime.Osr {
             RubyScope scope = proc.LocalScope;
             int depth = _info.Depth;
 
-            var own = MutableTuple.MakeTuple(_tupleType, new object[_tupleSize]);
-            own.SetNestedValue(_tupleSize, _counterIndex, ScriptingRuntimeHelpers.Int32ToObject(from));
-            own.SetNestedValue(_tupleSize, _limitIndex, limit);
-            own.SetNestedValue(_tupleSize, _resultIndex, result);
-            own.SetNestedValue(_tupleSize, _keptIndex, ScriptingRuntimeHelpers.Int32ToObject(keptBefore));
+            // The argument array and the block's tuple are kept for the next entry, so that a short run
+            // does not pay two allocations to get in. Ruby threads run in parallel and a run can re-enter
+            // its own site (a recursive method whose block loop is compiled), so an entry takes the pair
+            // for itself and allocates its own when another entry has it.
+            object[] args = Interlocked.Exchange(ref _spare, null);
+            MutableTuple own;
+            if (args != null) {
+                own = (MutableTuple)args[0];
+            } else {
+                own = MutableTuple.MakeTuple(_tupleType, new object[_tupleSize]);
+                args = new object[depth + 3];
+                args[0] = own;
+            }
+            try {
+                RunIn(args, own, block, scope, depth, from, limit, result, keptBefore, out resume, out kept);
+            } finally {
+                // Nothing a run held stays reachable from the site: the block's locals, the receiver,
+                // the result, self and the scopes. A copy that stopped part way (an exception, a throw)
+                // leaves its locals in the tuple too, which the next entry must not start from.
+                Clear(own, _tupleSize);
+                Array.Clear(args, 1, args.Length - 1);
+                Volatile.Write(ref _spare, args);
+            }
+        }
+
+        // The block's tuple holds objects only, so up to sixteen slots it is a MutableTuple<object, ...> of
+        // 4, 8 or 16, each deriving from the one half its size. Its slots are then properties this code
+        // can set and clear directly: MutableTuple.SetValue is a virtual call, a switch and a cast per
+        // slot, which was most of what an entry cost once it allocated nothing.
+        private static void Clear(MutableTuple/*!*/ tuple, int size) {
+            if (size <= 16 && tuple is MutableTuple<O, O, O, O> t4) {
+                t4.Item000 = null; t4.Item001 = null; t4.Item002 = null; t4.Item003 = null;
+                if (tuple is MutableTuple<O, O, O, O, O, O, O, O> t8) {
+                    t8.Item004 = null; t8.Item005 = null; t8.Item006 = null; t8.Item007 = null;
+                    if (tuple is MutableTuple<O, O, O, O, O, O, O, O, O, O, O, O, O, O, O, O> t16) {
+                        t16.Item008 = null; t16.Item009 = null; t16.Item010 = null; t16.Item011 = null;
+                        t16.Item012 = null; t16.Item013 = null; t16.Item014 = null; t16.Item015 = null;
+                    }
+                }
+                return;
+            }
+            for (int i = 0; i < size; i++) {
+                tuple.SetNestedValue(size, i, null);
+            }
+        }
+
+        private static void Store(MutableTuple/*!*/ tuple, int size, int index, object value) {
+            if (size <= 16) {
+                switch (index) {
+                    case 0: ((MutableTuple<O, O, O, O>)tuple).Item000 = value; return;
+                    case 1: ((MutableTuple<O, O, O, O>)tuple).Item001 = value; return;
+                    case 2: ((MutableTuple<O, O, O, O>)tuple).Item002 = value; return;
+                    case 3: ((MutableTuple<O, O, O, O>)tuple).Item003 = value; return;
+                    case 4: ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item004 = value; return;
+                    case 5: ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item005 = value; return;
+                    case 6: ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item006 = value; return;
+                    case 7: ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item007 = value; return;
+                }
+            }
+            tuple.SetNestedValue(size, index, value);
+        }
+
+        private static object Load(MutableTuple/*!*/ tuple, int size, int index) {
+            if (size <= 16) {
+                switch (index) {
+                    case 0: return ((MutableTuple<O, O, O, O>)tuple).Item000;
+                    case 1: return ((MutableTuple<O, O, O, O>)tuple).Item001;
+                    case 2: return ((MutableTuple<O, O, O, O>)tuple).Item002;
+                    case 3: return ((MutableTuple<O, O, O, O>)tuple).Item003;
+                    case 4: return ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item004;
+                    case 5: return ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item005;
+                    case 6: return ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item006;
+                    case 7: return ((MutableTuple<O, O, O, O, O, O, O, O>)tuple).Item007;
+                }
+            }
+            return tuple.GetNestedValue(size, index);
+        }
+
+        // An argument array whose first element is the block's tuple, both cleared, for the next entry to take.
+        private object[] _spare;
+
+        private void RunIn(object[]/*!*/ args, MutableTuple/*!*/ own, BlockParam/*!*/ block, RubyScope scope, int depth,
+            int from, object limit, RubyArray result, int keptBefore, out int resume, out int kept) {
+            Store(own, _tupleSize, _counterIndex, ScriptingRuntimeHelpers.Int32ToObject(from));
+            Store(own, _tupleSize, _limitIndex, limit);
+            Store(own, _tupleSize, _resultIndex, result);
+            Store(own, _tupleSize, _keptIndex, ScriptingRuntimeHelpers.Int32ToObject(keptBefore));
 
             // the tuples by lexical depth, the block's own first, then the scopes it was defined in,
             // the same chain its compiled body walks with GetParentScope
-            var args = new object[depth + 3];
-            args[0] = own;
             RubyScope s = scope;
             for (int k = 1; k <= depth && s != null; k++) {
                 args[k] = s.Locals;
@@ -476,9 +616,9 @@ namespace IronRuby.Runtime.Osr {
             // Whatever the copy did - ran to the end, handed the loop back, never ran - the counter in
             // the tuple is the iteration to go on from, and the locals are as of the top of it.
             _osr.Run(args);
-            object next = own.GetNestedValue(_tupleSize, _counterIndex);
+            object next = Load(own, _tupleSize, _counterIndex);
             resume = (next is int) ? (int)next : from;
-            object keptAfter = own.GetNestedValue(_tupleSize, _keptIndex);
+            object keptAfter = Load(own, _tupleSize, _keptIndex);
             kept = (keptAfter is int) ? (int)keptAfter : keptBefore;
         }
     }

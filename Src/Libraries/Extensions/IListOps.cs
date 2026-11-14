@@ -1196,11 +1196,11 @@ namespace IronRuby.Builtins {
                 // the same loop, without an interface call for Count and the element every time round
                 // -X:OSR: once the block is hot, the rest of a plain Array's loop runs in a typed copy of
                 // the loop this and the block make together (BlockLoopSite). A loop too short to be outlined
-                // never asks for the site, so it runs as it always did (see BlockLoopSite.MinRun).
-                var loop = (array.Count >= BlockLoopSite.MinRun && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(block, BlockLoopKind.Each) : null;
+                // never asks for the site, so it runs as it always did (see BlockLoopSite.For and Floor).
+                var loop = (array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(block, BlockLoopKind.Each, array.Count) : null;
                 long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
                 for (int i = 0; i < array.Count; i++) {
-                    if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                    if (--countdown <= 0 && array.Count - i >= loop.Floor) {
                         i = loop.Run(block, array, i, ref countdown);
                         if (i >= array.Count) { break; }
                     }
@@ -1257,10 +1257,10 @@ namespace IronRuby.Builtins {
             var result = new RubyArray(self.Count);
             var array = self as RubyArray;
             // -X:OSR: as Each
-            var loop = (array != null && array.Count >= BlockLoopSite.MinRun && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(collector, BlockLoopKind.Map) : null;
+            var loop = (array != null && array.Count >= BlockLoopSite.MinCollectRun && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(collector, BlockLoopKind.Map) : null;
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
-                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinCollectRun) {
                     i = loop.Run(collector, array, result, i, ref countdown);
                     if (i >= array.Count) { break; }
                 }
@@ -1294,10 +1294,10 @@ namespace IronRuby.Builtins {
             var result = new RubyArray();
             var array = self as RubyArray;
             // -X:OSR: as Each
-            var loop = (array != null && array.Count >= BlockLoopSite.MinRun && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(predicate, BlockLoopKind.Select) : null;
+            var loop = (array != null && array.Count >= BlockLoopSite.MinCollectRun && array.GetType() == typeof(RubyArray)) ? BlockLoopSite.For(predicate, BlockLoopKind.Select) : null;
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
-                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinRun) {
+                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinCollectRun) {
                     i = loop.Run(predicate, array, result, i, ref countdown);
                     if (i >= array.Count) { break; }
                 }

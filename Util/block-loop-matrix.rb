@@ -276,3 +276,44 @@ class Range; alias_method :__bl_each, :each; def each; yield :redefined; self; e
 t('... Range#each redefined') { a = []; (1..N).each { |i| a << i }; a }
 class Range; alias_method :each, :__bl_each; remove_method :__bl_each; end
 t('... and restored') { s = 0; (1..N).each { |i| s += i }; s }
+
+# Short runs (BlockLoopSite.MinRun is five): the copy is entered for an Array of five, run after run,
+# with the site's argument array and tuple reused. A FrozenError out of the copy, a run handed back
+# by an Integer where Floats were, the Array resized between runs, and four threads running the
+# same site at once must each leave the next run starting clean.
+class BlShortP; attr_accessor :x, :v; def initialize(x); @x = x; @v = 0.5; end; end
+def bl_short_push(ps); s = 0.0; ps.each { |b| b.x = b.x + b.v; s += b.x }; s; end
+def bl_short_sum(a); t = 0.0; a.each { |x| t += x * 1.5 }; t; end
+def bl_short_up(n); s = 0.0; 1.upto(n) { |i| s += i * 0.5 }; s; end
+t('short runs: attr writes, frozen, retyped, resized') {
+  ps = [BlShortP.new(1.0), BlShortP.new(2.0), BlShortP.new(3.0), BlShortP.new(4.0), BlShortP.new(5.0)]
+  out = []
+  6000.times do |i|
+    if i == 3000
+      ps[1].freeze
+      out << (bl_short_push(ps) rescue $!.class)
+      ps[1] = BlShortP.new(9.0)
+    end
+    ps[2] = BlShortP.new(1) if i == 4000
+    ps << BlShortP.new(0.25) if i == 4500
+    out << bl_short_push(ps)
+  end
+  [out[2999], out[3000], out[3001], out[4000], out[4501], out[-1], ps.map(&:x)]
+}
+t('... the same site from four threads') {
+  4.times.map { |k| Thread.new { s = 0.0; 20000.times { s += bl_short_sum([1.0, 2.0, 3.0, 4.0, k.to_f]) }; s } }.map(&:value)
+}
+t('... upto over five') { s = 0.0; 6000.times { s += bl_short_up(5) }; s }
+# A heavy body (BlockLoopSite.HeavyBody calls or more) enters the copy for a run of one: NBody's inner
+# Range over the bodies after i, with a body frozen in the middle of the sweep.
+def bl_short_pairs(ps)
+  e = 0.0
+  ps.size.times { |i| a = ps[i]; ((i + 1)...ps.size).each { |j| b = ps[j]; d = a.x - b.x; e += d * d * a.v * b.v; b.x = b.x - d * 0.001 } }
+  e
+end
+t('... a heavy body over runs of 4, 3, 2, 1') {
+  ps = Array.new(5) { |i| BlShortP.new(i + 0.5) }
+  e = 0.0
+  3000.times { |k| ps[3].freeze if k == 2000; e += (bl_short_pairs(ps) rescue 1.0) }
+  [e.round(6), ps.map { |p| p.x.round(9) }]
+}
