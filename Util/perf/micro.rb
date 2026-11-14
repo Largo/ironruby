@@ -4,6 +4,8 @@
 #   IR_CONFIG=Release ./ir.sh Util/perf/micro.rb
 #   ruby Util/perf/micro-table.rb cruby=ruby "ir=env IR_CONFIG=Release ./ir.sh"
 #
+#   IR_CONFIG=Release ./ir.sh Util/perf/micro.rb veach4 rangelit     # only these shapes (one per process is steadiest)
+#
 # Best of five runs of each. `empty` is the floor: a call of a method with no body.
 # TruffleRuby prints fractions of a ns for most of these, because it inlines the call and
 # then deletes the loop; its column says "free", not how fast a call is. Add a shape here
@@ -34,12 +36,22 @@ class P
   def rangeeach(n); s = 0.0; (n / 1000).times { (0...1000).each { |i| s += i * 0.5 } }; s; end
   def blkattr(bs, n); (n / 20).times { 20.times { |i| b = bs[i]; b.v -= b.x; b.c += 2 } }; end
 end
+# round nine's shapes: SOM's Vector#each (a Ruby each yielding the elements of an ivar Array through Range#each's
+# block, as DeltaBlue, CD, Json and Havlak iterate), and a method that makes a Range from its operands (Json's
+# `@input[@capture_start..end_]')
+class PVec
+  def initialize(n); @storage = Array.new(n) { |i| i }; @first_idx = 0; @last_idx = n; end
+  def each; (@first_idx..(@last_idx - 1)).each { |i| yield @storage[i] }; end
+  def sum; s = 0; each { |e| s += e }; s; end
+  def slice(e); @storage[@first_idx..e]; end
+end
 class P2; def initialize(a, b); @a = a; @b = b; end; def foo; 1; end; end
 class P3; def foo; 2; end; end
 class PV; attr_reader :x; def initialize(x); @x = x; end; end
 class PM; attr_reader :a, :b; def initialize(a, b); @a = a; @b = b; end; end
 class PB; attr_accessor :x, :v, :c; def initialize; @x = 1.5; @v = 0.0; @c = 0; end; end
 def t(name, n = 3_000_000)
+  return unless ARGV.empty? || ARGV.include?(name)
   best = 1e9
   5.times { t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC); yield n; d = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0; best = d if d < best }
   printf "%-12s %7.1f ns/op\n", name, best * 1e9 / n
@@ -74,3 +86,7 @@ pbs = Array.new(20) { PB.new }
 t("sqrtw")     { |n| o.sqrtw(n) }
 t("rangeeach") { |n| o.rangeeach(n) }
 t("blkattr")   { |n| o.blkattr(pbs, n) }
+v4 = PVec.new(4); v100 = PVec.new(100)
+t("veach4", 1_000_000) { |n| i = 0; while i < n; v4.sum; i += 1; end }
+t("veach100", 50_000)  { |n| i = 0; while i < n; v100.sum; i += 1; end }
+t("rangelit")          { |n| i = 0; while i < n; v4.slice(2); i += 1; end }
