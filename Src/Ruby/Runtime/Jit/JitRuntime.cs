@@ -160,6 +160,30 @@ namespace IronRuby.Runtime.Jit {
             return m;
         }
 
+        /// <summary>Integer#&lt;&lt; within a long; a result past a long (a Bignum) deopts.</summary>
+        public static long ShlLong(long a, long s) {
+            if (s < 0) { return ShrLong(a, s == Int64.MinValue ? Int64.MaxValue : -s); }
+            if (a == 0) { return 0; }
+            if (s >= 63) { throw Deopt(); }
+            long r = a << (int)s;
+            if ((r >> (int)s) != a) { throw Deopt(); }
+            return r;
+        }
+
+        /// <summary>Integer#&gt;&gt;: an arithmetic shift, -1 or 0 once every bit is gone.</summary>
+        public static long ShrLong(long a, long s) {
+            if (s < 0) { return ShlLong(a, s == Int64.MinValue ? Int64.MaxValue : -s); }
+            return (s >= 63) ? (a >> 63) : (a >> (int)s);
+        }
+
+        /// <summary>Integer#&gt;&gt; on an int; a negative width that leaves the int range deopts.</summary>
+        public static int ShrInt(int a, long s) {
+            if (s >= 0) { return (s >= 31) ? (a >> 31) : (a >> (int)s); }
+            long r = ShlLong(a, s == Int64.MinValue ? Int64.MaxValue : -s);
+            if (r != (int)r) { throw Deopt(); }
+            return (int)r;
+        }
+
         public static long AddLong(long a, long b) {
             long r = unchecked(a + b);
             // Signed overflow iff both operands differ in sign from the result.
