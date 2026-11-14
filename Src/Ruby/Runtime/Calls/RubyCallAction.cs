@@ -548,6 +548,10 @@ namespace IronRuby.Runtime.Calls {
                     return true;
                 }
 
+                if (callClrMethods && DispatchIntrinsics.TryBuildNotEquals(metaBuilder, args, method.Info)) {
+                    return true;
+                }
+
                 string sentName;
                 if (defaultFallback && callClrMethods && DispatchIntrinsics.TryBuildSend(metaBuilder, args, method.Info, out sentName)) {
                     return BuildCall(metaBuilder, sentName, args, defaultFallback, callClrMethods);
