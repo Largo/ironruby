@@ -63,12 +63,13 @@ namespace IronRuby.Builtins {
                 var nameError = RubyExceptions.CreateUndefinedLocalOrMethod(context, self, name.ToString());
                 // MRI's are those of the frame that called this: the method_missing that called super
                 RubyExceptionData.GetInstance(nameError).LocalVariables = scope.GetLocalVariableSymbols();
-                throw nameError;
+                throw RubyExceptionData.MarkUnkept(nameError);
             }
             var error = NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
             RubyExceptionData.GetInstance(error).PrivateCall = RubyOps.MethodMissingPrivateCall;
             RubyOps.MethodMissingPrivateCall = false;
-            throw error;
+            // made here and thrown at once: nothing has kept it
+            throw RubyExceptionData.MarkUnkept(error);
         }
 
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
