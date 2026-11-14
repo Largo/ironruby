@@ -188,6 +188,55 @@ namespace IronRuby.Builtins {
             return TrueForItems(each, predicate, self, true, true);
         }
 
+        // Ruby 2.5's pattern form: each item is matched with pattern === item and a block is never called.
+        // These used to be prelude wrappers (ruby4.rb) around the block forms, and a wrapper taking *args
+        // and &block made every [x].any? { } pay for a splat, a Proc and two more calls: 400 ns where MRI
+        // takes 70.
+        [RubyMethod("all?")]
+        public static object TrueForAll(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
+            return PatternForItems(each, caseEquals, predicate, self, pattern, false, false);
+        }
+
+        [RubyMethod("none?")]
+        public static object TrueForNone(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
+            return PatternForItems(each, caseEquals, predicate, self, pattern, true, false);
+        }
+
+        [RubyMethod("any?")]
+        public static object TrueForAny(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate, object self, object pattern) {
+            return PatternForItems(each, caseEquals, predicate, self, pattern, true, true);
+        }
+
+        private static object PatternForItems(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam predicate,
+            object self, object pattern, bool stop, bool positiveResult) {
+            if (predicate != null) {
+                each.Context.ReportWarning("given block not used");
+            }
+            // MRI calls #=== with rb_funcall, which a private #=== answers too, as this site's does.
+            var site = caseEquals.GetCallSite("===");
+
+            // An Array walks itself, as rb_ary_any_p and friends do, and does not call #each.
+            var array = self as RubyArray;
+            if (array != null) {
+                for (int i = 0; i < array.Count; i++) {
+                    if (Protocols.IsTrue(site.Target(site, pattern, array[i])) == stop) {
+                        return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
+                    }
+                }
+                return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+            }
+
+            object result = ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                if (Protocols.IsTrue(site.Target(site, pattern, PackValues(args))) == stop) {
+                    result = ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
+                    return selfBlock.Break(result);
+                }
+                return null;
+            }));
+            return result;
+        }
+
         private static object TrueForItems(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool stop, bool positiveResult) {
             // An Array's #all?, #any? and #none? are its own in MRI (rb_ary_all_p etc.): they walk the
             // array and yield each element once rather than going through #each and a block of ours.
@@ -1039,6 +1088,38 @@ namespace IronRuby.Builtins {
             }));
 
             return (count >= 0) ? ScriptingRuntimeHelpers.BooleanToObject(count == 1) : result;
+        }
+
+        // The pattern form (see TrueForAll): pattern === item, the block never called.
+        [RubyMethod("one?")]
+        public static object One(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, BlockParam comparer, object self, object pattern) {
+            if (comparer != null) {
+                each.Context.ReportWarning("given block not used");
+            }
+            var site = caseEquals.GetCallSite("===");
+
+            var array = self as RubyArray;
+            if (array != null) {
+                bool found = false;
+                for (int i = 0; i < array.Count; i++) {
+                    if (Protocols.IsTrue(site.Target(site, pattern, array[i]))) {
+                        if (found) {
+                            return ScriptingRuntimeHelpers.False;
+                        }
+                        found = true;
+                    }
+                }
+                return ScriptingRuntimeHelpers.BooleanToObject(found);
+            }
+
+            int count = 0;
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                if (Protocols.IsTrue(site.Target(site, pattern, PackValues(args))) && ++count > 1) {
+                    return selfBlock.Break(null);
+                }
+                return null;
+            }));
+            return ScriptingRuntimeHelpers.BooleanToObject(count == 1);
         }
 
         #endregion

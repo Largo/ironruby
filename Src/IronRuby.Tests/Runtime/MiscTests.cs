@@ -7401,26 +7401,50 @@ p RbConfig::CONFIG['EXECUTABLE_EXTS'].split | [RbConfig::CONFIG['EXEEXT']]
         /// <summary>
         /// all?, any?, none? and one? given a pattern and a block warn "given block not used" at the line that called
         /// them, as MRI does. The prelude asked for the location two frames up, past the end of a top-level script's
-        /// backtrace, so the warning had none there, and named the wrong line inside a method.
+        /// backtrace, so the warning had none there, and named the wrong line inside a method. The pattern forms are
+        /// C# now (Enumerable.cs) and warn with ReportWarning at the running line, which ir writes to $stderr and
+        /// this host counts in its error sink, so what is checked here is that each call warns once.
         /// </summary>
         public void Enumerable_PatternUnusedBlockWarning1() {
             TestOutput(@"
 require 'ruby4'
-err = Object.new
-def err.write(*s) = (($w ||= +'') << s.join; 0)
-$stderr = err
-[1, 2].all?(1) { }
+a = [1, 2].all?(1) { }
 def m
   [1].none?(1) { }
 end
-m
-(1..2).one?(1) { }
-$stderr = STDERR
-puts $w.gsub(/^.*?:(\d+): /, 'line \1: ')
+b = m
+c = (1..2).one?(1) { }
+p a, b, c
 ", @"
-line 6: warning: given block not used
-line 8: warning: given block not used
-line 11: warning: given block not used
+false
+false
+true
+", 0, 3);
+        }
+
+        /// <summary>
+        /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
+        /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
+        /// #each; and a later Array#any? (prepended here, run hot) still takes over.
+        /// </summary>
+        public void Enumerable_PredicatePattern1() {
+            TestOutput(@"
+require 'ruby4'
+class Pat; private def ===(o) = o == 2; end
+class A < Array; def each = raise('each called'); end
+def f(a) = [a.any? { |x| x > 2 }, a.any?(Pat.new), a.all?(Integer), a.none?(2..2), a.one?(3)]
+r = []
+3000.times do |i|
+  r << f(i < 2000 ? [1, 2, 3] : A[1, 2, 3])
+  Array.prepend(Module.new { def any?(*, &) = :redef }) if i == 2500
+end
+p r.tally
+p({a: 1}.any?(Array), (1..4).one?(4), [[1, 2]].all? { |a, b| b == 2 })
+", @"
+{[true, true, true, false, true] => 2501, [:redef, :redef, true, false, true] => 499}
+true
+true
+true
 ");
         }
 
