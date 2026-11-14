@@ -16,8 +16,16 @@ Run the steps in order and stop at the first failure: the cheap ones catch most 
 ## 1. The diff is what it says it is
 
 ```sh
+git -C <tree> status --short          # must print nothing: the gate judges commits
+git status --short -- Src Util        # nothing here either: the baseline is built from this checkout
 git -C <tree> diff --stat <base>...HEAD
 ```
+
+- Uncommitted changes in the candidate tree are built and tested but are in neither this
+  diff nor the merge that follows: commit them (or stash and rebuild) before going on.
+- Uncommitted changes in the baseline checkout make the baseline something other than the
+  commit the candidate branched from, and every comparison below is against it: commit or
+  stash them, and rebuild the baseline, first.
 
 - Whole-file churn means line endings or a BOM were rewritten: fix that first (CLAUDE.md).
 - A `*.Generated.cs` in the diff must come from its generator. A `[RubyMethod]`,
@@ -37,8 +45,18 @@ git -C <tree> diff --stat <base>...HEAD
 set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
   -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
-(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; tail -1 results.txt; grep '^> FAILED' results.txt)
+(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; echo "exit $?"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt)
 ```
+
+The run is complete only if it ends as the driver ends it: `PASSED` (exit 0), or the
+numbered list of failures followed by a `Repro: ... IronRuby.Tests.dll /verbose Name...`
+line (exit 1). A run that crashed or was killed - the OOM killer has taken this suite
+when other builds ran beside it - ends anywhere, with another exit status, may have
+printed no failure name at all, and would compare as clean: run it again, alone.
+
+Do the same in the baseline checkout (its own Release test build) and `diff` the two
+`failed.txt`: a name only the candidate has fails the gate. Do not go by "one failure, as
+before" - a different test failing in place of the known one would look the same.
 
 Then, whichever apply to the code the diff touches (each file's header says how to run it
 and what "same" means; most compare JIT/OSR on against off, or IronRuby against CRuby):
@@ -122,12 +140,14 @@ timing run is going.
 
 ## 4. Nothing got slower
 
-Back to back, twice, on a quiet machine (`uptime`):
+Back to back, twice, on a quiet machine (`uptime`), with both trees named by absolute path:
+`./ir.sh` is whichever tree the shell happens to be in, and step 2 left it in the candidate.
 
 ```sh
-ruby Util/perf/micro-table.rb "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release <tree>/ir.sh"
-ruby Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release <tree>/ir.sh"
-ruby Util/perf/awfy.rb 12 "new=env IR_CONFIG=Release <tree>/ir.sh" "base=env IR_CONFIG=Release ./ir.sh"
+BASE=/abs/path/to/baseline NEW=/abs/path/to/candidate
+ruby $BASE/Util/perf/micro-table.rb "base=env IR_CONFIG=Release $BASE/ir.sh" "new=env IR_CONFIG=Release $NEW/ir.sh"
+ruby $BASE/Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release $BASE/ir.sh" "new=env IR_CONFIG=Release $NEW/ir.sh"
+ruby $BASE/Util/perf/awfy.rb 12 "new=env IR_CONFIG=Release $NEW/ir.sh" "base=env IR_CONFIG=Release $BASE/ir.sh"
 ```
 
 The second run has the columns the other way round on purpose. Which column runs first

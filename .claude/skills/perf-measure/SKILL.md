@@ -56,7 +56,12 @@ ruby Util/perf/micro-table.rb cruby=ruby "ir=env IR_CONFIG=Release ./ir.sh"
 In `Util/perf/LEDGER.md`:
 
 - Replace the "Current numbers" tables with the new ones, with the date, the commit
-  (`git rev-parse --short HEAD`), the machine's core count and the load average.
+  (`git rev-parse --short HEAD`), the machine's core count and the load average. The commit
+  only names what was measured if the tree was clean when it was built and measured: check
+  `git status --short -- Src Util/perf Util/bench` first - the sources and the scripts that
+  do the measuring, since a changed `micro.rb` changes the numbers as surely as a changed
+  runtime - and commit or stash changes rather than record numbers under a commit that
+  cannot reproduce them.
 - Rebuild "Gaps, worst first" from the micro table: every operation where IronRuby/CRuby is
   above 1.3, sorted by that ratio, one line each, with the AWFY benchmarks it plausibly
   dominates. Keep the notes already written on a gap (what was tried, what was learned).

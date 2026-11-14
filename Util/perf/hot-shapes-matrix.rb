@@ -60,7 +60,8 @@ procs = []
        a.store(i % 5), a.hstore(i % 3), a.lv(1), a.b.local_variables, a.b.receiver.equal?(a),
        a.aset(o, i % 9), a.interp(Wrap.new(i % 4)), a.kase(i % 3 == 0 ? i : (i % 3 == 1 ? "a" : 1.5)), a.loop1(3), a.loop2(4),
        (i % 2000 == 0 ? a.loop3(5000) : 0)]
-  out << r if i % 3333 == 0
+  # rows at the multiples of 2000 too, where loop3 runs: after K is replaced its result has to change
+  out << r if i % 3333 == 0 || i % 2000 == 0
   case i
   when 5000 then class A; def getter; :redefined; end; end
   when 7000 then def a.getter; :singleton; end
@@ -177,7 +178,9 @@ ivo = IV.new; others = [IV2.new, IV.new]; ivout = []
   o = i.odd? ? ivo : others[i % 2]
   begin
     o.wr(i)
-    ivout << [i, o.rd, ivo.via(o), o.instance_variables] if i % 2500 == 1 || (i > 14_990 && i < 15_010 && i.odd?)
+    # via runs on every iteration, on both receivers, so that its attribute sites are hot; rows at both parities
+    read = o.rd; via = ivo.via(o)
+    ivout << [i, read, via, o.instance_variables] if i % 2500 < 2 || (i > 14_990 && i < 15_010)
   rescue => e
     ivout << [i, e.class, e.message[/can.t modify frozen IV/]] if i < 15_010
   end
@@ -343,7 +346,8 @@ idout = []
   r = idrecv[i % idrecv.size]
   row = [id.nq(r), id.eq(r, r), id.eq(r, plain), id.ne(r, plain), id.ne(r, r), id.eql(r, r), id.eql(r, 5),
          id.nqo(plain), id.eqo(plain), id.eqo(id), (id.nqo(IDPriv.new) rescue :private), same.eqs(same)]
-  idout << [i, row.map { |x| x.inspect }] if i % 2000 == 7 || (i > 9_995 && i < 10_010)
+  # and the iterations right after each redefinition below (x001), one per receiver, while it is in force
+  idout << [i, row.map { |x| x.inspect }] if i % 2000 == 7 || (i > 9_995 && i < 10_010) || (i % 1000).between?(2, 12)
   case i
   when 3001 then class Object; def nil?; :objnil; end; end
   when 4001 then class Object; remove_method :nil?; end
@@ -472,6 +476,106 @@ lambda do
     s += un.(rr.d1(i)) if i.odd?
   end
   p s, (rr.d6(1) rescue $!.message)
+end.call
+
+# ---- one-character slices: `s[i]' of an ASCII character shares one owner-less content ----
+# Every such String is still a String of its own: mutated in every way while others from the
+# same call site are alive, compared with ==/eql?/equal?/<=>/hash across encodings, with
+# String#== replaced and restored mid-run, and read and mutated from four threads at once.
+# A method, not a lambda: the threads' locals must not be the script's own (`e' above).
+def one_char_slices
+  srcs = ["abc\"\\ xé", "abc".b + "\xff".b, "abc".encode("US-ASCII"), ("ab" * 3) + "c",
+          "ab\xffc".dup.force_encoding("UTF-8"), "ab".encode("UTF-16LE"), "ab".encode("Shift_JIS"),
+          "ab".encode("EUC-JP")]
+  ops = [
+    ->(c) { c << "z" }, ->(c) { c.replace("q") }, ->(c) { c.force_encoding("UTF-16LE"); v = [c.valid_encoding?, c.bytesize]; c.force_encoding("UTF-8"); v },
+    ->(c) { c.setbyte(0, 0x7a) }, ->(c) { c.upcase! }, ->(c) { c.instance_variable_set(:@x, 1) },
+    ->(c) { def c.hi = :hi; c.hi }, ->(c) { c.freeze; (c << "x" rescue $!.class) },
+    ->(c) { c.dup << "d" }, ->(c) { c.clone << "e" }, ->(c) { c.encode("UTF-16BE") },
+    ->(c) { c.force_encoding("BINARY") }, ->(c) { c.prepend("p") }, ->(c) { c.clear },
+    ->(c) { c.insert(0, "é") }, ->(c) { c.squeeze!; c.succ! }, ->(c) { c.chop! },
+    ->(c) { {c => 1}.keys[0].frozen? }, ->(c) { Marshal.load(Marshal.dump(c)) },
+    ->(c) { c.to_sym.to_s }, ->(c) { c.unpack("C*") }, ->(c) { c.valid_encoding? },
+  ]
+  out = []
+  20_000.times do |i|
+    s = srcs[i % srcs.size]
+    k = i % s.size
+    a = s[k]; b = s[k]; c = s.slice(k); d = s[k]
+    r = ops[i % ops.size].(c) rescue $!.class
+    if i % 997 == 0 || i < srcs.size * ops.size
+      out << [i % srcs.size, k, a, b, c, d, r, a.encoding, c.encoding, a == b, a.eql?(b), a.equal?(b),
+              a == c, c == a, a.eql?(c), a <=> c, a.hash == b.hash, a.hash == c.hash, a.frozen?, c.frozen?,
+              a.valid_encoding?, a.ascii_only?, c.valid_encoding?, a.bytes, c.bytes, a == "a", "a" == a,
+              a == "a".b, a == "a".encode("UTF-16LE"), a != "b", a.instance_variables, b.singleton_methods,
+              a.class, d.size, d.bytesize]
+    end
+  end
+  out.each { |x| p x }
+  sub = Class.new(String)
+  q = sub.new("xyz")
+  p [q[1].class, q[1] == "y", "y" == q[1], q[1].equal?(q[1])]
+  w = ObjectSpace::WeakMap.new; k1 = "ab"[0]; k2 = "ab"[0]; w[k1] = 1
+  p [w.key?(k1), w.key?(k2), {k1 => 1}[k2], k1.hash == k2.hash]
+  # String#== redefined and restored while the slices compare hot
+  t = 0
+  20_000.times do |i|
+    if i == 7_000
+      String.class_eval { alias_method :__eq_saved, :==; def ==(o) = :redef }
+    elsif i == 14_000
+      String.class_eval { alias_method :==, :__eq_saved; remove_method :__eq_saved }
+    end
+    x = "ab"[i % 2]
+    v = (x == "a")
+    t += v == :redef ? 100 : (v ? 1 : 0)
+    t += 1000 if "b" == x && i.odd?
+  end
+  p t
+  # four threads: each mutates its own slices while comparing others from the same source
+  src = "abcdefgh" * 4
+  res = 4.times.map do |n|
+    Thread.new do
+      acc = []
+      5_000.times do |i|
+        c = src[(i + n) % src.size]
+        e = src[(i + n) % src.size]
+        c << n.to_s if i.even?
+        c.upcase! if i % 3 == 0
+        acc << [c, e == src[(i + n) % src.size], e.size] if i % 500 == 0
+      end
+      acc
+    end
+  end.map(&:value)
+  p res, src
+end
+one_char_slices
+# ---- a block that leaves the method through its block parameter (second review of #215) ----
+# `def capture(&b); b; end' is a light frame, but not one that "can only yield to its block":
+# each evaluation of the literal must give a Proc of its own.
+lambda do
+  kb = Class.new do
+    def capture(&b); b; end
+    def capture2(&b) = b
+    def keep(&b); @kept = b; nil; end
+    def forward(&b); capture(&b); end
+    attr_reader :kept
+  end.new
+  saved = []
+  i = 0
+  while i < 3
+    saved << kb.capture { i }
+    i += 1
+  end
+  p saved[0].equal?(saved[1]), saved.map(&:object_id).uniq.size, saved.map(&:call)
+  s2 = []; s3 = []; s4 = []
+  5000.times do |k|
+    pr = kb.capture2 { k }
+    s2 << pr if k % 1000 == 0
+    kb.keep { k * 2 }
+    s3 << kb.kept if k % 1000 == 1
+    s4 << kb.forward { k + 1 } if k % 1000 == 2
+  end
+  p s2.map(&:call), s3.map(&:call), s4.map(&:call), (s2 + s3 + s4).map(&:object_id).uniq.size
 end.call
 
 # ---- `"lit" == v' and `"lit" != v' in a method-JIT body, and `v == "lit"' ----

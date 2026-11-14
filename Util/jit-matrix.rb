@@ -2762,7 +2762,8 @@ nt.h = bang; nt.p = true; nt.w = 1
 t('! of an object with its own #!') { nt.sp_waiting_with_packet }
 nt.h = false; nt.p = false; nt.w = true
 warm { |i| nt.sp_holding_or_waiting }
-class FalseClass; def ! = :false_bang; end
+# false, where the built-in gives true: a body that ignored the replacement would answer differently
+class FalseClass; def ! = false; end
 t('FalseClass#! redefined') { nt.sp_holding_or_waiting }
 class FalseClass; remove_method :!; end
 t('and removed') { nt.sp_holding_or_waiting }
@@ -2941,6 +2942,107 @@ t('attr write on another object, then ivar write') { rv.value }
 rw.freeze
 t('the same with self frozen: one write, then FrozenError') { [(rw.no_attr_then_ivar(rv) rescue $!.class), rv.value] }
 t('C.new, then ivar write, self frozen') { rw.no_new_then_ivar rescue $!.class }
+
+# The stub's three settled-or-not states, each changed after the fact: a method the JIT declined
+# (tr_declined: settled on its generic body, which call sites then call without the trampoline), one
+# retired for deopting on every call (tr_retired: cooling) and one specialized (tr_spec: call sites
+# call its entry). Each is then redefined, made private, given a singleton override, refined, and
+# called through send and Method objects taken before and after, with TracePoint on.
+module JitTrampMatrix
+  class Holder
+    def initialize = (@a = 1; @s = "abc")
+    def tr_spec = @a == 1
+    def tr_declined(x) = (@i = x; @s[0])
+    def tr_retired(x) = x * x * x * x
+  end
+  def self.probe(o, before)
+    [o.tr_spec, o.tr_declined(1), o.tr_retired(3), o.send(:tr_spec), o.__send__(:tr_declined, 2),
+     o.public_send(:tr_retired, 2), before.map(&:call), Holder.instance_method(:tr_spec).bind(o).call,
+     o.method(:tr_declined).call(5), o.method(:tr_spec).owner == Holder, o.method(:tr_declined).arity]
+  end
+end
+module JitTrampRefine
+  refine JitTrampMatrix::Holder do
+    def tr_spec = :refined
+    def tr_declined(x) = :refined
+  end
+end
+tm = JitTrampMatrix::Holder.new
+warm { |i| tm.tr_spec; tm.tr_declined(i); tm.tr_retired(2**20 + i) }
+tm_m = tm.method(:tr_declined)
+tm_before = [tm.method(:tr_spec), -> { tm_m.call(1) }, -> { tm.tr_retired(7) }]
+t('tramp: after warm-up') { JitTrampMatrix.probe(tm, tm_before) }
+tm_calls = []
+tm_tp = TracePoint.new(:call, :return) { |x| tm_calls << [x.event, x.method_id] if x.method_id.to_s.start_with?('tr_') }
+t('tramp: TracePoint on the hot methods') { tm_tp.enable { JitTrampMatrix.probe(tm, []) }; tm_calls.uniq }
+tm_s = JitTrampMatrix::Holder.new
+def tm_s.tr_spec = :single
+def tm_s.tr_declined(x) = :single
+def tm_s.tr_retired(x) = :single
+t('tramp: singleton overrides') { [JitTrampMatrix.probe(tm_s, []), JitTrampMatrix.probe(tm, [])] }
+t('tramp: refined') do
+  Module.new { using JitTrampRefine; tm.instance_variable_set(:@r, [tm.tr_spec, tm.tr_declined(1), tm.send(:tr_spec)]) }
+  tm.instance_variable_get(:@r) + [tm.tr_spec]
+end
+class JitTrampMatrix::Holder
+  private :tr_spec, :tr_declined, :tr_retired
+end
+t('tramp: made private') { [(tm.tr_spec rescue $!.class), (tm.tr_declined(1) rescue $!.class), (tm.tr_retired(1) rescue $!.class), tm.send(:tr_spec), tm_before[0].call] }
+class JitTrampMatrix::Holder
+  public :tr_spec, :tr_declined, :tr_retired
+  def tr_spec = :redefined
+  def tr_declined(x) = :redefined
+  def tr_retired(x) = :redefined
+end
+t('tramp: redefined, next call') { JitTrampMatrix.probe(tm, tm_before) rescue [$!.class, $!.message[0, 40]] }
+t('tramp: redefined, plain calls') { [tm.tr_spec, tm.tr_declined(1), tm.tr_retired(1), tm_before[0].call, tm_before[1].call] }
+class JitTrampMatrix::Holder
+  alias_method :tr_spec, :tr_retired
+  define_method(:tr_declined) { |x| [:defined, x] }
+end
+t('tramp: aliased and define_method') { [tm.tr_spec(2), tm.tr_declined(4), tm.method(:tr_spec).name, tm.method(:tr_spec).original_name] }
+# ---------------------------------------------------------------- second review of #215
+# The hash query's helper deopts after its arguments have run: an argument with an effect
+# must not be evaluated a second time by the generic body.
+class JitFetchDefault
+  attr_reader :n
+  def initialize = (@n = 0)
+  def no_fetch_default(h, k) = h.fetch(k, @n += 1)
+end
+fd = JitFetchDefault.new; fh = { a: 1 }
+warm { fd.no_fetch_default(fh, :a) }
+t('fetch(nil, @n += 1): the default evaluated once') { [fd.no_fetch_default(fh, nil), fd.n] }
+t('fetch(:zz, @n += 1)') { [fd.no_fetch_default(fh, :zz), fd.n] }
+
+# A construction ends its own invocation, not the outer ones of a body that calls itself:
+# an initialize that redefines an operator must be seen by them.
+$jit_redef_plus = false
+class JitCtorRedef
+  attr_reader :x
+  def initialize(x)
+    @x = x
+    if $jit_redef_plus && x == 1.0
+      $jit_redef_plus = false
+      Float.class_eval { alias_method :__jit_old_plus, :+; def +(o) = 100.0 }
+    end
+  end
+end
+class JitCtorMaker
+  def no_make(n)
+    no_make(n - 1.0) if n > 0.0
+    JitCtorRedef.new(n + 1.0)
+  end
+end
+cm = JitCtorMaker.new
+warm { cm.no_make(2.0) }
+$jit_redef_plus = true
+ctor_x = cm.no_make(2.0).x
+Float.class_eval { alias_method :+, :__jit_old_plus; remove_method :__jit_old_plus }
+t('Float#+ redefined by an inner initialize') { ctor_x }
+
+# An initialize that constructs again recurses through the direct construction: SystemStackError.
+class JitCtorDeep; def initialize(n) = JitCtorDeep.new(n + 1); end
+t('initialize constructing without end') { begin; JitCtorDeep.new(0); :returned; rescue SystemStackError => e; e.class; end }
 
 # A swap: the first element store goes unlogged and the last one may not deopt, so a store the
 # fast path cannot make after the first (growing the array, an index that raises, a frozen

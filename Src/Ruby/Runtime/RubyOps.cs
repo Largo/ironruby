@@ -245,6 +245,20 @@ namespace IronRuby.Runtime {
             return (blockParameter == null) ? InactiveRfc : EnterLightMethodWithBlock(blockParameter);
         }
 
+        /// <summary>
+        /// EnterLightMethod of a method with a block parameter (`def m(&b)'): the body can hand the block on or keep
+        /// it without making a scope - `def capture(&b); b; end' - so the block is converted as any call's is, and is
+        /// never made again for the next evaluation of its literal.
+        /// </summary>
+        public static RuntimeFlowControl/*!*/ EnterLightMethodNamingBlock(Proc blockParameter) {
+            RubyUtils.SafePoint();
+            if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
+                blockParameter.ConvertAsFrame();
+                return blockParameter;
+            }
+            return InactiveRfc;
+        }
+
         private static RuntimeFlowControl/*!*/ EnterLightMethodWithBlock(Proc/*!*/ blockParameter) {
             // A light frame can only yield to its block: a literal one may be made again once the call returns (Proc.TryReuse).
             if (blockParameter.Kind == ProcKind.Block) {

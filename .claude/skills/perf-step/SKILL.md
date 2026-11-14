@@ -40,8 +40,14 @@ before proposing something they already cover.
 
 ## 2. Experiment, away from the baseline
 
-The build in this checkout is the baseline. Do not rebuild it while an experiment is being
-measured.
+The build in this checkout is the baseline. Build it now, before anything is measured
+against it (`dotnet build Src/Console/Ruby.Console.csproj -c Release
+-p:IronRubyTargetFrameworks=net10.0`, with `set -o pipefail` if its output is piped): the
+binaries do not say which sources they came from, and after a pull or a branch switch they
+are another revision's. `git status --short -- Src` must print nothing first: the experiment's
+worktree starts from the committed branch, so an uncommitted edit here would be in the
+baseline and not in the candidate, and be measured as the experiment's effect. Then do not
+rebuild it while an experiment is being measured.
 
 ```sh
 Util/perf/worktree.sh NAME      # ../wt-NAME on branch perf/NAME, with its own DLR copy; prints the build command
@@ -97,6 +103,10 @@ Otherwise it is rejected, however elegant. A change that is faster but fails the
 back to its author once with the failing test; if it fails again, reject it.
 
 ## 4. Land or record
+
+Whoever did the experiment - a subagent or you - its changes are committed on `perf/NAME`
+and `git -C ../wt-NAME status --short` prints nothing before the gate runs: the gate tests
+the tree, the merge takes the branch, and they must be the same thing.
 
 **Kept:** merge the branch into the working branch with a merge commit
 (`git merge --no-ff perf/NAME`), rebuild the baseline here (it is now the new baseline),

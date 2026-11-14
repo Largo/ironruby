@@ -6,10 +6,11 @@
 #
 # The last column is the second interpreter over the first, the gap the perf-step skill
 # picks its next target from.
+require 'shellwords'
 interps = ARGV.map { |s| s.split('=', 2) }
 micro = File.join(__dir__, 'micro.rb')
 res = interps.map do |name, cmd|
-  out = IO.popen("LANG=C.UTF-8 #{cmd} #{micro} 2>&1", &:read)
+  out = IO.popen("LANG=C.UTF-8 #{cmd} #{micro.shellescape} 2>&1", &:read)
   # An interpreter that failed leaves a short column or none, which the table would show as dashes
   # or not at all: say which one it was and what it printed instead.
   abort "#{name} (#{cmd}) failed with #{$?.exitstatus || $?.termsig}:\n#{out.lines.last(15).join}" unless $?.success?

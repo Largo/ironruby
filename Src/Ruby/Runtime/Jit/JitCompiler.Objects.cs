@@ -603,6 +603,7 @@ namespace IronRuby.Runtime.Jit {
             }
             _pure = false;
             _effectNotOnSelf = true;
+            _construction = true;
             type = JT.Obj;
             return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
         }
@@ -1018,6 +1019,15 @@ namespace IronRuby.Runtime.Jit {
         /// `x.size', `x.length', `x.empty?' on an exact Array or Hash.
         /// </summary>
         private MSA.Expression/*!*/ EmitHashQuery(MethodCall/*!*/ node, out JT type) {
+            var query = EmitHashQueryOperands(node, out type);
+            // The helper checks its receiver and its key, and deopts, after the arguments have been evaluated:
+            // `h.fetch(k, @n += 1)' has written @n by then. Said again here, the deopt is seen to follow whatever
+            // effect an argument had (_deoptAfterEffect), and such a body is declined.
+            _canDeopt = true;
+            return query;
+        }
+
+        private MSA.Expression/*!*/ EmitHashQueryOperands(MethodCall/*!*/ node, out JT type) {
             var args = (node.Arguments != null) ? node.Arguments.Expressions : new RExpr[0];
             foreach (var arg in args) {
                 if (arg is SplattedArgument) { throw Bail(node.MethodName + " with a splat"); }

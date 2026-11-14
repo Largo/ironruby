@@ -19,7 +19,7 @@
 # lambda_methodN. The names must stay ASCII: the runtime's perf-map writer damages a line
 # whose name is not (the names used to carry U+2111 U+211C and U+2236, and 40% of the
 # samples came out [unknown]).
-set -e
+set -e -o pipefail      # a failed perf record must not be hidden by the tail it is piped to
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
 PERF_HOME="${PERF_HOME:-$(dirname "$ROOT")/ironruby-perf}"
 NAME="${1:?usage: profile.sh Benchmark [tree]}"; TREE="${2:-$ROOT}"; SECS="${PROFILE_SECS:-15}"

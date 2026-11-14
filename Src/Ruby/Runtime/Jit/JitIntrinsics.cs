@@ -921,8 +921,14 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
+            // The direct construction calls initialize with no call site and no scope in between, so it is where an
+            // initialize that constructs again - `def initialize(n); C.new(n + 1); end' - has to meet the stack check
+            // a call would have made: too deep a recursion is a SystemStackError, not the end of the process.
             internal bool IsDirect {
-                get { return Construction.IsCurrent(Arity) && !TracePoint.CCallTracing; }
+                get {
+                    RubyOps.RequireSufficientStack();
+                    return Construction.IsCurrent(Arity) && !TracePoint.CCallTracing;
+                }
             }
         }
 
