@@ -252,7 +252,8 @@ IronRuby.Tests by failing name, ruby/spec language plus 32 directories (23065 ex
   JIT** (`JitRuntime.IdentityCallSite`). `==` 50 -> 27 ns, `nil?` 43 -> 35, but `str==`
   52 -> 97 (the new screen case gets in the way of the `s == "lit"` intrinsic), AWFY
   1.010, 1.007, 1.000: the benchmarks' hot `==`/`nil?` are on instance variables, which
-  the JIT refuses in method bodies. Worth redoing after gap 1(b), with the str== case fixed.
+  the JIT refused in method bodies at the time. Redone in round four, once it took them
+  (d14eddf), as bf354cf, with `s == "lit"` kept ahead of the new screen case.
 
 - **perf/jcall 7ecff1c2 fec30b9e - calls of other methods from a method-JIT body**
   (round five; new files `Jit/JitCalls.cs`, `Jit/JitCompiler.Calls.cs`). A call goes from

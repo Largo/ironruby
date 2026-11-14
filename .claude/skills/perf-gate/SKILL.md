@@ -45,7 +45,7 @@ git -C <tree> diff --stat <base>...HEAD
 set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
   -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
-(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; echo "exit $?"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt)
+(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; code=$?; echo "exit $code"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt; exit $code)
 ```
 
 The run is complete only if it ends as the driver ends it: `PASSED` (exit 0), or the
