@@ -2425,6 +2425,42 @@ namespace IronRuby.Builtins {
             return EachLine(block, self, separator, 0);
         }
 
+        /// <summary>
+        /// The lines of the string split after each <paramref name="separator"/> (not empty), as
+        /// the C# #each_line yields them, collected without a block: what String#lines and
+        /// #each_line in ruby4.rb build on, which otherwise paid a Ruby block call per line.
+        /// </summary>
+        [RubyMethod("__ir_lines__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ GetLines(MutableString/*!*/ self, [NotNull]MutableString/*!*/ separator) {
+            return GetLines(self, separator, false);
+        }
+
+        /// <summary>
+        /// With <paramref name="chompNewline"/> each line loses a trailing "\n" and a "\r" before it,
+        /// as chomp: true does for the default separator (rb_str_enumerate_lines): a "\r" with no
+        /// "\n" after it stays. Only for "\n" in an ASCII-compatible receiver; ruby4.rb checks that.
+        /// </summary>
+        [RubyMethod("__ir_lines__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ GetLines(MutableString/*!*/ self, [NotNull]MutableString/*!*/ separator, bool chompNewline) {
+            var result = new RubyArray();
+            int length = self.Length;
+            int start = 0;
+            while (start < length) {
+                int end = self.IndexOf(separator, start);
+                end = (end >= 0) ? end + separator.Length : length;
+                int stop = end;
+                if (chompNewline && stop > start && self.GetChar(stop - 1) == '\n') {
+                    stop--;
+                    if (stop > start && self.GetChar(stop - 1) == '\r') {
+                        stop--;
+                    }
+                }
+                result.Add(self.CreateDerived().Append(self, start, stop - start));
+                start = end;
+            }
+            return result;
+        }
+
         public static object EachLine(BlockParam/*!*/ block, MutableString/*!*/ self, [DefaultProtocol]MutableString separator, int start) {
             int changeCount = self.ChangeCount;
 
@@ -2858,8 +2894,44 @@ namespace IronRuby.Builtins {
             // encoding to a byte string, so "\u00e9".encode("BINARY") is an undefined conversion
             // even though the code point would fit in one byte.
             var encoder = to.TranscodingEncoding;
-            var buffer = new char[2];
 
+            // The common case, every character fits: append the text whole instead of a piece per
+            // character with an encoder probe each. Decided without trying the encoder (whose
+            // refusal is an exception): ASCII text into an encoding that reads ASCII as itself,
+            // or text without surrogates into a Unicode encoding (UTF-7 aside, it is a dummy).
+            if (settings.XmlMode == 0 && CanTakeWhole(text, to, binarySource || binaryTarget)) {
+                result.Append(text);
+            } else {
+                TranscodeByCharacter(fallbackStorage, toStr, text, result, encoder, from, to, settings, binarySource, binaryTarget);
+            }
+
+            if (spellAtEnd) {
+                // an empty string gets no byte order mark
+                if (result.IsEmpty) {
+                    return MutableString.CreateBinary(to);
+                }
+                return MutableString.CreateBinary(to.TranscodingEncoding.GetBytes(result.ConvertToString()), to);
+            }
+
+            return result;
+        }
+
+        private static bool CanTakeWhole(string/*!*/ text, RubyEncoding/*!*/ to, bool binarySide) {
+            var span = text.AsSpan();
+            if (span.IndexOfAnyExceptInRange('\0', '\x7f') < 0) {
+                return to.IsAsciiIdentity || (to.IsUnicodeEncoding && to.CodePage != 65000);
+            }
+            return !binarySide && to.IsUnicodeEncoding && to.CodePage != 65000
+                && span.IndexOfAnyInRange('\uD800', '\uDFFF') < 0;
+        }
+
+        private static void TranscodeByCharacter(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ fallbackStorage,
+            ConversionStorage<MutableString>/*!*/ toStr, string/*!*/ text, MutableString/*!*/ result,
+            Encoding/*!*/ encoder, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, TranscodeSettings settings,
+            bool binarySource, bool binaryTarget) {
+
+            var buffer = new char[2];
             for (int i = 0; i < text.Length; i++) {
                 int charCount = 1;
                 if (Char.IsHighSurrogate(text[i]) && i + 1 < text.Length && Char.IsLowSurrogate(text[i + 1])) {
@@ -2912,16 +2984,6 @@ namespace IronRuby.Builtins {
 
                 result.Append(settings.GetReplacement(to).ConvertToString());
             }
-
-            if (spellAtEnd) {
-                // an empty string gets no byte order mark
-                if (result.IsEmpty) {
-                    return MutableString.CreateBinary(to);
-                }
-                return MutableString.CreateBinary(to.TranscodingEncoding.GetBytes(result.ConvertToString()), to);
-            }
-
-            return result;
         }
 
         /// <summary>
@@ -4272,6 +4334,27 @@ namespace IronRuby.Builtins {
 
 
         #region =~, match
+
+        // String#match? (rb_str_match_m_p): Regexp#match? without a Ruby-level frame in between.
+        // A String pattern is a regexp source; $~ is left alone.
+        [RubyMethod("match?")]
+        public static bool IsMatch(MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ pattern,
+            [DefaultProtocol, DefaultParameterValue(0)]int start) {
+            return RegexpOps.IsMatch(pattern, self, start);
+        }
+
+        [RubyMethod("match?")]
+        public static bool IsMatch(MutableString/*!*/ self, [NotNull]MutableString/*!*/ pattern,
+            [DefaultProtocol, DefaultParameterValue(0)]int start) {
+            return RegexpOps.IsMatch(new RubyRegex(pattern), self, start);
+        }
+
+        [RubyMethod("match?")]
+        public static bool IsMatch(RubyContext/*!*/ context, MutableString/*!*/ self, object pattern,
+            [DefaultProtocol, DefaultParameterValue(0)]int start) {
+            throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Regexp)",
+                pattern == null ? "nil" : context.GetClassDisplayName(pattern));
+        }
 
         [RubyMethod("=~")]
         public static object Match(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
