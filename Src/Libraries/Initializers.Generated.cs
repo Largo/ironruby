@@ -8209,8 +8209,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "__ir_lines__", 0x52, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetLines)
+                0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetLines), 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetLines)
             );
             
             DefineLibraryMethod(module, "__ir_require_unchanged__", 0x52, 

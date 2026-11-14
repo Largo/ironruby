@@ -2423,13 +2423,30 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__ir_lines__", RubyMethodAttributes.PrivateInstance)]
         public static RubyArray/*!*/ GetLines(MutableString/*!*/ self, [NotNull]MutableString/*!*/ separator) {
+            return GetLines(self, separator, false);
+        }
+
+        /// <summary>
+        /// With <paramref name="chompNewline"/> each line loses a trailing "\n" and a "\r" before it,
+        /// as chomp: true does for the default separator (rb_str_enumerate_lines): a "\r" with no
+        /// "\n" after it stays. Only for "\n" in an ASCII-compatible receiver; ruby4.rb checks that.
+        /// </summary>
+        [RubyMethod("__ir_lines__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ GetLines(MutableString/*!*/ self, [NotNull]MutableString/*!*/ separator, bool chompNewline) {
             var result = new RubyArray();
             int length = self.Length;
             int start = 0;
             while (start < length) {
                 int end = self.IndexOf(separator, start);
                 end = (end >= 0) ? end + separator.Length : length;
-                result.Add(self.CreateDerived().Append(self, start, end - start));
+                int stop = end;
+                if (chompNewline && stop > start && self.GetChar(stop - 1) == '\n') {
+                    stop--;
+                    if (stop > start && self.GetChar(stop - 1) == '\r') {
+                        stop--;
+                    }
+                }
+                result.Add(self.CreateDerived().Append(self, start, stop - start));
                 start = end;
             }
             return result;

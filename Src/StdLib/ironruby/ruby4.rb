@@ -6260,6 +6260,9 @@ class String
 
     # paragraph mode chomps as it splits
     return __ir_paragraphs__(__ir_each_line_all__(newline), newline, chomp) if separator.empty?
+    if chomp && separator == "\n" && encoding.ascii_compatible?
+      return __ir_lines__(separator, true)
+    end
     lines = __ir_each_line_all__(separator)
     return lines unless chomp
     lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
