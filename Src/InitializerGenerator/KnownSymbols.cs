@@ -234,10 +234,22 @@ namespace IronRuby.InitializerGenerator {
         /// </summary>
         public StringBuilder FormatTypeName(StringBuilder result, ITypeSymbol type) {
             if (type is INamedTypeSymbol named && named.IsGenericType) {
-                string genericName = DispenseName(named.OriginalDefinition).Replace('+', '.');
-                int tickIndex = genericName.IndexOf('`');
-                result.Append(tickIndex != -1 ? genericName.Substring(0, tickIndex) : genericName);
+                if (named.ContainingType != null && named.ContainingType.IsGenericType) {
+                    // A type nested in a generic one, `Outer<int>.Inner<string>' or `Outer<int>.Inner': the containing
+                    // type with its own arguments, then this one's name. Cut at the first backtick like the rest, it
+                    // came out as `Outer<string>', which is not the parameter's type (the reflection-based
+                    // FormatTypeName this follows did the same; no library signature has such a type).
+                    FormatTypeName(result, named.ContainingType).Append('.').Append(named.Name);
+                } else {
+                    string genericName = DispenseName(named.OriginalDefinition).Replace('+', '.');
+                    int tickIndex = genericName.IndexOf('`');
+                    result.Append(tickIndex != -1 ? genericName.Substring(0, tickIndex) : genericName);
+                }
 
+                // (a type that is generic only through its containing type has no arguments of its own)
+                if (named.TypeArguments.Length == 0) {
+                    return result;
+                }
                 if (named.IsDefinition) {
                     result.Append('<');
                     result.Append(',', named.TypeArguments.Length - 1);

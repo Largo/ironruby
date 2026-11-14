@@ -523,6 +523,13 @@ namespace IronRuby.InitializerGenerator {
                     // we need to refer to the singleton object returned from singelton factory:
                     def.GetReference(_known, ref defVariableId);
                 }
+
+                if (def.Aliases.Count > 0) {
+                    // An alias is a constant set to the module itself (GenerateAliases), so a module with one needs
+                    // its reference even when it is global and nothing else refers to it: without it the generated
+                    // line was `SetConstant(Context.ObjectClass, "Alias", );'.
+                    def.GetReference(_known, ref defVariableId);
+                }
             }
 
             // qualified names, ids:
@@ -592,8 +599,42 @@ namespace IronRuby.InitializerGenerator {
                 }
             }
 
-            // TODO: checks
-            // - loops in copy-inclusion
+            // A module that includes or inherits from itself, directly or through others, has no place in the order the
+            // registrations are written in: ModuleDef.DependencyOrder would recurse until the compiler's stack
+            // overflowed, which no handler catches and no diagnostic reports.
+            var visiting = new Dictionary<ModuleDef, bool>();
+            foreach (ModuleDef def in _moduleDefs.Values) {
+                CheckInclusionCycles(def, visiting);
+            }
+        }
+
+        // visiting: true for a module whose supers and mixins are being walked, false for one that is done
+        private void CheckInclusionCycles(ModuleDef def, Dictionary<ModuleDef, bool> visiting) {
+            if (visiting.ContainsKey(def)) {
+                return;
+            }
+            visiting[def] = true;
+
+            var referred = new List<ModuleDef>();
+            if (def.Super != null && def.Super.Definition != null) {
+                referred.Add(def.Super.Definition);
+            }
+            foreach (MixinRef mixin in def.Mixins) {
+                if (mixin.Module.Definition != null) {
+                    referred.Add(mixin.Module.Definition);
+                }
+            }
+
+            foreach (ModuleDef other in referred) {
+                bool inProgress;
+                if (!visiting.TryGetValue(other, out inProgress)) {
+                    CheckInclusionCycles(other, visiting);
+                } else if (inProgress) {
+                    LogError(def.Trait, "'{0}' includes or inherits from '{1}', which includes or inherits from it",
+                        def.QualifiedName, other.QualifiedName);
+                }
+            }
+            visiting[def] = false;
         }
 
         private void SetQualifiedName(ModuleDef def) {
@@ -604,11 +645,29 @@ namespace IronRuby.InitializerGenerator {
                         KnownSymbols.AppendQualifiedName(new StringBuilder(), def.Extends).ToString();
                 } else if (def.DeclaringModule == null) {
                     def.QualifiedName = def.SimpleName;
+                } else if (DeclaresItself(def)) {
+                    // DefineIn naming the module itself, or two modules naming each other: there is no outermost
+                    // module to start the name from, and following the chain would never end.
+                    LogError(def.Trait, "DefineIn makes '{0}' its own declaring module, directly or through the modules it is declared in",
+                        KnownSymbols.FullName(def.Trait));
+                    def.DeclaringModule = null;
+                    def.QualifiedName = def.SimpleName;
                 } else {
                     SetQualifiedName(def.DeclaringModule);
                     def.QualifiedName = def.DeclaringModule.QualifiedName + "::" + def.SimpleName;
                 }
             }
+        }
+
+        // The chain of declaring modules above def comes back to a module already on it.
+        private static bool DeclaresItself(ModuleDef def) {
+            var seen = new HashSet<ModuleDef> { def };
+            for (ModuleDef outer = def.DeclaringModule; outer != null; outer = outer.DeclaringModule) {
+                if (!seen.Add(outer)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private ModuleDef GetDeclaringModuleDef(ModuleDef def) {

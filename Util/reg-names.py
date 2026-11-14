@@ -5,7 +5,7 @@ line, so two builds can be diffed for silently lost classes/methods.
 The initializers are written by Src/InitializerGenerator during the build; pass
 -p:EmitCompilerGeneratedFiles=true to have the file written under obj/:
 
-    python3 reg-names.py Src/Libraries/obj/Debug/net10.0/generated/IronRuby.InitializerGenerator/IronRuby.InitializerGenerator.LibraryInitializerGenerator/Initializers.Generated.cs > /tmp/before.txt
+    python3 Util/reg-names.py Src/Libraries/obj/Debug/net10.0/generated/IronRuby.InitializerGenerator/IronRuby.InitializerGenerator.LibraryInitializerGenerator/Initializers.Generated.cs > /tmp/before.txt
 """
 import sys, re
 
