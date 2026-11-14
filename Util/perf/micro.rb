@@ -34,6 +34,10 @@ class P
   def rangeeach(n); s = 0.0; (n / 1000).times { (0...1000).each { |i| s += i * 0.5 } }; s; end
   def blkattr(bs, n); (n / 20).times { 20.times { |i| b = bs[i]; b.v -= b.x; b.c += 2 } }; end
   def short4(bs); s = 0.0; bs.each { |b| s += b.v * 0.5 + 0.25 }; s; end
+  def sh_each(a); s = 0; a.each { |x| s += x }; s; end
+  def sh_times(k); s = 0; k.times { |j| s += j }; s; end
+  def sh_map(a); a.map { |x| x + 1 }; end
+  def sh_any(a); a.any? { |x| x > 1000 }; end
 end
 class P2; def initialize(a, b); @a = a; @b = b; end; def foo; 1; end; end
 class P3; def foo; 2; end; end
@@ -78,3 +82,12 @@ t("blkattr")   { |n| o.blkattr(pbs, n) }
 # round nine's: a short run, an Array#each over four with Float arithmetic, called from a while (ns per call)
 pb4 = pbs.first(4)
 t("short4")    { |n| i = 0; while i < n; o.short4(pb4); i += 1; end }
+# short runs of the core iterators at k = 1, 2, 4 (below BlockLoopSite.MinRun the generic yield loop, at or
+# above it the compiled copy): ns per call of the iterator, entry included
+[1, 2, 4].each do |k|
+  ak = Array.new(k) { |j| j + 1 }
+  t("each#{k}")  { |n| i = 0; while i < n; o.sh_each(ak); i += 1; end }
+  t("times#{k}") { |n| i = 0; while i < n; o.sh_times(k); i += 1; end }
+  t("map#{k}")   { |n| i = 0; while i < n; o.sh_map(ak); i += 1; end }
+  t("any#{k}")   { |n| i = 0; while i < n; o.sh_any(ak); i += 1; end }
+end
