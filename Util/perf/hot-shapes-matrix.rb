@@ -739,3 +739,120 @@ p 2000.times.map { |i| bm(i, i+1) }.last
 # caller frames from inside <=>
 class Cf; def <=>(o); $fr = caller(0, 3).map { |l| l[/'.*'/] }; 0; end; end
 k.r(Cf.new, Cf.new); p $fr
+
+# ---- `a != b' bound as a negated builtin `==' (DispatchIntrinsics.TryBuildNotEquals) ----
+# BasicObject#!= calls `==': for nil, true, false, a plain object, two Integers and two Strings
+# the rule compares itself. Hot, with what must undo it in the middle: `==' defined in the
+# class, on one object (def o.==, extend), on one String, in a prepended module of Integer,
+# String#== replaced and restored, `!=' defined, `==' made private and undefined, NilClass#==
+# redefined; receivers of every other kind beside them.
+def not_equals_matrix
+  ne_cls = Class.new { attr_reader :id; def initialize(id) = @id = id }
+  ne_sub = Class.new(String)
+  ne_basic = Class.new(BasicObject)
+  ne_struct = Struct.new(:a)
+  ne_mod = Module.new { def ==(o) = $ne_flag ? :prepended : super }
+  ne_eq = Module.new { def ==(o) = :extended }
+  ne = ->(a, b) { a != b }
+  o1 = ne_cls.new(1); o2 = ne_cls.new(2); o3 = ne_cls.new(3); s1 = +"ab"; s2 = +"ab"; s3 = +"ab"
+  bo = ne_basic.new
+  rows = []
+  6000.times do |i|
+    case i
+    when 600 then def o1.==(o) = true
+    when 1200 then o2.extend(ne_eq)
+    when 1800 then def s1.==(o) = true
+    when 2400 then $ne_flag = true; Integer.prepend(ne_mod)
+    when 2700 then $ne_flag = false
+    when 3000 then String.class_eval { alias_method :ne_saved_eq, :==; def ==(o) = :replaced }
+    when 3300 then String.class_eval { alias_method :==, :ne_saved_eq }
+    when 3600 then ne_cls.class_eval { def ==(o) = o.respond_to?(:id) && id == o.id }
+    when 4200 then ne_cls.class_eval { def !=(o) = :own_ne }
+    when 4500 then ne_cls.class_eval { remove_method :!= }
+    when 4800 then ne_cls.class_eval { private :== }
+    when 5100 then ne_cls.class_eval { undef_method :== }
+    when 5400 then NilClass.class_eval { def ==(o) = :nil_eq }
+    end
+    row = [ne.(nil, nil), ne.(nil, o3), ne.(true, true), ne.(true, false), ne.(false, nil),
+           (ne.(o1, o1) rescue $!.class), (ne.(o2, o3) rescue $!.class), (ne.(o3, o3) rescue $!.class), (ne.(o3, ne_cls.new(3)) rescue $!.class),
+           ne.(1, 1), ne.(1, 2), ne.(1, 1.0), ne.(1, nil), ne.(2**70, 2**70), ne.(1.5, 1.5),
+           ne.(s1, s2), ne.(s2, s3), ne.(s2, +"x"), ne.(s2, ne_sub.new("ab")), ne.(ne_sub.new("ab"), s2), ne.(s2, :ab), ne.("é", "é".b),
+           ne.(:a, :a), ne.(:a, :b), ne.(bo, bo), ne.(bo, nil), ne.(ne_struct.new(1), ne_struct.new(1)), ne.([1], [1]), ne.(1..2, 1..2)]
+    rows << [i, row] if i % 300 == 299
+  end
+  NilClass.class_eval { remove_method :== }
+  rows.each { |r| p r }
+end
+not_equals_matrix
+# ---- one-character slices, every way of taking one x every mutator (hunt of round six) ----
+# One line per source and way of taking the slice: for each mutator, the mutated slice's bytes and
+# encoding, then whether a second slice taken from the same source, a dup of the first and a fresh
+# slice of a new source are all still the untouched character, equal and hashing alike. A slice whose
+# content is shared (MutableString.SharedAsciiContents) must behave as one with a content of its own.
+lambda do
+  srcs = {
+    lit: -> { "hello" }, built: -> { "he" + "llo" }, cat: -> { s = +""; s << "hello"; s },
+    us: -> { "hello".encode("US-ASCII") }, bin: -> { "hello".b }, l1: -> { "hello".encode("ISO-8859-1") },
+    sj: -> { "hello".encode("Shift_JIS") }, ej: -> { "hello".encode("EUC-JP") }, u16: -> { "hello".encode("UTF-16LE") },
+    frz: -> { "hello".dup.freeze }, sub: -> { Class.new(String).new("hello") }, sym: -> { :hello.to_s },
+    interp: -> { x = "ell"; "h#{x}o" }, mb: -> { "héllo" }, broken: -> { "h\xffllo" },
+  }
+  gets = {
+    idx: ->(s) { s[0] }, idx2: ->(s) { s[0, 1] }, rng: ->(s) { s[0..0] }, slb: ->(s) { s.dup.slice!(0) },
+    chr: ->(s) { s.chr }, chars: ->(s) { s.chars[0] }, ec: ->(s) { s.each_char.first },
+    spl: ->(s) { s.split("")[0] }, scn: ->(s) { s.scan(/./)[0] },
+    md: ->(s) { s.match(/./)[0] }, part: ->(s) { s.partition(s[1])[0] }, last: ->(s) { s[-1] },
+  }
+  muts = {
+    push: ->(a) { a << "x" }, pre: ->(a) { a.prepend("z") }, ins: ->(a) { a.insert(0, "q") },
+    rep: ->(a) { a.replace("w") }, aset: ->(a) { a[0] = "Q" }, sb: ->(a) { a.setbyte(0, 65) }, up: ->(a) { a.upcase! },
+    sw: ->(a) { a.swapcase! }, succ: ->(a) { a.succ! }, tr: ->(a) { a.tr!("a-z", "A-Z") }, gsub: ->(a) { a.gsub!(/./, "gg") },
+    chop: ->(a) { a.chop! }, clr: ->(a) { a.clear }, fe: ->(a) { a.force_encoding("UTF-16LE") },
+    fb: ->(a) { a.force_encoding("BINARY") }, enc: ->(a) { a.encode!("UTF-16BE") }, sq: ->(a) { a.squeeze! },
+    frz: ->(a) { a.freeze; (a << "x" rescue $!.class) }, ic: ->(a) { a.send(:initialize_copy, "ic") },
+  }
+  srcs.each do |sn, src|
+    gets.each do |gn, g|
+      row = muts.map do |mn, m|
+        begin
+          s = src.(); a = g.(s); b = g.(s); c = a.dup; d = +b
+          m.(a)
+          f = g.(src.())
+          ok = b.bytes == c.bytes && b == c && b.eql?(d) && b.hash == c.hash && f == b && f.hash == b.hash && !b.frozen?
+          "#{a.bytes.join(",")}/#{a.encoding.name[0, 3]}#{ok ? "" : "!"}"
+        rescue => ex
+          ex.class.name
+        end
+      end
+      puts "1c #{sn} #{gn} #{row.join(" ")}"
+    end
+  end
+end.call
+
+# ---- one-character slices on threads: eight threads take slices of shared and of their own strings,
+# compare, hash and mutate them; two threads read one slice's content for the first time at once; every
+# shared character is still itself afterwards. (Not Range#to_a: Kernel.prepend above leaves nil?
+# answering :prenil, which the prelude's Range#to_a asks.)
+def one_char_slice_threads
+  src = (0..127).map(&:chr).join
+  srcs = 8.times.map { |i| (0..127).map(&:chr).join.encode(i.even? ? "UTF-8" : "US-ASCII") }
+  errs = Queue.new
+  8.times.map do |k|
+    Thread.new do
+      2000.times do |n|
+        i = (n * 7 + k) % 128
+        a = src[i]; b = srcs[k][i]
+        errs << :eq unless a == b && a.eql?(b) && a.hash == b.hash
+        a << "x"
+        errs << :mut unless a.bytes == [i, 120] && b.bytes == [i]
+        errs << :src unless src[i].ord == i
+      end
+    end
+  end.each(&:join)
+  dups = 1000.times.all? do
+    s = "q"[0]
+    4.times.map { |k| Thread.new { k.even? ? s.dup : s.hash.class } }.map(&:value).values_at(0, 2) == ["q", "q"]
+  end
+  p [errs.size, dups, Array.new(128) { |i| (0..127).map(&:chr).join[i].ord } == Array.new(128) { |i| i }]
+end
+one_char_slice_threads

@@ -45,7 +45,7 @@ git -C <tree> diff --stat <base>...HEAD
 set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
   -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
-(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; echo "exit $?"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt)
+(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; code=$?; echo "exit $code"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt; exit $code)
 ```
 
 The run is complete only if it ends as the driver ends it: `PASSED` (exit 0), or the
@@ -127,22 +127,28 @@ Object#==. So for every new case:
 
 ## 3. ruby/spec
 
-CI runs `spec/language`; do the same when `spec/` and `mspec/` are checked out (CLAUDE.md
-gives the pins), on both trees, and compare the summary lines and the failing example names:
+Sweep all five suites on the candidate, when `spec/` and `mspec/` are checked out (CLAUDE.md
+gives the pins), and check the result against the list of known failures:
 
 ```sh
-IR_CONFIG=Release ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
+cd <tree> && IR_CONFIG=Release JOBS=4 Util/ci-sweep.sh /abs/path/out && ruby Util/sweep-check.rb /abs/path/out
 ```
 
-Run mspec from the root of a checkout, one run at a time per directory: `default.mspec`
-there tells mspec which implementation it is on (run from anywhere else, the `fixnum_max`
-helper raises and five examples of core/string and core/array fail on any build), and two
-runs in one directory share `rubyspec_temp`. Compare the names of the failing examples,
-not only the summary lines.
+It takes under ten minutes on four cores (32,000 examples), reruns a crashed or hung job
+file by file and a new failure alone, and fails on a failing example the list does not
+name or a file with no summary line. A subset is not a substitute: the ten faults in
+`Util/perf/LEDGER.md` got past runs of `language` and a hand-picked part of `core`. The
+list is kept by the nightly job, which sweeps the default build; if the Release sweep
+names something new, run that file on the baseline too before believing it. Not while a
+timing run is going, and nothing else heavy while it runs: timing-sensitive examples flip
+under load.
 
-A change in call dispatch, blocks, scopes or core classes has a wide reach: also sweep
-`core` for the classes it touches (`Util/parallel-sweep.sh new base-out`). Not while a
-timing run is going.
+For a single directory run by hand (a comparison with the baseline, say), run mspec from
+the root of a checkout, one run at a time per directory: `default.mspec` there tells mspec
+which implementation it is on (run from anywhere else, the `fixnum_max` helper raises and
+five examples of core/string and core/array fail on any build), and two runs in one
+directory share `rubyspec_temp`. Compare the names of the failing examples, not only the
+summary lines.
 
 ## 4. Nothing got slower
 

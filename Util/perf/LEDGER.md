@@ -280,6 +280,10 @@ Profile (`Util/perf/profile.sh`, self time):
     through a site shared by every `!=` in the runtime, so that site is polymorphic. 2.9%
     of Richards inclusive (`NO_TASK != @current_task`), 2.1-2.6% self in Json and Permute.
     See Rejected (perf/richards) for a correct fast path that was too small to show.
+    #215 has since bound `a != b` as the negated builtin `==` for nil, booleans, plain
+    objects, two Integers and two Strings (05a31f0a, merged into this branch after round
+    nine): the cases this session's perf/neq1 found faster, without the Integer-against-
+    Float one it found slower.
 11. **The method JIT refuses a constant whose value is nil** ("constant without a value":
     it cannot tell nil from an autoload that has not run). Richards' `NO_WORK = nil` and
     `NO_TASK = nil` keep three methods out. See Rejected for why fixing only that is not
@@ -628,7 +632,8 @@ verify with the tiers off; start-up CPU time level (1.25-1.34 s on all four tree
   JIT** (`JitRuntime.IdentityCallSite`). `==` 50 -> 27 ns, `nil?` 43 -> 35, but `str==`
   52 -> 97 (the new screen case gets in the way of the `s == "lit"` intrinsic), AWFY
   1.010, 1.007, 1.000: the benchmarks' hot `==`/`nil?` are on instance variables, which
-  the JIT refuses in method bodies. Worth redoing after gap 1(b), with the str== case fixed.
+  the JIT refused in method bodies at the time. Redone in round four, once it took them
+  (d14eddf), as bf354cf, with `s == "lit"` kept ahead of the new screen case.
 
 - **perf/jcall 7ecff1c2 fec30b9e - calls of other methods from a method-JIT body**
   (round five; new files `Jit/JitCalls.cs`, `Jit/JitCompiler.Calls.cs`). A call goes from
@@ -821,6 +826,14 @@ one area the hunt had called sound:
   without a check; the question to ask of any new direct path into Ruby code.
 
 Ten faults in all after the gate had passed: seven found by review, three by the hunt.
+
+The full five-suite sweep (`Util/ci-sweep.sh`, then `Util/sweep-check.rb`) was run on
+commit 72c29b4c, Release net10.0, four jobs, after all of the above: core 23130 examples,
+library 6011, language 2935, command_line 175, security 34; no failing example that
+`Util/spec-known-failures.txt` does not list, none of its entries newly passing, no file
+without a summary line. It takes under eight minutes on four cores, so it belongs in the
+gate of every round, not only at the end: perf-gate's step 3 now says so. CI (Ubuntu and
+Windows on net11.0, ruby/spec language, the wasm host) passes on the same commit.
 
 ### Caught by the gate (round seven)
 
