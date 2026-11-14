@@ -99,16 +99,21 @@ for calls and blocks), add the case there; otherwise add a registered test in `S
 
 ## 3. ruby/spec
 
-CI runs `spec/language`; do the same when `spec/` and `mspec/` are checked out (CLAUDE.md
-gives the pins), on both trees, and compare the summary lines and the failing example names:
+Sweep all five suites on the candidate, when `spec/` and `mspec/` are checked out (CLAUDE.md
+gives the pins), and check the result against the list of known failures:
 
 ```sh
-IR_CONFIG=Release ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
+cd <tree> && IR_CONFIG=Release JOBS=4 Util/ci-sweep.sh /abs/path/out && ruby Util/sweep-check.rb /abs/path/out
 ```
 
-A change in call dispatch, blocks, scopes or core classes has a wide reach: also sweep
-`core` for the classes it touches (`Util/parallel-sweep.sh new base-out`). Not while a
-timing run is going.
+It takes under ten minutes on four cores (32,000 examples), reruns a crashed or hung job
+file by file and a new failure alone, and fails on a failing example the list does not
+name or a file with no summary line. A subset is not a substitute: the ten faults in
+`Util/perf/LEDGER.md` got past runs of `language` and a hand-picked part of `core`. The
+list is kept by the nightly job, which sweeps the default build; if the Release sweep
+names something new, run that file on the baseline too before believing it. Not while a
+timing run is going, and nothing else heavy while it runs: timing-sensitive examples flip
+under load.
 
 ## 4. Nothing got slower
 

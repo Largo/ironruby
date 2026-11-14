@@ -350,6 +350,14 @@ one area the hunt had called sound:
 
 Ten faults in all after the gate had passed: seven found by review, three by the hunt.
 
+The full five-suite sweep (`Util/ci-sweep.sh`, then `Util/sweep-check.rb`) was run on
+commit 72c29b4c, Release net10.0, four jobs, after all of the above: core 23130 examples,
+library 6011, language 2935, command_line 175, security 34; no failing example that
+`Util/spec-known-failures.txt` does not list, none of its entries newly passing, no file
+without a summary line. It takes under eight minutes on four cores, so it belongs in the
+gate of every round, not only at the end: perf-gate's step 3 now says so. CI (Ubuntu and
+Windows on net11.0, ruby/spec language, the wasm host) passes on the same commit.
+
 Not from this work, found on the way and still open: a self-recursive method with a
 logged Hash store slows down about 1000x past 65,536 levels of recursion (the shared
 `JitUndoLog` fills, the outer entry deopts, and `OnDeopt` never retires it because no
