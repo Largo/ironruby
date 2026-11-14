@@ -1622,6 +1622,19 @@ namespace IronRuby.Runtime.Jit {
                     if (live == null && written) { live = LoopSample(receiverLocal); }
                     string variableName = (live != null)
                         ? JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) : null;
+                    int member = (variableName == null && live is RubyStruct)
+                        ? JitRuntime.StructMemberSite.Member(JitRuntime.ClassOf(_context, live), node.MethodName, true, false) : -1;
+                    if (member >= 0) {
+                        // a Struct member reader: the member's read (JitRuntime.ReadStructMember)
+                        _canDeopt = true;
+                        if (!written) {
+                            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                            _peeked.Add(receiverLocal);
+                        }
+                        type = JT.Obj;
+                        return Ast.Call(JitRuntime.M("ReadStructMember"), written ? (MSA.Expression)bound : peek.Value.Key,
+                            Ast.Constant(new JitRuntime.StructMemberSite(node.MethodName, member, true, false)));
+                    }
                     if (variableName != null) {
                         _canDeopt = true;
                         if (!written) {

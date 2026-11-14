@@ -1586,7 +1586,9 @@ namespace IronRuby.Runtime.Jit {
             if (!TrySample(target, out sample) || !(sample is RubyObject)) { return null; }
             bool explicitReceiver = target != null && !(target is SelfReference);
             string variableName = JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, sample), node.MethodName, explicitReceiver);
-            if (variableName == null) { return null; }
+            if (variableName == null) {
+                return (sample is RubyStruct) ? EmitStructMemberRead(node, sample, explicitReceiver, out type) : null;
+            }
 
             MSA.Expression receiver;
             if (target == null) {
@@ -1620,6 +1622,10 @@ namespace IronRuby.Runtime.Jit {
             if (!TrySample(target, out sample) || !(sample is RubyObject)) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
             bool explicitReceiver = !(target is SelfReference);
             string variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            if (variableName == null && sample is RubyStruct) {
+                int member = JitRuntime.StructMemberSite.Member(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver, true);
+                if (member >= 0) { return EmitStructMemberWrite(node, right, member, explicitReceiver, out type); }
+            }
             if (variableName == null) { throw Bail("attribute assignment " + node.Name + " that is not an attr_writer"); }
 
             JT rt;
@@ -1639,6 +1645,51 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Assign(valueTemp, value),
                 Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
                     Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
+                valueTemp
+            );
+        }
+
+        /// <summary>
+        /// `o.x' where the profiled o is a Struct and x its member reader: the member's read
+        /// (JitRuntime.ReadStructMember), under the class and method-version check. Null: not one.
+        /// </summary>
+        private MSA.Expression EmitStructMemberRead(MethodCall/*!*/ node, object/*!*/ sample, bool explicitReceiver, out JT type) {
+            type = JT.None;
+            if (node.Arguments != null) { return null; }
+            int member = JitRuntime.StructMemberSite.Member(JitRuntime.ClassOf(_context, sample), node.MethodName, explicitReceiver, false);
+            if (member < 0) { return null; }
+            MSA.Expression receiver;
+            if (node.Target == null) {
+                receiver = _self;
+            } else {
+                JT rt;
+                receiver = Coerce(Emit(node.Target, out rt), rt, JT.Obj);
+            }
+            _canDeopt = true;
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("ReadStructMember"), receiver,
+                Ast.Constant(new JitRuntime.StructMemberSite(node.MethodName, member, explicitReceiver, false)));
+        }
+
+        /// <summary>`o.x = v' where the profiled o is a Struct and x= its member writer: as EmitMethodAttrWrite's store.</summary>
+        private MSA.Expression/*!*/ EmitStructMemberWrite(AttributeAccess/*!*/ node, RExpr/*!*/ right, int member, bool explicitReceiver, out JT type) {
+            JT rt;
+            var receiver = Coerce(Emit(node.Qualifier, out rt), rt, JT.Obj);
+            JT valueType;
+            var value = Emit(right, out valueType);
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            var receiverTemp = Ast.Variable(typeof(object), "#receiver");
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _pure = false;
+            _ivarWrite = true;
+            if (explicitReceiver) { _effectNotOnSelf = true; }
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp },
+                Ast.Assign(receiverTemp, receiver),
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("WriteStructMember"), receiverTemp, BoxForStore(valueTemp, valueType),
+                    Ast.Constant(new JitRuntime.StructMemberSite(node.Name, member, explicitReceiver, true))),
                 valueTemp
             );
         }
