@@ -978,6 +978,8 @@ namespace IronRuby.Runtime.Jit {
             internal object SelfSample;
             // The same call's positional arguments (JitCompiler.TrySample).
             internal object[] ArgSamples;
+            // The Ruby classes each positional argument has had, one or two; null for none, more, or another kind.
+            internal RubyClass[][] ArgClasses;
             // An outlined loop's self as it is when the loop turns hot (JitCompiler.NoteLoopSample).
             internal object LoopSelf;
             // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
@@ -1534,10 +1536,10 @@ namespace IronRuby.Runtime.Jit {
             RExpr source;
             // A local assigned more than once, first from another local - `x_tail = x' before a loop that walks
             // a list with `x_tail = x_tail.next' (List#is_shorter_than, CD's tree_minimum): what that local samples
-            // to is as good a profile, and as above an attr read of it checks the class it finds.
-            LocalVariable from;
-            if (!_singleSources.ContainsKey(local.Name) && _firstSources.TryGetValue(local.Name, out source) &&
-                (from = source as LocalVariable) != null && from.Name != local.Name) {
+            // to is as good a profile, and as above an attr read of it checks the class it finds. So is an instance
+            // variable of self, `current = @root' before `current = current.left' (CD's RedBlackTree#find_node).
+            var from = (_firstSources.TryGetValue(local.Name, out source) && !_singleSources.ContainsKey(local.Name)) ? source : null;
+            if (from is LocalVariable && ((LocalVariable)from).Name != local.Name || from is InstanceVariable) {
                 _sampleDepth++;
                 try {
                     return TrySample(from, out sample);
