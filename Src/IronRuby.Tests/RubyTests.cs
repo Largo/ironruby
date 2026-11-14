@@ -1316,6 +1316,7 @@ namespace IronRuby.Tests {
                 Hash_UpdateStringKey1,
                 Hash_EqlHashRehash1,
                 Enumerable_PatternUnusedBlockWarning1,
+                Enumerable_PredicatePattern1,
                 Enumerable_TallyBasicObject1,
                 Enumerable_InjectPrivateOp1,
                 HostingHelpOption1,

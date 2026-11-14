@@ -359,67 +359,8 @@ module Enumerable
   # Enumerator#next walks [...].each_with_index with a cursor while this is the method.
   ::Enumerator.__iter_cursor_method__(self, :each_with_index)
 
-  # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
-  # The built-ins only know the block form, and because they are defined on
-  # Enumerable they shadow rather than extend, so wrap them.
-  unless method_defined?(:__all_without_pattern__?)
-    alias :__all_without_pattern__? :all?
-    alias :__any_without_pattern__? :any?
-    alias :__none_without_pattern__? :none?
-    alias :__one_without_pattern__? :one?
-
-    def __check_pattern_args__(args, block = nil)
-      if args.size > 1
-        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
-      end
-      # The pattern wins and the block is never called, which is worth saying out loud.
-      # MRI names the line that called #all? and friends. The prelude's frames stand in a
-      # backtrace as a C method's do, at their caller's line, and this helper's not at all:
-      # #all? is the first frame above #warn and its caller the second. (uplevel 2 went past
-      # the end of a top-level script's backtrace, and the warning had no location.)
-      if block && !args.empty? && !$VERBOSE.nil?
-        warn "given block not used", uplevel: 1
-      end
-    end
-    private :__check_pattern_args__
-
-    def all?(*args, &block)
-      __check_pattern_args__(args, block)
-      return __all_without_pattern__?(&block) if args.empty?
-      pattern = args[0]
-      each { |*values| return false unless pattern === __enum_item__(values) }
-      true
-    end
-
-    def any?(*args, &block)
-      __check_pattern_args__(args, block)
-      return __any_without_pattern__?(&block) if args.empty?
-      pattern = args[0]
-      each { |*values| return true if pattern === __enum_item__(values) }
-      false
-    end
-
-    def none?(*args, &block)
-      __check_pattern_args__(args, block)
-      return __none_without_pattern__?(&block) if args.empty?
-      pattern = args[0]
-      each { |*values| return false if pattern === __enum_item__(values) }
-      true
-    end
-
-    def one?(*args, &block)
-      __check_pattern_args__(args, block)
-      return __one_without_pattern__?(&block) if args.empty?
-      pattern = args[0]
-      found = false
-      each do |*values|
-        next unless pattern === __enum_item__(values)
-        return false if found
-        found = true
-      end
-      found
-    end
-  end
+  # Ruby 2.5 gave the predicates (#all?, #any?, #none?, #one?) an optional pattern, matched
+  # with #===: Enumerable.cs has an overload for it, so that the block form is not a wrapper's call.
 
   # The method-name form of #inject reports a bad name the way MRI does - by
   # inspecting the object rather than by naming its class - and takes at most
