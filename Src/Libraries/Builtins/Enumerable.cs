@@ -188,6 +188,33 @@ namespace IronRuby.Builtins {
             return TrueForItems(each, predicate, self, true, true);
         }
 
+        // A pattern argument (Ruby 2.5) is rare; the prelude's __<name>_with_pattern__ handles it, so that
+        // the block form is called straight rather than through a Ruby wrapper taking *args and &block.
+        [RubyMethod("all?")]
+        public static object TrueForAll(CallSiteStorage<EachSiteN>/*!*/ patternSite, BlockParam block, object self, object pattern) {
+            return CallWithPattern(patternSite, "__all_with_pattern__", block, self, pattern);
+        }
+
+        [RubyMethod("none?")]
+        public static object TrueForNone(CallSiteStorage<EachSiteN>/*!*/ patternSite, BlockParam block, object self, object pattern) {
+            return CallWithPattern(patternSite, "__none_with_pattern__", block, self, pattern);
+        }
+
+        [RubyMethod("any?")]
+        public static object TrueForAny(CallSiteStorage<EachSiteN>/*!*/ patternSite, BlockParam block, object self, object pattern) {
+            return CallWithPattern(patternSite, "__any_with_pattern__", block, self, pattern);
+        }
+
+        [RubyMethod("one?")]
+        public static object One(CallSiteStorage<EachSiteN>/*!*/ patternSite, BlockParam block, object self, object pattern) {
+            return CallWithPattern(patternSite, "__one_with_pattern__", block, self, pattern);
+        }
+
+        private static object CallWithPattern(CallSiteStorage<EachSiteN>/*!*/ storage, string/*!*/ name, BlockParam block, object self, object pattern) {
+            var site = storage.GetCallSite(name, new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock | RubyCallFlags.HasSplattedArgument));
+            return site.Target(site, self, (block != null) ? block.Proc : null, new object[] { pattern });
+        }
+
         private static object TrueForItems(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool stop, bool positiveResult) {
             // An Array's #all?, #any? and #none? are its own in MRI (rb_ary_all_p etc.): they walk the
             // array and yield each element once rather than going through #each and a block of ours.

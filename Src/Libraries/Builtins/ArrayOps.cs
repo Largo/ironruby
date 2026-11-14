@@ -603,6 +603,60 @@ namespace IronRuby.Builtins {
         }
         #endregion
 
+        #region rotate, rotate!
+
+        // MRI's rb_ary_rotate_m: the elements from count on, then the ones before it, in a new plain Array.
+        [RubyMethod("rotate")]
+        public static RubyArray/*!*/ Rotate(RubyArray/*!*/ self) {
+            return Rotate(self, 1);
+        }
+
+        [RubyMethod("rotate")]
+        public static RubyArray/*!*/ Rotate(RubyArray/*!*/ self, [DefaultProtocol]int count) {
+            int n = self.Count;
+            var result = new RubyArray(n);
+            if (n == 0) {
+                return result;
+            }
+            int k = RotationStart(count, n);
+            result.AddRange(self, k, n - k);
+            result.AddRange(self, 0, k);
+            return result;
+        }
+
+        [RubyMethod("rotate!")]
+        public static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self) {
+            return InPlaceRotate(self, 1);
+        }
+
+        [RubyMethod("rotate!")]
+        public static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self, [DefaultProtocol]int count) {
+            self.RequireNotFrozen();
+            int n = self.Count;
+            if (n == 0) {
+                return self;
+            }
+            int k = RotationStart(count, n);
+            if (k == 0) {
+                return self;
+            }
+            var rotated = new object[n];
+            for (int i = 0; i < n; i++) {
+                rotated[i] = self[(k + i) % n];
+            }
+            for (int i = 0; i < n; i++) {
+                self[i] = rotated[i];
+            }
+            return self;
+        }
+
+        private static int RotationStart(int count, int n) {
+            int k = count % n;
+            return (k < 0) ? k + n : k;
+        }
+
+        #endregion
+
         #region reverse!
 
         [RubyMethod("reverse!")]
