@@ -690,9 +690,10 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>
         /// The store a method ends with when an earlier element store went unlogged (JitCompiler.IsLastStatement):
-        /// this one may not deopt, since the generic body would run the earlier store again. An element of a
-        /// plain Array that is there is replaced; anything else - a Hash, a frozen array, an index that grows the
-        /// array or raises, another receiver - is an ordinary call of []=, which does what Ruby does.
+        /// this one may not deopt, since the generic body would run the earlier store again. Its receiver is an Array
+        /// itself, checked before the first store (ExactArray), while Array#[]= is the public builtin and no refinement
+        /// is active, so a call of []= that sees every method is the call the generic code makes. An element that is
+        /// there is replaced; a frozen array, or an index that grows the array or raises, is that call.
         /// </summary>
         public sealed class StoreSite {
             internal readonly CallSite<Func<CallSite, object, object, object, object>>/*!*/ Fallback;
@@ -701,6 +702,17 @@ namespace IronRuby.Runtime.Jit {
                 Fallback = CallSite<Func<CallSite, object, object, object, object>>.Create(
                     Calls.RubyCallAction.Make(context, "[]=", Calls.RubyCallSignature.Simple(2)));
             }
+        }
+
+        /// <summary>
+        /// The receiver of the store a method ends with, checked before the first unlogged store (JitCompiler.IsEarlyTopStatement):
+        /// an Array itself, not a subclass, or a deopt while nothing has been written. A singleton []= is ruled out as it is for
+        /// IndexStoreInt (JitCompiler.HasPlainInstances).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyArray/*!*/ ExactArray(object value) {
+            if (value != null && value.GetType() == typeof(RubyArray)) { return (RubyArray)value; }
+            throw Deopt();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
