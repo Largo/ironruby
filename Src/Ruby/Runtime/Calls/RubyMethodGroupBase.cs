@@ -405,7 +405,8 @@ namespace IronRuby.Runtime.Calls {
                     }
                     metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
                 } else if (calleeHasBlockParam) {
-                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                    metaBuilder.ControlFlowBuilder = BlockNotKeptAttribute.IsDefinedOn(bindingTarget.Overload.ReflectionInfo)
+                        ? RuleControlFlowBuilderBlockNotKept : RuleControlFlowBuilder;
                 } else if (args.GetMetaBlock().Value == null) {
                     // The block argument was nil when this rule was built (x.count(&b) with b nil), and
                     // that is why an overload without a BlockParam was chosen. The rule must say so:
@@ -620,6 +621,15 @@ namespace IronRuby.Runtime.Calls {
         /// library method calls with block given in bfcVariable (BlockParam).
         /// </summary>
         public static void RuleControlFlowBuilder(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
+            RuleControlFlowBuilder(metaBuilder, args, false);
+        }
+
+        // RuleControlFlowBuilder of a [BlockNotKept] overload, whose literal block may be made again (RubyOps.CreateBfcForBlockNotKept).
+        private static void RuleControlFlowBuilderBlockNotKept(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
+            RuleControlFlowBuilder(metaBuilder, args, true);
+        }
+
+        private static void RuleControlFlowBuilder(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool blockNotKept) {
             if (metaBuilder.Error) {
                 return;
             }
@@ -644,7 +654,7 @@ namespace IronRuby.Runtime.Calls {
             ParameterExpression unwinder;
 
             metaBuilder.Result = Ast.Block(
-                Ast.Assign(bfcVariable, Methods.CreateBfcForLibraryMethod.OpCall(AstUtils.Convert(args.GetBlockExpression(), typeof(Proc)))),
+                Ast.Assign(bfcVariable, (blockNotKept ? Methods.CreateBfcForBlockNotKept : Methods.CreateBfcForLibraryMethod).OpCall(AstUtils.Convert(args.GetBlockExpression(), typeof(Proc)))),
                 AstUtils.Try(
                     Ast.Assign(resultVariable, AstUtils.Convert(metaBuilder.Result, typeof(object)))
                 ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#unwinder"),

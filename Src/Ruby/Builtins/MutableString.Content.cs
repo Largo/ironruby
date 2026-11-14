@@ -93,6 +93,14 @@ namespace IronRuby.Builtins {
             internal bool IsOffsetSlice;
 
             /// <summary>
+            /// Whether this is one of the owner-less contents that every one-character ASCII slice shares
+            /// (MutableString.SharedAsciiContents). It has no owner to ask for an encoding, so no method of it
+            /// is called: a read of MutableString._content gives the string a content of its own first
+            /// (MutableString.UnshareContent). It sits in the padding after IsOffsetSlice.
+            /// </summary>
+            internal bool IsShared;
+
+            /// <summary>
             /// A content of this one's items in an array of their own, from index 0. Only for an
             /// <see cref="IsOffsetSlice"/> content; any other is returned as it is.
             /// </summary>

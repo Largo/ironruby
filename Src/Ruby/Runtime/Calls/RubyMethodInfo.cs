@@ -364,7 +364,8 @@ namespace IronRuby.Runtime.Calls {
                 );
             }
 
-            metaBuilder.Result = AstFactory.CallDelegate(method, boxedArguments);
+            // (a method the JIT stands in front of: what its stub would call, read at each call)
+            metaBuilder.Result = IronRuby.Runtime.Jit.JitStub.CallCurrent(method, boxedArguments) ?? AstFactory.CallDelegate(method, boxedArguments);
         }
 
         /// <summary>

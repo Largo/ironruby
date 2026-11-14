@@ -261,6 +261,30 @@ namespace IronRuby.Runtime.Jit {
                 subject = new CaseSubject(temp, st);
             }
 
+            // in the order they run, for _deoptAfterEffect (as EmitIf)
+            var tests = new MSA.Expression[whens.Length];
+            var thens = new MSA.Expression[whens.Length];
+            var thenTypes = new JT[whens.Length];
+            bool pureAfterArms = true;
+            for (int i = 0; i < whens.Length; i++) {
+                var comparisons = whens[i].Comparisons;
+                if (comparisons.Length == 0) { throw Bail("when without a comparison"); }
+                var parts = new MSA.Expression[comparisons.Length];
+                for (int j = 0; j < comparisons.Length; j++) {
+                    if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
+                    parts[j] = (subject != null) ? EmitWhenTest(comparisons[j], subject) : EmitCondition(comparisons[j]);
+                }
+                MSA.Expression test = null;
+                for (int j = comparisons.Length - 1; j >= 0; j--) {
+                    test = (test == null) ? parts[j] : Ast.OrElse(parts[j], test);
+                }
+                tests[i] = test;
+                bool pureAfterTest = _pure;
+                thens[i] = EmitRegion(whens[i].Statements, out thenTypes[i]);
+                pureAfterArms &= _pure;
+                _pure = pureAfterTest;
+            }
+
             JT resultType;
             MSA.Expression result;
             if (node.ElseStatements != null) {
@@ -269,19 +293,10 @@ namespace IronRuby.Runtime.Jit {
                 result = Ast.Constant(null, typeof(object));
                 resultType = JT.Obj;
             }
+            _pure &= pureAfterArms;
 
             for (int i = whens.Length - 1; i >= 0; i--) {
-                var comparisons = whens[i].Comparisons;
-                if (comparisons.Length == 0) { throw Bail("when without a comparison"); }
-                MSA.Expression test = null;
-                for (int j = comparisons.Length - 1; j >= 0; j--) {
-                    if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
-                    var t = (subject != null) ? EmitWhenTest(comparisons[j], subject) : EmitCondition(comparisons[j]);
-                    test = (test == null) ? t : Ast.OrElse(t, test);
-                }
-                JT thenType;
-                var then = EmitRegion(whens[i].Statements, out thenType);
-                result = Join(test, then, thenType, result, resultType, out resultType);
+                result = Join(tests[i], thens[i], thenTypes[i], result, resultType, out resultType);
             }
             type = resultType;
 
@@ -513,10 +528,161 @@ namespace IronRuby.Runtime.Jit {
                     var str = literal.GetMutableString();
                     str.Freeze();
                     _canDeopt = true;
-                    return Ast.Call(JitRuntime.M("CaseString"), subject.Value, Ast.Constant(str), Ast.Constant(plainFalse));
+                    return Ast.Call(JitRuntime.M("CaseString"), subject.Value, Ast.Constant(str), AsciiLiteral(str), Ast.Constant(plainFalse));
                 default:
                     throw Bail("when of a String on a " + subject.Type);
             }
+        }
+
+        // ---- Class#new ---------------------------------------------------------------------
+        // `def make(x) P.new(x, 0) end': the method JIT took no call but its own operators and
+        // intrinsics, so a factory method ran generically, scope and all, around the call of new.
+        // Calling new runs the class's initialize - Ruby code, which may do anything, including
+        // redefining a method the specialized body relies on - so it is only taken as the very last
+        // thing the method does: everything the body checked at its entry has been used by then.
+        // The initializer's effects are observable, so a body that can deopt is not specialized.
+
+        /// <summary>
+        /// The call `C.new(a, ...)' (C a constant, at most JitRuntime.MaxConstructionArity plain
+        /// arguments, no block) that is the last statement of the method's body, or null.
+        /// </summary>
+        internal static MethodCall TailConstruction(IronRuby.Compiler.Ast.MethodDefinition/*!*/ ast) {
+            var body = ast.Body;
+            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) { return null; }
+            var statements = body.Statements;
+            if (statements == null || statements.Count == 0) { return null; }
+            var call = statements.Last as MethodCall;
+            if (call == null || call.MethodName != "new" || call.Block != null || !(call.Target is ConstantVariable)) { return null; }
+            var args = call.Arguments;
+            if (args != null) {
+                if (args.Expressions.Length > JitRuntime.MaxConstructionArity) { return null; }
+                foreach (var arg in args.Expressions) {
+                    if (arg is SplattedArgument || arg is HashConstructor) { return null; }
+                }
+            }
+            return call;
+        }
+
+        /// <summary>
+        /// `C.new(a, b)': where C's new is Class#new, public, and the construction is the plain one
+        /// (RubyClass.TryGetObjectConstruction: a RubyObject and a Ruby initialize of mandatory
+        /// parameters, or of optional and rest ones the call plan binds), the construction made
+        /// directly (JitRuntime.Construct*).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitConstruction(MethodCall/*!*/ node, out JT type) {
+            var target = (ConstantVariable)node.Target;
+            var cls = ResolveConstant(target) as RubyClass;
+            if (cls == null) { throw Bail("new of a constant that is not a class"); }
+            int argc = (node.Arguments == null) ? 0 : node.Arguments.Expressions.Length;
+
+            // what the call site would call: resolved under the refinements active where the method
+            // was written, and as a site resolves it, so that a change that copies the method
+            // (private_class_method) moves the method version
+            var meta = JitRuntime.ClassOf(_context, cls);
+            var refined = meta.ResolveMethod("new", VisibilityContext.AllVisible, _refinements);
+            MethodResolutionResult resolved;
+            using (_context.ClassHierarchyLocker()) {
+                resolved = meta.ResolveMethodForSiteNoLock("new", VisibilityContext.AllVisible);
+            }
+            var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
+            if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
+                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                throw Bail("new is not Class#new");
+            }
+            var construction = cls.TryGetObjectConstruction(argc);
+            if (construction == null) { throw Bail("new of " + cls.Name + " is not a plain construction"); }
+
+            var callArgs = new List<MSA.Expression>(argc + 2);
+            callArgs.Add(Ast.Constant(new JitRuntime.ConstructionSite(_context, construction, argc)));
+            JT ct;
+            callArgs.Add(Coerce(EmitConstant(target, out ct), ct, JT.Obj));
+            for (int i = 0; i < argc; i++) {
+                JT at;
+                var a = Emit(node.Arguments.Expressions[i], out at);
+                callArgs.Add(BoxForStore(a, at));
+            }
+            _pure = false;
+            _effectNotOnSelf = true;
+            _construction = true;
+            type = JT.Obj;
+            return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
+        }
+
+        /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
+        internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
+            if (node.MethodName != "==" && node.MethodName != "!=") { return false; }
+            var args = node.Arguments;
+            if (node.Block != null || args == null || args.Expressions.Length != 1) { return false; }
+            var arg = args.Expressions[0];
+            return IsPlainStringLiteral(arg) || IsPlainStringLiteral(node.Target) && !(arg is SplattedArgument);
+        }
+
+        /// <summary>`"lit" == v' or `"lit" != v': the receiver, not the argument, is the literal.</summary>
+        internal static bool IsReversedStringLiteralComparison(MethodCall/*!*/ node) {
+            return !IsPlainStringLiteral(node.Arguments.Expressions[0]);
+        }
+
+        private static bool IsPlainStringLiteral(Expression node) {
+            return node is StringLiteral && !(node is SymbolLiteral);
+        }
+
+        /// <summary>
+        /// `v == "lit"': the generic code makes a new String for the literal on every evaluation and
+        /// dispatches == on v. For a v that is a String, String#== (and BasicObject#!=, which calls it)
+        /// being the library methods, that is a comparison of contents with no allocation
+        /// (JitRuntime.StringEqualsLiteral); anything else deopts, so only a pure body may do this.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitStringLiteralComparison(MethodCall/*!*/ node, out JT type) {
+            var stringClass = KindClass(JitRuntime.KindString);
+            bool negated = node.MethodName == "!=";
+            if (!IsPlainLibraryMethod(stringClass, "==") || !IsPublic(stringClass, "==") ||
+                negated && (!IsPlainLibraryMethod(stringClass, "!=") || !IsPublic(stringClass, "!="))) {
+                throw Bail("String#" + node.MethodName + " is not the built-in one");
+            }
+            if (IsReversedStringLiteralComparison(node)) {
+                return EmitReversedStringLiteralComparison(node, negated, out type);
+            }
+            Type observed = ObservedType(node.Target);
+            if (observed != null && observed != MixedTypes && observed != typeof(MutableString)) {
+                throw Bail(node.MethodName + " of a String literal on a " + ((observed == typeof(void)) ? "nil" : observed.Name));
+            }
+            JT vt;
+            var v = Emit(node.Target, out vt);
+            if (vt != JT.Obj) { throw Bail(node.MethodName + " of a String literal on a " + vt); }
+
+            var str = ((StringLiteral)node.Arguments.Expressions[0]).GetMutableString();
+            str.Freeze();
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("StringEqualsLiteral"), v, Ast.Constant(str), AsciiLiteral(str));
+            return negated ? Ast.Not(test) : test;
+        }
+
+        /// <summary>
+        /// `"lit" == v', `"lit" != v' (Json's `' ' == @current'): String#== of the literal, a fresh String
+        /// nothing else can see (so no singleton == of its own), is String#=== - the contents of a String
+        /// v, false for a v that does not respond to to_str - which JitRuntime.CaseString computes as it
+        /// does for `when "lit"'. A v it cannot answer for deopts; the generic code makes the literal then.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitReversedStringLiteralComparison(MethodCall/*!*/ node, bool negated, out JT type) {
+            JT vt;
+            var v = Emit(node.Arguments.Expressions[0], out vt);
+            if (vt != JT.Obj) { throw Bail(node.MethodName + " of a String literal with a " + vt); }
+            bool plainFalse = NoToStr(KindClass(JitRuntime.KindNil)) && NoToStr(KindClass(JitRuntime.KindTrue))
+                && NoToStr(KindClass(JitRuntime.KindFalse)) && NoToStr(KindClass(JitRuntime.KindFixnum))
+                && NoToStr(KindClass(JitRuntime.KindFloat)) && NoToStr(KindClass(JitRuntime.KindSymbol));
+            var str = ((StringLiteral)node.Target).GetMutableString();
+            str.Freeze();
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("CaseString"), v, Ast.Constant(str), AsciiLiteral(str), Ast.Constant(plainFalse));
+            return negated ? Ast.Not(test) : test;
+        }
+
+        /// <summary>A String literal's characters for MutableString.EqualsAsciiLiteral, or null if it is not ASCII in an ASCII-compatible encoding.</summary>
+        private static MSA.Expression/*!*/ AsciiLiteral(MutableString/*!*/ literal) {
+            string ascii = (literal.Encoding.IsAsciiIdentity && literal.IsAscii()) ? literal.ToString() : null;
+            return Ast.Constant(ascii, typeof(string));
         }
 
         /// <summary>Instances of cls answer respond_to?(:to_str) false without calling Ruby code.</summary>
@@ -601,6 +767,106 @@ namespace IronRuby.Runtime.Jit {
                 e = Ast.Convert(e, v.Type);
             }
             return Ast.AndAlso(Ast.LessThanOrEqual(b, v), exclusive ? Ast.LessThan(v, e) : Ast.LessThanOrEqual(v, e));
+        }
+
+        // ---- samples of the objects a loop loads into its locals ------------------------------
+
+        // By Key: an element of the Array a local of an outlined loop is assigned from (NoteLoopSample).
+        private Dictionary<string, object> _loopSamples;
+
+        /// <summary>
+        /// `b = a[j]' or `b = @a[j]' in an outlined loop, a an Array whose elements, sampled, are all
+        /// objects of one class: one of them is what b holds, as a profile. A block's own local is fresh
+        /// on every call, so its tuple slot says nothing when the loop is compiled, and an attr read of b
+        /// (EmitCall) needs to know what reader it is. Only a profile: ReadSelfAttr checks the class of
+        /// every receiver it reads from and deopts on another.
+        /// </summary>
+        private void NoteLoopSample(LocalVariable/*!*/ target, RExpr/*!*/ right) {
+            if (_loop == null || _peekLocal == null) { return; }
+            var read = right as MethodCall;
+            if (read == null || read.MethodName != "[]" || read.Block != null || read.Arguments == null ||
+                read.Arguments.Expressions.Length != 1) { return; }
+            RubyArray array = null;
+            var local = read.Target as LocalVariable;
+            var ivar = read.Target as InstanceVariable;
+            if (local != null) {
+                var peek = _peekLocal(local);
+                array = peek.HasValue ? peek.Value.Value as RubyArray : null;
+            } else if (ivar != null && _hints != null && _hints.LoopSelf != null) {
+                object value;
+                if (_context.TryGetInstanceVariable(_hints.LoopSelf, ivar.Name, out value)) { array = value as RubyArray; }
+            }
+            if (array == null || array.Count == 0) { return; }
+            const int Samples = 16;
+            int step = Math.Max(1, array.Count / Samples);
+            object first = array[0];
+            if (!(first is RubyObject)) { return; }
+            RubyClass cls = ((RubyObject)first).ImmediateClass;
+            for (int i = step; i < array.Count; i += step) {
+                var element = array[i] as RubyObject;
+                if (element == null || element.ImmediateClass != cls) { return; }
+            }
+            if (_loopSamples == null) { _loopSamples = new Dictionary<string, object>(); }
+            _loopSamples[Key(target)] = first;
+        }
+
+        /// <summary>
+        /// Attribute reads and writes may go through a local the loop assigns: only in a core iterator's
+        /// loop, whose entry allocates nothing (BlockLoopSite.Run reuses its arguments; ReceiverHints.LongRuns).
+        /// </summary>
+        private bool WritesReceivers {
+            get { return _hints != null && _hints.LongRuns; }
+        }
+
+        private object LoopSample(LocalVariable/*!*/ local) {
+            object sample;
+            return (_loopSamples != null && _loopSamples.TryGetValue(Key(local), out sample)) ? sample : null;
+        }
+
+        // ---- Math.sqrt ----------------------------------------------------------------------
+
+        /// <summary>`Math.sqrt(x)' or `::Math.sqrt(x)', x no splat: the shape EmitMathSqrt takes.</summary>
+        internal static bool IsMathSqrt(MethodCall/*!*/ node) {
+            var constant = node.Target as ConstantVariable;
+            return node.MethodName == "sqrt" && node.Block == null && constant != null && constant.Name == "Math" && constant.Qualifier == null &&
+                node.Arguments != null && node.Arguments.Expressions.Length == 1 && !(node.Arguments.Expressions[0] is SplattedArgument);
+        }
+
+        /// <summary>
+        /// `Math.sqrt(x)' on an Integer or a Float: the square root, with no call. Only while the
+        /// constant resolves to a module whose public singleton `sqrt' is RubyMath.Sqrt, the library
+        /// method, under the refinements active here: the constant is folded under the constant version
+        /// guard and the method checked now and kept by the global method version guard, as the
+        /// operators are (RequireBuiltin). An object argument is speculated to be a number, and a
+        /// negative one deopts (JitRuntime.MathSqrt), so the generic call raises what it raises.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitMathSqrt(MethodCall/*!*/ node, out JT type) {
+            var math = ResolveConstant((ConstantVariable)node.Target) as RubyModule;
+            if (math == null) { throw Bail("Math is not a module"); }
+            RubyClass singleton = math.GetOrCreateSingletonClass();
+            if (!IsPublicBuiltin(singleton, "sqrt")) { throw Bail("Math.sqrt is not the built-in one"); }
+            var resolved = singleton.ResolveMethod("sqrt", VisibilityContext.AllVisible, _refinements);
+            foreach (var member in ((RubyLibraryMethodInfo)resolved.Info).GetMembers()) {
+                if (member.DeclaringType == null || member.DeclaringType.FullName != "IronRuby.Builtins.RubyMath") {
+                    throw Bail("Math.sqrt is not the built-in one");
+                }
+            }
+
+            RExpr argument = node.Arguments.Expressions[0];
+            JT at;
+            var a = Emit(argument, out at);
+            a = NumericIVar(argument, a, ref at);
+            if (at == JT.Obj) {
+                RequireNumericObservation(argument, "sqrt");
+                a = Ast.Call(JitRuntime.M("SpeculateDouble"), a);
+            } else if (IsNumeric(at)) {
+                a = Coerce(a, at, JT.Dbl);
+            } else {
+                throw Bail("Math.sqrt of a " + at);
+            }
+            _canDeopt = true;
+            type = JT.Dbl;
+            return Ast.Call(JitRuntime.M("MathSqrt"), a);
         }
 
         // ---- numbers out of objects ---------------------------------------------------------
@@ -705,6 +971,19 @@ namespace IronRuby.Runtime.Jit {
         internal sealed class ReceiverHints {
             internal Type[] Parameters;
             internal Type Self;
+            // Set by the compiler: a call it could have inlined is of a method still being profiled (JitStub.InlinableBody).
+            internal bool CalleeNotReady;
+            // A method's receiver when it turned hot, whose instance variables are a type profile
+            // (JitCompiler.NumericIVar); null for a loop, which has its live self at hand anyway.
+            internal object SelfSample;
+            // The same call's positional arguments (JitCompiler.TrySample).
+            internal object[] ArgSamples;
+            // The Ruby classes each positional argument has had, one or two; null for none, more, or another kind.
+            internal RubyClass[][] ArgClasses;
+            // An outlined loop's self as it is when the loop turns hot (JitCompiler.NoteLoopSample).
+            internal object LoopSelf;
+            // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
+            internal bool LongRuns;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
@@ -721,6 +1000,14 @@ namespace IronRuby.Runtime.Jit {
         private Type ObservedType(RExpr/*!*/ receiver) {
             if (receiver is SelfReference) {
                 return (_hints != null) ? _hints.Self : null;
+            }
+            var ivar = receiver as InstanceVariable;
+            if (ivar != null) {
+                // what the receiver that turned the method hot holds there: a profile, not a promise
+                object sample = (_hints != null) ? _hints.SelfSample : null;
+                object value;
+                if (sample == null || !_context.TryGetInstanceVariable(sample, ivar.Name, out value)) { return null; }
+                return (value == null) ? typeof(void) : value.GetType();
             }
             var local = receiver as LocalVariable;
             if (local == null) { return null; }
@@ -840,6 +1127,15 @@ namespace IronRuby.Runtime.Jit {
         /// `x.size', `x.length', `x.empty?' on an exact Array or Hash.
         /// </summary>
         private MSA.Expression/*!*/ EmitHashQuery(MethodCall/*!*/ node, out JT type) {
+            var query = EmitHashQueryOperands(node, out type);
+            // The helper checks its receiver and its key, and deopts, after the arguments have been evaluated:
+            // `h.fetch(k, @n += 1)' has written @n by then. Said again here, the deopt is seen to follow whatever
+            // effect an argument had (_deoptAfterEffect), and such a body is declined.
+            _canDeopt = true;
+            return query;
+        }
+
+        private MSA.Expression/*!*/ EmitHashQueryOperands(MethodCall/*!*/ node, out JT type) {
             var args = (node.Arguments != null) ? node.Arguments.Expressions : new RExpr[0];
             foreach (var arg in args) {
                 if (arg is SplattedArgument) { throw Bail(node.MethodName + " with a splat"); }
@@ -904,7 +1200,95 @@ namespace IronRuby.Runtime.Jit {
         /// is the value stored. An element read as an operand of op is speculated to be an Integer, or
         /// next to a Float an Integer or a Float.
         /// </summary>
-        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, out JT type) {
+        // ---- the store a method ends with -------------------------------------------------
+        // An element store is logged so that a deopt after it can take it back before the generic
+        // body runs the method again; each helper deopts only before it stores. The store that is the
+        // method body's last statement has nothing after it that could deopt, so it needs no log - and
+        // a method whose only store it is needs none at all, which saves its entry taking the thread's
+        // log and marking and releasing it on every call. Not in a loop, whose iteration is re-run, nor
+        // in a body that calls itself (see TryCompile), which a deopt of the caller re-runs.
+
+        private bool _noUnloggedWrites;
+        private bool _unloggedWrite;
+
+        // ---- stores before the last one ------------------------------------------------------
+        // `t = a[i]; a[i] = a[j]; a[j] = t': the first store is logged only so that the second one's deopt
+        // could take it back. A top-level store of a method body with no loop goes unlogged instead when
+        // nothing emitted after it can deopt, and the store the body ends with then never deopts: what it
+        // cannot do itself it hands to an ordinary call of []= (JitRuntime.IndexStoreIntOrCall). Anything
+        // after it that may deopt compiles the method again with the store logged (TryCompile).
+
+        private bool _noUnloggedEarlyWrites;
+        // An unlogged store has been emitted that is not the body's last statement.
+        private bool _unloggedStoreBefore;
+        private bool _deoptAfterUnloggedStore;
+
+        private bool IsEarlyTopStatement(RExpr/*!*/ node) {
+            if (_loop != null || _ast == null || _noUnloggedWrites || _noUnloggedEarlyWrites || !_refinements.IsEmpty) { return false; }
+            var statements = _ast.Body.Statements;
+            if (statements == null || statements.Count == 0 || statements.Last == node) { return false; }
+            var receiver = LastStoreReceiver();
+            if (receiver == null) { return false; }
+            // From this store to the last one, nothing may run Ruby code (which could assign the last store's
+            // receiver) or assign the receiver itself: its value read here is then the value the last store meets.
+            bool found = false;
+            foreach (var statement in statements) {
+                if (statement == node) { found = true; }
+                if (found && !IsPureForLastStore(statement, receiver)) { return false; }
+            }
+            return found;
+        }
+
+        // The receiver of the store the body ends with - `@v[j] = x' or `a[j] = x', a an untyped local - or null.
+        private RExpr LastStoreReceiver() {
+            var assign = _ast.Body.Statements.Last as SimpleAssignmentExpression;
+            var element = (assign != null && assign.Operation == null) ? assign.Left as ArrayItemAccess : null;
+            if (element == null || element.Block != null || element.Arguments.Expressions.Length != 1 ||
+                element.Arguments.Expressions[0] is SplattedArgument) {
+                return null;
+            }
+            return (element.Array is InstanceVariable || element.Array is LocalVariable) ? element.Array : null;
+        }
+
+        // Locals, instance variables, literals, element reads (`x[i]') and stores and local assignments made of them:
+        // the element helpers either do their work without calling Ruby or deopt.
+        private static bool IsPureForLastStore(RExpr node, RExpr/*!*/ receiver) {
+            if (node is LocalVariable || node is InstanceVariable || node is Literal) { return true; }
+            var element = node as ArrayItemAccess;
+            if (element != null) {
+                var args = element.Arguments.Expressions;
+                return element.Block == null && args.Length == 1 && !(args[0] is SplattedArgument)
+                    && IsPureForLastStore(element.Array, receiver) && IsPureForLastStore(args[0], receiver);
+            }
+            var call = node as MethodCall;
+            if (call != null) {
+                // `x[i]': EmitIndexRead's helper, or a builtin's on numbers
+                var args = (call.Arguments != null) ? call.Arguments.Expressions : null;
+                return call.MethodName == "[]" && call.Target != null && call.Block == null && args != null && args.Length == 1
+                    && !(args[0] is SplattedArgument) && IsPureForLastStore(call.Target, receiver) && IsPureForLastStore(args[0], receiver);
+            }
+            var assign = node as SimpleAssignmentExpression;
+            if (assign != null && assign.Operation == null) {
+                var local = assign.Left as LocalVariable;
+                if (local != null) {
+                    var receiverLocal = receiver as LocalVariable;
+                    return (receiverLocal == null || receiverLocal.Name != local.Name) && IsPureForLastStore(assign.Right, receiver);
+                }
+                return assign.Left is ArrayItemAccess && IsPureForLastStore(assign.Left, receiver) && IsPureForLastStore(assign.Right, receiver);
+            }
+            return false;
+        }
+
+        // The last store's receiver, read and checked to be a plain Array before the first unlogged store.
+        private MSA.ParameterExpression _lastStoreArray;
+
+        private bool IsLastStatement(RExpr/*!*/ node) {
+            if (_loop != null || _ast == null || _noUnloggedWrites) { return false; }
+            var statements = _ast.Body.Statements;
+            return statements != null && statements.Count > 0 && statements.Last == node;
+        }
+
+        private MSA.Expression/*!*/ EmitIndexWrite(ArrayItemAccess/*!*/ element, string op, RExpr/*!*/ right, bool last, bool early, out JT type) {
             var args = element.Arguments.Expressions;
             if (element.Block != null || args.Length != 1 || args[0] is SplattedArgument) { throw Bail("[]= with " + args.Length + " arguments"); }
             if (op != null && !JitScreen.IsBinaryOperator(op)) { throw Bail("[] " + op + "="); }
@@ -958,20 +1342,62 @@ namespace IronRuby.Runtime.Jit {
             }
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("[]= of a value that jumps away"); }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            if (last && _unloggedStoreBefore && _lastStoreArray != null && arrays && op == null && indexType != JT.Lng) {
+                // after an unlogged store: no deopt (see IsEarlyTopStatement)
+                type = valueType;
+                var site = Ast.Constant(new JitRuntime.StoreSite(_context));
+                var call = (indexType == JT.Obj)
+                    ? Ast.Call(JitRuntime.M("IndexStoreObjOrCall"), site, recvTemp, indexTemp, BoxForStore(valueTemp, valueType), Ast.Constant(arrays))
+                    : Ast.Call(JitRuntime.M("IndexStoreIntOrCall"), site, recvTemp, indexTemp, BoxForStore(valueTemp, valueType), Ast.Constant(arrays));
+                return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
+                    Ast.Assign(recvTemp, _lastStoreArray),
+                    Ast.Assign(indexTemp, index),
+                    Ast.Assign(valueTemp, value),
+                    call,
+                    valueTemp
+                );
+            }
             _canDeopt = true;
-            _hashWrite = true;
-            if (_undoLog == null) {
-                // in loop mode the entry sets both up; in a method the body reads the log on entry
-                _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
-                _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+            early &= !last && op == null;
+            MSA.Expression hoist = null;
+            if (early && _lastStoreArray == null) {
+                // The last store's receiver, read now, before anything is written: a plain Array while Array#[]= is
+                // the public builtin, or a deopt here. The last store then stores into it, and what its fast path
+                // cannot do is a call of []= no scope could see differently (JitRuntime.IndexStoreIntOrCall).
+                bool lastArrays, lastHashes;
+                RequireElementMethod("[]=", null, out lastArrays, out lastHashes);
+                JT lastRecvType = JT.None;
+                var lastRecv = lastArrays ? Emit(LastStoreReceiver(), out lastRecvType) : null;
+                if (lastRecv == null || lastRecvType != JT.Obj) {
+                    early = false;
+                } else {
+                    _lastStoreArray = Ast.Variable(typeof(RubyArray), "#last-array");
+                    _declared[0].Add(_lastStoreArray);
+                    hoist = Ast.Assign(_lastStoreArray, Ast.Call(JitRuntime.M("ExactArray"), lastRecv));
+                }
+            }
+            MSA.Expression log;
+            if (last || early) {
+                _unloggedWrite = true;
+                log = Ast.Constant(null, typeof(JitUndoLog));
+                if (early) { _unloggedStoreBefore = true; }
+            } else {
+                _hashWrite = true;
+                if (_undoLog == null) {
+                    // in loop mode the entry sets both up; in a method the body reads the log on entry
+                    _undoLog = Ast.Variable(typeof(JitUndoLog), "#undo");
+                    _undoMark = Ast.Variable(typeof(int), "#undo-mark");
+                }
+                log = _undoLog;
             }
             type = valueType;
             var store = (indexType == JT.Obj)
                 ? Ast.Call(JitRuntime.M("IndexStoreObj"), Ast.Constant(_context), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(arrays), Ast.Constant(hashes), _undoLog)
+                    Ast.Constant(arrays), Ast.Constant(hashes), log)
                 : Ast.Call(JitRuntime.M("IndexStore" + suffix), recvTemp, indexTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(arrays), Ast.Constant(hashes), _undoLog);
+                    Ast.Constant(arrays), Ast.Constant(hashes), log);
             return Ast.Block(ClrType(valueType), new[] { recvTemp, indexTemp, valueTemp },
+                hoist ?? (MSA.Expression)Ast.Empty(),
                 Ast.Assign(recvTemp, recv),
                 Ast.Assign(indexTemp, index),
                 Ast.Assign(valueTemp, value),
@@ -988,6 +1414,7 @@ namespace IronRuby.Runtime.Jit {
         /// adding the variable or raising deopts before it is made. The value is v.
         /// </summary>
         private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+            if (_loop == null) { return EmitMethodAttrWrite(node, op, right, out type); }
             var receiverLocal = node.Qualifier as LocalVariable;
             if (op != null || node.IsSafeNavigation || receiverLocal == null) {
                 throw Bail("attribute assignment " + node.Name);
@@ -999,20 +1426,29 @@ namespace IronRuby.Runtime.Jit {
             if (_loop == null || _peekLocal == null || !_refinements.IsEmpty) {
                 throw Bail("attribute assignment " + name);
             }
+            // A local the loop writes (`b = bodies[j]; b.x = v') is stored through from its object slot,
+            // the sample of what it holds taken as for a read of it (EmitCall); WriteSelfAttr checks the
+            // class of every receiver anyway.
             MSA.ParameterExpression bound;
             JT boundType;
-            if (TryLookup(Key(receiverLocal), out bound, out boundType)) { throw Bail("attribute assignment to a typed local"); }
+            bool written = TryLookup(Key(receiverLocal), out bound, out boundType);
+            if (written && (boundType != JT.Obj || !WritesReceivers)) { throw Bail("attribute assignment to a typed local"); }
             var peek = _peekLocal(receiverLocal);
             object live = peek.HasValue ? peek.Value.Value : null;
+            if (live == null && written) { live = LoopSample(receiverLocal); }
             string variableName = (live is RubyObject)
                 ? JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, live), name, true) : null;
             if (variableName == null) { throw Bail("attribute assignment " + name + " that is not an attr_writer"); }
 
+            // the receiver as it is before the value is evaluated, which may assign the local
+            var receiver = Ast.Variable(typeof(object), "#receiver");
             JT valueType;
             var value = Emit(right, out valueType);
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
-            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
-            _peeked.Add(receiverLocal);
+            if (!written) {
+                if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                _peeked.Add(receiverLocal);
+            }
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
             _canDeopt = true;
             _hashWrite = true;
@@ -1021,10 +1457,216 @@ namespace IronRuby.Runtime.Jit {
                 _undoMark = Ast.Variable(typeof(int), "#undo-mark");
             }
             type = valueType;
-            return Ast.Block(ClrType(valueType), new[] { valueTemp },
+            return Ast.Block(ClrType(valueType), new[] { receiver, valueTemp },
+                Ast.Assign(receiver, Ast.Convert(written ? (MSA.Expression)bound : peek.Value.Key, typeof(object))),
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteSelfAttr"), peek.Value.Key, BoxForStore(valueTemp, valueType),
+                Ast.Call(JitRuntime.M("WriteSelfAttr"), receiver, BoxForStore(valueTemp, valueType),
                     Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
+                valueTemp
+            );
+        }
+
+        /// <summary>
+        /// `o.x op= v' in an outlined loop, o a local: `o.x = o.x op v', the read (EmitCall's attr read),
+        /// the operator and the store (EmitAttributeWrite) in the order the generic code makes the calls.
+        /// The store logs what it replaces, so a deopt after it still restarts the iteration cleanly.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitMemberOpAssign(MemberAssignmentExpression/*!*/ node, out JT type) {
+            var receiverLocal = node.LeftTarget as LocalVariable;
+            string op = node.Operation;
+            if (receiverLocal == null || op == "&&" || op == "||" || !JitScreen.IsBinaryOperator(op)) {
+                throw Bail("attribute op-assign " + node.MemberName);
+            }
+            var location = node.Location;
+            var value = new MethodCall(new MethodCall(receiverLocal, node.MemberName, null, location), op, new Arguments(node.Right), location);
+            return EmitAttributeWrite(receiverLocal, node.MemberName + "=", value, out type);
+        }
+
+        // ---- attr_reader / attr_writer calls in a method --------------------------------------
+
+        /// <summary>
+        /// What a receiver held in the call that turned the method hot: self, one of self's instance
+        /// variables, or a parameter (ReceiverHints). A profile only: the code checks what it relies on.
+        /// </summary>
+        private bool TrySample(RExpr receiver, out object sample) {
+            sample = null;
+            if (_hints == null) { return false; }
+            if (receiver == null || receiver is SelfReference) {
+                sample = _hints.SelfSample;
+                return sample != null;
+            }
+            var ivar = receiver as InstanceVariable;
+            if (ivar != null) {
+                return _hints.SelfSample != null && _context.TryGetInstanceVariable(_hints.SelfSample, ivar.Name, out sample);
+            }
+            var local = receiver as LocalVariable;
+            if (local != null && _hints.ArgSamples != null && local.DefinitionLexicalDepth == _scopeDepth) {
+                int i = Array.IndexOf(_paramNames, local.Name);
+                if (i >= 0 && i < _hints.ArgSamples.Length) {
+                    // (a parameter the body assigns is not the argument where it is read: the read checks anyway)
+                    sample = _hints.ArgSamples[i];
+                    return true;
+                }
+                if (i < 0) { return TrySampleOfLocal(local, out sample); }
+            }
+            return false;
+        }
+
+        // The right sides of the method's locals that are assigned exactly once (`init = motion.pos_one'), by name,
+        // and of the first assignment of those assigned more than once (SingleSourceWalker.FirstSources).
+        private Dictionary<string, RExpr> _singleSources, _firstSources;
+        private int _sampleDepth;
+
+        /// <summary>
+        /// A local the method assigns once, from `p.a' (p something TrySample samples, a a public
+        /// attr_reader there), holds what the sampled p's instance variable holds now. A profile, like the
+        /// rest of TrySample: an attr read of the local checks the receiver's class and deopts on anything
+        /// else, and its value is typed through a guard, so a wrong sample is only a deopt. This is what lets
+        /// `init = motion.pos_one; fin.x - init.x' read init.x as a Float.
+        /// </summary>
+        private bool TrySampleOfLocal(LocalVariable/*!*/ local, out object sample) {
+            sample = null;
+            if (_ast == null || _ast.Body == null || _sampleDepth > 4) { return false; }
+            if (_singleSources == null) {
+                var walker = new SingleSourceWalker();
+                walker.Walk(_ast.Body);
+                _singleSources = walker.Sources();
+                _firstSources = walker.FirstSources();
+            }
+            RExpr source;
+            // A local assigned more than once, first from another local - `x_tail = x' before a loop that walks
+            // a list with `x_tail = x_tail.next' (List#is_shorter_than, CD's tree_minimum): what that local samples
+            // to is as good a profile, and as above an attr read of it checks the class it finds. So is an instance
+            // variable of self, `current = @root' before `current = current.left' (CD's RedBlackTree#find_node).
+            var from = (_firstSources.TryGetValue(local.Name, out source) && !_singleSources.ContainsKey(local.Name)) ? source : null;
+            if (from is LocalVariable && ((LocalVariable)from).Name != local.Name || from is InstanceVariable) {
+                _sampleDepth++;
+                try {
+                    return TrySample(from, out sample);
+                } finally {
+                    _sampleDepth--;
+                }
+            }
+            var call = _singleSources.TryGetValue(local.Name, out source) ? source as MethodCall : null;
+            if (call == null || call.Block != null || call.Target == null || call.Arguments != null && !call.Arguments.IsEmpty) { return false; }
+            object owner;
+            _sampleDepth++;
+            try {
+                if (!TrySample(call.Target, out owner) || !(owner is RubyObject)) { return false; }
+            } finally {
+                _sampleDepth--;
+            }
+            string variableName = JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, owner), call.MethodName, true);
+            return variableName != null && _context.TryGetInstanceVariable(owner, variableName, out sample);
+        }
+
+        /// <summary>
+        /// Collects the locals assigned once by a plain `x = v', with v. One assigned some other way as well
+        /// (a parallel assignment, a rescue) may be listed: the sample is only a profile (TrySampleOfLocal).
+        /// </summary>
+        private sealed class SingleSourceWalker : Walker {
+            private readonly Dictionary<string, RExpr>/*!*/ _sources = new Dictionary<string, RExpr>();
+            private readonly HashSet<string>/*!*/ _many = new HashSet<string>();
+
+            private readonly Dictionary<string, RExpr>/*!*/ _first = new Dictionary<string, RExpr>();
+
+            internal Dictionary<string, RExpr>/*!*/ Sources() {
+                foreach (var name in _many) {
+                    RExpr first;
+                    if (_sources.TryGetValue(name, out first)) { _first[name] = first; _sources.Remove(name); }
+                }
+                return _sources;
+            }
+
+            // the right side of the first plain `x = v' of each local assigned more than once, if the first
+            // assignment is one (after Sources)
+            internal Dictionary<string, RExpr>/*!*/ FirstSources() {
+                return _first;
+            }
+
+            public override bool Enter(SimpleAssignmentExpression/*!*/ node) {
+                var target = node.Left as LocalVariable;
+                if (target != null) {
+                    if (node.Operation != null || _sources.ContainsKey(target.Name)) {
+                        _many.Add(target.Name);
+                    } else {
+                        _sources[target.Name] = node.Right;
+                    }
+                }
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// `x', `self.x', `@o.x', `o.x' (o a parameter) in a method, where the profiled receiver's x is an
+        /// attr_reader (or a method that is one): the instance variable read the reader does
+        /// (JitRuntime.ReadSelfAttr), which checks the receiver's class and the global method version
+        /// on every read and deopts when either has moved - a redefinition, a singleton method, a
+        /// receiver of another class. A call with an explicit receiver can only reach a public reader.
+        /// A refinement active here could be what the call reaches, so none may be. The value is typed
+        /// by what the profiled receiver holds, through a guard (as NumericIVar). Null: not such a read.
+        /// </summary>
+        private MSA.Expression EmitMethodAttrRead(MethodCall/*!*/ node, out JT type) {
+            type = JT.None;
+            if (node.Block != null || !_refinements.IsEmpty) { return null; }
+            var target = node.Target;
+            object sample;
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) { return null; }
+            bool explicitReceiver = target != null && !(target is SelfReference);
+            string variableName = JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, sample), node.MethodName, explicitReceiver);
+            if (variableName == null) { return null; }
+
+            MSA.Expression receiver;
+            if (target == null) {
+                receiver = _self;
+            } else {
+                JT rt;
+                receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
+            }
+            _canDeopt = true;
+            MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), receiver,
+                Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, explicitReceiver)));
+            object value;
+            _context.TryGetInstanceVariable(sample, variableName, out value);
+            string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
+            if (guard == null) { type = JT.Obj; return read; }
+            type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
+            return Ast.Call(JitRuntime.M(guard), read);
+        }
+
+        /// <summary>
+        /// `@o.x = v', `o.x = v', `self.x = v' in a method, where the profiled receiver's x= is an attr_writer
+        /// (or a method that is one): the store (JitRuntime.WriteAttr), under ReadSelfAttr's checks, which
+        /// deopt before anything is written; a frozen receiver deopts too, so that its FrozenError comes
+        /// from the real call. The store is observable, so nothing emitted after it may deopt
+        /// (_deoptAfterEffect). `self.x = v' may call a private writer. The value is v.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitMethodAttrWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+            if (op != null || node.IsSafeNavigation || !_refinements.IsEmpty) { throw Bail("attribute assignment " + node.Name); }
+            var target = node.Qualifier;
+            object sample;
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
+            bool explicitReceiver = !(target is SelfReference);
+            string variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            if (variableName == null) { throw Bail("attribute assignment " + node.Name + " that is not an attr_writer"); }
+
+            JT rt;
+            var receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
+            JT valueType;
+            var value = Emit(right, out valueType);
+            if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            var receiverTemp = Ast.Variable(typeof(object), "#receiver");
+            var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            _canDeopt = true;
+            _pure = false;
+            _ivarWrite = true;
+            if (explicitReceiver) { _effectNotOnSelf = true; }
+            type = valueType;
+            return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp },
+                Ast.Assign(receiverTemp, receiver),
+                Ast.Assign(valueTemp, value),
+                Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
+                    Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
                 valueTemp
             );
         }

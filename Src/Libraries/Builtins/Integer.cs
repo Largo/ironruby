@@ -725,6 +725,7 @@ namespace IronRuby.Builtins {
         // JIT would otherwise fold a forwarder this small into a compiled call-site rule.
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
         public static object Times(BlockParam/*!*/ block, int self) {
             return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
         }
@@ -733,10 +734,10 @@ namespace IronRuby.Builtins {
             int i = 0;
             // -X:OSR: once the block is hot, the rest of the loop runs in a typed copy of the loop
             // this and the block make together (BlockLoopSite); one too short to be outlined never asks
-            var loop = (self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.Times) : null;
+            var loop = BlockLoopSite.For(block, BlockLoopKind.Times, self);
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i < self) {
-                if (--countdown <= 0 && self - i >= BlockLoopSite.MinRun) {
+                if (--countdown <= 0 && self - i >= loop.Floor) {
                     i = loop.Run(block, i, self, ref countdown);
                     if (i >= self) { break; }
                 }
@@ -760,6 +761,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
+        [BlockNotKept]
         public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
             return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
                 new Enumerator(self, "times");
@@ -803,10 +805,10 @@ namespace IronRuby.Builtins {
 
         private static object UpToImpl(BlockParam block, int self, int other) {
             int i = self;
-            var loop = ((long)other - self >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.UpTo) : null;
+            var loop = BlockLoopSite.For(block, BlockLoopKind.UpTo, (long)other - self);
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i <= other) {
-                if (--countdown <= 0 && (long)other - i >= BlockLoopSite.MinRun) {
+                if (--countdown <= 0 && (long)other - i >= loop.Floor) {
                     i = loop.Run(block, i, other, ref countdown);
                     if (i > other) { break; }
                 }
@@ -891,10 +893,10 @@ namespace IronRuby.Builtins {
 
         private static object DownToImpl(BlockParam/*!*/ block, int self, int other) {
             int i = self;
-            var loop = ((long)self - other >= BlockLoopSite.MinRun) ? BlockLoopSite.For(block, BlockLoopKind.DownTo) : null;
+            var loop = BlockLoopSite.For(block, BlockLoopKind.DownTo, (long)self - other);
             long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
             while (i >= other) {
-                if (--countdown <= 0 && (long)i - other >= BlockLoopSite.MinRun) {
+                if (--countdown <= 0 && (long)i - other >= loop.Floor) {
                     i = loop.Run(block, i, other, ref countdown);
                     if (i < other) { break; }
                 }

@@ -214,6 +214,10 @@ invalid definition is a build error (`IRGEN001`). To read what was generated, bu
   for one more.
 - `.claude/skills/review` is a project skill for reviewing a change the same way, before
   opening or merging a PR.
+- `.claude/skills/perf-measure`, `perf-step` and `perf-gate` are the loop for speed work:
+  measure against CRuby and TruffleRuby (`Util/perf/`), try one optimization in a worktree of
+  its own, and merge it only if it is measurably faster and computes the same thing.
+  `Util/perf/LEDGER.md` holds the numbers and what was tried; `/loop /perf-step` runs it.
 - PRs are merged with merge commits, after review points are addressed.
 
 ## Windows

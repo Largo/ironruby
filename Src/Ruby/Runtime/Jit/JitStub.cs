@@ -110,6 +110,15 @@ namespace IronRuby.Runtime.Jit {
         // intrinsic off a receiver with (JitCompiler.ObservedType); it is never relied on for a result.
         private readonly Type[]/*!*/ _argClrType;
         private Type _selfClrType;
+        // The Ruby classes each argument has had while profiling, the first two (an object of a class of its own
+        // or one that is not a RubyObject counts as a third): which receivers an inlined call on a parameter
+        // dispatches between (JitCompiler.TryInlineCall). A hint, like the rest; the inlined call checks the class.
+        private readonly RubyClass[]/*!*/ _argClass1, _argClass2;
+        private readonly bool[]/*!*/ _argManyClasses;
+
+        // The receiver of the call that reached the threshold, while TrySpecialize runs (under _compiling).
+        private object _selfSample;
+        private object[] _argSample;
         private RubyClass _receiverClass;
         private bool _polymorphicReceiver;
 
@@ -145,10 +154,106 @@ namespace IronRuby.Runtime.Jit {
             _typedCount = (keywords != null) ? _positional + keywords.Count : arity;
             _argKind = new int[_typedCount];
             _argClrType = new Type[_typedCount];
+            _argClass1 = new RubyClass[_typedCount];
+            _argClass2 = new RubyClass[_typedCount];
+            _argManyClasses = new bool[_typedCount];
         }
 
-        protected abstract void Install(Delegate/*!*/ entry);
+        protected abstract void SetFast(Delegate entry);
+        protected abstract Delegate Fast { get; }
         internal abstract Delegate/*!*/ Trampoline { get; }
+
+        // ---- what the callers hold -----------------------------------------------------------
+        // The method's dispatchers (RubyMethodBody.RegisterDispatcher) call whatever the fast slot
+        // holds, not the trampoline, whenever it holds something: the specialized entry, which checks
+        // every guard itself, the cooling stand-in, or the generic body once settled. A call through
+        // one then makes a single delegate invoke instead of two, the trampoline's being only a
+        // volatile load and a null test in front of the same invoke. With the slot empty (profiling)
+        // they call the trampoline. Install is the one place the slot changes, always under _sync,
+        // so the dispatchers follow each change in order. A dispatcher that still calls an entry
+        // replaced a moment ago runs code that is still correct - its guards fail into the generic
+        // body, and its callbacks change nothing for a specialization that is not current - as a
+        // thread that read the slot before the change does. Rules that baked the trampoline into
+        // their expression (RubyMethodInfo.BuildCallNoFlow) keep going through it.
+        // Bounded: a program that makes call sites without end keeps the rest on the trampoline.
+        private const int MaxDispatchers = 256;
+        private List<MethodDispatcher> _dispatchers;
+        // The method body that holds the trampoline as its delegate, told when the stub settles.
+        private RubyMethodBody _owner;
+        // The generic body's compiled form, once the light compiler has made it (Wrap).
+        private Delegate _compiledGeneric;
+
+        // Under _sync.
+        private void Install(Delegate entry) {
+            SetFast(entry);
+            if (_dispatchers != null) {
+                Delegate target = entry ?? Trampoline;
+                foreach (var dispatcher in _dispatchers) {
+                    dispatcher.SetMethod(target);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called for each dispatcher made over the trampoline: points it at what the fast slot holds.
+        /// </summary>
+        internal void AddDispatcher(MethodDispatcher/*!*/ dispatcher) {
+            lock (_sync) {
+                if (_dispatchers == null) { _dispatchers = new List<MethodDispatcher>(); }
+                if (_dispatchers.Count >= MaxDispatchers) { return; }
+                _dispatchers.Add(dispatcher);
+                Delegate fast = Fast;
+                if (fast != null) { dispatcher.SetMethod(fast); }
+            }
+        }
+
+        /// <summary>
+        /// The expression a rule calls <paramref name="method"/> with, if it is a trampoline: a read of what the stub would
+        /// call (Target) and one invoke of it, rather than an invoke of the trampoline that reads the fast slot and invokes that.
+        /// Null for any other delegate.
+        /// </summary>
+        internal static MSA.Expression CallCurrent(Delegate/*!*/ method, MSA.Expression[]/*!*/ arguments) {
+            var stub = method.Target as JitStub;
+            if (stub == null || method != stub.Trampoline) { return null; }
+            var target = Ast.Field(Ast.Constant(stub), stub.GetType().GetField("Target", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
+            return Ast.Invoke(target, arguments);
+        }
+
+        internal static void SetOwner(Delegate/*!*/ method, RubyMethodBody/*!*/ owner) {
+            var stub = method.Target as JitStub;
+            if (stub != null && method == stub.Trampoline) {
+                stub._owner = owner;
+            }
+        }
+
+        // The generic body as cheap as it is to call: compiled if it is.
+        private Delegate/*!*/ BestGeneric {
+            get { return Volatile.Read(ref _compiledGeneric) ?? _generic; }
+        }
+
+        private void GenericCompiled(Delegate/*!*/ compiled) {
+            if (compiled.GetType() == _generic.GetType()) {
+                Volatile.Write(ref _compiledGeneric, compiled);
+            }
+            _genericCompiled = true;
+            if (_compiledGeneric == null) { return; }
+            bool settled;
+            lock (_sync) {
+                settled = _state == Settled;
+                if (settled) { Install(compiled); }
+            }
+            if (settled) { NotifyOwner(); }
+        }
+
+        // Outside _sync: the method body's delegate becomes the generic body, so that the rules and
+        // dispatchers made from now on do not go through the trampoline at all. Settled is for good,
+        // and the generic body is what the trampoline would run.
+        private void NotifyOwner() {
+            var owner = _owner;
+            if (owner != null) {
+                owner.ReplaceTrampoline(Trampoline, _generic, BestGeneric);
+            }
+        }
         // The stand-in for a retired entry: the generic body behind a countdown of _coolCalls.
         protected abstract Delegate/*!*/ CoolingBody { get; }
 
@@ -176,6 +281,11 @@ namespace IronRuby.Runtime.Jit {
             internal long DeoptCost;
             // The constant version the typed bodies were compiled under (JitCode.UsesConstants).
             internal int ConstantVersion;
+            // The one typed body (not per-count ones), the method version its entry checks and the class it
+            // pins self to, if any: what a caller that inlines it (JitStub.InlinableBody) has to check too.
+            internal JitCode Code;
+            internal int Version;
+            internal RubyClass PinnedClass;
 
             internal Specialization(JitStub/*!*/ stub) {
                 Stub = stub;
@@ -226,12 +336,18 @@ namespace IronRuby.Runtime.Jit {
                 // A thread that read the empty fast slot before another one installed an entry
                 // can get here after that one has let go of _compiling.
                 if (_state != Profiling) { return; }
+                // the receiver of this call is the instance variable profile (Hints); it is only
+                // held while compiling, so a stub keeps no object of the program alive
+                _selfSample = self;
+                _argSample = args;
                 if (!TrySpecialize()) {
                     GiveUp();
                 }
             } catch (Exception) {
                 GiveUp();
             } finally {
+                _selfSample = null;
+                _argSample = null;
                 Volatile.Write(ref _compiling, 0);
             }
         }
@@ -243,6 +359,17 @@ namespace IronRuby.Runtime.Jit {
 
         private void Observe(int i, object arg) {
             ObserveType(ref _argClrType[i], arg);
+            if (!_argManyClasses[i]) {
+                var obj = arg as RubyObject;
+                RubyClass cls = (obj != null) ? obj.ImmediateClass : null;
+                if (cls == null || cls.IsSingletonClass) {
+                    _argManyClasses[i] = true;
+                } else if (_argClass1[i] == null) {
+                    _argClass1[i] = cls;
+                } else if (_argClass1[i] != cls) {
+                    if (_argClass2[i] == null) { _argClass2[i] = cls; } else if (_argClass2[i] != cls) { _argManyClasses[i] = true; }
+                }
+            }
             int k = (arg is int) ? 1 : (arg is double) ? 2 : (arg is long) ? 4 : 3;
             if (_argKind[i] == 0) {
                 _argKind[i] = k;
@@ -265,6 +392,7 @@ namespace IronRuby.Runtime.Jit {
             lock (_sync) {
                 Settle();
             }
+            NotifyOwner();
             // Every method that gets here passed JitScreen, so each one is either a genuinely
             // type-dependent refusal or the screen and JitCompiler.Emit having drifted apart.
             // Name it, so a count that creeps up can be traced to the construct responsible.
@@ -280,13 +408,16 @@ namespace IronRuby.Runtime.Jit {
             _state = Settled;
             _current = null;
             _direct = null;
-            Install(_generic);
+            Install(BestGeneric);
         }
 
         // How many times a method is specialized again after a method table change made its entry
         // stale. A program that keeps defining methods (a `def obj.x' per object, define_method in
         // a loop) would otherwise pay a compile every Threshold calls for as long as it runs.
         private const int MaxRespecializations = 8;
+        // How many times deopts of an inlined call on a parameter sent the method back to profiling (OnDeopt).
+        private const int MaxReprofiles = 2;
+        private int _reprofiles;
         private int _respecializations;
 
         /// <summary>
@@ -296,20 +427,28 @@ namespace IronRuby.Runtime.Jit {
         /// new version instead, or settle on the generic body once that has happened too often.
         /// </summary>
         internal void VersionChanged(Specialization/*!*/ spec) {
+            bool settled = false;
             lock (_sync) {
-                if (_state != Specialized || spec != _current) { return; }
-                if (++_respecializations > MaxRespecializations) {
-                    Settle();
-                    return;
-                }
-                // deoptimize: drop the specialized entry and let profiling start over
-                JitRuntime.Invalidations++;
-                _current = null;
-                _direct = null;
-                _calls = 0;
-                _state = Profiling;
-                Install(null);
+                settled = Respecialize(spec);
             }
+            if (settled) { NotifyOwner(); }
+        }
+
+        // Under _sync: true if the method settled on its generic body.
+        private bool Respecialize(Specialization/*!*/ spec) {
+            if (_state != Specialized || spec != _current) { return false; }
+            if (++_respecializations > MaxRespecializations) {
+                Settle();
+                return true;
+            }
+            // deoptimize: drop the specialized entry and let profiling start over
+            JitRuntime.Invalidations++;
+            _current = null;
+            _direct = null;
+            _calls = 0;
+            _state = Profiling;
+            Install(null);
+            return false;
         }
 
         // ---- deopt rate ----------------------------------------------------------------------
@@ -426,6 +565,24 @@ namespace IronRuby.Runtime.Jit {
                 return;
             }
 
+            if (spec.Code != null && spec.Code.InlinedOnArgumentClass && _reprofiles < MaxReprofiles) {
+                // An inlined call on a parameter checks the one class the profile saw it hold (TryInlineCall), and
+                // the calls since have mostly had another: profile again, adding the classes seen now, and compile
+                // again, rather than retire a body that a second class would have fitted.
+                bool settled;
+                lock (_sync) {
+                    if (_state != Specialized || spec != _current) { return; }
+                    _reprofiles++;
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] profiling {0}/{1} arity {2} again: {3} deopts in {4} calls",
+                            _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries);
+                    }
+                    settled = Respecialize(spec);
+                }
+                if (settled) { NotifyOwner(); }
+                return;
+            }
+
             lock (_sync) {
                 if (_state != Specialized || spec != _current) { return; }
                 JitRuntime.DeoptRetired++;
@@ -435,13 +592,14 @@ namespace IronRuby.Runtime.Jit {
                         _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, Costs(deopt, generic),
                         final ? ", for good" : String.Format(", retry in {0} ms", CoolDownMs << (_retirements - 1)));
                 }
-                if (final) {
-                    Settle();
+                if (!final) {
+                    StartCooling(Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
+                        CoolCheckCalls, CoolSampleMask);
                     return;
                 }
-                StartCooling(Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
-                    CoolCheckCalls, CoolSampleMask);
+                Settle();
             }
+            NotifyOwner();
         }
 
         /// <summary>
@@ -559,13 +717,27 @@ namespace IronRuby.Runtime.Jit {
             int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
-            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, Hints()));
-            if (code == null) { return false; }
+            var hints = Hints();
+            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints));
+            if (code == null) {
+                // A call the body could inline is of a method that has not been specialized yet: a caller
+                // called once per call of its callee turns hot first. Profile on, a few times, rather than
+                // settling on the generic body for good.
+                if (hints.CalleeNotReady && ++_inlineWaits <= MaxInlineWaits) {
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] waiting for a callee of {0}/{1} to be specialized", _declaringModule.Name ?? "main", _ast.Name);
+                    }
+                    return true;
+                }
+                return false;
+            }
 
-            bool needsClassGuard = code.EmittedSelfCall;
+            bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null;
             if (needsClassGuard) {
                 if (_receiverClass == null || _polymorphicReceiver) { return false; }
-                if (!SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                // the inlined self-calls were resolved on the class of the sampled receiver
+                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { return false; }
             }
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the
@@ -583,6 +755,9 @@ namespace IronRuby.Runtime.Jit {
 
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
+            spec.Code = code;
+            spec.Version = version;
+            spec.PinnedClass = needsClassGuard ? _receiverClass : null;
             spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
@@ -608,8 +783,27 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
+        // How many times TrySpecialize went on profiling for a callee to be specialized (ReceiverHints.CalleeNotReady).
+        private const int MaxInlineWaits = 3;
+        private int _inlineWaits;
+
+        /// <summary>The method is still being profiled: it may yet be specialized.</summary>
+        internal bool IsProfiling {
+            get { return _state == Profiling; }
+        }
+
         private JitCompiler.ReceiverHints/*!*/ Hints() {
-            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType };
+            return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample,
+                ArgClasses = ArgClasses() };
+        }
+
+        private RubyClass[][]/*!*/ ArgClasses() {
+            var result = new RubyClass[_typedCount][];
+            for (int i = 0; i < _typedCount; i++) {
+                if (_argManyClasses[i] || _argClass1[i] == null) { continue; }
+                result[i] = (_argClass2[i] == null) ? new[] { _argClass1[i] } : new[] { _argClass1[i], _argClass2[i] };
+            }
+            return result;
         }
 
         private JT[]/*!*/ ProfiledTypes(int count) {
@@ -711,6 +905,25 @@ namespace IronRuby.Runtime.Jit {
         /// The direct self-call is only correct if the name still resolves, from the profiled
         /// receiver class and under the body's refinements, to this very body.
         /// </summary>
+        /// <summary>
+        /// The typed body a caller compiled now may inline in place of a call of this method on an instance of
+        /// <paramref name="receiverClass"/> (JitCompiler.TryInlineCall), or null. It is the body the call would
+        /// enter now: the method specialized, its entry's method version the current one (the caller's entry
+        /// checks one no newer, so the two go stale together), and any class it pins self to this one.
+        /// </summary>
+        internal JitCode InlinableBody(RubyContext/*!*/ context, RubyClass/*!*/ receiverClass) {
+            if (context != _context || _perCountMandatory >= 0 || _keywords != null) { return null; }
+            Specialization spec;
+            lock (_sync) {
+                if (_state != Specialized) { return null; }
+                spec = _current;
+            }
+            if (spec == null || spec.Code == null || !spec.Code.Inlinable) { return null; }
+            if (spec.Version != RubyModule.GlobalMethodVersion) { return null; }
+            if (spec.PinnedClass != null && spec.PinnedClass != receiverClass) { return null; }
+            return spec.Code;
+        }
+
         private bool SelfCallResolvesHere(RubyClass/*!*/ cls, RefinementActivation/*!*/ refinements) {
             var resolved = cls.ResolveMethod(_ast.Name, VisibilityContext.AllVisible, refinements);
             if (!resolved.Found) { return false; }
@@ -1139,11 +1352,11 @@ namespace IronRuby.Runtime.Jit {
             bool perCount;
             int arity;
             string rejectedBy;
-            return Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy);
+            return Screen(ast, context, null, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy);
         }
 
         // The static part of Wrap's decision; rejectedBy is set when the screen (not the parameter list) refused the body.
-        private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, out JitKeywords keywords, out bool[] hasDefault,
+        private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule declaringModule, out JitKeywords keywords, out bool[] hasDefault,
             out object[] defaults, out bool perCount, out bool[] storedOnly, out int arity, out string rejectedBy) {
             keywords = null;
             hasDefault = null;
@@ -1205,7 +1418,9 @@ namespace IronRuby.Runtime.Jit {
             // into call site rules, so a method declined later still pays one extra indirect
             // call on every call for the life of the process.
             HashSet<string> otherUses;
-            if (!JitScreen.CanEverCompile(ast, keywords, out rejectedBy, out otherUses)) {
+            if (!JitScreen.CanEverCompile(ast, keywords,
+                // (no module: IsCandidate, which only asks whether the body may ever be wrapped)
+                (declaringModule != null) ? (name, onSelf) => IsLeafMethod(declaringModule, name, onSelf) : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses)) {
                 return false;
             }
 
@@ -1223,6 +1438,77 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
             return true;
+        }
+
+        /// <summary>
+        /// A call of <paramref name="name"/> is one the typed body may inline (JitCompiler.TryInlineCall): the method it
+        /// resolves to on the declaring module now is a Ruby method whose body calls nothing (JitScreen's leaf screen) -
+        /// for a call on another object, one of the declaring class's own kind (`other.compare_to(o)'), the only kind
+        /// this can see. A call on self of a method not defined yet may be of one defined further down. Only a hint, for the screen: the compiler resolves the call again on the receiver's class. Without it
+        /// every method calling another one would be wrapped, and a wrapped method declined later stays slower.
+        /// </summary>
+        private static bool IsLeafMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, bool onSelf) {
+            try {
+                var resolved = declaringModule.ResolveMethod(name, VisibilityContext.AllVisible);
+                if (!resolved.Found) {
+                    // a method defined further down the class body is not there yet when this one is defined
+                    if (onSelf) { return true; }
+                    // `key.compare_to(current.key)' in RedBlackTree: a method of another class, which only the profile
+                    // will name. Taken if some top-level class defines a method of that name that may be inlined.
+                    return IsLeafMethodOfSomeClass(declaringModule.Context, name);
+                }
+                // Nested only for a call on another object (`key.compare_to(k)'): taken for a call on self as well, it
+                // wrapped Json's HashIndexTable#add and #get over `hash_slot_for', whose own callee is never compiled.
+                return IsLeafMethod(resolved.Info as RubyMethodInfo, !onSelf);
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="nest"/>: the method may itself call, on self, methods of the leaf shape, which its typed body
+        /// inlines (JitInlineShape.IsInlinableShape) - one level, so `compare_to' calling `compare_numbers' is taken.
+        /// </summary>
+        private static bool IsLeafMethod(RubyMethodInfo info, bool nest) {
+            if (info == null) { return false; }
+            var ast = info.GetSyntaxTree();
+            var ps = ast.Parameters;
+            if (ps.Optional.Length > 0 || ps.Unsplat != null || ps.Block != null || ps.Mandatory.Length > MaxArity) { return false; }
+            RubyModule owner = info.DeclaringModule;
+            Func<string, bool> nested = null;
+            Func<string, bool, bool> nestedCallee = null;
+            if (nest) {
+                // the nested callee as the owner resolves it now; one defined further down is not taken
+                nested = n => {
+                    var r = owner.ResolveMethod(n, VisibilityContext.AllVisible);
+                    return r.Found && IsLeafMethod(r.Info as RubyMethodInfo, false);
+                };
+                nestedCallee = (n, onSelf) => onSelf && nested(n);
+            }
+            if (!JitInlineShape.IsInlinableShape(ast, nested)) { return false; }
+            string rejectedBy;
+            HashSet<string> otherUses;
+            return JitScreen.CanEverCompile(ast, null, nestedCallee, out rejectedBy, out otherUses);
+        }
+
+        /// <summary>A class that is a constant of Object defines a Ruby method of this name that may be inlined.</summary>
+        private static bool IsLeafMethodOfSomeClass(RubyContext/*!*/ context, string/*!*/ name) {
+            var candidates = new List<RubyMethodInfo>();
+            using (context.ClassHierarchyLocker()) {
+                context.ObjectClass.EnumerateConstants((module, constantName, value) => {
+                    var cls = value as RubyClass;
+                    RubyMemberInfo method;
+                    if (cls != null && cls.Context == context && !cls.IsSingletonClass && cls.TryGetDefinedMethod(name, out method)) {
+                        var info = method as RubyMethodInfo;
+                        if (info != null) { candidates.Add(info); }
+                    }
+                    return false;
+                });
+            }
+            foreach (var info in candidates) {
+                if (IsLeafMethod(info, true)) { return true; }
+            }
+            return false;
         }
 
         /// <summary>
@@ -1260,8 +1546,13 @@ namespace IronRuby.Runtime.Jit {
             bool perCount;
             int arity;
             string rejectedBy;
-            if (!Screen(ast, context, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
-                if (rejectedBy != null) { JitRuntime.RecordScreenRejection(rejectedBy); }
+            if (!Screen(ast, context, declaringModule, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
+                if (rejectedBy != null) {
+                    JitRuntime.RecordScreenRejection(rejectedBy);
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] screen rejected {0}/{1}: {2}", declaringModule.Name ?? "main", ast.Name, JitScreen.LastRejectionDetail);
+                    }
+                }
                 return generic;
             }
             int mandatoryCount = ast.Parameters.Mandatory.Length;
@@ -1283,7 +1574,7 @@ namespace IronRuby.Runtime.Jit {
             stub._declaringScope = declaringScope;
             var light = generic.Target as Microsoft.Scripting.Interpreter.LightLambda;
             if (light != null) {
-                light.Compile += (sender, e) => stub._genericCompiled = true;
+                light.Compile += (sender, e) => stub.GenericCompiled(e.Compiled);
             } else {
                 stub._genericCompiled = true;
             }
@@ -1300,6 +1591,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub0 : JitStub {
         private volatile Func<object, Proc, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object> Target;
         private readonly Func<object, Proc, object>/*!*/ _gen;
         private readonly Func<object, Proc, object>/*!*/ _tramp;
         private Func<object, Proc, object> _cool;
@@ -1308,10 +1601,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 0, keywords) {
             _gen = (Func<object, Proc, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block) {
@@ -1334,6 +1629,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub1 : JitStub {
         private volatile Func<object, Proc, object, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object, object> Target;
         private readonly Func<object, Proc, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object>/*!*/ _tramp;
         private Func<object, Proc, object, object> _cool;
@@ -1342,10 +1639,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 1, keywords) {
             _gen = (Func<object, Proc, object, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block, object a0) {
@@ -1368,6 +1667,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub2 : JitStub {
         private volatile Func<object, Proc, object, object, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object, object, object> Target;
         private readonly Func<object, Proc, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object>/*!*/ _tramp;
         private Func<object, Proc, object, object, object> _cool;
@@ -1376,10 +1677,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 2, keywords) {
             _gen = (Func<object, Proc, object, object, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object, object, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block, object a0, object a1) {
@@ -1402,6 +1705,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub3 : JitStub {
         private volatile Func<object, Proc, object, object, object, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object, object, object, object> Target;
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _tramp;
         private Func<object, Proc, object, object, object, object> _cool;
@@ -1410,10 +1715,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 3, keywords) {
             _gen = (Func<object, Proc, object, object, object, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block, object a0, object a1, object a2) {
@@ -1436,6 +1743,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub4 : JitStub {
         private volatile Func<object, Proc, object, object, object, object, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object, object, object, object, object> Target;
         private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _tramp;
         private Func<object, Proc, object, object, object, object, object> _cool;
@@ -1444,10 +1753,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 4, keywords) {
             _gen = (Func<object, Proc, object, object, object, object, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block, object a0, object a1, object a2, object a3) {
@@ -1470,6 +1781,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub5 : JitStub {
         private volatile Func<object, Proc, object, object, object, object, object, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object, object, object, object, object, object> Target;
         private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _tramp;
         private Func<object, Proc, object, object, object, object, object, object> _cool;
@@ -1478,10 +1791,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 5, keywords) {
             _gen = (Func<object, Proc, object, object, object, object, object, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
@@ -1504,6 +1819,8 @@ namespace IronRuby.Runtime.Jit {
 
     internal sealed class JitStub6 : JitStub {
         private volatile Func<object, Proc, object, object, object, object, object, object, object> _fast;
+        // What a rule calls (JitStub.CallCurrent): the fast slot when it holds something, the trampoline otherwise.
+        internal Func<object, Proc, object, object, object, object, object, object, object> Target;
         private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _tramp;
         private Func<object, Proc, object, object, object, object, object, object, object> _cool;
@@ -1512,10 +1829,12 @@ namespace IronRuby.Runtime.Jit {
             : base(ast, context, m, generic, 6, keywords) {
             _gen = (Func<object, Proc, object, object, object, object, object, object, object>)generic;
             _tramp = Call;
+            Target = _tramp;
         }
 
         internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
-        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object, object>)entry; }
+        protected override void SetFast(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object, object>)entry; Target = _fast ?? _tramp; }
+        protected override Delegate Fast { get { return _fast; } }
         protected override Delegate/*!*/ CoolingBody { get { return _cool ?? (_cool = Cool); } }
 
         private object Cool(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {
