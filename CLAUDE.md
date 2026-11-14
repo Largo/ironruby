@@ -30,7 +30,8 @@ Before changing a message, `grep -rn raise_consistent_error spec/` for it. The h
 | `Src/StdLib/ruby/4.0` | CRuby 4.0's standard library, vendored with some IronRuby patches; `Util/sync-stdlib.rb` moves it to a new CRuby release and merges the patches forward. Prefer an override in `ironruby/` to a new patch here |
 | `Src/Console` | `ironruby`/`ir`/`ironrubyw` executables |
 | `Src/IronRuby.Tests` | IronRuby's own test suite (C#; see below) |
-| `Src/ClassInitGenerator` | generates the library initializers |
+| `Src/InitializerGenerator` | the source generator that writes the library initializers during the build |
+| `Src/ClassInitGenerator` | regenerates `ReflectionCache.Generated.cs` |
 | `Build/dlr-patches` | patches IronRuby needs on the upstream DLR (README there) |
 | `Util/` | build helpers, spec sweeps, `*-matrix.rb` probes, benchmarks, release packaging |
 | `spec/`, `mspec/` | ruby/spec and mspec checkouts (not tracked) |
@@ -151,25 +152,23 @@ with no mspec summary line, and on a missing shard; a listed example that passes
 
 `*.Generated.cs` files are generated; do not edit them by hand except to get a build going again.
 
+The **library initializers** (the `[RubyMethod]`, `[RubyClass]`, `[RubyModule]`, `[RubyConstructor]`,
+`[RubyConstant]` registrations, parameter attributes like `[NotNull]` and `[DefaultProtocol]` included)
+are not a file: the source generator in `Src/InitializerGenerator` writes them while
+`IronRuby.Libraries` and `IronRuby.Libraries.Yaml` compile, so a change to any of them needs a build
+and nothing else. A new library namespace (`IronRuby.StandardLibrary.Foo`) is found by itself. An
+invalid definition is a build error (`IRGEN001`). To read what was generated, build with
+`-p:EmitCompilerGeneratedFiles=true` and look under `Src/Libraries/obj/<config>/<tfm>/generated/`
+(`Src/InitializerGenerator/README.md`).
+
 | File | Regenerate with | When |
 |---|---|---|
-| `Src/Libraries/Initializers.Generated.cs` | `./regen-initializers.sh` (or the steps in `Src/ClassInitGenerator/README.md`) | any `[RubyMethod]`, `[RubyClass]`, `[RubyModule]`, `[RubyConstructor]`, `[RubyConstant]` change, **including parameter attributes** (`[NotNull]`, `[DefaultProtocol]`): the binder reads them from this file, so a C#-only rebuild silently keeps the old behaviour, and a new constant is not there at all |
-| `Src/Libraries.Yaml/Initializer.Generated.cs` | ClassInitGenerator README | psych's `[RubyMethod]`s |
 | `Src/Ruby/Compiler/ReflectionCache.Generated.cs` | `ClassInitGenerator /refcache` (README) | a method marked `[Emitted]` (called from generated code via `Methods.X`) is added or changed |
 | `Src/Prism/Generated/*` | `cd Src/Prism && ruby generate.rb` | the pinned prism changes (CI regenerates them) |
 | `Src/Libraries/Builtins/InternalMethods.Generated.cs` | `Util/gen-internal-methods.rb` | |
 | `Src/Ruby/Builtins/UnicodeProperties.Generated.cs` | `Util/gen-unicode-properties.rb` | |
 | `*/AotSubclasses.Generated.cs` | `Util/aot/gen-subclasses.rb` | a library class is added |
 | `Src/Libraries/Rbs/RbsNodes.Generated.cs` | `Src/Libraries/Rbs/generate.rb` | |
-
-A new library namespace (`IronRuby.StandardLibrary.Foo`) has to be added to `LIBS` in
-`regen-initializers.sh` and to the list in `Src/ClassInitGenerator/README.md`; without it the
-generator skips the namespace and nothing in it is registered.
-
-If changing a `[RubyMethod]`'s signature breaks the build because the generated file still
-names the old one, either run `regen-initializers.sh` (it builds from a skeleton) or fix the
-one generated line by hand, build, and then regenerate properly. Check that the regenerated
-diff touches only what you changed.
 
 ## Code and commits
 

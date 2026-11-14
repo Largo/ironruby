@@ -26,13 +26,10 @@ internal class Generator {
         if (list.IndexOf("/refcache") >= 0 || list.IndexOf("-refcache") >= 0) {
             ReflectionCacheGenerator.Create(args).Generate();
         } else {
-            var generator = InitGenerator.Create(args);
-            if (generator == null) {
-                Environment.ExitCode = -1;
-                return;
-            }
-
-            generator.Generate();
+            // The library initializers were this tool's other output. Src/InitializerGenerator writes them now,
+            // while the libraries compile.
+            Console.Error.WriteLine("usage: ClassInitGenerator /refcache /out:<file>");
+            Environment.ExitCode = -1;
         }
     }
 
