@@ -513,6 +513,33 @@ Round seven (none of these is in the tree; the branches were local to the sessio
   in the binder's rule for a monomorphic attr site, would not have the second cost. The
   first version's CD figure is unexplained and may be worth one quiet run by itself.
 
+Round eight (three experiments on the tree of round seven; the NBody one is still open):
+
+- **perf/neq1 - `a != b` that reaches `BasicObject#!=`, bound as the receiver's `==`
+  negated** (gap 10): one dispatch, as CRuby's opt_neq, made in `DispatchIntrinsics`
+  where `send` and `respond_to?` are rewritten the same way. Its first version took the
+  shortcut for any public library `==`, and on a hot site lost the `BasicObject#!=`
+  frame from backtraces and `caller_locations` whenever that `==` runs Ruby code (Array,
+  Hash, Struct, Range, Comparable, String with a `to_str` argument, Integer and Float
+  with an object argument), while the first, cold executions of the same line kept it.
+  Its own backtrace case used a Ruby-defined `==`, where the shortcut is off. The second
+  version limited it to what opt_neq limits itself to: identity (`BasicObject#==` on nil,
+  true, false, plain objects), Symbol, and Integer, Float or String with an argument they
+  compare without calling out, tested in the rule. Correct on everything tried: 57
+  semantic cases, the frames seen from a hot site, c_call tracing switched on at a hot
+  site, a 45-line matrix. On a quiet machine, ns per `!=` in generic code, medians of
+  five alternating rounds: nil 24.9 -> 16.8, Symbol 26.2 -> 19.4, String 29.3 -> 23.7,
+  plain object 25.5 -> 22.7, Integer 24.9 -> 24.1 (faster in two rounds, slower in two);
+  Integer against a Float 31.5 -> 34.3, slower in all five; a site whose argument type
+  alternates 5-9% slower. AWFY geomean of the thirteen 1.019 and 1.008. No line held 15%
+  in every round, the one Permute needs showed nothing, and one got slower: not kept.
+  What is left of the idea is the shortcut for identity, Symbol and String alone, the
+  three lines that were never slower; its cost, that `!=` rules are then not shared
+  across classes, was not measured on wide sites.
+- **Permute's block** (gap 4): `[BlockNotKept]` on `Integer#downto` changes nothing, and
+  lowering `MinRun` cannot help, because the loop emitter declines the block at its
+  calls. Nothing was built beyond that.
+
 ## Regressions
 
 None in speed.
@@ -632,3 +659,19 @@ be the only method that a redefined `nil?` breaks where CRuby's C does not ask;
 `a[2**40] = x` raises RangeError where CRuby raises NoMemoryError; a String with a stray
 byte in UTF-16LE inspects as `"\uDC20"`, CRuby's is `"\x20"`;
 `Exception_CauseRaisedInClause1` fails in Release on net10.0 and passes on net11.0.
+From round eight: where `Integer#==` or `Float#==` calls the argument's `==`, a
+backtrace has no `Integer#==` frame (CRuby's has one), and `[[x]] == [[y]]` has one
+`Array#==` frame where CRuby has two; the frame of `Struct#==` is labelled `Array#==` in
+about one run in three of the same script; c_call tracing reports an `==` for each
+Integer element `Array#==` compares, which CRuby does not; `Math.sqrt(Complex(4, 0))` is
+2.0 (CRuby: (2.0+0.0i)), and the TypeError for `Math.sqrt(true)` names TrueClass where
+CRuby says true.
+
+How far one benchmark moves by itself, measured in round eight: Bounce's iteration time
+wanders between 63 and 88 ms inside one process, in stretches of 25 to 50 iterations,
+on every tree; awfy.rb's figure is the median of the second half of about 150
+iterations, so it lands on 64 or on 80 depending on where a fast stretch falls (the
+baseline was at 64 in both runs of one comparison and at 79-82 in six processes of 120
+iterations each). Storage, Towers and DeltaBlue show the same kind of swing. A
+difference between two trees on such a benchmark is settled by separate processes of a
+fixed length taken alternately (perf-gate, step 4), not by more awfy.rb runs.
