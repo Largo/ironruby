@@ -652,3 +652,35 @@ lambda do
   end
   [[97].pack('C'), (+"x").replace("a"), (+"") << "a", (+"").b << "a", :a.to_s, "a\0", "A", "ａ", "á"].each { |v| p [v, probe.(v)] }
 end.call
+
+# ---- a one-character slice compared with literals in compiled methods, then changed ----
+# `s[i]' of an ASCII character has a shared content (SharedAsciiContents); the compiled
+# comparisons read it as it is (MutableString.EqualsAsciiLiteral). The slice is still a
+# String of its own: appended to, replaced and retagged while the parser's next slices
+# and its source are compared again.
+lambda do
+  pr = Class.new do
+    def initialize(s); @input = s; @i = 0; @current = nil; end
+    def read; @current = @input[@i]; @i = (@i + 1) % @input.size; @current; end
+    def ws; ' ' == @current || "\t" == @current || "\n" == @current || "\r" == @current; end
+    def digit; '0' == @current || '5' == @current || '9' == @current; end
+    def fwd; @current == "a"; end
+    def ne; "a" != @current; end
+    def cas; case @current when 'a' then 1 when ' ' then 2 else 3 end; end
+    def all; [ws, digit, fwd, ne, cas].map { |x| x.inspect[0] }.join; end
+    attr_reader :input
+  end.new("a 5\tz9\nA".dup)
+  out = []
+  30_000.times do |k|
+    c = pr.read
+    r = pr.all
+    out << [c.bytes, r] if k >= 30_000 - 8
+    next unless k % 7_000 == 6_999
+    c << "!"; out << [:appended, c.bytes, pr.all]
+    c.replace(" "); out << [:replaced, c.bytes, pr.all]
+    c.force_encoding("UTF-16LE"); out << [:retagged, c.bytes, c.encoding.name, pr.all]
+    c.force_encoding("BINARY"); out << [:binary, c.bytes, pr.all]
+  end
+  out.each { |x| p x }
+  p pr.input
+end.call
