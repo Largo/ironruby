@@ -162,9 +162,20 @@ Profile (`Util/perf/profile.sh`, self time):
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
    method, and `tree_insert` and `find_node` over their call of `compare_to`. Untried:
    inline a small pure self call into the caller's specialization.
-4. **Permute: `permute` itself** (15% self, and a RubyMethodScope per call: it is not a
-   light frame, `IR_LIGHT_FRAMES=why` says why, nobody has read it yet), its `n != 0`
-   through `BasicObject#!=` (gap 10), and `Object::GetType` at 4.9%.
+4. **Permute: the `downto` block in `permute`** (the method is 15% self). `permute` is a
+   light frame (`IR_LIGHT_FRAMES=why` says so; an earlier version of this entry said it
+   was not, from the `RubyMethodScope::.ctor` line of the profile alone), and the method
+   JIT rejects it at the `downto` call. Its block reads the outer local `n1`, so every
+   non-leaf call makes a RubyMethodScope, a Proc and a BlockParam, about 350 B, for a run
+   of one to six iterations, under the block-loop tier's `MinRun`. Round eight's
+   experiment, on a loaded machine: with the block written as a `while` loop the method
+   takes 834-1243 us per `permute(6)` against CRuby's 835-1010, and 1155-2286 against
+   1121 as written, so the block is the whole gap; a larger gen0 does not help, so it is
+   the yield machinery and not the garbage. `[BlockNotKept]` on `Integer#downto` changes
+   nothing (149.73 B per call before and after): the Proc is new on every call, since
+   each call evaluates the literal once and the frame's slot is empty. `n != 0` goes
+   through `BasicObject#!=` (gap 10), and `Object::GetType` at 4.9% is `swap`'s type
+   guards, by that experiment's reading of the profile.
 5. **Rules bake the interpreted LightLambda of a method the JIT never wraps**
    (`LightLambda::Run*`, ~1% of Richards' `schedule`): a rule-level read of the body's
    current delegate, as b78ec3f5 did for stubs, would remove the hop once the body is
