@@ -5284,6 +5284,11 @@ namespace IronRuby.Builtins {
                 new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
+            DefineLibraryMethod(module, "__ir_urandom__", 0x62, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Urandom)
+            );
+            
             DefineLibraryMethod(module, "__method__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)

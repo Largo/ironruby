@@ -3467,6 +3467,21 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region rand, srand
+        /// <summary>
+        /// Random.urandom (the prelude defines it; Random is a Ruby class): <paramref name="count"/> bytes from the
+        /// OS CSPRNG, the source MRI reads too. The prelude used to open /dev/urandom for each call, ~100x what
+        /// MRI's getrandom(2) costs, and every SecureRandom token, request id and CSRF mask comes through here.
+        /// </summary>
+        [RubyMethod("__ir_urandom__", RubyMethodAttributes.PrivateSingleton)]
+        public static MutableString/*!*/ Urandom(RubyModule/*!*/ self, [DefaultProtocol]int count) {
+            if (count < 0) {
+                throw RubyExceptions.CreateArgumentError("negative string size (or size too big)");
+            }
+            byte[] bytes = new byte[count];
+            RandomNumberGenerator.Fill(bytes);
+            return MutableString.CreateBinary(bytes);
+        }
+
         [RubyMethod("srand", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("srand", RubyMethodAttributes.PublicSingleton)]
         public static object SeedRandomNumberGenerator(RubyContext/*!*/ context, object self) {

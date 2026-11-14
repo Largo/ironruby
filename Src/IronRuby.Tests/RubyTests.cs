@@ -691,6 +691,7 @@ namespace IronRuby.Tests {
                 ClrRubyEnumerable1,
                 ClrRubyEnumerableIdentity1,
                 ClrRubyImpliedInterfaces2,
+                ClrRubyImpliedInterfaces4,
                 ClrRubyImpliedInterfaces3,
                 ClrTaskValue1,
                 ClrTaskValue2,
