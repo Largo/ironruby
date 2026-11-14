@@ -794,6 +794,15 @@ namespace IronRuby.Builtins {
             // #5855: appending a 0x80-0xff code point to a US-ASCII string widens the receiver
             // to BINARY instead of failing. Integer#chr is stricter - 0x80.chr("US-ASCII") is a
             // RangeError - so this case cannot go through ToChr.
+            // The common shapes - a byte onto a binary buffer (protobuf/msgpack encoders), an ASCII
+            // character onto an ASCII-compatible string - append in place without building a
+            // one-character string first.
+            if (c <= 0xff && self.Encoding == RubyEncoding.Binary) {
+                return self.Append((byte)c);
+            }
+            if (c < 0x80 && self.Encoding.IsAsciiIdentity) {
+                return self.Append((char)c);
+            }
             if (c >= 0x80 && c <= 0xff && self.Encoding == RubyEncoding.Ascii) {
                 self.ForceEncoding(RubyEncoding.Binary);
                 return self.Append((byte)c);
