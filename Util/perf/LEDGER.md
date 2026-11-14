@@ -167,8 +167,16 @@ Profile (`Util/perf/profile.sh`, self time):
    was not, from the `RubyMethodScope::.ctor` line of the profile alone), and the method
    JIT rejects it at the `downto` call. Its block reads the outer local `n1`, so every
    non-leaf call makes a RubyMethodScope, a Proc and a BlockParam, about 350 B, for a run
-   of one to six iterations, under the block-loop tier's `MinRun`. Round eight's
-   experiment, on a loaded machine: with the block written as a `while` loop the method
+   of one to six iterations. Run length is not what keeps it out of the block-loop tier:
+   the same block over `20.downto(0)` is screened in and then declined by the loop
+   emitter ("call: swap/2", "operator perm on Obj, Int", "emitter gave up"), which has
+   no general method call, only intrinsics. So lowering `MinRun` would buy Permute a
+   failed compile per site; what it needs is gap 1's call from compiled code, or the
+   `downto` compiled as a counted loop in the caller, which has to keep the block's
+   backtrace lines and the `Integer#downto` frame, the stack check, `break`/`next`/
+   `redo`/`return`, `&b`, `binding`, fresh block-locals per iteration, and fall back for
+   a Bignum, a Float bound or a redefined `downto`. Round eight's experiment, on a
+   loaded machine: with the block written as a `while` loop the method
    takes 834-1243 us per `permute(6)` against CRuby's 835-1010, and 1155-2286 against
    1121 as written, so the block is the whole gap; a larger gen0 does not help, so it is
    the yield machinery and not the garbage. `[BlockNotKept]` on `Integer#downto` changes
