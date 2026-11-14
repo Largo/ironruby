@@ -560,6 +560,13 @@ with the tiers on and off, int-matrix as the tree before; ivar-stress and
 block-scope-reuse-race; four probe files of the gate's own (32, 23, 26 and 18 lines),
 shown by IR_JIT_VERBOSE and IR_OSR_VERBOSE to reach the new paths; eight benchmarks
 verify with the tiers off; start-up CPU time level (1.25-1.34 s on all four trees).
+After #215's branch was merged in again (through 9b2936fa, cd089543): IronRuby.Tests the
+same on both frameworks, the matrices as CRuby with #215's new cases in them
+(hot-shapes-matrix 1264 lines, jit-matrix 676), and the full five-suite sweep
+(`Util/ci-sweep.sh`, Release net10.0, four jobs): core 23130 examples, library 6011,
+language 2935, command_line 175, security 34; no failing example that
+`Util/spec-known-failures.txt` does not list, none of its entries newly passing, no file
+without a summary line.
 
 - **perf/entry, 8160d9c2 374f856a 389aa0d4 - an entry of a compiled block loop allocates
   nothing, and each block has a floor by the weight of its body** (gap 2). A site keeps
