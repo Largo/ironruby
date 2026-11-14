@@ -1457,13 +1457,16 @@ namespace IronRuby.Builtins {
         /// an ASCII-compatible encoding: 1 or 0, or -1 when only Equals can tell. When this String holds
         /// characters in an encoding where ASCII is its own bytes, every non-ASCII character is non-ASCII
         /// bytes too, so the two are equal exactly when the characters are (JitRuntime.CaseString).
-        /// It only looks, so it reads the content as it is: through _content the shared content of a
-        /// one-character slice (SharedAsciiContents) would be replaced with one of the string's own, an
-        /// object per character of a parser's input, which is what sharing it saves.
+        /// A one-character slice on a shared content (SharedAsciiContents) is compared as it is, the way
+        /// Equals compares it: through _content it would be given a content of its own, an object per
+        /// character of a parser's input, which is what sharing it saves.
         /// </summary>
         internal int EqualsAsciiLiteral(string/*!*/ ascii) {
-            var content = _rawContent as StringContent;
-            if (content == null || !_encoding.IsAsciiIdentity) { return -1; }
+            if (!_encoding.IsAsciiIdentity) { return -1; }
+            int shared = SharedAsciiChar;
+            if (shared >= 0) { return (ascii.Length == 1 && ascii[0] == shared) ? 1 : 0; }
+            var content = _content as StringContent;
+            if (content == null) { return -1; }
             return String.Equals(content.Data, ascii) ? 1 : 0;
         }
 
