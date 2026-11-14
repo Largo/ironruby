@@ -223,7 +223,10 @@ namespace IronRuby.Runtime {
             var chars = other.AsSpan(start, count);
             int newCount = itemCount + encoding.GetByteCount(chars);
             Resize(ref array, newCount);
-            encoding.GetBytes(chars, array.AsSpan(itemCount));
+            // The destination is exactly the bytes being written: an Encoding that does not override the
+            // span overloads (EscapingEncoding) converts through a temporary array as long as the span it
+            // is given, and the rest of a doubled buffer made every append to it cost the whole buffer.
+            encoding.GetBytes(chars, array.AsSpan(itemCount, newCount - itemCount));
             return newCount;
         }
 
