@@ -83,10 +83,16 @@ from run to run on this machine, so a ratio is good to about that:
 | lit== | 178.1 | 57.7 | 0.32 | 0.94 |
 | swap | 54.8 | 53.6 | 0.98 | 1.35 |
 | locattr | 47.4 | 40.3 | 0.85 | 1.38 |
+| sqrtw | 41.6 | 2.5 | 0.06 | 1.34 |
+| rangeeach | 44.9 | 2.2 | 0.05 | 0.87 |
+| blkattr | 74.1 | 61.9 | 0.84 | 1.12 |
 
-The last three are round seven's shapes, and their "start" is round six: a literal as
-the receiver of `==`, two element stores in one method, Float attr reads on locals
-assigned from attr reads.
+`lit==`, `swap` and `locattr` are round seven's shapes, and their "start" is round six: a
+literal as the receiver of `==`, two element stores in one method, Float attr reads on
+locals assigned from attr reads. The last three are round eight's, each a loop of its
+own (ns per iteration), measured on the round-eight tree with round seven as "start":
+`Math.sqrt` in a `while` loop, a 1000-element `Range#each`, attr op-assigns on a local
+that a 20-iteration `times` block assigns.
 
 Profile (`Util/perf/profile.sh`, self time):
 
@@ -157,6 +163,16 @@ Profile (`Util/perf/profile.sh`, self time):
    args array and a tuple, so MinRun = 1 on runs of four bought little (475-555 ms
    against 565-795, noisy): short runs need a cheaper entry as well as a lower floor. No
    part of this shows on NBody alone, which is why round seven did not attempt it.
+   Round eight took the first three and the kind (see Landed), and NBody still does not
+   move: what is left is the entry. With attr reads and writes on a loop-assigned local
+   allowed in `while` loops too, `advance` rewritten with a `while` inner loop ran in
+   1051-1054 ms against 1410-1636 on the tree before and CRuby's 1265 (the experiment's
+   figures); but that also compiled CD's `Node#successor`, a `while` entered 721k times
+   per iteration for a few iterations each, which then paid an entry allocation every
+   time, so they are limited to core-iterator blocks until an entry costs nothing: the
+   OSR tier counts iterations, not entries, and so cannot tell a loop whose runs are
+   short. A cheap entry for short runs (args array and tuple per run today) is the one
+   thing between this and NBody at about 0.8 of CRuby; then `each_index` as a kind.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -417,6 +433,38 @@ passes; 21 odd receivers of a store, one process each, as CRuby; start-up is unc
   `micro.rb` has `lit==`, `swap` and `locattr`; perf-gate asks a fourth question and says
   how to tell that a differential case reaches its path.
 
+Round eight: three experiments on the tree of round seven (NBody's inner loop, Permute's
+frame, `!=` as one dispatch); the last two are under Rejected. One landed, and it moves
+no AWFY benchmark: geomean of the thirteen against 6c932eb3's code, both column orders,
+1.004 and 0.998; NBody and CD the same in separate processes taken alternately; start-up
+not slower. It is kept on the per-operation rule. Gate against the tree before:
+IronRuby.Tests in Release (net10.0: 1253 tests, the one known failure on both; net11.0,
+this tree only: all pass); ruby/spec language, core/range, core/math, core/integer,
+core/array and core/float (2935, 606, 243, 598, 2898 and 260 examples, the same failing
+examples); block-loop-, osr-array-, jit-, hot-shapes- and ivar-matrix as CRuby with the
+tiers on and off, int-matrix as the tree before; ivar-stress; 124 lines of odd arguments
+and odd elements met on hot sites, shown by IR_OSR_VERBOSE to reach the compiled loops.
+
+- **perf/nbloop, 587fb944 097600ad cdc12734 5183dd88 - `Math.sqrt`, attr reads and writes
+  on a loop-assigned local, and `Range#each`, in compiled loops** (gap 2). `Math.sqrt(x)`
+  on a number is the square root with no call, in the method JIT and the loop compiler,
+  while the constant is the Math module and its singleton `sqrt` the library's (a
+  negative argument deopts, so the call raises Math::DomainError): 56 -> 2.5 ns in a
+  `while` loop, a method computing `Math.sqrt(@x*@x + @y*@y)` 88 -> 53. An attr read, an
+  attr write and `o.x op= v` through a local the loop assigns (`b = bs[i]; b.v -= b.x`)
+  compile in a core iterator's block, the local's class sampled from the Array it is
+  assigned from and checked at every read and write; the store logs what it replaces,
+  as stores in loops did: 83 -> 62 ns for two op-assigns in a 20-iteration `times` block.
+  `Range#each` over Integers is `Integer#upto`'s outlined loop for a run above the floor
+  (39 -> 2.2 ns per element of a 1000-element run); a run at or under it takes the loop
+  it took before. Two things were taken back after the first version: the attr changes
+  in `while` loops (CD's bytes +3.0%, gap 2), and a rewritten `Range#each` loop for
+  short runs, which was not shown to cost anything but had no reason to differ.
+  `locattr` (round seven's shape) had a median of 38.0 ns on the tree before and 41.1 on
+  this one over twelve alternating processes, with the same minimum (33.7 and 33.9) and
+  the same JIT decisions: both trees have a fast and a slow state for it and this build
+  was in the slow one more often. Not explained.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -513,7 +561,7 @@ Round seven (none of these is in the tree; the branches were local to the sessio
   in the binder's rule for a monomorphic attr site, would not have the second cost. The
   first version's CD figure is unexplained and may be worth one quiet run by itself.
 
-Round eight (three experiments on the tree of round seven; the NBody one is still open):
+Round eight (the NBody experiment landed, see above):
 
 - **perf/neq1 - `a != b` that reaches `BasicObject#!=`, bound as the receiver's `==`
   negated** (gap 10): one dispatch, as CRuby's opt_neq, made in `DispatchIntrinsics`

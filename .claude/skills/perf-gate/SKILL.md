@@ -165,6 +165,15 @@ length, the two trees taken alternately, eight of each, and compare the medians
 Storage failed this step in four of seven awfy.rb runs in round seven and was the same
 on both trees measured that way.
 
+The same goes for a micro line. A script that times ten shapes one after another times
+the later ones in whatever state the earlier ones left the process in, and that state
+differs between two trees when one of them compiles an earlier shape and the other does
+not: in round eight three lines were 15% slower in every round of such a script and the
+same on both trees once each shape ran in a process of its own. Give a shape that looks
+slower its own process (a script that takes the shape as an argument), six or more
+alternating rounds, and compare medians and minima; a line that reaches the same minimum
+on both trees has a fast and a slow state, not a cost.
+
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.
 

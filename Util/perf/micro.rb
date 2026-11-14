@@ -30,11 +30,15 @@ class P
   def ws(c); ' ' == c || "\t" == c || "\n" == c || "\r" == c; end
   def swap(i, j); t = @arr[i]; @arr[i] = @arr[j]; @arr[j] = t; end
   def locattr(m); a = m.a; b = m.b; b.x - a.x < 1.5; end
+  def sqrtw(n); i = 0; s = 0.0; f = 1.5; while i < n; s += Math.sqrt(f + i); i += 1; end; s; end
+  def rangeeach(n); s = 0.0; (n / 1000).times { (0...1000).each { |i| s += i * 0.5 } }; s; end
+  def blkattr(bs, n); (n / 20).times { 20.times { |i| b = bs[i]; b.v -= b.x; b.c += 2 } }; end
 end
 class P2; def initialize(a, b); @a = a; @b = b; end; def foo; 1; end; end
 class P3; def foo; 2; end; end
 class PV; attr_reader :x; def initialize(x); @x = x; end; end
 class PM; attr_reader :a, :b; def initialize(a, b); @a = a; @b = b; end; end
+class PB; attr_accessor :x, :v, :c; def initialize; @x = 1.5; @v = 0.0; @c = 0; end; end
 def t(name, n = 3_000_000)
   best = 1e9
   5.times { t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC); yield n; d = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0; best = d if d < best }
@@ -64,3 +68,9 @@ sx = "x"; pm = PM.new(PV.new(1.5), PV.new(2.5))
 t("lit==")   { |n| i = 0; while i < n; o.ws(sx); i += 1; end }
 t("swap")    { |n| i = 0; while i < n; o.swap(1, 2); i += 1; end }
 t("locattr") { |n| i = 0; while i < n; o.locattr(pm); i += 1; end }
+# round eight's shapes, each a loop of its own (ns per iteration of it, not per call): Math.sqrt in a while loop,
+# a long Range#each, attr op-assigns on a local a times block assigns
+pbs = Array.new(20) { PB.new }
+t("sqrtw")     { |n| o.sqrtw(n) }
+t("rangeeach") { |n| o.rangeeach(n) }
+t("blkattr")   { |n| o.blkattr(pbs, n) }
