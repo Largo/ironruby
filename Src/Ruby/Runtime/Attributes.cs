@@ -373,6 +373,20 @@ namespace IronRuby.Runtime {
     /// ([RubyMethod("map")], [RubyMethod("collect")]) learns which one was called. Opt-in: methods without it pay nothing.
     /// The parameter goes after RubyCallSiteStorage and RubyContext/RubyScope parameters and before the BlockParam.
     /// </summary>
+    /// <summary>
+    /// Marks a library method that does nothing with its BlockParam but yield to it while it runs: it keeps neither the
+    /// BlockParam nor its Proc, hands neither to anything else, and calls nothing that could (Array#each, Integer#times).
+    /// A literal block given to it is then reachable after the call only from the frame that made it, unless one of the
+    /// block's own calls captured a scope it ran in, so that frame may make it again (Proc.TryReuse), BlockParam and all,
+    /// for its next call - as for a block given to a light-frame Ruby method (RubyOps.EnterLightMethod).
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class BlockNotKeptAttribute : Attribute {
+        internal static bool IsDefinedOn(MethodBase method) {
+            return method != null && method.IsDefined(typeof(BlockNotKeptAttribute), false);
+        }
+    }
+
     [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
     public sealed class CalledNameAttribute : Attribute {
         internal static bool IsDefinedOn(ParameterInfo/*!*/ parameter) {

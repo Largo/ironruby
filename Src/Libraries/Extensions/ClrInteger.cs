@@ -45,7 +45,7 @@ namespace IronRuby.Builtins {
         /// each value has exactly one representation and #hash / #eql? need no cross-type care.
         /// </summary>
         public static object/*!*/ Narrow(long value) {
-            return (value >= Int32.MinValue && value <= Int32.MaxValue) ? ScriptingRuntimeHelpers.Int32ToObject((Int32)value) : (object)value;
+            return (value >= Int32.MinValue && value <= Int32.MaxValue) ? Protocols.BoxInt32((Int32)value) : (object)value;
         }
 
         #region Bitwise Operators
@@ -109,7 +109,7 @@ namespace IronRuby.Builtins {
             } else if (shift >= 32) {
                 return self < 0 ? MinusOne : Zero;
             } else {
-                return self >> shift;
+                return Protocols.BoxInt32(self >> shift);
             }
         }
 
@@ -410,7 +410,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("^")]
         public static object/*!*/ BitwiseXor(int self, int other) {
-            return self ^ other;
+            return Protocols.BoxInt32(self ^ other);
         }
 
         /// <summary>
@@ -762,7 +762,7 @@ namespace IronRuby.Builtins {
             if (self == Int32.MinValue && other == -1) {
                 return MinusMinValue();
             }
-            return MathUtils.FloorDivideUnchecked(self, other);
+            return Protocols.BoxInt32(MathUtils.FloorDivideUnchecked(self, other));
         }
 
         // A Fixnum is exactly a double, so its quotient is the division of the two, as MRI's

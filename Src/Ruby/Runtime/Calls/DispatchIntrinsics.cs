@@ -178,12 +178,110 @@ namespace IronRuby.Runtime.Calls {
             return true;
         }
 
+        // Whether every overload of a library method is one of the given CLR methods (an alias of another method, or the method
+        // of a user's library, is not).
+        private static bool IsLibraryMethod(RubyMemberInfo/*!*/ method, string/*!*/ declaringType, string/*!*/ clrName, string otherClrName = null) {
+            var libraryMethod = method as RubyLibraryMethodInfo;
+            if (libraryMethod == null) {
+                return false;
+            }
+            var members = libraryMethod.GetMembers();
+            if (members.Length == 0) {
+                return false;
+            }
+            foreach (var member in members) {
+                if (member.DeclaringType.FullName != declaringType || member.Name != clrName && member.Name != otherClrName) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool IsNotEqualsMethod(RubyMemberInfo/*!*/ method) {
+            return IsLibraryMethod(method, "IronRuby.Builtins.BasicObjectOps", "ValueNotEquals");
+        }
+
         /// <summary>
-        /// The rules TryBuildRespondTo and TryBuildSend build depend on the receiver's class, not only on the
+        /// `a != b' with BasicObject#!= - which calls `==' and negates the answer (rb_obj_not_equal) - is bound as the negated
+        /// `==' where that is one of the builtin comparisons that runs no Ruby code: identity for a plain Ruby object, nil, true
+        /// and false (BasicObject#==), Integer#== of two Integers, String#== of two Strings. It costs one rule rather than a rule,
+        /// BasicObjectOps.ValueNotEquals and a second rule at the site that method calls `==' through; and as nothing runs inside,
+        /// no frame of BasicObject#!= is missing from any backtrace.
+        /// 
+        /// The `==' is looked up the way that site does - public, without refinements - in the class the rule's receiver test
+        /// covers: a Ruby object's class (its singleton class if it has one), or a CLR type whose test is the type and its
+        /// class's version alone (no singleton `!=' or `==' on any instance - defining one re-versions the class). Defining
+        /// `==' or `!=' in the class or in any of its ancestors re-versions it, so the receiver test fails from then on.
+        /// </summary>
+        internal static bool TryBuildNotEquals(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, RubyMemberInfo/*!*/ method) {
+            var signature = args.Signature;
+            if (signature.HasBlock || signature.HasSplattedArgument || signature.HasRhsArgument || signature.ResolveOnly ||
+                signature.IsVirtualCall || signature.IsSuperCall || signature.IsInteropCall || args.SimpleArgumentCount != 1 ||
+                TracePoint.CCallTracing || !IsNotEqualsMethod(method)) {
+                return false;
+            }
+
+            object target = args.Target;
+            object arg = args.GetSimpleArgument(0);
+            var targetClass = args.TargetClass;
+            bool rubyObject = target != null && target.GetType() == typeof(RubyObject);
+            if (!rubyObject && target != null && !(target is bool) && !(target is int) && (target.GetType() != typeof(MutableString) ||
+                !RubyCallAction.HasPlainClrTypeTest(targetClass, "!=") || !RubyCallAction.HasPlainClrTypeTest(targetClass, "=="))) {
+                return false;
+            }
+
+            int version;
+            var lookup = targetClass.GetMethodLookup("==", out version);
+            if (version < 0 || !lookup.Found || lookup.Visibility != RubyMethodVisibility.Public) {
+                return false;
+            }
+
+            Expression targetExpression = AstUtils.Convert(args.TargetExpression, typeof(object));
+            Expression argExpression = AstUtils.Convert(args.GetSimpleArgumentExpression(0), typeof(object));
+            Expression equal;
+            if (target == null || target is bool || rubyObject) {
+                if (!IsLibraryMethod(lookup.Info, "IronRuby.Builtins.BasicObjectOps", "ValueEquals")) {
+                    return false;
+                }
+                // BasicObjectOps.ValueEquals: Object.Equals(self, other), which for these is identity (a RubyObject's
+                // BaseEquals is object's) and for a boxed bool is the value.
+                equal = rubyObject ?
+                    (Expression)Ast.ReferenceEqual(targetExpression, argExpression) :
+                    Ast.Call(typeof(object).GetMethod("Equals", new[] { typeof(object), typeof(object) }), targetExpression, argExpression);
+            } else if (target is int) {
+                if (!(arg is int) || !IsLibraryMethod(lookup.Info, "IronRuby.Builtins.ClrInteger", "Equal")) {
+                    return false;
+                }
+                // ClrInteger.Equal(int, int), the overload the call of `==' would take for two Integers:
+                metaBuilder.AddTypeRestriction(typeof(int), args.GetSimpleArgumentExpression(0));
+                equal = Ast.Equal(Ast.Unbox(targetExpression, typeof(int)), Ast.Unbox(argExpression, typeof(int)));
+            } else {
+                if (arg == null || arg.GetType() != typeof(MutableString) ||
+                    !IsLibraryMethod(lookup.Info, "IronRuby.Builtins.MutableStringOps", "StringEquals", "Equals")) {
+                    return false;
+                }
+                // MutableStringOps.StringEquals(MutableString, MutableString), the overload the call of `==' would take for two Strings:
+                metaBuilder.AddTypeRestriction(typeof(MutableString), args.GetSimpleArgumentExpression(0));
+                equal = Ast.Call(
+                    Ast.Convert(targetExpression, typeof(MutableString)),
+                    typeof(MutableString).GetMethod("Equals", new[] { typeof(MutableString) }),
+                    Ast.Convert(argExpression, typeof(MutableString))
+                );
+            }
+
+            metaBuilder.Result = Ast.Condition(equal,
+                Ast.Field(null, typeof(ScriptingRuntimeHelpers).GetField("False")),
+                Ast.Field(null, typeof(ScriptingRuntimeHelpers).GetField("True"))
+            );
+            return true;
+        }
+
+        /// <summary>
+        /// The rules TryBuildRespondTo, TryBuildSend and TryBuildNotEquals build depend on the receiver's class, not only on the
         /// method, so RubyCallAction.BindShared must not hand them to receivers of other classes.
         /// </summary>
         internal static bool MaySpecialize(RubyMemberInfo/*!*/ method) {
-            return IsKernelMethod(method, ref _respondTo, "RespondTo") || IsSendMethod(method);
+            return IsKernelMethod(method, ref _respondTo, "RespondTo") || IsSendMethod(method) || IsNotEqualsMethod(method);
         }
 
         /// <summary>

@@ -65,13 +65,19 @@ namespace IronRuby.Runtime.Calls {
         // CallAction only: a call written in Ruby source with a block (literal or &arg), as opposed
         // to one a library method makes. Only such a call warns that the callee ignores the block.
         HasSourceBlock = 512,
+
+        // CallAction only: a call in a method that runs without its scope (MethodDefinition.TransformLightFrame). The scope
+        // argument is the scope the method was defined in, which shares the method's runtime and nothing else. A rule that
+        // would read the scope - its value or its expression - returns RubyOps.LightScopeRequired instead, and the method
+        // makes its scope and repeats the call on an ordinary site (see CallArguments.ScopeRead).
+        HasLightScope = 1024,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 10;
+        private const int FlagsCount = 11;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -90,6 +96,7 @@ namespace IronRuby.Runtime.Calls {
         public bool IsSuperCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsSuperCall) != 0; } }
         public bool IsVariableCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVariableCall) != 0; } }
         public bool HasSourceBlock { get { return (_countAndFlags & (uint)RubyCallFlags.HasSourceBlock) != 0; } }
+        public bool HasLightScope { get { return (_countAndFlags & (uint)RubyCallFlags.HasLightScope) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }
@@ -172,7 +179,7 @@ namespace IronRuby.Runtime.Calls {
                 (HasImplicitSelf ? "." : "") +
                 (HasImplicitArguments ? "^" : "") +
                 (IsVirtualCall ? "V" : "") +
-                (HasScope ? "S" : "C") +
+                (HasLightScope ? "L" : HasScope ? "S" : "C") +
                 (ResolveOnly ? "?" : "," + ArgumentCount.ToString()) + 
                 (HasSplattedArgument ? "*" : "") + 
                 (HasBlock ? "&" : "") + 

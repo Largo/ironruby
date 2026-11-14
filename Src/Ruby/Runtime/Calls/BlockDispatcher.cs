@@ -143,6 +143,11 @@ namespace IronRuby.Runtime.Calls {
     }
 
     public abstract class BlockDispatcher {
+        // A literal block whose calls never leave its scope reachable but through RubyScope.MarkCaptured: not a lambda, no block
+        // literal nested in it (whose Proc holds the scope without marking it), no TracePoint hooks compiled in. Its Proc may be
+        // made again by the frame that made it (Proc.TryReuse, RubyOps.InstantiateReusableBlock).
+        internal bool ReusesProc;
+
         // position of the block definition (opening brace):
         private readonly string _sourcePath;
         private readonly int _sourceLine;

@@ -83,8 +83,25 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        /// <summary>
+        /// Set when the rule being built has read the scope of a site with a light scope (RubyCallFlags.HasLightScope), which
+        /// is not the caller's: the rule is then not made (RubyMetaBinder.Bind).
+        /// </summary>
+        internal bool ScopeRead;
+
+        /// <summary>
+        /// The scope argument's expression, for a helper that takes the scope only for its runtime (GetInstanceVariable,
+        /// SetAttribute): the scope a light-scope site passes has the same runtime, so this does not count as reading it.
+        /// </summary>
+        internal Expression/*!*/ ContextScopeExpression {
+            get { return (_scope != null && _signature.HasScope) ? _scope.Expression : MetaScope.Expression; }
+        }
+
         public DynamicMetaObject/*!*/ MetaScope {
             get {
+                if (_signature.HasLightScope) {
+                    ScopeRead = true;
+                }
                 if (_scope == null) {
                     Debug.Assert(!_signature.HasScope);
                     // we can burn the scope as a constant since we'll restrict the context arg to the current context:
