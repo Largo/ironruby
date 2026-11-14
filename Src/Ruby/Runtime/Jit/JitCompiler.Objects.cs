@@ -978,6 +978,8 @@ namespace IronRuby.Runtime.Jit {
             internal object SelfSample;
             // The same call's positional arguments (JitCompiler.TrySample).
             internal object[] ArgSamples;
+            // The Ruby classes each positional argument has had, one or two; null for none, more, or another kind.
+            internal RubyClass[][] ArgClasses;
             // An outlined loop's self as it is when the loop turns hot (JitCompiler.NoteLoopSample).
             internal object LoopSelf;
             // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
@@ -1510,8 +1512,9 @@ namespace IronRuby.Runtime.Jit {
             return false;
         }
 
-        // The right sides of the method's locals that are assigned exactly once (`init = motion.pos_one'), by name.
-        private Dictionary<string, RExpr> _singleSources;
+        // The right sides of the method's locals that are assigned exactly once (`init = motion.pos_one'), by name,
+        // and of the first assignment of those assigned more than once (SingleSourceWalker.FirstSources).
+        private Dictionary<string, RExpr> _singleSources, _firstSources;
         private int _sampleDepth;
 
         /// <summary>
@@ -1528,8 +1531,22 @@ namespace IronRuby.Runtime.Jit {
                 var walker = new SingleSourceWalker();
                 walker.Walk(_ast.Body);
                 _singleSources = walker.Sources();
+                _firstSources = walker.FirstSources();
             }
             RExpr source;
+            // A local assigned more than once, first from another local - `x_tail = x' before a loop that walks
+            // a list with `x_tail = x_tail.next' (List#is_shorter_than, CD's tree_minimum): what that local samples
+            // to is as good a profile, and as above an attr read of it checks the class it finds. So is an instance
+            // variable of self, `current = @root' before `current = current.left' (CD's RedBlackTree#find_node).
+            var from = (_firstSources.TryGetValue(local.Name, out source) && !_singleSources.ContainsKey(local.Name)) ? source : null;
+            if (from is LocalVariable && ((LocalVariable)from).Name != local.Name || from is InstanceVariable) {
+                _sampleDepth++;
+                try {
+                    return TrySample(from, out sample);
+                } finally {
+                    _sampleDepth--;
+                }
+            }
             var call = _singleSources.TryGetValue(local.Name, out source) ? source as MethodCall : null;
             if (call == null || call.Block != null || call.Target == null || call.Arguments != null && !call.Arguments.IsEmpty) { return false; }
             object owner;
@@ -1551,9 +1568,20 @@ namespace IronRuby.Runtime.Jit {
             private readonly Dictionary<string, RExpr>/*!*/ _sources = new Dictionary<string, RExpr>();
             private readonly HashSet<string>/*!*/ _many = new HashSet<string>();
 
+            private readonly Dictionary<string, RExpr>/*!*/ _first = new Dictionary<string, RExpr>();
+
             internal Dictionary<string, RExpr>/*!*/ Sources() {
-                foreach (var name in _many) { _sources.Remove(name); }
+                foreach (var name in _many) {
+                    RExpr first;
+                    if (_sources.TryGetValue(name, out first)) { _first[name] = first; _sources.Remove(name); }
+                }
                 return _sources;
+            }
+
+            // the right side of the first plain `x = v' of each local assigned more than once, if the first
+            // assignment is one (after Sources)
+            internal Dictionary<string, RExpr>/*!*/ FirstSources() {
+                return _first;
             }
 
             public override bool Enter(SimpleAssignmentExpression/*!*/ node) {

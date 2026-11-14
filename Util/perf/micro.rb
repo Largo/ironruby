@@ -98,7 +98,9 @@ t("blkattr")   { |n| o.blkattr(pbs, n) }
 # round nine's shapes: a method calling a small pure Float method on self twice (CD's compare_to), then
 # PVec's (above)
 t("selfcall")  { |n| i = 0; f = 1.5; while i < n; o.selfcall(f); i += 1; end }
-v4 = PVec.new(4); v100 = PVec.new(100)
+v1 = PVec.new(1); v2 = PVec.new(2); v4 = PVec.new(4); v100 = PVec.new(100)
+t("veach1", 1_000_000) { |n| i = 0; while i < n; v1.sum; i += 1; end }
+t("veach2", 1_000_000) { |n| i = 0; while i < n; v2.sum; i += 1; end }
 t("veach4", 1_000_000) { |n| i = 0; while i < n; v4.sum; i += 1; end }
 t("veach100", 50_000)  { |n| i = 0; while i < n; v100.sum; i += 1; end }
 t("rangelit")          { |n| i = 0; while i < n; v4.slice(2); i += 1; end }
@@ -114,3 +116,27 @@ t("short4")    { |n| i = 0; while i < n; o.short4(pb4); i += 1; end }
   t("s_map#{k}")   { |n| i = 0; while i < n; o.sh_map(ak); i += 1; end }
   t("s_any#{k}")   { |n| i = 0; while i < n; o.sh_any(ak); i += 1; end }
 end
+# round ten's shapes: a cursor walking a linked list (List's is_shorter_than: `xt = x; ... xt = xt.nxt'), and a
+# lookup in a binary tree of 300 keys whose `compare_to' calls a leaf on self (CD's RedBlackTree#find_node)
+class PEl; attr_accessor :val, :nxt; def initialize(v, n); @val = v; @nxt = n; end; end
+class PKey
+  attr_reader :x, :y
+  def initialize(x, y); @x = x; @y = y; end
+  def cmpn(a, b); return 0 if a == b; return -1 if a < b; 1; end
+  def compare_to(o); r = cmpn(@x, o.x); return r if r != 0; cmpn(@y, o.y); end
+end
+class PNode; attr_accessor :key, :left, :right; def initialize(k); @key = k; end; end
+class PTree
+  def initialize; @root = nil; end
+  def shorter(x, y); xt = x; yt = y; while yt; return true unless xt; xt = xt.nxt; yt = yt.nxt; end; false; end
+  def find(key); c = @root; while c; r = key.compare_to(c.key); return c if r == 0; if r < 0; c = c.left; else; c = c.right; end; end; nil; end
+  def add(key)
+    n = PNode.new(key); c = @root
+    return @root = n unless c
+    loop { if key.compare_to(c.key) < 0; (c.left = n; break) unless c.left; c = c.left; else; (c.right = n; break) unless c.right; c = c.right; end }
+  end
+end
+pt = PTree.new; pl6 = nil; 6.times { |j| pl6 = PEl.new(j, pl6) }; pl4 = pl6.nxt.nxt
+pkeys = Array.new(300) { |j| PKey.new((j * 7919) % 300 + 0.5, j * 1.0) }; pkeys.each { |k| pt.add(k) }
+t("listwalk")  { |n| i = 0; while i < n; pt.shorter(pl4, pl6); i += 1; end }
+t("treefind", 1_000_000) { |n| i = 0; while i < n; pt.find(pkeys[i % 300]); i += 1; end }
