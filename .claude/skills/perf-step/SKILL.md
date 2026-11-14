@@ -44,9 +44,11 @@ The build in this checkout is the baseline. Build it now, before anything is mea
 against it (`dotnet build Src/Console/Ruby.Console.csproj -c Release
 -p:IronRubyTargetFrameworks=net10.0`, with `set -o pipefail` if its output is piped): the
 binaries do not say which sources they came from, and after a pull or a branch switch they
-are another revision's. `git status --short -- Src` must print nothing first: the experiment's
-worktree starts from the committed branch, so an uncommitted edit here would be in the
-baseline and not in the candidate, and be measured as the experiment's effect. Then do not
+are another revision's. `git status --short --untracked-files=no` must print nothing first,
+for the whole checkout and not only `Src` (`Directory.Build.props` and the build scripts
+shape the build too): the experiment's worktree starts from the committed branch, so an
+uncommitted edit here would be in the baseline and not in the candidate, and be measured
+as the experiment's effect. Then do not
 rebuild it while an experiment is being measured.
 
 ```sh

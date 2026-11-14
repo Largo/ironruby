@@ -33,15 +33,24 @@ printf fmt, 'benchmark', *interps.map(&:first)
 cols = Array.new(interps.size) { [] }
 INNER.each do |b, inner|
   next unless only.empty? || only.include?(b)
-  row = interps.map do |_, cmd|
+  row = interps.map do |name, cmd|
     # cmd is a command line, as documented; the paths this script adds are quoted (a checkout or PERF_HOME with a space)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     out = IO.popen("LANG=C.UTF-8 timeout -s KILL #{secs} #{cmd} #{"-r#{sync}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} 100000 #{inner} 2>&1", &:read)
     # The run is meant to end at the deadline, killed (137 from timeout). One that ended by itself with an
-    # error - a wrong answer raises - is a failure however many iterations it printed first.
+    # error - a wrong answer raises - is a failure however many iterations it printed first, and so is one
+    # killed before the deadline (the OOM killer, a kill -9 from elsewhere), which is 137 or a signal too.
     st = $?
-    ended_as_meant = st.signaled? || [0, 137].include?(st.exitstatus)
+    at_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started >= secs - 0.5
+    ended_as_meant = st.exitstatus == 0 || at_deadline && (st.signaled? || st.exitstatus == 137)
     t = out.scan(/runtime: (\d+)us/).flatten.map(&:to_i)
-    (t.empty? || !ended_as_meant) ? nil : t[t.size / 2..].sort.then { |h| h[h.size / 2] }
+    if t.empty? || !ended_as_meant
+      # what the run said last is the only account of why there is no number
+      $stderr.puts "#{b} on #{name}: #{st.signaled? ? "signal #{st.termsig}" : "exit #{st.exitstatus}"}#{" before the deadline" unless at_deadline}, #{t.size} iterations; its last lines:"
+      out.lines.last(6).each { |l| $stderr.puts "  #{l.chomp}" }
+      next nil
+    end
+    t[t.size / 2..].sort.then { |h| h[h.size / 2] }
   end
   row.each_with_index { |v, k| cols[k] << v }
   printf fmt, b, *row.map { |v| v || 'FAIL' }

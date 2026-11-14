@@ -24,7 +24,16 @@ if [ ! -x "$PERF_HOME/truffleruby-$V/bin/truffleruby" ] &&
   tar -xzf "$PERF_HOME/truffleruby.tgz" -C "$PERF_HOME/truffleruby-$V" --strip-components=1
   rm "$PERF_HOME/truffleruby.tgz"
 fi
-[ -x "$PERF_HOME/truffleruby-$V/bin/truffleruby" ] && ln -sfn "truffleruby-$V" "$PERF_HOME/truffleruby"
+if [ -d "$PERF_HOME/truffleruby" ] && [ ! -L "$PERF_HOME/truffleruby" ]; then
+  # A real directory, from an install by hand: ln -sfn would put the link inside it and leave what it
+  # holds in use. It is fine if it is the version asked for, and nothing this script should move if not.
+  if ! "$PERF_HOME/truffleruby/bin/truffleruby" -v 2>/dev/null | grep -q "truffleruby $V "; then
+    echo "$PERF_HOME/truffleruby is a directory holding another TruffleRuby than $V: move it away, or set PERF_HOME, and run this again" >&2
+    exit 1
+  fi
+elif [ -x "$PERF_HOME/truffleruby-$V/bin/truffleruby" ]; then
+  ln -sfn "truffleruby-$V" "$PERF_HOME/truffleruby"
+fi
 [ -d "$PERF_HOME/awfy" ] || git clone -q --depth 1 https://github.com/smarr/are-we-fast-yet "$PERF_HOME/awfy"
 
 if [ ! -x "$ROOT/Src/Console/bin/Release/net10.0/ir" ]; then
