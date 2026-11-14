@@ -270,9 +270,13 @@ namespace IronRuby.Runtime.Jit {
         /// <paramref name="plainFalse"/> (checked when compiled). Anything else deopts.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        public static bool CaseString(object value, MutableString/*!*/ literal, bool plainFalse) {
+        public static bool CaseString(object value, MutableString/*!*/ literal, string ascii, bool plainFalse) {
             var str = value as MutableString;
-            if (str != null) { return literal.Equals(str); }
+            if (str != null) {
+                // ascii: the literal's characters when it is ASCII in an ASCII-compatible encoding (MutableString.EqualsAsciiLiteral).
+                int quick = (ascii != null) ? str.EqualsAsciiLiteral(ascii) : -1;
+                return (quick >= 0) ? quick != 0 : literal.Equals(str);
+            }
             if (plainFalse && (value == null || value is bool || value is int || value is long || value is double || value is RubySymbol)) {
                 return false;
             }
@@ -415,8 +419,12 @@ namespace IronRuby.Runtime.Jit {
         /// the generic code would have made. Any other receiver deopts, and the generic code makes
         /// the call with a fresh literal.
         /// </summary>
-        public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal) {
-            if (value != null && value.GetType() == typeof(MutableString)) { return ((MutableString)value).Equals(literal); }
+        public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal, string ascii) {
+            if (value != null && value.GetType() == typeof(MutableString)) {
+                var str = (MutableString)value;
+                int quick = (ascii != null) ? str.EqualsAsciiLiteral(ascii) : -1;
+                return (quick >= 0) ? quick != 0 : str.Equals(literal);
+            }
             throw Deopt();
         }
 
@@ -678,6 +686,51 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
             throw Deopt();
+        }
+
+        /// <summary>
+        /// The store a method ends with when an earlier element store went unlogged (JitCompiler.IsLastStatement):
+        /// this one may not deopt, since the generic body would run the earlier store again. Its receiver is an Array
+        /// itself, checked before the first store (ExactArray), while Array#[]= is the public builtin and no refinement
+        /// is active, so a call of []= that sees every method is the call the generic code makes. An element that is
+        /// there is replaced; a frozen array, or an index that grows the array or raises, is that call.
+        /// </summary>
+        public sealed class StoreSite {
+            internal readonly CallSite<Func<CallSite, object, object, object, object>>/*!*/ Fallback;
+
+            internal StoreSite(RubyContext/*!*/ context) {
+                Fallback = CallSite<Func<CallSite, object, object, object, object>>.Create(
+                    Calls.RubyCallAction.Make(context, "[]=", Calls.RubyCallSignature.Simple(2)));
+            }
+        }
+
+        /// <summary>
+        /// The receiver of the store a method ends with, checked before the first unlogged store (JitCompiler.IsEarlyTopStatement):
+        /// an Array itself, not a subclass, or a deopt while nothing has been written. A singleton []= is ruled out as it is for
+        /// IndexStoreInt (JitCompiler.HasPlainInstances).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyArray/*!*/ ExactArray(object value) {
+            if (value != null && value.GetType() == typeof(RubyArray)) { return (RubyArray)value; }
+            throw Deopt();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        public static void IndexStoreIntOrCall(StoreSite/*!*/ site, object recv, int index, object value, bool arrays) {
+            if (arrays && recv != null && recv.GetType() == typeof(RubyArray)) {
+                int position;
+                object old;
+                if (((RubyArray)recv).JitReplaceElement(index, value, out position, out old)) { return; }
+            }
+            site.Fallback.Target(site.Fallback, recv, ScriptingRuntimeHelpers.Int32ToObject(index), value);
+        }
+
+        public static void IndexStoreObjOrCall(StoreSite/*!*/ site, object recv, object index, object value, bool arrays) {
+            if (index is int) {
+                IndexStoreIntOrCall(site, recv, (int)index, value, arrays);
+                return;
+            }
+            site.Fallback.Target(site.Fallback, recv, index, value);
         }
 
         public static void IndexStoreLong(object recv, long index, object value, bool arrays, bool hashes, JitUndoLog log) {
