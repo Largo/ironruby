@@ -577,3 +577,48 @@ lambda do
   end
   p s2.map(&:call), s3.map(&:call), s4.map(&:call), (s2 + s3 + s4).map(&:object_id).uniq.size
 end.call
+
+# ---- `a != b' bound as a negated builtin `==' (DispatchIntrinsics.TryBuildNotEquals) ----
+# BasicObject#!= calls `==': for nil, true, false, a plain object, two Integers and two Strings
+# the rule compares itself. Hot, with what must undo it in the middle: `==' defined in the
+# class, on one object (def o.==, extend), on one String, in a prepended module of Integer,
+# String#== replaced and restored, `!=' defined, `==' made private and undefined, NilClass#==
+# redefined; receivers of every other kind beside them.
+def not_equals_matrix
+  ne_cls = Class.new { attr_reader :id; def initialize(id) = @id = id }
+  ne_sub = Class.new(String)
+  ne_basic = Class.new(BasicObject)
+  ne_struct = Struct.new(:a)
+  ne_mod = Module.new { def ==(o) = $ne_flag ? :prepended : super }
+  ne_eq = Module.new { def ==(o) = :extended }
+  ne = ->(a, b) { a != b }
+  o1 = ne_cls.new(1); o2 = ne_cls.new(2); o3 = ne_cls.new(3); s1 = +"ab"; s2 = +"ab"; s3 = +"ab"
+  bo = ne_basic.new
+  rows = []
+  6000.times do |i|
+    case i
+    when 600 then def o1.==(o) = true
+    when 1200 then o2.extend(ne_eq)
+    when 1800 then def s1.==(o) = true
+    when 2400 then $ne_flag = true; Integer.prepend(ne_mod)
+    when 2700 then $ne_flag = false
+    when 3000 then String.class_eval { alias_method :ne_saved_eq, :==; def ==(o) = :replaced }
+    when 3300 then String.class_eval { alias_method :==, :ne_saved_eq }
+    when 3600 then ne_cls.class_eval { def ==(o) = o.respond_to?(:id) && id == o.id }
+    when 4200 then ne_cls.class_eval { def !=(o) = :own_ne }
+    when 4500 then ne_cls.class_eval { remove_method :!= }
+    when 4800 then ne_cls.class_eval { private :== }
+    when 5100 then ne_cls.class_eval { undef_method :== }
+    when 5400 then NilClass.class_eval { def ==(o) = :nil_eq }
+    end
+    row = [ne.(nil, nil), ne.(nil, o3), ne.(true, true), ne.(true, false), ne.(false, nil),
+           (ne.(o1, o1) rescue $!.class), (ne.(o2, o3) rescue $!.class), (ne.(o3, o3) rescue $!.class), (ne.(o3, ne_cls.new(3)) rescue $!.class),
+           ne.(1, 1), ne.(1, 2), ne.(1, 1.0), ne.(1, nil), ne.(2**70, 2**70), ne.(1.5, 1.5),
+           ne.(s1, s2), ne.(s2, s3), ne.(s2, +"x"), ne.(s2, ne_sub.new("ab")), ne.(ne_sub.new("ab"), s2), ne.(s2, :ab), ne.("é", "é".b),
+           ne.(:a, :a), ne.(:a, :b), ne.(bo, bo), ne.(bo, nil), ne.(ne_struct.new(1), ne_struct.new(1)), ne.([1], [1]), ne.(1..2, 1..2)]
+    rows << [i, row] if i % 300 == 299
+  end
+  NilClass.class_eval { remove_method :== }
+  rows.each { |r| p r }
+end
+not_equals_matrix
