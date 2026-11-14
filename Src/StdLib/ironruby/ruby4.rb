@@ -843,6 +843,8 @@ module Enumerable
       __each_slice_without_self__(n, &block)
       self
     end
+    ::Enumerator.__iter_cursor_method__(self, :each_slice)
+    ::Enumerator.__iter_cursor_method__(self, :each_cons)
   end
 
   # An argument that is not an Array is taken by #to_ary if it has one and
