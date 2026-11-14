@@ -318,7 +318,8 @@ namespace IronRuby.Runtime.Calls {
         private const int MaxSharedRules = 16;
 
         private const RubyCallFlags SharableCallFlags = RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasRhsArgument |
-            RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock;
+            RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock |
+            RubyCallFlags.HasLightScope;
 
         private static readonly object _SharedRulesLock = new object();
         private SharedRule[] _sharedRules;
@@ -376,7 +377,11 @@ namespace IronRuby.Runtime.Calls {
                     return null;
                 }
                 version = targetClass.Version.Method;
-                method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope), MethodLookup.Default);
+                // As Resolve does: a site with a light scope has not got the caller's scope, so an explicit-receiver call there
+                // looks for a public method; when there is none, nothing is shared and the ordinary bind reads the scope.
+                var visibility = (Signature.HasLightScope && !Signature.HasImplicitSelf) ?
+                    new VisibilityContext(RubyMethodAttributes.Public) : GetVisibilityContext(Signature, scope);
+                method = targetClass.ResolveMethodForSiteNoLock(_methodName, visibility, MethodLookup.Default);
             }
 
             // Rules calling these methods depend on nothing but the method, the call signature and the arguments.
