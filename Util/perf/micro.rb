@@ -98,7 +98,9 @@ t("blkattr")   { |n| o.blkattr(pbs, n) }
 # round nine's shapes: a method calling a small pure Float method on self twice (CD's compare_to), then
 # PVec's (above)
 t("selfcall")  { |n| i = 0; f = 1.5; while i < n; o.selfcall(f); i += 1; end }
-v4 = PVec.new(4); v100 = PVec.new(100)
+v1 = PVec.new(1); v2 = PVec.new(2); v4 = PVec.new(4); v100 = PVec.new(100)
+t("veach1", 1_000_000) { |n| i = 0; while i < n; v1.sum; i += 1; end }
+t("veach2", 1_000_000) { |n| i = 0; while i < n; v2.sum; i += 1; end }
 t("veach4", 1_000_000) { |n| i = 0; while i < n; v4.sum; i += 1; end }
 t("veach100", 50_000)  { |n| i = 0; while i < n; v100.sum; i += 1; end }
 t("rangelit")          { |n| i = 0; while i < n; v4.slice(2); i += 1; end }
