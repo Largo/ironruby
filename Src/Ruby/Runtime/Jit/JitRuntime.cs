@@ -160,6 +160,30 @@ namespace IronRuby.Runtime.Jit {
             return m;
         }
 
+        /// <summary>Integer#&lt;&lt; within a long; a result past a long (a Bignum) deopts.</summary>
+        public static long ShlLong(long a, long s) {
+            if (s < 0) { return ShrLong(a, s == Int64.MinValue ? Int64.MaxValue : -s); }
+            if (a == 0) { return 0; }
+            if (s >= 63) { throw Deopt(); }
+            long r = a << (int)s;
+            if ((r >> (int)s) != a) { throw Deopt(); }
+            return r;
+        }
+
+        /// <summary>Integer#&gt;&gt;: an arithmetic shift, -1 or 0 once every bit is gone.</summary>
+        public static long ShrLong(long a, long s) {
+            if (s < 0) { return ShlLong(a, s == Int64.MinValue ? Int64.MaxValue : -s); }
+            return (s >= 63) ? (a >> 63) : (a >> (int)s);
+        }
+
+        /// <summary>Integer#&gt;&gt; on an int; a negative width that leaves the int range deopts.</summary>
+        public static int ShrInt(int a, long s) {
+            if (s >= 0) { return (s >= 31) ? (a >> 31) : (a >> (int)s); }
+            long r = ShlLong(a, s == Int64.MinValue ? Int64.MaxValue : -s);
+            if (r != (int)r) { throw Deopt(); }
+            return (int)r;
+        }
+
         public static long AddLong(long a, long b) {
             long r = unchecked(a + b);
             // Signed overflow iff both operands differ in sign from the result.
@@ -689,6 +713,87 @@ namespace IronRuby.Runtime.Jit {
                 data.SetInstanceVariable(variable.Name, value);
             }
             log.Replaced(data, variable.Name, old);
+        }
+
+        /// <summary>
+        /// `o.x' / `o.x = v' in a method where o, when the method was compiled, was a Struct and x (x=)
+        /// its member reader (writer) (JitCompiler.EmitMethodAttrRead/Write): the read or store the
+        /// member method does, re-checked as SelfAttrSite's is against o's class and the global method
+        /// version. A frozen o deopts before the store, so the FrozenError comes from the real call.
+        /// </summary>
+        public sealed class StructMemberSite {
+            internal readonly string/*!*/ Name;
+            internal readonly int Index;
+            internal readonly bool PublicOnly;
+            internal readonly bool Writer;
+
+            private sealed class Binding {
+                internal readonly RubyClass/*!*/ Class;
+                internal readonly int Version;
+                internal Binding(RubyClass/*!*/ cls, int version) { Class = cls; Version = version; }
+            }
+            private volatile Binding _bound;
+
+            internal StructMemberSite(string/*!*/ name, int index, bool publicOnly, bool writer) {
+                Name = name; Index = index; PublicOnly = publicOnly; Writer = writer;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            internal bool IsBoundTo(RubyClass/*!*/ cls) {
+                var b = _bound;
+                return b != null && b.Class == cls && b.Version == RubyModule.GlobalMethodVersion;
+            }
+
+            internal bool Bind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                if (Member(cls, Name, PublicOnly, Writer) != Index) { return false; }
+                _bound = new Binding(cls, version);
+                return true;
+            }
+
+            /// <summary>The index of the Struct member `name' reads (writes) on cls, if it is that member method; else -1.</summary>
+            internal static int Member(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly, bool writer) {
+                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
+                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return -1; }
+                var custom = resolved.Info as IronRuby.Runtime.Calls.RubyCustomMethodInfo;
+                if (custom == null || custom.StructMember < 0 || custom.IsStructWriter != writer) { return -1; }
+                return custom.StructMember;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static object ReadStructMember(object self, StructMemberSite/*!*/ site) {
+            if (self is RubyStruct s && site.IsBoundTo(s.ImmediateClass)) {
+                return RubyStruct.GetValue(s, site.Index);
+            }
+            return ReadStructMemberUncached(self, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object ReadStructMemberUncached(object self, StructMemberSite/*!*/ site) {
+            var s = self as RubyStruct;
+            if (s == null || (!site.IsBoundTo(s.ImmediateClass) && !site.Bind(s.ImmediateClass))) {
+                throw Deopt();
+            }
+            return RubyStruct.GetValue(s, site.Index);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void WriteStructMember(object self, object value, StructMemberSite/*!*/ site) {
+            if (self is RubyStruct s && site.IsBoundTo(s.ImmediateClass) && !s.IsFrozen) {
+                RubyStruct.SetValue(s, site.Index, value);
+                return;
+            }
+            WriteStructMemberUncached(self, value, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void WriteStructMemberUncached(object self, object value, StructMemberSite/*!*/ site) {
+            var s = self as RubyStruct;
+            if (s == null || (!site.IsBoundTo(s.ImmediateClass) && !site.Bind(s.ImmediateClass)) || s.IsFrozen) {
+                throw Deopt();
+            }
+            RubyStruct.SetValue(s, site.Index, value);
         }
 
         // The store into an existing variable of a plain Ruby object, at the slot the site has

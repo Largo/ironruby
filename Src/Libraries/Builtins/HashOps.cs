@@ -22,6 +22,7 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Diagnostics;
 using IronRuby.Runtime.Conversions;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Builtins {
 
@@ -263,6 +264,122 @@ namespace IronRuby.Builtins {
                 return site.Target(site, self, key);
             }
             return result;
+        }
+
+        // Hash#transform_values: a new hash of the same keys, in the same order, with the block's values;
+        // compare_by_identity carries over, the default does not. MRI copies the hash first and then
+        // replaces the copy's values (rb_hash_transform_values), so the block may add keys to the
+        // receiver or delete them, and the result still has the keys that were there when it started.
+        [RubyMethod("transform_values")]
+        public static Enumerator/*!*/ TransformValues(RubyContext/*!*/ context, Hash/*!*/ self) {
+            return new Enumerator(self, "transform_values") { SizeSource = self, SizeOp = "same" };
+        }
+
+        [RubyMethod("transform_values")]
+        public static object TransformValues(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, Hash/*!*/ self) {
+            // The copy: the entries as they are stored, so no key is hashed or compared again.
+            var result = CreateResultHash(self, 0);
+            if (!result.TryCopyEntriesFrom(self)) {
+                foreach (var entry in self) {
+                    result[entry.Key] = entry.Value;
+                }
+            }
+            // Each value is replaced where its entry is, not through its key: a block that changes a key
+            // so that it equals another one (`b.replace(a)' for the keys a and b) still leaves two entries,
+            // as MRI's rb_hash_stlike_foreach_with_replace does. Nothing else can reach the copy meanwhile.
+            int index = 0;
+            object key, value;
+            while (result.TryGetNextEntry(ref index, out key, out value)) {
+                object blockResult;
+                if (block.Yield(value, out blockResult)) {
+                    return blockResult;
+                }
+                result.SetEntryValue(index, blockResult);
+            }
+            return result;
+        }
+
+        // Hash#dig (rb_hash_dig): self[key] - the default included, a redefined #[] not - and then #dig on
+        // what that found for the remaining keys (rb_obj_dig). Overloads of one, two and three keys pass
+        // the rest on through sites of a fixed arity, so `h.dig(:a, :b, :c)` builds no argument array.
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, Hash/*!*/ self, object key) {
+            return GetElement(defaultStorage, self, key);
+        }
+
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ digStorage,
+            Hash/*!*/ self, object key, object key2) {
+            object value = GetElement(defaultStorage, self, key);
+            if (value == null) {
+                return null;
+            }
+            RequireDig(respondTo, value);
+            var site = digStorage.GetCallSite("dig", 1);
+            return site.Target(site, value, key2);
+        }
+
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ digStorage,
+            Hash/*!*/ self, object key, object key2, object key3) {
+            object value = GetElement(defaultStorage, self, key);
+            if (value == null) {
+                return null;
+            }
+            RequireDig(respondTo, value);
+            var site = digStorage.GetCallSite("dig", 2);
+            return site.Target(site, value, key2, key3);
+        }
+
+        [RubyMethod("dig")]
+        public static object Dig(BinaryOpStorage/*!*/ defaultStorage, RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ digStorage,
+            Hash/*!*/ self, object key, params object[]/*!*/ rest) {
+            object value = GetElement(defaultStorage, self, key);
+            if (rest.Length == 0 || value == null) {
+                return value;
+            }
+            RequireDig(respondTo, value);
+            var list = new RubyArray(rest.Length - 1);
+            for (int i = 1; i < rest.Length; i++) {
+                list.Add(rest[i]);
+            }
+            var site = digStorage.GetCallSite("dig", RubyCallSignature.WithSplat(1));
+            return site.Target(site, value, rest[0], list);
+        }
+
+        private static void RequireDig(RespondToStorage/*!*/ respondTo, object value) {
+            // A Hash or an Array whose #dig is the built-in one is known to have it. Anything else is asked, as
+            // respond_to? may be overridden - a Hash or an Array included, when its class, a module in it or the
+            // object itself redefines #dig: rb_obj_dig takes its short cut only while rb_method_basic_definition_p.
+            if (!HasBuiltinDig(respondTo.Context, value) && !Protocols.RespondTo(respondTo, value, "dig")) {
+                throw RubyExceptions.CreateTypeError("{0} does not have #dig method", respondTo.Context.GetClassName(value));
+            }
+        }
+
+        // Whether #dig of a Hash or an Array resolves to the built-in definition (the lookup is the class's cached
+        // one): the one Hash or Array declares, and still the original - Hash#dig is this library's, Array#dig the
+        // core prelude's - not a `def dig' the program wrote into Hash or Array since.
+        private static bool HasBuiltinDig(RubyContext/*!*/ context, object value) {
+            Type owner;
+            if (value is Hash) {
+                owner = typeof(Hash);
+            } else if (value is RubyArray) {
+                owner = typeof(RubyArray);
+            } else {
+                return false;
+            }
+            var method = context.GetImmediateClassOf(value).ResolveMethod("dig", VisibilityContext.AllVisible).Info;
+            if (method == null || method.DeclaringModule != context.GetClass(owner)) {
+                return false;
+            }
+            if (method is RubyLibraryMethodInfo) {
+                return true;
+            }
+            var rubyMethod = method as RubyMethodInfo;
+            return rubyMethod != null && rubyMethod.Document != null && TracePoint.IsCoreLibraryPath(rubyMethod.Document.FileName);
         }
 
         [RubyMethod("default")]

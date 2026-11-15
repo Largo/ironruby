@@ -1625,6 +1625,19 @@ namespace IronRuby.Runtime.Jit {
                     if (live == null && written) { live = LoopSample(receiverLocal); }
                     string variableName = (live != null)
                         ? JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, live), node.MethodName, true) : null;
+                    int member = (variableName == null && live is RubyStruct)
+                        ? JitRuntime.StructMemberSite.Member(JitRuntime.ClassOf(_context, live), node.MethodName, true, false) : -1;
+                    if (member >= 0) {
+                        // a Struct member reader: the member's read (JitRuntime.ReadStructMember)
+                        _canDeopt = true;
+                        if (!written) {
+                            if (_peeked == null) { _peeked = new List<LocalVariable>(); }
+                            _peeked.Add(receiverLocal);
+                        }
+                        type = JT.Obj;
+                        return Ast.Call(JitRuntime.M("ReadStructMember"), written ? (MSA.Expression)bound : peek.Value.Key,
+                            Ast.Constant(new JitRuntime.StructMemberSite(node.MethodName, member, true, false)));
+                    }
                     if (variableName != null) {
                         _canDeopt = true;
                         if (!written) {
@@ -1996,6 +2009,10 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
+            if (op == "<<" || op == ">>") {
+                return EmitShift(op, l, lt, r, rt, out type);
+            }
+
             // Integers. `operand' is Int exactly when both sides are, and that is the one case
             // in which the CLR operation cannot overflow a long and so needs no check at all:
             // two Int32s added, subtracted or multiplied in 64 bits always fit. So `int op int'
@@ -2030,6 +2047,25 @@ namespace IronRuby.Runtime.Jit {
                 case "%": _canDeopt = true; return Ast.Call(JitRuntime.M("ModLong"), l, r);
                 default: throw Bail("integer operator " + op);
             }
+        }
+
+        /// <summary>
+        /// Integer#&lt;&lt; and #&gt;&gt; on an integer shift width. A right shift of an int stays an int
+        /// (it only loses bits) unless the width is negative; every other case is a long, and a
+        /// result past a long deopts, as Integer#&lt;&lt; would hand out a Bignum.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitShift(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt, out JT type) {
+            if ((lt != JT.Int && lt != JT.Lng) || (rt != JT.Int && rt != JT.Lng)) {
+                throw Bail("shift " + op + " on " + lt + ", " + rt);
+            }
+            _canDeopt = true;
+            var width = Coerce(r, rt, JT.Lng);
+            if (op == ">>" && lt == JT.Int) {
+                type = JT.Int;
+                return Ast.Call(JitRuntime.M("ShrInt"), l, width);
+            }
+            type = JT.Lng;
+            return Ast.Call(JitRuntime.M(op == "<<" ? "ShlLong" : "ShrLong"), Coerce(l, lt, JT.Lng), width);
         }
 
         private MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {
@@ -2748,7 +2784,7 @@ namespace IronRuby.Runtime.Jit {
             switch (op) {
                 case "+": case "-": case "*": case "/": case "%":
                 case "<": case ">": case "<=": case ">=": case "==": case "!=":
-                case "&": case "|": case "^":
+                case "&": case "|": case "^": case "<<": case ">>":
                     return true;
                 default:
                     return false;
