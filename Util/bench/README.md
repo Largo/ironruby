@@ -105,12 +105,14 @@ before, 0.57x after.
 - `raise_rescue` (~150x) and `fiber_switch` (~237x) are unrelated to both: exception
   backtrace construction, and a real CLR thread per Fiber.
 
-## -X:JITMethods - a prototype
+## -X:JITMethods and -X:JITCalls - prototypes
 
-The method JIT's typed bodies as static methods of a runtime assembly, so that a method's call
-to itself is a `call` and the .NET JIT can tier, profile and inline them. Off by default and
-not for shipping as it is; `jit-methods.md` has what it measured and the verdict,
-`jit-methods.rb` and `jit-methods-run.rb` the benchmarks.
+`-X:JITMethods`: the method JIT's typed bodies as static methods of a runtime assembly, so that
+a method's call to itself is a `call` and the .NET JIT can tier, profile and inline them.
+`-X:JITCalls`: a compiled method calls the typed bodies of the other methods it calls on self,
+where the inliner could not make them part of it. Both are off by default and not for shipping
+as they are; `jit-methods.md` has what they measured and the verdict, `jit-methods.rb` and
+`jit-methods-run.rb` the benchmarks, `Util/jit-calls-matrix.rb` the differential check.
 
 ## Fiber switches and parked-thread GC cost
 

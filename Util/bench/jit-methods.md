@@ -1,4 +1,11 @@
-# -X:JITMethods: the method JIT's code as real methods (a prototype, and its verdict)
+# -X:JITMethods and -X:JITCalls: the method JIT's code as real methods, and calls between them
+
+Two prototypes, both off by default, and what they measured. Part 1 is `-X:JITMethods` alone,
+measured before master's method JIT learned to inline small callees; its numbers and its
+verdict stand as they were written. Part 2 is `-X:JITCalls`, the step Part 1 ends on, measured
+on top of that inliner, and ends with the verdict on both.
+
+# Part 1. -X:JITMethods: typed bodies as methods of a runtime assembly
 
 `-X:JIT` builds a typed body as a `System.Linq.Expressions` lambda and calls `Compile()`, which
 makes a `DynamicMethod` behind a delegate. The body's call to itself (`fib(n - 1)` in `def fib`,
@@ -67,8 +74,8 @@ CRuby 4.0.9 with the switch off and in every mode; 7 bodies are emitted (182 met
 `entry`), none falls back. A `SystemStackError` out of an emitted body and a `ZeroDivisionError`
 through one have the backtraces they have with the switch off.
 
-IronRuby.Tests (1,252 tests, Debug, net10.0) passes with the switch off, which is all it
-runs: none of its tests uses the switch.
+IronRuby.Tests (1,252 tests, Debug, net10.0) passed with the switch off, which was all it
+ran when this part was written; `JitMethods1` has since been added (Part 2).
 
 Not covered: the entry that `JitKeywordCall` calls (`BuildDirectEntry`) and `-X:OSR`'s loops are
 still DynamicMethods, and a body with no self-call is part of its entry, so only `entry` emits
@@ -207,7 +214,8 @@ does not inline without a profile. The best mode is still 2.0x the C#.
 
 The microbenchmark's other number - a loop calling a tiny `add` 200 million times, 5-8x of C#
 as a tree and 1x in either kind of assembly because the callee is inlined - has no
-counterpart to measure: the JIT binds no call from one Ruby method to another.
+counterpart to measure here: the JIT bound no call from one Ruby method to another. Part 2
+measures it.
 
 ## Unloading and leaks
 
@@ -241,7 +249,7 @@ per redefinition after forced collections:
   lifted constants.
 - **`dynamic`** has nothing to unload.
 
-## Verdict
+## Verdict of Part 1
 
 **As it stands, no.** What the JIT can turn into a direct call today is a method's call to
 itself. That is worth 1.5-1.8x on recursive microbenchmarks, nothing anywhere else, 26 ms at
@@ -284,8 +292,299 @@ method directly.**
 Then measure the shape the microbenchmark could and this prototype could not: a loop calling a
 small method.
 
-## Seen on the way
+## Seen on the way (Part 1)
 
 - Without the switch, redefining a hot method 3,000 times grows the process by 17 KB of
   private memory a time (1.2 KB of it managed heap).
 - `JitRuntime.AddLong` stays a call in `fib`'s typed body, with or without the switch.
+
+# Part 2. -X:JITCalls: one compiled method calling another directly
+
+The step the verdict above ends on. While it was being built, master gained the first half of
+it on its own: the method JIT now makes a *small pure* callee part of its caller's typed body
+(`JitCompiler.Inline.cs`, on by default) - `sq(x) + sq(y)` compiles with both `sq`s in it. What
+that inliner declines still made the JIT decline the caller: a callee with a loop, with an
+effect (an instance variable write), one that calls itself or calls further methods with
+arguments, or any callee where a refinement is active.
+
+`-X:JITCalls`, off by default, binds those: a call on self of a method that has a typed body
+becomes a call of that body, with typed arguments and a typed result.
+
+    ./ir.sh -X:JITCalls script.rb                         # through the body's delegate
+    ./ir.sh -X:JITCalls -X:JITMethods=run,tiered script.rb   # caller and callee are methods of the
+                                                          # runtime assembly: an IL `call`
+
+It is independent of `-X:JITMethods` and combines with each of its modes. The tiered Run
+assembly is the one the results above favour, and the one these are mostly about.
+
+## How it is built
+
+- **Which calls.** `name(args)` and `self.name(args)` in a method body (`JitCompiler.EmitCall`):
+  positional arguments, no block, no splat. The inliner is asked first; `EmitDirectCall` takes
+  what it declines. Calls on another receiver and calls from an outlined loop (`-X:OSR`) are
+  not bound.
+- **Finding the callee** (`JitStub.Callees`, `FindCallee`). The name is resolved from the
+  receiver class the caller's profile saw, as a call without a receiver resolves it (private
+  and protected methods included), under the refinements the caller's calls see. What it finds
+  must be a Ruby method with a JIT stub. A caller whose profile saw two receiver classes binds
+  nothing.
+- **Its typed body** (`JitStub.BindCallee`). Handed out only if the callee is specialized now,
+  under the method version the caller's entry will guard on (and, if the callee folded
+  constants, the same constant version). A callee that is still profiling, cooling down, or
+  whose entry has gone stale makes the caller wait as it waits for a callee it would inline: it
+  goes on profiling and tries again at its next threshold, three times at most. (A caller turns
+  hot at its 40th call, when a callee it calls once per call has been called 39 times.) Two
+  methods that call each other wait for each other and are both declined.
+- **Not bound**, and the caller declined as before: a callee with keywords; one with optional
+  parameters unless their defaults are literals and the call passes them all; one that writes
+  Hash or Array elements (its entry sets up the undo log, or the store is the last thing it
+  does); one that ends in a construction (`C.new` runs an `initialize`); one whose body pins
+  another receiver class.
+- **Arguments** (`CoerceArgument`). The callee's entry is skipped, so its type checks move to
+  the caller: an argument is passed as the type the callee's body was compiled for. An Integer
+  converts between its two representations (narrowing deopts if it does not fit), anything is
+  boxed where the callee takes an object, and an object where the callee takes a number is
+  unboxed behind a guard that deopts. Nothing else converts: an Integer for a body compiled for
+  a Float is a rejection. Under the switch the inliner narrows an Integer argument the same way
+  where it used to decline the caller.
+- **The call.** The callee's body as a delegate held by the caller: one indirect call. With
+  `-X:JITMethods` the caller's body is emitted as a static method next to the callee's and the
+  invocation becomes an IL `call` of that method (the emitter already did this for an entry
+  calling its body), which the .NET JIT may inline.
+- **The screen.** `JitScreen` gives a method a stub only if its calls on self are of leaf
+  methods the inliner could take. With the switch it also takes a call of a method the screen
+  itself would take (`JitStub.IsCallableMethod`, three levels down), so that the caller is
+  profiled at all. This alone lets the inliner do more: a helper two levels deep
+  (`norm_sum` -> `norm2c` -> `sq`) is compiled only with the switch, and then entirely by
+  inlining.
+
+## Guards, invalidation, and a caller in flight
+
+A direct call passes no guard of its own; it is the call the generic body would make because of
+two guards in **the caller's entry**:
+
+- **The receiver class is pinned** (as for a self-call and for an inlined call), and the callee
+  was resolved from that class. A subclass that overrides the callee, a singleton method, an
+  `extend`ed module: the receiver is of another class and runs the generic body.
+- **The global method version**, read before the callee was looked up. Every `def`, `undef`,
+  `remove_method`, `alias`, `include`/`prepend`/`extend`, singleton method, visibility change
+  and method added to a refinement bumps it. `BindCallee` hands out only a body compiled under
+  the same version, so caller and callee go stale together.
+
+What invalidation does to code that already exists: the caller's entry fails its version test at
+its next call, runs the generic body for that call, and takes itself down
+(`JitStub.VersionChanged`); the method profiles again and is specialized against the new method
+table, eight times at most, after which it stays generic. The old typed body is never entered
+again. With `-X:JITMethods=run` it stays loaded (see "Unloading and leaks": about 6 KB a body).
+There is no per-method dependency list: any method table change anywhere invalidates every
+specialized method, as it did before this change.
+
+Deopts: a callee's `JitDeoptException` (overflow, a zero divisor, a guard) leaves through the
+caller's typed body to the caller's entry, which runs the caller's generic body from the top;
+that calls the callee the ordinary way, and if the callee deopts again its own entry handles
+it (so such a call deopts twice). The caller therefore takes over the callee's facts at the
+call, in the compiler's own terms: the callee's deopts count as deopts there and its effects as
+effects after them, and a caller that would deopt after an effect is declined as a single body
+that does always was. The callee's self is the caller's, so "the first instance variable write
+is the one that can meet a frozen object" still holds. The entry's TracePoint check covers the
+callee as it covers the caller.
+
+**A caller in flight.** The guards are checked when the caller is entered, not at each call.
+There is no GVL, so another thread can redefine the callee while a caller is inside its typed
+body, and a `while` loop in a typed body has a safe point that runs what is waiting (a trap
+handler, a `Thread#raise`). A caller that is in its typed body when the callee is redefined
+**goes on calling the old callee until it returns**; its next entry sees the new one. A typed
+body cannot redefine anything itself (it calls only helpers and typed bodies; a body that ends
+in a construction is not bound). This window is not new - the operators a typed body binds,
+the self-call and the inlined calls have it - but with direct calls it covers callees with
+loops, so it can be long. CRuby would call the new method at the next call. Closing it needs
+a version check after the safe point and a deopt there, which only a pure body can take.
+
+A caller that writes logged Hash or Array elements may not call a body with a loop: such a
+caller's own safe points deopt rather than run Ruby code in the middle of writes a deopt would
+take back, and the callee's would not.
+
+Backtraces: a typed body raises only by deopting (the generic bodies then raise, with their
+frames) or from the stack check. A `ZeroDivisionError` out of a bound callee has CRuby's
+frames. An exception raised *inside* a typed callee (`Thread#raise` at its safe point) has no
+frame for a callee the .NET JIT inlined.
+
+## Checked
+
+- `Util/jit-calls-matrix.rb` makes callers hot and then probes them: the callee redefined,
+  aliased and wrapped, made private, removed (the inherited one is called), undefined;
+  overridden in a subclass, by a singleton method, by `extend` and by `prepend`; refined, with
+  callers defined before and after `using`, and the refinement redefined; Int32 to Int64 to
+  Bignum inside the callee; a Float, a String and nil where an Integer was profiled; division
+  by zero in the callee, once and 300 times, and its backtrace; private and protected callees,
+  `self.callee`; `method_missing`, then the method defined; callees with optional parameters,
+  keywords, a block, a splat; the wrong number of arguments; mutual recursion with and without
+  an end; instance variable, global and Hash writes in the callee; a frozen receiver; a
+  constant the callee folded, reassigned; `Integer#+` redefined; a TracePoint; four threads
+  making one caller hot. Its 92 lines are CRuby 4.0.9's with the switches off, with
+  `-X:JITCalls`, and with `-X:JITCalls` and each of `-X:JITMethods`, `=run,tiered`, `=collect`,
+  `=dynamic`, `=run,entry`. 23 calls are bound in it and 33 inlined.
+- `Util/jit-matrix.rb` (684 lines on master now) is CRuby's in the same modes.
+- IronRuby.Tests: `JitCalls1` runs `-X:JITCalls` and `JitMethods1` seven combinations of the two
+  switches, checking that bodies were emitted; the test project now builds
+  `IronRuby.JitEmit.dll` next to it. The suite passes on net10.0 and net11.0
+  (1,256 tests, Debug, Linux).
+- A plain build does not build `Src/JitEmit`, and a self-contained composite ReadyToRun
+  publish with the release script's options carries no `IronRuby.JitEmit.dll`; there
+  `-X:JITMethods` warns once and compiles as without it, and `-X:JITCalls` needs nothing.
+
+## Results
+
+The same harness as Part 1 (`Util/bench/jit-methods-run.rb`: fresh process per run, pinned with
+`taskset -c 5,6`, modes taking turns, CPU time of the benchmark's thread, best of 5 with the
+median in parentheses, every value compared with CRuby 4.0.9's), on the branch merged with
+master, .NET 10.0.15, the same machine, load average 5 to 8. `off` is master's JIT as it is,
+inliner included; `run,tiered` is Part 1's prototype alone; `calls` is `-X:JITCalls` alone; the
+others add a `-X:JITMethods` mode to it.
+
+The `calls_*` benchmarks are callers that are themselves hot methods:
+
+| benchmark | shape | with the switch |
+|---|---|---|
+| calls_fib35 | `fib` with its test in a helper | the inliner takes the helper |
+| calls_arith | a loop over `norm2c`, which calls `sq` twice | caller compiled only with the switch; all inlined |
+| calls_float | a loop over a Float helper | the inliner takes the helper |
+| calls_collatz | a loop choosing between two helpers | the inliner takes both |
+| calls_loop | a loop over `collatz`, which has a loop | 1 call bound |
+| calls_object | three methods of an object reading an instance variable through a method | 4 calls bound |
+| calls_multi | six methods: a generator, helpers two levels deep, a loop | compiled only with the switch; all inlined |
+| calls_mutual | `even?`/`odd?` calling each other | not bound |
+
+`*_flat` is the same work with the helpers written out by hand.
+
+### Once compiled
+
+The fastest later run of the timed section in the process.
+
+| benchmark = value | CRuby | off | run,tiered | calls | run+calls | run,tiered+calls | collect+calls |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| fib35 = 9227465 | 0.964 | 0.168 (0.180) | 0.060 (0.092) **0.36x** | 0.136 (0.153) **0.81x** | 0.100 (0.140) **0.60x** | 0.068 (0.102) **0.40x** | 0.115 (0.127) **0.69x** |
+| calls_fib35 = 9227465 | 1.623 | 0.158 (0.170) | 0.080 (0.090) **0.50x** | 0.151 (0.164) **0.95x** | 0.097 (0.100) **0.61x** | 0.088 (0.092) **0.56x** | 0.112 (0.120) **0.71x** |
+| calls_arith = 6657650000000 | 1.912 | 1.712 (1.888) | 1.704 (1.872) **1.00x** | 0.136 (0.154) **0.08x** | 0.124 (0.130) **0.07x** | 0.123 (0.136) **0.07x** | 0.113 (0.131) **0.07x** |
+| calls_arith_flat = 6657650000000 | 1.080 | 0.107 (0.132) | 0.104 (0.112) **0.97x** | 0.107 (0.111) **1.00x** | 0.100 (0.112) **0.93x** | 0.106 (0.116) **0.99x** | 0.099 (0.140) **0.93x** |
+| calls_float = 8786742 | 1.716 | 0.094 (0.114) | 0.104 (0.111) **1.10x** | 0.098 (0.104) **1.04x** | 0.087 (0.096) **0.93x** | 0.096 (0.100) **1.02x** | 0.100 (0.103) **1.06x** |
+| calls_float_flat = 8786742 | 1.411 | 0.100 (0.104) | 0.096 (0.096) **0.96x** | 0.092 (0.098) **0.92x** | 0.098 (0.100) **0.98x** | 0.096 (0.104) **0.96x** | 0.096 (0.106) **0.96x** |
+| calls_collatz = 18404748 | 1.248 | 0.112 (0.124) | 0.108 (0.120) **0.96x** | 0.108 (0.132) **0.96x** | 0.108 (0.124) **0.96x** | 0.127 (0.128) **1.14x** | 0.123 (0.132) **1.10x** |
+| calls_loop = 18405285 | 1.260 | 0.100 (0.107) | 0.095 (0.115) **0.95x** | 0.108 (0.112) **1.08x** | 0.077 (0.092) **0.77x** | 0.052 (0.056) **0.52x** | 0.072 (0.090) **0.72x** |
+| calls_object = 10248560000 | 1.360 | 1.401 (1.621) | 1.492 (1.719) **1.06x** | 0.384 (0.422) **0.27x** | 0.288 (0.304) **0.21x** | 0.204 (0.208) **0.15x** | 0.323 (0.362) **0.23x** |
+| calls_multi = 120711913449 | 0.684 | 0.791 (0.824) | 0.741 (0.817) **0.94x** | 0.052 (0.055) **0.07x** | 0.053 (0.057) **0.07x** | 0.051 (0.052) **0.06x** | 0.049 (0.054) **0.06x** |
+| calls_mutual = 30000 | 0.108 | 0.156 (0.168) | 0.154 (0.160) **0.99x** | 0.148 (0.160) **0.95x** | 0.148 (0.156) **0.95x** | 0.156 (0.156) **1.00x** | 0.156 (0.164) **1.00x** |
+
+- **Where the inliner already takes the callee, the switch changes nothing**: calls_fib35,
+  calls_float and calls_collatz are within a tick or two of `off` in every mode, and a helper
+  costs what writing it out costs (calls_float 0.094, flat 0.100).
+- **calls_arith and calls_multi are 13x and 15x faster with the switch, and no call in them is
+  bound.** Without it their callers are never compiled: `norm_sum`'s helper has a helper, so the
+  screen gives it no stub, and `score` passes an Integer it computed in a long to a body typed
+  for an Int32, which the inliner refuses. The switch widens the screen and narrows the
+  argument, and the inliner then takes every call. calls_arith ends at 0.136 against 0.107
+  written out by hand.
+- **calls_object is 3.6x faster through the delegate and 6.9x in the tiered Run assembly.** Its
+  `walk` is declined without the switch; with it four calls are bound. As methods of the Run
+  assembly `index` and `wrap` have `w` inlined into them by the .NET JIT at once, and at Tier 1
+  the listing of `walk` has no call of any of the three left in it.
+- **calls_loop gains nothing from the delegate and 1.9x from the tiered Run assembly.** The
+  callee is compiled either way and one call per hundred iterations of its loop is not what costs;
+  emitted and tiered, the pair runs in 0.052 s where it took 0.100, and the Tier-1 code of
+  `collatz_sum` has `collatz`, loop and all, inside it. A collectible assembly gets 0.72x.
+- **Two methods that call each other are not bound** and cost what they did (0.156 s, where
+  CRuby takes 0.108).
+- fib35 is Part 1's result again on the new base: 0.168 off, 0.060 `run,tiered`. Its 0.81x
+  under `calls` is noise - nothing in it is bound, and nine more runs of the two gave 0.143 and
+  0.140.
+
+### First run in the process
+
+Profiling and compilation included; bench.rb's benchmarks run once, so they are only here.
+
+| benchmark = value | CRuby | off | run,tiered | calls | run+calls | run,tiered+calls | collect+calls |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| fib35 = 9227465 | 0.980 | 0.231 (0.239) | 0.297 (0.307) **1.29x** | 0.196 (0.277) **0.85x** | 0.177 (0.193) **0.77x** | 0.267 (0.294) **1.15x** | 0.203 (0.246) **0.88x** |
+| calls_fib35 = 9227465 | 1.815 | 0.219 (0.227) | 0.251 (0.271) **1.14x** | 0.204 (0.243) **0.93x** | 0.175 (0.183) **0.80x** | 0.263 (0.287) **1.20x** | 0.198 (0.209) **0.90x** |
+| calls_arith = 6657650000000 | 1.972 | 1.978 (1.996) | 1.863 (1.935) **0.94x** | 0.304 (0.314) **0.15x** | 0.267 (0.288) **0.13x** | 0.248 (0.261) **0.13x** | 0.268 (0.272) **0.14x** |
+| calls_arith_flat = 6657650000000 | 1.140 | 0.211 (0.256) | 0.224 (0.274) **1.06x** | 0.208 (0.264) **0.98x** | 0.219 (0.251) **1.04x** | 0.203 (0.235) **0.96x** | 0.238 (0.272) **1.12x** |
+| calls_float = 8786742 | 1.928 | 0.209 (0.250) | 0.221 (0.256) **1.06x** | 0.228 (0.260) **1.09x** | 0.222 (0.243) **1.06x** | 0.215 (0.240) **1.03x** | 0.245 (0.255) **1.17x** |
+| calls_float_flat = 8786742 | 1.456 | 0.228 (0.245) | 0.187 (0.233) **0.82x** | 0.213 (0.228) **0.94x** | 0.214 (0.235) **0.94x** | 0.233 (0.244) **1.03x** | 0.213 (0.234) **0.94x** |
+| calls_collatz = 18404748 | 1.336 | 0.212 (0.249) | 0.190 (0.236) **0.90x** | 0.195 (0.250) **0.92x** | 0.186 (0.246) **0.88x** | 0.232 (0.264) **1.10x** | 0.233 (0.238) **1.10x** |
+| calls_loop = 18405285 | 1.300 | 0.208 (0.273) | 0.205 (0.223) **0.99x** | 0.190 (0.223) **0.92x** | 0.203 (0.283) **0.98x** | 0.325 (0.401) **1.57x** | 0.197 (0.259) **0.95x** |
+| calls_object = 10248560000 | 1.444 | 1.591 (1.899) | 1.717 (1.918) **1.08x** | 0.528 (0.584) **0.33x** | 0.417 (0.514) **0.26x** | 0.401 (0.448) **0.25x** | 0.444 (0.494) **0.28x** |
+| calls_multi = 120711913449 | 0.692 | 0.942 (1.032) | 0.947 (0.988) **1.01x** | 0.130 (0.140) **0.14x** | 0.138 (0.146) **0.15x** | 0.139 (0.149) **0.15x** | 0.143 (0.151) **0.15x** |
+| calls_mutual = 30000 | 0.108 | 0.243 (0.260) | 0.249 (0.263) **1.02x** | 0.223 (0.249) **0.92x** | 0.223 (0.227) **0.92x** | 0.225 (0.247) **0.93x** | 0.229 (0.247) **0.94x** |
+| bench:fib = 514229 | 0.052 | 0.032 (0.036) | 0.066 (0.068) **2.08x** | 0.031 (0.036) **0.99x** | 0.053 (0.058) **1.68x** | 0.066 (0.069) **2.08x** | 0.055 (0.057) **1.74x** |
+| bench:ackermann = 1021 | 0.024 | 0.026 (0.028) | 0.055 (0.058) **2.09x** | 0.028 (0.034) **1.07x** | 0.054 (0.055) **2.06x** | 0.058 (0.064) **2.22x** | 0.052 (0.054) **1.99x** |
+| bench:call_1arg = nil | 0.060 | 0.175 (0.199) | 0.182 (0.196) **1.05x** | 0.177 (0.197) **1.02x** | 0.177 (0.189) **1.01x** | 0.173 (0.201) **0.99x** | 0.174 (0.188) **1.00x** |
+| bench:call_3arg = nil | 0.068 | 0.179 (0.204) | 0.177 (0.210) **0.99x** | 0.181 (0.210) **1.01x** | 0.179 (0.209) **1.00x** | 0.179 (0.184) **1.00x** | 0.172 (0.178) **0.96x** |
+
+- `-X:JITCalls` on its own costs nothing that shows where it binds nothing (bench:fib 0.99x,
+  call_1arg 1.02x, call_3arg 1.01x; ackermann's 1.07x is half a tick). On a script that loads
+  json, erb, set, optparse, pp and time and uses them, it gives no additional method a stub:
+  the screen admits a call only of a method it would itself take.
+- With `-X:JITMethods` the costs are Part 1's: 26 ms at the first emission (bench:fib and
+  ackermann, 30 ms in all, double), and with `tiered` a slow start - calls_loop's first run is
+  1.57x and fib35's 1.15x to 1.29x of `off`.
+- Compiling: `IR_JIT_VERBOSE=1` reports 35-47 ms for calls_object's three methods without the
+  switch, 35-52 ms for its four with it, and 62-84 ms with `-X:JITMethods` as well.
+
+## Costs
+
+- **Memory.** `-X:JITCalls` alone holds a delegate per callee that some caller binds, which
+  goes when its specialization does. With `-X:JITMethods=run` every emitted body stays for good
+  (Part 1: about 6 KB each, and its static fields root their constants, the `RubyContext`
+  among them). Direct calls emit more bodies than Part 1 did: every caller with a bound call
+  and every bound callee, where it used to be only methods that call themselves, and again
+  after each method table change (up to eight times a method).
+- **Deopts cost twice** when they come from a bound callee: the caller's entry catches it and
+  runs the generic caller, whose call of the callee deopts again in the callee's own entry.
+- **Invalidation is global.** One `def` anywhere makes every entry stale. That was so before;
+  more methods being compiled means more to recompile after it.
+- **Waiting.** A caller whose callee is not specialized yet profiles for another 40 calls, up
+  to three times, where it used to be declined at once.
+
+## Verdict
+
+**Binding calls between compiled methods: yes, worth making real, and it does not need the
+runtime assembly.** `-X:JITCalls` by itself is about 320 lines in the JIT, loads nothing, leaks
+nothing, costs nothing where it binds nothing, and makes methods compile that the JIT declines
+today: 3.6x on calls_object. It should be said plainly, though, that most of what the switch
+gained in these benchmarks is not a bound call. calls_arith and calls_multi (13x, 15x) come
+from the caller being compiled at all, and two small changes to master's inliner would give
+that without this prototype: let the screen take a caller whose helper has a helper, and
+narrow an Integer argument behind a deopt where it now declines the caller.
+
+**The tiered Run assembly as a second tier: yes, now with a second reason.** Part 1 had one
+use for it, a method calling itself (fib35 0.36x). Bound calls are the other: emitted and
+tiered, a caller and the callees the tree inliner cannot take are inlined into one another by
+the .NET JIT - 1.9x on a callee with a loop, another 1.9x on top of binding for the object
+methods - which neither a DynamicMethod nor a collectible assembly gets. It is still not for
+shipping as a first tier: 26 ms at the first emission, a first run up to 1.6x slower while the
+code is unoptimized, and bodies that never unload.
+
+**Where there was no gain:** two methods calling each other (not bound), and every caller
+whose callee the inliner already takes.
+
+What is left, in the order it should be done:
+
+1. The two inliner changes above, on their own, with the switch off.
+2. `-X:JITCalls` on by default once it has run the spec suites and the benchmark suite: it
+   is the smaller and safer half.
+3. The caller in flight. A version check after a loop's safe point, deopting a pure body and
+   letting an impure one finish, bounds the window to one iteration.
+4. Promotion: emit into the Run assembly only methods that have stayed specialized and hot,
+   with a byte budget, so that short programs never pay the 26 ms and the leak is bounded;
+   entries stay DynamicMethods. The constants need an owner that dies with the runtime, and
+   the tree compiler has to be precompiled (Part 1, points 3 to 5).
+5. Reach: a receiver of more than one class (an entry per class instead of declining), calls
+   on other receivers (the inliner already checks a class at the call), mutual recursion (a
+   cell per callee, as the self-call has), callers that are outlined loops, and callees that
+   write elements.
+
+The risks: a redefinition that a running caller does not see until it returns, which CRuby
+never shows; `Reflection.Emit` into a persisted-in-memory assembly as a dependency (none of
+this exists where there is no dynamic code); a tree compiler that is a port of the .NET
+Framework's and is now exercised by one test; and that all of it was measured on Linux x64
+only - the Windows jobs in CI are the first run there.
