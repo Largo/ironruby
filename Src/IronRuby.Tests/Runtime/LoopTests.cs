@@ -308,6 +308,7 @@ c
         /// </summary>
         public void BlockLoopEachIndex1() {
             TestOutput(@"
+require 'ruby4'
 def sum(a); s = 0; a.each_index { |i| s += i * 3 + a[i] }; s; end
 a = (0...5000).to_a
 p sum(a), sum([1, 2, 3])

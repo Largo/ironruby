@@ -232,8 +232,13 @@ Profile (`Util/perf/profile.sh`, self time):
    the delegate about 20), which is why a light block needs five elements; the OSR
    tier's entry for `while` loops builds its argument array in generated code and still
    allocates it, so attr reads and writes on a loop-assigned local stay limited to
-   core-iterator blocks; and `each_index`, `each_with_index` and `Array#each` with a
-   `yield` in the block are not kinds.
+   core-iterator blocks; and `each_with_index` and `Array#each` with a `yield` in the
+   block are not kinds. `each_index` is one now (see Landed), and NBody does not move with
+   it: both of its `each_index` blocks hold the inner `Range#each` block, and the screen
+   rejects a block holding a call with a block (the loop emitter cannot take one), so
+   they are never offered to the loop compiler. What NBody needs next is a block loop
+   whose body may hold another outlined iterator, the inner block's loop emitted in
+   place; `each_with_index` needs two parameters, which the screen does not take either.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -732,6 +737,25 @@ in 2.2 s on both.
   pattern is called (CRuby calls it with rb_funcall; the wrapper raised NoMethodError),
   and an Array subclass's own `#each` is not (the wrapper called it; so did `one?` with
   a block or without an argument, which now walks the Array as `rb_ary_one_p` does).
+
+Gap 2's `each_index` (one experiment on 6e146fa3, measured against a Release build of that
+commit, taken alternately on a loaded machine: other sessions were benchmarking). Kept on
+the per-operation rule; it moves no AWFY benchmark. Gate against the tree before:
+IronRuby.Tests in Release on net10.0 (the one known failure, `Exception_CauseRaisedInClause1`;
+the new `BlockLoopEachIndex1` passes); ruby/spec language and core/array (2935 and 2898
+examples, the same one error on both trees); block-loop- and osr-array-matrix as CRuby
+4.0.9 with OSR on and off; the thirteen AWFY benchmarks verify; IR_OSR_VERBOSE shows the
+matrix's `each_index` blocks specialized.
+
+- **`Array#each_index` is a block-loop kind** (gap 2). `BlockLoopKind.EachIndex` is
+  Each's loop yielding the counter (`while #i < #a.size; i = #i; body; #i += 1; end`),
+  entered from `IListOps.EachIndex` for a plain RubyArray with Each's floor and
+  countdown; the size is read every step, as `rb_ary_each_index` does, and a redefined
+  or private `Array#size` does not change the run. `a.each_index { |i| s += a[i] * 2 + i }`
+  per element, three alternating runs: over 1000 58-61 -> 5.7-6.2 ns, over 16 65-74 ->
+  31-33, over 5 100-106 -> 81-87 (CRuby, same load: 71, 145, 187); a 12-operation Float
+  body over 1000 196-202 -> 5.7-9.2. NBody: 1.80-2.22 s per 250,000 against 1.75-2.27,
+  the same, since neither of its `each_index` blocks reaches the loop compiler (gap 2).
 
 ## Rejected
 
