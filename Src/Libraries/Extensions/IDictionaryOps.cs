@@ -531,6 +531,9 @@ namespace IronRuby.Builtins {
                 // (as it saw the prelude's Hash#fetch raise it)
                 if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
                     TracePoint.OnException(TraceEvents.Raise, null, context, error);
+                    // the hook has seen it (TracePoint#raised_exception) and may have kept it, and may have
+                    // disabled itself as well: its backtrace cannot wait for a rescue to expose it any more
+                    RubyExceptionData.GetInstance(error).RaisedUnkept = false;
                 }
                 throw error;
             }
@@ -555,14 +558,17 @@ namespace IronRuby.Builtins {
 
             object keyErrorClass;
             if (context.ObjectClass.TryGetConstant(null, "KeyError", out keyErrorClass)) {
+                // Its callers throw it at once: unless Ruby code of the program's takes part in making it, nothing has
+                // kept it. Asked before it is made, as Kernel#raise asks: a KeyError.new of the program's that keeps
+                // the exception can remove itself before it returns, and the methods would then look built-in.
+                var cls = keyErrorClass as RubyClass;
+                bool unkept = cls != null && RubyExceptionData.MakesUnkeptPreludeException(cls);
                 var site = newStorage.GetCallSite("new");
                 Exception exception = site.Target(site, keyErrorClass, message) as Exception;
                 if (exception != null) {
                     context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__receiver__"), receiver);
                     context.SetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__key__"), key);
-                    // its callers throw it at once: unless Ruby code of the program's took part in making it, nothing has kept it
-                    var cls = keyErrorClass as RubyClass;
-                    if (cls != null && RubyExceptionData.MakesUnkeptPreludeException(cls)) {
+                    if (unkept) {
                         RubyExceptionData.MarkUnkept(exception);
                     }
                     return exception;

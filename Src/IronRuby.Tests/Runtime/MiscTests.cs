@@ -7532,6 +7532,36 @@ nil
         }
 
         /// <summary>
+        /// The KeyError of Hash#fetch may leave its backtrace until a rescue exposes it only while nothing can have kept
+        /// it. A TracePoint on :raise that keeps it and disables itself, and a KeyError.new of the program's that keeps it
+        /// and removes itself, both have: read after the rescuing frame is gone, the backtrace is still the raise's.
+        /// </summary>
+        public void Hash_FetchKeptKeyError1() {
+            TestOutput(@"
+require 'ruby4'
+H = {}
+def f1 = H.fetch(:x)
+def g1 = (begin; f1; rescue KeyError; nil; end)
+20000.times { g1 }
+kept = nil
+tp = TracePoint.new(:raise) { |t| kept = t.raised_exception; t.disable }
+tp.enable
+g1
+tp.disable
+p kept.class, kept.backtrace.map { |l| l[/'(.*)'/, 1] }
+made = nil
+make = KeyError.method(:new)
+KeyError.define_singleton_method(:new) { |*a| made = make.call(*a); KeyError.singleton_class.send(:remove_method, :new); made }
+g1
+p(made.nil? || made.backtrace.none? { |l| l.include?('Exception#backtrace') })
+", @"
+KeyError
+[""Hash#fetch"", ""Object#f1"", ""Object#g1"", ""<main>""]
+true
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.

@@ -1324,6 +1324,7 @@ namespace IronRuby.Tests {
                 String_LinesAfterByteRead1,
                 Hash_DigSubclass1,
                 Hash_TransformValuesMutatedKey1,
+                Hash_FetchKeptKeyError1,
                 Enumerable_TallyBasicObject1,
                 Enumerable_InjectPrivateOp1,
                 HostingHelpOption1,
