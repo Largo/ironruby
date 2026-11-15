@@ -7484,6 +7484,28 @@ p u.lines(""\u00FC"").map(&:bytes), u.each_line(""\u00FC"").map(&:size)
         }
 
         /// <summary>
+        /// Hash#dig asks an instance of a Hash or Array subclass whether it has #dig, as it asks any other object
+        /// (rb_obj_dig takes its short cut only while #dig is the built-in one), and calls a redefined #dig.
+        /// </summary>
+        public void Hash_DigSubclass1() {
+            TestOutput(@"
+require 'ruby4'
+class H2 < Hash; def dig(*k) = [:over, k]; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+class A2 < Array; def dig(*k) = [:over, k]; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+class H3 < Hash; def dig(*k) = [:over, k]; end
+p(({ a: H2.new }.dig(:a, 1) rescue $!.message), ({ a: A2.new }.dig(:a, 1, 2, 3, 4) rescue $!.message))
+p({ a: H3.new }.dig(:a, 1), { a: H3.new }.dig(:a, 1, 2, 3, 4), { a: H3[b: 1] }.dig(:a), { a: { b: [5, 6] } }.dig(:a, :b, 1))
+", @"
+""H2 does not have #dig method""
+""A2 does not have #dig method""
+[:over, [1]]
+[:over, [1, 2, 3, 4]]
+{b: 1}
+6
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.

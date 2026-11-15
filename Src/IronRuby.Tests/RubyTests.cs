@@ -1322,6 +1322,7 @@ namespace IronRuby.Tests {
                 Array_RotateLongCount1,
                 Hash_TransformValuesSnapshot1,
                 String_LinesAfterByteRead1,
+                Hash_DigSubclass1,
                 Enumerable_TallyBasicObject1,
                 Enumerable_InjectPrivateOp1,
                 HostingHelpOption1,

@@ -352,8 +352,11 @@ namespace IronRuby.Builtins {
         }
 
         private static void RequireDig(RespondToStorage/*!*/ respondTo, object value) {
-            // a Hash or an Array is known to have #dig; anything else is asked (respond_to? may be overridden)
-            if (!(value is Hash || value is RubyArray) && !Protocols.RespondTo(respondTo, value, "dig")) {
+            // A plain Hash or Array is known to have #dig; anything else is asked (respond_to? may be
+            // overridden), an instance of a subclass of theirs included: rb_obj_dig takes its short cut
+            // only while #dig is the built-in one, and a subclass is where it is redefined.
+            Type type = value.GetType();
+            if (type != typeof(Hash) && type != typeof(RubyArray) && !Protocols.RespondTo(respondTo, value, "dig")) {
                 throw RubyExceptions.CreateTypeError("{0} does not have #dig method", respondTo.Context.GetClassName(value));
             }
         }
