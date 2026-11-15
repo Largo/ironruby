@@ -257,6 +257,29 @@ bench("calls_collatz") do
   s
 end
 
+# a callee with a loop of its own, which is not made part of its caller
+def collatz_sum(lo, hi)
+  s = 0; i = lo
+  while i < hi
+    s += collatz(i)
+    i += 1
+  end
+  s
+end
+
+bench("calls_loop") do
+  s = 0; r = 0
+  while r < 3
+    lo = 1
+    while lo < 60_000
+      s += collatz_sum(lo, lo + 500)
+      lo += 500
+    end
+    r += 1
+  end
+  s
+end
+
 # methods of an object: the callees read an instance variable, the callers get an object back
 class Grid
   def initialize(w) = @w = w

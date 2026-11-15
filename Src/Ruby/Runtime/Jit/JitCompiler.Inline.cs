@@ -113,6 +113,9 @@ namespace IronRuby.Runtime.Jit {
                     _canDeopt = true;
                     a = Ast.Call(JitRuntime.M(pt == JT.Int ? "GuardInt" : pt == JT.Dbl ? "GuardDouble" : pt == JT.Lng ? "GuardLong" : "-"), a);
                     at = pt;
+                } else if (pt == JT.Int && at == JT.Lng && _callees != null) {
+                    // -X:JITCalls: an Integer computed here, for a body typed for one that fits an Int32, is narrowed
+                    // behind a deopt (Coerce below), as an argument of a direct call is (CoerceArgument).
                 } else if (pt == JT.Int && at != JT.Int || pt == JT.Dbl && at != JT.Dbl && at != JT.Int && at != JT.Lng) {
                     throw Bail("inlined call " + node.MethodName + ": argument " + at + " for " + pt);
                 }
