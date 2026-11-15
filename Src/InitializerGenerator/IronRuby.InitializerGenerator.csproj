@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Roslyn source generator that writes the library initializers ([RubyModule], [RubyMethod],
+       [RubyConstant] ... registrations) while IronRuby.Libraries and IronRuby.Libraries.Yaml compile.
+       It runs inside the compiler, so it targets netstandard2.0 whatever IronRuby itself targets. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>IronRuby.InitializerGenerator</AssemblyName>
+    <RootNamespace>IronRuby.InitializerGenerator</RootNamespace>
+    <Nullable>disable</Nullable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- RS2008: release tracking is for analyzers shipped in a package; this one only builds IronRuby. -->
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The oldest compiler API the generator needs (incremental generators); any newer compiler loads it. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>
