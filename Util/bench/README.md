@@ -105,6 +105,13 @@ before, 0.57x after.
 - `raise_rescue` (~150x) and `fiber_switch` (~237x) are unrelated to both: exception
   backtrace construction, and a real CLR thread per Fiber.
 
+## Core methods written in Ruby
+
+`truffleruby-lessons.md` compares how TruffleRuby and IronRuby divide their core between Ruby
+and the host language, measures what a core method written in Ruby costs here against the
+same method in C# (`prelude-cost.rb`, `core-small.rb`, `core-inventory.rb`), and ranks what
+transfers.
+
 ## Fiber switches and parked-thread GC cost
 
 `fiber.rb` measures resume/yield round trips, create-and-complete time, and forced
