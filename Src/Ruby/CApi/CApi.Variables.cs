@@ -21,10 +21,19 @@ namespace IronRuby.Runtime.CApi {
         #region Time
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct TimeVal { public long tv_sec, tv_usec; }
+        internal struct TimeVal {
+            // both C longs: 32-bit on Windows
+            public CLong sec, usec;
+            public long tv_sec { get { return (long)sec.Value; } set { sec = new CLong(checked((nint)value)); } }
+            public long tv_usec { get { return (long)usec.Value; } set { usec = new CLong((nint)value); } }
+        }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct TimeSpec { public long tv_sec, tv_nsec; }
+        internal struct TimeSpec {
+            public long tv_sec;    // time_t: 64-bit on both
+            public CLong nsec;
+            public long tv_nsec { get { return (long)nsec.Value; } set { nsec = new CLong((nint)value); } }
+        }
 
         internal static VALUE rb_time_new(long sec, long usec) {
             return ToValue(Call(Constant("Time"), "at", Normalize(sec), Normalize(usec), Sym("usec")));

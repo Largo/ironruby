@@ -10,8 +10,12 @@
 #include "ruby/thread.h"
 #include "ruby/util.h"
 #include <errno.h>
-#include <pthread.h>
 #include <signal.h>
+#if defined(_WIN32)
+# include <windows.h>
+#else
+# include <pthread.h>
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +45,7 @@ rb_ir_throw(void)
         fputs("[IronRuby C API] an exception was raised with no Ruby frame to unwind to\n", stderr);
         abort();
     }
-    longjmp(frame->buf, 1);
+    RB_IR_LONGJMP(frame->buf);
 }
 
 /* ------------------------------------------------------------------------------------------
@@ -364,6 +368,9 @@ rb_ir_vformat(struct rb_ir_buf *b, const char *fmt, va_list ap)
             else if (*p == 'j') { lng = 5; spec[sl++] = *p++; }
             else if (*p == 'q') { lng = 2; spec[sl++] = 'l'; spec[sl++] = 'l'; p++; }
             else if (*p == 'L') { lng = 9; spec[sl++] = *p++; }
+            else if (p[0] == 'I' && p[1] == '6' && p[2] == '4') { lng = 2; spec[sl++] = 'l'; spec[sl++] = 'l'; p += 3; }
+            else if (p[0] == 'I' && p[1] == '3' && p[2] == '2') { lng = 0; p += 3; }
+            else if (*p == 'I') { lng = 3; spec[sl++] = 'z'; p++; }
             else break;
         }
         char conv = *p;
@@ -633,6 +640,20 @@ rb_warning(const char *fmt, ...)
     VALUE msg = rb_vsprintf(fmt, ap);
     va_end(ap);
     rb_ir_warn(msg, 1);
+}
+
+/* errno is the C library's, so these read it here rather than in IronRuby
+ * (Marshal.GetLastSystemError is GetLastError on Windows). */
+void
+rb_sys_fail(const char *msg)
+{
+    rb_syserr_fail(*rb_errno_ptr(), msg);
+}
+
+void
+rb_sys_fail_str(VALUE msg)
+{
+    rb_syserr_fail_str(*rb_errno_ptr(), msg);
 }
 
 /* ruby.h defines errno as (*rb_errno_ptr()); this is the C library's own. */
@@ -1115,6 +1136,24 @@ rb_uv_to_utf8(char buf[6], unsigned long uv)
  * #kill or a signal for the main thread runs ubf(data2) to get func to return. RUBY_UBF_IO
  * interrupts the blocking system call with SIGVTALRM, whose handler is installed without
  * SA_RESTART so that the call fails with EINTR. */
+#if defined(_WIN32)
+/* Windows: the blocked thread's synchronous I/O is cancelled instead (ERROR_OPERATION_ABORTED). */
+RB_IR_EXPORT void
+rb_ir_interrupt_thread(void *thread)
+{
+    HANDLE h = OpenThread(THREAD_TERMINATE, FALSE, (DWORD)(uintptr_t)thread);
+    if (h) {
+        CancelSynchronousIo(h);
+        CloseHandle(h);
+    }
+}
+
+static void *
+rb_ir_current_thread(void)
+{
+    return (void *)(uintptr_t)GetCurrentThreadId();
+}
+#else
 static void rb_ir_sigvtalrm(int sig) { (void)sig; }
 static pthread_once_t rb_ir_sigvtalrm_once = PTHREAD_ONCE_INIT;
 
@@ -1135,10 +1174,17 @@ rb_ir_interrupt_thread(void *thread)
 }
 
 static void *
+rb_ir_current_thread(void)
+{
+    pthread_once(&rb_ir_sigvtalrm_once, rb_ir_install_sigvtalrm);
+    return (void *)pthread_self();
+}
+#endif
+
+static void *
 rb_ir_blocking_region(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2)
 {
-    if (ubf == RUBY_UBF_IO) pthread_once(&rb_ir_sigvtalrm_once, rb_ir_install_sigvtalrm);
-    int token = rb_ir_blocking_begin((void *)ubf, data2, (void *)pthread_self());
+    int token = rb_ir_blocking_begin((void *)ubf, data2, rb_ir_current_thread());
     void *result = func(data1);
     rb_ir_blocking_end(token);
     return result;

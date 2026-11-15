@@ -35,7 +35,10 @@ namespace IronRuby.Runtime.CApi {
     /// </summary>
     internal static unsafe partial class CApi {
         internal const VALUE Qfalse = 0x00, Qnil = 0x04, Qtrue = 0x14, Qundef = 0x24;
-        private const long FixnumMax = long.MaxValue >> 1, FixnumMin = long.MinValue >> 1;
+        // CRuby's FIXNUM_MAX is LONG_MAX / 2: 62 bits on Unix, 30 on Windows, where C's long is 32-bit
+        internal static readonly bool IsWindows = OperatingSystem.IsWindows();
+        private static readonly long FixnumMax = IsWindows ? Int32.MaxValue >> 1 : long.MaxValue >> 1;
+        private static readonly long FixnumMin = IsWindows ? Int32.MinValue >> 1 : long.MinValue >> 1;
 
         private static readonly object _handleLock = new object();
         private static object[] _handles = new object[1024];
@@ -65,7 +68,7 @@ namespace IronRuby.Runtime.CApi {
             if (obj is bool b) {
                 return b ? Qtrue : Qfalse;
             }
-            if (obj is int i) {
+            if (obj is int i && i >= FixnumMin && i <= FixnumMax) {
                 return ((VALUE)(long)i << 1) | 1;
             }
             if (obj is long l && l >= FixnumMin && l <= FixnumMax) {
@@ -289,7 +292,7 @@ namespace IronRuby.Runtime.CApi {
             switch (obj) {
                 case null: return T_NIL;
                 case bool b: return b ? T_TRUE : T_FALSE;
-                case int _: return T_FIXNUM;
+                case int i: return (i >= FixnumMin && i <= FixnumMax) ? T_FIXNUM : T_BIGNUM;
                 case long l: return (l >= FixnumMin && l <= FixnumMax) ? T_FIXNUM : T_BIGNUM;
                 case BigInteger _: return T_BIGNUM;
                 case double _: return T_FLOAT;

@@ -243,6 +243,12 @@ module Gem
   # installed gem is activated like any other - ahead of the built-in on
   # $LOAD_PATH.  Needs the C API (ironruby_capi?).
 
+  # RubyGems runs nmake for an mswin RUBY_PLATFORM; IronRuby's extensions are built with
+  # MinGW and its make (rbconfig.rb, mkmf.rb in Src/StdLib/ironruby).
+  if RUBY_PLATFORM.include?("mswin") && ironruby_capi? && !ENV["MAKE"] && !ENV["make"]
+    ENV["MAKE"] = "make"
+  end
+
   def self.ironruby_native_gems
     @__ironruby_native_gems__ ||= (ENV["IRONRUBY_NATIVE_GEMS"] || "").split(/[\s,]+/).reject(&:empty?).freeze
   end

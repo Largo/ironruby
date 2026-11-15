@@ -59,21 +59,23 @@ namespace IronRuby.Runtime.CApi {
             lock (_loadLock) {
                 Initialize(context);
 
-                IntPtr handle;
-                fixed (byte* p = CString(path)) {
-                    handle = _dlopen(p, RTLD_NOW | RTLD_GLOBAL);
-                }
-                if (handle == IntPtr.Zero) {
-                    throw RubyExceptions.CreateLoadError(DlError() + " - " + path);
+                // A CRuby-built extension reads object memory directly and would crash: on Unix our
+                // headers mark an extension (rb_ir_abi_version), on Windows it imports our DLL.
+                if (IsWindows && !PeImportsShim(path)) {
+                    throw IncompatibleExtension(path);
                 }
 
-                IntPtr abi;
-                fixed (byte* p = CString("rb_ir_abi_version")) {
-                    abi = _dlsym(handle, p);
+                string error;
+                IntPtr handle = OpenLibrary(path, true, out error);
+                if (handle == IntPtr.Zero) {
+                    throw RubyExceptions.CreateLoadError(error + " - " + path);
                 }
-                if (abi == IntPtr.Zero || *(int*)abi != AbiVersion) {
-                    throw RubyExceptions.CreateLoadError(
-                        "incompatible library: not compiled against IronRuby's ruby.h (a CRuby extension?) - " + path);
+
+                if (!IsWindows) {
+                    IntPtr abi = Symbol(handle, "rb_ir_abi_version");
+                    if (abi == IntPtr.Zero || *(int*)abi != AbiVersion) {
+                        throw IncompatibleExtension(path);
+                    }
                 }
 
                 string name = Path.GetFileName(path);
@@ -81,10 +83,7 @@ namespace IronRuby.Runtime.CApi {
                 if (dot >= 0) {
                     name = name.Substring(0, dot);
                 }
-                IntPtr init;
-                fixed (byte* p = CString("Init_" + name)) {
-                    init = _dlsym(handle, p);
-                }
+                IntPtr init = Symbol(handle, "Init_" + name);
                 if (init == IntPtr.Zero) {
                     throw RubyExceptions.CreateLoadError("Init_" + name + " is not defined - " + path);
                 }
@@ -98,6 +97,96 @@ namespace IronRuby.Runtime.CApi {
 
         private const int RTLD_LAZY = 1, RTLD_NOW = 2, RTLD_GLOBAL = 0x100;
 
+        private static readonly string ShimName = IsWindows ? "libironruby-capi.dll" : "libironruby-capi.so";
+
+        private static Exception/*!*/ IncompatibleExtension(string/*!*/ path) {
+            return RubyExceptions.CreateLoadError(
+                "incompatible library: not compiled against IronRuby's ruby.h (a CRuby extension?) - " + path);
+        }
+
+        /// <summary>
+        /// dlopen (RTLD_GLOBAL for the shim, whose symbols the extensions resolve against) or, on
+        /// Windows, LoadLibrary: there an extension imports the shim by name, and the loader binds
+        /// it to the copy already loaded.
+        /// </summary>
+        private static IntPtr OpenLibrary(string/*!*/ path, bool global, out string error) {
+            error = null;
+            if (IsWindows) {
+                try {
+                    return NativeLibrary.Load(path);
+                } catch (Exception e) {
+                    error = e.Message;
+                    return IntPtr.Zero;
+                }
+            }
+            IntPtr handle;
+            fixed (byte* p = CString(path)) {
+                handle = _dlopen(p, RTLD_NOW | (global ? RTLD_GLOBAL : 0));
+            }
+            if (handle == IntPtr.Zero) {
+                error = DlError();
+            }
+            return handle;
+        }
+
+        private static IntPtr Symbol(IntPtr library, string/*!*/ name) {
+            if (IsWindows) {
+                IntPtr address;
+                return NativeLibrary.TryGetExport(library, name, out address) ? address : IntPtr.Zero;
+            }
+            fixed (byte* p = CString(name)) {
+                return _dlsym(library, p);
+            }
+        }
+
+        /// <summary>
+        /// Whether a PE DLL imports libironruby-capi.dll: what an extension linked by mkmf against
+        /// IronRuby's RbConfig does, and one built for CRuby (importing x64-ucrt-ruby400.dll) does not.
+        /// </summary>
+        private static bool PeImportsShim(string/*!*/ path) {
+            try {
+                using (var stream = File.OpenRead(path))
+                using (var pe = new System.Reflection.PortableExecutable.PEReader(stream)) {
+                    var headers = pe.PEHeaders;
+                    var dir = headers.PEHeader.ImportTableDirectory;
+                    if (dir.Size == 0) {
+                        return false;
+                    }
+                    var image = pe.GetEntireImage();
+                    int RvaToOffset(int rva) {
+                        foreach (var section in headers.SectionHeaders) {
+                            if (rva >= section.VirtualAddress && rva < section.VirtualAddress + Math.Max(section.VirtualSize, section.SizeOfRawData)) {
+                                return rva - section.VirtualAddress + section.PointerToRawData;
+                            }
+                        }
+                        return -1;
+                    }
+                    var bytes = image.GetContent();
+                    for (int offset = RvaToOffset(dir.RelativeVirtualAddress); offset >= 0 && offset + 20 <= bytes.Length; offset += 20) {
+                        int nameRva = BitConverter.ToInt32(bytes.AsSpan(offset + 12, 4));
+                        if (nameRva == 0) {
+                            break;
+                        }
+                        int nameOffset = RvaToOffset(nameRva);
+                        if (nameOffset < 0) {
+                            continue;
+                        }
+                        int end = nameOffset;
+                        while (end < bytes.Length && bytes[end] != 0) {
+                            end++;
+                        }
+                        string dll = System.Text.Encoding.ASCII.GetString(bytes.AsSpan(nameOffset, end - nameOffset));
+                        if (String.Equals(dll, ShimName, StringComparison.OrdinalIgnoreCase)) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception) {
+                // not a PE file we can read: not ours
+            }
+            return false;
+        }
+
         private static void Initialize(RubyContext/*!*/ context) {
             if (_context != null) {
                 if (_context != context) {
@@ -107,30 +196,32 @@ namespace IronRuby.Runtime.CApi {
                 return;
             }
 
-            if (!OperatingSystem.IsLinux()) {
-                throw RubyExceptions.CreateLoadError("IronRuby's C API is only implemented on Linux so far");
+            bool supported = RuntimeInformation.ProcessArchitecture == Architecture.X64 && (OperatingSystem.IsLinux() || IsWindows);
+            if (!supported) {
+                throw RubyExceptions.CreateLoadError("IronRuby's C API is only implemented on Linux and Windows x64 so far");
             }
 
-            IntPtr libc;
-            if (!NativeLibrary.TryLoad("libc.so.6", out libc) && !NativeLibrary.TryLoad("libdl.so.2", out libc)) {
-                throw RubyExceptions.CreateLoadError("cannot find the C library's dlopen");
+            if (!IsWindows) {
+                IntPtr libc;
+                if (!NativeLibrary.TryLoad("libc.so.6", out libc) && !NativeLibrary.TryLoad("libdl.so.2", out libc)) {
+                    throw RubyExceptions.CreateLoadError("cannot find the C library's dlopen");
+                }
+                _dlopen = (delegate* unmanaged[Cdecl]<byte*, int, IntPtr>)NativeLibrary.GetExport(libc, "dlopen");
+                _dlsym = (delegate* unmanaged[Cdecl]<IntPtr, byte*, IntPtr>)NativeLibrary.GetExport(libc, "dlsym");
+                _dlerror = (delegate* unmanaged[Cdecl]<byte*>)NativeLibrary.GetExport(libc, "dlerror");
             }
-            _dlopen = (delegate* unmanaged[Cdecl]<byte*, int, IntPtr>)NativeLibrary.GetExport(libc, "dlopen");
-            _dlsym = (delegate* unmanaged[Cdecl]<IntPtr, byte*, IntPtr>)NativeLibrary.GetExport(libc, "dlsym");
-            _dlerror = (delegate* unmanaged[Cdecl]<byte*>)NativeLibrary.GetExport(libc, "dlerror");
 
             string dir = Path.GetDirectoryName(typeof(CApi).Assembly.Location);
-            string shimPath = Path.Combine(dir, "libironruby-capi.so");
+            string shimPath = Path.Combine(dir, ShimName);
             if (!File.Exists(shimPath)) {
                 throw RubyExceptions.CreateLoadError(
                     "cannot load a C extension: " + shimPath + " is missing (build it with Util/build-capi.sh)");
             }
-            fixed (byte* p = CString(shimPath)) {
-                // global: the extensions' undefined rb_* symbols resolve against it
-                _shim = _dlopen(p, RTLD_NOW | RTLD_GLOBAL);
-            }
+            // global: on Unix the extensions' undefined rb_* symbols resolve against it
+            string error;
+            _shim = OpenLibrary(shimPath, true, out error);
             if (_shim == IntPtr.Zero) {
-                throw RubyExceptions.CreateLoadError(DlError() + " - " + shimPath);
+                throw RubyExceptions.CreateLoadError(error + " - " + shimPath);
             }
 
             _callMethod = (delegate* unmanaged[Cdecl]<void*, int, VALUE, int, VALUE*, int*, VALUE>)ShimExport("rb_ir_call_method");
@@ -159,10 +250,7 @@ namespace IronRuby.Runtime.CApi {
         }
 
         private static IntPtr ShimExport(string/*!*/ name) {
-            IntPtr result;
-            fixed (byte* p = CString(name)) {
-                result = _dlsym(_shim, p);
-            }
+            IntPtr result = Symbol(_shim, name);
             if (result == IntPtr.Zero) {
                 throw RubyExceptions.CreateLoadError("libironruby-capi has no " + name + " (rebuild it with Util/build-capi.sh)");
             }

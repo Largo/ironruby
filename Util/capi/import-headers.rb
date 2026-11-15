@@ -1,6 +1,10 @@
 # Copies CRuby's C API headers into Src/StdLib/include and makes them IronRuby's:
 #
-#   ruby Util/capi/import-headers.rb [CRUBY_INCLUDE_DIR]    # default: RbConfig's rubyhdrdir
+#   ruby Util/capi/import-headers.rb [CRUBY_INCLUDE_DIR [ARCH]] [--also OTHER_INCLUDE_DIR]...
+#
+# CRUBY_INCLUDE_DIR defaults to this Ruby's rubyhdrdir. Each --also is the include tree of
+# CRuby 4.0 built for another platform (RubyInstaller's for x64-mingw-ucrt, say): its
+# <arch>/ruby/config.h and the headers only that platform installs (ruby/win32.h) are added.
 #
 # Run it with a CRuby 4.0 whose headers are the ones to ship (`ruby -v` 4.0.x). The headers
 # are CRuby's own (Ruby's licence, BSD-2-Clause - see Src/StdLib/include/README.md), with one
@@ -15,8 +19,14 @@
 require 'fileutils'
 require 'rbconfig'
 
-src = ARGV[0] || RbConfig::CONFIG['rubyhdrdir']
-arch = ARGV[1] || RbConfig::CONFIG['arch']
+also = []
+args = []
+until ARGV.empty?
+  a = ARGV.shift
+  a == '--also' ? also << ARGV.shift : args << a
+end
+src = args[0] || RbConfig::CONFIG['rubyhdrdir']
+arch = args[1] || RbConfig::CONFIG['arch']
 root = File.expand_path('../..', __dir__)
 dst = File.join(root, 'Src/StdLib/include')
 
@@ -33,7 +43,20 @@ FileUtils.cp(File.join(src, 'ruby.h'), dst)
 FileUtils.cp_r(File.join(src, 'ruby'), dst)
 archdir = File.join(dst, arch, 'ruby')
 FileUtils.mkdir_p(archdir)
-FileUtils.cp(File.join(RbConfig::CONFIG['rubyarchhdrdir'] || "#{src}/#{arch}", 'ruby/config.h'), archdir)
+FileUtils.cp(File.exist?("#{src}/#{arch}/ruby/config.h") ? "#{src}/#{arch}/ruby/config.h" : File.join(RbConfig::CONFIG['rubyarchhdrdir'], 'ruby/config.h'), archdir)
+
+also.each do |other|
+  Dir.glob('*-*', base: other).each do |other_arch|
+    next unless File.file?(File.join(other, other_arch, 'ruby/config.h'))
+    FileUtils.mkdir_p(File.join(dst, other_arch, 'ruby'))
+    FileUtils.cp(File.join(other, other_arch, 'ruby/config.h'), File.join(dst, other_arch, 'ruby'))
+  end
+  Dir.glob('ruby/**/*.h', base: other).each do |h|
+    next if File.exist?(File.join(dst, h))
+    FileUtils.mkdir_p(File.dirname(File.join(dst, h)))
+    FileUtils.cp(File.join(other, h), File.join(dst, h))
+  end
+end
 
 def edit(dst, file, old, new)
   path = File.join(dst, file)
@@ -79,8 +102,9 @@ File.write(File.join(dst, 'ruby/internal/ironruby.h'), <<~'C')
   VALUE rb_ir_rarray_aref(VALUE ary, long i);
   void rb_ir_rarray_aset(VALUE ary, long i, VALUE v);
   /* Marks an extension as compiled against these headers: IronRuby refuses to load one that
-   * lacks it, which is what a CRuby-built extension, reading object memory directly, would. */
-  #if defined(__GNUC__) || defined(__clang__)
+   * lacks it, which is what a CRuby-built extension, reading object memory directly, would.
+   * On Windows the loader checks that the DLL imports libironruby-capi instead. */
+  #if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
   __attribute__((weak, visibility("default"))) const int rb_ir_abi_version = 1;
   #endif
   /* CRuby's own, declared here too because encoding.h's inline functions now call them */

@@ -507,11 +507,6 @@ namespace IronRuby.Runtime.CApi {
             Send(_context.KernelModule, "raise", null, exc);
         }
 
-        internal static void rb_sys_fail(byte* msg) {
-            int err = Marshal.GetLastSystemError();
-            RaiseSystemCallError(err, msg != null ? FromCString(msg) : null);
-        }
-
         internal static void rb_syserr_fail(int err, byte* msg) {
             RaiseSystemCallError(err, msg != null ? FromCString(msg) : null);
         }

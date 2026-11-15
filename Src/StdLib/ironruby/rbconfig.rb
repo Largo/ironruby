@@ -140,11 +140,11 @@ module RbConfig
   # x86_64-linux's is shipped so far.
   hdrdir = "#{libdir}/include"
   CONFIG["rubyhdrdir"] = hdrdir
-  CONFIG["rubyarchhdrdir"] = "#{hdrdir}/#{cpu_and_os[0]}-#{cpu_and_os[1].sub(/-gnu\z/, '')}"
+  CONFIG["rubyarchhdrdir"] = windows ? "#{hdrdir}/x64-mingw-ucrt" : "#{hdrdir}/#{cpu_and_os[0]}-#{cpu_and_os[1].sub(/-gnu\z/, '')}"
   CONFIG["sitehdrdir"] = "#{hdrdir}/site_ruby"
   CONFIG["vendorhdrdir"] = "#{hdrdir}/vendor_ruby"
   CONFIG["topdir"] = File.dirname(__FILE__)
-  CONFIG["build_os"] = CONFIG["host_os"].dup
+  CONFIG["build_os"] ||= CONFIG["host_os"].dup
 
   # The C toolchain mkmf drives. Where IronRuby has no C API (Windows so far), every one of
   # these is empty: mkmf reads them while it loads and would otherwise fail on nil, and empty
@@ -184,6 +184,31 @@ module RbConfig
       "INSTALL_DATA" => "$(INSTALL) -m 644", "INSTALL_SCRIPT" => "$(INSTALL)",
       "MAKEDIRS" => "mkdir -p", "MKDIR_P" => "mkdir -p", "RM" => "rm -f",
       "RMDIR" => "rmdir --ignore-fail-on-non-empty", "RMALL" => "rm -fr", "CP" => "cp",
+    }.each { |key, value| CONFIG[key] = value.dup }
+  else
+    # Windows: MinGW gcc, as RubyInstaller's CRuby builds extensions (its DevKit, or MSYS2's
+    # UCRT64 gcc and make), linking libironruby-capi.dll's import library from bindir.
+    # RUBY_PLATFORM and host_os still say mswin64, which is what IronRuby is; build_os and the
+    # shell describe the toolchain (mkmf turns C:/ paths into /C/ ones for build_os mingw32).
+    {
+      "CC" => "gcc", "CPP" => "$(CC) -E", "CXX" => "g++", "GCC" => "yes",
+      "CFLAGS" => "$(cflags)", "cflags" => "$(optflags) $(debugflags) $(warnflags)",
+      "optflags" => "-O2", "debugflags" => "-g", "warnflags" => "-Wall -Wno-unused-parameter",
+      "CXXFLAGS" => "$(cxxflags)", "cxxflags" => "$(optflags) $(debugflags) $(warnflags)",
+      "CPPFLAGS" => "-D_WIN32_WINNT=0x0600 -D__MINGW_USE_VC2005_COMPAT $(DEFS) $(cppflags)", "cppflags" => "", "DEFS" => "",
+      "CCDLFLAGS" => "", "LDFLAGS" => "-L.", "DLDFLAGS" => "-Wl,--enable-auto-image-base,--enable-auto-import", "EXTDLDFLAGS" => "",
+      "LDSHARED" => "$(CC) -shared", "LDSHAREDXX" => "$(CXX) -shared",
+      "LIBS" => "-lshell32 -lws2_32 -liphlpapi -limagehlp -lshlwapi -lbcrypt", "DLDLIBS" => "",
+      "LIBRUBYARG" => "$(LIBRUBYARG_SHARED)",
+      "LIBRUBYARG_SHARED" => "-L$(bindir) -lironruby-capi", "LIBRUBYARG_STATIC" => "-L$(bindir) -lironruby-capi",
+      "OUTFLAG" => "-o ", "COUTFLAG" => "-o ", "CPPOUTFILE" => "-o conftest.i",
+      "LIBPATHFLAG" => " -L%s", "RPATHFLAG" => "", "EXPORT_PREFIX" => " ",
+      "LINK_SO" => "", "POSTLINK" => ":", "TRY_LINK" => "",
+      "INSTALL" => "/usr/bin/install -c", "INSTALL_PROG" => "$(INSTALL) -m 0755",
+      "INSTALL_DATA" => "$(INSTALL) -m 644", "INSTALL_SCRIPT" => "$(INSTALL)",
+      "MAKEDIRS" => "mkdir -p", "MKDIR_P" => "mkdir -p", "RM" => "rm -f",
+      "RMDIR" => "rmdir --ignore-fail-on-non-empty", "RMALL" => "rm -fr", "CP" => "cp",
+      "SHELL" => "/bin/sh", "NULLCMD" => ":", "build_os" => "mingw32",
     }.each { |key, value| CONFIG[key] = value.dup }
   end
 

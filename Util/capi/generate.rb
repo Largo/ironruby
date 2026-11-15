@@ -21,7 +21,9 @@ TYPES = {
   'void' => 'void',
   'VALUE' => 'ulong', 'ID' => 'ulong',
   'int' => 'int', 'unsigned int' => 'uint',
-  'long' => 'long', 'unsigned long' => 'ulong',
+  # C's long is 64-bit on Unix and 32-bit on Windows: CLong/CULong are the CLR's types for it,
+  # converted to long/ulong at the call (CApi.*.cs work in long)
+  'long' => 'CLong', 'unsigned long' => 'CULong',
   'long long' => 'long', 'unsigned long long' => 'ulong',
   'short' => 'short', 'unsigned short' => 'ushort',
   'size_t' => 'nuint', 'ssize_t' => 'nint', 'st_index_t' => 'ulong', 'st_data_t' => 'ulong',
@@ -37,8 +39,8 @@ TYPES = {
   'timeval' => 'TimeVal', 'timespec' => 'TimeSpec',
 }
 POINTERS = {
-  'char' => 'byte*', 'VALUE' => 'ulong*', 'ID' => 'ulong*', 'int' => 'int*', 'long' => 'long*',
-  'double' => 'double*', 'size_t' => 'nuint*', 'unsigned int' => 'uint*', 'unsigned long' => 'ulong*',
+  'char' => 'byte*', 'VALUE' => 'ulong*', 'ID' => 'ulong*', 'int' => 'int*', 'long' => 'CLong*',
+  'double' => 'double*', 'size_t' => 'nuint*', 'unsigned int' => 'uint*', 'unsigned long' => 'CULong*',
   'timespec' => 'TimeSpec*', 'timeval' => 'TimeVal*',
 }
 
@@ -97,7 +99,7 @@ File.readlines(DEF).each_with_index do |line, i|
 end
 # A name ruby.h #defines to another function is never called by that name: list the target.
 inc = File.join(root, 'Src/StdLib/include')
-arch = Dir.glob(File.join(inc, '*-*')).find { |d| File.directory?(d) }
+arch = File.join(inc, RbConfig::CONFIG['arch'])
 macros = IO.popen(['gcc', '-dM', '-E', "-I#{inc}", "-I#{arch}", '-x', 'c', '-'], 'r+') { |io|
   io.write("#include \"ruby.h\"\n#include \"ruby/encoding.h\"\n"); io.close_write; io.read }
 # Functions declared noreturn: their forwarders always unwind (the managed side always raises).
@@ -163,7 +165,16 @@ cs << "        }\n"
 fns.each do |f|
   ret = cs_type(f.ret)
   plist = f.params.map { |p| "#{p.cs} #{cs_name(p.name)}" }.join(', ')
-  args = f.params.map { |p| cs_name(p.name) }.join(', ')
+  args = f.params.map { |p|
+    case p.cs
+    when 'CLong' then "(long)#{cs_name(p.name)}.Value"
+    when 'CULong' then "(ulong)#{cs_name(p.name)}.Value"
+    else cs_name(p.name)
+    end
+  }.join(', ')
+  call = "#{f.name}(#{args})"
+  call = "new CLong(checked((nint)#{call}))" if ret == 'CLong'
+  call = "new CULong(checked((nuint)#{call}))" if ret == 'CULong'
   cs << "\n        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n"
   cs << "        private static #{ret} Entry_#{f.name}(#{plist}) {\n"
   cs << "            var frame = EnterManaged();\n"
@@ -171,7 +182,7 @@ fns.each do |f|
   if ret == 'void'
     cs << "                #{f.name}(#{args});\n"
   else
-    cs << "                return #{f.name}(#{args});\n"
+    cs << "                return #{call};\n"
   end
   cs << "            } catch (Exception e) {\n                SetPending(e);\n"
   cs << "                return#{ret == 'void' ? '' : ' default'};\n"

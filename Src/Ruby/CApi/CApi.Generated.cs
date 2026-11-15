@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime.CApi {
     internal static unsafe partial class CApi {
-        internal const int FunctionCount = 518;
+        internal const int FunctionCount = 517;
 
         internal static void FillFunctionTable(IntPtr* table) {
             table[0] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_builtin_type;
@@ -14,20 +14,20 @@ namespace IronRuby.Runtime.CApi {
             table[3] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_ir_fl_set;
             table[4] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_ir_fl_unset;
             table[5] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_ir_fl_reverse;
-            table[6] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_ir_rstring_len;
+            table[6] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_ir_rstring_len;
             table[7] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*>)&Entry_rb_ir_rstring_ptr;
-            table[8] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_ir_rarray_len;
+            table[8] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_ir_rarray_len;
             table[9] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*>)&Entry_rb_ir_rarray_ptr;
-            table[10] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_ir_rarray_aref;
-            table[11] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong, void>)&Entry_rb_ir_rarray_aset;
+            table[10] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_ir_rarray_aref;
+            table[11] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong, void>)&Entry_rb_ir_rarray_aset;
             table[12] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_ir_caught;
             table[13] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, int>)&Entry_rb_ir_rescue_match;
             table[14] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, void>)&Entry_rb_ir_warn;
-            table[15] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, int, ulong>)&Entry_rb_ir_str_new_buffer;
+            table[15] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, int, ulong>)&Entry_rb_ir_str_new_buffer;
             table[16] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void>)&Entry_rb_ir_raise_notimp;
             table[17] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void>)&Entry_rb_ir_bug;
             table[18] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, byte*>)&Entry_rb_string_value_cstr;
-            table[19] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, long*, byte*>)&Entry_rb_str_subpos;
+            table[19] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, CLong*, byte*>)&Entry_rb_str_subpos;
             table[20] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*>)&Entry_rb_id2name;
             table[21] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*>)&Entry_rb_obj_classname;
             table[22] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*>)&Entry_rb_sourcefile;
@@ -37,7 +37,7 @@ namespace IronRuby.Runtime.CApi {
             table[26] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, double>)&Entry_rb_num2dbl;
             table[27] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, double>)&Entry_rb_str_to_dbl;
             table[28] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_frame_this_func;
-            table[29] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_intern2;
+            table[29] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_intern2;
             table[30] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_intern;
             table[31] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_intern_str;
             table[32] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym2id;
@@ -59,12 +59,12 @@ namespace IronRuby.Runtime.CApi {
             table[48] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_utf8_encindex;
             table[49] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_big2ll;
             table[50] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_num2ll;
-            table[51] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_big2long;
-            table[52] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_fix2int;
-            table[53] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_num2int;
-            table[54] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_num2long;
-            table[55] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long>)&Entry_rb_str_strlen;
-            table[56] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, long>)&Entry_rb_str_sublen;
+            table[51] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_big2long;
+            table[52] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_fix2int;
+            table[53] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_num2int;
+            table[54] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_num2long;
+            table[55] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong>)&Entry_rb_str_strlen;
+            table[56] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, CLong>)&Entry_rb_str_sublen;
             table[57] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_ascii8bit_encoding;
             table[58] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*>)&Entry_rb_enc_find;
             table[59] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void*>)&Entry_rb_enc_from_index;
@@ -78,36 +78,36 @@ namespace IronRuby.Runtime.CApi {
             table[67] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_hash;
             table[68] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_big2ull;
             table[69] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_num2ull;
-            table[70] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_big2ulong;
-            table[71] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_num2uint;
-            table[72] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_num2ulong;
+            table[70] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CULong>)&Entry_rb_big2ulong;
+            table[71] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CULong>)&Entry_rb_num2uint;
+            table[72] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CULong>)&Entry_rb_num2ulong;
             table[73] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ushort>)&Entry_rb_num2ushort;
             table[74] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_any_to_s;
             table[75] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_Array;
             table[76] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_ary_aref;
-            table[77] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, long, ulong>)&Entry_rb_ary_cat;
+            table[77] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, CLong, ulong>)&Entry_rb_ary_cat;
             table[78] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_clear;
             table[79] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_concat;
-            table[80] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_ary_delete_at;
+            table[80] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_ary_delete_at;
             table[81] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_delete;
             table[82] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_dup;
-            table[83] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_ary_entry;
+            table[83] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_ary_entry;
             table[84] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_freeze;
-            table[85] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_ary_hidden_new;
+            table[85] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_ary_hidden_new;
             table[86] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_includes;
             table[87] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_join;
-            table[88] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_ary_new_capa;
-            table[89] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong*, ulong>)&Entry_rb_ary_new_from_values;
+            table[88] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_ary_new_capa;
+            table[89] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong*, ulong>)&Entry_rb_ary_new_from_values;
             table[90] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ary_new;
             table[91] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_plus;
             table[92] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_pop;
             table[93] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_push;
             table[94] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_reverse;
-            table[95] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_ary_rotate;
+            table[95] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_ary_rotate;
             table[96] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_shift;
             table[97] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_sort_bang;
             table[98] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_sort;
-            table[99] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, long, ulong>)&Entry_rb_ary_subseq;
+            table[99] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, CLong, ulong>)&Entry_rb_ary_subseq;
             table[100] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_to_ary;
             table[101] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ary_to_s;
             table[102] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_unshift;
@@ -137,20 +137,20 @@ namespace IronRuby.Runtime.CApi {
             table[126] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_enc_associate_index;
             table[127] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*, ulong>)&Entry_rb_enc_associate;
             table[128] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_enc_from_encoding;
-            table[129] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_enc_interned_str;
+            table[129] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, void*, ulong>)&Entry_rb_enc_interned_str;
             table[130] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, ulong>)&Entry_rb_enc_interned_str_cstr;
-            table[131] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, long, void*, ulong>)&Entry_rb_enc_str_buf_cat;
-            table[132] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_enc_str_new;
+            table[131] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, CLong, void*, ulong>)&Entry_rb_enc_str_buf_cat;
+            table[132] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, void*, ulong>)&Entry_rb_enc_str_new;
             table[133] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, ulong>)&Entry_rb_enc_str_new_cstr;
             table[134] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_equal;
             table[135] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_errinfo;
             table[136] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_eval_string;
             table[137] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_exc_new_cstr;
             table[138] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_exc_new_str;
-            table[139] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, long, ulong>)&Entry_rb_exc_new;
-            table[140] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_external_str_new;
+            table[139] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, CLong, ulong>)&Entry_rb_exc_new;
+            table[140] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_external_str_new;
             table[141] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_external_str_new_cstr;
-            table[142] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_external_str_new_with_enc;
+            table[142] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, void*, ulong>)&Entry_rb_external_str_new_with_enc;
             table[143] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_fix2str;
             table[144] = (IntPtr)(delegate* unmanaged[Cdecl]<double, ulong>)&Entry_rb_float_new;
             table[145] = (IntPtr)(delegate* unmanaged[Cdecl]<double, ulong>)&Entry_rb_float_new_in_heap;
@@ -177,9 +177,9 @@ namespace IronRuby.Runtime.CApi {
             table[166] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_inspect;
             table[167] = (IntPtr)(delegate* unmanaged[Cdecl]<nint, ulong>)&Entry_rb_int2big;
             table[168] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_Integer;
-            table[169] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_interned_str;
+            table[169] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_interned_str;
             table[170] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_interned_str_cstr;
-            table[171] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong, ulong>)&Entry_rb_int_positive_pow;
+            table[171] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, CULong, ulong>)&Entry_rb_int_positive_pow;
             table[172] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, IntPtr, ulong, ulong>)&Entry_rb_iterate;
             table[173] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ivar_defined;
             table[174] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ivar_get;
@@ -187,7 +187,7 @@ namespace IronRuby.Runtime.CApi {
             table[176] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_iv_get;
             table[177] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, ulong>)&Entry_rb_iv_set;
             table[178] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_ll2inum;
-            table[179] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_locale_str_new;
+            table[179] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_locale_str_new;
             table[180] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_locale_str_new_cstr;
             table[181] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mod_ancestors;
             table[182] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mod_name;
@@ -213,12 +213,12 @@ namespace IronRuby.Runtime.CApi {
             table[202] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_str2inum;
             table[203] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_append;
             table[204] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_buf_append;
-            table[205] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_str_buf_new;
+            table[205] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_str_buf_new;
             table[206] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_str_cat_cstr;
-            table[207] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, long, ulong>)&Entry_rb_str_cat;
+            table[207] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, CLong, ulong>)&Entry_rb_str_cat;
             table[208] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*, void*, int, ulong, ulong>)&Entry_rb_str_conv_enc_opts;
             table[209] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*, void*, ulong>)&Entry_rb_str_conv_enc;
-            table[210] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_str_drop_bytes;
+            table[210] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_str_drop_bytes;
             table[211] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_dup;
             table[212] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong, ulong>)&Entry_rb_str_encode;
             table[213] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_equal;
@@ -232,32 +232,32 @@ namespace IronRuby.Runtime.CApi {
             table[221] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_intern;
             table[222] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_length;
             table[223] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_locktmp;
-            table[224] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_str_new;
+            table[224] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_str_new;
             table[225] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_str_new_cstr;
             table[226] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_new_frozen;
             table[227] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_new_shared;
-            table[228] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_str_new_static;
-            table[229] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, long, ulong>)&Entry_rb_str_new_with_class;
+            table[228] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_str_new_static;
+            table[229] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, CLong, ulong>)&Entry_rb_str_new_with_class;
             table[230] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_plus;
-            table[231] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_str_resize;
+            table[231] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_str_resize;
             table[232] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_str_split;
-            table[233] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, long, ulong>)&Entry_rb_str_subseq;
-            table[234] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, long, ulong>)&Entry_rb_str_substr;
+            table[233] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, CLong, ulong>)&Entry_rb_str_subseq;
+            table[234] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, CLong, ulong>)&Entry_rb_str_substr;
             table[235] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_times;
-            table[236] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_str_tmp_new;
+            table[236] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_str_tmp_new;
             table[237] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_to_interned_str;
             table[238] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_to_str;
             table[239] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_unlocktmp;
             table[240] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_thread_current;
             table[241] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_to_int;
             table[242] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ull2inum;
-            table[243] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_usascii_str_new;
+            table[243] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_usascii_str_new;
             table[244] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_usascii_str_new_cstr;
-            table[245] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_usascii_str_new_static;
-            table[246] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_utf8_str_new_static;
+            table[245] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_usascii_str_new_static;
+            table[246] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_utf8_str_new_static;
             table[247] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_yield_values2;
             table[248] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_yield;
-            table[249] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong, void>)&Entry_rb_ary_store;
+            table[249] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong, void>)&Entry_rb_ary_store;
             table[250] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, void>)&Entry_rb_check_type;
             table[251] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_cmperr;
             table[252] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_const_set;
@@ -292,240 +292,239 @@ namespace IronRuby.Runtime.CApi {
             table[281] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_iter_break_value;
             table[282] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_iter_break;
             table[283] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void>)&Entry_rb_jump_tag;
-            table[284] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, long, void>)&Entry_rb_mem_clear;
+            table[284] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, CLong, void>)&Entry_rb_mem_clear;
             table[285] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_memerror;
             table[286] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_need_block;
             table[287] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, void>)&Entry_rb_obj_call_init;
-            table[288] = (IntPtr)(delegate* unmanaged[Cdecl]<long, void>)&Entry_rb_out_of_int;
+            table[288] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, void>)&Entry_rb_out_of_int;
             table[289] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void>)&Entry_rb_scan_args_bad_format;
             table[290] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, int, void>)&Entry_rb_scan_args_length_mismatch;
             table[291] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_set_errinfo;
             table[292] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_str_free;
-            table[293] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, void>)&Entry_rb_str_modify_expand;
+            table[293] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, void>)&Entry_rb_str_modify_expand;
             table[294] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_str_modify;
-            table[295] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, void>)&Entry_rb_str_set_len;
-            table[296] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, long, ulong, void>)&Entry_rb_str_update;
+            table[295] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, void>)&Entry_rb_str_set_len;
+            table[296] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, CLong, ulong, void>)&Entry_rb_str_update;
             table[297] = (IntPtr)(delegate* unmanaged[Cdecl]<int, byte*, void>)&Entry_rb_syserr_fail;
-            table[298] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void>)&Entry_rb_sys_fail;
-            table[299] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_undef_alloc_func;
-            table[300] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, void>)&Entry_rb_undef_method;
-            table[301] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, void>)&Entry_rb_unexpected_type;
-            table[302] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, byte*>)&Entry_rb_string_value_ptr;
-            table[303] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_proc_new;
-            table[304] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, int, int, ulong*, int>)&Entry_rb_get_kwargs;
-            table[305] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_io_descriptor;
-            table[306] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, int, ulong>)&Entry_rb_call_super_kw;
-            table[307] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_enc_str_coderange;
-            table[308] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int>)&Entry_rb_obj_method_arity;
-            table[309] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, void*, long>)&Entry_rb_enc_strlen;
-            table[310] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_check_to_integer;
-            table[311] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_check_array_type;
-            table[312] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_make_exception;
-            table[313] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fix2uint;
-            table[314] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_uint2big;
-            table[315] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_uint2inum;
-            table[316] = (IntPtr)(delegate* unmanaged[Cdecl]<nint, ulong>)&Entry_rb_int2inum;
-            table[317] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int*, nuint>)&Entry_rb_absint_size;
-            table[318] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_absint_singlebit_p;
-            table[319] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_big_sign;
-            table[320] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_big_cmp;
-            table[321] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, long, void>)&Entry_rb_big_pack;
-            table[322] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_file_open_str;
-            table[323] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, ulong>)&Entry_rb_file_open;
-            table[324] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_define_class_id_under;
-            table[325] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_define_module_id_under;
-            table[326] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int>)&Entry_rb_const_defined_at;
-            table[327] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_const_get_from;
-            table[328] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*>)&Entry_rb_class2name;
-            table[329] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_class_real;
-            table[330] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_path_to_class;
-            table[331] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong>)&Entry_rb_check_funcall;
-            table[332] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_to_encoding_index;
-            table[333] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, int>)&Entry_rb_enc_to_index;
-            table[334] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_time_num_new;
-            table[335] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_aref;
-            table[336] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_struct_aset;
-            table[337] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_getmember;
-            table[338] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_members;
-            table[339] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_s_members;
-            table[340] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_size;
-            table[341] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_initialize;
-            table[342] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_cmp;
-            table[343] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_relop;
-            table[344] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_bin;
-            table[345] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, ulong>)&Entry_rb_mutex_synchronize;
-            table[346] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_lock;
-            table[347] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_unlock;
-            table[348] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_trylock;
-            table[349] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_locked_p;
-            table[350] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_mutex_sleep;
-            table[351] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_instance_id;
-            table[352] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_const_id;
-            table[353] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_class_id;
-            table[354] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_local_id;
-            table[355] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_global_id;
-            table[356] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_attrset_id;
-            table[357] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_get_path;
-            table[358] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong>)&Entry_rb_enumeratorize;
-            table[359] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, void*, ulong>)&Entry_rb_enumeratorize_with_size;
-            table[360] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, int, ulong>)&Entry_rb_class_new_instance_kw;
-            table[361] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_funcall_with_block_kw;
-            table[362] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_yield_splat;
-            table[363] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_to_symbol;
-            table[364] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, void>)&Entry_rb_syserr_fail_str;
-            table[365] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, ulong>)&Entry_rb_syserr_new_str;
-            table[366] = (IntPtr)(delegate* unmanaged[Cdecl]<int, byte*, ulong>)&Entry_rb_syserr_new;
-            table[367] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, int, ulong>)&Entry_rb_reg_new;
-            table[368] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_reg_new_str;
-            table[369] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_reg_match;
-            table[370] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, ulong>)&Entry_rb_reg_nth_match;
-            table[371] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_reg_options;
-            table[372] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_reg_regcomp;
-            table[373] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_backref_get;
-            table[374] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_range_new;
-            table[375] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, ulong*, int*, int>)&Entry_rb_range_values;
-            table[376] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long*, long*, long, int, ulong>)&Entry_rb_range_beg_len;
-            table[377] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, long, int>)&Entry_rb_memcicmp;
-            table[378] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, void>)&Entry_rb_ivar_foreach;
-            table[379] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_io_write;
-            table[380] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_io_puts;
-            table[381] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_io_print;
-            table[382] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_io_addstr;
-            table[383] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_get_io;
-            table[384] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_check_io;
-            table[385] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_closed_p;
-            table[386] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_binmode;
-            table[387] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_close;
-            table[388] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_path;
-            table[389] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_taint_check;
-            table[390] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_public_instance_methods;
-            table[391] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_instance_methods;
-            table[392] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_private_instance_methods;
-            table[393] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_protected_instance_methods;
-            table[394] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, byte*, byte*, ulong>)&Entry_rb_check_convert_type;
-            table[395] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, byte*, byte*, ulong>)&Entry_rb_convert_type;
-            table[396] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, ulong>)&Entry_rb_catch_obj;
-            table[397] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_throw_obj;
-            table[398] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong, void>)&Entry_rb_throw;
-            table[399] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void*, ulong>)&Entry_rb_thread_create;
-            table[400] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_thread_wakeup;
-            table[401] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_thread_local_aref;
-            table[402] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_thread_local_aset;
-            table[403] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_thread_alone;
-            table[404] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_set_new;
-            table[405] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_set_new_capa;
-            table[406] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_add;
-            table[407] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_delete;
-            table[408] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_lookup;
-            table[409] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, nuint>)&Entry_rb_set_size;
-            table[410] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_set_clear;
-            table[411] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, void>)&Entry_rb_set_foreach;
-            table[412] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_rational_new;
-            table[413] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_rational_num;
-            table[414] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_rational_den;
-            table[415] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_complex_new;
-            table[416] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_obj_method;
-            table[417] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, int>)&Entry_rb_method_boundp;
-            table[418] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, int>)&Entry_rb_obj_respond_to;
-            table[419] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_instance_variables;
-            table[420] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ivar_count;
-            table[421] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_prepend_module;
-            table[422] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_undef;
-            table[423] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_alias;
-            table[424] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_class_new;
-            table[425] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr>)&Entry_rb_get_alloc_func;
-            table[426] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_marshal_dump;
-            table[427] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_marshal_load;
-            table[428] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_gc;
-            table[429] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_gc_enable;
-            table[430] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_gc_disable;
-            table[431] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_enc_str_new_static;
-            table[432] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_enc_str_asciionly_p;
-            table[433] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, int>)&Entry_rb_enc_dummy_p;
-            table[434] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void*>)&Entry_rb_enc_compatible;
-            table[435] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_default_internal_encoding;
-            table[436] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_default_external_encoding;
-            table[437] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_locale_encoding;
-            table[438] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_locale_encindex;
-            table[439] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_filesystem_encoding;
-            table[440] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_filesystem_encindex;
-            table[441] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void*>)&Entry_rb_enc_check;
-            table[442] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, int>)&Entry_rb_enc_alias;
-            table[443] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_block_lambda;
-            table[444] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym2str;
-            table[445] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_intern3;
-            table[446] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_str_format;
-            table[447] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_f_sprintf;
-            table[448] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong, void>)&Entry_rb_define_global_const;
-            table[449] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_f_global_variables;
-            table[450] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_free_generic_ivar;
-            table[451] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_copy_generic_ivar;
-            table[452] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_num_zerodiv;
-            table[453] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_make_backtrace;
-            table[454] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_obj_singleton_methods;
-            table[455] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_mod_constants;
-            table[456] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_mod_module_eval;
-            table[457] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_obj_instance_exec;
-            table[458] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_ary_resize;
-            table[459] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_replace;
-            table[460] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_hash_fetch;
-            table[461] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_hash_set_ifnone;
-            table[462] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_start;
-            table[463] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong*, ulong, void>)&Entry_rb_hash_bulk_insert;
-            table[464] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_concat;
-            table[465] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_succ;
-            table[466] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_replace;
-            table[467] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_str_ellipsize;
-            table[468] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_scrub;
-            table[469] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_str_buf_new_cstr;
-            table[470] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym_to_s;
-            table[471] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_is_proc;
-            table[472] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_is_method;
-            table[473] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_proc_call;
-            table[474] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, ulong>)&Entry_rb_proc_call_with_block;
-            table[475] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_proc_arity;
-            table[476] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_proc_lambda_p;
-            table[477] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_method_call;
-            table[478] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, void>)&Entry_rb_set_end_proc;
-            table[479] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, ulong*, int>)&Entry_rb_frame_method_id_and_class;
-            table[480] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, void*, int>)&Entry_rb_ir_blocking_begin;
-            table[481] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void>)&Entry_rb_ir_blocking_end;
-            table[482] = (IntPtr)(delegate* unmanaged[Cdecl]<long, long, ulong>)&Entry_rb_time_new;
-            table[483] = (IntPtr)(delegate* unmanaged[Cdecl]<long, long, ulong>)&Entry_rb_time_nano_new;
-            table[484] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, int, ulong>)&Entry_rb_time_timespec_new;
-            table[485] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_interval;
-            table[486] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_timeval;
-            table[487] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeSpec>)&Entry_rb_time_timespec;
-            table[488] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, void>)&Entry_rb_timespec_now;
-            table[489] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_get;
-            table[490] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_cvar_set;
-            table[491] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_defined;
-            table[492] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_cv_get;
-            table[493] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_cv_set;
-            table[494] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_define_class_variable;
-            table[495] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_hash_new_capa;
-            table[496] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash;
-            table[497] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_delete_if;
-            table[498] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_freeze;
-            table[499] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_fiber_new;
-            table[500] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_resume;
-            table[501] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_fiber_yield;
-            table[502] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_fiber_current;
-            table[503] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fiber_alive_p;
-            table[504] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_raise;
-            table[505] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_proc_call_kw;
-            table[506] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_proc_call_with_block_kw;
-            table[507] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, IntPtr, ulong, ulong>)&Entry_rb_catch;
-            table[508] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_variable;
-            table[509] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_readonly_variable;
-            table[510] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void*, void*, void>)&Entry_rb_define_hooked_variable;
-            table[511] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, void*, void>)&Entry_rb_define_virtual_variable;
-            table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
-            table[513] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_ir_data_new;
-            table[514] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_allocate_builtin;
-            table[515] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_apply;
-            table[516] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_utf8_str_new;
-            table[517] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_utf8_str_new_cstr;
+            table[298] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_undef_alloc_func;
+            table[299] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, void>)&Entry_rb_undef_method;
+            table[300] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, void>)&Entry_rb_unexpected_type;
+            table[301] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, byte*>)&Entry_rb_string_value_ptr;
+            table[302] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_proc_new;
+            table[303] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, int, int, ulong*, int>)&Entry_rb_get_kwargs;
+            table[304] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_io_descriptor;
+            table[305] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, int, ulong>)&Entry_rb_call_super_kw;
+            table[306] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_enc_str_coderange;
+            table[307] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int>)&Entry_rb_obj_method_arity;
+            table[308] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, void*, CLong>)&Entry_rb_enc_strlen;
+            table[309] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_check_to_integer;
+            table[310] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_check_array_type;
+            table[311] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_make_exception;
+            table[312] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CULong>)&Entry_rb_fix2uint;
+            table[313] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_uint2big;
+            table[314] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_uint2inum;
+            table[315] = (IntPtr)(delegate* unmanaged[Cdecl]<nint, ulong>)&Entry_rb_int2inum;
+            table[316] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int*, nuint>)&Entry_rb_absint_size;
+            table[317] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_absint_singlebit_p;
+            table[318] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_big_sign;
+            table[319] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_big_cmp;
+            table[320] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CULong*, CLong, void>)&Entry_rb_big_pack;
+            table[321] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_file_open_str;
+            table[322] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, ulong>)&Entry_rb_file_open;
+            table[323] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_define_class_id_under;
+            table[324] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_define_module_id_under;
+            table[325] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int>)&Entry_rb_const_defined_at;
+            table[326] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_const_get_from;
+            table[327] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*>)&Entry_rb_class2name;
+            table[328] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_class_real;
+            table[329] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_path_to_class;
+            table[330] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong>)&Entry_rb_check_funcall;
+            table[331] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_to_encoding_index;
+            table[332] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, int>)&Entry_rb_enc_to_index;
+            table[333] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_time_num_new;
+            table[334] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_aref;
+            table[335] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_struct_aset;
+            table[336] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_getmember;
+            table[337] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_members;
+            table[338] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_s_members;
+            table[339] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_size;
+            table[340] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_initialize;
+            table[341] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_cmp;
+            table[342] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_relop;
+            table[343] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_bin;
+            table[344] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, ulong>)&Entry_rb_mutex_synchronize;
+            table[345] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_lock;
+            table[346] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_unlock;
+            table[347] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_trylock;
+            table[348] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_locked_p;
+            table[349] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_mutex_sleep;
+            table[350] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_instance_id;
+            table[351] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_const_id;
+            table[352] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_class_id;
+            table[353] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_local_id;
+            table[354] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_global_id;
+            table[355] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_attrset_id;
+            table[356] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_get_path;
+            table[357] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong>)&Entry_rb_enumeratorize;
+            table[358] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, void*, ulong>)&Entry_rb_enumeratorize_with_size;
+            table[359] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, int, ulong>)&Entry_rb_class_new_instance_kw;
+            table[360] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_funcall_with_block_kw;
+            table[361] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_yield_splat;
+            table[362] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_to_symbol;
+            table[363] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, void>)&Entry_rb_syserr_fail_str;
+            table[364] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, ulong>)&Entry_rb_syserr_new_str;
+            table[365] = (IntPtr)(delegate* unmanaged[Cdecl]<int, byte*, ulong>)&Entry_rb_syserr_new;
+            table[366] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, int, ulong>)&Entry_rb_reg_new;
+            table[367] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_reg_new_str;
+            table[368] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_reg_match;
+            table[369] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, ulong>)&Entry_rb_reg_nth_match;
+            table[370] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_reg_options;
+            table[371] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_reg_regcomp;
+            table[372] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_backref_get;
+            table[373] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_range_new;
+            table[374] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, ulong*, int*, int>)&Entry_rb_range_values;
+            table[375] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong*, CLong*, CLong, int, ulong>)&Entry_rb_range_beg_len;
+            table[376] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, CLong, int>)&Entry_rb_memcicmp;
+            table[377] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, void>)&Entry_rb_ivar_foreach;
+            table[378] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_io_write;
+            table[379] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_io_puts;
+            table[380] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_io_print;
+            table[381] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_io_addstr;
+            table[382] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_get_io;
+            table[383] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_check_io;
+            table[384] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_closed_p;
+            table[385] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_binmode;
+            table[386] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_close;
+            table[387] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_path;
+            table[388] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_taint_check;
+            table[389] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_public_instance_methods;
+            table[390] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_instance_methods;
+            table[391] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_private_instance_methods;
+            table[392] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_protected_instance_methods;
+            table[393] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, byte*, byte*, ulong>)&Entry_rb_check_convert_type;
+            table[394] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, byte*, byte*, ulong>)&Entry_rb_convert_type;
+            table[395] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, ulong>)&Entry_rb_catch_obj;
+            table[396] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_throw_obj;
+            table[397] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong, void>)&Entry_rb_throw;
+            table[398] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void*, ulong>)&Entry_rb_thread_create;
+            table[399] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_thread_wakeup;
+            table[400] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_thread_local_aref;
+            table[401] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_thread_local_aset;
+            table[402] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_thread_alone;
+            table[403] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_set_new;
+            table[404] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_set_new_capa;
+            table[405] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_add;
+            table[406] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_delete;
+            table[407] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_lookup;
+            table[408] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, nuint>)&Entry_rb_set_size;
+            table[409] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_set_clear;
+            table[410] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, void>)&Entry_rb_set_foreach;
+            table[411] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_rational_new;
+            table[412] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_rational_num;
+            table[413] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_rational_den;
+            table[414] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_complex_new;
+            table[415] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_obj_method;
+            table[416] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, int>)&Entry_rb_method_boundp;
+            table[417] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, int>)&Entry_rb_obj_respond_to;
+            table[418] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_instance_variables;
+            table[419] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ivar_count;
+            table[420] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_prepend_module;
+            table[421] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_undef;
+            table[422] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_alias;
+            table[423] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_class_new;
+            table[424] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr>)&Entry_rb_get_alloc_func;
+            table[425] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_marshal_dump;
+            table[426] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_marshal_load;
+            table[427] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_gc;
+            table[428] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_gc_enable;
+            table[429] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_gc_disable;
+            table[430] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, void*, ulong>)&Entry_rb_enc_str_new_static;
+            table[431] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_enc_str_asciionly_p;
+            table[432] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, int>)&Entry_rb_enc_dummy_p;
+            table[433] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void*>)&Entry_rb_enc_compatible;
+            table[434] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_default_internal_encoding;
+            table[435] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_default_external_encoding;
+            table[436] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_locale_encoding;
+            table[437] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_locale_encindex;
+            table[438] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_filesystem_encoding;
+            table[439] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_filesystem_encindex;
+            table[440] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void*>)&Entry_rb_enc_check;
+            table[441] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, int>)&Entry_rb_enc_alias;
+            table[442] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_block_lambda;
+            table[443] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym2str;
+            table[444] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, void*, ulong>)&Entry_rb_intern3;
+            table[445] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_str_format;
+            table[446] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_f_sprintf;
+            table[447] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong, void>)&Entry_rb_define_global_const;
+            table[448] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_f_global_variables;
+            table[449] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_free_generic_ivar;
+            table[450] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_copy_generic_ivar;
+            table[451] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_num_zerodiv;
+            table[452] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_make_backtrace;
+            table[453] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_obj_singleton_methods;
+            table[454] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_mod_constants;
+            table[455] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_mod_module_eval;
+            table[456] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_obj_instance_exec;
+            table[457] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_ary_resize;
+            table[458] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_replace;
+            table[459] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_hash_fetch;
+            table[460] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_hash_set_ifnone;
+            table[461] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_start;
+            table[462] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong*, ulong, void>)&Entry_rb_hash_bulk_insert;
+            table[463] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_concat;
+            table[464] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_succ;
+            table[465] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_replace;
+            table[466] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong, ulong>)&Entry_rb_str_ellipsize;
+            table[467] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_scrub;
+            table[468] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_str_buf_new_cstr;
+            table[469] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym_to_s;
+            table[470] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_is_proc;
+            table[471] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_is_method;
+            table[472] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_proc_call;
+            table[473] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, ulong>)&Entry_rb_proc_call_with_block;
+            table[474] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_proc_arity;
+            table[475] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_proc_lambda_p;
+            table[476] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_method_call;
+            table[477] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, void>)&Entry_rb_set_end_proc;
+            table[478] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, ulong*, int>)&Entry_rb_frame_method_id_and_class;
+            table[479] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, void*, int>)&Entry_rb_ir_blocking_begin;
+            table[480] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void>)&Entry_rb_ir_blocking_end;
+            table[481] = (IntPtr)(delegate* unmanaged[Cdecl]<long, CLong, ulong>)&Entry_rb_time_new;
+            table[482] = (IntPtr)(delegate* unmanaged[Cdecl]<long, CLong, ulong>)&Entry_rb_time_nano_new;
+            table[483] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, int, ulong>)&Entry_rb_time_timespec_new;
+            table[484] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_interval;
+            table[485] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_timeval;
+            table[486] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeSpec>)&Entry_rb_time_timespec;
+            table[487] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, void>)&Entry_rb_timespec_now;
+            table[488] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_get;
+            table[489] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_cvar_set;
+            table[490] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_defined;
+            table[491] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_cv_get;
+            table[492] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_cv_set;
+            table[493] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_define_class_variable;
+            table[494] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_hash_new_capa;
+            table[495] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash;
+            table[496] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_delete_if;
+            table[497] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_freeze;
+            table[498] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_fiber_new;
+            table[499] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_resume;
+            table[500] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_fiber_yield;
+            table[501] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_fiber_current;
+            table[502] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fiber_alive_p;
+            table[503] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_raise;
+            table[504] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_proc_call_kw;
+            table[505] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_proc_call_with_block_kw;
+            table[506] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, IntPtr, ulong, ulong>)&Entry_rb_catch;
+            table[507] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_variable;
+            table[508] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_readonly_variable;
+            table[509] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void*, void*, void>)&Entry_rb_define_hooked_variable;
+            table[510] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, void*, void>)&Entry_rb_define_virtual_variable;
+            table[511] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
+            table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_ir_data_new;
+            table[513] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_allocate_builtin;
+            table[514] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_apply;
+            table[515] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_utf8_str_new;
+            table[516] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_utf8_str_new_cstr;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -607,10 +606,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_ir_rstring_len(ulong str) {
+        private static CLong Entry_rb_ir_rstring_len(ulong str) {
             var frame = EnterManaged();
             try {
-                return rb_ir_rstring_len(str);
+                return new CLong(checked((nint)rb_ir_rstring_len(str)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -633,10 +632,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_ir_rarray_len(ulong ary) {
+        private static CLong Entry_rb_ir_rarray_len(ulong ary) {
             var frame = EnterManaged();
             try {
-                return rb_ir_rarray_len(ary);
+                return new CLong(checked((nint)rb_ir_rarray_len(ary)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -659,10 +658,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ir_rarray_aref(ulong ary, long i) {
+        private static ulong Entry_rb_ir_rarray_aref(ulong ary, CLong i) {
             var frame = EnterManaged();
             try {
-                return rb_ir_rarray_aref(ary, i);
+                return rb_ir_rarray_aref(ary, (long)i.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -672,10 +671,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_ir_rarray_aset(ulong ary, long i, ulong v) {
+        private static void Entry_rb_ir_rarray_aset(ulong ary, CLong i, ulong v) {
             var frame = EnterManaged();
             try {
-                rb_ir_rarray_aset(ary, i, v);
+                rb_ir_rarray_aset(ary, (long)i.Value, v);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -724,10 +723,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ir_str_new_buffer(byte* ptr, long len, int encindex) {
+        private static ulong Entry_rb_ir_str_new_buffer(byte* ptr, CLong len, int encindex) {
             var frame = EnterManaged();
             try {
-                return rb_ir_str_new_buffer(ptr, len, encindex);
+                return rb_ir_str_new_buffer(ptr, (long)len.Value, encindex);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -776,10 +775,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static byte* Entry_rb_str_subpos(ulong str, long beg, long* len) {
+        private static byte* Entry_rb_str_subpos(ulong str, CLong beg, CLong* len) {
             var frame = EnterManaged();
             try {
-                return rb_str_subpos(str, beg, len);
+                return rb_str_subpos(str, (long)beg.Value, len);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -906,10 +905,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_intern2(byte* name, long len) {
+        private static ulong Entry_rb_intern2(byte* name, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_intern2(name, len);
+                return rb_intern2(name, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1192,10 +1191,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_big2long(ulong x) {
+        private static CLong Entry_rb_big2long(ulong x) {
             var frame = EnterManaged();
             try {
-                return rb_big2long(x);
+                return new CLong(checked((nint)rb_big2long(x)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1205,10 +1204,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_fix2int(ulong num) {
+        private static CLong Entry_rb_fix2int(ulong num) {
             var frame = EnterManaged();
             try {
-                return rb_fix2int(num);
+                return new CLong(checked((nint)rb_fix2int(num)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1218,10 +1217,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_num2int(ulong num) {
+        private static CLong Entry_rb_num2int(ulong num) {
             var frame = EnterManaged();
             try {
-                return rb_num2int(num);
+                return new CLong(checked((nint)rb_num2int(num)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1231,10 +1230,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_num2long(ulong num) {
+        private static CLong Entry_rb_num2long(ulong num) {
             var frame = EnterManaged();
             try {
-                return rb_num2long(num);
+                return new CLong(checked((nint)rb_num2long(num)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1244,10 +1243,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_str_strlen(ulong str) {
+        private static CLong Entry_rb_str_strlen(ulong str) {
             var frame = EnterManaged();
             try {
-                return rb_str_strlen(str);
+                return new CLong(checked((nint)rb_str_strlen(str)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1257,10 +1256,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_str_sublen(ulong str, long pos) {
+        private static CLong Entry_rb_str_sublen(ulong str, CLong pos) {
             var frame = EnterManaged();
             try {
-                return rb_str_sublen(str, pos);
+                return new CLong(checked((nint)rb_str_sublen(str, (long)pos.Value)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1439,10 +1438,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_big2ulong(ulong x) {
+        private static CULong Entry_rb_big2ulong(ulong x) {
             var frame = EnterManaged();
             try {
-                return rb_big2ulong(x);
+                return new CULong(checked((nuint)rb_big2ulong(x)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1452,10 +1451,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_num2uint(ulong num) {
+        private static CULong Entry_rb_num2uint(ulong num) {
             var frame = EnterManaged();
             try {
-                return rb_num2uint(num);
+                return new CULong(checked((nuint)rb_num2uint(num)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1465,10 +1464,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_num2ulong(ulong num) {
+        private static CULong Entry_rb_num2ulong(ulong num) {
             var frame = EnterManaged();
             try {
-                return rb_num2ulong(num);
+                return new CULong(checked((nuint)rb_num2ulong(num)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1530,10 +1529,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_cat(ulong ary, ulong* train, long len) {
+        private static ulong Entry_rb_ary_cat(ulong ary, ulong* train, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_ary_cat(ary, train, len);
+                return rb_ary_cat(ary, train, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1569,10 +1568,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_delete_at(ulong ary, long pos) {
+        private static ulong Entry_rb_ary_delete_at(ulong ary, CLong pos) {
             var frame = EnterManaged();
             try {
-                return rb_ary_delete_at(ary, pos);
+                return rb_ary_delete_at(ary, (long)pos.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1608,10 +1607,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_entry(ulong ary, long off) {
+        private static ulong Entry_rb_ary_entry(ulong ary, CLong off) {
             var frame = EnterManaged();
             try {
-                return rb_ary_entry(ary, off);
+                return rb_ary_entry(ary, (long)off.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1634,10 +1633,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_hidden_new(long capa) {
+        private static ulong Entry_rb_ary_hidden_new(CLong capa) {
             var frame = EnterManaged();
             try {
-                return rb_ary_hidden_new(capa);
+                return rb_ary_hidden_new((long)capa.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1673,10 +1672,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_new_capa(long capa) {
+        private static ulong Entry_rb_ary_new_capa(CLong capa) {
             var frame = EnterManaged();
             try {
-                return rb_ary_new_capa(capa);
+                return rb_ary_new_capa((long)capa.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1686,10 +1685,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_new_from_values(long n, ulong* elts) {
+        private static ulong Entry_rb_ary_new_from_values(CLong n, ulong* elts) {
             var frame = EnterManaged();
             try {
-                return rb_ary_new_from_values(n, elts);
+                return rb_ary_new_from_values((long)n.Value, elts);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1764,10 +1763,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_rotate(ulong ary, long rot) {
+        private static ulong Entry_rb_ary_rotate(ulong ary, CLong rot) {
             var frame = EnterManaged();
             try {
-                return rb_ary_rotate(ary, rot);
+                return rb_ary_rotate(ary, (long)rot.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -1816,10 +1815,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_subseq(ulong ary, long beg, long len) {
+        private static ulong Entry_rb_ary_subseq(ulong ary, CLong beg, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_ary_subseq(ary, beg, len);
+                return rb_ary_subseq(ary, (long)beg.Value, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2206,10 +2205,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_enc_interned_str(byte* ptr, long len, void* enc) {
+        private static ulong Entry_rb_enc_interned_str(byte* ptr, CLong len, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_enc_interned_str(ptr, len, enc);
+                return rb_enc_interned_str(ptr, (long)len.Value, enc);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2232,10 +2231,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_enc_str_buf_cat(ulong str, byte* ptr, long len, void* enc) {
+        private static ulong Entry_rb_enc_str_buf_cat(ulong str, byte* ptr, CLong len, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_enc_str_buf_cat(str, ptr, len, enc);
+                return rb_enc_str_buf_cat(str, ptr, (long)len.Value, enc);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2245,10 +2244,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_enc_str_new(byte* ptr, long len, void* enc) {
+        private static ulong Entry_rb_enc_str_new(byte* ptr, CLong len, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_enc_str_new(ptr, len, enc);
+                return rb_enc_str_new(ptr, (long)len.Value, enc);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2336,10 +2335,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_exc_new(ulong etype, byte* ptr, long len) {
+        private static ulong Entry_rb_exc_new(ulong etype, byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_exc_new(etype, ptr, len);
+                return rb_exc_new(etype, ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2349,10 +2348,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_external_str_new(byte* ptr, long len) {
+        private static ulong Entry_rb_external_str_new(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_external_str_new(ptr, len);
+                return rb_external_str_new(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2375,10 +2374,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_external_str_new_with_enc(byte* ptr, long len, void* enc) {
+        private static ulong Entry_rb_external_str_new_with_enc(byte* ptr, CLong len, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_external_str_new_with_enc(ptr, len, enc);
+                return rb_external_str_new_with_enc(ptr, (long)len.Value, enc);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2726,10 +2725,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_interned_str(byte* ptr, long len) {
+        private static ulong Entry_rb_interned_str(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_interned_str(ptr, len);
+                return rb_interned_str(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2752,10 +2751,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_int_positive_pow(long x, ulong y) {
+        private static ulong Entry_rb_int_positive_pow(CLong x, CULong y) {
             var frame = EnterManaged();
             try {
-                return rb_int_positive_pow(x, y);
+                return rb_int_positive_pow((long)x.Value, (ulong)y.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -2856,10 +2855,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_locale_str_new(byte* ptr, long len) {
+        private static ulong Entry_rb_locale_str_new(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_locale_str_new(ptr, len);
+                return rb_locale_str_new(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3194,10 +3193,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_buf_new(long capa) {
+        private static ulong Entry_rb_str_buf_new(CLong capa) {
             var frame = EnterManaged();
             try {
-                return rb_str_buf_new(capa);
+                return rb_str_buf_new((long)capa.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3220,10 +3219,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_cat(ulong dst, byte* src, long srclen) {
+        private static ulong Entry_rb_str_cat(ulong dst, byte* src, CLong srclen) {
             var frame = EnterManaged();
             try {
-                return rb_str_cat(dst, src, srclen);
+                return rb_str_cat(dst, src, (long)srclen.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3259,10 +3258,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_drop_bytes(ulong str, long len) {
+        private static ulong Entry_rb_str_drop_bytes(ulong str, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_drop_bytes(str, len);
+                return rb_str_drop_bytes(str, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3441,10 +3440,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_new(byte* ptr, long len) {
+        private static ulong Entry_rb_str_new(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_new(ptr, len);
+                return rb_str_new(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3493,10 +3492,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_new_static(byte* ptr, long len) {
+        private static ulong Entry_rb_str_new_static(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_new_static(ptr, len);
+                return rb_str_new_static(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3506,10 +3505,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_new_with_class(ulong obj, byte* ptr, long len) {
+        private static ulong Entry_rb_str_new_with_class(ulong obj, byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_new_with_class(obj, ptr, len);
+                return rb_str_new_with_class(obj, ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3532,10 +3531,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_resize(ulong str, long len) {
+        private static ulong Entry_rb_str_resize(ulong str, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_resize(str, len);
+                return rb_str_resize(str, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3558,10 +3557,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_subseq(ulong str, long beg, long len) {
+        private static ulong Entry_rb_str_subseq(ulong str, CLong beg, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_subseq(str, beg, len);
+                return rb_str_subseq(str, (long)beg.Value, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3571,10 +3570,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_substr(ulong str, long beg, long len) {
+        private static ulong Entry_rb_str_substr(ulong str, CLong beg, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_substr(str, beg, len);
+                return rb_str_substr(str, (long)beg.Value, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3597,10 +3596,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_tmp_new(long len) {
+        private static ulong Entry_rb_str_tmp_new(CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_tmp_new(len);
+                return rb_str_tmp_new((long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3688,10 +3687,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_usascii_str_new(byte* ptr, long len) {
+        private static ulong Entry_rb_usascii_str_new(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_usascii_str_new(ptr, len);
+                return rb_usascii_str_new(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3714,10 +3713,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_usascii_str_new_static(byte* ptr, long len) {
+        private static ulong Entry_rb_usascii_str_new_static(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_usascii_str_new_static(ptr, len);
+                return rb_usascii_str_new_static(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3727,10 +3726,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_utf8_str_new_static(byte* ptr, long len) {
+        private static ulong Entry_rb_utf8_str_new_static(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_utf8_str_new_static(ptr, len);
+                return rb_utf8_str_new_static(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -3766,10 +3765,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_ary_store(ulong ary, long key, ulong val) {
+        private static void Entry_rb_ary_store(ulong ary, CLong key, ulong val) {
             var frame = EnterManaged();
             try {
-                rb_ary_store(ary, key, val);
+                rb_ary_store(ary, (long)key.Value, val);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4221,10 +4220,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_mem_clear(ulong* buf, long len) {
+        private static void Entry_rb_mem_clear(ulong* buf, CLong len) {
             var frame = EnterManaged();
             try {
-                rb_mem_clear(buf, len);
+                rb_mem_clear(buf, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4273,10 +4272,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_out_of_int(long num) {
+        private static void Entry_rb_out_of_int(CLong num) {
             var frame = EnterManaged();
             try {
-                rb_out_of_int(num);
+                rb_out_of_int((long)num.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4338,10 +4337,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_str_modify_expand(ulong str, long capa) {
+        private static void Entry_rb_str_modify_expand(ulong str, CLong capa) {
             var frame = EnterManaged();
             try {
-                rb_str_modify_expand(str, capa);
+                rb_str_modify_expand(str, (long)capa.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4364,10 +4363,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_str_set_len(ulong str, long len) {
+        private static void Entry_rb_str_set_len(ulong str, CLong len) {
             var frame = EnterManaged();
             try {
-                rb_str_set_len(str, len);
+                rb_str_set_len(str, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4377,10 +4376,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_str_update(ulong dst, long beg, long len, ulong src) {
+        private static void Entry_rb_str_update(ulong dst, CLong beg, CLong len, ulong src) {
             var frame = EnterManaged();
             try {
-                rb_str_update(dst, beg, len, src);
+                rb_str_update(dst, (long)beg.Value, (long)len.Value, src);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4394,19 +4393,6 @@ namespace IronRuby.Runtime.CApi {
             var frame = EnterManaged();
             try {
                 rb_syserr_fail(err, msg);
-            } catch (Exception e) {
-                SetPending(e);
-                return;
-            } finally {
-                LeaveManaged(frame);
-            }
-        }
-
-        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_sys_fail(byte* msg) {
-            var frame = EnterManaged();
-            try {
-                rb_sys_fail(msg);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -4546,10 +4532,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static long Entry_rb_enc_strlen(byte* head, byte* tail, void* enc) {
+        private static CLong Entry_rb_enc_strlen(byte* head, byte* tail, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_enc_strlen(head, tail, enc);
+                return new CLong(checked((nint)rb_enc_strlen(head, tail, enc)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -4598,10 +4584,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_fix2uint(ulong num) {
+        private static CULong Entry_rb_fix2uint(ulong num) {
             var frame = EnterManaged();
             try {
-                return rb_fix2uint(num);
+                return new CULong(checked((nuint)rb_fix2uint(num)));
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -4702,10 +4688,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_big_pack(ulong val, ulong* buf, long num_longs) {
+        private static void Entry_rb_big_pack(ulong val, CULong* buf, CLong num_longs) {
             var frame = EnterManaged();
             try {
-                rb_big_pack(val, buf, num_longs);
+                rb_big_pack(val, buf, (long)num_longs.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -5300,10 +5286,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_reg_new(byte* src, long len, int opts) {
+        private static ulong Entry_rb_reg_new(byte* src, CLong len, int opts) {
             var frame = EnterManaged();
             try {
-                return rb_reg_new(src, len, opts);
+                return rb_reg_new(src, (long)len.Value, opts);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -5417,10 +5403,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_range_beg_len(ulong range, long* begp, long* lenp, long len, int err) {
+        private static ulong Entry_rb_range_beg_len(ulong range, CLong* begp, CLong* lenp, CLong len, int err) {
             var frame = EnterManaged();
             try {
-                return rb_range_beg_len(range, begp, lenp, len, err);
+                return rb_range_beg_len(range, begp, lenp, (long)len.Value, err);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -5430,10 +5416,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static int Entry_rb_memcicmp(void* s1, void* s2, long n) {
+        private static int Entry_rb_memcicmp(void* s1, void* s2, CLong n) {
             var frame = EnterManaged();
             try {
-                return rb_memcicmp(s1, s2, n);
+                return rb_memcicmp(s1, s2, (long)n.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6132,10 +6118,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_enc_str_new_static(byte* ptr, long len, void* enc) {
+        private static ulong Entry_rb_enc_str_new_static(byte* ptr, CLong len, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_enc_str_new_static(ptr, len, enc);
+                return rb_enc_str_new_static(ptr, (long)len.Value, enc);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6314,10 +6300,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_intern3(byte* name, long len, void* enc) {
+        private static ulong Entry_rb_intern3(byte* name, CLong len, void* enc) {
             var frame = EnterManaged();
             try {
-                return rb_intern3(name, len, enc);
+                return rb_intern3(name, (long)len.Value, enc);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6483,10 +6469,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_ary_resize(ulong ary, long len) {
+        private static ulong Entry_rb_ary_resize(ulong ary, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_ary_resize(ary, len);
+                return rb_ary_resize(ary, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6548,10 +6534,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_hash_bulk_insert(long argc, ulong* argv, ulong hash) {
+        private static void Entry_rb_hash_bulk_insert(CLong argc, ulong* argv, ulong hash) {
             var frame = EnterManaged();
             try {
-                rb_hash_bulk_insert(argc, argv, hash);
+                rb_hash_bulk_insert((long)argc.Value, argv, hash);
             } catch (Exception e) {
                 SetPending(e);
                 return;
@@ -6600,10 +6586,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_str_ellipsize(ulong str, long len) {
+        private static ulong Entry_rb_str_ellipsize(ulong str, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_str_ellipsize(str, len);
+                return rb_str_ellipsize(str, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6795,10 +6781,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_time_new(long sec, long usec) {
+        private static ulong Entry_rb_time_new(long sec, CLong usec) {
             var frame = EnterManaged();
             try {
-                return rb_time_new(sec, usec);
+                return rb_time_new(sec, (long)usec.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6808,10 +6794,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_time_nano_new(long sec, long nsec) {
+        private static ulong Entry_rb_time_nano_new(long sec, CLong nsec) {
             var frame = EnterManaged();
             try {
-                return rb_time_nano_new(sec, nsec);
+                return rb_time_nano_new(sec, (long)nsec.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -6964,10 +6950,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_hash_new_capa(long capa) {
+        private static ulong Entry_rb_hash_new_capa(CLong capa) {
             var frame = EnterManaged();
             try {
-                return rb_hash_new_capa(capa);
+                return rb_hash_new_capa((long)capa.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;
@@ -7237,10 +7223,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static ulong Entry_rb_utf8_str_new(byte* ptr, long len) {
+        private static ulong Entry_rb_utf8_str_new(byte* ptr, CLong len) {
             var frame = EnterManaged();
             try {
-                return rb_utf8_str_new(ptr, len);
+                return rb_utf8_str_new(ptr, (long)len.Value);
             } catch (Exception e) {
                 SetPending(e);
                 return default;

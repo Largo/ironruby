@@ -23,14 +23,30 @@
 
 #if defined(_WIN32)
 # define RB_IR_EXPORT __declspec(dllexport)
-# define RB_IR_THREAD __declspec(thread)
 #else
 # define RB_IR_EXPORT __attribute__((visibility("default")))
+#endif
+#if defined(_MSC_VER)
+# define RB_IR_THREAD __declspec(thread)
+#else
 # define RB_IR_THREAD __thread
 #endif
 
+/* On Windows a C library longjmp unwinds the stack the SEH way, which needs every frame it
+ * crosses to cooperate; GCC's builtins only restore registers, as CRuby's RUBY_SETJMP does
+ * with MinGW. */
+#if defined(_WIN32)
+typedef void *rb_ir_jmp_buf[5];
+# define RB_IR_SETJMP(buf) __builtin_setjmp(buf)
+# define RB_IR_LONGJMP(buf) __builtin_longjmp(buf, 1)
+#else
+typedef jmp_buf rb_ir_jmp_buf;
+# define RB_IR_SETJMP(buf) setjmp(buf)
+# define RB_IR_LONGJMP(buf) longjmp(buf, 1)
+#endif
+
 struct rb_ir_frame {
-    jmp_buf buf;
+    rb_ir_jmp_buf buf;
     struct rb_ir_frame *prev;
 };
 
@@ -46,7 +62,7 @@ RBIMPL_ATTR_NORETURN() void rb_ir_throw(void);
 #define RB_IR_PROTECT(frame, STMT, ON_RAISE) do {   \
     (frame).prev = rb_ir_top;                         \
     rb_ir_top = &(frame);                             \
-    if (setjmp((frame).buf) == 0) {                   \
+    if (RB_IR_SETJMP((frame).buf) == 0) {             \
         STMT;                                         \
         rb_ir_top = (frame).prev;                     \
     } else {                                          \

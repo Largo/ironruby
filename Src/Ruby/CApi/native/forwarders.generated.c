@@ -299,7 +299,6 @@
 #undef rb_str_set_len
 #undef rb_str_update
 #undef rb_syserr_fail
-#undef rb_sys_fail
 #undef rb_undef_alloc_func
 #undef rb_undef_method
 #undef rb_unexpected_type
@@ -819,7 +818,6 @@ struct rb_ir_function_table {
     void (*rb_str_set_len)(VALUE str, long len);
     void (*rb_str_update)(VALUE dst, long beg, long len, VALUE src);
     void (*rb_syserr_fail)(int err, const char *msg);
-    void (*rb_sys_fail)(const char *msg);
     void (*rb_undef_alloc_func)(VALUE klass);
     void (*rb_undef_method)(VALUE klass, const char *name);
     void (*rb_unexpected_type)(VALUE self, int t);
@@ -1042,7 +1040,7 @@ struct rb_ir_function_table {
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 518;
+const int rb_ir_function_count = 517;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -3373,13 +3371,6 @@ void
 (rb_syserr_fail)(int err, const char *msg)
 {
     rb_ir_fns.rb_syserr_fail(err, msg);
-    rb_ir_throw();
-}
-
-void
-(rb_sys_fail)(const char *msg)
-{
-    rb_ir_fns.rb_sys_fail(msg);
     rb_ir_throw();
 }
 

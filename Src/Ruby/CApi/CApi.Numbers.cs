@@ -70,35 +70,41 @@ namespace IronRuby.Runtime.CApi {
             return _context.Inspect(d).ToString();
         }
 
-        private static long ToLong(VALUE value, string ctype) {
+        // C's long: 64-bit on Unix, 32-bit on Windows
+        private static readonly long CLongMax = IsWindows ? Int32.MaxValue : Int64.MaxValue;
+        private static readonly long CLongMin = IsWindows ? Int32.MinValue : Int64.MinValue;
+        private static readonly ulong CULongMax = IsWindows ? UInt32.MaxValue : UInt64.MaxValue;
+
+        private static long ToLong(VALUE value, string ctype, long min = Int64.MinValue, long max = Int64.MaxValue) {
             if ((value & 1) != 0) {
                 return (long)value >> 1;
             }
             object obj = FromValue(value);
             BigInteger b = ToBigInteger(obj, ctype);
-            if (b < Int64.MinValue || b > Int64.MaxValue) {
+            if (b < min || b > max) {
                 throw RubyExceptions.CreateRangeError(String.Format("bignum too big to convert into '{0}'", ctype));
             }
             return (long)b;
         }
 
-        private static ulong ToULong(VALUE value, string ctype) {
+        private static ulong ToULong(VALUE value, string ctype, ulong max = UInt64.MaxValue) {
             if ((value & 1) != 0) {
                 return (ulong)((long)value >> 1);
             }
             BigInteger b = ToBigInteger(FromValue(value), ctype);
-            if (b < Int64.MinValue || b > UInt64.MaxValue) {
+            // CRuby accepts the negative values of the signed type and wraps them
+            if (b < -(BigInteger)max / 2 - 1 || b > max) {
                 throw RubyExceptions.CreateRangeError(String.Format("bignum out of range of {0}", ctype));
             }
-            return b < 0 ? (ulong)(long)b : (ulong)b;
+            return b < 0 ? (ulong)(long)b & max : (ulong)b;
         }
 
         internal static long rb_num2long(VALUE num) {
-            return ToLong(num, "long");
+            return ToLong(num, "long", CLongMin, CLongMax);
         }
 
         internal static ulong rb_num2ulong(VALUE num) {
-            return ToULong(num, "unsigned long");
+            return ToULong(num, "unsigned long", CULongMax);
         }
 
         internal static long rb_num2ll(VALUE num) {
@@ -232,11 +238,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static long rb_big2long(VALUE x) {
-            return ToLong(x, "long");
+            return ToLong(x, "long", CLongMin, CLongMax);
         }
 
         internal static ulong rb_big2ulong(VALUE x) {
-            return ToULong(x, "unsigned long");
+            return ToULong(x, "unsigned long", CULongMax);
         }
 
         internal static long rb_big2ll(VALUE x) {

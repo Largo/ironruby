@@ -474,7 +474,14 @@ namespace IronRuby.Runtime.CApi {
             return prefix is MutableString p ? p.GetCharCount() : 0;
         }
 
-        internal static byte* rb_str_subpos(VALUE str, long beg, long* len) {
+        internal static byte* rb_str_subpos(VALUE str, long beg, System.Runtime.InteropServices.CLong* lenp) {
+            long l = (long)lenp->Value;
+            byte* r = StrSubpos(str, beg, &l);
+            *lenp = new System.Runtime.InteropServices.CLong((nint)l);
+            return r;
+        }
+
+        private static byte* StrSubpos(VALUE str, long beg, long* len) {
             var s = ToMutableString(str);
             int length = s.GetCharCount();
             if (*len < 0) {

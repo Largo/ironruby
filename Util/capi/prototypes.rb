@@ -9,7 +9,8 @@
 # stub that raises NotImplementedError.
 root = File.expand_path('../..', __dir__)
 inc = File.join(root, 'Src/StdLib/include')
-arch = Dir.glob(File.join(inc, '*-*')).find { |d| File.directory?(d) } or abort 'no <arch>/ruby/config.h'
+arch = File.join(inc, RbConfig::CONFIG['arch'])
+abort "no #{arch}/ruby/config.h" unless File.file?(File.join(arch, 'ruby/config.h'))
 headers = %w[ruby.h ruby/encoding.h ruby/io.h ruby/thread.h ruby/util.h ruby/st.h ruby/re.h ruby/version.h
              ruby/debug.h ruby/memory_view.h ruby/ractor.h ruby/random.h ruby/fiber/scheduler.h ruby/io/buffer.h
              ruby/vm.h ruby/thread_native.h]

@@ -177,9 +177,10 @@ namespace IronRuby.Runtime.CApi {
             return CallV(lhs, "<=>", FromValue(rhs));
         }
 
-        internal static void rb_big_pack(VALUE val, ulong* buf, long num_longs) {
+        internal static void rb_big_pack(VALUE val, System.Runtime.InteropServices.CULong* buf, long num_longs) {
             // rb_integer_pack(val, buf, num_longs, sizeof(long), 0, INTEGER_PACK_LSWORD_FIRST|INTEGER_PACK_NATIVE|INTEGER_PACK_2COMP)
-            rb_integer_pack(val, buf, (nuint)num_longs, 8, 0, PACK_LSWORD_FIRST | PACK_NATIVE_BYTE_ORDER | PACK_2COMP);
+            rb_integer_pack(val, buf, (nuint)num_longs, (nuint)sizeof(System.Runtime.InteropServices.CULong), 0,
+                PACK_LSWORD_FIRST | PACK_NATIVE_BYTE_ORDER | PACK_2COMP);
         }
 
         internal static void rb_num_zerodiv() {
@@ -613,7 +614,17 @@ namespace IronRuby.Runtime.CApi {
         }
 
         // CRuby's rb_range_beg_len: Qfalse when not a range, Qnil when out of range (err 0), else Qtrue
-        internal static VALUE rb_range_beg_len(VALUE range, long* begp, long* lenp, long len, int err) {
+        internal static VALUE rb_range_beg_len(VALUE range, System.Runtime.InteropServices.CLong* begp, System.Runtime.InteropServices.CLong* lenp, long len, int err) {
+            long b = 0, l = 0;
+            VALUE r = RangeBegLen(range, &b, &l, len, err);
+            if (r == Qtrue) {
+                *begp = new System.Runtime.InteropServices.CLong((nint)b);
+                *lenp = new System.Runtime.InteropServices.CLong((nint)l);
+            }
+            return r;
+        }
+
+        private static VALUE RangeBegLen(VALUE range, long* begp, long* lenp, long len, int err) {
             VALUE b, e;
             int excl;
             if (rb_range_values(range, &b, &e, &excl) == 0) {

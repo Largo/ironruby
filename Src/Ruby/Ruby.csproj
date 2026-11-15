@@ -29,5 +29,14 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>libironruby-capi.so</Link>
     </Content>
+    <!-- Windows: the DLL, and the import library extensions link against (RbConfig LIBRUBYARG) -->
+    <Content Include="CApi\native\build\libironruby-capi.dll" Condition="Exists('$(MSBuildThisFileDirectory)CApi\native\build\libironruby-capi.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libironruby-capi.dll</Link>
+    </Content>
+    <Content Include="CApi\native\build\libironruby-capi.dll.a" Condition="Exists('$(MSBuildThisFileDirectory)CApi\native\build\libironruby-capi.dll.a')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libironruby-capi.dll.a</Link>
+    </Content>
   </ItemGroup>
 </Project>

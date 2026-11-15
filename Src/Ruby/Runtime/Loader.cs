@@ -820,12 +820,24 @@ namespace IronRuby.Runtime {
                     if (stream.Read(magic, 0, 4) != 4) {
                         return false;
                     }
-                    return (magic[0] == 0x7f && magic[1] == (byte)'E' && magic[2] == (byte)'L' && magic[3] == (byte)'F') ||
-                        (magic[0] == 0xcf && magic[1] == 0xfa && magic[2] == 0xed && magic[3] == 0xfe);
+                    if ((magic[0] == 0x7f && magic[1] == (byte)'E' && magic[2] == (byte)'L' && magic[3] == (byte)'F') ||
+                        (magic[0] == 0xcf && magic[1] == 0xfa && magic[2] == 0xed && magic[3] == 0xfe)) {
+                        return true;
+                    }
+                    // a PE DLL (Windows) without CLR metadata: a CLR assembly is a PE file too
+                    if (magic[0] == (byte)'M' && magic[1] == (byte)'Z') {
+                        stream.Position = 0;
+                        using (var pe = new System.Reflection.PortableExecutable.PEReader(stream)) {
+                            return !pe.HasMetadata;
+                        }
+                    }
+                    return false;
                 }
             } catch (IOException) {
                 return false;
             } catch (UnauthorizedAccessException) {
+                return false;
+            } catch (BadImageFormatException) {
                 return false;
             }
         }

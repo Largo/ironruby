@@ -18,12 +18,22 @@ SRC="$IR_ROOT/Src/Ruby/CApi/native"
 OUT=${1:-$SRC/build}
 CC=${CC:-gcc}
 INC="$IR_ROOT/Src/StdLib/include"
-ARCH_INC=$(ls -d "$INC"/*-*/ | head -1)
 
+# Windows: MinGW gcc (MSYS2 UCRT64 or the RubyInstaller DevKit), from Git Bash or an MSYS2
+# shell. The DLL exports every function and the global VALUEs; extensions link against its
+# import library, libironruby-capi.dll.a, which is shipped beside it.
 case "$(uname -s)" in
-  Linux) LIB=libironruby-capi.so ;;
-  *) echo "build-capi.sh: only Linux is supported so far" >&2; exit 1 ;;
+  Linux)
+    LIB=libironruby-capi.so; ARCH=x86_64-linux; PLATFORM_CFLAGS="-fPIC -fvisibility=default"
+    LINKFLAGS="" ;;
+  MINGW*|MSYS*)
+    LIB=libironruby-capi.dll; ARCH=x64-mingw-ucrt
+    # RUBY_EXPORT: the global VALUEs are defined here, not imported
+    PLATFORM_CFLAGS="-DRUBY_EXPORT -D_WIN32_WINNT=0x0600 -D__MINGW_USE_VC2005_COMPAT"
+    LINKFLAGS="-Wl,--export-all-symbols -Wl,--out-implib,OUTDIR/libironruby-capi.dll.a -static-libgcc" ;;
+  *) echo "build-capi.sh: only Linux and Windows (MinGW) are supported so far" >&2; exit 1 ;;
 esac
+ARCH_INC="$INC/$ARCH"
 
 if command -v ruby >/dev/null 2>&1; then
   ruby "$IR_ROOT/Util/capi/generate.rb" >/dev/null
@@ -31,7 +41,7 @@ fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-CFLAGS="-O2 -g -fPIC -fvisibility=default -Wall -Wno-unused-function -I$INC -I$ARCH_INC"
+CFLAGS="-O2 -g $PLATFORM_CFLAGS -Wall -Wno-unused-function -I$INC -I$ARCH_INC"
 
 "$CC" $CFLAGS -c "$SRC/capi.c" -o "$tmp/capi.o"
 "$CC" $CFLAGS -c "$SRC/forwarders.generated.c" -o "$tmp/forwarders.o"
@@ -39,7 +49,9 @@ CFLAGS="-O2 -g -fPIC -fvisibility=default -Wall -Wno-unused-function -I$INC -I$A
 # Stubs for everything declared and not defined above.
 nm --defined-only -g "$tmp/capi.o" "$tmp/forwarders.o" | awk 'NF == 3 { print $3 }' | sort -u > "$tmp/defined.txt"
 if command -v ruby >/dev/null 2>&1; then
-  ruby "$IR_ROOT/Util/capi/prototypes.rb" --names > "$SRC/declared.txt"
+  ruby "$IR_ROOT/Util/capi/prototypes.rb" --names > "$tmp/declared.txt"
+  # the platform's own declarations (rb_w32_* on Windows) are added to the committed list
+  sort -u "$SRC/declared.txt" "$tmp/declared.txt" -o "$SRC/declared.txt"
 fi
 # and for CRuby's other exported functions (cruby-exports.txt, from `nm libruby-static.a`): some
 # extensions declare one themselves (hash_spec.c: rb_ident_hash_new), and a missing symbol
@@ -52,8 +64,8 @@ cat "$SRC/declared.txt" "$SRC/cruby-exports.txt" | grep -E '^(rb_|ruby_|onig|st_
     echo "void $name(void) { rb_ir_unimplemented(\"$name\"); }"
   done < "$tmp/stubs.txt"
 } > "$tmp/stubs.c"
-"$CC" -O1 -fPIC -w -c "$tmp/stubs.c" -o "$tmp/stubs.o"
+"$CC" -O1 $PLATFORM_CFLAGS -w -c "$tmp/stubs.c" -o "$tmp/stubs.o"
 
 mkdir -p "$OUT"
-"$CC" -shared -o "$OUT/$LIB" "$tmp/capi.o" "$tmp/forwarders.o" "$tmp/stubs.o"
+"$CC" -shared -o "$OUT/$LIB" "$tmp/capi.o" "$tmp/forwarders.o" "$tmp/stubs.o" ${LINKFLAGS//OUTDIR/$OUT}
 echo "$OUT/$LIB: $(wc -l < "$tmp/defined.txt") functions defined, $(wc -l < "$tmp/stubs.txt") stubs"
