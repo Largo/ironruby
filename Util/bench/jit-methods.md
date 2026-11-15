@@ -365,7 +365,10 @@ two guards in **the caller's entry**:
 
 - **The receiver class is pinned** (as for a self-call and for an inlined call), and the callee
   was resolved from that class. A subclass that overrides the callee, a singleton method, an
-  `extend`ed module: the receiver is of another class and runs the generic body.
+  `extend`ed module: the receiver is of another class and runs the generic body. A method with
+  optional parameters has a body per number of arguments passed, and each body that binds a
+  call has the guard in its arm of the entry (it was missing there until the review: a subclass
+  overriding the callee got the superclass's).
 - **The global method version**, read before the callee was looked up. Every `def`, `undef`,
   `remove_method`, `alias`, `include`/`prepend`/`extend`, singleton method, visibility change
   and method added to a refinement bumps it. `BindCallee` hands out only a body compiled under

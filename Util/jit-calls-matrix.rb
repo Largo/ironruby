@@ -135,6 +135,26 @@ t('class: ... of another object') { Shape.new(40).width_plus(1) }
 t('class: ... a Float') { Shape.new(1.5).width_plus(1) }
 t('class: ... nil') { Shape.new(nil).width_plus(1) }
 
+# a method with an optional parameter has a body per argument count, and each one that binds a
+# call needs the receiver class its callee was resolved on (the callee is made hot first: such
+# a caller does not wait for it)
+class OptBase
+  def scale(x)
+    i = 0
+    while i < 3
+      i += 1
+    end
+    x * 2
+  end
+  def f(x = 1 + 1) = scale(x)
+end
+class OptDerived < OptBase
+  def scale(x) = x * 3
+end
+opt = OptBase.new
+t('an optional parameter: callee, then caller') { hot { opt.scale(2) }; [hot { opt.f }, hot { opt.f(5) }] }
+t('... the callee overridden in a subclass') { d = OptDerived.new; [d.f, d.f(5), opt.f, opt.f(5)] }
+
 # ---- visibility and the receiver ---------------------------------------------------------------
 
 class Vis

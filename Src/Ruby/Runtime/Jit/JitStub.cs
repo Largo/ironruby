@@ -1351,7 +1351,10 @@ namespace IronRuby.Runtime.Jit {
             Specialization/*!*/ spec) {
 
             MSA.Expression test = NotTracing();
-            if (pinnedClass != null && code.EmittedSelfCall) {
+            // as BuildEntry's: a body that calls itself or binds another method's typed body is only
+            // right for the class those calls were resolved on. A subclass that overrides the callee
+            // changes no method version, so nothing else sends its receivers to the generic body.
+            if (pinnedClass != null && (code.EmittedSelfCall || code.DirectCalls)) {
                 test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
                     Ast.Constant(pinnedClass, typeof(RubyClass))));
