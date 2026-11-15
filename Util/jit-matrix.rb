@@ -3287,3 +3287,147 @@ wd = jit_walk_list(6); wd.nxt.freeze
 t('walk: restored, a frozen node') { [sp_walk_shorter(jit_walk_list(2), jit_walk_list(2)), sp_walk_last(wd)] }
 JitWalkNode.send(:remove_method, :nxt)
 t('walk: reader removed') { sp_walk_last(jit_walk_list(3)) }
+
+# ---------------------------------------------------------------- 10. an effect, then a deopt
+#
+# The method JIT's rule is that nothing that can deopt may follow an effect: a deopt re-runs
+# the generic body from the start, so an effect before it would run twice, or a write taken
+# back would be lost. Three of the faults the gate missed (Util/perf/LEDGER.md) were in this
+# rule's bookkeeping, so before the rule is relaxed every (effect, deopt source, order) is
+# here: each effect below with each deopt source, in four orders - the effect's statement
+# before the deopt's and after it, and the two as the left and the right operand of one +.
+# Every method is made hot with Integers and then probed once with the deopt's trigger, once
+# more without it, and then the state each effect leaves is printed: an effect that ran twice
+# or a write that was lost shows up there, not only in the return value.
+#
+# The Array store appends and the Hash store counts per key (Hash#size is not one the JIT
+# takes), so that either one run twice leaves something else behind.
+#
+# The methods are written out by class_eval from the tables, as ordinary defs of EdBox; to
+# see one, take its effect and deopt from the tables (ed_<effect>_<deopt>_<order>).
+
+class EdNode
+  attr_reader :v
+  def initialize(v)
+    $ed_made += 1
+    @v = v
+  end
+end
+
+class EdBox
+  attr_accessor :v
+  attr_reader :w, :n, :a, :h, :r
+  attr_writer :t
+  def initialize(other)
+    @o = other
+    reset
+  end
+  def reset
+    @w = 0; @n = 0; @a = []; @h = {}; @r = 1; @t = 0
+  end
+  def bump(k)
+    $ed_calls += 1
+    k
+  end
+  def twice(x) = x * 2
+  def helper(x) = x + 1
+  def state = [@w, @o.v, @n, @a, @h, @r, $ed_calls, $ed_made, $ed_g]
+end
+
+# The same ivars as EdBox's, set in another order, so that @r is read through another shape.
+class EdBoxShape < EdBox
+  def initialize(other)
+    @r = 1; @zz = 0; @h = {}; @a = []
+    super
+  end
+end
+
+ED_K = 1
+
+def ed_reset
+  $ed_calls = 0; $ed_made = 0; $ed_g = 0
+end
+ed_reset
+
+ED_EFFECTS = {
+  'ivar'   => '(@w = x)',
+  'attr'   => '(@o.v = x)',
+  'opasgn' => '(@n += 1)',
+  'call'   => 'bump(1)',
+  'new'    => 'EdNode.new(1).v',
+  'astore' => '(@a[@a.size] = 1)',
+  'hstore' => '(@h[x] = (@h[x] || 0) + 1)',
+  'global' => '($ed_g += 1)',
+}
+
+# Each deopt source with how its probe triggers it: the argument (2**62 is an Int64 here, so
+# the guard that fails is the overflow check in the body, not the argument's), a receiver of
+# another shape, @t made a Float, or a method or constant changed around the call and put
+# back after it. None is an argument of a type the body was not made for, which its entry
+# would turn away before the effect ran (the method or constant may be checked there).
+ED_DEOPTS = {
+  'type'     => ['(@t + x)', :float],
+  'shape'    => ['(@r + x)', :shape],
+  'call2'    => ['twice(x)', 2**62],
+  'redef'    => ['helper(x)', :redef],
+  'overflow' => ['(x * 4)', 2**62],
+  'nilconst' => ['(ED_K + x)', :nilconst],
+}
+
+ED_ORDERS = {
+  'seq'  => ->(e, d) { "#{e}\n    #{d}" },
+  'rseq' => ->(e, d) { "r = #{d}\n    #{e}\n    r" },
+  'lop'  => ->(e, d) { "#{e} + #{d}" },
+  'rop'  => ->(e, d) { "#{d} + #{e}" },
+}
+
+ED_EFFECTS.each do |en, e|
+  ED_DEOPTS.each do |dn, (d, _)|
+    ED_ORDERS.each do |on, order|
+      EdBox.class_eval <<~RUBY, __FILE__, __LINE__ + 1
+        def ed_#{en}_#{dn}_#{on}(x)
+          #{order.(e, d)}
+        end
+      RUBY
+    end
+  end
+end
+
+def ed_probe(name, trigger)
+  other = Struct.new(:v).new(0)
+  box = (trigger == :shape ? EdBoxShape : EdBox).new(other)
+  ed_reset
+  x = trigger.is_a?(Numeric) ? trigger : 2
+  case trigger
+  when :float then box.t = 1.5
+  when :redef then EdBox.class_eval { def helper(x) = x * 3 }
+  when :nilconst then Object.send(:remove_const, :ED_K); Object.const_set(:ED_K, nil)
+  end
+  begin
+    v = box.send(name, x)
+    r = "#{v.inspect} (#{v.class})"
+  rescue Exception => ex
+    r = ex.class.to_s
+  ensure
+    case trigger
+    when :redef then EdBox.class_eval { def helper(x) = x + 1 }
+    when :nilconst then Object.send(:remove_const, :ED_K); Object.const_set(:ED_K, 1)
+    end
+  end
+  first = box.state
+  again = box.send(name, 3)
+  [r, first, again, box.state]
+end
+
+puts
+puts '--- 10. an effect, then something that can deopt ---'
+ED_EFFECTS.each_key do |en|
+  ED_DEOPTS.each do |dn, (_, trigger)|
+    ED_ORDERS.each_key do |on|
+      name = :"ed_#{en}_#{dn}_#{on}"
+      hot_box = EdBox.new(Struct.new(:v).new(0))
+      warm { |i| hot_box.send(name, i % 50) }
+      t(name.to_s) { ed_probe(name, trigger) }
+    end
+  end
+end
