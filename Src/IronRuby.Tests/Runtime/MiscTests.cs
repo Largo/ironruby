@@ -7423,6 +7423,172 @@ true
         }
 
         /// <summary>
+        /// Array#rotate and #rotate! take their count as a long (MRI's NUM2LONG): a count past an int still rotates,
+        /// one past a long is a RangeError, for an empty or a frozen Array too.
+        /// </summary>
+        public void Array_RotateLongCount1() {
+            TestOutput(@"
+a = [1, 2, 3]
+p a.rotate(2**40), a.rotate(-(2**40) - 1), a.dup.rotate!(2**40 + 1)
+p((a.rotate(2**64) rescue $!.class), ([].rotate(2**64) rescue $!.class), ([].freeze.rotate!(2**64) rescue $!.class))
+", @"
+[2, 3, 1]
+[2, 3, 1]
+[3, 1, 2]
+RangeError
+RangeError
+RangeError
+");
+        }
+
+        /// <summary>
+        /// Hash#transform_values transforms a copy of the receiver (rb_hash_transform_values): keys the block adds to
+        /// the receiver are not visited, and keys it deletes are still in the result.
+        /// </summary>
+        public void Hash_TransformValuesSnapshot1() {
+            TestOutput(@"
+h = { a: 1, b: 2, c: 3 }
+p h.transform_values { |v| h[:z] = 9; h.delete(:c); v * 2 }, h
+i = { a: 1 }
+p i.transform_values { |v| i.clear; v }, i
+", @"
+{a: 2, b: 4, c: 6}
+{a: 1, b: 2, z: 9}
+{a: 1}
+{}
+");
+        }
+
+        /// <summary>
+        /// String#lines with a separator reads the receiver's length after the search for the separator, which
+        /// switches a receiver held as bytes (after #bytesize or #getbyte) to characters: a length kept from
+        /// before counted bytes, and the copy of the last line ran past the end (review of #218).
+        /// </summary>
+        public void String_LinesAfterByteRead1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""\u00E9\nab\n\u00FC""; s.bytesize
+p s.lines(""\n"").map(&:bytes), s.lines(""\n"", chomp: true).map(&:bytes)
+t = ""a\u00E9\r\nb\r\n""; t.getbyte(0)
+p t.lines(""\r\n"").map(&:bytes), t.lines(chomp: true).map(&:bytes)
+u = ""\u00E9\u00FCab\u00FC\u00FC""; u.bytesize
+p u.lines(""\u00FC"").map(&:bytes), u.each_line(""\u00FC"").map(&:size)
+", @"
+[[195, 169, 10], [97, 98, 10], [195, 188]]
+[[195, 169], [97, 98], [195, 188]]
+[[97, 195, 169, 13, 10], [98, 13, 10]]
+[[97, 195, 169], [98]]
+[[195, 169, 195, 188], [97, 98, 195, 188], [195, 188]]
+[2, 3, 1]
+");
+        }
+
+        /// <summary>
+        /// Hash#dig asks a Hash or an Array whose #dig is redefined - in a subclass or on the object itself - whether it
+        /// has #dig, as it asks any other object, and does not ask one whose #dig is the built-in one, whatever its
+        /// respond_to? says (rb_obj_dig takes its short cut while rb_method_basic_definition_p). A #dig the program
+        /// defines in Array itself is a redefinition too.
+        /// </summary>
+        public void Hash_DigSubclass1() {
+            TestOutput(@"
+require 'ruby4'
+class H2 < Hash; def dig(*k) = [:over, k]; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+class A2 < Array; def dig(*k) = [:over, k]; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+class H3 < Hash; def dig(*k) = [:over, k]; end
+p(({ a: H2.new }.dig(:a, 1) rescue $!.message), ({ a: A2.new }.dig(:a, 1, 2, 3, 4) rescue $!.message))
+p({ a: H3.new }.dig(:a, 1), { a: H3.new }.dig(:a, 1, 2, 3, 4), { a: H3[b: 1] }.dig(:a), { a: { b: [5, 6] } }.dig(:a, :b, 1))
+class H4 < Hash; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+class A4 < Array; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+p({ a: H4[:x, 3] }.dig(:a, :x), { a: A4[7, 8] }.dig(:a, 1))
+h = {}; def h.dig(*) = :over; def h.respond_to?(m, priv = false) = m == :dig ? false : super
+g = { b: 1 }; def g.respond_to?(m, priv = false) = m == :dig ? false : super
+p(({ a: h }.dig(:a, :b) rescue $!.class), { a: g }.dig(:a, :b))
+a = [5]; def a.respond_to?(m, priv = false) = m == :dig ? false : super
+p({ a: a }.dig(:a, 0))
+class Array; alias_method :dig0, :dig; def dig(*) = :over; end
+p(({ a: a }.dig(:a, 0) rescue $!.class), { a: [5] }.dig(:a, 0))
+", @"
+""H2 does not have #dig method""
+""A2 does not have #dig method""
+[:over, [1]]
+[:over, [1, 2, 3, 4]]
+{b: 1}
+6
+3
+8
+TypeError
+1
+5
+TypeError
+:over
+");
+        }
+
+        /// <summary>
+        /// Hash#transform_values replaces each value where its entry is (rb_hash_stlike_foreach_with_replace), not through
+        /// its key: keys the block makes equal stay two entries. compare_by_identity carries over, the default does not.
+        /// </summary>
+        public void Hash_TransformValuesMutatedKey1() {
+            TestOutput(@"
+require 'ruby4'
+a = [1]; b = [2]; h = { a => 10, b => 20 }
+r = h.transform_values { |v| b.replace([1]); v + 1 }
+p r.size, r.to_a, h.size
+k = { a: 1 }.compare_by_identity; k[""x"".dup] = 2; k[""x"".dup] = 3
+t = k.transform_values { |v| v * 10 }
+p t, t.compare_by_identity?, Hash.new(5).merge(a: 1).transform_values { |v| v }.default
+p({ a: 1, b: 2 }.transform_values { |v| break :out if v == 2; v }, { nil => 1 }.transform_values { |v| v + 1 })
+", @"
+2
+[[[1], 11], [[1], 21]]
+2
+{a: 10, ""x"" => 20, ""x"" => 30}
+true
+nil
+:out
+{nil => 2}
+");
+        }
+
+        /// <summary>
+        /// The KeyError of Hash#fetch may leave its backtrace until a rescue exposes it only while nothing can have kept
+        /// it. A TracePoint on :raise or on :c_call (which sees it being initialized) that keeps it and disables itself,
+        /// and a KeyError.new of the program's that keeps it and removes itself, all have: read after the rescuing frame
+        /// is gone, the backtrace is still the raise's.
+        /// </summary>
+        public void Hash_FetchKeptKeyError1() {
+            TestOutput(@"
+require 'ruby4'
+H = {}
+def f1 = H.fetch(:x)
+def g1 = (begin; f1; rescue KeyError; nil; end)
+20000.times { g1 }
+kept = nil
+tp = TracePoint.new(:raise) { |t| kept = t.raised_exception; t.disable }
+tp.enable
+g1
+tp.disable
+p kept.class, kept.backtrace.map { |l| l[/'(.*)'/, 1] }
+seen = nil
+tc = TracePoint.new(:c_call) { |t| if KeyError === t.self then seen = t.self; t.disable end }
+tc.enable
+g1
+tc.disable
+p seen.backtrace.map { |l| l[/'(.*)'/, 1] }
+made = nil
+make = KeyError.method(:new)
+KeyError.define_singleton_method(:new) { |*a| made = make.call(*a); KeyError.singleton_class.send(:remove_method, :new); made }
+g1
+p(made.nil? || made.backtrace.none? { |l| l.include?('Exception#backtrace') })
+", @"
+KeyError
+[""Hash#fetch"", ""Object#f1"", ""Object#g1"", ""<main>""]
+[""Hash#fetch"", ""Object#f1"", ""Object#g1"", ""<main>""]
+true
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.

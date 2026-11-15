@@ -784,6 +784,8 @@ module Enumerable
       __each_slice_without_self__(n, &block)
       self
     end
+    ::Enumerator.__iter_cursor_method__(self, :each_slice)
+    ::Enumerator.__iter_cursor_method__(self, :each_cons)
   end
 
   # An argument that is not an Array is taken by #to_ary if it has one and
@@ -1249,17 +1251,7 @@ class Array
   # All of these hand back a plain Array, never the receiver's subclass, which
   # is what MRI does and what ruby/spec asserts.
 
-  def rotate(count = 1)
-    count = __array_to_int__(count)
-    return [].concat(self) if empty?
-    count %= size
-    [].concat(self[count..-1]).concat(self[0, count])
-  end unless method_defined?(:rotate)
-
-  def rotate!(count = 1)
-    __array_check_frozen__
-    replace(rotate(count))
-  end unless method_defined?(:rotate!)
+  # rotate and rotate! are ArrayOps.Rotate and ArrayOps.InPlaceRotate.
 
   # The deletions have to be visible if the block raises part way through, so
   # this compacts in place rather than building a new array and swapping it in.
@@ -5317,7 +5309,13 @@ class Enumerator
         # A blockless #chunk: the block given here is the one it was waiting for.
         return @__deferred__.call(block)
       end
-      return super(&block) if args.empty?
+      if args.empty?
+        # A plain #lazy hands the block straight to its receiver's #each, as MRI's lazy_init_block
+        # does: no generator, Yielder and two splatting blocks in between for every element.
+        source = @__lazy_source__
+        return source.each(&block) if block && source && @__generator__.equal?(@__lazy_generator__)
+        return super(&block)
+      end
       generator = @__generator__
       lazy = Lazy.__raw__(@__size__) { |y| generator.call(y, *args) }
       block ? lazy.each(&block) : lazy
@@ -5334,6 +5332,14 @@ class Enumerator
       lazy = allocate
       lazy.__lazy_init__(size, &generator)
       lazy
+    end
+
+    # The receiver of a plain #lazy, and the generator that goes with it (an #initialize_copy or
+    # a re-#initialize that replaces the generator turns the shortcut off).
+    def __set_lazy_source__(source)
+      @__lazy_source__ = source
+      @__lazy_generator__ = @__generator__
+      self
     end
 
     def __lazy_init__(size, &generator)
@@ -6094,8 +6100,9 @@ module Enumerable
     source = self
     n = (size if respond_to?(:size))
     n = nil unless n.is_a?(::Numeric)
-    ::Enumerator::Lazy.__raw__(n) { |y, *args| source.each(*args) { |*values| y.yield(*values) } }
-      .__set_inspect__(self, nil)
+    lazy = ::Enumerator::Lazy.__raw__(n) { |y, *args| source.each(*args) { |*values| y.yield(*values) } }
+    lazy.__set_lazy_source__(source)
+    lazy.__set_inspect__(self, nil)
   end unless method_defined?(:lazy)
 end
 
@@ -6201,6 +6208,9 @@ class String
 
     # paragraph mode chomps as it splits
     return __ir_paragraphs__(__ir_each_line_all__(newline), newline, chomp) if separator.empty?
+    if chomp && separator == "\n" && encoding.ascii_compatible?
+      return __ir_lines__(separator, true)
+    end
     lines = __ir_each_line_all__(separator)
     return lines unless chomp
     lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
@@ -6210,6 +6220,7 @@ class String
   # check fire: the block below never touches the receiver.
   def __ir_each_line_all__(separator)
     return dup if separator.nil?
+    return __ir_lines__(separator) unless separator.empty?
     lines = []
     __ir_each_line__(separator) { |line| lines << line }
     lines
@@ -9061,22 +9072,13 @@ end
 end
 
 class Random
-  # Real entropy from the OS. /dev/urandom is the same source MRI uses on Unix.
-  # Windows has no such file - and reading one that does not exist is how
-  # Tempfile, Dir.mktmpdir, SecureRandom and net/http all used to die there - so
-  # off Unix this goes to .NET's CSPRNG instead. System.Security.Cryptography is
-  # not one of the assemblies the host pre-references, hence the load_assembly.
+  # Real entropy from the OS CSPRNG (getrandom/urandom on Unix, BCrypt on Windows),
+  # the source MRI uses: Kernel.__ir_urandom__ (KernelOps.Urandom). Opening
+  # /dev/urandom for each call cost ~47 us where MRI takes ~0.4, and SecureRandom -
+  # session ids, CSRF masks, request ids - calls it several times a request.
   unless respond_to?(:urandom)
-    if ::File.exist?("/dev/urandom")
-      def self.urandom(count)
-        File.open("/dev/urandom", "rb") { |f| f.read(count) }
-      end
-    else
-      load_assembly "System.Security.Cryptography"
-      def self.urandom(count)
-        count = ::Kernel.Integer(count)
-        ::System::Security::Cryptography::RandomNumberGenerator.get_bytes(count).to_a.pack("C*")
-      end
+    def self.urandom(count)
+      ::Kernel.__send__(:__ir_urandom__, count)
     end
   end
 end

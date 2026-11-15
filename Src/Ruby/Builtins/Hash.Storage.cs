@@ -741,6 +741,17 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        /// <summary>
+        /// Replaces the value of the entry <see cref="TryGetNextEntry"/> returned last: the one before
+        /// position <paramref name="index"/> as that call left it. The key is neither hashed nor
+        /// compared, so the entry stays an entry of its own even when its key has since come to
+        /// equal another's (Hash#transform_values, whose block changed a key).
+        /// </summary>
+        public void SetEntryValue(int index, object value) {
+            _entries[index - 1].Value = value;
+            _stamp++;
+        }
+
         /// <summary>Keys and values in insertion order, in one pass over the entries.</summary>
         public void CopyKeysAndValues(object[]/*!*/ keys, object[]/*!*/ values) {
             Entry[] entries = _entries;

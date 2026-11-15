@@ -999,6 +999,23 @@ true
         /// class keeps one set of instance data: what the superclass's initialize sets is there after super, dup copies it.
         /// Whether or not the superclass's type exists already; and a subclass of a class that got IComparable is one too.
         /// </summary>
+        /// <summary>
+        /// The same for a direct subclass of BasicObject (BasicObject's CLR type is a RubyObject too): a
+        /// SimpleDelegator subclass that includes Enumerable lost the object its initialize delegated to.
+        /// </summary>
+        public void ClrRubyImpliedInterfaces4() {
+            TestOutput(@"
+class B < BasicObject; def set(x) = (@v = x); def get = @v; end
+class E < B; include ::Enumerable; end
+class C < B; include ::Comparable; end
+e = E.new; e.set(1); c = C.new; c.set(2)
+p e.get, c.get
+", @"
+1
+2
+");
+        }
+
         public void ClrRubyImpliedInterfaces2() {
             Context.ObjectClass.SetConstant("Caller", Context.GetClass(typeof(ProtocolClrCaller1)));
             TestOutput(@"

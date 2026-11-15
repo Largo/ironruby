@@ -281,6 +281,26 @@ namespace IronRuby.Runtime {
             return HasNoSurrogates(s) ? _inner.GetBytes(s) : base.GetBytes(s);
         }
 
+        // Encoding's span overloads copy the characters into a char[] and convert into a byte[] as long as the
+        // destination before copying it over (MutableString appending to a byte buffer goes through them). Without
+        // surrogates there is nothing unpaired, and the inner encoding answers as the char[] overloads below would.
+        public override int GetByteCount(ReadOnlySpan<char> chars) {
+            return HasNoSurrogates(chars) ? _inner.GetByteCount(chars) : base.GetByteCount(chars);
+        }
+
+        public override int GetBytes(ReadOnlySpan<char> chars, Span<byte> bytes) {
+            return HasNoSurrogates(chars) ? _inner.GetBytes(chars, bytes) : base.GetBytes(chars, bytes);
+        }
+
+        private static bool HasNoSurrogates(ReadOnlySpan<char> s) {
+            foreach (char c in s) {
+                if (char.IsSurrogate(c)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private static bool HasNoSurrogates(string s) {
             if (s == null) {
                 return false;

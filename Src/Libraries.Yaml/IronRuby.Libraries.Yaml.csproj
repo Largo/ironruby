@@ -5,6 +5,8 @@
     <RootNamespace>IronRuby.StandardLibrary.Yaml</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <!-- the library initializer, see Src/InitializerGenerator/README.md -->
+    <ProjectReference Include="..\InitializerGenerator\IronRuby.InitializerGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />

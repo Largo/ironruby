@@ -651,8 +651,9 @@ namespace IronRuby.Builtins {
         /// are not valid in its encoding escaped ("1\xFF"), everything else passed through.
         /// </summary>
         private static Exception/*!*/ InvalidIntegerValue(MutableString/*!*/ value) {
-            return RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
-                MutableStringOps.GetQuotedStringRepresentation(value, false, '"'));
+            // thrown at once by its callers, kept by nothing
+            return RubyExceptionData.MarkUnkept(RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
+                MutableStringOps.GetQuotedStringRepresentation(value, false, '"')));
         }
 
         private static bool IsIntegerWhitespace(char c) {
@@ -3466,6 +3467,21 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region rand, srand
+        /// <summary>
+        /// Random.urandom (the prelude defines it; Random is a Ruby class): <paramref name="count"/> bytes from the
+        /// OS CSPRNG, the source MRI reads too. The prelude used to open /dev/urandom for each call, ~100x what
+        /// MRI's getrandom(2) costs, and every SecureRandom token, request id and CSRF mask comes through here.
+        /// </summary>
+        [RubyMethod("__ir_urandom__", RubyMethodAttributes.PrivateSingleton)]
+        public static MutableString/*!*/ Urandom(RubyModule/*!*/ self, [DefaultProtocol]int count) {
+            if (count < 0) {
+                throw RubyExceptions.CreateArgumentError("negative string size (or size too big)");
+            }
+            byte[] bytes = new byte[count];
+            RandomNumberGenerator.Fill(bytes);
+            return MutableString.CreateBinary(bytes);
+        }
+
         [RubyMethod("srand", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("srand", RubyMethodAttributes.PublicSingleton)]
         public static object SeedRandomNumberGenerator(RubyContext/*!*/ context, object self) {
