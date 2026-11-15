@@ -21,4 +21,13 @@
     <Exec Command="sh &quot;$(MSBuildThisFileDirectory)../../Util/check-dlr-patches.sh&quot; &quot;$([MSBuild]::NormalizeDirectory('$(DlrSourceDir)'))&quot;"
           CustomErrorRegularExpression="^check-dlr-patches:" />
   </Target>
+  <ItemGroup>
+    <!-- libironruby-capi, the native half of the C API (Src/Ruby/CApi), built by
+         Util/build-capi.sh into CApi/native/build. Without it, requiring a C extension
+         raises a LoadError naming the script. -->
+    <Content Include="CApi\native\build\libironruby-capi.so" Condition="Exists('$(MSBuildThisFileDirectory)CApi\native\build\libironruby-capi.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>libironruby-capi.so</Link>
+    </Content>
+  </ItemGroup>
 </Project>

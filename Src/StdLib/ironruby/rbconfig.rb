@@ -55,7 +55,9 @@ module RbConfig
   CONFIG["RUBY_SO_NAME"] = "IronRuby"
   CONFIG["PATH_SEPARATOR"] = File::PATH_SEPARATOR.dup
 
-  # There is no C-level libruby; IronRuby.dll is the runtime an embedding host links to.
+  # There is no C-level libruby to link a C extension against: an extension's rb_* symbols are
+  # resolved when it is loaded, against libironruby-capi (Src/Ruby/CApi), as they are in a CRuby
+  # built without --enable-shared. IronRuby.dll is the runtime an embedding host links to.
   CONFIG["ENABLE_SHARED"] = "no"
   CONFIG["LIBRUBY"] = "IronRuby.dll"
 
@@ -133,24 +135,21 @@ module RbConfig
   # shared objects, as in an MRI built with --with-static-linked-ext.
   CONFIG["EXTSTATIC"] = "static"
 
-  # Where a distribution keeps the headers a C extension compiles against.
-  # IronRuby has none: an extension here is a .NET assembly.  mkmf still refuses
-  # to load unless rubyhdrdir names a directory holding ruby/ruby.h - it aborts
-  # before defining MakeMakefile at all - so these name the header this tree
-  # ships, which is a single #error saying so (Src/StdLib/include/ruby/ruby.h).
+  # The headers a C extension compiles against: CRuby 4.0's, with the macros that read object
+  # memory turned into calls (Util/capi/import-headers.rb). config.h is per platform; only
+  # x86_64-linux's is shipped so far.
   hdrdir = "#{libdir}/include"
   CONFIG["rubyhdrdir"] = hdrdir
-  CONFIG["rubyarchhdrdir"] = "#{hdrdir}/#{arch}"
+  CONFIG["rubyarchhdrdir"] = "#{hdrdir}/#{cpu_and_os[0]}-#{cpu_and_os[1].sub(/-gnu\z/, '')}"
   CONFIG["sitehdrdir"] = "#{hdrdir}/site_ruby"
   CONFIG["vendorhdrdir"] = "#{hdrdir}/vendor_ruby"
   CONFIG["topdir"] = File.dirname(__FILE__)
   CONFIG["build_os"] = CONFIG["host_os"].dup
 
-  # The C toolchain mkmf drives.  There is none: every one of these is what MRI
-  # fills in from its own build, and IronRuby was not built by a C compiler.
-  # They are here because mkmf reads them while it loads and would otherwise
-  # fail on nil; empty is the truthful value, and it makes every compile mkmf
-  # attempts fail rather than appear to succeed.
+  # The C toolchain mkmf drives. Where IronRuby has no C API (Windows so far), every one of
+  # these is empty: mkmf reads them while it loads and would otherwise fail on nil, and empty
+  # makes every compile mkmf attempts fail rather than appear to succeed. Linux fills the
+  # toolchain in below.
   %w[
     ADDITIONAL_DLDFLAGS ARCH_FLAG ASSEMBLE_C ASSEMBLE_CXX BUILD_FILE_SEPARATOR
     CC_WRAPPER CFLAGS CLEANFILES COMMON_HEADERS COMMON_LIBS COMMON_MACROS
@@ -160,6 +159,29 @@ module RbConfig
     LIBRUBYARG_STATIC LIBS LINK_SO MAIN_DOES_NOTHING OUTFLAG RPATHFLAG
     RULE_SUBST TRY_LINK TRY_LINK_CXX UNIVERSAL_INTS warnflags
   ].each { |key| CONFIG[key] = "" }
+
+  # The C toolchain for extensions (Linux; Windows and macOS do not have the C API yet): gcc, as
+  # CRuby's Linux builds use, with no libruby to link (LIBRUBYARG is empty).
+  unless windows
+    {
+      "CC" => "gcc", "CPP" => "$(CC) -E", "CXX" => "g++", "GCC" => "yes",
+      "CFLAGS" => "$(cflags)", "cflags" => "$(optflags) $(debugflags) $(warnflags)",
+      "optflags" => "-O2", "debugflags" => "-g", "warnflags" => "-Wall -Wno-unused-parameter",
+      "CXXFLAGS" => "$(cxxflags)", "cxxflags" => "$(optflags) $(debugflags) $(warnflags)",
+      "CPPFLAGS" => " $(DEFS) $(cppflags)", "cppflags" => "", "DEFS" => "",
+      "CCDLFLAGS" => "-fPIC", "LDFLAGS" => "-L.", "DLDFLAGS" => "", "EXTDLDFLAGS" => "",
+      "LDSHARED" => "$(CC) -shared", "LDSHAREDXX" => "$(CXX) -shared",
+      "LIBS" => "-lm -lpthread", "DLDLIBS" => "-lc",
+      "LIBRUBYARG" => "$(LIBRUBYARG_SHARED)", "LIBRUBYARG_SHARED" => "", "LIBRUBYARG_STATIC" => "",
+      "OUTFLAG" => "-o ", "COUTFLAG" => "-o ", "CPPOUTFILE" => "-o conftest.i",
+      "LIBPATHFLAG" => " -L%1$-s", "RPATHFLAG" => " -Wl,-rpath,%1$-s",
+      "LINK_SO" => "", "POSTLINK" => ":", "TRY_LINK" => "",
+      "INSTALL" => "/usr/bin/install -c", "INSTALL_PROG" => "$(INSTALL) -m 0755",
+      "INSTALL_DATA" => "$(INSTALL) -m 644", "INSTALL_SCRIPT" => "$(INSTALL)",
+      "MAKEDIRS" => "mkdir -p", "MKDIR_P" => "mkdir -p", "RM" => "rm -f",
+      "RMDIR" => "rmdir --ignore-fail-on-non-empty", "RMALL" => "rm -fr", "CP" => "cp",
+    }.each { |key, value| CONFIG[key] = value.dup }
+  end
 
   # Naming conventions rather than tools, so these have an answer even here.
   CONFIG["OBJEXT"] = windows ? "obj" : "o"
