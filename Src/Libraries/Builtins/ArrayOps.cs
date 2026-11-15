@@ -608,11 +608,16 @@ namespace IronRuby.Builtins {
         // MRI's rb_ary_rotate_m: the elements from count on, then the ones before it, in a new plain Array.
         [RubyMethod("rotate")]
         public static RubyArray/*!*/ Rotate(RubyArray/*!*/ self) {
-            return Rotate(self, 1);
+            return Rotate(self, 1L);
         }
 
+        // The count is a long in MRI (NUM2LONG): one past an int still rotates, one past a long is a RangeError.
         [RubyMethod("rotate")]
-        public static RubyArray/*!*/ Rotate(RubyArray/*!*/ self, [DefaultProtocol]int count) {
+        public static RubyArray/*!*/ Rotate(RubyArray/*!*/ self, [DefaultProtocol]IntegerValue count) {
+            return Rotate(self, RotationCount(count));
+        }
+
+        private static RubyArray/*!*/ Rotate(RubyArray/*!*/ self, long count) {
             int n = self.Count;
             var result = new RubyArray(n);
             if (n == 0) {
@@ -626,11 +631,16 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("rotate!")]
         public static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self) {
-            return InPlaceRotate(self, 1);
+            return InPlaceRotate(self, 1L);
         }
 
         [RubyMethod("rotate!")]
-        public static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self, [DefaultProtocol]int count) {
+        public static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self, [DefaultProtocol]IntegerValue count) {
+            // (rb_ary_rotate_bang converts the count before it checks that the Array can be modified)
+            return InPlaceRotate(self, RotationCount(count));
+        }
+
+        private static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self, long count) {
             self.RequireNotFrozen();
             int n = self.Count;
             if (n == 0) {
@@ -650,9 +660,20 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        private static int RotationStart(int count, int n) {
-            int k = count % n;
-            return (k < 0) ? k + n : k;
+        private static long RotationCount(IntegerValue count) {
+            if (count.IsFixnum) {
+                return count.Fixnum;
+            }
+            long value;
+            if (!count.Bignum.AsInt64(out value)) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
+            return value;
+        }
+
+        private static int RotationStart(long count, int n) {
+            long k = count % n;
+            return (int)((k < 0) ? k + n : k);
         }
 
         #endregion

@@ -7423,6 +7423,25 @@ true
         }
 
         /// <summary>
+        /// Array#rotate and #rotate! take their count as a long (MRI's NUM2LONG): a count past an int still rotates,
+        /// one past a long is a RangeError, for an empty or a frozen Array too.
+        /// </summary>
+        public void Array_RotateLongCount1() {
+            TestOutput(@"
+a = [1, 2, 3]
+p a.rotate(2**40), a.rotate(-(2**40) - 1), a.dup.rotate!(2**40 + 1)
+p((a.rotate(2**64) rescue $!.class), ([].rotate(2**64) rescue $!.class), ([].freeze.rotate!(2**64) rescue $!.class))
+", @"
+[2, 3, 1]
+[2, 3, 1]
+[3, 1, 2]
+RangeError
+RangeError
+RangeError
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.
