@@ -68,6 +68,7 @@ class Walker < Prism::Visitor
     @nest = []
     @sing = 0
     @guards = []
+    @module_function = []
     super()
   end
 
@@ -81,18 +82,40 @@ class Walker < Prism::Visitor
   def visit_class_node(node) = scoped(name_of(node.constant_path)) { super }
   def visit_module_node(node) = scoped(name_of(node.constant_path)) { super }
 
+  # `class << self' keeps the owner; `class << Dir' at the top level makes Dir the owner of what
+  # it defines, as singleton methods
   def visit_singleton_class_node(node)
+    owner = node.expression.is_a?(Prism::SelfNode) ? nil : name_of(node.expression)
+    @nest.push(owner) if owner
     @sing += 1
     super
   ensure
     @sing -= 1
+    @nest.pop if owner
+  end
+
+  # `module_function :a, :b' makes Kernel#a also Kernel.a; a bare `module_function' does so for
+  # every def after it in the same module body
+  def visit_call_node(node)
+    if node.name == :module_function && node.receiver.nil? && @sing == 0
+      entry = @out[@nest.empty? ? 'Object' : @nest.join('::')]
+      args = node.arguments&.arguments || []
+      if args.empty?
+        @module_function[-1] = true unless @module_function.empty?
+      else
+        args.each { |a| entry[:sing] << a.unescaped if a.is_a?(Prism::SymbolNode) }
+      end
+    end
+    super
   end
 
   def scoped(name)
     @nest.push(name)
+    @module_function.push(false)
     yield
   ensure
     @nest.pop
+    @module_function.pop
   end
 
   # `def m ... end unless method_defined?(:m)': the prelude's definition only where C# has none
@@ -118,6 +141,7 @@ class Walker < Prism::Visitor
       return
     end
     (node.receiver || @sing > 0 ? entry[:sing] : entry[:inst]) << name
+    entry[:sing] << name if !node.receiver && @sing == 0 && @module_function.last
     # does the body yield or call a block parameter? (a block-taking iterator)
     src = node.slice
     entry[:iter] << name if src =~ /\byield\b|\bblock_given\?|&\w+/

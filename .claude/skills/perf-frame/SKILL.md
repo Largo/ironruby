@@ -73,9 +73,22 @@ Take one. State what it costs with a pair of shapes in `Util/bench/prelude-cost.
 method with the construct and the same method without it), measured with `/perf-ab`. No
 pair, no experiment: the gain has to be visible in one line.
 
-## 2. The matrix comes first
+## 2. A worktree for the work
 
-Write `Util/<shape>-matrix.rb` before changing the compiler, modelled on
+This checkout stays the baseline, clean and built; everything below - the matrix, the
+compiler change, the test - is written in the candidate tree:
+
+```sh
+Util/perf/worktree.sh NAME          # ../wt-NAME on branch perf/NAME, with its own DLR copy; prints its build command
+```
+
+From a checkout with no `../dlr` beside it (one under `.claude/worktrees`), export
+`DLR_SOURCE_DIR=<the DLR checkout>/src/core` first. Build the worktree with the command it
+prints before writing anything, so that the matrix's first run is of the unchanged code.
+
+## 3. The matrix comes first
+
+Write `Util/<shape>-matrix.rb` in the worktree before changing the compiler, modelled on
 `Util/block-given-matrix.rb` and `Util/light-rest-matrix.rb`: a `t(label) { }` that runs
 each probe 3000 times and prints every distinct answer once, so that the interpreted body,
 the compiled one and a site whose rule is already bound all meet the case. It must print
@@ -103,7 +116,7 @@ Cases a frame change has to survive:
 - **Tracing.** A TracePoint for `:call` and for `:c_call` sees what it saw; the answers
   after it is disabled are the ones before.
 
-## 3. Behind a switch
+## 4. Behind a switch
 
 A `static readonly bool` beside the others in `MethodDefinition.cs`
 (`IR_LIGHT_REST`, `IR_LIGHT_BLOCK_GIVEN`): on unless the variable is `0`. The switch is the
@@ -148,7 +161,7 @@ What went wrong doing exactly this, so that it does not again:
 - Many `.cs` files here are CRLF, some with a BOM. Edit by bytes and check
   `git diff --stat` for a file that changed whole.
 
-## 4. Verify in every mode
+## 5. Verify in every mode
 
 The matrix must print CRuby's output with: the default; the switch off;
 `IR_LIGHT_FRAMES=0`; `-X:NoJIT -X:NoOSR`; `-X:JITCalls`; and `IR_CONFIG=R2R` after a
@@ -177,7 +190,7 @@ summary line, look at it before trusting the rest: run as root from a tree whose
 a symlink of another path depth, `spec/core/dir`'s chroot examples loop forever on any
 build - kill that `ir` and run the directory from a tree whose depth matches.
 
-## 5. Measure, decide, record
+## 6. Measure, decide, record
 
 `/perf-ab` with the switch-off arm, on the pair from step 1 and on the methods that were
 supposed to gain. Then the whole of `prelude-cost.rb` once, and `Util/benchsuite/run.sh
@@ -186,8 +199,11 @@ expected: a method that became light but then needs its scope on most calls pays
 detour.
 
 Keep it if the pair moves by 15% or more, nothing else is slower beyond the run's noise,
-and everything in step 4 holds. Otherwise leave the switch off by default or revert, and
-say which in the ledger.
+and everything in step 5 holds. Otherwise leave the switch off by default or revert, and
+say which in the ledger. A change that is kept is promoted as `/perf-step` does (step 4
+there): committed on `perf/NAME`, merged into the working branch with `--no-ff`, the
+baseline rebuilt and the pair measured again on the merged build; then the worktree is
+removed (`Util/perf/worktree.sh -d NAME`).
 
 Record: gap 9 of `Util/perf/LEDGER.md` (what light frames still exclude) brought up to
 date with the switch's name and the matrix; the commit says what the shape cost, why

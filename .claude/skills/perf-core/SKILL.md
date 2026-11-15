@@ -185,8 +185,13 @@ slower with a Symbol; only the table showed it.
   probes once with `IR_CONFIG=R2R` after building.
 - Commit: what was wrong (the entry, with its cost), what the method does now, the
   numbers against the unchanged build and CRuby, how it was checked.
-- In `Util/perf/LEDGER.md`, move the method to "Landed" or add under "Rejected" what was
-  tried and what the floor was. Do not open a pull request unless asked.
+- Promote it as `/perf-step` does (step 4 there): `git -C ../wt-NAME status --short` prints
+  nothing, `git merge --no-ff perf/NAME` into the working branch, rebuild the baseline
+  here, and run the step-5 rows again on the merged build against the commit before the
+  merge. If the gain does not show there, revert the merge.
+- Then, in `Util/perf/LEDGER.md`, move the method to "Landed" (with the merge commit) or
+  add under "Rejected" what was tried and what the floor was, and remove the worktree
+  (`Util/perf/worktree.sh -d NAME`). Do not open a pull request unless asked.
 
 ## Stop conditions for a loop
 

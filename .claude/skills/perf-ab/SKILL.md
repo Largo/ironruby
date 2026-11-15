@@ -93,9 +93,11 @@ ruby Util/perf/ab.rb -r 6 FILE "base=..." "off=env IR_LIGHT_REST=0 IR_CONFIG=Rel
 ```
 
 `off` and `new` are one binary, so code layout and everything else the change did not
-intend are the same in both. `new` against `off` is the change; `off` against `base` is
-what two builds differ by for no reason. A "regression" that `off` shows too is not the
-change's.
+intend are the same in both. `new` against `off` isolates the switched change. `off`
+against `base` shows every other difference the candidate build has: noise, and anything
+else the branch changed, intended or not. A regression that `off` shows too is not the
+switched change's - but it is still the candidate's, and is reported as one until a rerun
+shows it is noise.
 
 ## 5. A shape of your own
 

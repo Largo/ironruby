@@ -49,6 +49,8 @@ file = argv.shift
 interps = argv.map { |s| s.split('=', 2) }
 abort "usage: ruby #{$0} [-r ROUNDS] [-c CPUS] [-n ITERATIONS] FILE NAME=CMD... [-- SHAPE...]" if file.nil? || interps.empty? || interps.any? { |_, c| c.nil? }
 abort "#{file}: no such file" unless File.file?(file)
+dups = interps.map(&:first).tally.select { |_, c| c > 1 }.keys
+abort "each interpreter needs a name of its own: #{dups.join(', ')} given twice" unless dups.empty?
 
 def idlest_cpus(count)
   read = -> { File.readlines('/proc/stat').grep(/^cpu\d/).to_h { |l| a = l.split; [a[0][3..].to_i, [a[1..3].sum(&:to_i) + a[6..8].sum(&:to_i), a[4].to_i + a[5].to_i]] } }
@@ -97,7 +99,9 @@ order.each do |shape|
   cells = names.map do |name|
     v = by[name]
     next '-' if v.empty?
-    rounds > 1 ? format('%.1f (%d)', v.min, ((v.max / v.min - 1) * 100).round) : format('%.1f', v.min)
+    next format('%.1f', v.min) if rounds == 1
+    # a cell of 0 ns is a count too short for the timer's grain (see -n): no spread to give
+    v.min > 0 ? format('%.1f (%d)', v.min, ((v.max / v.min - 1) * 100).round) : format('%.1f (-n?)', v.min)
   end
   ratio = prev && !by[last].empty? && !by[prev].empty? && by[prev].min > 0 ? format('%.2f', by[last].min / by[prev].min) : ''
   # the two builds' ranges overlap: every round of one fits between the rounds of the other

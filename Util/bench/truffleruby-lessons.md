@@ -160,24 +160,25 @@ only target core methods defined in Java ... never core methods defined in Ruby"
 | class | C# only | Ruby | of which replace a C# method | Ruby and take a block |
 |---|---:|---:|---:|---:|
 | Array | 83 | 25 | 5 | 16 |
-| Hash | 61 | 17 | 0 | 5 |
+| Hash | 60 | 19 | 1 | 5 |
 | String | 119 | 25 | 7 | 7 |
 | Integer | 61 | 1 | 0 | 0 |
 | Float | 33 | 5 | 0 | 0 |
 | Enumerable | 31 | 35 | 11 | 31 |
-| Kernel | 158 | 24 | 9 | 5 |
+| Kernel | 151 | 41 | 16 | 5 |
 | Range | 21 | 8 | 1 | 6 |
-| Struct | 18 | 6 | 3 | 3 |
+| Struct | 17 | 7 | 4 | 4 |
 | Comparable | 7 | 0 | 0 | 0 |
 | Symbol | 30 | 3 | 0 | 0 |
 | Proc | 15 | 0 | 0 | 0 |
 | Module | 88 | 1 | 0 | 0 |
 | Numeric | 15 | 16 | 4 | 0 |
 | Enumerator | 15 | 11 | 2 | 6 |
-| these fifteen | 755 | 177 | 42 | 79 |
+| these fifteen | 746 | 197 | 51 | 80 |
 
-Whole tree: 2,235 `[RubyMethod]` names, 620 prelude `def`s of core methods and 294 prelude
-helpers named `__x__`. So IronRuby is about 80% C# where TruffleRuby is about 75% Ruby.
+Whole tree: 2,235 `[RubyMethod]` names, 693 prelude `def`s of core methods and 326 prelude
+helpers named `__x__` (a `module_function` counts on both sides, as Kernel's do). So
+IronRuby is about 75% C# where TruffleRuby is about 75% Ruby.
 
 The prelude methods that replace a C# one are mostly wrappers: they take `*args, &block`,
 check or convert something the 1.9-era C# method does not, and call it under an alias.
