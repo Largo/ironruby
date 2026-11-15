@@ -561,8 +561,10 @@ namespace IronRuby.Builtins {
                 // Its callers throw it at once: unless Ruby code of the program's takes part in making it, nothing has
                 // kept it. Asked before it is made, as Kernel#raise asks: a KeyError.new of the program's that keeps
                 // the exception can remove itself before it returns, and the methods would then look built-in.
+                // Nor while any TracePoint is enabled: a :c_call hook sees the exception as it is initialized
+                // (TracePoint#self), and can keep it and disable itself.
                 var cls = keyErrorClass as RubyClass;
-                bool unkept = cls != null && RubyExceptionData.MakesUnkeptPreludeException(cls);
+                bool unkept = cls != null && TracePoint.ActiveEvents == 0 && RubyExceptionData.MakesUnkeptPreludeException(cls);
                 var site = newStorage.GetCallSite("new");
                 Exception exception = site.Target(site, keyErrorClass, message) as Exception;
                 if (exception != null) {

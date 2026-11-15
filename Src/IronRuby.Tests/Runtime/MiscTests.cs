@@ -7552,8 +7552,9 @@ nil
 
         /// <summary>
         /// The KeyError of Hash#fetch may leave its backtrace until a rescue exposes it only while nothing can have kept
-        /// it. A TracePoint on :raise that keeps it and disables itself, and a KeyError.new of the program's that keeps it
-        /// and removes itself, both have: read after the rescuing frame is gone, the backtrace is still the raise's.
+        /// it. A TracePoint on :raise or on :c_call (which sees it being initialized) that keeps it and disables itself,
+        /// and a KeyError.new of the program's that keeps it and removes itself, all have: read after the rescuing frame
+        /// is gone, the backtrace is still the raise's.
         /// </summary>
         public void Hash_FetchKeptKeyError1() {
             TestOutput(@"
@@ -7568,6 +7569,12 @@ tp.enable
 g1
 tp.disable
 p kept.class, kept.backtrace.map { |l| l[/'(.*)'/, 1] }
+seen = nil
+tc = TracePoint.new(:c_call) { |t| if KeyError === t.self then seen = t.self; t.disable end }
+tc.enable
+g1
+tc.disable
+p seen.backtrace.map { |l| l[/'(.*)'/, 1] }
 made = nil
 make = KeyError.method(:new)
 KeyError.define_singleton_method(:new) { |*a| made = make.call(*a); KeyError.singleton_class.send(:remove_method, :new); made }
@@ -7575,6 +7582,7 @@ g1
 p(made.nil? || made.backtrace.none? { |l| l.include?('Exception#backtrace') })
 ", @"
 KeyError
+[""Hash#fetch"", ""Object#f1"", ""Object#g1"", ""<main>""]
 [""Hash#fetch"", ""Object#f1"", ""Object#g1"", ""<main>""]
 true
 ");
