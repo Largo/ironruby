@@ -1,7 +1,9 @@
 # String/Symbol/Regexp/IO micro shapes. Usage: ruby shapes.rb [filter]
 # Prints name, CPU ms per run (least of 5 after warmup), and a checksum.
 require 'stringio'
+require 'fileutils'
 DIR = ENV['STR_SCRATCH'] || '/root/workspace/strings-scratch'
+FileUtils.mkdir_p(DIR)
 FILE = File.join(DIR, "shapes-#{$$}.txt")
 File.write(FILE, (1..2000).map { |i| "line #{i} some text here, value=#{i * 7}\n" }.join)
 BIG = 'a' * 1_000_000 + 'b'

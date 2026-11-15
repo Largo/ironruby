@@ -1,7 +1,9 @@
 # The answers the kept changes could affect, to diff against CRuby:
 # protoboeuf-encode's bytes (SHA-256) and RuboCop's autocorrect of ruby-bench's fixture (offences + corrected source).
 require "digest"
-dir = "/root/workspace/ruby-bench/benchmarks/protoboeuf-encode"
+# RB_DIR is the ruby-bench checkout; RUBOCOP_RB_DIR the copy whose rubocop bundle is installed.
+rb = ENV["RB_DIR"] || "/root/workspace/ruby-bench"
+dir = File.join(rb, "benchmarks/protoboeuf-encode")
 def make_shareable(x) = x
 require File.join(dir, "benchmark_pb")
 lots = Marshal.load(File.binread(File.join(dir, "encoded_msgs.bin"))).map { |b| ProtoBoeuf::ParkingLot.decode(b) }
@@ -9,7 +11,7 @@ lots = Marshal.load(File.binread(File.join(dir, "encoded_msgs.bin"))).map { |b| 
 enc = lots.map { |l| ProtoBoeuf::ParkingLot.encode(l) }
 puts "protoboeuf-encode #{enc.sum(&:bytesize)} bytes #{Digest::SHA256.hexdigest(enc.join)} #{enc.map(&:encoding).uniq}"
 if ARGV[0] == "rubocop"
-  Dir.chdir("/root/workspace/parsers-scratch/ruby-bench/benchmarks/rubocop")
+  Dir.chdir(File.join(ENV["RUBOCOP_RB_DIR"] || "/root/workspace/parsers-scratch/ruby-bench", "benchmarks/rubocop"))
   require "bundler/setup"; require "stringio"; require "rubocop"
   opts = RuboCop::Options.new.parse(%w[--stderr --force-exclusion --format json --raise-cop-error --autocorrect]).first
   path = File.expand_path("fixture.rb")

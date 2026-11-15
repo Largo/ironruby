@@ -1,5 +1,5 @@
 # protoboeuf decode, steady state: CPU seconds for N passes after warmup.
-dir = "/root/workspace/ruby-bench/benchmarks/protoboeuf"
+dir = File.join(ENV["RB_DIR"] || "/root/workspace/ruby-bench", "benchmarks/protoboeuf")   # RB_DIR: the ruby-bench checkout
 def make_shareable(x) = x
 require File.join(dir, "benchmark_pb")
 MSGS = Marshal.load(File.binread(File.join(dir, "encoded_msgs.bin")))

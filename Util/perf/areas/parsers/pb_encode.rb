@@ -1,5 +1,5 @@
 # protoboeuf encode, steady state: CPU seconds per pass over the 11 messages after warmup.
-dir = "/root/workspace/ruby-bench/benchmarks/protoboeuf-encode"
+dir = File.join(ENV["RB_DIR"] || "/root/workspace/ruby-bench", "benchmarks/protoboeuf-encode")   # RB_DIR: the ruby-bench checkout
 def make_shareable(x) = x
 require File.join(dir, "benchmark_pb")
 LOTS = Marshal.load(File.binread(File.join(dir, "encoded_msgs.bin"))).map { |b| ProtoBoeuf::ParkingLot.decode(b) }
