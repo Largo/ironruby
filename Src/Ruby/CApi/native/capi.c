@@ -1245,3 +1245,155 @@ rb_ir_call_gvar_set(void *fn, VALUE val, ID id, VALUE *data, int *raised)
     *raised = 0;
     RB_IR_PROTECT(frame, ((rb_gvar_setter_t *)fn)(val, id, data), *raised = 1);
 }
+
+/* ------------------------------------------------------------------------------------------
+ * T_DATA. IronRuby makes the object (a DataObject) and its handle's slot is laid out as RData /
+ * RTypedData, so the fields are written here and read by the header macros directly. The data
+ * is never embedded: RTYPEDDATA's type word never has TYPED_DATA_EMBEDDED set.
+ * ------------------------------------------------------------------------------------------ */
+
+#undef rb_data_object_wrap
+#undef rb_data_object_zalloc
+#undef rb_data_typed_object_wrap
+#undef rb_data_typed_object_zalloc
+
+void *
+ruby_xmalloc(size_t size)
+{
+    void *p = malloc(size ? size : 1);
+    if (!p) rb_memerror();
+    return p;
+}
+
+void *
+ruby_xmalloc2(size_t nelems, size_t elemsiz)
+{
+    if (elemsiz && nelems > (size_t)-1 / elemsiz) rb_raise(rb_eArgError, "malloc: possible integer overflow");
+    return ruby_xmalloc(nelems * elemsiz);
+}
+
+void *
+ruby_xcalloc(size_t nelems, size_t elemsiz)
+{
+    void *p = calloc(nelems ? nelems : 1, elemsiz ? elemsiz : 1);
+    if (!p) rb_memerror();
+    return p;
+}
+
+void *
+ruby_xrealloc(void *ptr, size_t newsiz)
+{
+    void *p = realloc(ptr, newsiz ? newsiz : 1);
+    if (!p) rb_memerror();
+    return p;
+}
+
+void *
+ruby_xrealloc2(void *ptr, size_t newelems, size_t newsiz)
+{
+    if (newsiz && newelems > (size_t)-1 / newsiz) rb_raise(rb_eArgError, "realloc: possible integer overflow");
+    return ruby_xrealloc(ptr, newelems * newsiz);
+}
+
+void
+ruby_xfree(void *ptr)
+{
+    free(ptr);
+}
+
+void
+rb_gc_adjust_memory_usage(ssize_t diff)
+{
+}
+
+/* ALLOCV: a temporary buffer whose lifetime CRuby ties to a hidden object; it is freed by
+ * rb_free_tmp_buffer here (and leaked if an exception skips that, as handles are). */
+void *
+rb_alloc_tmp_buffer(volatile VALUE *store, long len)
+{
+    if (len < 0) rb_raise(rb_eArgError, "negative buffer size (or size too big)");
+    void *p = ruby_xmalloc((size_t)len);
+    *store = (VALUE)p | 1;   /* not a VALUE anyone reads: odd, so never mistaken for a handle */
+    return p;
+}
+
+void *
+rb_alloc_tmp_buffer_with_count(volatile VALUE *store, size_t len, size_t count)
+{
+    return rb_alloc_tmp_buffer(store, (long)len);
+}
+
+void
+rb_free_tmp_buffer(volatile VALUE *store)
+{
+    if (*store & 1) free((void *)(*store & ~(VALUE)1));
+    *store = 0;
+}
+
+VALUE
+rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree)
+{
+    VALUE obj = rb_ir_data_new(klass, 0);
+    RDATA(obj)->dmark = dmark;
+    RDATA(obj)->dfree = dfree;
+    RDATA(obj)->data = datap;
+    return obj;
+}
+
+VALUE
+rb_data_object_zalloc(VALUE klass, size_t size, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree)
+{
+    return rb_data_object_wrap(klass, ruby_xcalloc(1, size), dmark, dfree);
+}
+
+VALUE
+rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *type)
+{
+    VALUE obj = rb_ir_data_new(klass, 1);
+    *(VALUE *)&RTYPEDDATA(obj)->type = (VALUE)type;
+    RTYPEDDATA(obj)->data = datap;
+    return obj;
+}
+
+VALUE
+rb_data_typed_object_zalloc(VALUE klass, size_t size, const rb_data_type_t *type)
+{
+    return rb_data_typed_object_wrap(klass, ruby_xcalloc(1, size), type);
+}
+
+int
+rb_typeddata_inherited_p(const rb_data_type_t *child, const rb_data_type_t *parent)
+{
+    for (; child; child = child->parent) {
+        if (child == parent) return 1;
+    }
+    return 0;
+}
+
+int
+rb_typeddata_is_kind_of(VALUE obj, const rb_data_type_t *data_type)
+{
+    if (!RB_TYPE_P(obj, T_DATA) || !RTYPEDDATA_P(obj)) return 0;
+    return rb_typeddata_inherited_p(RTYPEDDATA_TYPE(obj), data_type);
+}
+
+void *
+rb_check_typeddata(VALUE obj, const rb_data_type_t *data_type)
+{
+    if (!RB_TYPE_P(obj, T_DATA) || !RTYPEDDATA_P(obj)) {
+        rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)",
+                 RB_SPECIAL_CONST_P(obj) ? rb_obj_classname(obj) : rb_obj_classname(obj), data_type->wrap_struct_name);
+    }
+    if (!rb_typeddata_inherited_p(RTYPEDDATA_TYPE(obj), data_type)) {
+        rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)",
+                 RTYPEDDATA_TYPE(obj)->wrap_struct_name, data_type->wrap_struct_name);
+    }
+    return RTYPEDDATA_GET_DATA(obj);
+}
+
+/* What rb_get_alloc_func answers for a class no extension gave an allocator. */
+RB_IR_EXPORT VALUE
+rb_ir_default_allocator(VALUE klass)
+{
+    return rb_ir_allocate_builtin(klass);
+}

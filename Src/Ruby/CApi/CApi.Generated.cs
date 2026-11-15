@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime.CApi {
     internal static unsafe partial class CApi {
-        internal const int FunctionCount = 513;
+        internal const int FunctionCount = 515;
 
         internal static void FillFunctionTable(IntPtr* table) {
             table[0] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_builtin_type;
@@ -521,6 +521,8 @@ namespace IronRuby.Runtime.CApi {
             table[510] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void*, void*, void>)&Entry_rb_define_hooked_variable;
             table[511] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, void*, void>)&Entry_rb_define_virtual_variable;
             table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
+            table[513] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_ir_data_new;
+            table[514] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_allocate_builtin;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -7184,6 +7186,32 @@ namespace IronRuby.Runtime.CApi {
             var frame = EnterManaged();
             try {
                 return rb_ident_hash_new();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_ir_data_new(ulong klass, int typed) {
+            var frame = EnterManaged();
+            try {
+                return rb_ir_data_new(klass, typed);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_ir_allocate_builtin(ulong klass) {
+            var frame = EnterManaged();
+            try {
+                return rb_ir_allocate_builtin(klass);
             } catch (Exception e) {
                 SetPending(e);
                 return default;

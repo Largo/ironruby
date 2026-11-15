@@ -514,6 +514,8 @@
 #undef rb_define_hooked_variable
 #undef rb_define_virtual_variable
 #undef rb_ident_hash_new
+#undef rb_ir_data_new
+#undef rb_ir_allocate_builtin
 
 struct rb_ir_function_table {
     VALUE (*rb_ir_builtin_type)(VALUE obj);
@@ -1029,10 +1031,12 @@ struct rb_ir_function_table {
     void (*rb_define_hooked_variable)(const char *name, VALUE *var, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter);
     void (*rb_define_virtual_variable)(const char *name, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter);
     VALUE (*rb_ident_hash_new)(void);
+    VALUE (*rb_ir_data_new)(VALUE klass, int typed);
+    VALUE (*rb_ir_allocate_builtin)(VALUE klass);
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 513;
+const int rb_ir_function_count = 515;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -5053,6 +5057,22 @@ VALUE
 (rb_ident_hash_new)(void)
 {
     VALUE rb_ir_result = rb_ir_fns.rb_ident_hash_new();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_ir_data_new)(VALUE klass, int typed)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_ir_data_new(klass, typed);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_ir_allocate_builtin)(VALUE klass)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_ir_allocate_builtin(klass);
     RB_IR_CHECK();
     return rb_ir_result;
 }

@@ -20,8 +20,10 @@ namespace IronRuby.Runtime.CApi {
     /// special_consts.h), so the header macros that test a VALUE's bits work unchanged: Fixnums
     /// (n &lt;&lt; 1 | 1), Flonums (the rotated double | 0b10), static Symbols (ID &lt;&lt; 8 | 0x0c), and
     /// Qfalse 0x00, Qnil 0x04, Qtrue 0x14, Qundef 0x24. Every other object is a handle: the
-    /// address of a 32-byte slot of native memory laid out as CRuby's struct RBasic (flags, klass)
-    /// followed by the object's index in IronRuby's table. The headers never read the slot - their
+    /// address of a 48-byte slot of native memory laid out as CRuby's struct RData/RTypedData -
+    /// RBasic (flags, klass), two words, the data pointer - followed by the object's index in
+    /// IronRuby's table. For a T_DATA object (DataObject) the slot is where its fields live:
+    /// DATA_PTR and RTYPEDDATA_TYPE are plain reads and writes of it, as in CRuby. The headers never read the slot - their
     /// macros call into IronRuby - but code that dereferences RBASIC(obj) itself, as some
     /// extensions and ruby/spec's rbasic specs do, reads a plausible type, frozen bit and class
     /// (as of when the handle was made) instead of crashing the process.
@@ -41,7 +43,8 @@ namespace IronRuby.Runtime.CApi {
 
         // Handle slots come from slabs that never move or go away; a slab holds slots
         // [Start, Start + Count) of the table.
-        private const int SlotSize = 32;
+        private const int SlotSize = 48;
+        private const int SlotIndexWord = 5;
         private struct Slab { public VALUE Base; public int Start, Count; }
         private static Slab[] _slabs = new Slab[0];
         private static readonly Dictionary<object, VALUE> _handleOf = new Dictionary<object, VALUE>(ReferenceEqualityComparer.Instance);
@@ -101,7 +104,7 @@ namespace IronRuby.Runtime.CApi {
                 // RBasic: the class may need a handle of its own, made after this one so that a
                 // class whose class is itself (Class) terminates
                 ((VALUE*)value)[0] = (VALUE)BuiltinType(obj);
-                ((VALUE*)value)[2] = (VALUE)index;
+                ((VALUE*)value)[SlotIndexWord] = (VALUE)index;
                 ((VALUE*)value)[1] = ToValue(_context.GetImmediateClassOf(obj));
                 return value;
             }
@@ -112,7 +115,7 @@ namespace IronRuby.Runtime.CApi {
             if (slabs.Length == 0 || index >= slabs[slabs.Length - 1].Start + slabs[slabs.Length - 1].Count) {
                 int count = slabs.Length == 0 ? 4096 : slabs[slabs.Length - 1].Count * 2;
                 var slab = new Slab {
-                    Base = (VALUE)System.Runtime.InteropServices.NativeMemory.AlignedAlloc((nuint)(count * SlotSize), SlotSize),
+                    Base = (VALUE)System.Runtime.InteropServices.NativeMemory.AlignedAlloc((nuint)(count * SlotSize), 16),
                     Start = index,
                     Count = count,
                 };
@@ -301,6 +304,7 @@ namespace IronRuby.Runtime.CApi {
                 case RubyStruct _: return T_STRUCT;
                 case RubyIO _: return T_FILE;
                 case Exception _: return T_OBJECT;
+                case DataObject _: return T_DATA;
                 case RubyObject _: return RationalOrComplex(obj) ?? T_OBJECT;
             }
             return T_DATA;
@@ -330,7 +334,7 @@ namespace IronRuby.Runtime.CApi {
         // RUBY_FL_*: the bits CRuby keeps in RBasic.flags. Those IronRuby knows from the object
         // itself are computed; the FL_USER bits an extension sets on its own objects are kept here.
         private const VALUE FL_FREEZE = 1 << 11, FL_SINGLETON = 1 << 13 /* FL_USER1 */,
-            FL_EXIVAR = 0, CR_7BIT = 1UL << 20, CR_VALID = 1UL << 21;
+            RUBY_TYPED_FL_IS_TYPED_DATA = 1 << 6, CR_7BIT = 1UL << 20, CR_VALID = 1UL << 21;
         private static readonly ConditionalWeakTable<object, StrongBox<VALUE>> _userFlags =
             new ConditionalWeakTable<object, StrongBox<VALUE>>();
 
@@ -345,6 +349,9 @@ namespace IronRuby.Runtime.CApi {
             if (obj is MutableString str) {
                 flags |= str.IsAscii() ? CR_7BIT : CR_VALID;
             }
+            if (obj is DataObject data && data.Typed) {
+                flags |= RUBY_TYPED_FL_IS_TYPED_DATA;
+            }
             StrongBox<VALUE> user;
             if (obj != null && _userFlags.TryGetValue(obj, out user)) {
                 flags |= user.Value;
@@ -357,7 +364,7 @@ namespace IronRuby.Runtime.CApi {
                 _context.FreezeObject(obj);
             }
             // the type, the freeze bit, the singleton bit and the code range are not the extension's to set
-            const VALUE computed = 0x1f | FL_FREEZE | FL_SINGLETON | CR_7BIT | CR_VALID;
+            const VALUE computed = 0x1f | FL_FREEZE | FL_SINGLETON | CR_7BIT | CR_VALID | RUBY_TYPED_FL_IS_TYPED_DATA;
             set &= ~computed;
             clear &= ~computed;
             if (set == 0 && clear == 0) {

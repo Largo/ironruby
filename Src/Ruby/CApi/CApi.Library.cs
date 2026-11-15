@@ -382,7 +382,8 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static IntPtr rb_get_alloc_func(VALUE klass) {
-            return IntPtr.Zero;
+            var cls = FromValue(klass) as RubyClass;
+            return cls != null ? GetAllocFunc(cls) : IntPtr.Zero;
         }
 
         internal static VALUE rb_make_backtrace() {

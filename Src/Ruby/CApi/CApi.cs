@@ -155,6 +155,7 @@ namespace IronRuby.Runtime.CApi {
             _context = context;
             InitializeGlobals(context);
             InitializeThreads();
+            _defaultAllocator = ShimExport("rb_ir_default_allocator");
         }
 
         private static IntPtr ShimExport(string/*!*/ name) {

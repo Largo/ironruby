@@ -196,14 +196,71 @@ namespace IronRuby.Runtime.CApi {
             }
         }
 
-        // TODO: an allocator written in C needs RubyClass to allocate through it (Class#allocate
-        // and Class#new both build their own rule); T_DATA objects are the next milestone.
+        // the C function behind each class's allocator, for rb_get_alloc_func
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<RubyClass, StrongBox<IntPtr>> _allocFuncs =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<RubyClass, StrongBox<IntPtr>>();
+
         internal static void rb_define_alloc_func(VALUE klass, IntPtr func) {
-            throw RubyExceptions.CreateNotImplementedError("rb_define_alloc_func is not implemented by IronRuby's C API yet");
+            var cls = FromValue(klass) as RubyClass;
+            if (cls == null) {
+                throw RubyExceptions.CreateTypeError("allocator for a module");
+            }
+            _allocFuncs.AddOrUpdate(cls, new StrongBox<IntPtr>(func));
+            cls.SetCAllocator(c => {
+                object obj = FromValue(CallFunc1(func, ToValue(c)));
+                if (obj == null || !ReferenceEquals(_context.GetClassOf(obj).GetNonSingletonClass(), c) && !(obj is DataObject)) {
+                    throw RubyExceptions.CreateTypeError(String.Format("wrong instance allocation"));
+                }
+                return obj;
+            });
         }
 
         internal static void rb_undef_alloc_func(VALUE klass) {
-            // nothing to do until rb_define_alloc_func is: a class defined from C allocates as any class does
+            var cls = FromValue(klass) as RubyClass;
+            if (cls != null) {
+                _allocFuncs.AddOrUpdate(cls, new StrongBox<IntPtr>(IntPtr.Zero));
+                cls.SetCAllocator(c => {
+                    throw RubyExceptions.CreateTypeError(String.Format("allocator undefined for {0}", c.Name));
+                });
+            }
+        }
+
+        internal static IntPtr GetAllocFunc(RubyClass/*!*/ cls) {
+            for (RubyClass c = cls; c != null; c = c.SuperClass) {
+                StrongBox<IntPtr> f;
+                if (_allocFuncs.TryGetValue(c, out f)) {
+                    return f.Value;
+                }
+            }
+            // CRuby: every class has one; this one allocates as the class does by itself
+            return _defaultAllocator;
+        }
+
+        private static IntPtr _defaultAllocator;
+
+        internal static VALUE rb_ir_allocate_builtin(VALUE klass) {
+            var cls = FromValue(klass) as RubyClass;
+            if (cls == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type (expected Class)");
+            }
+            return ToValue(cls.AllocateBuiltin());
+        }
+
+        /// <summary>
+        /// A new T_DATA object: rb_data_object_wrap and rb_data_typed_object_wrap (native/capi.c)
+        /// fill its slot in.
+        /// </summary>
+        internal static VALUE rb_ir_data_new(VALUE klass, int typed) {
+            var cls = klass == 0 ? _context.ObjectClass : FromValue(klass) as RubyClass;
+            if (cls == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type (expected Class)");
+            }
+            var obj = new DataObject(cls.GetNonSingletonClass(), typed != 0);
+            VALUE value = ToValue(obj);
+            if (klass == 0) {
+                rb_obj_hide(value);
+            }
+            return value;
         }
 
         #endregion
