@@ -372,7 +372,8 @@ module Enumerable
     # the method called - so each is a method here, not an alias.
     def __enum_inject__(args, block)
       if args.size > 2 || (args.empty? && !block)
-        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
+        # rb_check_arity(argc, 0, 2) with a block and (argc, 1, 2) without one
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected #{block ? 0 : 1}..2)"
       end
       if args.size == 2 || (args.size == 1 && !block)
         name = args.last
@@ -393,12 +394,36 @@ module Enumerable
     end
     private :__enum_inject__
 
-    def inject(*args, &block)
-      __enum_inject__(args, block)
+    # The shapes nearly every call has - a block with or without an initial value, or a Symbol
+    # naming the method with or without one - have nothing to check and go straight to the C#
+    # method. The parameters say "not given" with a marker rather than being a rest Array to
+    # count and to splat again, which costs more than the fold itself over a few elements
+    # (Util/bench/truffleruby-lessons.md); what is left in the rest is only there to be
+    # counted in the error MRI raises. ::Symbol ===, not #is_a?: the argument may be anything.
+    def inject(initial = (no_initial = true; nil), name = (no_name = true; nil), *extra, &block)
+      if no_name
+        if block
+          return no_initial ? __inject_without_name_check__(&block) : __inject_without_name_check__(initial, &block)
+        elsif ::Symbol === initial
+          return __inject_without_name_check__(initial)
+        end
+      elsif !block && ::Symbol === name && extra.empty?
+        return __inject_without_name_check__(initial, name)
+      end
+      __enum_inject__(no_initial ? extra : no_name ? [initial] : [initial, name, *extra], block)
     end
 
-    def reduce(*args, &block)
-      __enum_inject__(args, block)
+    def reduce(initial = (no_initial = true; nil), name = (no_name = true; nil), *extra, &block)
+      if no_name
+        if block
+          return no_initial ? __inject_without_name_check__(&block) : __inject_without_name_check__(initial, &block)
+        elsif ::Symbol === initial
+          return __inject_without_name_check__(initial)
+        end
+      elsif !block && ::Symbol === name && extra.empty?
+        return __inject_without_name_check__(initial, name)
+      end
+      __enum_inject__(no_initial ? extra : no_name ? [initial] : [initial, name, *extra], block)
     end
     __ir_same_method__(:reduce, :inject)
   end
@@ -1230,9 +1255,11 @@ class Array
   # wild checks which one it gets. The body is Enumerable's. (#max and #min are Array's
   # own in C#, see IListOps: Enumerable's go through #each and a Proc per element.)
   # An Array of Integers and Floats is summed in C# (ArrayOps.NumericSum), the same way.
-  def sum(*args, &block)
-    if block.nil? && args.size <= 1
-      result = __numeric_sum__(args.empty? ? 0 : args[0])
+  # The initial value is a parameter with MRI's default, not one of a rest Array: the method
+  # takes at most one argument, as MRI's does, and a call makes no Array to count them in.
+  def sum(init = 0)
+    unless block_given?
+      result = __numeric_sum__(init)
       return result unless result.nil?
     end
     super
