@@ -294,6 +294,10 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(FromValue(recv), IdToString(mid), TakePassedBlock(), FromValues(argc, argv)));
         }
 
+        internal static VALUE rb_apply(VALUE recv, VALUE mid, VALUE args) {
+            return ToValue(Send(FromValue(recv), IdToString(mid), TakePassedBlock(), ToRubyArray(args).ToArray()));
+        }
+
         internal static VALUE rb_funcallv_kw(VALUE recv, VALUE mid, int argc, VALUE* argv, int kw_splat) {
             return rb_funcallv(recv, mid, argc, argv);
         }

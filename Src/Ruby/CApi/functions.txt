@@ -528,3 +528,6 @@ void rb_define_virtual_variable(const char *name, rb_gvar_getter_t *getter, rb_g
 VALUE rb_ident_hash_new(void);
 VALUE rb_ir_data_new(VALUE klass, int typed);
 VALUE rb_ir_allocate_builtin(VALUE klass);
+VALUE rb_apply(VALUE recv, ID mid, VALUE args);
+VALUE rb_utf8_str_new(const char *ptr, long len);
+VALUE rb_utf8_str_new_cstr(const char *ptr);

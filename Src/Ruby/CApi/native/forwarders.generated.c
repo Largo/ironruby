@@ -516,6 +516,9 @@
 #undef rb_ident_hash_new
 #undef rb_ir_data_new
 #undef rb_ir_allocate_builtin
+#undef rb_apply
+#undef rb_utf8_str_new
+#undef rb_utf8_str_new_cstr
 
 struct rb_ir_function_table {
     VALUE (*rb_ir_builtin_type)(VALUE obj);
@@ -1033,10 +1036,13 @@ struct rb_ir_function_table {
     VALUE (*rb_ident_hash_new)(void);
     VALUE (*rb_ir_data_new)(VALUE klass, int typed);
     VALUE (*rb_ir_allocate_builtin)(VALUE klass);
+    VALUE (*rb_apply)(VALUE recv, ID mid, VALUE args);
+    VALUE (*rb_utf8_str_new)(const char *ptr, long len);
+    VALUE (*rb_utf8_str_new_cstr)(const char *ptr);
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 515;
+const int rb_ir_function_count = 518;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -5073,6 +5079,30 @@ VALUE
 (rb_ir_allocate_builtin)(VALUE klass)
 {
     VALUE rb_ir_result = rb_ir_fns.rb_ir_allocate_builtin(klass);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_apply)(VALUE recv, ID mid, VALUE args)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_apply(recv, mid, args);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_utf8_str_new)(const char *ptr, long len)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_utf8_str_new(ptr, len);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_utf8_str_new_cstr)(const char *ptr)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_utf8_str_new_cstr(ptr);
     RB_IR_CHECK();
     return rb_ir_result;
 }

@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime.CApi {
     internal static unsafe partial class CApi {
-        internal const int FunctionCount = 515;
+        internal const int FunctionCount = 518;
 
         internal static void FillFunctionTable(IntPtr* table) {
             table[0] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_builtin_type;
@@ -523,6 +523,9 @@ namespace IronRuby.Runtime.CApi {
             table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
             table[513] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_ir_data_new;
             table[514] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_allocate_builtin;
+            table[515] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_apply;
+            table[516] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, ulong>)&Entry_rb_utf8_str_new;
+            table[517] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_utf8_str_new_cstr;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -7212,6 +7215,45 @@ namespace IronRuby.Runtime.CApi {
             var frame = EnterManaged();
             try {
                 return rb_ir_allocate_builtin(klass);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_apply(ulong recv, ulong mid, ulong args) {
+            var frame = EnterManaged();
+            try {
+                return rb_apply(recv, mid, args);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_utf8_str_new(byte* ptr, long len) {
+            var frame = EnterManaged();
+            try {
+                return rb_utf8_str_new(ptr, len);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_utf8_str_new_cstr(byte* ptr) {
+            var frame = EnterManaged();
+            try {
+                return rb_utf8_str_new_cstr(ptr);
             } catch (Exception e) {
                 SetPending(e);
                 return default;

@@ -266,6 +266,14 @@ namespace IronRuby.Runtime.CApi {
             return NewStaticString(ptr, len, RubyEncoding.UTF8);
         }
 
+        internal static VALUE rb_utf8_str_new(byte* ptr, long len) {
+            return ToValue(NewString(ptr, len, RubyEncoding.UTF8));
+        }
+
+        internal static VALUE rb_utf8_str_new_cstr(byte* ptr) {
+            return ToValue(MutableString.CreateBinary(CBytes(ptr), RubyEncoding.UTF8));
+        }
+
         internal static VALUE rb_enc_str_new(byte* ptr, long len, void* enc) {
             return ToValue(NewString(ptr, len, FromNativeEncoding(enc) ?? RubyEncoding.Binary));
         }

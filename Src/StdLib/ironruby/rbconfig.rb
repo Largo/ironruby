@@ -161,7 +161,7 @@ module RbConfig
   ].each { |key| CONFIG[key] = "" }
 
   # The C toolchain for extensions (Linux; Windows and macOS do not have the C API yet): gcc, as
-  # CRuby's Linux builds use, with no libruby to link (LIBRUBYARG is empty).
+  # CRuby's Linux builds use, linking libironruby-capi where CRuby links libruby.
   unless windows
     {
       "CC" => "gcc", "CPP" => "$(CC) -E", "CXX" => "g++", "GCC" => "yes",
@@ -172,7 +172,11 @@ module RbConfig
       "CCDLFLAGS" => "-fPIC", "LDFLAGS" => "-L.", "DLDFLAGS" => "", "EXTDLDFLAGS" => "",
       "LDSHARED" => "$(CC) -shared", "LDSHAREDXX" => "$(CXX) -shared",
       "LIBS" => "-lm -lpthread", "DLDLIBS" => "-lc",
-      "LIBRUBYARG" => "$(LIBRUBYARG_SHARED)", "LIBRUBYARG_SHARED" => "", "LIBRUBYARG_STATIC" => "",
+      # linked against the shim, which lives next to the ir executable, so that mkmf's
+      # have_func test programs link and the extension records what it needs
+      "LIBRUBYARG" => "$(LIBRUBYARG_SHARED)",
+      "LIBRUBYARG_SHARED" => "-Wl,-rpath,$(bindir) -L$(bindir) -lironruby-capi",
+      "LIBRUBYARG_STATIC" => "-Wl,-rpath,$(bindir) -L$(bindir) -lironruby-capi",
       "OUTFLAG" => "-o ", "COUTFLAG" => "-o ", "CPPOUTFILE" => "-o conftest.i",
       "LIBPATHFLAG" => " -L%1$-s", "RPATHFLAG" => " -Wl,-rpath,%1$-s",
       "LINK_SO" => "", "POSTLINK" => ":", "TRY_LINK" => "",
