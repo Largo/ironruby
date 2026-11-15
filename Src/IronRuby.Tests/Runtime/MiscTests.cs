@@ -7155,6 +7155,56 @@ ArgumentError
         }
 
         /// <summary>
+        /// `block_given?' in a light frame is answered from the frame's block parameter when it is Kernel's
+        /// (DispatchIntrinsics.TryBuildBlockGiven), without making the method's scope - and is still the call it is written as
+        /// when the name is another method's: one the class defines, one defined after the site was bound, a BasicObject
+        /// without Kernel, a refinement, `send'. Util/block-given-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameBlockGiven1() {
+            TestOutput(@"
+require 'ruby4'
+def asked; r = block_given?; yield if r == true; r; end
+def guarded; return :none unless block_given?; yield; end
+def named(&b); b = nil; [b, block_given?]; end
+def in_block; r = nil; [1].each { r = block_given? }; yield if r; r; end
+def sent; r = send(:block_given?); yield if r; r; end
+p asked, asked { }, asked(&nil), guarded, guarded { :y }, named { }, in_block, in_block { }, sent, sent { }
+p 40.times.map { |i| i.odd? ? asked { } : asked }.uniq
+class Own; def block_given?; :own; end; def asked; r = block_given?; yield if r == true; r; end; end
+p Own.new.asked { }
+class Bare < BasicObject; def asked; yield if block_given?; end; end
+begin; Bare.new.asked { }; rescue ::NoMethodError => e; p e.class; end
+class Later; def asked; r = block_given?; yield if r == true; r; end; end
+l = Later.new
+p 40.times.map { |i| Later.class_eval { def block_given?; :later; end } if i == 20; l.asked { } }.uniq
+Later.send(:remove_method, :block_given?)
+p l.asked { }, l.asked
+module R; refine Object do; def block_given?; :refined; end; end; end
+module U; using R; class A; def asked; r = block_given?; yield if r == true; r; end; end; def self.run; A.new.asked { }; end; end
+p U.run, asked { }
+", @"
+false
+true
+false
+:none
+:y
+[nil, true]
+false
+true
+false
+true
+[false, true]
+:own
+NoMethodError
+[true, :later]
+true
+false
+:refined
+true
+");
+        }
+
+        /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
         /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
         /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no

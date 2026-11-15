@@ -54,6 +54,12 @@ namespace IronRuby.Runtime {
         // (RubyCallFlags.HasLightScope): the method makes the scope and calls through an ordinary site.
         public static readonly object LightScopeRequired = new object();
 
+        // Returned by the rule of a `block_given?' site in a light frame when the call is Kernel#block_given? itself
+        // (DispatchIntrinsics.TryBuildBlockGiven): the answer is whether the frame has a block, which a light-frame method
+        // reads from its block parameter without making its scope to be asked through; a block's frame has no block
+        // parameter to read, and makes the call with its scope as for LightScopeRequired.
+        public static readonly object LightBlockGiven = new object();
+
         // How many refine blocks are running in the process (RubyUtils.EvaluateRefinementBlock). While none is, no Proc
         // has a refine block's override, so the lexical walk steps over block scopes (RubyScope.GetLexicalRefinements),
         // and the rule of a refined call made in a block written in a method can test the method's record instead
