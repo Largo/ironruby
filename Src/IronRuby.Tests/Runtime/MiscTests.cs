@@ -7460,6 +7460,30 @@ p i.transform_values { |v| i.clear; v }, i
         }
 
         /// <summary>
+        /// String#lines with a separator reads the receiver's length after the search for the separator, which
+        /// switches a receiver held as bytes (after #bytesize or #getbyte) to characters: a length kept from
+        /// before counted bytes, and the copy of the last line ran past the end (review of #218).
+        /// </summary>
+        public void String_LinesAfterByteRead1() {
+            TestOutput(@"
+require 'ruby4'
+s = ""\u00E9\nab\n\u00FC""; s.bytesize
+p s.lines(""\n"").map(&:bytes), s.lines(""\n"", chomp: true).map(&:bytes)
+t = ""a\u00E9\r\nb\r\n""; t.getbyte(0)
+p t.lines(""\r\n"").map(&:bytes), t.lines(chomp: true).map(&:bytes)
+u = ""\u00E9\u00FCab\u00FC\u00FC""; u.bytesize
+p u.lines(""\u00FC"").map(&:bytes), u.each_line(""\u00FC"").map(&:size)
+", @"
+[[195, 169, 10], [97, 98, 10], [195, 188]]
+[[195, 169], [97, 98], [195, 188]]
+[[97, 195, 169, 13, 10], [98, 13, 10]]
+[[97, 195, 169], [98]]
+[[195, 169, 195, 188], [97, 98, 195, 188], [195, 188]]
+[2, 3, 1]
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.

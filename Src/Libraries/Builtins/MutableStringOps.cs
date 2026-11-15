@@ -2443,15 +2443,18 @@ namespace IronRuby.Builtins {
         [RubyMethod("__ir_lines__", RubyMethodAttributes.PrivateInstance)]
         public static RubyArray/*!*/ GetLines(MutableString/*!*/ self, [NotNull]MutableString/*!*/ separator, bool chompNewline) {
             var result = new RubyArray();
-            int length = self.Length;
             int start = 0;
-            while (start < length) {
+            // Length counts in the representation the receiver is held in, and the search switches a
+            // receiver held as bytes to characters when the separator is: the length is read after
+            // each search, as EachLine reads it, and never kept from before the first
+            // (`s = "\u00E9\n"; s.bytesize; s.lines("\n")` kept 3 for a string of 2).
+            while (start < self.Length) {
                 int end = self.IndexOf(separator, start);
-                end = (end >= 0) ? end + separator.Length : length;
+                end = (end >= 0) ? end + separator.Length : self.Length;
                 int stop = end;
-                if (chompNewline && stop > start && self.GetChar(stop - 1) == '\n') {
+                if (chompNewline && stop > start && GetLineUnit(self, stop - 1) == '\n') {
                     stop--;
-                    if (stop > start && self.GetChar(stop - 1) == '\r') {
+                    if (stop > start && GetLineUnit(self, stop - 1) == '\r') {
                         stop--;
                     }
                 }
@@ -2459,6 +2462,16 @@ namespace IronRuby.Builtins {
                 start = end;
             }
             return result;
+        }
+
+        /// <summary>
+        /// The byte or the character at <paramref name="index"/>, whichever the string is held as:
+        /// GetChar would switch a string held as bytes to characters, and the indices GetLines works
+        /// with would then count the wrong unit. "\n" and "\r" are the same in both where GetLines
+        /// looks for them (an ASCII-compatible encoding).
+        /// </summary>
+        private static int GetLineUnit(MutableString/*!*/ self, int index) {
+            return self.IsBinary ? self.GetByte(index) : self.GetChar(index);
         }
 
         public static object EachLine(BlockParam/*!*/ block, MutableString/*!*/ self, [DefaultProtocol]MutableString separator, int start) {
