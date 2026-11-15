@@ -72,7 +72,6 @@ namespace IronRuby.Compiler.Ast {
                 return (_isExclusive ? Methods.CreateExclusiveRange : Methods.CreateInclusiveRange).OpCall(
                     AstUtils.Box(_begin.TransformRead(gen)),
                     AstUtils.Box(_end.TransformRead(gen)), 
-                    gen.CurrentScopeVariable, 
                     AstUtils.Constant(new BinaryOpStorage(gen.Context))
                 );
             }

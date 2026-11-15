@@ -2419,6 +2419,32 @@ cov_loop(50000)
 t('Coverage of hot methods and loops') { Coverage.result[cov_file][:lines] }
 File.delete(cov_file)
 
+# An attr read on a local assigned once from another attr read (`i = m.a; i.x'): the local is typed
+# by the profiled m's instance variable, and the read checks the class it finds there. Then a
+# receiver without the readers, an Integer, Bignums, the reader redefined, a singleton method.
+class JitLocV; attr_reader :x, :y; def initialize(x, y) = (@x = x; @y = y); end
+class JitLocM; attr_reader :a, :b; def initialize(a, b) = (@a = a; @b = b); end
+class JitLocW; def x; 7; end; def y; 1.5; end; end
+JIT_LOC_LIM = 100.0
+def sp_attr_of_local(v, m)
+  i = m.a
+  j = m.b
+  d = j.x - i.x
+  return false if v.x > JIT_LOC_LIM
+  d / (i.y + 1.0) < v.y
+end
+loc = []
+3000.times do |k|
+  m = JitLocM.new(JitLocV.new(k * 0.5, 2.0), JitLocV.new(k * 1.5, 3.0))
+  m = JitLocM.new(JitLocW.new, JitLocV.new(1, 2)) if k == 1500
+  m = JitLocM.new(JitLocV.new(2**70, 1.0), JitLocV.new(2**71, 0.5)) if k == 1700
+  JitLocV.class_eval { def x; @x + @x; end } if k == 2000
+  m.a.define_singleton_method(:y) { -5.0 } if k == 2500
+  loc << sp_attr_of_local(JitLocV.new(k % 150 * 1.0, k * 0.5), m) if k % 100 == 0 || (1490..1510).include?(k) || k == 1700
+end
+t('attr read of a local assigned from an attr read') { loc }
+t('... of a nil') { sp_attr_of_local(JitLocV.new(1.0, 1.0), JitLocM.new(JitLocV.new(nil, 1), JitLocV.new(1.0, 1))) }
+
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
 def sp_plus(a, b)
@@ -2678,3 +2704,586 @@ warm { |i| js.sp_count(i % 5) }
 t('self-call defined before the refinement') { js.sp_count(3) }
 warm { |i| js.no_count_refined(i % 5) }
 t('a call of the refined name where it is used') { js.no_count_refined(2) }
+
+# Instance variables as operands: typed by what the receiver's variable held when the method
+# turned hot, read through a guard that deopts when it holds anything else.
+class JitIVarOperands
+  def initialize(a, b); @a = a; @b = b; end
+  attr_writer :a, :b
+  def sp_sum; @a + @b; end
+  def sp_mod; @a % @b; end
+  def sp_same; @a == @b; end
+  def sp_less(o); @a < o; end
+  def sp_scaled; @a * 3 + @b; end
+  def sp_div; @a / @b; end
+end
+io = JitIVarOperands.new(9, 4)
+warm { |i| io.sp_sum; io.sp_same; io.sp_less(i); io.sp_scaled; io.sp_div }
+t('ivar operands, Integers') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 2**62; io.b = -(2**62)
+t('ivar operands overflowing into Bignum') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 2**80
+t('ivar operand a Bignum') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled] }
+io.a = 7.5; io.b = 2
+t('ivar operand a Float') { [io.sp_sum, io.sp_same, io.sp_less(10), io.sp_scaled, io.sp_div] }
+io.a = 7; io.b = 0
+t('ivar divisor zero') { io.sp_div }
+io.a = nil
+t('ivar operand nil') { io.sp_sum }
+io.a = "s"
+t('ivar operand a String') { [io.sp_same, io.sp_scaled] }
+io.a = 1; io.b = 1
+warm { |i| io.sp_mod; io.sp_same }
+class Integer; alias_method :jit_iv_mod, :%; def %(o) = :redefined_mod; end
+t('Integer#% redefined under an ivar operand') { io.sp_mod }
+class Integer; alias_method :%, :jit_iv_mod; end
+t('and restored') { io.sp_mod }
+fo = JitIVarOperands.new(5, 1).freeze
+t('frozen receiver reads') { [fo.sp_sum, fo.sp_less(6)] }
+class JitIVarOperandsSub < JitIVarOperands
+  def sp_sum; super * 10; end
+end
+t('subclass overriding the method') { JitIVarOperandsSub.new(5, 1).sp_sum }
+
+# `!@x': speculated true/false/nil, whose #! is BasicObject's.
+class JitIVarNot
+  def initialize; @h = false; @p = true; @w = false; end
+  attr_writer :h, :p, :w
+  def sp_holding_or_waiting; @h || (!@p && @w); end
+  def sp_waiting_with_packet; @p && @w && !@h; end
+end
+nt = JitIVarNot.new
+warm { |i| nt.sp_holding_or_waiting; nt.sp_waiting_with_packet }
+t('! of ivars') { [nt.sp_holding_or_waiting, nt.sp_waiting_with_packet] }
+nt.h = nil; nt.p = nil; nt.w = :x
+t('! of nil ivars') { [nt.sp_holding_or_waiting, nt.sp_waiting_with_packet] }
+bang = Object.new; def bang.! = :custom_bang
+nt.h = bang; nt.p = true; nt.w = 1
+t('! of an object with its own #!') { nt.sp_waiting_with_packet }
+nt.h = false; nt.p = false; nt.w = true
+warm { |i| nt.sp_holding_or_waiting }
+# false, where the built-in gives true: a body that ignored the replacement would answer differently
+class FalseClass; def ! = false; end
+t('FalseClass#! redefined') { nt.sp_holding_or_waiting }
+class FalseClass; remove_method :!; end
+t('and removed') { nt.sp_holding_or_waiting }
+
+# Instance variable writes in a body that can deopt: allowed while every deopt comes before the
+# first write (no loop, no self-call); the guards here all run before the store.
+class JitIVarWrites
+  def initialize; @seed = 74755; @n = 0; @f = 1.0; @log = []; end
+  attr_accessor :seed, :n, :f
+  def sp_next; @seed = ((@seed * 1309) + 13849) & 65535; end
+  def sp_inc(d); @n += d; end
+  def sp_fscale; @f *= 2; end
+  def no_two_writes(d); @n += d; @seed += d; end   # the second guard is after the first write
+end
+iw = JitIVarWrites.new
+warm { |i| iw.sp_next; iw.sp_inc(1); iw.sp_fscale; iw.no_two_writes(1) }
+t('ivar writes, hot') { [iw.sp_next, iw.sp_inc(3), iw.n, iw.seed] }
+iw.n = 2**62
+t('ivar op-assign overflowing') { [iw.sp_inc(2**62), iw.n] }
+iw.n = 1.5
+t('ivar op-assign on a Float') { [iw.sp_inc(1), iw.n] }
+iw.n = "s"
+t('ivar op-assign on a String') { iw.sp_inc(1) }
+t('the String left alone') { iw.n }
+iw.n = 5; iw.seed = "x"
+t('second guard fails after the first write') { iw.no_two_writes(1) }
+t('first write kept') { iw.n }
+iw.n = 1; iw.seed = 1
+iw.freeze
+t('op-assign on a frozen receiver') { iw.sp_inc(1) }
+t('frozen value unchanged') { iw.n }
+
+# attr_reader / attr_writer calls in a method: the reader's instance variable read and the writer's
+# store, under a check of the receiver's class and the global method version on every call.
+class JitAttrVar
+  attr_accessor :value
+  def initialize(v); @value = v; end
+end
+class JitAttrUser
+  attr_reader :strength
+  def initialize(s, a, b); @strength = s; @a = a; @b = b; @dir = :forward; end
+  attr_writer :dir
+  def sp_stronger(o); @strength < o.strength; end
+  def sp_copy
+    if @dir == :forward
+      @b.value = @a.value
+    else
+      @a.value = @b.value
+    end
+  end
+  def sp_scale(k); @b.value = @a.value * k + 1; end
+  def sp_self_read; strength + 1; end
+end
+a1 = JitAttrVar.new(3); b1 = JitAttrVar.new(0)
+u1 = JitAttrUser.new(2, a1, b1); u2 = JitAttrUser.new(5, a1, b1)
+warm { |i| u1.sp_stronger(u2); u1.sp_copy; u1.sp_scale(i); u1.sp_self_read }
+t('attr reads and writes, hot') { [u1.sp_stronger(u2), u1.sp_copy, b1.value, u1.sp_scale(2), b1.value, u1.sp_self_read] }
+u1.dir = :back; b1.value = 9
+t('the other arm') { [u1.sp_copy, a1.value] }
+u1.dir = :forward
+a1.value = 2**62
+t('attr value overflowing') { [u1.sp_scale(4), b1.value] }
+a1.value = 1.5
+t('attr value a Float') { [u1.sp_scale(2), u1.sp_copy] }
+a1.value = 3
+other = Struct.new(:strength).new(7)
+t('a receiver of another class') { u1.sp_stronger(other) }
+def u2.strength = 100
+t('a singleton reader') { u1.sp_stronger(u2) }
+class JitAttrVar; def value = :redefined_value; end
+t('the reader redefined') { [u1.sp_copy, b1.instance_variable_get(:@value)] }
+class JitAttrVar; remove_method :value; attr_reader :value; end
+t('and restored') { u1.sp_copy }
+class JitAttrVar; private :value=; end
+t('the writer made private') { u1.sp_copy }
+class JitAttrVar; public :value=; end
+b1.freeze
+t('a frozen receiver of the writer') { u1.sp_copy }
+t('frozen value unchanged') { b1.value }
+class JitAttrVar; def method_missing(*) = :mm; end
+c1 = JitAttrUser.new(1, BasicObject.new, JitAttrVar.new(0))
+t('a BasicObject receiver') { c1.sp_copy }
+
+# Identity compares on receivers of every kind at one site (JitRuntime.IsIdentical/IsNil): nil,
+# true, false and Symbols take their class without a lookup, Symbols under a binding of their own.
+class JitIdent
+  def initialize(d, x) = (@d = d; @x = x)
+  def sp_fwd = @d == :forward
+  def sp_nn = @x != nil
+  def sp_eq(o) = @x.equal?(o)
+  def sp_isnil = @x.nil?
+  def all = [sp_fwd, sp_nn, sp_eq(:forward), sp_isnil]
+end
+ids = [nil, true, false, :forward, :back, 1, 2**40, 1.5, "s", Object.new, JitIdent].map { |v| JitIdent.new(v, v) }
+warm { |i| ids[i % 4].all; ids[3].all }
+t('identity compares, mixed receivers') { ids.map { |o| o.all[0..1] + [o.sp_isnil] } }
+class NilClass; alias_method :jit_saved_nil?, :nil?; def nil? = :nil_redefined; end
+t('NilClass#nil? redefined') { ids.first(5).map(&:sp_isnil) }
+class NilClass; alias_method :nil?, :jit_saved_nil?; end
+t('and restored') { ids.first(5).map(&:sp_isnil) }
+class Symbol; alias_method :jit_saved_eq, :==; def ==(o) = :sym_eq; end
+t('Symbol#== redefined') { ids.map(&:sp_fwd) }
+class Symbol; alias_method :==, :jit_saved_eq; end
+t('and restored') { ids.map(&:sp_fwd) }
+class BasicObject; alias_method :jit_saved_eq, :==; def ==(o) = :bo_eq; end
+t('BasicObject#== redefined') { ids.map { |o| [o.sp_fwd, o.sp_nn] } }
+class BasicObject; alias_method :==, :jit_saved_eq; end
+t('and restored') { ids.map { |o| [o.sp_fwd, o.sp_nn] } }
+def nil.jit_probe = 1
+t('def nil.x then nil?') { [ids[0].sp_isnil, ids[0].sp_nn, nil.jit_probe] }
+t('a singleton on a Symbol') { sy = :forward; sy.define_singleton_method(:x) { 1 } rescue $!.class }
+
+# Inlined attr reads/writes (JitRuntime.ReadSelfAttr/WriteAttr fast paths): shape changes, a
+# removed variable, a frozen receiver, a subclass with another slot order.
+class JitIv
+  attr_accessor :a, :b
+  def initialize(a, b) = (@a = a; @b = b)
+end
+class JitIvSub < JitIv
+  def initialize(a, b) = (@z = 0; @b = b; @a = a)
+end
+class JitIvUser
+  def initialize(o) = (@o = o; @n = 0; @m = 1; @k = 2)
+  def sp_move
+    @o.b = @o.a
+    nil
+  end
+  attr_writer :o
+end
+iv = JitIv.new(1, 2); u = JitIvUser.new(iv)
+warm { u.sp_move }
+t('inline attr, hot') { iv.a = 4; [u.sp_move, iv.b] }
+u.o = JitIvSub.new(10, 0)
+t('a subclass with another slot order') { [u.sp_move, u.instance_variable_get(:@o).b] }
+iv.instance_variable_set(:@c, 5); u.o = iv
+t('a shape grown') { [u.sp_move, iv.b] }
+iv.remove_instance_variable(:@a)
+t('the read variable removed') { u.sp_move rescue $!.class }
+iv.a = 4; iv.remove_instance_variable(:@b)
+t('the written variable removed') { [u.sp_move, iv.b] }
+iv.freeze
+t('a frozen receiver') { [(u.sp_move rescue $!.class), iv.b] }
+
+# ---------------------------------------------------------------- review of #215
+# `!(a && b)' calls #! on b's value when a is truthy: a compiled body may only take the truth
+# of booleans for it, not an object's, whose class can have a #! of its own.
+class JitNotOdd; def !; :custom; end; end
+class JitNotHolder
+  def initialize(x) = (@x = x)
+  def no_not_and = !(true && @x)
+  def no_not_or = !(false || @x)
+  def sp_not_bools(a, b) = !(a > 1 && b > 1)
+end
+nh = [JitNotHolder.new(JitNotOdd.new), JitNotHolder.new(nil), JitNotHolder.new(1), JitNotHolder.new(false)]
+warm { |i| nh[i % 4].no_not_and; nh[i % 4].no_not_or; nh[0].sp_not_bools(i, 2) }
+t('!(true && @x) with a #! of its own') { nh.map(&:no_not_and) }
+t('!(false || @x) with a #! of its own') { nh.map(&:no_not_or) }
+t('!(a > 1 && b > 1)') { [nh[0].sp_not_bools(2, 2), nh[0].sp_not_bools(0, 2)] }
+
+# An attribute written on another object, then a write to self that fails on a frozen self:
+# the body must not be run again from the start, which would write the attribute twice.
+class JitRwValue; attr_accessor :value; def initialize = (@value = 0); end
+class JitRwOwner
+  def no_attr_then_ivar(o)
+    o.value = o.value + 1
+    @x = 1
+  end
+  def no_new_then_ivar
+    @made = JitRwValue.new
+    @y = 2
+  end
+end
+rw = JitRwOwner.new; rv = JitRwValue.new
+warm { rw.no_attr_then_ivar(rv); rw.no_new_then_ivar }
+t('attr write on another object, then ivar write') { rv.value }
+rw.freeze
+t('the same with self frozen: one write, then FrozenError') { [(rw.no_attr_then_ivar(rv) rescue $!.class), rv.value] }
+t('C.new, then ivar write, self frozen') { rw.no_new_then_ivar rescue $!.class }
+
+# The stub's three settled-or-not states, each changed after the fact: a method the JIT declined
+# (tr_declined: settled on its generic body, which call sites then call without the trampoline), one
+# retired for deopting on every call (tr_retired: cooling) and one specialized (tr_spec: call sites
+# call its entry). Each is then redefined, made private, given a singleton override, refined, and
+# called through send and Method objects taken before and after, with TracePoint on.
+module JitTrampMatrix
+  class Holder
+    def initialize = (@a = 1; @s = "abc")
+    def tr_spec = @a == 1
+    def tr_declined(x) = (@i = x; @s[0])
+    def tr_retired(x) = x * x * x * x
+  end
+  def self.probe(o, before)
+    [o.tr_spec, o.tr_declined(1), o.tr_retired(3), o.send(:tr_spec), o.__send__(:tr_declined, 2),
+     o.public_send(:tr_retired, 2), before.map(&:call), Holder.instance_method(:tr_spec).bind(o).call,
+     o.method(:tr_declined).call(5), o.method(:tr_spec).owner == Holder, o.method(:tr_declined).arity]
+  end
+end
+module JitTrampRefine
+  refine JitTrampMatrix::Holder do
+    def tr_spec = :refined
+    def tr_declined(x) = :refined
+  end
+end
+tm = JitTrampMatrix::Holder.new
+warm { |i| tm.tr_spec; tm.tr_declined(i); tm.tr_retired(2**20 + i) }
+tm_m = tm.method(:tr_declined)
+tm_before = [tm.method(:tr_spec), -> { tm_m.call(1) }, -> { tm.tr_retired(7) }]
+t('tramp: after warm-up') { JitTrampMatrix.probe(tm, tm_before) }
+tm_calls = []
+tm_tp = TracePoint.new(:call, :return) { |x| tm_calls << [x.event, x.method_id] if x.method_id.to_s.start_with?('tr_') }
+t('tramp: TracePoint on the hot methods') { tm_tp.enable { JitTrampMatrix.probe(tm, []) }; tm_calls.uniq }
+tm_s = JitTrampMatrix::Holder.new
+def tm_s.tr_spec = :single
+def tm_s.tr_declined(x) = :single
+def tm_s.tr_retired(x) = :single
+t('tramp: singleton overrides') { [JitTrampMatrix.probe(tm_s, []), JitTrampMatrix.probe(tm, [])] }
+t('tramp: refined') do
+  Module.new { using JitTrampRefine; tm.instance_variable_set(:@r, [tm.tr_spec, tm.tr_declined(1), tm.send(:tr_spec)]) }
+  tm.instance_variable_get(:@r) + [tm.tr_spec]
+end
+class JitTrampMatrix::Holder
+  private :tr_spec, :tr_declined, :tr_retired
+end
+t('tramp: made private') { [(tm.tr_spec rescue $!.class), (tm.tr_declined(1) rescue $!.class), (tm.tr_retired(1) rescue $!.class), tm.send(:tr_spec), tm_before[0].call] }
+class JitTrampMatrix::Holder
+  public :tr_spec, :tr_declined, :tr_retired
+  def tr_spec = :redefined
+  def tr_declined(x) = :redefined
+  def tr_retired(x) = :redefined
+end
+t('tramp: redefined, next call') { JitTrampMatrix.probe(tm, tm_before) rescue [$!.class, $!.message[0, 40]] }
+t('tramp: redefined, plain calls') { [tm.tr_spec, tm.tr_declined(1), tm.tr_retired(1), tm_before[0].call, tm_before[1].call] }
+class JitTrampMatrix::Holder
+  alias_method :tr_spec, :tr_retired
+  define_method(:tr_declined) { |x| [:defined, x] }
+end
+t('tramp: aliased and define_method') { [tm.tr_spec(2), tm.tr_declined(4), tm.method(:tr_spec).name, tm.method(:tr_spec).original_name] }
+# ---------------------------------------------------------------- second review of #215
+# The hash query's helper deopts after its arguments have run: an argument with an effect
+# must not be evaluated a second time by the generic body.
+class JitFetchDefault
+  attr_reader :n
+  def initialize = (@n = 0)
+  def no_fetch_default(h, k) = h.fetch(k, @n += 1)
+end
+fd = JitFetchDefault.new; fh = { a: 1 }
+warm { fd.no_fetch_default(fh, :a) }
+t('fetch(nil, @n += 1): the default evaluated once') { [fd.no_fetch_default(fh, nil), fd.n] }
+t('fetch(:zz, @n += 1)') { [fd.no_fetch_default(fh, :zz), fd.n] }
+
+# A construction ends its own invocation, not the outer ones of a body that calls itself:
+# an initialize that redefines an operator must be seen by them.
+$jit_redef_plus = false
+class JitCtorRedef
+  attr_reader :x
+  def initialize(x)
+    @x = x
+    if $jit_redef_plus && x == 1.0
+      $jit_redef_plus = false
+      Float.class_eval { alias_method :__jit_old_plus, :+; def +(o) = 100.0 }
+    end
+  end
+end
+class JitCtorMaker
+  def no_make(n)
+    no_make(n - 1.0) if n > 0.0
+    JitCtorRedef.new(n + 1.0)
+  end
+end
+cm = JitCtorMaker.new
+warm { cm.no_make(2.0) }
+$jit_redef_plus = true
+ctor_x = cm.no_make(2.0).x
+Float.class_eval { alias_method :+, :__jit_old_plus; remove_method :__jit_old_plus }
+t('Float#+ redefined by an inner initialize') { ctor_x }
+
+# An initialize that constructs again recurses through the direct construction: SystemStackError.
+class JitCtorDeep; def initialize(n) = JitCtorDeep.new(n + 1); end
+t('initialize constructing without end') { begin; JitCtorDeep.new(0); :returned; rescue SystemStackError => e; e.class; end }
+
+# A swap: the first element store goes unlogged and the last one may not deopt, so a store the
+# fast path cannot make after the first (growing the array, an index that raises, a frozen
+# array, Array#[]= redefined) is an ordinary call of []=, and the first store is not made twice.
+class JitSwapLast
+  attr_accessor :v
+  def initialize = (@v = [0, 1, 2, 3, 4, 5])
+  def sp_swap(i, j)
+    tmp = @v[i]
+    @v[i] = @v[j]
+    @v[j] = tmp
+  end
+  def sp_swap_then_ivar(i, j)
+    tmp = @v[i]
+    @v[i] = @v[j]
+    @w = 1
+    @v[j] = tmp
+  end
+end
+sw = JitSwapLast.new
+warm { sw.sp_swap(1, 4); sw.sp_swap_then_ivar(2, 3) }
+t('swap that grows the array') { sw.v = (0..5).to_a; sw.sp_swap(1, 9); sw.v }
+t('swap whose last index raises') { sw.v = (0..5).to_a; [(sw.sp_swap(2, -20) rescue $!.class), sw.v] }
+t('swap on a Hash') { sw.v = { 1 => :a, 2 => :b }; sw.sp_swap(1, 2); sw.v }
+t('swap then ivar write, self frozen') { s2 = JitSwapLast.new; s2.freeze; [(s2.sp_swap_then_ivar(0, 1) rescue $!.class), s2.v] }
+class JitSwapArray < Array; def []=(i, x); super(i, x * 10); end; end
+t('swap on an Array subclass') { sw.v = JitSwapArray[1, 2, 3]; sw.sp_swap(0, 2); sw.v }
+
+# An attr WRITE on a local assigned once from an attr read (`c = h.a; c.v = x'): the profile that
+# types the local's reads types the receiver of the store too, and a store is an effect. The
+# leaf frozen (FrozenError, nothing written), a leaf with a writer method of its own, the writer
+# redefined, a singleton writer; and the shapes where something that can fail follows the store,
+# which must make it once.
+class JitLwLeaf; attr_accessor :v, :w; def initialize(v, w = 0) = (@v = v; @w = w); end
+class JitLwOther; attr_reader :n, :v; def initialize = (@n = 0; @v = 7); def v=(x); @n += 1; @v = x; end; end
+class JitLwHolder
+  attr_accessor :a, :b, :x
+  def initialize(a, b) = (@a = a; @b = b; @x = 0)
+  def sp_local_write(val); c = self.a; c.v = val; end
+  def sp_local_inc; c = self.a; c.v = c.v + 1; end
+  def no_local_inc_then_read; c = self.a; c.v = c.v + 1; d = self.b; d.w; end
+  def no_local_inc_then_ivar; c = self.a; c.v = c.v + 1; @x = 1; end
+end
+lw = JitLwHolder.new(JitLwLeaf.new(0), JitLwLeaf.new(2, 5))
+warm { |i| lw.sp_local_write(i); lw.sp_local_inc; lw.no_local_inc_then_read; lw.no_local_inc_then_ivar }
+t('attr write on a local assigned from an attr read') { lw.a.v }
+t('... read-modify-write') { [lw.sp_local_inc, lw.a.v] }
+lw.a.freeze
+t('... the leaf frozen: nothing written') { [(lw.sp_local_write(99) rescue $!.class), (lw.sp_local_inc rescue $!.class), lw.a.v] }
+lw.a = JitLwOther.new
+t('... a leaf with a writer method of its own') { lw.sp_local_write(5); lw.sp_local_inc; [lw.a.n, lw.a.v] }
+lw.a = JitLwLeaf.new(1)
+JitLwLeaf.class_eval { def v=(x); @v = x * 2; end }
+t('... the writer redefined') { lw.sp_local_write(3); lw.a.v }
+JitLwLeaf.class_eval { attr_writer :v }
+lw.a.define_singleton_method(:v=) { |x| @v = -x }
+t('... a singleton writer') { lw.sp_local_write(4); lw.a.v }
+lw.a = JitLwLeaf.new(0)
+lw.b = JitLwOther.new
+t('a store, then a call that fails: one store') { [(lw.no_local_inc_then_read rescue $!.class), lw.a.v] }
+lw.b = nil
+t('... on nil') { [(lw.no_local_inc_then_read rescue $!.class), lw.a.v] }
+lw.freeze
+t('a store, then an ivar write on a frozen self: one store') { [(lw.no_local_inc_then_ivar rescue $!.class), lw.a.v] }
+
+# The store a method ends with, after an unlogged first store, on a receiver the fast path
+# cannot store into: an ordinary call of []=, which must find a Hash's, a subclass's, one that
+# answers something else, a private one (NoMethodError), one that raises and method_missing,
+# and must leave the first store made, once. Then Array#[]= itself redefined and restored.
+class JitTwoSub < Array; def []=(i, x); super(i, [x]); end; end
+class JitTwoRet; def initialize = (@h = {}); def []=(i, x); @h[i] = x; :ret; end; def to_a = @h.sort; end
+class JitTwoPriv; private def []=(i, x); end; end
+class JitTwoRaise; def []=(i, x); raise ArgumentError, "no #{i}"; end; end
+class JitTwoMissing; attr_reader :l; def initialize = (@l = []); def method_missing(n, *a) = (@l << [n, a]; :mm); def respond_to_missing?(*) = true; end
+class JitTwo
+  attr_accessor :v, :w
+  def initialize = (@v = [1, 2, 3]; @w = [10, 20, 30])
+  def sp_two_stores(i, j, x); @v[i] = x; @w[j] = x; end
+end
+tw = JitTwo.new
+warm { |i| tw.sp_two_stores(i % 3, (i + 1) % 3, i) }
+two = ->(w, j = 1) { tw.v = [1, 2, 3]; tw.w = w; [(tw.sp_two_stores(0, j, 7) rescue $!.class), tw.v] }
+t('two stores, the last on another Array') { w = [10, 20, 30]; [two.(w), w] }
+t('... that grows it') { w = [10]; [two.(w, 4), w] }
+t('... an index too small') { w = [10]; [two.(w, -5), w] }
+t('... a frozen Array') { w = [10, 20].freeze; [two.(w), w] }
+t('... a Hash') { w = { 1 => :b }; [two.(w), w] }
+t('... an Array subclass with its own []=') { w = JitTwoSub.new([7, 8, 9]); [two.(w), w] }
+t('... an object whose []= answers something else') { w = JitTwoRet.new; [two.(w), w.to_a] }
+t('... a private []=') { two.(JitTwoPriv.new) }
+t('... a []= that raises') { two.(JitTwoRaise.new) }
+t('... method_missing') { w = JitTwoMissing.new; [two.(w), w.l] }
+t('... nil') { two.(nil) }
+t('... the first Array itself') { tw.v = [1, 2, 3]; tw.w = tw.v; [tw.sp_two_stores(0, 2, 7), tw.v] }
+class Array; alias_method :__jit_two_set, :[]=; def []=(*a); $jit_two_sets = ($jit_two_sets || 0) + 1; __jit_two_set(*a); end; end
+t('Array#[]= redefined: both stores call it') { w = [10, 20, 30]; r = two.(w); class Array; alias_method :[]=, :__jit_two_set; remove_method :__jit_two_set; end; [r, w, $jit_two_sets] }
+t('... and restored') { w = [10, 20, 30]; [two.(w), w, $jit_two_sets] }
+
+# ---------------------------------------------------------------- Math.sqrt
+# Inlined (JitCompiler.EmitMathSqrt) while the constant Math resolves to a module whose public
+# singleton sqrt is the library one. Every edge of RubyMath.Sqrt: an Integer, a Bignum, -0.0, NaN,
+# a negative argument (a deopt, then Math::DomainError), nil and a String (TypeError), a Rational;
+# then Math.sqrt redefined and restored, Math shadowed by a constant in an enclosing module,
+# a refinement of Math's singleton class, and the singleton method removed.
+puts '--- Math.sqrt ---'
+class JitSqrtV; def initialize(x) = (@x = x); def sp_sqrt_ivar = Math.sqrt(@x * @x + 1.0); end
+def sp_sqrt(x) = Math.sqrt(x)
+def sp_sqrt_global(x) = ::Math.sqrt(x) + 1
+def sp_sqrt_loop(a)
+  s = 0.0
+  i = 0
+  while i < a.size
+    s += Math.sqrt(a[i])
+    i += 1
+  end
+  s
+end
+module JitSqrtScope; def self.sp_sqrt(x) = Math.sqrt(x); end
+module JitSqrtRef
+  refine Math.singleton_class do
+    def sqrt(x) = :refined
+  end
+end
+module JitSqrtRefUser; using JitSqrtRef; def self.no_sqrt(x) = Math.sqrt(x); end
+sv = JitSqrtV.new(3.0)
+warm { |i| sp_sqrt(i * 1.5); sp_sqrt_global(i * 0.5); sv.sp_sqrt_ivar; sp_sqrt_loop([1.0, 4.0, i, 9.0]); JitSqrtScope.sp_sqrt(i * 2.0); JitSqrtRefUser.no_sqrt(i * 1.0) }
+t('Math.sqrt of a Float') { sp_sqrt(2.0) }
+t('... of an Integer') { sp_sqrt(16) }
+t('... of a large Integer') { sp_sqrt(2**62 + 1) }
+t('... of a Bignum') { sp_sqrt(2**70) }
+t('... of -0.0') { sp_sqrt(-0.0) }
+t('... of NaN') { sp_sqrt(Float::NAN).nan? }
+t('... of Infinity') { sp_sqrt(Float::INFINITY) }
+t('... of a negative Float') { sp_sqrt(-1.0) }
+t('... of a negative Integer') { sp_sqrt(-4) }
+t('... the DomainError message') { begin; sp_sqrt(-2.5); rescue Math::DomainError => e; e.message; end }
+t('... of nil') { sp_sqrt(nil) }
+t('... of a String') { sp_sqrt("4") }
+t('... of a Rational') { sp_sqrt(1/4r) }
+t('::Math.sqrt') { sp_sqrt_global(9) }
+t('... on an instance variable') { sv.sp_sqrt_ivar }
+t('... in a while loop') { sp_sqrt_loop([1.0, 4.0, 9, 2**70]) }
+t('... in a while loop, a negative element') { sp_sqrt_loop([1.0, 4.0, -9.0]) }
+t('... in a while loop, nil') { sp_sqrt_loop([1.0, nil]) }
+t('... under a refinement of Math') { JitSqrtRefUser.no_sqrt(4.0) }
+class << Math; alias_method :__jit_sqrt, :sqrt; def sqrt(x) = :redefined; end
+t('Math.sqrt redefined') { [sp_sqrt(4.0), (sp_sqrt_loop([1.0]) rescue $!.class), sv.sp_sqrt_ivar, (sp_sqrt_global(1) rescue $!.class)] }
+class << Math; alias_method :sqrt, :__jit_sqrt; remove_method :__jit_sqrt; end
+t('... and restored') { [sp_sqrt(4.0), sp_sqrt_loop([1.0, 4.0]), sv.sp_sqrt_ivar] }
+module JitSqrtScope; Math = Struct.new(:k) { def sqrt(x) = [:shadow, x] }.new(1); end
+t('Math shadowed in an enclosing module') { JitSqrtScope.sp_sqrt(4.0) }
+warm { |i| sp_sqrt(i * 1.5) }
+Math.singleton_class.send(:remove_method, :sqrt)
+t('Math.sqrt removed') { sp_sqrt(4.0) }
+
+# The stub's states reached by keyword methods and constructors (hunt of round six): a keyword method
+# declined (settled, which JitKeywordCall takes for given up), an initialize, a retired method, each
+# called with and without keywords, through Method and UnboundMethod objects taken before warming,
+# through alias_method and define_method copies, a subclass's super, a singleton override, then
+# redefined, made private and given a prepended initialize.
+class JitSettleK
+  def initialize(a = 1) = (@i = a; @s = "abc"; @t = @s[0])
+  attr_reader :i, :t
+  def dc(x) = (@i = x; @s[0])
+  def kd(x, k: 1) = (@i = x; @s[k])
+  def rt(x) = x * x * x * x
+end
+sk = JitSettleK.new
+sk_early = [sk.method(:dc), JitSettleK.instance_method(:kd), sk.method(:rt).to_proc, JitSettleK.method(:new)]
+3.times { warm { |i| sk.dc(i); sk.kd(i); sk.kd(i, k: 2); sk.rt(2**20 + i); JitSettleK.new(i) } }
+t('settle: after warm-up') { [sk.dc(1), sk.kd(1), sk.kd(1, k: 0), sk.rt(3), JitSettleK.new(7).i, JitSettleK.new.t] }
+t('settle: Method objects taken before') { [sk_early[0].(2), sk_early[1].bind(sk).(1, k: 2), sk_early[2].(2), sk_early[3].(9).i] }
+class JitSettleK2 < JitSettleK; def dc(x) = [super, :sub]; def initialize(a = 1) = super(a + 1) end
+t('settle: subclass super') { [JitSettleK2.new(1).dc(1), JitSettleK2.new(1).i, JitSettleK2.new.kd(1, k: 2)] }
+sk_o = JitSettleK.new; def sk_o.kd(x, k: 5) = :single
+t('settle: singleton keyword override') { [sk_o.kd(1), sk_o.kd(1, k: 1), sk.kd(1)] }
+class JitSettleK; alias_method :dc2, :dc; define_method(:kd2, instance_method(:kd)); end
+t('settle: alias and define_method copies') { [sk.dc2(1), sk.kd2(1, k: 2), sk.kd2(1)] }
+class JitSettleK; def kd(x, k: 1) = :redef end
+t('settle: keyword method redefined') { [sk.kd(1), sk.kd(1, k: 2), sk.kd2(1, k: 2), sk_early[1].bind(sk).(1, k: 0)] }
+class JitSettleK; private :dc end
+t('settle: made private') { [(sk.dc(1) rescue :priv), sk.send(:dc, 1), sk.dc2(1)] }
+module JitSettlePre; def initialize(a = 1) = super(a * 10) end
+JitSettleK.prepend JitSettlePre
+t('settle: prepended initialize') { [JitSettleK.new(3).i, JitSettleK2.new(3).i] }
+t('settle: traced') do
+  ev = []
+  TracePoint.new(:call, :return) { |tp| ev << [tp.event, tp.method_id] }.enable { JitSettleK.new(1); sk.dc2(1); sk.kd2(1, k: 1); sk.rt(2) }
+  ev
+end
+
+# A method whose argument type flips between Integer, Bignum and Float on four threads while another
+# thread redefines it 300 times: every answer is one of the two definitions'.
+def jit_settle_threads
+  k = Class.new { def f(x) = x * x * x * x; def g(x, k: 0) = (@q = x; "ab"[k]) }
+  stop = false; bad = []
+  r = Thread.new { 300.times { |j| k.class_eval(j.even? ? "def f(x) = x * x * x * x" : "def f(x) = -(x * x * x * x)") }; stop = true }
+  ths = 4.times.map { Thread.new { o = k.new; until stop; [1, 2**40, 1.5, 3].each { |v| x = o.f(v); e = v * v * v * v; bad << x unless x == e || x == -e }; o.g(1, k: 1) == "b" or bad << :g end } }
+  r.join; ths.each(&:join)
+  bad.size
+end
+t('settle: redefined while four threads call it') { jit_settle_threads }
+
+# A cursor local first assigned from a parameter and then from its own attr read (List#is_shorter_than,
+# CD's tree_minimum): sampled through the parameter, so the reads in the loop are compiled attr reads,
+# which another class, a singleton reader, a redefined, private or removed reader, false and an
+# Integer in the list must each send back to the real call.
+class JitWalkNode
+  attr_accessor :nxt, :v
+  def initialize(n, v = 0) = (@nxt = n; @v = v)
+end
+class JitWalkOther; def initialize(n) = (@n = n); def nxt = @n; end
+def jit_walk_list(n) = (0...n).inject(nil) { |l, i| JitWalkNode.new(l, i) }
+def sp_walk_shorter(x, y)
+  xt = x
+  yt = y
+  while yt
+    return true unless xt
+    xt = xt.nxt
+    yt = yt.nxt
+  end
+  false
+end
+def sp_walk_last(x)
+  cur = x
+  cur = cur.nxt while cur.nxt
+  cur.v
+end
+wa = jit_walk_list(3); wb = jit_walk_list(5)
+3.times { warm { |i| sp_walk_shorter(wa, wb); sp_walk_shorter(wb, wa); sp_walk_last(wb) } }
+t('walk: after warm-up') { [sp_walk_shorter(wa, wb), sp_walk_shorter(wb, wa), sp_walk_last(wb)] }
+t('walk: another class') { [sp_walk_shorter(JitWalkOther.new(JitWalkOther.new(nil)), wb), sp_walk_shorter(wa, JitWalkOther.new(nil))] }
+wc = jit_walk_list(4); def wc.nxt = nil
+t('walk: a singleton reader') { [sp_walk_shorter(wc, wb), sp_walk_last(wc)] }
+t('walk: false and an Integer') { [sp_walk_shorter(false, wb), sp_walk_shorter(wa, false), sp_walk_shorter(wa, 5)] }
+JitWalkNode.class_eval { def nxt = @nxt && @nxt.nxt }
+t('walk: reader redefined') { [sp_walk_shorter(wa, wb), sp_walk_last(jit_walk_list(7))] }
+JitWalkNode.class_eval { private :nxt }
+t('walk: reader made private') { sp_walk_shorter(wa, wb) }
+JitWalkNode.class_eval { public :nxt; attr_reader :nxt }
+wd = jit_walk_list(6); wd.nxt.freeze
+t('walk: restored, a frozen node') { [sp_walk_shorter(jit_walk_list(2), jit_walk_list(2)), sp_walk_last(wd)] }
+JitWalkNode.send(:remove_method, :nxt)
+t('walk: reader removed') { sp_walk_last(jit_walk_list(3)) }

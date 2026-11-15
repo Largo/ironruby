@@ -53,6 +53,34 @@ namespace IronRuby.Runtime {
             scope.InLoop = false;
         }
 
+        /// <summary>
+        /// EnterLoop and LeaveLoop in a light frame (MethodDefinition.LightFrameRewriter), whose scope is null unless something
+        /// has made it; a scope made later in the loop takes the flag from the frame (LightScopeInLoop).
+        /// </summary>
+        public static void EnterLightLoop(RubyScope scope) {
+            if (scope != null) {
+                scope.InLoop = true;
+            }
+        }
+
+        public static void LeaveLightLoop(RubyScope scope) {
+            if (scope != null) {
+                scope.InLoop = false;
+            }
+        }
+
+        // A light frame's scope made on demand inside a loop is in that loop, for an eval'd break or next (EvalBreak).
+        public static RubyMethodScope/*!*/ LightScopeInLoop(RubyMethodScope/*!*/ scope, bool inLoop) {
+            scope.InLoop = inLoop;
+            return scope;
+        }
+
+        // The same for a block that runs without its scope (BlockDefinition) and makes it inside a loop of its own.
+        public static RubyBlockScope/*!*/ LightBlockScopeInLoop(RubyBlockScope/*!*/ scope, bool inLoop) {
+            scope.InLoop = inLoop;
+            return scope;
+        }
+
         [Emitted]
         public static void EnterRescue(RubyScope/*!*/ scope) {
             scope.InRescue = true;
@@ -531,7 +559,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static object MethodPropagateReturn(RubyScope/*!*/ scope, Proc block, BlockReturnResult/*!*/ unwinder) {
-            if (unwinder.TargetFrame == scope) {
+            // A light-frame method's scope, made on demand for a block literal, has the call's flow-control frame - the literal
+            // block the method was called with (RubyOps.EnterLightMethod) - and a return in that block literal targets that
+            // frame, not the scope: returned to the caller instead, it reached a frame it does not belong to (`def d; [1].each
+            // { return 5 }; end; d { }' ended with a MethodUnwinder nothing caught).
+            if (unwinder.TargetFrame == scope || (scope is RubyMethodScope && unwinder.TargetFrame == scope.FlowControlScope)) {
                 return unwinder.ReturnValue;
             } else if (block != null) {
                 return unwinder;

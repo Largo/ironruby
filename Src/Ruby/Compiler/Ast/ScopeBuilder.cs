@@ -446,8 +446,14 @@ namespace IronRuby.Compiler.Ast {
                 return Ast.Equal(_tuple, AstUtils.Constant(null, _tuple.Type));
             }
 
+            // inside the arguments of a loop's OSR site (see VisitMethodCall)
+            private bool _inOsrArguments;
+
             protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
                 if (node == _tuple) {
+                    if (_inOsrArguments) {
+                        return _scope.MaterializeLocals();
+                    }
                     Failed = true;
                 }
                 return node;
@@ -505,11 +511,22 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return Ast.Call(node.Method, arguments);
                 }
+                if (node.Method == IronRuby.Runtime.Osr.OsrLoopSite.RunMethod) {
+                    // -X:OSR: a loop that has taken enough back edges hands its specialized copy the locals tuple, which is
+                    // made there as for a scope - once per loop entry that gets that far; `while' in a light frame (a linked
+                    // list walk) allocated the tuple on every call for it
+                    _inOsrArguments = true;
+                    try {
+                        return base.VisitMethodCall(node);
+                    } finally {
+                        _inOsrArguments = false;
+                    }
+                }
                 return base.VisitMethodCall(node);
             }
 
             protected override MSA.Expression/*!*/ VisitExtension(MSA.Expression/*!*/ node) {
-                if (node is TraceLineExpression || node is TraceReturnExpression || node is CompiledFrameExpression) {
+                if (node is TraceLineExpression || node is TraceReturnExpression || node is CompiledFrameExpression || node is Microsoft.Scripting.Ast.LightDynamicExpression) {
                     return base.VisitExtension(node);
                 }
                 if (node is SourceLineMarker || node is EnterInterpretedFrameExpression) {
@@ -539,6 +556,30 @@ namespace IronRuby.Compiler.Ast {
         public MSA.Expression/*!*/ CreateScope(MSA.Expression/*!*/ body) {
             Debug.Assert(_closures == null);
             return Ast.Block(_hiddenVariables, body);
+        }
+
+        /// <summary>
+        /// CreateScope of a block whose scope is made on demand (BlockDefinition.TransformLightCalls): the scope initializer
+        /// may leave the scope null, so the closures - the enclosing scopes' locals - are read from the scope the block was
+        /// defined in, <paramref name="parentScope"/>, which is assigned <paramref name="parentInitializer"/> first. That is
+        /// the parent the block's scope has when one is made (RubyBlockScope: its Proc's LocalScope).
+        /// </summary>
+        public MSA.Expression/*!*/ CreateScopeWithParent(MSA.Expression/*!*/ scopeVariable, MSA.Expression/*!*/ scopeInitializer,
+            MSA.Expression/*!*/ parentScope, MSA.Expression/*!*/ parentInitializer, MSA.Expression/*!*/ body) {
+
+            var result = new AstExpressions();
+            result.Add(Ast.Assign(parentScope, parentInitializer));
+            if (_closures != null) {
+                MSA.Expression tempScope = (_closures.Count > 1) ? DefineHiddenVariable("#s", typeof(RubyScope)) : null;
+                for (int i = 0; i < _closures.Count; i++) {
+                    MSA.Expression closureScope = (i == 0) ? parentScope :
+                        Ast.Assign(tempScope, Methods.GetParentScope.OpCall(i == 1 ? parentScope : tempScope));
+                    result.Add(Ast.Assign(_closures[i], AstUtils.Convert(Methods.GetLocals.OpCall(closureScope), _closures[i].Type)));
+                }
+            }
+            result.Add(Ast.Assign(scopeVariable, scopeInitializer));
+            result.Add(body);
+            return Ast.Block(_hiddenVariables, result);
         }
 
         public MSA.Expression/*!*/ CreateScope(MSA.Expression/*!*/ scopeVariable, MSA.Expression/*!*/ scopeInitializer, MSA.Expression/*!*/ body) {

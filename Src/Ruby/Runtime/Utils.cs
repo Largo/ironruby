@@ -328,7 +328,22 @@ namespace IronRuby.Runtime {
 
         internal static string/*!*/ GetSlice(this string/*!*/ str, int start, int count) {
             count = NormalizeCount(str.Length, start, count);
+            if (count == 1 && str[start] < AsciiStrings.Length) {
+                return AsciiStrings[str[start]];
+            }
             return count > 0 ? str.Substring(start, count) : String.Empty;
+        }
+
+        // The one-character ASCII strings, for GetSlice: `s[i]' of a String is a new MutableString each time, but the CLR
+        // string it holds is immutable (a change to the MutableString replaces it), so it can be shared, as String.Empty is.
+        private static readonly string/*!*/[]/*!*/ AsciiStrings = MakeAsciiStrings();
+
+        private static string[]/*!*/ MakeAsciiStrings() {
+            var result = new string[128];
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = String.Intern(((char)i).ToString());
+            }
+            return result;
         }
 
         internal static string/*!*/ GetStringSlice(ReadOnlySpan<char> chars, int start, int count) {

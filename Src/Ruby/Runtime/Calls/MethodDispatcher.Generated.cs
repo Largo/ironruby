@@ -202,8 +202,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null /*$BoxedArguments*/);
             } else {
-                return ((CallSite<Func<CallSite, object /*$GenericParams*/, object>>)callSite).
-                    Update(callSite, self /*$Arguments*/);
+                return Miss<Func<CallSite, object /*$GenericParams*/, object>>(callSite)(callSite, self /*$Arguments*/);
             }
         }
     }
@@ -219,8 +218,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null /*$BoxedArguments*/);
             } else {
-                return ((CallSite<Func<CallSite, TScope, object /*$GenericParams*/, object>>)callSite).
-                    Update(callSite, scope, self /*$Arguments*/);
+                return Miss<Func<CallSite, TScope, object /*$GenericParams*/, object>>(callSite)(callSite, scope, self /*$Arguments*/);
             }
         }
     }
@@ -237,8 +235,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc /*$BoxedArguments*/);
             } else {
-                return ((CallSite<Func<CallSite, object, TProc /*$GenericParams*/, object>>)callSite).
-                    Update(callSite, self, proc /*$Arguments*/);
+                return Miss<Func<CallSite, object, TProc /*$GenericParams*/, object>>(callSite)(callSite, self, proc /*$Arguments*/);
             }
         }
     }
@@ -256,8 +253,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc /*$BoxedArguments*/);
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc /*$GenericParams*/, object>>)callSite).
-                    Update(callSite, scope, self, proc /*$Arguments*/);
+                return Miss<Func<CallSite, TScope, object, TProc /*$GenericParams*/, object>>(callSite)(callSite, scope, self, proc /*$Arguments*/);
             }
         }
     }
@@ -273,8 +269,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self, scope)) {
                 return Method(self, null /*$BoxedArguments*/);
             } else {
-                return ((CallSite<Func<CallSite, TScope, object /*$GenericParams*/, object>>)callSite).
-                    Update(callSite, scope, self /*$Arguments*/);
+                return Miss<Func<CallSite, TScope, object /*$GenericParams*/, object>>(callSite)(callSite, scope, self /*$Arguments*/);
             }
         }
     }
@@ -291,8 +286,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc /*$BoxedArguments*/);
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc /*$GenericParams*/, object>>)callSite).
-                    Update(callSite, scope, self, proc /*$Arguments*/);
+                return Miss<Func<CallSite, TScope, object, TProc /*$GenericParams*/, object>>(callSite)(callSite, scope, self, proc /*$Arguments*/);
             }
         }
     }
@@ -308,8 +302,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0));
             } else {
-                return ((CallSite<Func<CallSite, object , T0, object>>)callSite).
-                    Update(callSite, self ,arg0);
+                return Miss<Func<CallSite, object , T0, object>>(callSite)(callSite, self ,arg0);
             }
         }
     }
@@ -325,8 +318,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0, object>>)callSite).
-                    Update(callSite, scope, self ,arg0);
+                return Miss<Func<CallSite, TScope, object , T0, object>>(callSite)(callSite, scope, self ,arg0);
             }
         }
     }
@@ -343,8 +335,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0));
             } else {
-                return ((CallSite<Func<CallSite, object, TProc , T0, object>>)callSite).
-                    Update(callSite, self, proc ,arg0);
+                return Miss<Func<CallSite, object, TProc , T0, object>>(callSite)(callSite, self, proc ,arg0);
             }
         }
     }
@@ -362,8 +353,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0);
+                return Miss<Func<CallSite, TScope, object, TProc , T0, object>>(callSite)(callSite, scope, self, proc ,arg0);
             }
         }
     }
@@ -379,8 +369,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self, scope)) {
                 return Method(self, null ,Box(arg0));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0, object>>)callSite).
-                    Update(callSite, scope, self ,arg0);
+                return Miss<Func<CallSite, TScope, object , T0, object>>(callSite)(callSite, scope, self ,arg0);
             }
         }
     }
@@ -397,8 +386,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0);
+                return Miss<Func<CallSite, TScope, object, TProc , T0, object>>(callSite)(callSite, scope, self, proc ,arg0);
             }
         }
     }
@@ -411,8 +399,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1));
             } else {
-                return ((CallSite<Func<CallSite, object , T0 , T1, object>>)callSite).
-                    Update(callSite, self ,arg0, arg1);
+                return Miss<Func<CallSite, object , T0 , T1, object>>(callSite)(callSite, self ,arg0, arg1);
             }
         }
     }
@@ -428,8 +415,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1);
+                return Miss<Func<CallSite, TScope, object , T0 , T1, object>>(callSite)(callSite, scope, self ,arg0, arg1);
             }
         }
     }
@@ -446,8 +432,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1));
             } else {
-                return ((CallSite<Func<CallSite, object, TProc , T0 , T1, object>>)callSite).
-                    Update(callSite, self, proc ,arg0, arg1);
+                return Miss<Func<CallSite, object, TProc , T0 , T1, object>>(callSite)(callSite, self, proc ,arg0, arg1);
             }
         }
     }
@@ -465,8 +450,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1);
             }
         }
     }
@@ -482,8 +466,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self, scope)) {
                 return Method(self, null ,Box(arg0), Box(arg1));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1);
+                return Miss<Func<CallSite, TScope, object , T0 , T1, object>>(callSite)(callSite, scope, self ,arg0, arg1);
             }
         }
     }
@@ -500,8 +483,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1);
             }
         }
     }
@@ -514,8 +496,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2));
             } else {
-                return ((CallSite<Func<CallSite, object , T0 , T1 , T2, object>>)callSite).
-                    Update(callSite, self ,arg0, arg1, arg2);
+                return Miss<Func<CallSite, object , T0 , T1 , T2, object>>(callSite)(callSite, self ,arg0, arg1, arg2);
             }
         }
     }
@@ -531,8 +512,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1, arg2);
+                return Miss<Func<CallSite, TScope, object , T0 , T1 , T2, object>>(callSite)(callSite, scope, self ,arg0, arg1, arg2);
             }
         }
     }
@@ -549,8 +529,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2));
             } else {
-                return ((CallSite<Func<CallSite, object, TProc , T0 , T1 , T2, object>>)callSite).
-                    Update(callSite, self, proc ,arg0, arg1, arg2);
+                return Miss<Func<CallSite, object, TProc , T0 , T1 , T2, object>>(callSite)(callSite, self, proc ,arg0, arg1, arg2);
             }
         }
     }
@@ -568,8 +547,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1 , T2, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1, arg2);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1 , T2, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1, arg2);
             }
         }
     }
@@ -585,8 +563,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self, scope)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1, arg2);
+                return Miss<Func<CallSite, TScope, object , T0 , T1 , T2, object>>(callSite)(callSite, scope, self ,arg0, arg1, arg2);
             }
         }
     }
@@ -603,8 +580,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1 , T2, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1, arg2);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1 , T2, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1, arg2);
             }
         }
     }
@@ -617,8 +593,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2), Box(arg3));
             } else {
-                return ((CallSite<Func<CallSite, object , T0 , T1 , T2 , T3, object>>)callSite).
-                    Update(callSite, self ,arg0, arg1, arg2, arg3);
+                return Miss<Func<CallSite, object , T0 , T1 , T2 , T3, object>>(callSite)(callSite, self ,arg0, arg1, arg2, arg3);
             }
         }
     }
@@ -634,8 +609,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2), Box(arg3));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2 , T3, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1, arg2, arg3);
+                return Miss<Func<CallSite, TScope, object , T0 , T1 , T2 , T3, object>>(callSite)(callSite, scope, self ,arg0, arg1, arg2, arg3);
             }
         }
     }
@@ -652,8 +626,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2), Box(arg3));
             } else {
-                return ((CallSite<Func<CallSite, object, TProc , T0 , T1 , T2 , T3, object>>)callSite).
-                    Update(callSite, self, proc ,arg0, arg1, arg2, arg3);
+                return Miss<Func<CallSite, object, TProc , T0 , T1 , T2 , T3, object>>(callSite)(callSite, self, proc ,arg0, arg1, arg2, arg3);
             }
         }
     }
@@ -671,8 +644,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2), Box(arg3));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1, arg2, arg3);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1, arg2, arg3);
             }
         }
     }
@@ -688,8 +660,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self, scope)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2), Box(arg3));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2 , T3, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1, arg2, arg3);
+                return Miss<Func<CallSite, TScope, object , T0 , T1 , T2 , T3, object>>(callSite)(callSite, scope, self ,arg0, arg1, arg2, arg3);
             }
         }
     }
@@ -706,8 +677,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2), Box(arg3));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1, arg2, arg3);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1, arg2, arg3);
             }
         }
     }
@@ -720,8 +690,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2), Box(arg3), Box(arg4));
             } else {
-                return ((CallSite<Func<CallSite, object , T0 , T1 , T2 , T3 , T4, object>>)callSite).
-                    Update(callSite, self ,arg0, arg1, arg2, arg3, arg4);
+                return Miss<Func<CallSite, object , T0 , T1 , T2 , T3 , T4, object>>(callSite)(callSite, self ,arg0, arg1, arg2, arg3, arg4);
             }
         }
     }
@@ -737,8 +706,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2), Box(arg3), Box(arg4));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2 , T3 , T4, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1, arg2, arg3, arg4);
+                return Miss<Func<CallSite, TScope, object , T0 , T1 , T2 , T3 , T4, object>>(callSite)(callSite, scope, self ,arg0, arg1, arg2, arg3, arg4);
             }
         }
     }
@@ -755,8 +723,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2), Box(arg3), Box(arg4));
             } else {
-                return ((CallSite<Func<CallSite, object, TProc , T0 , T1 , T2 , T3 , T4, object>>)callSite).
-                    Update(callSite, self, proc ,arg0, arg1, arg2, arg3, arg4);
+                return Miss<Func<CallSite, object, TProc , T0 , T1 , T2 , T3 , T4, object>>(callSite)(callSite, self, proc ,arg0, arg1, arg2, arg3, arg4);
             }
         }
     }
@@ -774,8 +741,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2), Box(arg3), Box(arg4));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3 , T4, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1, arg2, arg3, arg4);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3 , T4, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1, arg2, arg3, arg4);
             }
         }
     }
@@ -791,8 +757,7 @@ namespace IronRuby.Runtime.Calls {
             if (IsCurrentFor(self, scope)) {
                 return Method(self, null ,Box(arg0), Box(arg1), Box(arg2), Box(arg3), Box(arg4));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2 , T3 , T4, object>>)callSite).
-                    Update(callSite, scope, self ,arg0, arg1, arg2, arg3, arg4);
+                return Miss<Func<CallSite, TScope, object , T0 , T1 , T2 , T3 , T4, object>>(callSite)(callSite, scope, self ,arg0, arg1, arg2, arg3, arg4);
             }
         }
     }
@@ -809,8 +774,7 @@ namespace IronRuby.Runtime.Calls {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,Box(arg0), Box(arg1), Box(arg2), Box(arg3), Box(arg4));
             } else {
-                return ((CallSite<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3 , T4, object>>)callSite).
-                    Update(callSite, scope, self, proc ,arg0, arg1, arg2, arg3, arg4);
+                return Miss<Func<CallSite, TScope, object, TProc , T0 , T1 , T2 , T3 , T4, object>>(callSite)(callSite, scope, self, proc ,arg0, arg1, arg2, arg3, arg4);
             }
         }
     }

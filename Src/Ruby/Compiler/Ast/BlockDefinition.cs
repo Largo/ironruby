@@ -213,6 +213,33 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
+            // A body that makes calls, or uses the enclosing scopes' locals or instance variables - { |e| o.cmp(e) },
+            // { |ball| bounces += 1 if ball.bounce } - runs without its scope too, until a call needs it: the calls go through
+            // sites with a light scope, which are handed the scope the block was defined in (see
+            // MethodDefinition.LightFrameRewriter), and the enclosing scopes' locals are read from that scope too.
+            MSA.ParameterExpression parentScope = null;
+            if (lazyScope == null && MethodDefinition.LightCallsEnabled && !hasNestedReturn && !gen.TraceEnabled &&
+                !gen.CompilerOptions.IsEval && IsLightCallBody()) {
+                var names = scope.GetVariableNamesExpression();
+                var parent = scope.DefineHiddenVariable("#parent", typeof(RubyScope));
+                Func<MSA.Expression> makeScope = () => Methods.CreateBlockScopeLazy.OpCall(
+                    scope.LocalsTupleVariable, names, blockParameter, selfParameter, EnterInterpretedFrameExpression.Instance
+                );
+                // a `while' in the body marks the frame, and a scope made inside it takes the mark (RubyOps.EnterLightLoop)
+                var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
+                var lazy = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable,
+                    Ast.Call(typeof(RubyOps).GetMethod("LightBlockScopeInLoop"), makeScope(), inLoop)));
+                var rewriter = new MethodDefinition.LightFrameRewriter(scopeVariable, lazy, null, parent, inLoop, false);
+                var lazyParamInit = rewriter.Visit(paramInit);
+                var lazyStatements = rewriter.Visit(statements);
+                if (!rewriter.NeedsScope) {
+                    paramInit = lazyParamInit;
+                    statements = lazyStatements;
+                    lazyScope = lazy;
+                    parentScope = parent;
+                }
+            }
+
             var bodyTry = AstUtils.Try(
                 statements
             ).Catch(blockUnwinder = Ast.Parameter(typeof(BlockUnwinder), "#u"),
@@ -256,6 +283,10 @@ namespace IronRuby.Compiler.Ast {
             // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
             // A nested block literal is a Proc over the scope on every call: nothing to reuse.
             bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+
+            // The same holds for the Proc of the literal (see BlockDispatcher.ReusesProc).
+            bool reusesProc = !isLambda && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
                 !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
             body = gen.Traceable
@@ -315,11 +346,10 @@ namespace IronRuby.Compiler.Ast {
                 });
             }
 
-            body = scope.CreateScope(
-                scopeVariable,
-                enterScope,
-                body
-            );
+            body = (parentScope != null)
+                ? scope.CreateScopeWithParent(scopeVariable, enterScope, parentScope,
+                    Ast.Property(Ast.Property(blockParameter, typeof(BlockParam).GetProperty("Proc")), typeof(Proc).GetProperty("LocalScope")), body)
+                : scope.CreateScope(scopeVariable, enterScope, body);
 
             gen.LeaveBlockDefinition();
 
@@ -327,6 +357,7 @@ namespace IronRuby.Compiler.Ast {
             var attributes = _parameters.GetBlockSignatureAttributes();
 
             var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
+            blockDispatcher.ReusesProc = reusesProc;
             blockDispatcher.ParameterSignature = _parameters.Signature;
             if (outerVariables != null) {
                 blockDispatcher.OuterVariableNames = outerVariables.ToArray();
@@ -343,7 +374,12 @@ namespace IronRuby.Compiler.Ast {
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode);
 
-            return Ast.Coalesce(
+            // A literal that may reuse its Proc keeps the last one in a variable of the frame that makes it (the enclosing
+            // method's or block's call): only that frame, on its own thread, ever makes the Proc again (Proc.TryReuse).
+            MSA.Expression previousProc = reusesProc ? gen.CurrentScope.DefineHiddenVariable("#proc", typeof(Proc)) : null;
+
+            MSA.Expression instance = Ast.Coalesce(
+                reusesProc ? Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher) :
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
@@ -356,6 +392,7 @@ namespace IronRuby.Compiler.Ast {
                     )
                 )
             );
+            return reusesProc ? Ast.Assign(previousProc, instance) : instance;
         }
 
         // MRI labels a block frame "block in <enclosing>", and counts the nesting once there
@@ -408,6 +445,31 @@ namespace IronRuby.Compiler.Ast {
             }
             foreach (var statement in _body) {
                 if (!IsScopeFree(statement)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// IsScopeFreeBody for a body that may also make calls without a block and use instance variables, constants and the
+        /// enclosing scopes' locals (MethodDefinition.IsScopeFree, which light-frame methods are filtered by).
+        /// </summary>
+        private bool IsLightCallBody() {
+            if (_parameters.Optional.Length > 0 || _parameters.Unsplat != null || _parameters.Block != null || HasPostParameters) {
+                return false;
+            }
+            var signature = _parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                return false;
+            }
+            foreach (var parameter in _parameters.Mandatory) {
+                if (!(parameter is LocalVariable) && !(parameter is Placeholder)) {
+                    return false;
+                }
+            }
+            foreach (var statement in _body) {
+                if (!MethodDefinition.IsScopeFree(statement)) {
                     return false;
                 }
             }

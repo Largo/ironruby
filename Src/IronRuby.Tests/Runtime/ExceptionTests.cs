@@ -1257,6 +1257,36 @@ true
         }
 
         /// <summary>
+        /// A const_missing that reads a missing constant of its own recurses through the constant lookup alone: its body is a
+        /// light frame with no call site, so nothing in it checked the stack, and the recursion ended the process with a CLR
+        /// stack overflow. So did an #inspect that reads a constant qualified by an object that is no module, through the
+        /// TypeError's message. CRuby raises SystemStackError for both (and cannot rescue it, so its output is that error).
+        /// </summary>
+        public void Exception_StackLevelTooDeepConstMissing1() {
+            TestOutput(@"
+class ConstMissingDeep; def self.const_missing(n) = Zork; end
+begin
+  ConstMissingDeep::Foo
+rescue SystemStackError => e
+  p e.class
+end
+p Thread.new { begin; ConstMissingDeep::Foo; rescue SystemStackError; :caught; end }.value
+# the TypeError of a qualifier that is no module calls #inspect, which reads the constant again
+class NotModuleDeep; def inspect = NotModuleObj::X; end
+NotModuleObj = NotModuleDeep.new
+begin
+  NotModuleObj::X
+rescue SystemStackError => e
+  p e.class
+end
+", @"
+SystemStackError
+:caught
+SystemStackError
+");
+        }
+
+        /// <summary>
         /// A JIT-compiled method whose last act is to call itself still makes a frame per call, so a recursion with no
         /// end raises SystemStackError as in MRI (#165). RyuJIT made such a self-call a jump (an implicit tail call):
         /// `def d(n) = d(n + 1)' ran forever at 100% CPU. Each recursion here does end, after 10M calls, so a frame
