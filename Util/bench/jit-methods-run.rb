@@ -35,7 +35,13 @@ ENV["BENCH_VALUE"] = "1"
 ENV["BENCH_CLOCK"] ||= "cpu"
 
 reps = (ARGV.first =~ /\A\d+\z/) ? ARGV.shift.to_i : 7
-names = ARGV.empty? ? `ruby #{File.join(HERE, "jit-methods.rb")} --list`.split : ARGV
+# no shell: a checkout path with a space in it would otherwise list nothing
+names = ARGV
+if names.empty?
+  names = IO.popen(["ruby", File.join(HERE, "jit-methods.rb"), "--list"], &:read).split
+  abort "jit-methods.rb --list failed" unless $?.success?
+end
+abort "no benchmarks to run" if names.empty?
 
 # [value, first run's seconds, fastest later run's seconds or nil]
 def run(command, name)
