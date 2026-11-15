@@ -1,6 +1,6 @@
 ---
 name: perf-step
-description: One iteration of making IronRuby faster - take the worst open gap from Util/perf/LEDGER.md, try one optimization for it (usually a trick TruffleRuby or YJIT uses) in a separate worktree, measure it against the unchanged build, and merge it only if it is measurably faster and passes /perf-gate; otherwise record why not. Use when asked to make IronRuby faster, to try a performance idea, or to keep improving speed. Made to run in a loop (`/loop /perf-step`): each run does one experiment and leaves the ledger ready for the next.
+description: One iteration of making IronRuby faster - take the worst open gap from Util/perf/LEDGER.md, try one optimization for it (usually a trick TruffleRuby or YJIT uses) in a separate worktree, measure it against the unchanged build, and merge it only if it is measurably faster and passes /perf-gate; otherwise record why not. Use when asked to make IronRuby faster in general, to try a performance idea, or to keep improving speed, and the target is not more specific: a slow core method written in Ruby goes to /perf-core, the cost of entering methods (frames, scopes, wrappers) to /perf-frame, and "is this build faster on X" to /perf-ab. Made to run in a loop (`/loop /perf-step`): each run does one experiment and leaves the ledger ready for the next.
 ---
 
 # One step faster
@@ -36,7 +36,20 @@ Where the ideas come from:
 | array/hash storage strategies, ropes, lazy backtraces, constant caches | `Builtins/RubyArray.cs`, `Hash`, `MutableString`, `RubyExceptionData.cs` |
 
 `Util/bench/README.md` says what the JIT and OSR tiers already do and decline; read it
-before proposing something they already cover.
+before proposing something they already cover. `Util/bench/truffleruby-lessons.md` has
+what TruffleRuby keeps in Ruby and in Java, what a core method written in Ruby costs here
+part by part, and a ranked list of what transfers.
+
+Two kinds of gap have a skill of their own, with the steps and the traps of that kind of
+work; use it for the experiment and come back here to decide and to record:
+
+- a core method that is slow and is written in Ruby (the prelude): `/perf-core`;
+- a kind of method that still allocates a scope on every call, or a call that forces one
+  (a block or a splat passed on, `super`, `defined?(yield)`): `/perf-frame`.
+
+For a difference of 10-30% on a small shape, `/perf-ab` (`Util/perf/ab.rb`) is steadier
+than one run of `micro-table.rb`: it takes turns between the builds and shows each cell's
+spread.
 
 ## 2. Experiment, away from the baseline
 

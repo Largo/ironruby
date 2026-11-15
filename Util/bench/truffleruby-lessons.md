@@ -466,6 +466,10 @@ TruffleRuby's, adjusted to what was measured:
 - A slow prelude method is first a method with an expensive entry. Measure
   (`IR_LIGHT_FRAMES=why` says why it makes a scope) before moving it to C#.
 
+The skills in `.claude/skills` are these as repeatable steps: `/perf-core` takes one slow
+prelude method (item 3), `/perf-frame` one more frame shape or one more call the frame
+answers (items 1 and 2), and `/perf-ab` is how either is measured (`Util/perf/ab.rb`).
+
 ## 5. What does not transfer
 
 - **Partial evaluation.** Truffle specializes the interpreter itself to the program, so a

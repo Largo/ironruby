@@ -72,6 +72,8 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | Hash, Struct | `Util/hash-order-matrix.rb`, `Util/hash-struct-matrix.rb` |
 | exceptions, backtraces | `Util/raise-matrix.rb`, `Util/full-message-matrix.rb` |
 | calls, blocks, scopes, dispatch | `Util/perf/hot-shapes-matrix.rb` |
+| light frames (`MethodDefinition.cs`), rules that answer for the frame (`DispatchIntrinsics.cs`) | `Util/block-given-matrix.rb`, `Util/light-rest-matrix.rb`, each also with its switch off and with `IR_LIGHT_FRAMES=0` |
+| calls bound by `-X:JITCalls` | `Util/jit-calls-matrix.rb` |
 
 And always, because an optimization that is only wrong when hot passes everything above:
 

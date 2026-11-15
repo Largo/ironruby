@@ -6,6 +6,8 @@
 #   IR_CONFIG=Release ./ir.sh -X:NoJIT -X:NoOSR Util/bench/prelude-cost.rb
 #   ruby Util/bench/prelude-cost.rb                                    # CRuby, for the built-in column
 #   ... prelude-cost.rb each4 rb_each4                                 # only these (one process each is steadiest)
+#   ... prelude-cost.rb --list                                         # the shapes' names
+#   ruby Util/perf/ab.rb Util/bench/prelude-cost.rb cruby=ruby "base=..." "new=..." -- g_bg   # two builds, taking turns
 #
 # Four groups: a core method in C# against the same method in Ruby (each4 / rb_each4 ...); the parts a Ruby
 # iterator is made of (e0, e_y1 ...: the method is called with a block and does only the part named);
@@ -306,6 +308,7 @@ rescue SystemCallError
 end
 
 def t(name, n)
+  return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
   best = 1e9
   sum = nil

@@ -5,6 +5,8 @@
 #   IR_CONFIG=Release ./ir.sh Util/bench/core-small.rb
 #   ruby Util/bench/core-small.rb
 #   ... core-small.rb inject sum            # only these
+#   ... core-small.rb --list                # the names
+#   ruby Util/perf/ab.rb Util/bench/core-small.rb cruby=ruby "base=..." "new=..." -- inject   # two builds, taking turns
 #
 # Every line prints the sum of its results next to its time; it must be CRuby's.
 $stdout.sync = true
@@ -82,6 +84,7 @@ class H
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 def t(name, n)
+  return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
   best = 1e9; sum = nil
   7.times { t0 = cpu; sum = yield n; d = cpu - t0; best = d if d < best }

@@ -384,6 +384,29 @@ Profile (`Util/perf/profile.sh`, self time):
     of a 100-element micro. What is left for DeltaBlue is gap 13 (the fixed cost of its
     20,592 `Range#each` calls per iteration, most over one or two elements) and gap 1
     (`CallSite.Target` 23% in `add_propagate`, `satisfy`, `Plan#execute`'s block).
+15. **Core methods written in Ruby are at 3.1x CRuby, those in C# at 1.6x**
+    (`Util/bench/core-small.rb`, 67 calls on four elements; `Util/bench/truffleruby-lessons.md`
+    section 3). The cause is the entry, not the method: a rest parameter, a named block,
+    one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
+    `Array#dig(0, 1)` 15.1, `sum { }` 6.5, `Kernel#String` 6.2, `Array#sum` 5.3, `to_h { }`
+    4.5, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `min_by` 3.6, `Hash#sum { }` 3.6, `then` 3.2,
+    `take_while` 3.0, `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
+    `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
+    and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0). One method per run of
+    `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
+16. **Wrappers stay out of light frames** because they pass a block or a splat on
+    (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
+    a layer costs 94 to 275 ns. Until that shape is let in, `/perf-core` can only route
+    around it. `/perf-frame`; see gap 9 for the other shapes.
+17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
+    called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
+    site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
+    Untried: a name the compiler turns into a direct static call in prelude files only
+    (lessons, section 4, item 4).
+18. **A `while ... yield` in Ruby runs at ~100 ns per element** against 9 for a C#
+    iterator compiled with its block, and at twice CRuby's time for the same source: the
+    loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
+    `yield <expr>`"). This is what keeps per-element loops in C#.
 
 ## Landed
 
