@@ -23,12 +23,34 @@
 #   MODES="off run run,entry"   the modes to run: off, or the options after -X:JITMethods=;
 #                               `calls' is -X:JITCalls, alone or joined to a -X:JITMethods
 #                               mode by a + ("run,tiered+calls")
-#   CPUS=5,6                    the CPUs to pin to
+#   CPUS=5,6                    the CPUs to pin to; by default 5 and 6 where this process may
+#                               use them, otherwise the last two it may use
 #   IR_TFM=net11.0              the framework, as for ir.sh
+require "open3"
+
 HERE = File.dirname(File.expand_path(__FILE__))
 ROOT = File.dirname(File.dirname(HERE))
 IR = ENV["IR"] || File.join(ROOT, "ir.sh")
-CPUS = ENV["CPUS"] || "5,6"
+
+# The CPUs this process may run on ("0-3,8" in /proc/self/status), or nil where that is not
+# known. taskset refuses a list with no CPU of them in it, and every run would then fail.
+def allowed_cpus
+  list = File.read("/proc/self/status")[/^Cpus_allowed_list:\s*(\S+)/, 1] or return nil
+  list.split(",").flat_map do |range|
+    low, high = range.split("-").map(&:to_i)
+    (low..(high || low)).to_a
+  end
+rescue SystemCallError
+  nil
+end
+
+def default_cpus
+  allowed = allowed_cpus
+  return "5,6" if allowed.nil? || (allowed.include?(5) && allowed.include?(6))
+  allowed.last(2).join(",")
+end
+
+CPUS = ENV["CPUS"] || default_cpus
 MODES = (ENV["MODES"] || "off dynamic run collect run,entry collect,entry").split
 ENV["IR_CONFIG"] ||= "Release"
 ENV["BENCH_VALUE"] = "1"
@@ -43,12 +65,17 @@ if names.empty?
 end
 abort "no benchmarks to run" if names.empty?
 
-# [value, first run's seconds, fastest later run's seconds or nil]
+# [value, first run's seconds, fastest later run's seconds or nil]; a run that failed is a
+# String instead, saying how: its exit status and what it wrote to stderr.
 def run(command, name)
   mine = !name.start_with?("bench:")
   file, bench = mine ? ["jit-methods.rb", name] : ["bench.rb", name.sub("bench:", "")]
-  out = IO.popen(["taskset", "-c", CPUS, *command, File.join(HERE, file), bench], err: File::NULL, &:read).lines.map(&:chomp)
-  return nil unless $?.success? && out.size >= (mine ? 3 : 2)
+  out, err, status = Open3.capture3("taskset", "-c", CPUS, *command, File.join(HERE, file), bench)
+  out = out.lines.map(&:chomp)
+  unless status.success? && out.size >= (mine ? 3 : 2)
+    how = status.success? ? "printed #{out.size} lines" : status.to_s
+    return err.strip.empty? ? how : "#{how}: #{err.strip}"
+  end
   mine ? [out[-3], out[-2].to_f, out[-1].to_f] : [out[-2], out[-1].to_f, nil]
 end
 
@@ -73,6 +100,10 @@ first_rows = []
 steady_rows = []
 names.each do |name|
   cruby = Array.new(3) { run(["ruby"], name) }
+  # Before anything is measured: a reference run that failed would otherwise only be found
+  # when the table is made, after every IronRuby run of the benchmark.
+  failed = cruby.grep(String).first
+  abort "#{name}: a CRuby reference run failed (CPUS=#{CPUS}): #{failed}" if failed
   expected = cruby.first[0]
   first = Hash.new { |h, k| h[k] = [] }
   steady = Hash.new { |h, k| h[k] = [] }
@@ -81,12 +112,14 @@ names.each do |name|
       options = (mode == "off") ? [] : mode.split("+").map do |m|
         (m == "calls") ? "-X:JITCalls" : "-X:JITMethods=#{m}"
       end
-      value, t1, t2 = run([IR, *options], name)
-      if value == expected
-        first[mode] << t1
-        steady[mode] << t2 if t2
+      result = run([IR, *options], name)
+      if result.is_a?(String)
+        wrong << "#{name} #{mode}: the run failed, #{result}"
+      elsif result[0] == expected
+        first[mode] << result[1]
+        steady[mode] << result[2] if result[2]
       else
-        wrong << "#{name} #{mode}: #{value.inspect}, CRuby #{expected.inspect}"
+        wrong << "#{name} #{mode}: #{result[0].inspect}, CRuby #{expected.inspect}"
       end
     end
   end

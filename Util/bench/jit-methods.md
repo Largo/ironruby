@@ -585,8 +585,11 @@ What is left, in the order it should be done:
 1. The two inliner changes above, on their own, with the switch off.
 2. `-X:JITCalls` on by default once it has run the spec suites and the benchmark suite: it
    is the smaller and safer half.
-3. The caller in flight. A version check after a loop's safe point, deopting a pure body and
-   letting an impure one finish, bounds the window to one iteration.
+3. The caller in flight. A version check after a loop's safe point, with a deopt there,
+   bounds the window to one iteration for a pure body. An impure body cannot take that deopt,
+   and one left to finish goes on calling the old callee for the rest of its loop: closing its
+   window needs a way to leave a typed body in the middle of a loop without running it again,
+   which is not designed here.
 4. Promotion: emit into the Run assembly only methods that have stayed specialized and hot,
    with a byte budget, so that short programs never pay the 26 ms and the leak is bounded;
    entries stay DynamicMethods. The constants need an owner that dies with the runtime, and
