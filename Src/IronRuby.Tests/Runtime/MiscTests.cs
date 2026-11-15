@@ -7506,6 +7506,32 @@ p({ a: H3.new }.dig(:a, 1), { a: H3.new }.dig(:a, 1, 2, 3, 4), { a: H3[b: 1] }.d
         }
 
         /// <summary>
+        /// Hash#transform_values replaces each value where its entry is (rb_hash_stlike_foreach_with_replace), not through
+        /// its key: keys the block makes equal stay two entries. compare_by_identity carries over, the default does not.
+        /// </summary>
+        public void Hash_TransformValuesMutatedKey1() {
+            TestOutput(@"
+require 'ruby4'
+a = [1]; b = [2]; h = { a => 10, b => 20 }
+r = h.transform_values { |v| b.replace([1]); v + 1 }
+p r.size, r.to_a, h.size
+k = { a: 1 }.compare_by_identity; k[""x"".dup] = 2; k[""x"".dup] = 3
+t = k.transform_values { |v| v * 10 }
+p t, t.compare_by_identity?, Hash.new(5).merge(a: 1).transform_values { |v| v }.default
+p({ a: 1, b: 2 }.transform_values { |v| break :out if v == 2; v }, { nil => 1 }.transform_values { |v| v + 1 })
+", @"
+2
+[[[1], 11], [[1], 21]]
+2
+{a: 10, ""x"" => 20, ""x"" => 30}
+true
+nil
+:out
+{nil => 2}
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.

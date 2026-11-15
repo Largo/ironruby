@@ -277,25 +277,24 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("transform_values")]
         public static object TransformValues(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, Hash/*!*/ self) {
-            var result = new Hash(context.EqualityComparer, self.Count);
-            if (self.ComparesByIdentity) {
-                result.CompareByIdentity();
+            // The copy: the entries as they are stored, so no key is hashed or compared again.
+            var result = CreateResultHash(self, 0);
+            if (!result.TryCopyEntriesFrom(self)) {
+                foreach (var entry in self) {
+                    result[entry.Key] = entry.Value;
+                }
             }
-            int count = self.Count;
-            var keys = new object[count];
-            var values = new object[count];
-            int index = 0, taken = 0;
+            // Each value is replaced where its entry is, not through its key: a block that changes a key
+            // so that it equals another one (`b.replace(a)' for the keys a and b) still leaves two entries,
+            // as MRI's rb_hash_stlike_foreach_with_replace does. Nothing else can reach the copy meanwhile.
+            int index = 0;
             object key, value;
-            while (taken < count && self.TryGetNextEntry(ref index, out key, out value)) {
-                keys[taken] = key;
-                values[taken++] = value;
-            }
-            for (int i = 0; i < taken; i++) {
+            while (result.TryGetNextEntry(ref index, out key, out value)) {
                 object blockResult;
-                if (block.Yield(values[i], out blockResult)) {
+                if (block.Yield(value, out blockResult)) {
                     return blockResult;
                 }
-                result[keys[i]] = blockResult;
+                result.SetEntryValue(index, blockResult);
             }
             return result;
         }
