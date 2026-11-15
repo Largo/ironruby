@@ -353,13 +353,19 @@ namespace IronRuby.Runtime.CApi {
                         argv[i] = ToValue(args[i]);
                     }
                     VALUE yielded = argc > 0 ? argv[0] : Qnil;
+                    _cBlockDepth++;
                     try {
                         return FromValue(CallBlock(fn, yielded, data2, argc, argv, Qnil));
                     } catch (CIterBreak b) {
                         return selfBlock.Break(b.ReturnValue);
+                    } finally {
+                        _cBlockDepth--;
                     }
                 }));
         }
+
+        // blocks written in C running on this thread: what rb_iter_break can break out of
+        [ThreadStatic] private static int _cBlockDepth;
 
         private sealed class CIterBreak : StackUnwinder {
             public CIterBreak(object value) : base(value) { }
@@ -381,10 +387,15 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static void rb_iter_break() {
-            throw new CIterBreak(null);
+            rb_iter_break_value(Qnil);
         }
 
         internal static void rb_iter_break_value(VALUE val) {
+            if (_cBlockDepth == 0) {
+                // a break out of a Ruby block from C called inside it: IronRuby's break needs the
+                // block's own frame, which a C function is not given
+                throw RubyExceptions.CreateNotImplementedError("rb_iter_break outside a block written in C is not implemented by IronRuby's C API yet");
+            }
             throw new CIterBreak(FromValue(val));
         }
 

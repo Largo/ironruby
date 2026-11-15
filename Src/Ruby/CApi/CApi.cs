@@ -154,6 +154,7 @@ namespace IronRuby.Runtime.CApi {
 
             _context = context;
             InitializeGlobals(context);
+            InitializeThreads();
         }
 
         private static IntPtr ShimExport(string/*!*/ name) {

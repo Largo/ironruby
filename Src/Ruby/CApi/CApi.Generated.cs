@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime.CApi {
     internal static unsafe partial class CApi {
-        internal const int FunctionCount = 302;
+        internal const int FunctionCount = 513;
 
         internal static void FillFunctionTable(IntPtr* table) {
             table[0] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_builtin_type;
@@ -310,6 +310,217 @@ namespace IronRuby.Runtime.CApi {
             table[299] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_undef_alloc_func;
             table[300] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, void>)&Entry_rb_undef_method;
             table[301] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, void>)&Entry_rb_unexpected_type;
+            table[302] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, byte*>)&Entry_rb_string_value_ptr;
+            table[303] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_proc_new;
+            table[304] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, int, int, ulong*, int>)&Entry_rb_get_kwargs;
+            table[305] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_io_descriptor;
+            table[306] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, int, ulong>)&Entry_rb_call_super_kw;
+            table[307] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_enc_str_coderange;
+            table[308] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int>)&Entry_rb_obj_method_arity;
+            table[309] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, void*, long>)&Entry_rb_enc_strlen;
+            table[310] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_check_to_integer;
+            table[311] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_check_array_type;
+            table[312] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_make_exception;
+            table[313] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fix2uint;
+            table[314] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_uint2big;
+            table[315] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_uint2inum;
+            table[316] = (IntPtr)(delegate* unmanaged[Cdecl]<nint, ulong>)&Entry_rb_int2inum;
+            table[317] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int*, nuint>)&Entry_rb_absint_size;
+            table[318] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_absint_singlebit_p;
+            table[319] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_big_sign;
+            table[320] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_big_cmp;
+            table[321] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, long, void>)&Entry_rb_big_pack;
+            table[322] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_file_open_str;
+            table[323] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, ulong>)&Entry_rb_file_open;
+            table[324] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_define_class_id_under;
+            table[325] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_define_module_id_under;
+            table[326] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int>)&Entry_rb_const_defined_at;
+            table[327] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_const_get_from;
+            table[328] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*>)&Entry_rb_class2name;
+            table[329] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_class_real;
+            table[330] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_path_to_class;
+            table[331] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong>)&Entry_rb_check_funcall;
+            table[332] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_to_encoding_index;
+            table[333] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, int>)&Entry_rb_enc_to_index;
+            table[334] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_time_num_new;
+            table[335] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_aref;
+            table[336] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_struct_aset;
+            table[337] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_getmember;
+            table[338] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_members;
+            table[339] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_s_members;
+            table[340] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_struct_size;
+            table[341] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_struct_initialize;
+            table[342] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_cmp;
+            table[343] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_relop;
+            table[344] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_num_coerce_bin;
+            table[345] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, ulong>)&Entry_rb_mutex_synchronize;
+            table[346] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_lock;
+            table[347] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_unlock;
+            table[348] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_trylock;
+            table[349] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_mutex_locked_p;
+            table[350] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_mutex_sleep;
+            table[351] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_instance_id;
+            table[352] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_const_id;
+            table[353] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_class_id;
+            table[354] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_local_id;
+            table[355] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_global_id;
+            table[356] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_is_attrset_id;
+            table[357] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_get_path;
+            table[358] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong>)&Entry_rb_enumeratorize;
+            table[359] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, void*, ulong>)&Entry_rb_enumeratorize_with_size;
+            table[360] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, int, ulong>)&Entry_rb_class_new_instance_kw;
+            table[361] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_funcall_with_block_kw;
+            table[362] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_yield_splat;
+            table[363] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_to_symbol;
+            table[364] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, void>)&Entry_rb_syserr_fail_str;
+            table[365] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, ulong>)&Entry_rb_syserr_new_str;
+            table[366] = (IntPtr)(delegate* unmanaged[Cdecl]<int, byte*, ulong>)&Entry_rb_syserr_new;
+            table[367] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, int, ulong>)&Entry_rb_reg_new;
+            table[368] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_reg_new_str;
+            table[369] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_reg_match;
+            table[370] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong, ulong>)&Entry_rb_reg_nth_match;
+            table[371] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_reg_options;
+            table[372] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_reg_regcomp;
+            table[373] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_backref_get;
+            table[374] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_range_new;
+            table[375] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong*, ulong*, int*, int>)&Entry_rb_range_values;
+            table[376] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long*, long*, long, int, ulong>)&Entry_rb_range_beg_len;
+            table[377] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, long, int>)&Entry_rb_memcicmp;
+            table[378] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, void>)&Entry_rb_ivar_foreach;
+            table[379] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_io_write;
+            table[380] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_io_puts;
+            table[381] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_io_print;
+            table[382] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_io_addstr;
+            table[383] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_get_io;
+            table[384] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_check_io;
+            table[385] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_closed_p;
+            table[386] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_binmode;
+            table[387] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_close;
+            table[388] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_path;
+            table[389] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_io_taint_check;
+            table[390] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_public_instance_methods;
+            table[391] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_instance_methods;
+            table[392] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_private_instance_methods;
+            table[393] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_class_protected_instance_methods;
+            table[394] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, byte*, byte*, ulong>)&Entry_rb_check_convert_type;
+            table[395] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, byte*, byte*, ulong>)&Entry_rb_convert_type;
+            table[396] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, ulong>)&Entry_rb_catch_obj;
+            table[397] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_throw_obj;
+            table[398] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong, void>)&Entry_rb_throw;
+            table[399] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void*, ulong>)&Entry_rb_thread_create;
+            table[400] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_thread_wakeup;
+            table[401] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_thread_local_aref;
+            table[402] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_thread_local_aset;
+            table[403] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_thread_alone;
+            table[404] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_set_new;
+            table[405] = (IntPtr)(delegate* unmanaged[Cdecl]<nuint, ulong>)&Entry_rb_set_new_capa;
+            table[406] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_add;
+            table[407] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_delete;
+            table[408] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, byte>)&Entry_rb_set_lookup;
+            table[409] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, nuint>)&Entry_rb_set_size;
+            table[410] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_set_clear;
+            table[411] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr, ulong, void>)&Entry_rb_set_foreach;
+            table[412] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_rational_new;
+            table[413] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_rational_num;
+            table[414] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_rational_den;
+            table[415] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_complex_new;
+            table[416] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_obj_method;
+            table[417] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, int>)&Entry_rb_method_boundp;
+            table[418] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, int>)&Entry_rb_obj_respond_to;
+            table[419] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_instance_variables;
+            table[420] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ivar_count;
+            table[421] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_prepend_module;
+            table[422] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_undef;
+            table[423] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_alias;
+            table[424] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_class_new;
+            table[425] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, IntPtr>)&Entry_rb_get_alloc_func;
+            table[426] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_marshal_dump;
+            table[427] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_marshal_load;
+            table[428] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_gc;
+            table[429] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_gc_enable;
+            table[430] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_gc_disable;
+            table[431] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_enc_str_new_static;
+            table[432] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_enc_str_asciionly_p;
+            table[433] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, int>)&Entry_rb_enc_dummy_p;
+            table[434] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void*>)&Entry_rb_enc_compatible;
+            table[435] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_default_internal_encoding;
+            table[436] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_default_external_encoding;
+            table[437] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_locale_encoding;
+            table[438] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_locale_encindex;
+            table[439] = (IntPtr)(delegate* unmanaged[Cdecl]<void*>)&Entry_rb_filesystem_encoding;
+            table[440] = (IntPtr)(delegate* unmanaged[Cdecl]<int>)&Entry_rb_filesystem_encindex;
+            table[441] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void*>)&Entry_rb_enc_check;
+            table[442] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, byte*, int>)&Entry_rb_enc_alias;
+            table[443] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_block_lambda;
+            table[444] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym2str;
+            table[445] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, long, void*, ulong>)&Entry_rb_intern3;
+            table[446] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_str_format;
+            table[447] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_f_sprintf;
+            table[448] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong, void>)&Entry_rb_define_global_const;
+            table[449] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_f_global_variables;
+            table[450] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_free_generic_ivar;
+            table[451] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, void>)&Entry_rb_copy_generic_ivar;
+            table[452] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_num_zerodiv;
+            table[453] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_make_backtrace;
+            table[454] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_obj_singleton_methods;
+            table[455] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_mod_constants;
+            table[456] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_mod_module_eval;
+            table[457] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_obj_instance_exec;
+            table[458] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_ary_resize;
+            table[459] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_ary_replace;
+            table[460] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_hash_fetch;
+            table[461] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_hash_set_ifnone;
+            table[462] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_start;
+            table[463] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong*, ulong, void>)&Entry_rb_hash_bulk_insert;
+            table[464] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_concat;
+            table[465] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_str_succ;
+            table[466] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_replace;
+            table[467] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, long, ulong>)&Entry_rb_str_ellipsize;
+            table[468] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_str_scrub;
+            table[469] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_str_buf_new_cstr;
+            table[470] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_sym_to_s;
+            table[471] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_is_proc;
+            table[472] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_obj_is_method;
+            table[473] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_proc_call;
+            table[474] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, ulong>)&Entry_rb_proc_call_with_block;
+            table[475] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int>)&Entry_rb_proc_arity;
+            table[476] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_proc_lambda_p;
+            table[477] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong, ulong>)&Entry_rb_method_call;
+            table[478] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, void>)&Entry_rb_set_end_proc;
+            table[479] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, ulong*, int>)&Entry_rb_frame_method_id_and_class;
+            table[480] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, void*, int>)&Entry_rb_ir_blocking_begin;
+            table[481] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void>)&Entry_rb_ir_blocking_end;
+            table[482] = (IntPtr)(delegate* unmanaged[Cdecl]<long, long, ulong>)&Entry_rb_time_new;
+            table[483] = (IntPtr)(delegate* unmanaged[Cdecl]<long, long, ulong>)&Entry_rb_time_nano_new;
+            table[484] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, int, ulong>)&Entry_rb_time_timespec_new;
+            table[485] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_interval;
+            table[486] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_timeval;
+            table[487] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeSpec>)&Entry_rb_time_timespec;
+            table[488] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, void>)&Entry_rb_timespec_now;
+            table[489] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_get;
+            table[490] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_cvar_set;
+            table[491] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_defined;
+            table[492] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_cv_get;
+            table[493] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_cv_set;
+            table[494] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_define_class_variable;
+            table[495] = (IntPtr)(delegate* unmanaged[Cdecl]<long, ulong>)&Entry_rb_hash_new_capa;
+            table[496] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash;
+            table[497] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_delete_if;
+            table[498] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_freeze;
+            table[499] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_fiber_new;
+            table[500] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_resume;
+            table[501] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_fiber_yield;
+            table[502] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_fiber_current;
+            table[503] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fiber_alive_p;
+            table[504] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_raise;
+            table[505] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_proc_call_kw;
+            table[506] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_proc_call_with_block_kw;
+            table[507] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, IntPtr, ulong, ulong>)&Entry_rb_catch;
+            table[508] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_variable;
+            table[509] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_readonly_variable;
+            table[510] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void*, void*, void>)&Entry_rb_define_hooked_variable;
+            table[511] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, void*, void>)&Entry_rb_define_virtual_variable;
+            table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -4233,6 +4444,2749 @@ namespace IronRuby.Runtime.CApi {
             } catch (Exception e) {
                 SetPending(e);
                 return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static byte* Entry_rb_string_value_ptr(ulong* ptr) {
+            var frame = EnterManaged();
+            try {
+                return rb_string_value_ptr(ptr);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_proc_new(IntPtr func, ulong callback_arg) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_new(func, callback_arg);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_get_kwargs(ulong keyword_hash, ulong* table, int required, int optional, ulong* values) {
+            var frame = EnterManaged();
+            try {
+                return rb_get_kwargs(keyword_hash, table, required, optional, values);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_io_descriptor(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_descriptor(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_call_super_kw(int argc, ulong* argv, int kw_splat) {
+            var frame = EnterManaged();
+            try {
+                return rb_call_super_kw(argc, argv, kw_splat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_enc_str_coderange(ulong str) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_str_coderange(str);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_obj_method_arity(ulong obj, ulong mid) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_method_arity(obj, mid);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static long Entry_rb_enc_strlen(byte* head, byte* tail, void* enc) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_strlen(head, tail, enc);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_check_to_integer(ulong val, byte* mid) {
+            var frame = EnterManaged();
+            try {
+                return rb_check_to_integer(val, mid);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_check_array_type(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_check_array_type(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_make_exception(int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_make_exception(argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fix2uint(ulong num) {
+            var frame = EnterManaged();
+            try {
+                return rb_fix2uint(num);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_uint2big(nuint i) {
+            var frame = EnterManaged();
+            try {
+                return rb_uint2big(i);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_uint2inum(nuint i) {
+            var frame = EnterManaged();
+            try {
+                return rb_uint2inum(i);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_int2inum(nint i) {
+            var frame = EnterManaged();
+            try {
+                return rb_int2inum(i);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static nuint Entry_rb_absint_size(ulong val, int* nlz_bits_ret) {
+            var frame = EnterManaged();
+            try {
+                return rb_absint_size(val, nlz_bits_ret);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_absint_singlebit_p(ulong val) {
+            var frame = EnterManaged();
+            try {
+                return rb_absint_singlebit_p(val);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_big_sign(ulong num) {
+            var frame = EnterManaged();
+            try {
+                return rb_big_sign(num);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_big_cmp(ulong lhs, ulong rhs) {
+            var frame = EnterManaged();
+            try {
+                return rb_big_cmp(lhs, rhs);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_big_pack(ulong val, ulong* buf, long num_longs) {
+            var frame = EnterManaged();
+            try {
+                rb_big_pack(val, buf, num_longs);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_file_open_str(ulong fname, byte* fmode) {
+            var frame = EnterManaged();
+            try {
+                return rb_file_open_str(fname, fmode);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_file_open(byte* fname, byte* fmode) {
+            var frame = EnterManaged();
+            try {
+                return rb_file_open(fname, fmode);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_define_class_id_under(ulong outer, ulong id, ulong super) {
+            var frame = EnterManaged();
+            try {
+                return rb_define_class_id_under(outer, id, super);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_define_module_id_under(ulong outer, ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_define_module_id_under(outer, id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_const_defined_at(ulong space, ulong name) {
+            var frame = EnterManaged();
+            try {
+                return rb_const_defined_at(space, name);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_const_get_from(ulong space, ulong name) {
+            var frame = EnterManaged();
+            try {
+                return rb_const_get_from(space, name);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static byte* Entry_rb_class2name(ulong klass) {
+            var frame = EnterManaged();
+            try {
+                return rb_class2name(klass);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_real(ulong klass) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_real(klass);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_path_to_class(ulong path) {
+            var frame = EnterManaged();
+            try {
+                return rb_path_to_class(path);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_check_funcall(ulong recv, ulong mid, int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_check_funcall(recv, mid, argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_to_encoding_index(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_to_encoding_index(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_enc_to_index(void* enc) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_to_index(enc);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_time_num_new(ulong timev, ulong off) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_num_new(timev, off);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_aref(ulong st, ulong k) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_aref(st, k);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_aset(ulong st, ulong k, ulong v) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_aset(st, k, v);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_getmember(ulong self, ulong key) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_getmember(self, key);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_members(ulong self) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_members(self);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_s_members(ulong klass) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_s_members(klass);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_size(ulong st) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_size(st);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_struct_initialize(ulong self, ulong values) {
+            var frame = EnterManaged();
+            try {
+                return rb_struct_initialize(self, values);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_num_coerce_cmp(ulong lhs, ulong rhs, ulong op) {
+            var frame = EnterManaged();
+            try {
+                return rb_num_coerce_cmp(lhs, rhs, op);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_num_coerce_relop(ulong lhs, ulong rhs, ulong op) {
+            var frame = EnterManaged();
+            try {
+                return rb_num_coerce_relop(lhs, rhs, op);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_num_coerce_bin(ulong lhs, ulong rhs, ulong op) {
+            var frame = EnterManaged();
+            try {
+                return rb_num_coerce_bin(lhs, rhs, op);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mutex_synchronize(ulong mutex, IntPtr func, ulong arg) {
+            var frame = EnterManaged();
+            try {
+                return rb_mutex_synchronize(mutex, func, arg);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mutex_lock(ulong mutex) {
+            var frame = EnterManaged();
+            try {
+                return rb_mutex_lock(mutex);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mutex_unlock(ulong mutex) {
+            var frame = EnterManaged();
+            try {
+                return rb_mutex_unlock(mutex);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mutex_trylock(ulong mutex) {
+            var frame = EnterManaged();
+            try {
+                return rb_mutex_trylock(mutex);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mutex_locked_p(ulong mutex) {
+            var frame = EnterManaged();
+            try {
+                return rb_mutex_locked_p(mutex);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mutex_sleep(ulong self, ulong timeout) {
+            var frame = EnterManaged();
+            try {
+                return rb_mutex_sleep(self, timeout);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_is_instance_id(ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_is_instance_id(id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_is_const_id(ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_is_const_id(id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_is_class_id(ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_is_class_id(id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_is_local_id(ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_is_local_id(id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_is_global_id(ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_is_global_id(id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_is_attrset_id(ulong id) {
+            var frame = EnterManaged();
+            try {
+                return rb_is_attrset_id(id);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_get_path(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_get_path(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_enumeratorize(ulong recv, ulong meth, int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_enumeratorize(recv, meth, argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_enumeratorize_with_size(ulong recv, ulong meth, int argc, ulong* argv, void* func) {
+            var frame = EnterManaged();
+            try {
+                return rb_enumeratorize_with_size(recv, meth, argc, argv, func);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_new_instance_kw(int argc, ulong* argv, ulong klass, int kw_splat) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_new_instance_kw(argc, argv, klass, kw_splat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_funcall_with_block_kw(ulong recv, ulong mid, int argc, ulong* argv, ulong procval, int kw_splat) {
+            var frame = EnterManaged();
+            try {
+                return rb_funcall_with_block_kw(recv, mid, argc, argv, procval, kw_splat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_yield_splat(ulong ary) {
+            var frame = EnterManaged();
+            try {
+                return rb_yield_splat(ary);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_to_symbol(ulong name) {
+            var frame = EnterManaged();
+            try {
+                return rb_to_symbol(name);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_syserr_fail_str(int err, ulong msg) {
+            var frame = EnterManaged();
+            try {
+                rb_syserr_fail_str(err, msg);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_syserr_new_str(int n, ulong arg) {
+            var frame = EnterManaged();
+            try {
+                return rb_syserr_new_str(n, arg);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_syserr_new(int err, byte* msg) {
+            var frame = EnterManaged();
+            try {
+                return rb_syserr_new(err, msg);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_reg_new(byte* src, long len, int opts) {
+            var frame = EnterManaged();
+            try {
+                return rb_reg_new(src, len, opts);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_reg_new_str(ulong src, int opts) {
+            var frame = EnterManaged();
+            try {
+                return rb_reg_new_str(src, opts);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_reg_match(ulong re, ulong str) {
+            var frame = EnterManaged();
+            try {
+                return rb_reg_match(re, str);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_reg_nth_match(int n, ulong md) {
+            var frame = EnterManaged();
+            try {
+                return rb_reg_nth_match(n, md);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_reg_options(ulong re) {
+            var frame = EnterManaged();
+            try {
+                return rb_reg_options(re);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_reg_regcomp(ulong str) {
+            var frame = EnterManaged();
+            try {
+                return rb_reg_regcomp(str);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_backref_get() {
+            var frame = EnterManaged();
+            try {
+                return rb_backref_get();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_range_new(ulong beg, ulong end, int excl) {
+            var frame = EnterManaged();
+            try {
+                return rb_range_new(beg, end, excl);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_range_values(ulong range, ulong* begp, ulong* endp, int* exclp) {
+            var frame = EnterManaged();
+            try {
+                return rb_range_values(range, begp, endp, exclp);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_range_beg_len(ulong range, long* begp, long* lenp, long len, int err) {
+            var frame = EnterManaged();
+            try {
+                return rb_range_beg_len(range, begp, lenp, len, err);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_memcicmp(void* s1, void* s2, long n) {
+            var frame = EnterManaged();
+            try {
+                return rb_memcicmp(s1, s2, n);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_ivar_foreach(ulong obj, IntPtr func, ulong arg) {
+            var frame = EnterManaged();
+            try {
+                rb_ivar_foreach(obj, func, arg);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_write(ulong io, ulong str) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_write(io, str);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_puts(int argc, ulong* argv, ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_puts(argc, argv, io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_print(int argc, ulong* argv, ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_print(argc, argv, io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_addstr(ulong io, ulong str) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_addstr(io, str);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_get_io(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_get_io(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_check_io(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_check_io(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_closed_p(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_closed_p(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_binmode(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_binmode(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_close(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_close(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_path(ulong io) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_path(io);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_io_taint_check(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_io_taint_check(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_public_instance_methods(int argc, ulong* argv, ulong mod) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_public_instance_methods(argc, argv, mod);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_instance_methods(int argc, ulong* argv, ulong mod) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_instance_methods(argc, argv, mod);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_private_instance_methods(int argc, ulong* argv, ulong mod) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_private_instance_methods(argc, argv, mod);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_protected_instance_methods(int argc, ulong* argv, ulong mod) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_protected_instance_methods(argc, argv, mod);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_check_convert_type(ulong val, int type, byte* name, byte* mid) {
+            var frame = EnterManaged();
+            try {
+                return rb_check_convert_type(val, type, name, mid);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_convert_type(ulong val, int type, byte* name, byte* mid) {
+            var frame = EnterManaged();
+            try {
+                return rb_convert_type(val, type, name, mid);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_catch_obj(ulong tag, IntPtr func, ulong data) {
+            var frame = EnterManaged();
+            try {
+                return rb_catch_obj(tag, func, data);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_throw_obj(ulong tag, ulong val) {
+            var frame = EnterManaged();
+            try {
+                rb_throw_obj(tag, val);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_throw(byte* tag, ulong val) {
+            var frame = EnterManaged();
+            try {
+                rb_throw(tag, val);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_thread_create(IntPtr f, void* g) {
+            var frame = EnterManaged();
+            try {
+                return rb_thread_create(f, g);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_thread_wakeup(ulong thread) {
+            var frame = EnterManaged();
+            try {
+                return rb_thread_wakeup(thread);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_thread_local_aref(ulong thread, ulong key) {
+            var frame = EnterManaged();
+            try {
+                return rb_thread_local_aref(thread, key);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_thread_local_aset(ulong thread, ulong key, ulong val) {
+            var frame = EnterManaged();
+            try {
+                return rb_thread_local_aset(thread, key, val);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_thread_alone() {
+            var frame = EnterManaged();
+            try {
+                return rb_thread_alone();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_set_new() {
+            var frame = EnterManaged();
+            try {
+                return rb_set_new();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_set_new_capa(nuint capa) {
+            var frame = EnterManaged();
+            try {
+                return rb_set_new_capa(capa);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static byte Entry_rb_set_add(ulong set, ulong element) {
+            var frame = EnterManaged();
+            try {
+                return rb_set_add(set, element);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static byte Entry_rb_set_delete(ulong set, ulong element) {
+            var frame = EnterManaged();
+            try {
+                return rb_set_delete(set, element);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static byte Entry_rb_set_lookup(ulong set, ulong element) {
+            var frame = EnterManaged();
+            try {
+                return rb_set_lookup(set, element);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static nuint Entry_rb_set_size(ulong set) {
+            var frame = EnterManaged();
+            try {
+                return rb_set_size(set);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_set_clear(ulong set) {
+            var frame = EnterManaged();
+            try {
+                return rb_set_clear(set);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_set_foreach(ulong set, IntPtr func, ulong arg) {
+            var frame = EnterManaged();
+            try {
+                rb_set_foreach(set, func, arg);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_rational_new(ulong num, ulong den) {
+            var frame = EnterManaged();
+            try {
+                return rb_rational_new(num, den);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_rational_num(ulong rat) {
+            var frame = EnterManaged();
+            try {
+                return rb_rational_num(rat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_rational_den(ulong rat) {
+            var frame = EnterManaged();
+            try {
+                return rb_rational_den(rat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_complex_new(ulong real, ulong imag) {
+            var frame = EnterManaged();
+            try {
+                return rb_complex_new(real, imag);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_obj_method(ulong recv, ulong mid) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_method(recv, mid);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_method_boundp(ulong klass, ulong id, int ex) {
+            var frame = EnterManaged();
+            try {
+                return rb_method_boundp(klass, id, ex);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_obj_respond_to(ulong obj, ulong mid, int private_p) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_respond_to(obj, mid, private_p);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_obj_instance_variables(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_instance_variables(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_ivar_count(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_ivar_count(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_prepend_module(ulong klass, ulong module) {
+            var frame = EnterManaged();
+            try {
+                rb_prepend_module(klass, module);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_undef(ulong mod, ulong mid) {
+            var frame = EnterManaged();
+            try {
+                rb_undef(mod, mid);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_alias(ulong klass, ulong dst, ulong src) {
+            var frame = EnterManaged();
+            try {
+                rb_alias(klass, dst, src);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_class_new(ulong super) {
+            var frame = EnterManaged();
+            try {
+                return rb_class_new(super);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static IntPtr Entry_rb_get_alloc_func(ulong klass) {
+            var frame = EnterManaged();
+            try {
+                return rb_get_alloc_func(klass);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_marshal_dump(ulong obj, ulong port) {
+            var frame = EnterManaged();
+            try {
+                return rb_marshal_dump(obj, port);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_marshal_load(ulong port) {
+            var frame = EnterManaged();
+            try {
+                return rb_marshal_load(port);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_gc() {
+            var frame = EnterManaged();
+            try {
+                rb_gc();
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_gc_enable() {
+            var frame = EnterManaged();
+            try {
+                return rb_gc_enable();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_gc_disable() {
+            var frame = EnterManaged();
+            try {
+                return rb_gc_disable();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_enc_str_new_static(byte* ptr, long len, void* enc) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_str_new_static(ptr, len, enc);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_enc_str_asciionly_p(ulong str) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_str_asciionly_p(str);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_enc_dummy_p(void* enc) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_dummy_p(enc);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void* Entry_rb_enc_compatible(ulong str1, ulong str2) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_compatible(str1, str2);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void* Entry_rb_default_internal_encoding() {
+            var frame = EnterManaged();
+            try {
+                return rb_default_internal_encoding();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void* Entry_rb_default_external_encoding() {
+            var frame = EnterManaged();
+            try {
+                return rb_default_external_encoding();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void* Entry_rb_locale_encoding() {
+            var frame = EnterManaged();
+            try {
+                return rb_locale_encoding();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_locale_encindex() {
+            var frame = EnterManaged();
+            try {
+                return rb_locale_encindex();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void* Entry_rb_filesystem_encoding() {
+            var frame = EnterManaged();
+            try {
+                return rb_filesystem_encoding();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_filesystem_encindex() {
+            var frame = EnterManaged();
+            try {
+                return rb_filesystem_encindex();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void* Entry_rb_enc_check(ulong str1, ulong str2) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_check(str1, str2);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_enc_alias(byte* alias, byte* orig) {
+            var frame = EnterManaged();
+            try {
+                return rb_enc_alias(alias, orig);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_block_lambda() {
+            var frame = EnterManaged();
+            try {
+                return rb_block_lambda();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_sym2str(ulong symbol) {
+            var frame = EnterManaged();
+            try {
+                return rb_sym2str(symbol);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_intern3(byte* name, long len, void* enc) {
+            var frame = EnterManaged();
+            try {
+                return rb_intern3(name, len, enc);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_format(int argc, ulong* argv, ulong fmt) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_format(argc, argv, fmt);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_f_sprintf(int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_f_sprintf(argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_define_global_const(byte* name, ulong val) {
+            var frame = EnterManaged();
+            try {
+                rb_define_global_const(name, val);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_f_global_variables() {
+            var frame = EnterManaged();
+            try {
+                return rb_f_global_variables();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_free_generic_ivar(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                rb_free_generic_ivar(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_copy_generic_ivar(ulong clone, ulong obj) {
+            var frame = EnterManaged();
+            try {
+                rb_copy_generic_ivar(clone, obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_num_zerodiv() {
+            var frame = EnterManaged();
+            try {
+                rb_num_zerodiv();
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_make_backtrace() {
+            var frame = EnterManaged();
+            try {
+                return rb_make_backtrace();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_obj_singleton_methods(int argc, ulong* argv, ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_singleton_methods(argc, argv, obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mod_constants(int argc, ulong* argv, ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_mod_constants(argc, argv, recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_mod_module_eval(int argc, ulong* argv, ulong mod) {
+            var frame = EnterManaged();
+            try {
+                return rb_mod_module_eval(argc, argv, mod);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_obj_instance_exec(int argc, ulong* argv, ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_instance_exec(argc, argv, recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_ary_resize(ulong ary, long len) {
+            var frame = EnterManaged();
+            try {
+                return rb_ary_resize(ary, len);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_ary_replace(ulong copy, ulong orig) {
+            var frame = EnterManaged();
+            try {
+                return rb_ary_replace(copy, orig);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash_fetch(ulong hash, ulong key) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash_fetch(hash, key);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash_set_ifnone(ulong hash, ulong ifnone) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash_set_ifnone(hash, ifnone);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash_start(ulong i) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash_start(i);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_hash_bulk_insert(long argc, ulong* argv, ulong hash) {
+            var frame = EnterManaged();
+            try {
+                rb_hash_bulk_insert(argc, argv, hash);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_concat(ulong dst, ulong src) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_concat(dst, src);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_succ(ulong orig) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_succ(orig);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_replace(ulong dst, ulong src) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_replace(dst, src);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_ellipsize(ulong str, long len) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_ellipsize(str, len);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_scrub(ulong str, ulong repl) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_scrub(str, repl);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_str_buf_new_cstr(byte* ptr) {
+            var frame = EnterManaged();
+            try {
+                return rb_str_buf_new_cstr(ptr);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_sym_to_s(ulong sym) {
+            var frame = EnterManaged();
+            try {
+                return rb_sym_to_s(sym);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_obj_is_proc(ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_is_proc(recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_obj_is_method(ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_obj_is_method(recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_proc_call(ulong recv, ulong args) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_call(recv, args);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_proc_call_with_block(ulong recv, int argc, ulong* argv, ulong proc) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_call_with_block(recv, argc, argv, proc);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_proc_arity(ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_arity(recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_proc_lambda_p(ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_lambda_p(recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_method_call(int argc, ulong* argv, ulong recv) {
+            var frame = EnterManaged();
+            try {
+                return rb_method_call(argc, argv, recv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_set_end_proc(IntPtr func, ulong arg) {
+            var frame = EnterManaged();
+            try {
+                rb_set_end_proc(func, arg);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_frame_method_id_and_class(ulong* idp, ulong* klassp) {
+            var frame = EnterManaged();
+            try {
+                return rb_frame_method_id_and_class(idp, klassp);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static int Entry_rb_ir_blocking_begin(void* ubf, void* data2, void* thread) {
+            var frame = EnterManaged();
+            try {
+                return rb_ir_blocking_begin(ubf, data2, thread);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_ir_blocking_end(int token) {
+            var frame = EnterManaged();
+            try {
+                rb_ir_blocking_end(token);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_time_new(long sec, long usec) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_new(sec, usec);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_time_nano_new(long sec, long nsec) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_nano_new(sec, nsec);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_time_timespec_new(TimeSpec* ts, int offset) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_timespec_new(ts, offset);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static TimeVal Entry_rb_time_interval(ulong num) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_interval(num);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static TimeVal Entry_rb_time_timeval(ulong time) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_timeval(time);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static TimeSpec Entry_rb_time_timespec(ulong time) {
+            var frame = EnterManaged();
+            try {
+                return rb_time_timespec(time);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_timespec_now(TimeSpec* ts) {
+            var frame = EnterManaged();
+            try {
+                rb_timespec_now(ts);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_cvar_get(ulong klass, ulong name) {
+            var frame = EnterManaged();
+            try {
+                return rb_cvar_get(klass, name);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_cvar_set(ulong klass, ulong name, ulong val) {
+            var frame = EnterManaged();
+            try {
+                rb_cvar_set(klass, name, val);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_cvar_defined(ulong klass, ulong name) {
+            var frame = EnterManaged();
+            try {
+                return rb_cvar_defined(klass, name);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_cv_get(ulong klass, byte* name) {
+            var frame = EnterManaged();
+            try {
+                return rb_cv_get(klass, name);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_cv_set(ulong klass, byte* name, ulong val) {
+            var frame = EnterManaged();
+            try {
+                rb_cv_set(klass, name, val);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_define_class_variable(ulong arg0, byte* arg1, ulong arg2) {
+            var frame = EnterManaged();
+            try {
+                rb_define_class_variable(arg0, arg1, arg2);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash_new_capa(long capa) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash_new_capa(capa);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash_delete_if(ulong hash) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash_delete_if(hash);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_hash_freeze(ulong obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_hash_freeze(obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fiber_new(IntPtr func, ulong callback_obj) {
+            var frame = EnterManaged();
+            try {
+                return rb_fiber_new(func, callback_obj);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fiber_resume(ulong fiber, int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_fiber_resume(fiber, argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fiber_yield(int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_fiber_yield(argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fiber_current() {
+            var frame = EnterManaged();
+            try {
+                return rb_fiber_current();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fiber_alive_p(ulong fiber) {
+            var frame = EnterManaged();
+            try {
+                return rb_fiber_alive_p(fiber);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_fiber_raise(ulong fiber, int argc, ulong* argv) {
+            var frame = EnterManaged();
+            try {
+                return rb_fiber_raise(fiber, argc, argv);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_proc_call_kw(ulong recv, ulong args, int kw_splat) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_call_kw(recv, args, kw_splat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_proc_call_with_block_kw(ulong recv, int argc, ulong* argv, ulong proc, int kw_splat) {
+            var frame = EnterManaged();
+            try {
+                return rb_proc_call_with_block_kw(recv, argc, argv, proc, kw_splat);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_catch(byte* tag, IntPtr func, ulong data) {
+            var frame = EnterManaged();
+            try {
+                return rb_catch(tag, func, data);
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_define_variable(byte* name, ulong* var) {
+            var frame = EnterManaged();
+            try {
+                rb_define_variable(name, var);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_define_readonly_variable(byte* name, ulong* var) {
+            var frame = EnterManaged();
+            try {
+                rb_define_readonly_variable(name, var);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_define_hooked_variable(byte* name, ulong* var, void* getter, void* setter) {
+            var frame = EnterManaged();
+            try {
+                rb_define_hooked_variable(name, var, getter, setter);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_define_virtual_variable(byte* name, void* getter, void* setter) {
+            var frame = EnterManaged();
+            try {
+                rb_define_virtual_variable(name, getter, setter);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static ulong Entry_rb_ident_hash_new() {
+            var frame = EnterManaged();
+            try {
+                return rb_ident_hash_new();
+            } catch (Exception e) {
+                SetPending(e);
+                return default;
             } finally {
                 LeaveManaged(frame);
             }

@@ -7,7 +7,11 @@
  * VALUE variables (rb_cObject...) that IronRuby fills in when it loads the shim.
  */
 #include "capi.h"
+#include "ruby/thread.h"
+#include "ruby/util.h"
 #include <errno.h>
+#include <pthread.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +19,8 @@
 /* ruby.h points snprintf and vsnprintf at ruby_snprintf, which is defined here in terms of them */
 #undef snprintf
 #undef vsnprintf
+#undef strtod
+#undef strdup  /* ruby/util.h: ruby_strdup, defined below */
 
 RB_IR_THREAD struct rb_ir_frame *rb_ir_top;
 RB_IR_THREAD int rb_ir_pending;
@@ -124,6 +130,13 @@ rb_ir_call_foreach(void *fn, VALUE key, VALUE value, VALUE arg, int *raised)
     *raised = 0;
     RB_IR_PROTECT(frame, result = ((int (*)(VALUE, VALUE, VALUE))fn)(key, value, arg), *raised = 1);
     return result;
+}
+
+/* Whether this thread is one Ruby code runs on: IronRuby has entered C on it. */
+int
+ruby_native_thread_p(void)
+{
+    return rb_ir_top != NULL;
 }
 
 /* A function the shim does not implement yet (stubs.generated.c). */
@@ -749,6 +762,69 @@ utf8_left_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *en
 static OnigUChar *sb_left_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *end, const OnigEncodingType *enc) { return (OnigUChar *)p; }
 static int always_true(const OnigUChar *p, const OnigUChar *end, const OnigEncodingType *enc) { return 1; }
 
+/* Character classes: exact for ASCII; a non-ASCII code point is a letter (and so alnum, word,
+ * graph, print) in a Unicode encoding and nothing in any other, which is close enough for what
+ * extensions ask (rb_enc_isalnum, rb_enc_isspace...) until IronRuby answers these itself. */
+static int
+is_code_ctype(OnigCodePoint code, OnigCtype ctype, const OnigEncodingType *enc)
+{
+    if (code < 128) {
+        int c = (int)code;
+        switch (ctype) {
+          case ONIGENC_CTYPE_NEWLINE: return c == '\n';
+          case ONIGENC_CTYPE_ALPHA: return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+          case ONIGENC_CTYPE_BLANK: return c == ' ' || c == '\t';
+          case ONIGENC_CTYPE_CNTRL: return c < 0x20 || c == 0x7f;
+          case ONIGENC_CTYPE_DIGIT: return c >= '0' && c <= '9';
+          case ONIGENC_CTYPE_GRAPH: return c > 0x20 && c < 0x7f;
+          case ONIGENC_CTYPE_LOWER: return c >= 'a' && c <= 'z';
+          case ONIGENC_CTYPE_PRINT: return c >= 0x20 && c < 0x7f;
+          case ONIGENC_CTYPE_PUNCT: return c > 0x20 && c < 0x7f && !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'));
+          case ONIGENC_CTYPE_SPACE: return c == ' ' || (c >= '\t' && c <= '\r');
+          case ONIGENC_CTYPE_UPPER: return c >= 'A' && c <= 'Z';
+          case ONIGENC_CTYPE_XDIGIT: return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+          case ONIGENC_CTYPE_WORD: return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+          case ONIGENC_CTYPE_ALNUM: return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+          case ONIGENC_CTYPE_ASCII: return 1;
+        }
+        return 0;
+    }
+    if (!(enc->flags & ONIGENC_FLAG_UNICODE)) return 0;
+    switch (ctype) {
+      case ONIGENC_CTYPE_ALPHA: case ONIGENC_CTYPE_GRAPH: case ONIGENC_CTYPE_PRINT:
+      case ONIGENC_CTYPE_WORD: case ONIGENC_CTYPE_ALNUM:
+        return 1;
+    }
+    return 0;
+}
+
+static int
+mbc_case_fold(OnigCaseFoldType flag, const OnigUChar **pp, const OnigUChar *end, OnigUChar *to, const OnigEncodingType *enc)
+{
+    const OnigUChar *p = *pp;
+    *to = (*p >= 'A' && *p <= 'Z') ? (OnigUChar)(*p + 32) : *p;
+    (*pp)++;
+    return 1;
+}
+
+static int apply_all_case_fold(OnigCaseFoldType flag, OnigApplyAllCaseFoldFunc f, void *arg, const OnigEncodingType *enc) { return 0; }
+static int get_case_fold_codes_by_str(OnigCaseFoldType flag, const OnigUChar *p, const OnigUChar *end, OnigCaseFoldCodeItem acs[], const OnigEncodingType *enc) { return 0; }
+static int property_name_to_ctype(const OnigEncodingType *enc, const OnigUChar *p, const OnigUChar *end) { return ONIGERR_INVALID_CHAR_PROPERTY_NAME; }
+static int get_ctype_code_range(OnigCtype ctype, OnigCodePoint *sb_out, const OnigCodePoint *ranges[], const OnigEncodingType *enc) { return ONIG_NO_SUPPORT_CONFIG; }
+
+static int
+case_map(OnigCaseFoldType *flagP, const OnigUChar **pp, const OnigUChar *end, OnigUChar *to, OnigUChar *to_end, const OnigEncodingType *enc)
+{
+    OnigUChar *start = to;
+    while (*pp < end && to < to_end) {
+        OnigUChar c = *(*pp)++;
+        if ((*flagP & ONIGENC_CASE_UPCASE) && c >= 'a' && c <= 'z') c -= 32;
+        else if ((*flagP & ONIGENC_CASE_DOWNCASE) && c >= 'A' && c <= 'Z') c += 32;
+        *to++ = c;
+    }
+    return (int)(to - start);
+}
+
 RB_IR_EXPORT rb_encoding *
 rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int utf8)
 {
@@ -766,5 +842,406 @@ rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int u
     enc->code_to_mbc = utf8 ? utf8_code_to_mbc : sb_code_to_mbc;
     enc->left_adjust_char_head = utf8 ? utf8_left_adjust : sb_left_adjust;
     enc->is_allowed_reverse_match = always_true;
+    enc->is_code_ctype = is_code_ctype;
+    enc->mbc_case_fold = mbc_case_fold;
+    enc->apply_all_case_fold = apply_all_case_fold;
+    enc->get_case_fold_codes_by_str = get_case_fold_codes_by_str;
+    enc->property_name_to_ctype = property_name_to_ctype;
+    enc->get_ctype_code_range = get_ctype_code_range;
+    enc->case_map = case_map;
     return enc;
+}
+
+/* ------------------------------------------------------------------------------------------
+ * rb_scan_args, for a format that is not a compile-time constant (the headers inline the
+ * constant case). CRuby's class.c: "[lead][opt][*][trail][:][&]". IronRuby does not tell C
+ * whether keywords were passed yet, so a trailing Hash is taken as the keywords when the
+ * format has ':' and there are more arguments than the mandatory ones.
+ * ------------------------------------------------------------------------------------------ */
+
+static int
+rb_ir_scan_args(int argc, const VALUE *argv, const char *fmt, va_list ap)
+{
+    const char *p = fmt;
+    int n_lead = 0, n_opt = 0, n_trail = 0, f_var = 0, f_hash = 0, f_block = 0;
+    if (*p >= '0' && *p <= '9') {
+        n_lead = *p++ - '0';
+        if (*p >= '0' && *p <= '9') n_opt = *p++ - '0';
+    }
+    if (*p == '*') { f_var = 1; p++; }
+    if (*p >= '0' && *p <= '9') n_trail = *p++ - '0';
+    if (*p == ':') { f_hash = 1; p++; }
+    if (*p == '&') { f_block = 1; p++; }
+    if (*p != '\0') rb_fatal("bad scan arg format: %s", fmt);
+
+    int n_mand = n_lead + n_trail;
+    VALUE hash = Qnil;
+    if (f_hash && argc > n_mand && RB_TYPE_P(argv[argc - 1], T_HASH)) {
+        hash = rb_hash_dup(argv[argc - 1]);
+        argc--;
+    }
+    if (argc < n_mand || (!f_var && argc > n_mand + n_opt)) {
+        rb_error_arity(argc, n_mand, f_var ? -1 : n_mand + n_opt);
+    }
+
+    int i = 0;
+    for (int k = 0; k < n_lead; k++) {
+        VALUE *var = va_arg(ap, VALUE *);
+        if (var) *var = argv[i];
+        i++;
+    }
+    for (int k = 0; k < n_opt; k++) {
+        VALUE *var = va_arg(ap, VALUE *);
+        if (i < argc - n_trail) {
+            if (var) *var = argv[i];
+            i++;
+        } else if (var) {
+            *var = Qnil;
+        }
+    }
+    if (f_var) {
+        int n = argc - i - n_trail;
+        VALUE *var = va_arg(ap, VALUE *);
+        if (var) *var = n > 0 ? rb_ary_new_from_values(n, argv + i) : rb_ary_new();
+        if (n > 0) i += n;
+    }
+    for (int k = 0; k < n_trail; k++) {
+        VALUE *var = va_arg(ap, VALUE *);
+        if (var) *var = argv[i];
+        i++;
+    }
+    if (f_hash) {
+        VALUE *var = va_arg(ap, VALUE *);
+        if (var) *var = hash;
+    }
+    if (f_block) {
+        VALUE *var = va_arg(ap, VALUE *);
+        if (var) *var = rb_block_given_p() ? rb_block_proc() : Qnil;
+    }
+    return argc;
+}
+
+int
+(rb_scan_args)(int argc, const VALUE *argv, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int r = rb_ir_scan_args(argc, argv, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+int
+(rb_scan_args_kw)(int kw_flag, int argc, const VALUE *argv, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int r = rb_ir_scan_args(argc, argv, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+/* ------------------------------------------------------------------------------------------
+ * More variadic and C-only functions.
+ * ------------------------------------------------------------------------------------------ */
+
+static VALUE do_eval_string(VALUE str) { return rb_eval_string((const char *)str); }
+
+VALUE
+rb_eval_string_protect(const char *str, int *state)
+{
+    return rb_protect(do_eval_string, (VALUE)str, state);
+}
+
+void
+rb_category_warn(rb_warning_category_t category, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    VALUE msg = rb_vsprintf(fmt, ap);
+    va_end(ap);
+    rb_ir_warn(msg, 0);
+}
+
+void
+rb_category_warning(rb_warning_category_t category, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    VALUE msg = rb_vsprintf(fmt, ap);
+    va_end(ap);
+    rb_ir_warn(msg, 1);
+}
+
+VALUE
+rb_io_printf(int argc, const VALUE *argv, VALUE out)
+{
+    rb_io_write(out, rb_f_sprintf(argc, argv));
+    return Qnil;
+}
+
+VALUE
+rb_struct_define(const char *name, ...)
+{
+    VALUE args = rb_ary_new();
+    if (name) rb_ary_push(args, rb_str_new_cstr(name));
+    va_list ap;
+    va_start(ap, name);
+    for (;;) {
+        const char *member = va_arg(ap, const char *);
+        if (!member) break;
+        rb_ary_push(args, rb_id2sym(rb_intern(member)));
+    }
+    va_end(ap);
+    return rb_funcallv(rb_cStruct, rb_intern("new"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
+}
+
+VALUE
+rb_struct_define_under(VALUE outer, const char *name, ...)
+{
+    VALUE args = rb_ary_new();
+    va_list ap;
+    va_start(ap, name);
+    for (;;) {
+        const char *member = va_arg(ap, const char *);
+        if (!member) break;
+        rb_ary_push(args, rb_id2sym(rb_intern(member)));
+    }
+    va_end(ap);
+    VALUE st = rb_funcallv(rb_cStruct, rb_intern("new"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
+    rb_const_set(outer, rb_intern(name), st);
+    return st;
+}
+
+VALUE
+rb_struct_new(VALUE klass, ...)
+{
+    long n = RARRAY_LEN(rb_struct_s_members(klass));
+    VALUE args = rb_ary_new();
+    va_list ap;
+    va_start(ap, klass);
+    for (long i = 0; i < n; i++) rb_ary_push(args, va_arg(ap, VALUE));
+    va_end(ap);
+    return rb_class_new_instance((int)n, RARRAY_CONST_PTR(args), klass);
+}
+
+double
+ruby_strtod(const char *str, char **endptr)
+{
+    return strtod(str, endptr);
+}
+
+char *
+ruby_strdup(const char *str)
+{
+    size_t n = strlen(str) + 1;
+    char *copy = malloc(n);
+    if (!copy) rb_memerror();
+    memcpy(copy, str, n);
+    return copy;
+}
+
+unsigned long
+ruby_scan_oct(const char *start, size_t len, size_t *retlen)
+{
+    const char *p = start;
+    unsigned long v = 0;
+    while (len-- > 0 && *p >= '0' && *p <= '7') v = (v << 3) | (unsigned long)(*p++ - '0');
+    *retlen = (size_t)(p - start);
+    return v;
+}
+
+unsigned long
+ruby_scan_hex(const char *start, size_t len, size_t *retlen)
+{
+    const char *p = start;
+    unsigned long v = 0;
+    for (; len-- > 0; p++) {
+        int d = (*p >= '0' && *p <= '9') ? *p - '0' : (*p >= 'a' && *p <= 'f') ? *p - 'a' + 10 : (*p >= 'A' && *p <= 'F') ? *p - 'A' + 10 : -1;
+        if (d < 0) break;
+        v = (v << 4) | (unsigned long)d;
+    }
+    *retlen = (size_t)(p - start);
+    return v;
+}
+
+void *
+rb_ext_resolve_symbol(const char *feature, const char *symbol)
+{
+    return NULL;
+}
+
+int
+rb_enc_precise_mbclen(const char *p, const char *e, rb_encoding *enc)
+{
+    if (p >= e) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(1);
+    return enc->precise_mbc_enc_len((const OnigUChar *)p, (const OnigUChar *)e, enc);
+}
+
+int
+rb_enc_mbclen(const char *p, const char *e, rb_encoding *enc)
+{
+    int r = rb_enc_precise_mbclen(p, e, enc);
+    if (ONIGENC_MBCLEN_CHARFOUND_P(r)) return ONIGENC_MBCLEN_CHARFOUND_LEN(r);
+    int min = enc->min_enc_len;
+    return min <= e - p ? min : (int)(e - p);
+}
+
+unsigned int
+rb_enc_codepoint_len(const char *p, const char *e, int *len_p, rb_encoding *enc)
+{
+    if (e <= p) rb_raise(rb_eArgError, "empty string");
+    int r = rb_enc_precise_mbclen(p, e, enc);
+    if (!ONIGENC_MBCLEN_CHARFOUND_P(r)) rb_raise(rb_eArgError, "invalid byte sequence in %s", enc->name);
+    if (len_p) *len_p = ONIGENC_MBCLEN_CHARFOUND_LEN(r);
+    return enc->mbc_to_code((const OnigUChar *)p, (const OnigUChar *)e, enc);
+}
+
+char *
+rb_enc_nth(const char *p, const char *e, long nth, rb_encoding *enc)
+{
+    while (p < e && nth-- > 0) p += rb_enc_mbclen(p, e, enc);
+    return (char *)(p > e ? e : p);
+}
+
+int
+rb_uv_to_utf8(char buf[6], unsigned long uv)
+{
+    return utf8_code_to_mbc((OnigCodePoint)uv, (OnigUChar *)buf, NULL);
+}
+
+/* No GVL: IronRuby's threads run in parallel already, so these just call func. What they do
+ * keep is the rest of the contract: the thread is "sleep" meanwhile, and Thread#wakeup, #raise,
+ * #kill or a signal for the main thread runs ubf(data2) to get func to return. RUBY_UBF_IO
+ * interrupts the blocking system call with SIGVTALRM, whose handler is installed without
+ * SA_RESTART so that the call fails with EINTR. */
+static void rb_ir_sigvtalrm(int sig) { (void)sig; }
+static pthread_once_t rb_ir_sigvtalrm_once = PTHREAD_ONCE_INIT;
+
+static void
+rb_ir_install_sigvtalrm(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = rb_ir_sigvtalrm;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGVTALRM, &sa, NULL);
+}
+
+RB_IR_EXPORT void
+rb_ir_interrupt_thread(void *thread)
+{
+    pthread_kill((pthread_t)thread, SIGVTALRM);
+}
+
+static void *
+rb_ir_blocking_region(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2)
+{
+    if (ubf == RUBY_UBF_IO) pthread_once(&rb_ir_sigvtalrm_once, rb_ir_install_sigvtalrm);
+    int token = rb_ir_blocking_begin((void *)ubf, data2, (void *)pthread_self());
+    void *result = func(data1);
+    rb_ir_blocking_end(token);
+    return result;
+}
+
+void *
+rb_thread_call_without_gvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2)
+{
+    return rb_ir_blocking_region(func, data1, ubf, data2);
+}
+
+void *
+rb_thread_call_without_gvl2(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2)
+{
+    return rb_ir_blocking_region(func, data1, ubf, data2);
+}
+
+void *
+rb_thread_call_with_gvl(void *(*func)(void *), void *data1)
+{
+    return func(data1);
+}
+
+void *
+rb_nogvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2, int flags)
+{
+    return rb_ir_blocking_region(func, data1, ubf, data2);
+}
+
+int
+ruby_thread_has_gvl_p(void)
+{
+    return rb_ir_top != NULL;
+}
+
+/* rb_exec_recursive: func(obj, arg, recursive?), recursive when obj is already being processed
+ * on this thread. */
+#define RB_IR_RECURSION_MAX 256
+static RB_IR_THREAD VALUE rb_ir_recursion[RB_IR_RECURSION_MAX];
+static RB_IR_THREAD int rb_ir_recursion_depth;
+
+static VALUE
+rb_ir_exec_recursive(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE arg)
+{
+    for (int i = 0; i < rb_ir_recursion_depth; i++) {
+        if (rb_ir_recursion[i] == obj) return func(obj, arg, 1);
+    }
+    if (rb_ir_recursion_depth == RB_IR_RECURSION_MAX) return func(obj, arg, 0);
+    int depth = rb_ir_recursion_depth;
+    rb_ir_recursion[rb_ir_recursion_depth++] = obj;
+    struct rb_ir_frame frame;
+    VALUE result = Qnil;
+    int tag = 0;
+    RB_IR_PROTECT(frame, result = func(obj, arg, 0), tag = rb_ir_caught());
+    rb_ir_recursion_depth = depth;
+    if (tag) rb_jump_tag(tag);
+    return result;
+}
+
+VALUE
+rb_exec_recursive(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE arg)
+{
+    return rb_ir_exec_recursive(func, obj, arg);
+}
+
+VALUE
+rb_exec_recursive_paired(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE paired_obj, VALUE arg)
+{
+    return rb_ir_exec_recursive(func, obj, arg);
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Global variables defined from C (rb_define_hooked_variable & co): CRuby's stock getters and
+ * setters, which an extension passes by name, and the trampolines IronRuby calls them through.
+ * ------------------------------------------------------------------------------------------ */
+
+VALUE rb_gvar_undef_getter(ID id, VALUE *data) { return Qnil; }
+VALUE rb_gvar_val_getter(ID id, VALUE *data) { return (VALUE)data; }
+VALUE rb_gvar_var_getter(ID id, VALUE *data) { return data ? *data : Qnil; }
+void rb_gvar_undef_setter(VALUE val, ID id, VALUE *data) { }
+void rb_gvar_val_setter(VALUE val, ID id, VALUE *data) { }
+void rb_gvar_var_setter(VALUE val, ID id, VALUE *data) { *data = val; }
+
+void
+rb_gvar_readonly_setter(VALUE val, ID id, VALUE *data)
+{
+    rb_name_error(id, "%"PRIsVALUE" is a read-only variable", rb_id2str(id));
+}
+
+RB_IR_EXPORT VALUE
+rb_ir_call_gvar_get(void *fn, ID id, VALUE *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    VALUE result = Qnil;
+    *raised = 0;
+    RB_IR_PROTECT(frame, result = ((rb_gvar_getter_t *)fn)(id, data), *raised = 1);
+    return result;
+}
+
+RB_IR_EXPORT void
+rb_ir_call_gvar_set(void *fn, VALUE val, ID id, VALUE *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    *raised = 0;
+    RB_IR_PROTECT(frame, ((rb_gvar_setter_t *)fn)(val, id, data), *raised = 1);
 }

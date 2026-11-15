@@ -26,17 +26,20 @@ TYPES = {
   'short' => 'short', 'unsigned short' => 'ushort',
   'size_t' => 'nuint', 'ssize_t' => 'nint', 'st_index_t' => 'ulong', 'st_data_t' => 'ulong',
   'double' => 'double', 'float' => 'float',
-  'char' => 'byte', 'bool' => 'byte', 'rb_event_flag_t' => 'uint',
+  'char' => 'byte', 'bool' => 'byte', '_Bool' => 'byte', 'rb_event_flag_t' => 'uint',
   'time_t' => 'long', 'rb_pid_t' => 'int', 'pid_t' => 'int',
   'uintptr_t' => 'nuint', 'intptr_t' => 'nint', 'uint32_t' => 'uint', 'int32_t' => 'int',
   'uint64_t' => 'ulong', 'int64_t' => 'long',
   # function pointer typedefs
   'rb_block_call_func_t' => 'IntPtr', 'rb_alloc_func_t' => 'IntPtr', 'RUBY_DATA_FUNC' => 'IntPtr',
   'rb_unblock_function_t' => 'IntPtr', 'rb_postponed_job_func_t' => 'IntPtr',
+  # structs passed by value (CApi.Time.cs)
+  'timeval' => 'TimeVal', 'timespec' => 'TimeSpec',
 }
 POINTERS = {
   'char' => 'byte*', 'VALUE' => 'ulong*', 'ID' => 'ulong*', 'int' => 'int*', 'long' => 'long*',
   'double' => 'double*', 'size_t' => 'nuint*', 'unsigned int' => 'uint*', 'unsigned long' => 'ulong*',
+  'timespec' => 'TimeSpec*', 'timeval' => 'TimeVal*',
 }
 
 def cs_type(ctype)

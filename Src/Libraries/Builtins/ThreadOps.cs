@@ -1107,6 +1107,7 @@ namespace IronRuby.Builtins {
             }
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
             info.Run();
+            RubyUtils.UnblockNative(self);
             return self;
         }
 

@@ -63,5 +63,7 @@ void rb_ir_warn(VALUE message, int verbose_only);
 VALUE rb_ir_str_new_buffer(const char *ptr, long len, int encindex);
 void rb_ir_raise_notimp(const char *name);
 void rb_ir_bug(const char *message);
+int rb_ir_blocking_begin(void *ubf, void *data2, void *thread);
+void rb_ir_blocking_end(int token);
 
 #endif

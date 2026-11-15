@@ -19,10 +19,12 @@ namespace IronRuby.Runtime.CApi {
     /// VALUEs. Immediates are encoded exactly as CRuby 4.0 on 64-bit encodes them (ruby/internal/
     /// special_consts.h), so the header macros that test a VALUE's bits work unchanged: Fixnums
     /// (n &lt;&lt; 1 | 1), Flonums (the rotated double | 0b10), static Symbols (ID &lt;&lt; 8 | 0x0c), and
-    /// Qfalse 0x00, Qnil 0x04, Qtrue 0x14, Qundef 0x24. Every other object is a handle: an index
-    /// into a table, shifted to keep the low three bits clear, as a heap pointer's are, and offset
-    /// to an address that is not canonical on x86-64 or arm64, so a header macro that still
-    /// dereferences one faults at once instead of reading something.
+    /// Qfalse 0x00, Qnil 0x04, Qtrue 0x14, Qundef 0x24. Every other object is a handle: the
+    /// address of a 32-byte slot of native memory laid out as CRuby's struct RBasic (flags, klass)
+    /// followed by the object's index in IronRuby's table. The headers never read the slot - their
+    /// macros call into IronRuby - but code that dereferences RBASIC(obj) itself, as some
+    /// extensions and ruby/spec's rbasic specs do, reads a plausible type, frozen bit and class
+    /// (as of when the handle was made) instead of crashing the process.
     ///
     /// An object keeps its handle - the same VALUE every time, which C code compares with == -
     /// and the table keeps it alive for the life of the process. That is the first version's
@@ -31,12 +33,17 @@ namespace IronRuby.Runtime.CApi {
     /// </summary>
     internal static unsafe partial class CApi {
         internal const VALUE Qfalse = 0x00, Qnil = 0x04, Qtrue = 0x14, Qundef = 0x24;
-        private const VALUE HandleBase = 0x4000_0000_0000_0000UL;
         private const long FixnumMax = long.MaxValue >> 1, FixnumMin = long.MinValue >> 1;
 
         private static readonly object _handleLock = new object();
         private static object[] _handles = new object[1024];
-        private static int _handleCount = 1;
+        private static int _handleCount = 0;
+
+        // Handle slots come from slabs that never move or go away; a slab holds slots
+        // [Start, Start + Count) of the table.
+        private const int SlotSize = 32;
+        private struct Slab { public VALUE Base; public int Start, Count; }
+        private static Slab[] _slabs = new Slab[0];
         private static readonly Dictionary<object, VALUE> _handleOf = new Dictionary<object, VALUE>(ReferenceEqualityComparer.Instance);
 
         // IDs: a symbol's ID is its index here, or, for a one-character operator, the character
@@ -89,10 +96,47 @@ namespace IronRuby.Runtime.CApi {
                 }
                 int index = _handleCount++;
                 _handles[index] = obj;
-                value = HandleBase | ((VALUE)index << 3);
+                value = SlotAddress(index);
                 _handleOf.Add(obj, value);
+                // RBasic: the class may need a handle of its own, made after this one so that a
+                // class whose class is itself (Class) terminates
+                ((VALUE*)value)[0] = (VALUE)BuiltinType(obj);
+                ((VALUE*)value)[2] = (VALUE)index;
+                ((VALUE*)value)[1] = ToValue(_context.GetImmediateClassOf(obj));
                 return value;
             }
+        }
+
+        private static VALUE SlotAddress(int index) {
+            var slabs = _slabs;
+            if (slabs.Length == 0 || index >= slabs[slabs.Length - 1].Start + slabs[slabs.Length - 1].Count) {
+                int count = slabs.Length == 0 ? 4096 : slabs[slabs.Length - 1].Count * 2;
+                var slab = new Slab {
+                    Base = (VALUE)System.Runtime.InteropServices.NativeMemory.AlignedAlloc((nuint)(count * SlotSize), SlotSize),
+                    Start = index,
+                    Count = count,
+                };
+                System.Runtime.InteropServices.NativeMemory.Clear((void*)slab.Base, (nuint)(count * SlotSize));
+                var bigger = new Slab[slabs.Length + 1];
+                Array.Copy(slabs, bigger, slabs.Length);
+                bigger[slabs.Length] = slab;
+                Volatile.Write(ref _slabs, slabs = bigger);
+            }
+            var last = slabs[slabs.Length - 1];
+            return last.Base + (VALUE)((index - last.Start) * SlotSize);
+        }
+
+        /// <summary>
+        /// The table index of a handle, or -1 for a value that is not one.
+        /// </summary>
+        private static int HandleIndex(VALUE value) {
+            foreach (var slab in Volatile.Read(ref _slabs)) {
+                if (value >= slab.Base && value < slab.Base + (VALUE)(slab.Count * SlotSize)) {
+                    VALUE offset = value - slab.Base;
+                    return (offset % SlotSize) == 0 ? slab.Start + (int)(offset / SlotSize) : -1;
+                }
+            }
+            return -1;
         }
 
         internal static object FromValue(VALUE value) {
@@ -112,10 +156,10 @@ namespace IronRuby.Runtime.CApi {
             if ((value & 0xff) == 0x0c) {
                 return IdToSymbol(value >> 8);
             }
-            if ((value & 7) == 0 && (value & HandleBase) != 0) {
-                ulong index = (value & ~HandleBase) >> 3;
+            int index = HandleIndex(value);
+            if (index >= 0) {
                 var handles = Volatile.Read(ref _handles);
-                if (index > 0 && index < (ulong)handles.Length) {
+                if (index < handles.Length) {
                     object obj = handles[index];
                     if (obj != null) {
                         return obj;

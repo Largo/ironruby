@@ -303,6 +303,217 @@
 #undef rb_undef_alloc_func
 #undef rb_undef_method
 #undef rb_unexpected_type
+#undef rb_string_value_ptr
+#undef rb_proc_new
+#undef rb_get_kwargs
+#undef rb_io_descriptor
+#undef rb_call_super_kw
+#undef rb_enc_str_coderange
+#undef rb_obj_method_arity
+#undef rb_enc_strlen
+#undef rb_check_to_integer
+#undef rb_check_array_type
+#undef rb_make_exception
+#undef rb_fix2uint
+#undef rb_uint2big
+#undef rb_uint2inum
+#undef rb_int2inum
+#undef rb_absint_size
+#undef rb_absint_singlebit_p
+#undef rb_big_sign
+#undef rb_big_cmp
+#undef rb_big_pack
+#undef rb_file_open_str
+#undef rb_file_open
+#undef rb_define_class_id_under
+#undef rb_define_module_id_under
+#undef rb_const_defined_at
+#undef rb_const_get_from
+#undef rb_class2name
+#undef rb_class_real
+#undef rb_path_to_class
+#undef rb_check_funcall
+#undef rb_to_encoding_index
+#undef rb_enc_to_index
+#undef rb_time_num_new
+#undef rb_struct_aref
+#undef rb_struct_aset
+#undef rb_struct_getmember
+#undef rb_struct_members
+#undef rb_struct_s_members
+#undef rb_struct_size
+#undef rb_struct_initialize
+#undef rb_num_coerce_cmp
+#undef rb_num_coerce_relop
+#undef rb_num_coerce_bin
+#undef rb_mutex_synchronize
+#undef rb_mutex_lock
+#undef rb_mutex_unlock
+#undef rb_mutex_trylock
+#undef rb_mutex_locked_p
+#undef rb_mutex_sleep
+#undef rb_is_instance_id
+#undef rb_is_const_id
+#undef rb_is_class_id
+#undef rb_is_local_id
+#undef rb_is_global_id
+#undef rb_is_attrset_id
+#undef rb_get_path
+#undef rb_enumeratorize
+#undef rb_enumeratorize_with_size
+#undef rb_class_new_instance_kw
+#undef rb_funcall_with_block_kw
+#undef rb_yield_splat
+#undef rb_to_symbol
+#undef rb_syserr_fail_str
+#undef rb_syserr_new_str
+#undef rb_syserr_new
+#undef rb_reg_new
+#undef rb_reg_new_str
+#undef rb_reg_match
+#undef rb_reg_nth_match
+#undef rb_reg_options
+#undef rb_reg_regcomp
+#undef rb_backref_get
+#undef rb_range_new
+#undef rb_range_values
+#undef rb_range_beg_len
+#undef rb_memcicmp
+#undef rb_ivar_foreach
+#undef rb_io_write
+#undef rb_io_puts
+#undef rb_io_print
+#undef rb_io_addstr
+#undef rb_io_get_io
+#undef rb_io_check_io
+#undef rb_io_closed_p
+#undef rb_io_binmode
+#undef rb_io_close
+#undef rb_io_path
+#undef rb_io_taint_check
+#undef rb_class_public_instance_methods
+#undef rb_class_instance_methods
+#undef rb_class_private_instance_methods
+#undef rb_class_protected_instance_methods
+#undef rb_check_convert_type
+#undef rb_convert_type
+#undef rb_catch_obj
+#undef rb_throw_obj
+#undef rb_throw
+#undef rb_thread_create
+#undef rb_thread_wakeup
+#undef rb_thread_local_aref
+#undef rb_thread_local_aset
+#undef rb_thread_alone
+#undef rb_set_new
+#undef rb_set_new_capa
+#undef rb_set_add
+#undef rb_set_delete
+#undef rb_set_lookup
+#undef rb_set_size
+#undef rb_set_clear
+#undef rb_set_foreach
+#undef rb_rational_new
+#undef rb_rational_num
+#undef rb_rational_den
+#undef rb_complex_new
+#undef rb_obj_method
+#undef rb_method_boundp
+#undef rb_obj_respond_to
+#undef rb_obj_instance_variables
+#undef rb_ivar_count
+#undef rb_prepend_module
+#undef rb_undef
+#undef rb_alias
+#undef rb_class_new
+#undef rb_get_alloc_func
+#undef rb_marshal_dump
+#undef rb_marshal_load
+#undef rb_gc
+#undef rb_gc_enable
+#undef rb_gc_disable
+#undef rb_enc_str_new_static
+#undef rb_enc_str_asciionly_p
+#undef rb_enc_dummy_p
+#undef rb_enc_compatible
+#undef rb_default_internal_encoding
+#undef rb_default_external_encoding
+#undef rb_locale_encoding
+#undef rb_locale_encindex
+#undef rb_filesystem_encoding
+#undef rb_filesystem_encindex
+#undef rb_enc_check
+#undef rb_enc_alias
+#undef rb_block_lambda
+#undef rb_sym2str
+#undef rb_intern3
+#undef rb_str_format
+#undef rb_f_sprintf
+#undef rb_define_global_const
+#undef rb_f_global_variables
+#undef rb_free_generic_ivar
+#undef rb_copy_generic_ivar
+#undef rb_num_zerodiv
+#undef rb_make_backtrace
+#undef rb_obj_singleton_methods
+#undef rb_mod_constants
+#undef rb_mod_module_eval
+#undef rb_obj_instance_exec
+#undef rb_ary_resize
+#undef rb_ary_replace
+#undef rb_hash_fetch
+#undef rb_hash_set_ifnone
+#undef rb_hash_start
+#undef rb_hash_bulk_insert
+#undef rb_str_concat
+#undef rb_str_succ
+#undef rb_str_replace
+#undef rb_str_ellipsize
+#undef rb_str_scrub
+#undef rb_str_buf_new_cstr
+#undef rb_sym_to_s
+#undef rb_obj_is_proc
+#undef rb_obj_is_method
+#undef rb_proc_call
+#undef rb_proc_call_with_block
+#undef rb_proc_arity
+#undef rb_proc_lambda_p
+#undef rb_method_call
+#undef rb_set_end_proc
+#undef rb_frame_method_id_and_class
+#undef rb_ir_blocking_begin
+#undef rb_ir_blocking_end
+#undef rb_time_new
+#undef rb_time_nano_new
+#undef rb_time_timespec_new
+#undef rb_time_interval
+#undef rb_time_timeval
+#undef rb_time_timespec
+#undef rb_timespec_now
+#undef rb_cvar_get
+#undef rb_cvar_set
+#undef rb_cvar_defined
+#undef rb_cv_get
+#undef rb_cv_set
+#undef rb_define_class_variable
+#undef rb_hash_new_capa
+#undef rb_hash
+#undef rb_hash_delete_if
+#undef rb_hash_freeze
+#undef rb_fiber_new
+#undef rb_fiber_resume
+#undef rb_fiber_yield
+#undef rb_fiber_current
+#undef rb_fiber_alive_p
+#undef rb_fiber_raise
+#undef rb_proc_call_kw
+#undef rb_proc_call_with_block_kw
+#undef rb_catch
+#undef rb_define_variable
+#undef rb_define_readonly_variable
+#undef rb_define_hooked_variable
+#undef rb_define_virtual_variable
+#undef rb_ident_hash_new
 
 struct rb_ir_function_table {
     VALUE (*rb_ir_builtin_type)(VALUE obj);
@@ -607,10 +818,221 @@ struct rb_ir_function_table {
     void (*rb_undef_alloc_func)(VALUE klass);
     void (*rb_undef_method)(VALUE klass, const char *name);
     void (*rb_unexpected_type)(VALUE self, int t);
+    char * (*rb_string_value_ptr)(volatile VALUE *ptr);
+    VALUE (*rb_proc_new)(rb_block_call_func_t func, VALUE callback_arg);
+    int (*rb_get_kwargs)(VALUE keyword_hash, const ID *table, int required, int optional, VALUE *values);
+    int (*rb_io_descriptor)(VALUE io);
+    VALUE (*rb_call_super_kw)(int argc, const VALUE *argv, int kw_splat);
+    int (*rb_enc_str_coderange)(VALUE str);
+    int (*rb_obj_method_arity)(VALUE obj, ID mid);
+    long (*rb_enc_strlen)(const char *head, const char *tail, rb_encoding *enc);
+    VALUE (*rb_check_to_integer)(VALUE val, const char *mid);
+    VALUE (*rb_check_array_type)(VALUE obj);
+    VALUE (*rb_make_exception)(int argc, const VALUE *argv);
+    unsigned long (*rb_fix2uint)(VALUE num);
+    VALUE (*rb_uint2big)(uintptr_t i);
+    VALUE (*rb_uint2inum)(uintptr_t i);
+    VALUE (*rb_int2inum)(intptr_t i);
+    size_t (*rb_absint_size)(VALUE val, int *nlz_bits_ret);
+    int (*rb_absint_singlebit_p)(VALUE val);
+    int (*rb_big_sign)(VALUE num);
+    VALUE (*rb_big_cmp)(VALUE lhs, VALUE rhs);
+    void (*rb_big_pack)(VALUE val, unsigned long *buf, long num_longs);
+    VALUE (*rb_file_open_str)(VALUE fname, const char *fmode);
+    VALUE (*rb_file_open)(const char *fname, const char *fmode);
+    VALUE (*rb_define_class_id_under)(VALUE outer, ID id, VALUE super);
+    VALUE (*rb_define_module_id_under)(VALUE outer, ID id);
+    int (*rb_const_defined_at)(VALUE space, ID name);
+    VALUE (*rb_const_get_from)(VALUE space, ID name);
+    const char * (*rb_class2name)(VALUE klass);
+    VALUE (*rb_class_real)(VALUE klass);
+    VALUE (*rb_path_to_class)(VALUE path);
+    VALUE (*rb_check_funcall)(VALUE recv, ID mid, int argc, const VALUE *argv);
+    int (*rb_to_encoding_index)(VALUE obj);
+    int (*rb_enc_to_index)(rb_encoding *enc);
+    VALUE (*rb_time_num_new)(VALUE timev, VALUE off);
+    VALUE (*rb_struct_aref)(VALUE st, VALUE k);
+    VALUE (*rb_struct_aset)(VALUE st, VALUE k, VALUE v);
+    VALUE (*rb_struct_getmember)(VALUE self, ID key);
+    VALUE (*rb_struct_members)(VALUE self);
+    VALUE (*rb_struct_s_members)(VALUE klass);
+    VALUE (*rb_struct_size)(VALUE st);
+    VALUE (*rb_struct_initialize)(VALUE self, VALUE values);
+    VALUE (*rb_num_coerce_cmp)(VALUE lhs, VALUE rhs, ID op);
+    VALUE (*rb_num_coerce_relop)(VALUE lhs, VALUE rhs, ID op);
+    VALUE (*rb_num_coerce_bin)(VALUE lhs, VALUE rhs, ID op);
+    VALUE (*rb_mutex_synchronize)(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg);
+    VALUE (*rb_mutex_lock)(VALUE mutex);
+    VALUE (*rb_mutex_unlock)(VALUE mutex);
+    VALUE (*rb_mutex_trylock)(VALUE mutex);
+    VALUE (*rb_mutex_locked_p)(VALUE mutex);
+    VALUE (*rb_mutex_sleep)(VALUE self, VALUE timeout);
+    int (*rb_is_instance_id)(ID id);
+    int (*rb_is_const_id)(ID id);
+    int (*rb_is_class_id)(ID id);
+    int (*rb_is_local_id)(ID id);
+    int (*rb_is_global_id)(ID id);
+    int (*rb_is_attrset_id)(ID id);
+    VALUE (*rb_get_path)(VALUE obj);
+    VALUE (*rb_enumeratorize)(VALUE recv, VALUE meth, int argc, const VALUE *argv);
+    VALUE (*rb_enumeratorize_with_size)(VALUE recv, VALUE meth, int argc, const VALUE *argv, rb_enumerator_size_func *func);
+    VALUE (*rb_class_new_instance_kw)(int argc, const VALUE *argv, VALUE klass, int kw_splat);
+    VALUE (*rb_funcall_with_block_kw)(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval, int kw_splat);
+    VALUE (*rb_yield_splat)(VALUE ary);
+    VALUE (*rb_to_symbol)(VALUE name);
+    void (*rb_syserr_fail_str)(int err, VALUE msg);
+    VALUE (*rb_syserr_new_str)(int n, VALUE arg);
+    VALUE (*rb_syserr_new)(int err, const char *msg);
+    VALUE (*rb_reg_new)(const char *src, long len, int opts);
+    VALUE (*rb_reg_new_str)(VALUE src, int opts);
+    VALUE (*rb_reg_match)(VALUE re, VALUE str);
+    VALUE (*rb_reg_nth_match)(int n, VALUE md);
+    int (*rb_reg_options)(VALUE re);
+    VALUE (*rb_reg_regcomp)(VALUE str);
+    VALUE (*rb_backref_get)(void);
+    VALUE (*rb_range_new)(VALUE beg, VALUE end, int excl);
+    int (*rb_range_values)(VALUE range, VALUE *begp, VALUE *endp, int *exclp);
+    VALUE (*rb_range_beg_len)(VALUE range, long *begp, long *lenp, long len, int err);
+    int (*rb_memcicmp)(const void *s1, const void *s2, long n);
+    void (*rb_ivar_foreach)(VALUE obj, int (*func)(ID name, VALUE val, st_data_t arg), st_data_t arg);
+    VALUE (*rb_io_write)(VALUE io, VALUE str);
+    VALUE (*rb_io_puts)(int argc, const VALUE *argv, VALUE io);
+    VALUE (*rb_io_print)(int argc, const VALUE *argv, VALUE io);
+    VALUE (*rb_io_addstr)(VALUE io, VALUE str);
+    VALUE (*rb_io_get_io)(VALUE io);
+    VALUE (*rb_io_check_io)(VALUE io);
+    VALUE (*rb_io_closed_p)(VALUE io);
+    VALUE (*rb_io_binmode)(VALUE io);
+    VALUE (*rb_io_close)(VALUE io);
+    VALUE (*rb_io_path)(VALUE io);
+    VALUE (*rb_io_taint_check)(VALUE obj);
+    VALUE (*rb_class_public_instance_methods)(int argc, const VALUE *argv, VALUE mod);
+    VALUE (*rb_class_instance_methods)(int argc, const VALUE *argv, VALUE mod);
+    VALUE (*rb_class_private_instance_methods)(int argc, const VALUE *argv, VALUE mod);
+    VALUE (*rb_class_protected_instance_methods)(int argc, const VALUE *argv, VALUE mod);
+    VALUE (*rb_check_convert_type)(VALUE val, int type, const char *name, const char *mid);
+    VALUE (*rb_convert_type)(VALUE val, int type, const char *name, const char *mid);
+    VALUE (*rb_catch_obj)(VALUE tag, rb_block_call_func_t func, VALUE data);
+    void (*rb_throw_obj)(VALUE tag, VALUE val);
+    void (*rb_throw)(const char *tag, VALUE val);
+    VALUE (*rb_thread_create)(VALUE (*f)(void *g), void *g);
+    VALUE (*rb_thread_wakeup)(VALUE thread);
+    VALUE (*rb_thread_local_aref)(VALUE thread, ID key);
+    VALUE (*rb_thread_local_aset)(VALUE thread, ID key, VALUE val);
+    int (*rb_thread_alone)(void);
+    VALUE (*rb_set_new)(void);
+    VALUE (*rb_set_new_capa)(size_t capa);
+    _Bool (*rb_set_add)(VALUE set, VALUE element);
+    _Bool (*rb_set_delete)(VALUE set, VALUE element);
+    _Bool (*rb_set_lookup)(VALUE set, VALUE element);
+    size_t (*rb_set_size)(VALUE set);
+    VALUE (*rb_set_clear)(VALUE set);
+    void (*rb_set_foreach)(VALUE set, int (*func)(VALUE element, VALUE arg), VALUE arg);
+    VALUE (*rb_rational_new)(VALUE num, VALUE den);
+    VALUE (*rb_rational_num)(VALUE rat);
+    VALUE (*rb_rational_den)(VALUE rat);
+    VALUE (*rb_complex_new)(VALUE real, VALUE imag);
+    VALUE (*rb_obj_method)(VALUE recv, VALUE mid);
+    int (*rb_method_boundp)(VALUE klass, ID id, int ex);
+    int (*rb_obj_respond_to)(VALUE obj, ID mid, int private_p);
+    VALUE (*rb_obj_instance_variables)(VALUE obj);
+    st_index_t (*rb_ivar_count)(VALUE obj);
+    void (*rb_prepend_module)(VALUE klass, VALUE module);
+    void (*rb_undef)(VALUE mod, ID mid);
+    void (*rb_alias)(VALUE klass, ID dst, ID src);
+    VALUE (*rb_class_new)(VALUE super);
+    rb_alloc_func_t (*rb_get_alloc_func)(VALUE klass);
+    VALUE (*rb_marshal_dump)(VALUE obj, VALUE port);
+    VALUE (*rb_marshal_load)(VALUE port);
+    void (*rb_gc)(void);
+    VALUE (*rb_gc_enable)(void);
+    VALUE (*rb_gc_disable)(void);
+    VALUE (*rb_enc_str_new_static)(const char *ptr, long len, rb_encoding *enc);
+    int (*rb_enc_str_asciionly_p)(VALUE str);
+    int (*rb_enc_dummy_p)(rb_encoding *enc);
+    rb_encoding * (*rb_enc_compatible)(VALUE str1, VALUE str2);
+    rb_encoding * (*rb_default_internal_encoding)(void);
+    rb_encoding * (*rb_default_external_encoding)(void);
+    rb_encoding * (*rb_locale_encoding)(void);
+    int (*rb_locale_encindex)(void);
+    rb_encoding * (*rb_filesystem_encoding)(void);
+    int (*rb_filesystem_encindex)(void);
+    rb_encoding * (*rb_enc_check)(VALUE str1, VALUE str2);
+    int (*rb_enc_alias)(const char *alias, const char *orig);
+    VALUE (*rb_block_lambda)(void);
+    VALUE (*rb_sym2str)(VALUE symbol);
+    ID (*rb_intern3)(const char *name, long len, rb_encoding *enc);
+    VALUE (*rb_str_format)(int argc, const VALUE *argv, VALUE fmt);
+    VALUE (*rb_f_sprintf)(int argc, const VALUE *argv);
+    void (*rb_define_global_const)(const char *name, VALUE val);
+    VALUE (*rb_f_global_variables)(void);
+    void (*rb_free_generic_ivar)(VALUE obj);
+    void (*rb_copy_generic_ivar)(VALUE clone, VALUE obj);
+    void (*rb_num_zerodiv)(void);
+    VALUE (*rb_make_backtrace)(void);
+    VALUE (*rb_obj_singleton_methods)(int argc, const VALUE *argv, VALUE obj);
+    VALUE (*rb_mod_constants)(int argc, const VALUE *argv, VALUE recv);
+    VALUE (*rb_mod_module_eval)(int argc, const VALUE *argv, VALUE mod);
+    VALUE (*rb_obj_instance_exec)(int argc, const VALUE *argv, VALUE recv);
+    VALUE (*rb_ary_resize)(VALUE ary, long len);
+    VALUE (*rb_ary_replace)(VALUE copy, VALUE orig);
+    VALUE (*rb_hash_fetch)(VALUE hash, VALUE key);
+    VALUE (*rb_hash_set_ifnone)(VALUE hash, VALUE ifnone);
+    st_index_t (*rb_hash_start)(st_index_t i);
+    void (*rb_hash_bulk_insert)(long argc, const VALUE *argv, VALUE hash);
+    VALUE (*rb_str_concat)(VALUE dst, VALUE src);
+    VALUE (*rb_str_succ)(VALUE orig);
+    VALUE (*rb_str_replace)(VALUE dst, VALUE src);
+    VALUE (*rb_str_ellipsize)(VALUE str, long len);
+    VALUE (*rb_str_scrub)(VALUE str, VALUE repl);
+    VALUE (*rb_str_buf_new_cstr)(const char *ptr);
+    VALUE (*rb_sym_to_s)(VALUE sym);
+    VALUE (*rb_obj_is_proc)(VALUE recv);
+    VALUE (*rb_obj_is_method)(VALUE recv);
+    VALUE (*rb_proc_call)(VALUE recv, VALUE args);
+    VALUE (*rb_proc_call_with_block)(VALUE recv, int argc, const VALUE *argv, VALUE proc);
+    int (*rb_proc_arity)(VALUE recv);
+    VALUE (*rb_proc_lambda_p)(VALUE recv);
+    VALUE (*rb_method_call)(int argc, const VALUE *argv, VALUE recv);
+    void (*rb_set_end_proc)(void (*func)(VALUE arg), VALUE arg);
+    int (*rb_frame_method_id_and_class)(ID *idp, VALUE *klassp);
+    int (*rb_ir_blocking_begin)(void *ubf, void *data2, void *thread);
+    void (*rb_ir_blocking_end)(int token);
+    VALUE (*rb_time_new)(time_t sec, long usec);
+    VALUE (*rb_time_nano_new)(time_t sec, long nsec);
+    VALUE (*rb_time_timespec_new)(const struct timespec *ts, int offset);
+    struct timeval (*rb_time_interval)(VALUE num);
+    struct timeval (*rb_time_timeval)(VALUE time);
+    struct timespec (*rb_time_timespec)(VALUE time);
+    void (*rb_timespec_now)(struct timespec *ts);
+    VALUE (*rb_cvar_get)(VALUE klass, ID name);
+    void (*rb_cvar_set)(VALUE klass, ID name, VALUE val);
+    VALUE (*rb_cvar_defined)(VALUE klass, ID name);
+    VALUE (*rb_cv_get)(VALUE klass, const char *name);
+    void (*rb_cv_set)(VALUE klass, const char *name, VALUE val);
+    void (*rb_define_class_variable)(VALUE arg0, const char * arg1, VALUE arg2);
+    VALUE (*rb_hash_new_capa)(long capa);
+    VALUE (*rb_hash)(VALUE obj);
+    VALUE (*rb_hash_delete_if)(VALUE hash);
+    VALUE (*rb_hash_freeze)(VALUE obj);
+    VALUE (*rb_fiber_new)(rb_block_call_func_t func, VALUE callback_obj);
+    VALUE (*rb_fiber_resume)(VALUE fiber, int argc, const VALUE *argv);
+    VALUE (*rb_fiber_yield)(int argc, const VALUE *argv);
+    VALUE (*rb_fiber_current)(void);
+    VALUE (*rb_fiber_alive_p)(VALUE fiber);
+    VALUE (*rb_fiber_raise)(VALUE fiber, int argc, VALUE *argv);
+    VALUE (*rb_proc_call_kw)(VALUE recv, VALUE args, int kw_splat);
+    VALUE (*rb_proc_call_with_block_kw)(VALUE recv, int argc, const VALUE *argv, VALUE proc, int kw_splat);
+    VALUE (*rb_catch)(const char *tag, rb_block_call_func_t func, VALUE data);
+    void (*rb_define_variable)(const char *name, VALUE *var);
+    void (*rb_define_readonly_variable)(const char *name, const VALUE *var);
+    void (*rb_define_hooked_variable)(const char *name, VALUE *var, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter);
+    void (*rb_define_virtual_variable)(const char *name, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter);
+    VALUE (*rb_ident_hash_new)(void);
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 302;
+const int rb_ir_function_count = 513;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -2970,5 +3392,1668 @@ void
 {
     rb_ir_fns.rb_unexpected_type(self, t);
     rb_ir_throw();
+}
+
+char *
+(rb_string_value_ptr)(volatile VALUE *ptr)
+{
+    char * rb_ir_result = rb_ir_fns.rb_string_value_ptr(ptr);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_proc_new)(rb_block_call_func_t func, VALUE callback_arg)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_proc_new(func, callback_arg);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_get_kwargs)(VALUE keyword_hash, const ID *table, int required, int optional, VALUE *values)
+{
+    int rb_ir_result = rb_ir_fns.rb_get_kwargs(keyword_hash, table, required, optional, values);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_io_descriptor)(VALUE io)
+{
+    int rb_ir_result = rb_ir_fns.rb_io_descriptor(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_call_super_kw)(int argc, const VALUE *argv, int kw_splat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_call_super_kw(argc, argv, kw_splat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_enc_str_coderange)(VALUE str)
+{
+    int rb_ir_result = rb_ir_fns.rb_enc_str_coderange(str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_obj_method_arity)(VALUE obj, ID mid)
+{
+    int rb_ir_result = rb_ir_fns.rb_obj_method_arity(obj, mid);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+long
+(rb_enc_strlen)(const char *head, const char *tail, rb_encoding *enc)
+{
+    long rb_ir_result = rb_ir_fns.rb_enc_strlen(head, tail, enc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_check_to_integer)(VALUE val, const char *mid)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_check_to_integer(val, mid);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_check_array_type)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_check_array_type(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_make_exception)(int argc, const VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_make_exception(argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+unsigned long
+(rb_fix2uint)(VALUE num)
+{
+    unsigned long rb_ir_result = rb_ir_fns.rb_fix2uint(num);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_uint2big)(uintptr_t i)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_uint2big(i);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_uint2inum)(uintptr_t i)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_uint2inum(i);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_int2inum)(intptr_t i)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_int2inum(i);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+size_t
+(rb_absint_size)(VALUE val, int *nlz_bits_ret)
+{
+    size_t rb_ir_result = rb_ir_fns.rb_absint_size(val, nlz_bits_ret);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_absint_singlebit_p)(VALUE val)
+{
+    int rb_ir_result = rb_ir_fns.rb_absint_singlebit_p(val);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_big_sign)(VALUE num)
+{
+    int rb_ir_result = rb_ir_fns.rb_big_sign(num);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_big_cmp)(VALUE lhs, VALUE rhs)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_big_cmp(lhs, rhs);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_big_pack)(VALUE val, unsigned long *buf, long num_longs)
+{
+    rb_ir_fns.rb_big_pack(val, buf, num_longs);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_file_open_str)(VALUE fname, const char *fmode)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_file_open_str(fname, fmode);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_file_open)(const char *fname, const char *fmode)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_file_open(fname, fmode);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_define_class_id_under)(VALUE outer, ID id, VALUE super)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_define_class_id_under(outer, id, super);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_define_module_id_under)(VALUE outer, ID id)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_define_module_id_under(outer, id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_const_defined_at)(VALUE space, ID name)
+{
+    int rb_ir_result = rb_ir_fns.rb_const_defined_at(space, name);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_const_get_from)(VALUE space, ID name)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_const_get_from(space, name);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+const char *
+(rb_class2name)(VALUE klass)
+{
+    const char * rb_ir_result = rb_ir_fns.rb_class2name(klass);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_class_real)(VALUE klass)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_real(klass);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_path_to_class)(VALUE path)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_path_to_class(path);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_check_funcall)(VALUE recv, ID mid, int argc, const VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_check_funcall(recv, mid, argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_to_encoding_index)(VALUE obj)
+{
+    int rb_ir_result = rb_ir_fns.rb_to_encoding_index(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_enc_to_index)(rb_encoding *enc)
+{
+    int rb_ir_result = rb_ir_fns.rb_enc_to_index(enc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_time_num_new)(VALUE timev, VALUE off)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_time_num_new(timev, off);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_aref)(VALUE st, VALUE k)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_aref(st, k);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_aset)(VALUE st, VALUE k, VALUE v)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_aset(st, k, v);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_getmember)(VALUE self, ID key)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_getmember(self, key);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_members)(VALUE self)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_members(self);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_s_members)(VALUE klass)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_s_members(klass);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_size)(VALUE st)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_size(st);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_struct_initialize)(VALUE self, VALUE values)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_struct_initialize(self, values);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_num_coerce_cmp)(VALUE lhs, VALUE rhs, ID op)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_num_coerce_cmp(lhs, rhs, op);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_num_coerce_relop)(VALUE lhs, VALUE rhs, ID op)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_num_coerce_relop(lhs, rhs, op);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_num_coerce_bin)(VALUE lhs, VALUE rhs, ID op)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_num_coerce_bin(lhs, rhs, op);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mutex_synchronize)(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mutex_synchronize(mutex, func, arg);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mutex_lock)(VALUE mutex)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mutex_lock(mutex);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mutex_unlock)(VALUE mutex)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mutex_unlock(mutex);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mutex_trylock)(VALUE mutex)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mutex_trylock(mutex);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mutex_locked_p)(VALUE mutex)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mutex_locked_p(mutex);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mutex_sleep)(VALUE self, VALUE timeout)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mutex_sleep(self, timeout);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_is_instance_id)(ID id)
+{
+    int rb_ir_result = rb_ir_fns.rb_is_instance_id(id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_is_const_id)(ID id)
+{
+    int rb_ir_result = rb_ir_fns.rb_is_const_id(id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_is_class_id)(ID id)
+{
+    int rb_ir_result = rb_ir_fns.rb_is_class_id(id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_is_local_id)(ID id)
+{
+    int rb_ir_result = rb_ir_fns.rb_is_local_id(id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_is_global_id)(ID id)
+{
+    int rb_ir_result = rb_ir_fns.rb_is_global_id(id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_is_attrset_id)(ID id)
+{
+    int rb_ir_result = rb_ir_fns.rb_is_attrset_id(id);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_get_path)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_get_path(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_enumeratorize)(VALUE recv, VALUE meth, int argc, const VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_enumeratorize(recv, meth, argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_enumeratorize_with_size)(VALUE recv, VALUE meth, int argc, const VALUE *argv, rb_enumerator_size_func *func)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_enumeratorize_with_size(recv, meth, argc, argv, func);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_class_new_instance_kw)(int argc, const VALUE *argv, VALUE klass, int kw_splat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_new_instance_kw(argc, argv, klass, kw_splat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_funcall_with_block_kw)(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval, int kw_splat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_funcall_with_block_kw(recv, mid, argc, argv, procval, kw_splat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_yield_splat)(VALUE ary)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_yield_splat(ary);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_to_symbol)(VALUE name)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_to_symbol(name);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_syserr_fail_str)(int err, VALUE msg)
+{
+    rb_ir_fns.rb_syserr_fail_str(err, msg);
+    rb_ir_throw();
+}
+
+VALUE
+(rb_syserr_new_str)(int n, VALUE arg)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_syserr_new_str(n, arg);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_syserr_new)(int err, const char *msg)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_syserr_new(err, msg);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_reg_new)(const char *src, long len, int opts)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_reg_new(src, len, opts);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_reg_new_str)(VALUE src, int opts)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_reg_new_str(src, opts);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_reg_match)(VALUE re, VALUE str)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_reg_match(re, str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_reg_nth_match)(int n, VALUE md)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_reg_nth_match(n, md);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_reg_options)(VALUE re)
+{
+    int rb_ir_result = rb_ir_fns.rb_reg_options(re);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_reg_regcomp)(VALUE str)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_reg_regcomp(str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_backref_get)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_backref_get();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_range_new)(VALUE beg, VALUE end, int excl)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_range_new(beg, end, excl);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_range_values)(VALUE range, VALUE *begp, VALUE *endp, int *exclp)
+{
+    int rb_ir_result = rb_ir_fns.rb_range_values(range, begp, endp, exclp);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_range_beg_len)(VALUE range, long *begp, long *lenp, long len, int err)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_range_beg_len(range, begp, lenp, len, err);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_memcicmp)(const void *s1, const void *s2, long n)
+{
+    int rb_ir_result = rb_ir_fns.rb_memcicmp(s1, s2, n);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_ivar_foreach)(VALUE obj, int (*func)(ID name, VALUE val, st_data_t arg), st_data_t arg)
+{
+    rb_ir_fns.rb_ivar_foreach(obj, func, arg);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_io_write)(VALUE io, VALUE str)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_write(io, str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_puts)(int argc, const VALUE *argv, VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_puts(argc, argv, io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_print)(int argc, const VALUE *argv, VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_print(argc, argv, io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_addstr)(VALUE io, VALUE str)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_addstr(io, str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_get_io)(VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_get_io(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_check_io)(VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_check_io(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_closed_p)(VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_closed_p(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_binmode)(VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_binmode(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_close)(VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_close(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_path)(VALUE io)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_path(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_io_taint_check)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_taint_check(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_class_public_instance_methods)(int argc, const VALUE *argv, VALUE mod)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_public_instance_methods(argc, argv, mod);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_class_instance_methods)(int argc, const VALUE *argv, VALUE mod)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_instance_methods(argc, argv, mod);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_class_private_instance_methods)(int argc, const VALUE *argv, VALUE mod)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_private_instance_methods(argc, argv, mod);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_class_protected_instance_methods)(int argc, const VALUE *argv, VALUE mod)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_protected_instance_methods(argc, argv, mod);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_check_convert_type)(VALUE val, int type, const char *name, const char *mid)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_check_convert_type(val, type, name, mid);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_convert_type)(VALUE val, int type, const char *name, const char *mid)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_convert_type(val, type, name, mid);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_catch_obj)(VALUE tag, rb_block_call_func_t func, VALUE data)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_catch_obj(tag, func, data);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_throw_obj)(VALUE tag, VALUE val)
+{
+    rb_ir_fns.rb_throw_obj(tag, val);
+    rb_ir_throw();
+}
+
+void
+(rb_throw)(const char *tag, VALUE val)
+{
+    rb_ir_fns.rb_throw(tag, val);
+    rb_ir_throw();
+}
+
+VALUE
+(rb_thread_create)(VALUE (*f)(void *g), void *g)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_thread_create(f, g);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_thread_wakeup)(VALUE thread)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_thread_wakeup(thread);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_thread_local_aref)(VALUE thread, ID key)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_thread_local_aref(thread, key);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_thread_local_aset)(VALUE thread, ID key, VALUE val)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_thread_local_aset(thread, key, val);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_thread_alone)(void)
+{
+    int rb_ir_result = rb_ir_fns.rb_thread_alone();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_set_new)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_set_new();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_set_new_capa)(size_t capa)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_set_new_capa(capa);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+_Bool
+(rb_set_add)(VALUE set, VALUE element)
+{
+    _Bool rb_ir_result = rb_ir_fns.rb_set_add(set, element);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+_Bool
+(rb_set_delete)(VALUE set, VALUE element)
+{
+    _Bool rb_ir_result = rb_ir_fns.rb_set_delete(set, element);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+_Bool
+(rb_set_lookup)(VALUE set, VALUE element)
+{
+    _Bool rb_ir_result = rb_ir_fns.rb_set_lookup(set, element);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+size_t
+(rb_set_size)(VALUE set)
+{
+    size_t rb_ir_result = rb_ir_fns.rb_set_size(set);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_set_clear)(VALUE set)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_set_clear(set);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_set_foreach)(VALUE set, int (*func)(VALUE element, VALUE arg), VALUE arg)
+{
+    rb_ir_fns.rb_set_foreach(set, func, arg);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_rational_new)(VALUE num, VALUE den)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_rational_new(num, den);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_rational_num)(VALUE rat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_rational_num(rat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_rational_den)(VALUE rat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_rational_den(rat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_complex_new)(VALUE real, VALUE imag)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_complex_new(real, imag);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_obj_method)(VALUE recv, VALUE mid)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_obj_method(recv, mid);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_method_boundp)(VALUE klass, ID id, int ex)
+{
+    int rb_ir_result = rb_ir_fns.rb_method_boundp(klass, id, ex);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_obj_respond_to)(VALUE obj, ID mid, int private_p)
+{
+    int rb_ir_result = rb_ir_fns.rb_obj_respond_to(obj, mid, private_p);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_obj_instance_variables)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_obj_instance_variables(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+st_index_t
+(rb_ivar_count)(VALUE obj)
+{
+    st_index_t rb_ir_result = rb_ir_fns.rb_ivar_count(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_prepend_module)(VALUE klass, VALUE module)
+{
+    rb_ir_fns.rb_prepend_module(klass, module);
+    RB_IR_CHECK();
+}
+
+void
+(rb_undef)(VALUE mod, ID mid)
+{
+    rb_ir_fns.rb_undef(mod, mid);
+    RB_IR_CHECK();
+}
+
+void
+(rb_alias)(VALUE klass, ID dst, ID src)
+{
+    rb_ir_fns.rb_alias(klass, dst, src);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_class_new)(VALUE super)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_class_new(super);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_alloc_func_t
+(rb_get_alloc_func)(VALUE klass)
+{
+    rb_alloc_func_t rb_ir_result = rb_ir_fns.rb_get_alloc_func(klass);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_marshal_dump)(VALUE obj, VALUE port)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_marshal_dump(obj, port);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_marshal_load)(VALUE port)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_marshal_load(port);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_gc)(void)
+{
+    rb_ir_fns.rb_gc();
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_gc_enable)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_gc_enable();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_gc_disable)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_gc_disable();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_enc_str_new_static)(const char *ptr, long len, rb_encoding *enc)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_enc_str_new_static(ptr, len, enc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_enc_str_asciionly_p)(VALUE str)
+{
+    int rb_ir_result = rb_ir_fns.rb_enc_str_asciionly_p(str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_enc_dummy_p)(rb_encoding *enc)
+{
+    int rb_ir_result = rb_ir_fns.rb_enc_dummy_p(enc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_encoding *
+(rb_enc_compatible)(VALUE str1, VALUE str2)
+{
+    rb_encoding * rb_ir_result = rb_ir_fns.rb_enc_compatible(str1, str2);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_encoding *
+(rb_default_internal_encoding)(void)
+{
+    rb_encoding * rb_ir_result = rb_ir_fns.rb_default_internal_encoding();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_encoding *
+(rb_default_external_encoding)(void)
+{
+    rb_encoding * rb_ir_result = rb_ir_fns.rb_default_external_encoding();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_encoding *
+(rb_locale_encoding)(void)
+{
+    rb_encoding * rb_ir_result = rb_ir_fns.rb_locale_encoding();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_locale_encindex)(void)
+{
+    int rb_ir_result = rb_ir_fns.rb_locale_encindex();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_encoding *
+(rb_filesystem_encoding)(void)
+{
+    rb_encoding * rb_ir_result = rb_ir_fns.rb_filesystem_encoding();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_filesystem_encindex)(void)
+{
+    int rb_ir_result = rb_ir_fns.rb_filesystem_encindex();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+rb_encoding *
+(rb_enc_check)(VALUE str1, VALUE str2)
+{
+    rb_encoding * rb_ir_result = rb_ir_fns.rb_enc_check(str1, str2);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_enc_alias)(const char *alias, const char *orig)
+{
+    int rb_ir_result = rb_ir_fns.rb_enc_alias(alias, orig);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_block_lambda)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_block_lambda();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_sym2str)(VALUE symbol)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_sym2str(symbol);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+ID
+(rb_intern3)(const char *name, long len, rb_encoding *enc)
+{
+    ID rb_ir_result = rb_ir_fns.rb_intern3(name, len, enc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_str_format)(int argc, const VALUE *argv, VALUE fmt)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_format(argc, argv, fmt);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_f_sprintf)(int argc, const VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_f_sprintf(argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_define_global_const)(const char *name, VALUE val)
+{
+    rb_ir_fns.rb_define_global_const(name, val);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_f_global_variables)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_f_global_variables();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_free_generic_ivar)(VALUE obj)
+{
+    rb_ir_fns.rb_free_generic_ivar(obj);
+    RB_IR_CHECK();
+}
+
+void
+(rb_copy_generic_ivar)(VALUE clone, VALUE obj)
+{
+    rb_ir_fns.rb_copy_generic_ivar(clone, obj);
+    RB_IR_CHECK();
+}
+
+void
+(rb_num_zerodiv)(void)
+{
+    rb_ir_fns.rb_num_zerodiv();
+    rb_ir_throw();
+}
+
+VALUE
+(rb_make_backtrace)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_make_backtrace();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_obj_singleton_methods)(int argc, const VALUE *argv, VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_obj_singleton_methods(argc, argv, obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mod_constants)(int argc, const VALUE *argv, VALUE recv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mod_constants(argc, argv, recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_mod_module_eval)(int argc, const VALUE *argv, VALUE mod)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_mod_module_eval(argc, argv, mod);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_obj_instance_exec)(int argc, const VALUE *argv, VALUE recv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_obj_instance_exec(argc, argv, recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_ary_resize)(VALUE ary, long len)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_ary_resize(ary, len);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_ary_replace)(VALUE copy, VALUE orig)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_ary_replace(copy, orig);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_hash_fetch)(VALUE hash, VALUE key)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_hash_fetch(hash, key);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_hash_set_ifnone)(VALUE hash, VALUE ifnone)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_hash_set_ifnone(hash, ifnone);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+st_index_t
+(rb_hash_start)(st_index_t i)
+{
+    st_index_t rb_ir_result = rb_ir_fns.rb_hash_start(i);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_hash_bulk_insert)(long argc, const VALUE *argv, VALUE hash)
+{
+    rb_ir_fns.rb_hash_bulk_insert(argc, argv, hash);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_str_concat)(VALUE dst, VALUE src)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_concat(dst, src);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_str_succ)(VALUE orig)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_succ(orig);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_str_replace)(VALUE dst, VALUE src)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_replace(dst, src);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_str_ellipsize)(VALUE str, long len)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_ellipsize(str, len);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_str_scrub)(VALUE str, VALUE repl)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_scrub(str, repl);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_str_buf_new_cstr)(const char *ptr)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_str_buf_new_cstr(ptr);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_sym_to_s)(VALUE sym)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_sym_to_s(sym);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_obj_is_proc)(VALUE recv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_obj_is_proc(recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_obj_is_method)(VALUE recv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_obj_is_method(recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_proc_call)(VALUE recv, VALUE args)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_proc_call(recv, args);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_proc_call_with_block)(VALUE recv, int argc, const VALUE *argv, VALUE proc)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_proc_call_with_block(recv, argc, argv, proc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_proc_arity)(VALUE recv)
+{
+    int rb_ir_result = rb_ir_fns.rb_proc_arity(recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_proc_lambda_p)(VALUE recv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_proc_lambda_p(recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_method_call)(int argc, const VALUE *argv, VALUE recv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_method_call(argc, argv, recv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_set_end_proc)(void (*func)(VALUE arg), VALUE arg)
+{
+    rb_ir_fns.rb_set_end_proc(func, arg);
+    RB_IR_CHECK();
+}
+
+int
+(rb_frame_method_id_and_class)(ID *idp, VALUE *klassp)
+{
+    int rb_ir_result = rb_ir_fns.rb_frame_method_id_and_class(idp, klassp);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_ir_blocking_begin)(void *ubf, void *data2, void *thread)
+{
+    int rb_ir_result = rb_ir_fns.rb_ir_blocking_begin(ubf, data2, thread);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_ir_blocking_end)(int token)
+{
+    rb_ir_fns.rb_ir_blocking_end(token);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_time_new)(time_t sec, long usec)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_time_new(sec, usec);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_time_nano_new)(time_t sec, long nsec)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_time_nano_new(sec, nsec);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_time_timespec_new)(const struct timespec *ts, int offset)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_time_timespec_new(ts, offset);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+struct timeval
+(rb_time_interval)(VALUE num)
+{
+    struct timeval rb_ir_result = rb_ir_fns.rb_time_interval(num);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+struct timeval
+(rb_time_timeval)(VALUE time)
+{
+    struct timeval rb_ir_result = rb_ir_fns.rb_time_timeval(time);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+struct timespec
+(rb_time_timespec)(VALUE time)
+{
+    struct timespec rb_ir_result = rb_ir_fns.rb_time_timespec(time);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_timespec_now)(struct timespec *ts)
+{
+    rb_ir_fns.rb_timespec_now(ts);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_cvar_get)(VALUE klass, ID name)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_cvar_get(klass, name);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_cvar_set)(VALUE klass, ID name, VALUE val)
+{
+    rb_ir_fns.rb_cvar_set(klass, name, val);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_cvar_defined)(VALUE klass, ID name)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_cvar_defined(klass, name);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_cv_get)(VALUE klass, const char *name)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_cv_get(klass, name);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_cv_set)(VALUE klass, const char *name, VALUE val)
+{
+    rb_ir_fns.rb_cv_set(klass, name, val);
+    RB_IR_CHECK();
+}
+
+void
+(rb_define_class_variable)(VALUE arg0, const char * arg1, VALUE arg2)
+{
+    rb_ir_fns.rb_define_class_variable(arg0, arg1, arg2);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_hash_new_capa)(long capa)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_hash_new_capa(capa);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_hash)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_hash(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_hash_delete_if)(VALUE hash)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_hash_delete_if(hash);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_hash_freeze)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_hash_freeze(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_fiber_new)(rb_block_call_func_t func, VALUE callback_obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_fiber_new(func, callback_obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_fiber_resume)(VALUE fiber, int argc, const VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_fiber_resume(fiber, argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_fiber_yield)(int argc, const VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_fiber_yield(argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_fiber_current)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_fiber_current();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_fiber_alive_p)(VALUE fiber)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_fiber_alive_p(fiber);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_fiber_raise)(VALUE fiber, int argc, VALUE *argv)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_fiber_raise(fiber, argc, argv);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_proc_call_kw)(VALUE recv, VALUE args, int kw_splat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_proc_call_kw(recv, args, kw_splat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_proc_call_with_block_kw)(VALUE recv, int argc, const VALUE *argv, VALUE proc, int kw_splat)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_proc_call_with_block_kw(recv, argc, argv, proc, kw_splat);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_catch)(const char *tag, rb_block_call_func_t func, VALUE data)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_catch(tag, func, data);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_define_variable)(const char *name, VALUE *var)
+{
+    rb_ir_fns.rb_define_variable(name, var);
+    RB_IR_CHECK();
+}
+
+void
+(rb_define_readonly_variable)(const char *name, const VALUE *var)
+{
+    rb_ir_fns.rb_define_readonly_variable(name, var);
+    RB_IR_CHECK();
+}
+
+void
+(rb_define_hooked_variable)(const char *name, VALUE *var, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter)
+{
+    rb_ir_fns.rb_define_hooked_variable(name, var, getter, setter);
+    RB_IR_CHECK();
+}
+
+void
+(rb_define_virtual_variable)(const char *name, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter)
+{
+    rb_ir_fns.rb_define_virtual_variable(name, getter, setter);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_ident_hash_new)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_ident_hash_new();
+    RB_IR_CHECK();
+    return rb_ir_result;
 }
 

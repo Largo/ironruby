@@ -533,6 +533,7 @@ namespace IronRuby.Builtins {
                 // Thread.Interrupt: that throws at arbitrary managed waits, including ones with no
                 // handler for it.
                 ThreadOps.WakeForSignal(main);
+                RubyUtils.UnblockNative(main);
             }
         }
 
