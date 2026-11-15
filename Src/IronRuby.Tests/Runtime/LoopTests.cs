@@ -301,6 +301,58 @@ c
         }
 
         /// <summary>
+        /// Array#each_index outlined with its block by -X:OSR (BlockLoopKind.EachIndex): the length is read
+        /// afresh every step, as rb_ary_each_index does, so a pop or a push under the loop ends it where CRuby
+        /// does; an element of another type, break, next, a raise and its backtrace frame, and a subclass's own
+        /// each_index. The output is CRuby 4.0's.
+        /// </summary>
+        public void BlockLoopEachIndex1() {
+            TestOutput(@"
+def sum(a); s = 0; a.each_index { |i| s += i * 3 + a[i] }; s; end
+a = (0...5000).to_a
+p sum(a), sum([1, 2, 3])
+a[4000] = 0.5
+p sum(a)
+a[4000] = nil
+p((sum(a) rescue $!.class))
+b = (0...5000).to_a
+s = 0
+b.each_index { |i| s += i; b.pop if i == 3000 }
+p s, b.size
+s = 0
+b.each_index { |i| s += i; b.push(1) if i == 4000 }
+p s, b.size
+p(b.each_index { |i| break i * 2 if i == 4500 })
+c = 0
+b.each_index { |i| next if i.odd?; c += 1 }
+p c
+def raiser(a); s = 0; a.each_index { |i| s += 10 / (a.size - 1 - i) }; end
+begin
+  raiser(a)
+rescue ZeroDivisionError => e
+  p e.backtrace_locations[0, 3].map(&:label)
+end
+k = Class.new(Array) { def each_index; yield :sub; self; end }
+r = []
+k.new(a).each_index { |i| r << i }
+p r
+", @"
+49990000
+15
+49986000.5
+TypeError
+12492501
+4999
+12497500
+5000
+9000
+2500
+[""Integer#/"", ""block in Object#raiser"", ""Array#each_index""]
+[:sub]
+");
+        }
+
+        /// <summary>
         /// A global variable read or assigned in a specialized method or an outlined loop (JitCompiler.EmitGlobalRead,
         /// EmitGlobalWrite): the value it holds now, whatever it is, through an alias too; what an assignment stores
         /// is what a read sees, and trace_var still sees every assignment. A special variable, an undefined one, or

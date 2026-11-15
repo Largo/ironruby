@@ -1324,6 +1324,25 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_index")]
         [BlockNotKept]
         public static object EachIndex([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
+            var array = self as RubyArray;
+            if (array != null && array.GetType() == typeof(RubyArray)) {
+                // -X:OSR: as Each, the length read afresh every step (rb_ary_each_index)
+                var loop = BlockLoopSite.For(block, BlockLoopKind.EachIndex, array.Count);
+                long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
+                for (int j = 0; j < array.Count; j++) {
+                    if (--countdown <= 0 && array.Count - j >= loop.Floor) {
+                        j = loop.Run(block, array, j, ref countdown);
+                        if (j >= array.Count) { break; }
+                    }
+                    object result;
+                    if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject(j), out result)) {
+                        return result;
+                    }
+                }
+                if (loop != null) { loop.Leave(countdown); }
+                return self;
+            }
+
             int i = 0;
             while (i < self.Count) {
                 object result;

@@ -1,7 +1,7 @@
 /* ****************************************************************************
  *
  * -X:OSR for the loops the core iterators run: `n.times { }', `a.upto(b) { }',
- * `a.downto(b) { }', and Array's `each', `map', `select', `any?', `all?' and `none?'.
+ * `a.downto(b) { }', and Array's `each', `each_index', `map', `select', `any?', `all?' and `none?'.
  *
  * Those loops are C# loops in the library that yield to a block, so there is no `while' for
  * OsrLoopSite to replace, and every iteration pays for a block invocation and a dynamic call
@@ -15,6 +15,7 @@
  *     (a..b).each { |i| body }       the same, Range#each over Integers (a...b: #n is b - 1)
  *     a.downto(b) { |i| body }       while #i >= #n;    i = #i;      body; #i -= 1; end
  *     array.each { |x| body }        while #i < #a.size; x = #a[#i]; body; #i += 1; end
+ *     array.each_index { |i| body }  while #i < #a.size; i = #i;     body; #i += 1; end
  *
  * and for map, select and any? the block's value - the last statement of the body - goes into
  * `#r[#i] = value', `if value; #r[#k] = #a[#i]; #k += 1; end' and `if value; #k = 1; break; end'
@@ -63,6 +64,8 @@ namespace IronRuby.Runtime.Osr {
         // any?, none?: stops at the first element the block is truthy for; all?: at the first falsy one
         FindTruthy = 6,
         FindFalsy = 7,
+        // Array#each_index: Each's loop, yielding the index rather than the element
+        EachIndex = 8,
     }
 
     /// <summary>
@@ -70,7 +73,7 @@ namespace IronRuby.Runtime.Osr {
     /// that passed the screen, on its BlockDispatcher, and the sites for each iterator it is given to.
     /// </summary>
     internal sealed class BlockLoopInfo {
-        private const int KindCount = 8;
+        private const int KindCount = 9;
 
         internal readonly BlockDefinition/*!*/ Ast;
         internal readonly RubyContext/*!*/ Context;
@@ -81,7 +84,7 @@ namespace IronRuby.Runtime.Osr {
         internal readonly LocalVariable/*!*/[]/*!*/ Locals;
         internal readonly string/*!*/ Name;
         internal readonly BlockLoopSite[]/*!*/ Sites = new BlockLoopSite[KindCount];
-        // the shortest run of Times, UpTo, DownTo, Range#each and Array#each worth entering the copy for
+        // the shortest run of Times, UpTo, DownTo, Range#each, Array#each and #each_index worth entering the copy for
         // (BlockLoopSite.MinRun, BlockLoopSite.MinMediumRun, BlockLoopSite.MinLightRun)
         internal readonly int Floor;
 
@@ -360,6 +363,11 @@ namespace IronRuby.Runtime.Osr {
                     condition = new MethodCall(counter, "<", new Arguments(new MethodCall(limit, "size", null, location)), location);
                     element = new MethodCall(limit, "[]", new Arguments(counter), location);
                     break;
+                case BlockLoopKind.EachIndex:
+                    // the length read afresh every step, as rb_ary_each_index does
+                    condition = new MethodCall(counter, "<", new Arguments(new MethodCall(limit, "size", null, location)), location);
+                    element = counter;
+                    break;
                 default:
                     throw new ArgumentException("kind");
             }
@@ -467,9 +475,9 @@ namespace IronRuby.Runtime.Osr {
             return i;
         }
 
-        /// <summary>Array#each's: runs from index <paramref name="i"/> on, answers the index to resume at.</summary>
+        /// <summary>Array#each's and #each_index's: runs from index <paramref name="i"/> on, answers the index to resume at.</summary>
         public int Run(BlockParam/*!*/ block, RubyArray/*!*/ array, int i, ref long countdown) {
-            Debug.Assert(_kind == BlockLoopKind.Each);
+            Debug.Assert(_kind == BlockLoopKind.Each || _kind == BlockLoopKind.EachIndex);
             int kept;
             Run(block, i, array, null, 0, out i, out kept);
             countdown = _osr.Countdown;

@@ -1,6 +1,6 @@
 # Differential matrix for the loops of the core iterators that -X:OSR outlines together with their
 # block (Src/Ruby/Runtime/Osr/BlockLoopSite.cs): Integer#times, #upto, #downto (Fixnum bounds) and
-# Array#each, #map, #select, #any?, #all?, #none?. Run it under CRuby and under ./ir.sh with OSR on and off, and diff:
+# Array#each, #each_index, #map, #select, #any?, #all?, #none?. Run it under CRuby and under ./ir.sh with OSR on and off, and diff:
 #
 #   ruby Util/block-loop-matrix.rb > /tmp/mri.txt
 #   ./ir.sh Util/block-loop-matrix.rb > /tmp/osr.txt
@@ -317,3 +317,62 @@ t('... a heavy body over runs of 4, 3, 2, 1') {
   3000.times { |k| ps[3].freeze if k == 2000; e += (bl_short_pairs(ps) rescue 1.0) }
   [e.round(6), ps.map { |p| p.x.round(9) }]
 }
+
+# ---------------------------------------------------------------- Array#each_index
+# Array#each's loop yielding the index (BlockLoopKind.EachIndex): the length is read afresh every
+# step, as rb_ary_each_index does, so an Array that shrinks or grows under the loop ends it where
+# CRuby does. The jumps, a raise and its backtrace, a subclass, a redefinition, an element of another
+# type met by the copy, and NBody's shape: each_index over five bodies with a heavy Range#each inside.
+def bl_ei_raise
+  a = (0...N).to_a; s = 0
+  a.each_index { |i| s += 10 / (N - 1 - i) }
+rescue ZeroDivisionError => e
+  e.backtrace_locations[0, 3].map { |l| l.label }
+end
+def bl_ei_return(a); a.each_index { |i| return i if i == 5000 }; :no; end
+t('each_index: s += i') { a = (0...N).to_a; s = 0; a.each_index { |i| s += i }; s }
+t('... value is the receiver') { a = (0...N).to_a; a.each_index { |i| i }.equal?(a) }
+t('... reads the elements') { a = Array.new(N) { |i| i * 0.25 }; s = 0.0; a.each_index { |i| s += a[i] }; s }
+t('... a nil element') { a = Array.new(N) { |i| i == 5000 ? nil : i }; s = 0; (a.each_index { |i| s += a[i] } rescue [$!.class, s]) }
+t('... Float element after Integers') { a = Array.new(N) { |i| i == 5000 ? 1.5 : i }; s = 0; a.each_index { |i| s += a[i] }; s }
+t('... pop under the loop') { a = (0...N).to_a; s = 0; a.each_index { |i| s += i; a.pop if i == 5000 }; [s, a.size] }
+t('... clear under the loop') { a = (0...N).to_a; s = 0; a.each_index { |i| s += i; a.clear if i == 4000 }; [s, a.size] }
+t('... push under the loop') { a = (0...N).to_a; s = 0; a.each_index { |i| s += i; a.push(7) if i == 5000 }; [s, a.size] }
+t('... element written under the loop') { a = (0...N).to_a; s = 0; a.each_index { |i| a[i] = i * 2; s += a[i] }; [s, a[-1]] }
+t('... break with a value') { a = (0...N).to_a; a.each_index { |i| break i * 2 if i == 5000 } }
+t('... next') { a = (0...N).to_a; c = 0; a.each_index { |i| next if i.odd?; c += 1 }; c }
+t('... redo') { a = (0...N).to_a; c = 0; r = false; a.each_index { |i| c += 1; (r = true; redo) if i == 5000 && !r }; c }
+t('... return') { bl_ei_return((0...N).to_a) }
+t('... backtrace of an error in the block') { bl_ei_raise }
+t('... no parameter') { a = (0...N).to_a; s = 0; a.each_index { s += 2 }; s }
+t('... frozen') { a = (0...N).to_a.freeze; s = 0; a.each_index { |i| s += i }; s }
+t('... Array subclass') { c = Class.new(Array); a = c.new((0...N).to_a); s = 0; a.each_index { |i| s += i }; s }
+t('... subclass with its own each_index') { c = Class.new(Array) { def each_index; yield :sub; self; end }; a = c.new((0...N).to_a); r = []; a.each_index { |i| r << i }; r }
+t('... without a block') { e = (0...N).to_a.each_index; [e.class, e.size] }
+t('... an Integer overflowing') { a = (0...N).to_a; s = 2**62; a.each_index { |i| s += 4503599627370496 }; [s, s.class] }
+t('... nested in times, short') { s = 0; a = [1, 2, 3]; 3000.times { a.each_index { |i| s += i * 3 + a[i] } }; s }
+class Array; alias_method :__bl_each_index, :each_index; def each_index; yield :redefined; self; end; end
+t('... Array#each_index redefined') { r = []; (0...N).to_a.each_index { |i| r << i }; r }
+class Array; alias_method :each_index, :__bl_each_index; remove_method :__bl_each_index; end
+t('... and restored') { a = (0...N).to_a; s = 0; a.each_index { |i| s += i }; s }
+def bl_ei_pairs(ps)
+  e = 0.0
+  ps.each_index { |i| a = ps[i]; ((i + 1)...ps.size).each { |j| b = ps[j]; d = a.x - b.x; e += d * d * a.v * b.v; b.x = b.x - d * 0.001 } }
+  ps.each_index { |i| b = ps[i]; b.x = b.x + b.v * 0.01 }
+  e
+end
+t('... NBody shape over five, a body frozen part way') {
+  ps = Array.new(5) { |i| BlShortP.new(i + 0.5) }
+  e = 0.0
+  3000.times { |k| ps[3].freeze if k == 2000; e += (bl_ei_pairs(ps) rescue 1.0) }
+  [e.round(6), ps.map { |p| p.x.round(9) }]
+}
+# rb_ary_each_index reads the length directly, never through #size or #[], which the copy's loop
+# condition calls: a redefined or private Array#size must not change what the loop runs over.
+def bl_ei_sum(a); s = 0; a.each_index { |i| s += i }; s; end
+t('... before Array#size is redefined') { bl_ei_sum((0...N).to_a) }
+class Array; alias_method :__bl_size, :size; def size; 2; end; end
+t('... Array#size redefined') { bl_ei_sum((0...N).to_a) }
+class Array; alias_method :size, :__bl_size; private :size; end
+t('... Array#size private') { bl_ei_sum((0...N).to_a) }
+class Array; public :size; remove_method :__bl_size; end
