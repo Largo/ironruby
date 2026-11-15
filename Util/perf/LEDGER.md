@@ -251,6 +251,32 @@ Profile (`Util/perf/profile.sh`, self time):
    of the gate's). `tree_insert` is now rejected only at `Node.new`: a deopt after a
    construction in the middle of a body would run `initialize` twice, so it needs the
    allocation's effects logged, or the deopt that resumes mid-body of gap 1.
+   Round eleven looked behind `Node.new` (an experiment that let any plain `C.new` through
+   the screen and the emitter, not kept): the next refusal is `z.parent = y`, "attribute
+   assignment parent= on an unprofiled receiver" (a construction's result has no profile
+   and is typed Obj), and behind that, by the rules of `TryCompile`, two more decline the
+   body: the loop's `x.value = value` is an effect, and an impure body with a loop may not
+   deopt anywhere, though that branch returns at once; and the inlined `compare_to` after
+   `z.parent = y` is a deopt after an effect. So the narrow version is four changes, not
+   one: (1) a mid-body construction of a class whose `initialize` only writes its own
+   instance variables from its arguments and literals, with the site deopting *before*
+   the construction (not taking the generic `new` the tail construction falls back to)
+   whenever the construction is not current or `:c_call` is traced, and never under
+   `-X:ObjectSpace`, where `each_object(Node)` would count the instance a restarted body
+   threw away; (2) the result typed as that class, so its attribute writers bind without
+   a profile; (3) writes to that object before it escapes (stored, passed, returned) not
+   counted as effects; (4) an effect followed by `return` in a loop not counted against
+   the loop's other deopts. What it could buy: `tree_insert` is called 209,547 times per
+   CD iteration (about 600 ms); on a 64-key tree of CD's `Vector2D` keys it costs 859 ns
+   generic, called with `send` (CRuby 1259), a `get` of the same keys, whose `find_node`
+   is compiled, 312 ns (CRuby 937), so at most some 450 ns a call, and much less on CD's
+   own small per-frame trees: its 5.2% self share (round seven's profile; `perf` could
+   not sample on this round's machine) puts the gain at 2-4% of CD, the size that round
+   ten's `find_node` could not show against CD's noise. `Util/jit-construct-
+   matrix.rb` pins construct-then-deopt (Integer overflow, a key of another class, a
+   frozen node, `initialize` redefined to count, to publish self and to raise, the class
+   reopened, the `tree_insert` shape) and passes on CRuby 4.0 and IronRuby with and
+   without the JIT; any of the four changes has to keep it passing. See Rejected.
 4. **Permute: the `downto` block in `permute`** (the method is 15% self). `permute` is a
    light frame (`IR_LIGHT_FRAMES=why` says so; an earlier version of this entry said it
    was not, from the `RubyMethodScope::.ctor` line of the profile alone), and the method
@@ -910,6 +936,12 @@ Round ten:
   `HashIndexTable#add` and `#get`, which were then declined. Nested only for a call on
   another object. **Inlining only the sampled class on a parameter**: retired for good
   in CD, whose keys have two classes; hence the two-class dispatch.
+- **CD's `tree_insert` through a mid-body `Node.new`** (round eleven, gap 3): not built.
+  The construction is the first of four rules that decline the body, each in the
+  effect/deopt bookkeeping that three of the ten faults the gate missed were in, for an
+  estimated 2-4% of CD, below what CD's noise lets a round show. Gap 3 lists the four,
+  the safety conditions (a pure `initialize`, a deopt before a construction that is not
+  current, never under `-X:ObjectSpace`) and the matrix that pins the semantics.
 
 ## Regressions
 
