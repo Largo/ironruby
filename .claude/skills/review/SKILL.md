@@ -91,11 +91,11 @@ EAGAIN or EINTR wait, or spin? Does a timeout still hold on an `O_NONBLOCK` desc
 - A check that passes when the thing it checks never ran: a cold run counted as warm (#76).
 
 **Generated files.**
-- A new or changed `[RubyMethod]` needs `Src/Libraries/Initializers.Generated.cs` regenerated
-  with `./regen-initializers.sh`.
+- The library initializers are generated during the build (`Src/InitializerGenerator`): a new or
+  changed `[RubyMethod]` needs no regeneration, and a checked-in `Initializers.Generated.cs` is a mistake.
 - A new `[Emitted]` `RubyOps` method needs its `ReflectionCache.Generated.cs` entry.
 - Prism changes must match `Src/Prism/Generated`.
-- A forgotten regeneration builds but registers nothing.
+- A forgotten `ReflectionCache` entry fails the build; stale `Src/Prism/Generated` fails release.yml.
 
 ## 3. Prove each finding
 
@@ -108,8 +108,7 @@ A finding you have not checked is a question, not a finding.
    overloads or signatures.
 3. **Reproduce when it is cheap.**
    - Build with `dotnet build Src/Console/Ruby.Console.csproj -c Release
-     -p:IronRubyTargetFrameworks=net10.0`. A `[RubyMethod]` change first needs
-     `./regen-initializers.sh`. A file under `Src/StdLib` needs no build.
+     -p:IronRubyTargetFrameworks=net10.0`. A file under `Src/StdLib` needs no build.
    - Write a few lines of Ruby and run them with `IR_CONFIG=Release ./ir.sh x.rb` and
      `ruby x.rb`. A difference from CRuby is the bug report. The reference is CRuby 4.0; if the
      `ruby` at hand is older, say which version you compared against.
