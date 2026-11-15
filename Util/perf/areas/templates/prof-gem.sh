@@ -4,6 +4,8 @@
 set -e -o pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../../../.." && pwd)"
 RB=$1 B=$2 TREE=${3:-$ROOT} SECS=${PROFILE_SECS:-15}
+# absolute, since the run below changes into the ruby-bench directory: a tree given as . would mean that one
+RB=$(cd "$RB" && pwd); TREE=$(cd "$TREE" && pwd)
 OUT=/root/workspace/templates-scratch/profiles; mkdir -p $OUT
 PERF="$(ls /usr/lib/linux-tools-*/perf 2>/dev/null | tail -n 1 || true)"; PERF="${PERF:-$(command -v perf)}"
 SHIM=$(mktemp -d -p /root/workspace/templates-scratch)

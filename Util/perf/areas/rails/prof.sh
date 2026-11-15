@@ -10,6 +10,7 @@ echo "before: $(grep -c '^itr' $OUT/$NAME.run.log) pid $PID"
 /usr/bin/perf record -F 499 -g -e cpu-clock -p $PID -o $OUT/$NAME.perf -- sleep $S 2>&1 | tail -1
 echo "after: $(grep -c '^itr' $OUT/$NAME.run.log)"
 kill $PID; wait $PID 2>/dev/null
-/usr/bin/perf script -i $OUT/$NAME.perf -F ip,sym,dso > $OUT/$NAME.stacks 2>/dev/null
+# the capture is kept when the conversion fails, so that it can be tried again
+/usr/bin/perf script -i $OUT/$NAME.perf -F ip,sym,dso > $OUT/$NAME.stacks 2>/dev/null || { echo "perf script failed: $OUT/$NAME.perf is kept" >&2; exit 1; }
 rm -f $OUT/$NAME.perf
 ruby /root/workspace/wt-rails/Util/perf/profile-agg.rb $OUT/$NAME.stacks 40

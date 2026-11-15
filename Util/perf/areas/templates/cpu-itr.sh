@@ -4,6 +4,8 @@
 #   cpu-itr.sh <ruby-bench dir> <cruby|ir-tree> <benchmark> [itrs=6]
 # Prints the iteration lines (#1 is the cold one) and "mean of last half".
 RB=$1 ENG=$2 B=$3 N=${4:-6}
+# absolute, since the run below changes into the ruby-bench directory: a tree given as . would mean that one
+RB=$(cd "$RB" && pwd) || exit 1; [ "$ENG" = cruby ] || ENG=$(cd "$ENG" && pwd) || exit 1
 set -o pipefail   # a benchmark that dies must not leave awk's status as the script's
 # without the directory every path below would start at /
 SHIM=$(mktemp -d -p "${TEMPLATES_SCRATCH:-/root/workspace/templates-scratch}") || exit 1; trap 'rm -rf $SHIM' EXIT
