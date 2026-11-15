@@ -7205,6 +7205,64 @@ true
         }
 
         /// <summary>
+        /// A method with a rest parameter is a light frame too (MethodDefinition.IsLightFrameCandidate): the Array is the
+        /// call's own, and a scope made on demand - for binding, local_variables, a block - has it as a scope made at entry
+        /// does. Util/light-rest-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameRest1() {
+            TestOutput(@"
+require 'ruby4'
+def rest(*a); a; end
+def lead(x, *a); [x, a]; end
+def opt(x, y = 5, *a); [x, y, a]; end
+def grow(*a); a << 9; a; end
+def seen(*a); binding.local_variable_get(:a); end
+def names(x, *a); local_variables; end
+def in_block(*a); r = nil; [1].each { r = a }; r; end
+def summed(*a); i = 0; s = 0; while i < a.size; s += a[i]; i += 1; end; s; end
+def fwd(*a); rest(0, *a); end
+def given(*a); block_given? ? yield(*a) : a.size; end
+p rest, rest(1), rest(1, [2]), rest(*[1, 2]), rest(nil), rest(a: 1), lead(1), lead(1, 2, 3), opt(1), opt(1, 2, 3)
+x = [1, 2]
+p grow(*x), x, rest(1).equal?(rest(1)), seen(1, 2), names(1, 2), in_block(3), summed(1, 2, 3), fwd(1), given(1, 2), given(1, 2) { |q, r| q + r }
+p 40.times.map { |i| rest(*([i % 3] * (i % 3))).size }.uniq, 40.times.map { |i| summed(i, 1) }.sum
+p method(:rest).arity, method(:lead).arity, method(:rest).parameters
+begin; lead; rescue ArgumentError => e; p e.message; end
+def boom(*a); raise ""boom #{a.size}""; end
+begin; boom(1, 2); rescue => e; p e.message, e.backtrace[0][/in .*/]; end
+", @"
+[]
+[1]
+[1, [2]]
+[1, 2]
+[nil]
+[{a: 1}]
+[1, []]
+[1, [2, 3]]
+[1, 5, []]
+[1, 2, [3]]
+[1, 2, 9]
+[1, 2]
+false
+[1, 2]
+[:x, :a]
+[3]
+6
+[0, 1]
+2
+3
+[0, 1, 2]
+820
+-1
+-2
+[[:rest, :a]]
+""wrong number of arguments (given 0, expected 1+)""
+""boom 2""
+""in 'Object#boom'""
+");
+        }
+
+        /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
         /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
         /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no

@@ -399,6 +399,11 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightBlockGivenEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCK_GIVEN") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_REST=0 keeps every method with a rest parameter (`def f(*args)') out of light frames (see IsLightFrameCandidate).
+        /// </summary>
+        internal static readonly bool LightRestEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REST") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -480,10 +485,13 @@ namespace IronRuby.Compiler.Ast {
         /// (LightFrameRewriter.LightScopeCall), so `def getter; a; end', `def cmp(o); @x < o; end' and conditions over
         /// such calls are light as well, and so are the attribute and element assignments, string interpolation, `case/when'
         /// and `while' loops made of them (a loop's OSR site gets the scope made on demand). Global variables need the scope.
+        /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
+        /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
+        /// and keywords are not taken.
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
-            if (!AreLightOptionals() || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+            if (!AreLightOptionals() || _parameters.Unsplat != null && !LightRestEnabled || _parameters.SuperSplat != null ||
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return false;
             }
@@ -523,7 +531,7 @@ namespace IronRuby.Compiler.Ast {
         /// that is not scope-free (its node type and line). Null if it is a candidate.
         /// </summary>
         private string WhyNotLightFrameCandidate() {
-            if (!AreLightOptionals() || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+            if (!AreLightOptionals() || _parameters.Unsplat != null && !LightRestEnabled || _parameters.SuperSplat != null ||
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return "optional, splat or post parameters";
             }

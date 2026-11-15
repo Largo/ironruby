@@ -300,9 +300,14 @@ Profile (`Util/perf/profile.sh`, self time):
    SOM's `Vector#each` over 4 elements ran at 0.98-1.05 of before and over 100 at
    1.00-1.15 (round nine). Closed. What DeltaBlue pays is in gap 14.
 9. **Light frames still exclude** `super` (6 hot `initialize` methods), `rescue`,
-   keywords, `$~`, regex literals; `block_given?` still forces the scope.
+   keywords, `$~`, regex literals, and a call that passes the method's block on
+   (`inner(&block)`: 94 to 275 ns per wrapper layer, Util/bench/truffleruby-lessons.md).
    `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
    RubyInstanceData + RubyObject as two objects per Ruby object.
+   `block_given?` no longer forces the scope (it is answered from the frame's block
+   parameter, `IR_LIGHT_BLOCK_GIVEN=0` for the old call) and a rest parameter no longer
+   keeps a method out (`IR_LIGHT_REST=0`); Util/block-given-matrix.rb and
+   Util/light-rest-matrix.rb are their matrices.
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
     through a site shared by every `!=` in the runtime, so that site is polymorphic. 2.9%
