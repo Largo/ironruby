@@ -333,6 +333,12 @@ namespace IronRuby.Aot.Compiler {
         // assumes 'object' of non-static call is already on stack
         private void EmitMethodCall(MethodInfo mi, IArgumentProvider args, Type objectType, CompilationFlags flags) {
 
+            // the DynamicMethod's call to itself: its closure is its first argument
+            bool selfCall = SelfCall != null && mi == SelfCall && _method is DynamicMethod;
+            if (selfCall) {
+                EmitClosureArgument();
+            }
+
             // Emit arguments
             List<WriteBack> wb = EmitArguments(mi, args);
 
@@ -353,7 +359,15 @@ namespace IronRuby.Aot.Compiler {
             if (mi.CallingConvention == CallingConventions.VarArgs) {
                 _ilg.EmitCall(callOp, mi, System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(System.Linq.Enumerable.Range(0, args.ArgumentCount), i => args.GetArgument(i).Type)));
             } else {
-                _ilg.Emit(callOp, mi);
+                MethodInfo target;
+                if (selfCall) {
+                    _ilg.Emit(OpCodes.Call, (DynamicMethod)_method);
+                } else if (MethodSubstitutions != null && MethodSubstitutions.TryGetValue(mi, out target)) {
+                    // a stand-in for a method that is still being built (ExpressionCompiler.CompileToMethod)
+                    _ilg.Emit(callOp, target);
+                } else {
+                    _ilg.Emit(callOp, mi);
+                }
             }
 
             // Emit writebacks for properties passed as "ref" arguments

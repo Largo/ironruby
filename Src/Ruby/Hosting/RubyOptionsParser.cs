@@ -724,6 +724,23 @@ namespace IronRuby.Hosting {
                         case "NoOSR":
                             LanguageSetup.Options["OSR"] = ScriptingRuntimeHelpers.False;
                             return;
+
+                        // a prototype: the method JIT's code as static methods of a runtime assembly
+                        // (Runtime/Jit/JitMethodEmitter.cs, which lists the options)
+                        case "JITMethods":
+                            LanguageSetup.Options["JITMethods"] = "run";
+                            return;
+
+                        // a prototype: a typed body calls the typed bodies of other methods of its
+                        // receiver directly (Runtime/Jit/JitStub.cs, BindCallee)
+                        case "JITCalls":
+                            LanguageSetup.Options["JITCalls"] = ScriptingRuntimeHelpers.True;
+                            return;
+                    }
+
+                    if (optionValue != null && optionValue.StartsWith("JITMethods=", StringComparison.Ordinal)) {
+                        LanguageSetup.Options["JITMethods"] = optionValue.Substring("JITMethods=".Length);
+                        return;
                     }
 
                     // -X:StdLib=dir[:dir...] names the standard library directories. They go on
