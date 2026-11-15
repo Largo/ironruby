@@ -430,14 +430,18 @@ frame for a callee the .NET JIT inlined.
   keywords, a block, a splat; the wrong number of arguments; mutual recursion with and without
   an end; instance variable, global and Hash writes in the callee; a frozen receiver; a
   constant the callee folded, reassigned; `Integer#+` redefined; a TracePoint; four threads
-  making one caller hot. Its 92 lines are CRuby 4.0.9's with the switches off, with
-  `-X:JITCalls`, and with `-X:JITCalls` and each of `-X:JITMethods`, `=run,tiered`, `=collect`,
-  `=dynamic`, `=run,entry`. 23 calls are bound in it and 33 inlined.
+  making one caller hot; and, since the review, a caller with an optional parameter whose
+  callee a subclass overrides, and a global that the caller reads and the callee assigns, the
+  other way round, and between two callees, each with a deopt after the write. Its 100 lines
+  are CRuby 4.0.9's with the switches off, with `-X:JITCalls`, and with `-X:JITCalls` and each
+  of `-X:JITMethods`, `=run,tiered`, `=collect`, `=dynamic`, `=run,entry`. 28 calls are bound
+  in it and 33 inlined.
 - `Util/jit-matrix.rb` (684 lines on master now) is CRuby's in the same modes.
-- IronRuby.Tests: `JitCalls1` runs `-X:JITCalls` and `JitMethods1` seven combinations of the two
-  switches, checking that bodies were emitted; the test project now builds
-  `IronRuby.JitEmit.dll` next to it. The suite passes on net10.0 and net11.0
-  (1,256 tests, Debug, Linux).
+- IronRuby.Tests: `JitCalls1` runs `-X:JITCalls`, checking that calls were bound
+  (`JitRuntime.DirectCallBodies`, which `IR_JIT_VERBOSE=1` prints as `direct-calls=`) and that
+  none are without the switch, and `JitMethods1` seven combinations of the two switches,
+  checking that bodies were emitted; the test project now builds `IronRuby.JitEmit.dll` next to
+  it. The suite passes on net10.0 and net11.0 (1,264 tests on master as merged, Debug, Linux).
 - A plain build does not build `Src/JitEmit`, and a self-contained composite ReadyToRun
   publish with the release script's options carries no `IronRuby.JitEmit.dll`; there
   `-X:JITMethods` warns once and compiles as without it, and `-X:JITCalls` needs nothing.

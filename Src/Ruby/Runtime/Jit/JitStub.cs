@@ -797,6 +797,7 @@ namespace IronRuby.Runtime.Jit {
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
+            if (code.DirectCalls) { JitRuntime.DirectCallBodies++; }
             if (JitRuntime.Verbose) {
                 Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}",
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, code.EmittedSelfCall ? " (self-call)" : "",
@@ -1019,11 +1020,16 @@ namespace IronRuby.Runtime.Jit {
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
+            // `pinned' is also a self-call's
+            foreach (var code in codes) {
+                if (code != null && code.DirectCalls) { JitRuntime.DirectCallBodies++; break; }
+            }
             if (JitRuntime.Verbose) {
                 for (int k = 0; k <= optionalCount; k++) {
                     if (codes[k] == null) { continue; }
-                    Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} passing {3} optional -> {4}{5}",
-                        _declaringModule.Name ?? "main", _ast.Name, _arity, k, codes[k].ReturnType, codes[k].EmittedSelfCall ? " (self-call)" : "");
+                    Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} passing {3} optional -> {4}{5}{6}",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, k, codes[k].ReturnType, codes[k].EmittedSelfCall ? " (self-call)" : "",
+                        codes[k].DirectCalls ? " (direct calls)" : "");
                 }
             }
             return true;

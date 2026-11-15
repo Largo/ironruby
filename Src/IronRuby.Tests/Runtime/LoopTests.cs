@@ -414,11 +414,18 @@ nil
         /// compiled for still gives CRuby 4.0's output.
         /// </summary>
         public void JitCalls1() {
+            int bound = IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies;
             var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITCalls"] = true; });
             AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                 JitCallsExpected);
+            // the output is the same when nothing is bound: tot's call of acc, a callee with a loop, is one
+            // the inliner never takes, and Shape#area's of side is another
+            Assert(IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies >= bound + 2);
+            bound = IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies;
             AreEqual(Engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                 JitCallsExpected);
+            // and without the switch nothing is
+            Assert(IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies == bound);
         }
 
         /// <summary>
@@ -461,6 +468,15 @@ def small?(k) = k < 2
 def fibh(k) = small?(k) ? k : fibh(k - 1) + fibh(k - 2)
 def quot(a, b) = a / b
 def ratio(a, b) = quot(a, b) + 1
+def acc(n)
+  s = 0; i = 0
+  while i < n
+    s += sq(i)
+    i += 1
+  end
+  s
+end
+def tot(n) = acc(n) + 1
 class Shape
   def scale = 2
   def side(x) = x * scale
@@ -470,19 +486,19 @@ class Wide < Shape
   def scale = 3
 end
 r = []
-100.times { r << sum(50) << fibh(15) << ratio(10, 3) << Shape.new.area(4) }
+100.times { r << sum(50) << fibh(15) << ratio(10, 3) << Shape.new.area(4) << tot(50) }
 r = r.uniq
 r << norm2(4_000_000_000, 4_000_000_000) << norm2(1.5, 2)
 r << (ratio(1, 0) rescue $!.class)
 r << Wide.new.area(4)
 Object.send(:remove_method, :sq)
 def sq(x) = x + 1
-r << sum(50) << norm2(1, 2)
+r << sum(50) << norm2(1, 2) << tot(50)
 Object.send(:remove_method, :small?)
 def small?(k) = k < 3
 r << fibh(15) << fib(20)
 r.join(',')
 ";
-        private const string JitCallsExpected = "42875,610,4,64,32000000000000000000,6.25,ZeroDivisionError,144,1675,5,987,6765";
+        private const string JitCallsExpected = "42875,610,4,64,40426,32000000000000000000,6.25,ZeroDivisionError,144,1675,5,1276,987,6765";
     }
 }
