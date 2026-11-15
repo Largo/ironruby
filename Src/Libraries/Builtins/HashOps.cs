@@ -351,13 +351,27 @@ namespace IronRuby.Builtins {
         }
 
         private static void RequireDig(RespondToStorage/*!*/ respondTo, object value) {
-            // A plain Hash or Array is known to have #dig; anything else is asked (respond_to? may be
-            // overridden), an instance of a subclass of theirs included: rb_obj_dig takes its short cut
-            // only while #dig is the built-in one, and a subclass is where it is redefined.
-            Type type = value.GetType();
-            if (type != typeof(Hash) && type != typeof(RubyArray) && !Protocols.RespondTo(respondTo, value, "dig")) {
+            // A Hash or an Array whose #dig is the built-in one is known to have it. Anything else is asked, as
+            // respond_to? may be overridden - a Hash or an Array included, when its class, a module in it or the
+            // object itself redefines #dig: rb_obj_dig takes its short cut only while rb_method_basic_definition_p.
+            if (!HasBuiltinDig(respondTo.Context, value) && !Protocols.RespondTo(respondTo, value, "dig")) {
                 throw RubyExceptions.CreateTypeError("{0} does not have #dig method", respondTo.Context.GetClassName(value));
             }
+        }
+
+        // Whether #dig of a Hash or an Array resolves to the one Hash or Array itself defines (the lookup is the
+        // class's cached one).
+        private static bool HasBuiltinDig(RubyContext/*!*/ context, object value) {
+            Type owner;
+            if (value is Hash) {
+                owner = typeof(Hash);
+            } else if (value is RubyArray) {
+                owner = typeof(RubyArray);
+            } else {
+                return false;
+            }
+            var method = context.GetImmediateClassOf(value).ResolveMethod("dig", VisibilityContext.AllVisible).Info;
+            return method != null && method.DeclaringModule == context.GetClass(owner);
         }
 
         [RubyMethod("default")]

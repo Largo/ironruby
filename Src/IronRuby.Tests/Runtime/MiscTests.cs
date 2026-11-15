@@ -7484,8 +7484,9 @@ p u.lines(""\u00FC"").map(&:bytes), u.each_line(""\u00FC"").map(&:size)
         }
 
         /// <summary>
-        /// Hash#dig asks an instance of a Hash or Array subclass whether it has #dig, as it asks any other object
-        /// (rb_obj_dig takes its short cut only while #dig is the built-in one), and calls a redefined #dig.
+        /// Hash#dig asks a Hash or an Array whose #dig is redefined - in a subclass or on the object itself - whether it
+        /// has #dig, as it asks any other object, and does not ask one whose #dig is the built-in one, whatever its
+        /// respond_to? says (rb_obj_dig takes its short cut while rb_method_basic_definition_p).
         /// </summary>
         public void Hash_DigSubclass1() {
             TestOutput(@"
@@ -7495,6 +7496,12 @@ class A2 < Array; def dig(*k) = [:over, k]; def respond_to?(m, priv = false) = m
 class H3 < Hash; def dig(*k) = [:over, k]; end
 p(({ a: H2.new }.dig(:a, 1) rescue $!.message), ({ a: A2.new }.dig(:a, 1, 2, 3, 4) rescue $!.message))
 p({ a: H3.new }.dig(:a, 1), { a: H3.new }.dig(:a, 1, 2, 3, 4), { a: H3[b: 1] }.dig(:a), { a: { b: [5, 6] } }.dig(:a, :b, 1))
+class H4 < Hash; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+class A4 < Array; def respond_to?(m, priv = false) = m == :dig ? false : super; end
+p({ a: H4[:x, 3] }.dig(:a, :x), { a: A4[7, 8] }.dig(:a, 1))
+h = {}; def h.dig(*) = :over; def h.respond_to?(m, priv = false) = m == :dig ? false : super
+g = { b: 1 }; def g.respond_to?(m, priv = false) = m == :dig ? false : super
+p(({ a: h }.dig(:a, :b) rescue $!.class), { a: g }.dig(:a, :b))
 ", @"
 ""H2 does not have #dig method""
 ""A2 does not have #dig method""
@@ -7502,6 +7509,10 @@ p({ a: H3.new }.dig(:a, 1), { a: H3.new }.dig(:a, 1, 2, 3, 4), { a: H3[b: 1] }.d
 [:over, [1, 2, 3, 4]]
 {b: 1}
 6
+3
+8
+TypeError
+1
 ");
         }
 
