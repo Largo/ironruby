@@ -79,6 +79,9 @@ namespace IronRuby.Runtime.Jit {
         // The body writes Hash or Array elements, logged or not, or ends in a construction, which runs an
         // initialize: neither is called directly (JitStub.BindCallee).
         internal bool WritesElements, Construction;
+        // The ordinary globals the body reads and the ones it assigns, with those of the bodies it calls
+        // directly; null when there are none. A caller's are checked against them (JitCompiler.TakeGlobals).
+        internal HashSet<GlobalVariable> GlobalsRead, GlobalsWritten;
         // The body calls the typed bodies of other methods: the entry pins the receiver class they
         // were resolved from.
         internal bool DirectCalls;
@@ -682,6 +685,8 @@ namespace IronRuby.Runtime.Jit {
                     HasLoop = c._hasLoop || c._calleeLoop,
                     WritesElements = c._hashWrite || c._unloggedWrite,
                     Construction = c._construction,
+                    GlobalsRead = c._globalsRead,
+                    GlobalsWritten = c._globalsWritten,
                     DirectCalls = c._directCalls,
                     Inlinable = c._pure && !c._selfCall && !c._directCalls && !c._hasLoop && !c._construction && !c._ivarWrite && !c._usesConstants &&
                         !c._hashWrite && c._undoLog == null && c._arrayLoads == null && keywords == null && supplied < 0 &&
@@ -1106,6 +1111,37 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private HashSet<GlobalVariable> _globalsRead, _globalsWritten;
+
+        /// <summary>
+        /// -X:JITCalls: the globals of a body this one calls directly are this body's, for the rule of
+        /// EmitGlobalRead and EmitGlobalWrite: a deopt after the call restarts this body, and a global one
+        /// of the two reads and the other assigns - or one callee reads and another assigns - would then
+        /// be read as the first run left it and assigned from that (`store($g + 1)' counting twice).
+        /// </summary>
+        private void TakeGlobals(JitCode/*!*/ code, string/*!*/ name) {
+            if (code.GlobalsRead != null) {
+                foreach (var variable in code.GlobalsRead) {
+                    if (_globalsWritten != null && _globalsWritten.Contains(variable)) {
+                        throw Bail("call: " + name + " reads a global variable written here");
+                    }
+                }
+            }
+            if (code.GlobalsWritten != null) {
+                foreach (var variable in code.GlobalsWritten) {
+                    if (_globalsRead != null && _globalsRead.Contains(variable)) {
+                        throw Bail("call: " + name + " writes a global variable read here");
+                    }
+                }
+            }
+            if (code.GlobalsRead != null) {
+                if (_globalsRead == null) { _globalsRead = new HashSet<GlobalVariable>(); }
+                _globalsRead.UnionWith(code.GlobalsRead);
+            }
+            if (code.GlobalsWritten != null) {
+                if (_globalsWritten == null) { _globalsWritten = new HashSet<GlobalVariable>(); }
+                _globalsWritten.UnionWith(code.GlobalsWritten);
+            }
+        }
 
         /// <summary>
         /// `[a, b]': a new Array of boxed values, made by the helper the generic body calls. Building
@@ -1884,6 +1920,8 @@ namespace IronRuby.Runtime.Jit {
             if (code.EffectNotOnSelf) { _effectNotOnSelf = true; }
             if (code.UsesConstants) { _usesConstants = true; }
             if (code.HasLoop) { _calleeLoop = true; }
+            // after the arguments, which may read a global themselves
+            TakeGlobals(code, node.MethodName);
             _directCalls = true;
 
             type = code.ReturnType;

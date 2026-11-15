@@ -340,6 +340,12 @@ assembly is the one the results above favour, and the one these are mostly about
   Hash or Array elements (its entry sets up the undo log, or the store is the last thing it
   does); one that ends in a construction (`C.new` runs an `initialize`); one whose body pins
   another receiver class.
+- **Global variables** (`TakeGlobals`). A body may assign a global it does not read: a deopt
+  restarts it, and the restart stores the same value again. The globals of a bound callee count
+  as the caller's for that rule, so a caller is declined when it reads a global a callee
+  assigns, assigns one a callee reads, or binds one callee that reads it and another that
+  assigns it (`store($g, d)` with `$g = v + 1` in `store` counted twice after a deopt, before
+  the review of the pull request).
 - **Arguments** (`CoerceArgument`). The callee's entry is skipped, so its type checks move to
   the caller: an argument is passed as the type the callee's body was compiled for. An Integer
   converts between its two representations (narrowing deopts if it does not fit), anything is

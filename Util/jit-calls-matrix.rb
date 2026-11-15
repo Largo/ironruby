@@ -359,6 +359,57 @@ def bump_twice(x) = bump(x) + bump(x)
 t('a global written by the callee') { hot { bump_twice(1) }; $calls }
 t('... and a deopt after it') { $calls = 0; [(bump_twice(2**62) rescue :err), $calls] }
 
+# a global one body reads and the other assigns: a deopt after the call restarts the caller,
+# which must not read what its first run left
+$g = 0
+def gstore(v, d)
+  i = 0
+  while i < 1
+    i += 1
+  end
+  $g = v + 1
+  10 / d
+end
+def gbump(d) = gstore($g, d)
+t('a global the caller reads, the callee writes') { hot { gstore(1, 1) }; $g = 0; hot { gbump(1) }; $g }
+t('... and a deopt after the write') { [(gbump(0) rescue :err), $g] }
+
+$h = 0
+def hpeek
+  i = 0
+  while i < 1
+    i += 1
+  end
+  $h
+end
+def hnext(d)
+  v = hpeek
+  $h = v + 1
+  10 / d
+end
+t('a global the callee reads, the caller writes') { hot { hpeek }; $h = 0; hot { hnext(1) }; $h }
+t('... and a deopt after the write') { [(hnext(0) rescue :err), $h] }
+
+$k = 0
+def kpeek
+  i = 0
+  while i < 1
+    i += 1
+  end
+  $k
+end
+def kstore(v)
+  i = 0
+  while i < 1
+    i += 1
+  end
+  $k = v + 1
+  v
+end
+def knext(d) = kstore(kpeek) / d
+t('a global one callee reads, another writes') { hot { kpeek; kstore(0) }; $k = 0; hot { knext(1) }; $k }
+t('... and a deopt after the write') { [(knext(0) rescue :err), $k] }
+
 def fill(h, k)
   h[k] = k
   h.size
