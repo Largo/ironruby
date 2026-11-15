@@ -267,8 +267,9 @@ namespace IronRuby.Builtins {
         }
 
         // Hash#transform_values: a new hash of the same keys, in the same order, with the block's values;
-        // compare_by_identity carries over, the default does not. MRI walks self with
-        // rb_hash_stlike_foreach, which does not mark the hash as iterated: the block may add keys to it.
+        // compare_by_identity carries over, the default does not. MRI copies the hash first and then
+        // replaces the copy's values (rb_hash_transform_values), so the block may add keys to the
+        // receiver or delete them, and the result still has the keys that were there when it started.
         [RubyMethod("transform_values")]
         public static Enumerator/*!*/ TransformValues(RubyContext/*!*/ context, Hash/*!*/ self) {
             return new Enumerator(self, "transform_values") { SizeSource = self, SizeOp = "same" };
@@ -280,14 +281,21 @@ namespace IronRuby.Builtins {
             if (self.ComparesByIdentity) {
                 result.CompareByIdentity();
             }
-            int index = 0;
+            int count = self.Count;
+            var keys = new object[count];
+            var values = new object[count];
+            int index = 0, taken = 0;
             object key, value;
-            while (self.TryGetNextEntry(ref index, out key, out value)) {
+            while (taken < count && self.TryGetNextEntry(ref index, out key, out value)) {
+                keys[taken] = key;
+                values[taken++] = value;
+            }
+            for (int i = 0; i < taken; i++) {
                 object blockResult;
-                if (block.Yield(value, out blockResult)) {
+                if (block.Yield(values[i], out blockResult)) {
                     return blockResult;
                 }
-                result[key] = blockResult;
+                result[keys[i]] = blockResult;
             }
             return result;
         }

@@ -1320,6 +1320,7 @@ namespace IronRuby.Tests {
                 Enumerable_PatternUnusedBlockWarning1,
                 Enumerable_PredicatePattern1,
                 Array_RotateLongCount1,
+                Hash_TransformValuesSnapshot1,
                 Enumerable_TallyBasicObject1,
                 Enumerable_InjectPrivateOp1,
                 HostingHelpOption1,

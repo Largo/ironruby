@@ -7442,6 +7442,24 @@ RangeError
         }
 
         /// <summary>
+        /// Hash#transform_values transforms a copy of the receiver (rb_hash_transform_values): keys the block adds to
+        /// the receiver are not visited, and keys it deletes are still in the result.
+        /// </summary>
+        public void Hash_TransformValuesSnapshot1() {
+            TestOutput(@"
+h = { a: 1, b: 2, c: 3 }
+p h.transform_values { |v| h[:z] = 9; h.delete(:c); v * 2 }, h
+i = { a: 1 }
+p i.transform_values { |v| i.clear; v }, i
+", @"
+{a: 2, b: 4, c: 6}
+{a: 1, b: 2, z: 9}
+{a: 1}
+{}
+");
+        }
+
+        /// <summary>
         /// The pattern forms of all?, any?, none? and one? are C# overloads, not prelude wrappers: the pattern's #===
         /// is called as MRI's rb_funcall calls it, a private one included; an Array walks itself and does not call
         /// #each; and a later Array#any? (prepended here, run hot) still takes over.
