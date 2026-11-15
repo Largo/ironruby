@@ -218,6 +218,9 @@ invalid definition is a build error (`IRGEN001`). To read what was generated, bu
   measure against CRuby and TruffleRuby (`Util/perf/`), try one optimization in a worktree of
   its own, and merge it only if it is measurably faster and computes the same thing.
   `Util/perf/LEDGER.md` holds the numbers and what was tried; `/loop /perf-step` runs it.
+  `perf-core` speeds up one core method written in Ruby without moving it to C#,
+  `perf-frame` lets one more kind of method run without a scope, and `perf-ab` says whether
+  a small shape is faster on one build than on another (`Util/perf/ab.rb`).
 - PRs are merged with merge commits, after review points are addressed.
 
 ## Windows

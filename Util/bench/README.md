@@ -114,6 +114,13 @@ where the inliner could not make them part of it. Both are off by default and no
 as they are; `jit-methods.md` has what they measured and the verdict, `jit-methods.rb` and
 `jit-methods-run.rb` the benchmarks, `Util/jit-calls-matrix.rb` the differential check.
 
+## Core methods written in Ruby
+
+`truffleruby-lessons.md` compares how TruffleRuby and IronRuby divide their core between Ruby
+and the host language, measures what a core method written in Ruby costs here against the
+same method in C# (`prelude-cost.rb`, `core-small.rb`, `core-inventory.rb`), and ranks what
+transfers.
+
 ## Fiber switches and parked-thread GC cost
 
 `fiber.rb` measures resume/yield round trips, create-and-complete time, and forced

@@ -392,6 +392,18 @@ namespace IronRuby.Compiler.Ast {
         /// IR_LIGHT_BLOCKS=0 keeps every method with a literal block out of light frames (see TransformLightFrame).
         /// </summary>
         internal static readonly bool LightBlocksEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCKS") != "0";
+
+        /// <summary>
+        /// IR_LIGHT_BLOCK_GIVEN=0 makes `block_given?' in a light-frame method the call it was before: the frame makes its
+        /// scope and Kernel#block_given? reads the block from it (see LightFrameRewriter.LightScopeCall).
+        /// </summary>
+        internal static readonly bool LightBlockGivenEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCK_GIVEN") != "0";
+
+        /// <summary>
+        /// IR_LIGHT_REST=0 keeps every method with a rest parameter (`def f(*args)') out of light frames (see IsLightFrameCandidate).
+        /// </summary>
+        internal static readonly bool LightRestEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REST") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -473,10 +485,13 @@ namespace IronRuby.Compiler.Ast {
         /// (LightFrameRewriter.LightScopeCall), so `def getter; a; end', `def cmp(o); @x < o; end' and conditions over
         /// such calls are light as well, and so are the attribute and element assignments, string interpolation, `case/when'
         /// and `while' loops made of them (a loop's OSR site gets the scope made on demand). Global variables need the scope.
+        /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
+        /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
+        /// and keywords are not taken.
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
-            if (!AreLightOptionals() || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+            if (!AreLightOptionals() || _parameters.Unsplat != null && !LightRestEnabled || _parameters.SuperSplat != null ||
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return false;
             }
@@ -516,7 +531,7 @@ namespace IronRuby.Compiler.Ast {
         /// that is not scope-free (its node type and line). Null if it is a candidate.
         /// </summary>
         private string WhyNotLightFrameCandidate() {
-            if (!AreLightOptionals() || _parameters.Unsplat != null || _parameters.SuperSplat != null ||
+            if (!AreLightOptionals() || _parameters.Unsplat != null && !LightRestEnabled || _parameters.SuperSplat != null ||
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return "optional, splat or post parameters";
             }
@@ -793,7 +808,8 @@ namespace IronRuby.Compiler.Ast {
             light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope(), inLoop)));
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard) {
-                BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral()
+                BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
+                BlockParameter = LightBlockGivenEnabled ? blockParameter : null
             };
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
@@ -839,6 +855,10 @@ namespace IronRuby.Compiler.Ast {
 
             // see LightFrame.MakesCalls
             internal bool MakesCalls;
+
+            // The method's block parameter, in a method's frame: what `block_given?' asks about (see LightScopeCall). Null in
+            // a block's frame, which has the method's block only through its scope.
+            internal MSA.Expression BlockParameter;
 
             internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc,
                 MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ inLoop, bool lazyUses) {
@@ -1022,11 +1042,28 @@ namespace IronRuby.Compiler.Ast {
                 temps[0] = result;
                 MakesCalls = true;
                 body.Add(Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), lightArgs)));
-                body.Add(Ast.Condition(
-                    Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired)),
-                    AstUtils.LightDynamic(action, typeof(object), fullArgs),
-                    result
-                ));
+                MSA.Expression needsScope = Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired));
+                bool blockGiven = DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature);
+                if (blockGiven && BlockParameter == null) {
+                    // a block's frame has the method's block only through its scope: the call, as for any rule that reads it
+                    needsScope = Ast.OrElse(needsScope, Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightBlockGiven)));
+                }
+                MSA.Expression value = Ast.Condition(needsScope, AstUtils.LightDynamic(action, typeof(object), fullArgs), result);
+                if (blockGiven && BlockParameter != null) {
+                    // `block_given?' that is Kernel's (DispatchIntrinsics.TryBuildBlockGiven): whether the frame was given a
+                    // block, which is what Kernel#block_given? reads from the scope this frame would have to make for it -
+                    // CreateMethodScopeLazy is handed this same parameter.
+                    value = Ast.Condition(
+                        Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightBlockGiven)),
+                        Ast.Condition(
+                            Ast.ReferenceNotEqual(BlockParameter, AstUtils.Constant(null, BlockParameter.Type)),
+                            Ast.Field(null, typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetField("True")),
+                            Ast.Field(null, typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetField("False"))
+                        ),
+                        value
+                    );
+                }
+                body.Add(value);
                 return Ast.Block(temps, body);
             }
 

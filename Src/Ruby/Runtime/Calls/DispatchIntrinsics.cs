@@ -35,6 +35,9 @@ namespace IronRuby.Runtime.Calls {
         // The method infos last found to be Kernel#send and BasicObject#__send__ (or aliases of them).
         private static RubyMemberInfo _send, _basicSend;
 
+        // The method info last found to be Kernel#block_given? (or an alias of it).
+        private static RubyMemberInfo _blockGiven;
+
         // Rules specialized on a name, per receiver class, so that a site sending or asking about computed
         // names does not bind a rule per name: past the limit the class's sites get the general rules.
         private sealed class FoldCounts {
@@ -274,6 +277,39 @@ namespace IronRuby.Runtime.Calls {
                 Ast.Field(null, typeof(ScriptingRuntimeHelpers).GetField("True"))
             );
             return true;
+        }
+
+        /// <summary>
+        /// `block_given?' at a site with a light scope (RubyCallFlags.HasLightScope), resolved to Kernel#block_given?: the
+        /// method reads the scope it is called from, which such a site has not got, so its rule would be the one that sends
+        /// the call back to be made again with the scope made for it (RubyOps.LightScopeRequired) - an allocation of the
+        /// method's scope and two calls for a question the frame can answer from its block parameter. The rule answers
+        /// RubyOps.LightBlockGiven instead, under the receiver test every rule has, so a block_given? defined anywhere the
+        /// receiver's class finds it first, an undefined one, a BasicObject (no Kernel) and method_missing are all still
+        /// the call's own; a refinement of the name makes Resolve read the scope, and the site then gets no rule at all.
+        /// Only for the name itself: every site that can get this rule is one MethodDefinition.LightFrameRewriter made
+        /// for a call named block_given? without arguments, and those are the sites that know the answer's meaning.
+        /// </summary>
+        internal static bool TryBuildBlockGiven(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, RubyMemberInfo/*!*/ method,
+            string/*!*/ methodName) {
+
+            var signature = args.Signature;
+            if (!IsLightBlockGivenSite(methodName, signature) || TracePoint.CCallTracing ||
+                !IsKernelMethod(method, ref _blockGiven, "HasBlock")) {
+                return false;
+            }
+            metaBuilder.Result = Ast.Constant(RubyOps.LightBlockGiven, typeof(object));
+            return true;
+        }
+
+        /// <summary>
+        /// A site with a light scope whose rule may answer RubyOps.LightBlockGiven (TryBuildBlockGiven): `block_given?'
+        /// with no arguments, on any receiver (Kernel#block_given? does not look at its own).
+        /// </summary>
+        internal static bool IsLightBlockGivenSite(string/*!*/ methodName, RubyCallSignature signature) {
+            return signature.HasLightScope && signature.ArgumentCount == 0 && !signature.HasBlock && !signature.HasSplattedArgument &&
+                !signature.HasRhsArgument && !signature.ResolveOnly && !signature.IsSuperCall && !signature.IsVirtualCall &&
+                !signature.IsInteropCall && methodName == "block_given?";
         }
 
         /// <summary>

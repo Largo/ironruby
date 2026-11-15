@@ -1086,6 +1086,8 @@ namespace IronRuby.Tests {
                 Enumerator_RewindEnsureRaises1,
                 Marshal_RegexpWrapper1,
                 Method_LightFrameBlockGuard1,
+                Method_LightFrameBlockGiven1,
+                Method_LightFrameRest1,
                 BigDecimal_Ruby4_1,
                 BigDecimal_Engine1,
                 BigDecimal_ExponentLimits1,

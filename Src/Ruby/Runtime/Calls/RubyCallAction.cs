@@ -524,12 +524,20 @@ namespace IronRuby.Runtime.Calls {
                 _PendingVersionSet = null;
                 _PendingVersionSetOwner = null;
             }
-            return BuildCall(metaBuilder, _methodName, args, defaultFallback, true);
+            return BuildCall(metaBuilder, _methodName, args, defaultFallback, true, true);
         }
 
         // Returns true if the call was bound (with success or failure), false if fallback should be performed.
         internal static bool BuildCall(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args, 
             bool defaultFallback, bool callClrMethods) {
+            return BuildCall(metaBuilder, methodName, args, defaultFallback, callClrMethods, false);
+        }
+
+        // siteNamesMethod: the call is the one the site's source makes, of the name it is written with - not one made for it
+        // (`send(:name)', an interop binder's), whose site does not know what a rule for that name may answer
+        // (DispatchIntrinsics.TryBuildBlockGiven).
+        private static bool BuildCall(MetaObjectBuilder/*!*/ metaBuilder, string/*!*/ methodName, CallArguments/*!*/ args, 
+            bool defaultFallback, bool callClrMethods, bool siteNamesMethod) {
 
             RubyMemberInfo methodMissing;
             var method = Resolve(metaBuilder, methodName, args, out methodMissing);
@@ -553,13 +561,17 @@ namespace IronRuby.Runtime.Calls {
                     return true;
                 }
 
+                if (siteNamesMethod && DispatchIntrinsics.TryBuildBlockGiven(metaBuilder, args, method.Info, methodName)) {
+                    return true;
+                }
+
                 if (callClrMethods && DispatchIntrinsics.TryBuildNotEquals(metaBuilder, args, method.Info)) {
                     return true;
                 }
 
                 string sentName;
                 if (defaultFallback && callClrMethods && DispatchIntrinsics.TryBuildSend(metaBuilder, args, method.Info, out sentName)) {
-                    return BuildCall(metaBuilder, sentName, args, defaultFallback, callClrMethods);
+                    return BuildCall(metaBuilder, sentName, args, defaultFallback, callClrMethods, false);
                 }
 
                 method.Info.BuildCall(metaBuilder, args, methodName);
