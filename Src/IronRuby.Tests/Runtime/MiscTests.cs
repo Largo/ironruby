@@ -7486,7 +7486,8 @@ p u.lines(""\u00FC"").map(&:bytes), u.each_line(""\u00FC"").map(&:size)
         /// <summary>
         /// Hash#dig asks a Hash or an Array whose #dig is redefined - in a subclass or on the object itself - whether it
         /// has #dig, as it asks any other object, and does not ask one whose #dig is the built-in one, whatever its
-        /// respond_to? says (rb_obj_dig takes its short cut while rb_method_basic_definition_p).
+        /// respond_to? says (rb_obj_dig takes its short cut while rb_method_basic_definition_p). A #dig the program
+        /// defines in Array itself is a redefinition too.
         /// </summary>
         public void Hash_DigSubclass1() {
             TestOutput(@"
@@ -7502,6 +7503,10 @@ p({ a: H4[:x, 3] }.dig(:a, :x), { a: A4[7, 8] }.dig(:a, 1))
 h = {}; def h.dig(*) = :over; def h.respond_to?(m, priv = false) = m == :dig ? false : super
 g = { b: 1 }; def g.respond_to?(m, priv = false) = m == :dig ? false : super
 p(({ a: h }.dig(:a, :b) rescue $!.class), { a: g }.dig(:a, :b))
+a = [5]; def a.respond_to?(m, priv = false) = m == :dig ? false : super
+p({ a: a }.dig(:a, 0))
+class Array; alias_method :dig0, :dig; def dig(*) = :over; end
+p(({ a: a }.dig(:a, 0) rescue $!.class), { a: [5] }.dig(:a, 0))
 ", @"
 ""H2 does not have #dig method""
 ""A2 does not have #dig method""
@@ -7513,6 +7518,9 @@ p(({ a: h }.dig(:a, :b) rescue $!.class), { a: g }.dig(:a, :b))
 8
 TypeError
 1
+5
+TypeError
+:over
 ");
         }
 

@@ -359,8 +359,9 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // Whether #dig of a Hash or an Array resolves to the one Hash or Array itself defines (the lookup is the
-        // class's cached one).
+        // Whether #dig of a Hash or an Array resolves to the built-in definition (the lookup is the class's cached
+        // one): the one Hash or Array declares, and still the original - Hash#dig is this library's, Array#dig the
+        // core prelude's - not a `def dig' the program wrote into Hash or Array since.
         private static bool HasBuiltinDig(RubyContext/*!*/ context, object value) {
             Type owner;
             if (value is Hash) {
@@ -371,7 +372,14 @@ namespace IronRuby.Builtins {
                 return false;
             }
             var method = context.GetImmediateClassOf(value).ResolveMethod("dig", VisibilityContext.AllVisible).Info;
-            return method != null && method.DeclaringModule == context.GetClass(owner);
+            if (method == null || method.DeclaringModule != context.GetClass(owner)) {
+                return false;
+            }
+            if (method is RubyLibraryMethodInfo) {
+                return true;
+            }
+            var rubyMethod = method as RubyMethodInfo;
+            return rubyMethod != null && rubyMethod.Document != null && TracePoint.IsCoreLibraryPath(rubyMethod.Document.FileName);
         }
 
         [RubyMethod("default")]
