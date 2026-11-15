@@ -200,6 +200,12 @@ Profile (`Util/perf/profile.sh`, self time):
    makes: without one it sees private and protected methods and no refinements ("Caught
    by the gate", round seven), so "continues in generic code" has to carry self's class
    at least.
+   The design is `Docs/jit-resume-deopt.md`: a per-operation generic fallback for
+   operations with object results after the first effect, every later speculative
+   operation re-checking the method version itself, and a resumable generic body for
+   what that cannot take (typed results, loops); the state a materialized scope needs;
+   the gate's rows mapped to the faults below; and a staged plan whose first stage
+   compiles `hold_self`. Not implemented.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
