@@ -200,7 +200,10 @@ module RbConfig
       "LDSHARED" => "$(CC) -shared", "LDSHAREDXX" => "$(CXX) -shared",
       "LIBS" => "-lshell32 -lws2_32 -liphlpapi -limagehlp -lshlwapi -lbcrypt", "DLDLIBS" => "",
       "LIBRUBYARG" => "$(LIBRUBYARG_SHARED)",
-      "LIBRUBYARG_SHARED" => "-L$(bindir) -lironruby-capi", "LIBRUBYARG_STATIC" => "-L$(bindir) -lironruby-capi",
+      # the directory itself, not $(bindir): mkmf takes the drive letter off a $(...) directory
+      # (it becomes $(DESTDIR)), which leaves MSYS make a path under its own root
+      "LIBRUBYARG_SHARED" => "-L\"#{CONFIG["bindir"]}\" -lironruby-capi",
+      "LIBRUBYARG_STATIC" => "-L\"#{CONFIG["bindir"]}\" -lironruby-capi",
       "OUTFLAG" => "-o ", "COUTFLAG" => "-o ", "CPPOUTFILE" => "-o conftest.i",
       "LIBPATHFLAG" => " -L%s", "RPATHFLAG" => "", "EXPORT_PREFIX" => " ",
       "LINK_SO" => "", "POSTLINK" => ":", "TRY_LINK" => "",
@@ -209,12 +212,14 @@ module RbConfig
       "MAKEDIRS" => "mkdir -p", "MKDIR_P" => "mkdir -p", "RM" => "rm -f",
       "RMDIR" => "rmdir --ignore-fail-on-non-empty", "RMALL" => "rm -fr", "CP" => "cp",
       "SHELL" => "/bin/sh", "NULLCMD" => ":", "build_os" => "mingw32",
+      # gcc's, not MSVC's: mkmf's try_compile looks for conftest.$(OBJEXT)
+      "OBJEXT" => "o", "LIBEXT" => "a",
     }.each { |key, value| CONFIG[key] = value.dup }
   end
 
   # Naming conventions rather than tools, so these have an answer even here.
-  CONFIG["OBJEXT"] = windows ? "obj" : "o"
-  CONFIG["LIBEXT"] = windows ? "lib" : "a"
+  CONFIG["OBJEXT"] ||= windows ? "obj" : "o"
+  CONFIG["LIBEXT"] ||= windows ? "lib" : "a"
   CONFIG["ASMEXT"] = "S"
   # There is no static libruby either; it must differ from LIBRUBY, which is how
   # mkmf decides whether the runtime is linked in.

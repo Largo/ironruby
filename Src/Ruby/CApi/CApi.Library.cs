@@ -897,8 +897,8 @@ namespace IronRuby.Runtime.CApi {
 
         internal static void* rb_default_internal_encoding() { return NativeEncoding(_context.DefaultInternalEncoding); }
         internal static void* rb_default_external_encoding() { return NativeEncoding(_context.DefaultExternalEncoding); }
-        internal static void* rb_locale_encoding() { return NativeEncoding(_context.DefaultExternalEncoding); }
-        internal static int rb_locale_encindex() { return EncodingIndex(_context.DefaultExternalEncoding); }
+        internal static void* rb_locale_encoding() { return NativeEncoding(LocaleEncoding()); }
+        internal static int rb_locale_encindex() { return EncodingIndex(LocaleEncoding()); }
         internal static void* rb_filesystem_encoding() { return NativeEncoding(_context.GetPathEncoding()); }
         internal static int rb_filesystem_encindex() { return EncodingIndex(_context.GetPathEncoding()); }
 

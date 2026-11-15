@@ -311,12 +311,17 @@ namespace IronRuby.Runtime.CApi {
             return ExternalString(Bytes(ptr, len), FromNativeEncoding(enc) ?? RubyEncoding.Binary);
         }
 
+        // Encoding.find("locale"): not the default external one on Windows (a code page there)
+        internal static RubyEncoding/*!*/ LocaleEncoding() {
+            return (RubyEncoding)Send(ResolveGlobal(_context, "Encoding"), "find", null, MutableString.CreateAscii("locale"));
+        }
+
         internal static VALUE rb_locale_str_new(byte* ptr, long len) {
-            return ExternalString(Bytes(ptr, len), _context.DefaultExternalEncoding);
+            return ExternalString(Bytes(ptr, len), LocaleEncoding());
         }
 
         internal static VALUE rb_locale_str_new_cstr(byte* ptr) {
-            return ExternalString(CBytes(ptr), _context.DefaultExternalEncoding);
+            return ExternalString(CBytes(ptr), LocaleEncoding());
         }
 
         internal static VALUE rb_ir_str_new_buffer(byte* ptr, long len, int encindex) {
@@ -731,7 +736,7 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_str_export_locale(VALUE obj) {
-            return rb_str_export(obj);
+            return rb_str_conv_enc(rb_str_to_str(obj), null, NativeEncoding(LocaleEncoding()));
         }
 
         #endregion

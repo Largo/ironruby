@@ -808,7 +808,7 @@ struct rb_ir_function_table {
     void (*rb_memerror)(void);
     void (*rb_need_block)(void);
     void (*rb_obj_call_init)(VALUE obj, int argc, const VALUE *argv);
-    void (*rb_out_of_int)(long num);
+    void (*rb_out_of_int)(SIGNED_VALUE num);
     void (*rb_scan_args_bad_format)(const char *fmt);
     void (*rb_scan_args_length_mismatch)(const char *fmt, int argc);
     void (*rb_set_errinfo)(VALUE err);
@@ -3305,7 +3305,7 @@ void
 }
 
 void
-(rb_out_of_int)(long num)
+(rb_out_of_int)(SIGNED_VALUE num)
 {
     rb_ir_fns.rb_out_of_int(num);
     rb_ir_throw();

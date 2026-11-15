@@ -36,7 +36,7 @@ namespace IronRuby.Runtime.CApi {
     internal static unsafe partial class CApi {
         internal const VALUE Qfalse = 0x00, Qnil = 0x04, Qtrue = 0x14, Qundef = 0x24;
         // CRuby's FIXNUM_MAX is LONG_MAX / 2: 62 bits on Unix, 30 on Windows, where C's long is 32-bit
-        internal static readonly bool IsWindows = OperatingSystem.IsWindows();
+        internal static bool IsWindows => OperatingSystem.IsWindows();
         private static readonly long FixnumMax = IsWindows ? Int32.MaxValue >> 1 : long.MaxValue >> 1;
         private static readonly long FixnumMin = IsWindows ? Int32.MinValue >> 1 : long.MinValue >> 1;
 

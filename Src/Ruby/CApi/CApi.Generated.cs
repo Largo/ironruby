@@ -296,7 +296,7 @@ namespace IronRuby.Runtime.CApi {
             table[285] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_memerror;
             table[286] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_need_block;
             table[287] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, void>)&Entry_rb_obj_call_init;
-            table[288] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, void>)&Entry_rb_out_of_int;
+            table[288] = (IntPtr)(delegate* unmanaged[Cdecl]<long, void>)&Entry_rb_out_of_int;
             table[289] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void>)&Entry_rb_scan_args_bad_format;
             table[290] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, int, void>)&Entry_rb_scan_args_length_mismatch;
             table[291] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_set_errinfo;
@@ -4272,10 +4272,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-        private static void Entry_rb_out_of_int(CLong num) {
+        private static void Entry_rb_out_of_int(long num) {
             var frame = EnterManaged();
             try {
-                rb_out_of_int((long)num.Value);
+                rb_out_of_int(num);
             } catch (Exception e) {
                 SetPending(e);
                 return;

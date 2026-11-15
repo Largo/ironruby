@@ -19,7 +19,7 @@ CS_OUT = File.join(root, 'Src/Ruby/CApi/CApi.Generated.cs')
 
 TYPES = {
   'void' => 'void',
-  'VALUE' => 'ulong', 'ID' => 'ulong',
+  'VALUE' => 'ulong', 'ID' => 'ulong', 'SIGNED_VALUE' => 'long',
   'int' => 'int', 'unsigned int' => 'uint',
   # C's long is 64-bit on Unix and 32-bit on Windows: CLong/CULong are the CLR's types for it,
   # converted to long/ulong at the call (CApi.*.cs work in long)

@@ -55,30 +55,30 @@ rb_ir_throw(void)
 
 typedef VALUE (*rb_ir_f0)(VALUE);
 #define A(i) argv[i]
-#define CALL_N(n, ...) return ((VALUE (*)())fn)(self, ##__VA_ARGS__)
 
+/* Each arity's own function type: in C23 (GCC 16's default) VALUE (*)() takes no arguments. */
 static VALUE
 rb_ir_dispatch(void *fn, int arity, VALUE self, int argc, const VALUE *argv)
 {
     switch (arity) {
       case -2: return ((VALUE (*)(VALUE, VALUE))fn)(self, argv[0]);
       case -1: return ((VALUE (*)(int, const VALUE *, VALUE))fn)(argc, argv, self);
-      case 0:  CALL_N(0);
-      case 1:  CALL_N(1, A(0));
-      case 2:  CALL_N(2, A(0), A(1));
-      case 3:  CALL_N(3, A(0), A(1), A(2));
-      case 4:  CALL_N(4, A(0), A(1), A(2), A(3));
-      case 5:  CALL_N(5, A(0), A(1), A(2), A(3), A(4));
-      case 6:  CALL_N(6, A(0), A(1), A(2), A(3), A(4), A(5));
-      case 7:  CALL_N(7, A(0), A(1), A(2), A(3), A(4), A(5), A(6));
-      case 8:  CALL_N(8, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7));
-      case 9:  CALL_N(9, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8));
-      case 10: CALL_N(10, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9));
-      case 11: CALL_N(11, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10));
-      case 12: CALL_N(12, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11));
-      case 13: CALL_N(13, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12));
-      case 14: CALL_N(14, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13));
-      case 15: CALL_N(15, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14));
+      case 0: return ((VALUE (*)(VALUE))fn)(self);
+      case 1: return ((VALUE (*)(VALUE, VALUE))fn)(self, A(0));
+      case 2: return ((VALUE (*)(VALUE, VALUE, VALUE))fn)(self, A(0), A(1));
+      case 3: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2));
+      case 4: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3));
+      case 5: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4));
+      case 6: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5));
+      case 7: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6));
+      case 8: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7));
+      case 9: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8));
+      case 10: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9));
+      case 11: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10));
+      case 12: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11));
+      case 13: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12));
+      case 14: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13));
+      case 15: return ((VALUE (*)(VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE, VALUE))fn)(self, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), A(12), A(13), A(14));
     }
     return Qnil;
 }

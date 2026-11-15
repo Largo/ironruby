@@ -72,9 +72,20 @@ module Gem
   # So insert at the first standard library directory instead, which is the
   # same position relative to the library that CRuby uses, and still behind -I
   # and RUBYLIB.
+  #
+  # On Windows ir.cmd puts the directories on $LOAD_PATH with backslashes, and a
+  # forward-slash copy of one comes later: compared as written, the first match
+  # was that copy, so a newer installed version of a default gem stayed behind
+  # the one in Src/StdLib (`gem "json"` resolved, `require "json"` did not use it).
 
   def self.load_path_insert_index
-    indexes = ironruby_stdlib_dirs.filter_map {|dir| $LOAD_PATH.index(dir) }
+    dirs = ironruby_stdlib_dirs
+    dirs = dirs.map {|dir| dir.tr("\\", "/").downcase } if File::ALT_SEPARATOR
+    indexes = $LOAD_PATH.each_index.select do |i|
+      entry = $LOAD_PATH[i].to_s
+      entry = entry.tr("\\", "/").downcase if File::ALT_SEPARATOR
+      dirs.include?(entry)
+    end
     indexes.min || $LOAD_PATH.index(RbConfig::CONFIG["sitelibdir"]) || 0
   end
 
