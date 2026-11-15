@@ -44,6 +44,8 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
         internal static long CompileTicks;
+        // -X:JITCalls: the specializations whose bodies call other methods' typed bodies (JitCode.DirectCalls)
+        internal static int DirectCallBodies;
 
         /// <summary>
         /// Which node kinds the static pre-screen turned methods away on. Only collected under
@@ -70,9 +72,9 @@ namespace IronRuby.Runtime.Jit {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} compile={7:F1}ms",
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} direct-calls={8} compile={7:F1}ms",
                     Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired, DeoptRetried,
-                    CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+                    CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency, DirectCallBodies);
                 PrintScreenReasons();
             };
         }

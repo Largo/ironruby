@@ -17,6 +17,8 @@
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
     <ProjectReference Include="..\Libraries.Yaml\IronRuby.Libraries.Yaml.csproj" />
     <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
+    <!-- -X:JITMethods (a prototype): the tree compiler it loads from next to IronRuby.dll, for JitMethods1 -->
+    <ProjectReference Include="..\JitEmit\IronRuby.JitEmit.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>

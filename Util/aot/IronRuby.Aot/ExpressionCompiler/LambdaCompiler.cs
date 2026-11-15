@@ -107,6 +107,14 @@ namespace IronRuby.Aot.Compiler {
         /// </summary>
         internal static readonly List<MethodBuilder> CreatedMethods = new List<MethodBuilder>();
 
+        // Calls to emit to another method than the tree names; set for one compilation, under
+        // ExpressionCompiler's lock.
+        internal static IDictionary<MethodInfo, MethodInfo> MethodSubstitutions;
+
+        // A stand-in for the DynamicMethod being compiled: a call to it is a call of that method
+        // (ExpressionCompiler.CompileDynamic).
+        internal static MethodInfo SelfCall;
+
         private LambdaCompiler(AnalyzedTree tree, LambdaExpression lambda, MethodBuilder method) {
             CreatedMethods.Add(method);
             _hasClosureArgument = tree.Scopes[lambda].NeedsClosure;

@@ -22,6 +22,10 @@
  *     `using'd. A method added to an active refinement bumps the global method version too.
  *   - The receiver's immediate class is pinned whenever the specialized body contains a
  *     direct self-call, so that call cannot be a call to an override.
+ *   - -X:JITCalls (a prototype, off by default): a call of another method on self is bound to
+ *     that method's typed body (BindCallee), resolved from the same pinned class under the same
+ *     method version; the guards the callee's own entry would make move to the caller's entry
+ *     and the callee's deopts end there.
  *   - Argument types are re-checked on entry; a miss falls through to the generic body.
  *   - Integer overflow out of Int64, a narrowing back to Int32 that does not fit, and
  *     division by zero raise JitDeoptException, caught at the entry,
@@ -142,6 +146,14 @@ namespace IronRuby.Runtime.Jit {
         // had happened to the first one since).
         private int _compiling;
 
+        // -X:JITCalls: this method's typed bodies call the typed bodies of other methods of the
+        // receiver (TrySpecialize, BindCallee).
+        private readonly bool _directCalls;
+        // Set while compiling: a call the body would bind is of a method that may still get a typed
+        // body (it is profiling or cooling down, or its entry is stale). The method then goes on
+        // profiling, as for a callee it would inline (ReceiverHints.CalleeNotReady, MaxInlineWaits).
+        private bool _calleeNotReady;
+
         protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity,
             JitKeywords keywords) {
             _ast = ast;
@@ -154,6 +166,7 @@ namespace IronRuby.Runtime.Jit {
             _typedCount = (keywords != null) ? _positional + keywords.Count : arity;
             _argKind = new int[_typedCount];
             _argClrType = new Type[_typedCount];
+            _directCalls = context.RubyOptions.JitCalls;
             _argClass1 = new RubyClass[_typedCount];
             _argClass2 = new RubyClass[_typedCount];
             _argManyClasses = new bool[_typedCount];
@@ -286,6 +299,9 @@ namespace IronRuby.Runtime.Jit {
             internal JitCode Code;
             internal int Version;
             internal RubyClass PinnedClass;
+            // -X:JITCalls: the body as a delegate, for a caller to call (BindCallee). Made when the method
+            // calls itself, or when the first caller asks.
+            internal Delegate Typed;
 
             internal Specialization(JitStub/*!*/ stub) {
                 Stub = stub;
@@ -718,12 +734,13 @@ namespace IronRuby.Runtime.Jit {
 
             long start = Stopwatch.GetTimestamp();
             var hints = Hints();
-            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints));
+            var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints,
+                Callees(refinements, version, constantVersion)));
             if (code == null) {
-                // A call the body could inline is of a method that has not been specialized yet: a caller
-                // called once per call of its callee turns hot first. Profile on, a few times, rather than
-                // settling on the generic body for good.
-                if (hints.CalleeNotReady && ++_inlineWaits <= MaxInlineWaits) {
+                // A call the body could inline - or, with -X:JITCalls, bind - is of a method that has not been
+                // specialized yet: a caller called once per call of its callee turns hot first. Profile on, a
+                // few times, rather than settling on the generic body for good.
+                if ((hints.CalleeNotReady || _calleeNotReady) && ++_inlineWaits <= MaxInlineWaits) {
                     if (JitRuntime.Verbose) {
                         Console.Error.WriteLine("[jit] waiting for a callee of {0}/{1} to be specialized", _declaringModule.Name ?? "main", _ast.Name);
                     }
@@ -732,7 +749,8 @@ namespace IronRuby.Runtime.Jit {
                 return false;
             }
 
-            bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null;
+            // (a body with direct calls was only compiled for a receiver class the profile pinned: Callees)
+            bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null || code.DirectCalls;
             if (needsClassGuard) {
                 if (_receiverClass == null || _polymorphicReceiver) { return false; }
                 if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
@@ -744,10 +762,12 @@ namespace IronRuby.Runtime.Jit {
             // direct self-call goes through SelfCell. Otherwise the entry invokes the lambda
             // itself, which the expression compiler inlines, so a specialized call is the
             // trampoline hop and the entry and nothing more.
+            // -X:JITMethods: a body that calls other typed bodies is a method next to theirs too, so
+            // that those calls are made from code the runtime compiles as it compiles them.
             MSA.Expression callee;
-            if (code.EmittedSelfCall) {
-                Delegate typed = code.Lambda.Compile();
-                code.SelfCell.Value = typed;
+            Delegate typed = null;
+            if (code.EmittedSelfCall || (code.DirectCalls && JitMethodEmitter.For(_context) != null)) {
+                typed = CompileTyped(code);
                 callee = Ast.Constant(typed, typed.GetType());
             } else {
                 callee = code.Lambda;
@@ -758,7 +778,8 @@ namespace IronRuby.Runtime.Jit {
             spec.Code = code;
             spec.Version = version;
             spec.PinnedClass = needsClassGuard ? _receiverClass : null;
-            spec.Entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec).Compile();
+            spec.Typed = typed;
+            spec.Entry = CompileEntry(BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec));
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
                 spec.Direct = BuildDirectEntry(code, callee, version, spec).Compile();
@@ -776,11 +797,117 @@ namespace IronRuby.Runtime.Jit {
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
+            if (code.DirectCalls) { JitRuntime.DirectCallBodies++; }
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}",
-                    _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, needsClassGuard ? " (self-call)" : "");
+                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}",
+                    _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, code.EmittedSelfCall ? " (self-call)" : "",
+                    code.DirectCalls ? " (direct calls)" : "");
             }
             return true;
+        }
+
+        // ---- -X:JITCalls ---------------------------------------------------------------------
+
+        /// <summary>
+        /// What the compiler asks for the typed body of a method this one calls on self: the name is
+        /// resolved from the receiver class the profile saw - which the entry then pins - as a call
+        /// without a receiver resolves it, under the refinements the body's calls see. Null when the
+        /// class is not pinned down; the body then binds no call, as without the switch.
+        /// </summary>
+        private Func<string, int, JitCallee> Callees(RefinementActivation/*!*/ refinements, int version, int constantVersion) {
+            _calleeNotReady = false;
+            if (!_directCalls || _receiverClass == null || _polymorphicReceiver) { return null; }
+            var cls = _receiverClass;
+            // the compiler asks again in each of its rounds
+            var found = new Dictionary<string, JitCallee>();
+            return (name, argc) => {
+                string key = name + "/" + argc;
+                JitCallee callee;
+                if (!found.TryGetValue(key, out callee)) {
+                    found[key] = callee = FindCallee(cls, refinements, name, argc, version, constantVersion);
+                }
+                return callee;
+            };
+        }
+
+        private JitCallee FindCallee(RubyClass/*!*/ cls, RefinementActivation/*!*/ refinements, string/*!*/ name, int argc, int version,
+            int constantVersion) {
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible, refinements);
+            if (!resolved.Found) { return null; }
+            var info = resolved.Info as RubyMethodInfo;
+            if (info == null) { return null; }
+            // a method the JIT took has its trampoline for a body
+            var stub = info.GetDelegate().Target as JitStub;
+            if (stub == null || stub == this || stub._context != _context) { return null; }
+            bool retry;
+            var callee = stub.BindCallee(cls, argc, version, constantVersion, out retry);
+            if (callee == null && retry) { _calleeNotReady = true; }
+            if (JitRuntime.Verbose) {
+                Console.Error.WriteLine("[jit]   {0} -> {1}/{2}: {3}", _ast.Name, name, argc,
+                    (callee == null) ? (retry ? "no typed body yet" : "no typed body") : "bound");
+            }
+            return callee;
+        }
+
+        /// <summary>
+        /// This method's typed body for a caller whose receiver is of <paramref name="receiverClass"/>
+        /// and whose entry guards on <paramref name="version"/> and, if the body folded constants,
+        /// <paramref name="constantVersion"/> - the versions this body must have been compiled under,
+        /// since the caller's entry is the only guard a direct call passes. Null if there is no such
+        /// body; <paramref name="retry"/> says there may be one later: the method is still profiling
+        /// or cooling down, or its entry has gone stale, which its next call finds out. As
+        /// InlinableBody, but of a body that could not be made part of its caller.
+        /// </summary>
+        internal JitCallee BindCallee(RubyClass/*!*/ receiverClass, int argc, int version, int constantVersion, out bool retry) {
+            retry = false;
+            // the body takes exactly the arguments the call passes, in order
+            if (_keywords != null || _perCountMandatory >= 0 || argc != _arity) { return null; }
+            Specialization spec;
+            int state;
+            lock (_sync) {
+                state = _state;
+                spec = (state == Specialized) ? _current : null;
+            }
+            if (spec == null) {
+                retry = state != Settled;
+                return null;
+            }
+            var code = spec.Code;
+            if (code == null) { return null; }
+            if (spec.Version != version || (code.UsesConstants && spec.ConstantVersion != constantVersion)) {
+                retry = true;
+                return null;
+            }
+            // Element writes are undone by the entry's undo log, or are the last thing the body does; a
+            // construction runs an initialize, which may redefine what the caller has bound.
+            if (code.WritesElements || code.Construction) { return null; }
+            // The body's own inlined and direct calls were resolved from the class its entry pins.
+            if (spec.PinnedClass != null && spec.PinnedClass != receiverClass) { return null; }
+
+            Delegate typed;
+            lock (spec) {
+                // (a body that does not call itself was made part of its entry, and not compiled on its own)
+                typed = spec.Typed ?? (spec.Typed = CompileTyped(code));
+            }
+            return new JitCallee { Code = code, Target = Ast.Constant(typed, typed.GetType()) };
+        }
+
+        /// <summary>
+        /// A typed body that calls itself, as a delegate. -X:JITMethods: a static method of a runtime
+        /// assembly whose self-calls are calls (JitMethodEmitter), and the cell is then not read at all.
+        /// </summary>
+        private Delegate/*!*/ CompileTyped(JitCode/*!*/ code) {
+            var emitter = JitMethodEmitter.For(_context);
+            Delegate typed = (emitter != null) ? emitter.EmitTyped(code) : null;
+            if (typed == null) { typed = code.Lambda.Compile(); }
+            code.SelfCell.Value = typed;
+            return typed;
+        }
+
+        private Delegate/*!*/ CompileEntry(MSA.LambdaExpression/*!*/ entry) {
+            var emitter = JitMethodEmitter.For(_context);
+            Delegate result = (emitter != null && emitter.Entries) ? emitter.EmitEntry(entry) : null;
+            return result ?? entry.Compile();
         }
 
         // How many times TrySpecialize went on profiling for a callee to be specialized (ReceiverHints.CalleeNotReady).
@@ -850,14 +977,17 @@ namespace IronRuby.Runtime.Jit {
             var codes = new JitCode[optionalCount + 1];
             var callees = new MSA.Expression[optionalCount + 1];
             bool any = false, pinned = false;
+            var bind = Callees(refinements, version, constantVersion);
             for (int k = 0; k <= optionalCount; k++) {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
-                var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints()));
+                var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints(),
+                    bind));
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
                     if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
                     pinned = true;
                 }
+                if (code.DirectCalls) { pinned = true; }
                 codes[k] = code;
                 any = true;
             }
@@ -867,9 +997,8 @@ namespace IronRuby.Runtime.Jit {
                 var code = codes[k];
                 if (code == null) { continue; }
                 // as in TrySpecialize: a body of its own only when it calls itself
-                if (code.EmittedSelfCall) {
-                    Delegate typed = code.Lambda.Compile();
-                    code.SelfCell.Value = typed;
+                if (code.EmittedSelfCall || (code.DirectCalls && JitMethodEmitter.For(_context) != null)) {
+                    Delegate typed = CompileTyped(code);
                     callees[k] = Ast.Constant(typed, typed.GetType());
                 } else {
                     callees[k] = code.Lambda;
@@ -879,7 +1008,7 @@ namespace IronRuby.Runtime.Jit {
             // one Specialization for all the bodies: they retire, cool down and go stale together
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
-            spec.Entry = BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec).Compile();
+            spec.Entry = CompileEntry(BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec));
 
             lock (_sync) {
                 // as in TrySpecialize
@@ -891,11 +1020,16 @@ namespace IronRuby.Runtime.Jit {
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
+            // `pinned' is also a self-call's
+            foreach (var code in codes) {
+                if (code != null && code.DirectCalls) { JitRuntime.DirectCallBodies++; break; }
+            }
             if (JitRuntime.Verbose) {
                 for (int k = 0; k <= optionalCount; k++) {
                     if (codes[k] == null) { continue; }
-                    Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} passing {3} optional -> {4}{5}",
-                        _declaringModule.Name ?? "main", _ast.Name, _arity, k, codes[k].ReturnType, codes[k].EmittedSelfCall ? " (self-call)" : "");
+                    Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} passing {3} optional -> {4}{5}{6}",
+                        _declaringModule.Name ?? "main", _ast.Name, _arity, k, codes[k].ReturnType, codes[k].EmittedSelfCall ? " (self-call)" : "",
+                        codes[k].DirectCalls ? " (direct calls)" : "");
                 }
             }
             return true;
@@ -1223,7 +1357,10 @@ namespace IronRuby.Runtime.Jit {
             Specialization/*!*/ spec) {
 
             MSA.Expression test = NotTracing();
-            if (pinnedClass != null && code.EmittedSelfCall) {
+            // as BuildEntry's: a body that calls itself or binds another method's typed body is only
+            // right for the class those calls were resolved on. A subclass that overrides the callee
+            // changes no method version, so nothing else sends its receivers to the generic body.
+            if (pinnedClass != null && (code.EmittedSelfCall || code.DirectCalls)) {
                 test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
                     Ast.Constant(pinnedClass, typeof(RubyClass))));
@@ -1420,7 +1557,10 @@ namespace IronRuby.Runtime.Jit {
             HashSet<string> otherUses;
             if (!JitScreen.CanEverCompile(ast, keywords,
                 // (no module: IsCandidate, which only asks whether the body may ever be wrapped)
-                (declaringModule != null) ? (name, onSelf) => IsLeafMethod(declaringModule, name, onSelf) : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses)) {
+                (declaringModule != null)
+                    ? (name, onSelf) => IsLeafMethod(declaringModule, name, onSelf) ||
+                        (onSelf && context.RubyOptions.JitCalls && IsCallableMethod(declaringModule, name, 0))
+                    : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses)) {
                 return false;
             }
 
@@ -1460,6 +1600,33 @@ namespace IronRuby.Runtime.Jit {
                 // Nested only for a call on another object (`key.compare_to(k)'): taken for a call on self as well, it
                 // wrapped Json's HashIndexTable#add and #get over `hash_slot_for', whose own callee is never compiled.
                 return IsLeafMethod(resolved.Info as RubyMethodInfo, !onSelf);
+            } catch (Exception) {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// -X:JITCalls: a call of <paramref name="name"/> on self is one the typed body may bind (BindCallee) - the
+        /// method it resolves to on the declaring module now is a Ruby method the screen would take, its own calls
+        /// on self looked at the same way, three levels down. As IsLeafMethod, only a hint, and one defined further
+        /// down is taken on trust.
+        /// </summary>
+        private static bool IsCallableMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, int depth) {
+            try {
+                var resolved = declaringModule.ResolveMethod(name, VisibilityContext.AllVisible);
+                if (!resolved.Found) { return true; }
+                var info = resolved.Info as RubyMethodInfo;
+                if (info == null) { return false; }
+                var ast = info.GetSyntaxTree();
+                var ps = ast.Parameters;
+                if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock || ps.Mandatory.Length + ps.Optional.Length > MaxArity) { return false; }
+                if (depth >= 3) { return true; }
+                RubyModule owner = info.DeclaringModule;
+                string rejectedBy;
+                HashSet<string> otherUses;
+                return JitScreen.CanEverCompile(ast, null,
+                    (n, onSelf) => IsLeafMethod(owner, n, onSelf) || (onSelf && IsCallableMethod(owner, n, depth + 1)),
+                    out rejectedBy, out otherUses);
             } catch (Exception) {
                 return false;
             }

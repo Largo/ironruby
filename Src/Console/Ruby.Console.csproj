@@ -70,6 +70,8 @@
     <!-- yaml.rb load_assembly's this at runtime, so it has to sit next to the host -->
     <ProjectReference Include="..\Libraries.Yaml\IronRuby.Libraries.Yaml.csproj" />
     <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
+    <!-- -X:JITMethods, a prototype: the expression compiler it loads at run time -->
+    <ProjectReference Include="..\JitEmit\IronRuby.JitEmit.csproj" Condition="'$(IronRubyJitEmit)' == 'true'" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
