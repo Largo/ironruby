@@ -739,7 +739,10 @@ in 2.2 s on both.
   a block or without an argument, which now walks the Array as `rb_ary_one_p` does).
 
 Gap 2's `each_index` (one experiment on 6e146fa3, measured against a Release build of that
-commit, taken alternately on a loaded machine: other sessions were benchmarking). Kept on
+commit, taken alternately on a loaded machine: other sessions were benchmarking). The
+measured build is 8a70f030 (the change; the commit after it touches only this file and a
+test), on 2026-11-15. Its core count and load average were not written down, which is why
+the entry below carries a second measurement that has them. Kept on
 the per-operation rule; it moves no AWFY benchmark. Gate against the tree before:
 IronRuby.Tests in Release on net10.0 (the one known failure, `Exception_CauseRaisedInClause1`;
 the new `BlockLoopEachIndex1` passes); ruby/spec language and core/array (2935 and 2898
@@ -756,6 +759,19 @@ matrix's `each_index` blocks specialized.
   31-33, over 5 100-106 -> 81-87 (CRuby, same load: 71, 145, 187); a 12-operation Float
   body over 1000 196-202 -> 5.7-9.2. NBody: 1.80-2.22 s per 250,000 against 1.75-2.27,
   the same, since neither of its `each_index` blocks reaches the loop compiler (gap 2).
+  Measured again on 2026-11-16 with the conditions recorded: Release net10.0 builds of
+  6e146fa3 and of the branch at 22d353ab (the change is 8a70f030), each from a worktree
+  whose `git status --short` printed nothing, built one after the other and then measured
+  with nothing else running; 4 cores, 1-minute load average 2.32 at the start (the builds
+  had just ended) and 1.44 at the end. The script is not one of `Util/perf`'s: the same
+  block inside `reps.times`, 4,000,000 elements per batch, the least of seven batches
+  after two for warm-up, three rounds taking turns between the builds. Per element,
+  6e146fa3 -> the branch: over 1000 39.9-43.0 -> 6.4-7.2 ns, over 16 46.3-47.4 ->
+  18.0-19.1, over 5 63.4-64.6 -> 47.4-50.4 (CRuby 4.0.9, once, after the rounds: 37.9,
+  45.4, 51.7); a Float body of 13 operations over 1000 (not the one above) 138.7-144.1
+  -> 3.9-4.4 (CRuby 127.1). Every run printed the same sums. That is about 6x over 1000
+  elements (the first measurement had 10x), 2.5x over 16 (2.2x) and 1.3x over 5 (1.2x),
+  where entering the loop is most of the cost.
 
 ## Rejected
 
