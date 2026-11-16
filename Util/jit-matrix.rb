@@ -1294,7 +1294,7 @@ def sp_case_str(s)
   case s
   when "foo" then 1
   when "bar", "baz" then 2
-  when "é" then 3
+  when "\u00e9" then 3
   else 0
   end
 end
@@ -1424,7 +1424,7 @@ t('case of Integer literals, subclasses') { [JitArr.new, JitHash.new, JitStr.new
 warm { |i| sp_case_sym([:add, :sub, :mul, :div, :mod][i % 5]) }
 t('case of a Symbol') { [:add, :sub, :mul, :div, :mod, "add", nil, 1].map { |s| sp_case_sym(s) } }
 warm { |i| sp_case_str(["foo", "bar", "baz", "qux"][i % 4]) }
-t('case of a String') { ["foo", "bar", "baz", "qux", "é", "é".b, "foo".b, JitStr.new("foo"), :foo, nil, 1, 2.0, true].map { |s| sp_case_str(s) } }
+t('case of a String') { ["foo", "bar", "baz", "qux", "\u00e9", "\u00e9".b, "foo".b, JitStr.new("foo"), :foo, nil, 1, 2.0, true].map { |s| sp_case_str(s) } }
 warm { |i| sp_case_cond(i - 60) }
 t('case without a subject') { [sp_case_cond(-5), sp_case_cond(0), sp_case_cond(5)] }
 warm { |i| sp_case_const(["a", 1][i % 2]) }
@@ -1847,7 +1847,7 @@ t('a default proc that writes the hash') { dw = Hash.new { |hh, k| hh[k] = k * 3
 t('a mutable default value') { dv = Hash.new([]); x = sp_hget2(dv, 1); x << 1; [dv, dv.default, sp_hget2(dv, 2)] }
 t('keys: nil, Float, Bignum, Array, Int64') { x = {}; [nil, 2.5, 2**70, [1], 2**40, -0.0].each_with_index { |k, j| sp_hset2(x, k, j) }; [nil, 2.5, 2**70, [1], 2**40, 0.0, 1.0].map { |k| [sp_hget2(x, k), sp_hkey2(x, k)] } }
 t('keys: 1 and 1.0') { x = { 1 => :i, 1.0 => :f }; [sp_hget2(x, 1), sp_hget2(x, 1.0), sp_hkey2(x, 1.0), sp_hfetch2(x, 2.0)] }
-t('keys: String encodings') { x = { "é" => 1, "a" => 2 }; [sp_hget2(x, "é"), sp_hget2(x, "é".b), sp_hget2(x, "a".b), sp_hkey2(x, "é".b), sp_hget2(x, "a".encode("UTF-16LE"))] }
+t('keys: String encodings') { x = { "\u00e9" => 1, "a" => 2 }; [sp_hget2(x, "\u00e9"), sp_hget2(x, "\u00e9".b), sp_hget2(x, "a".b), sp_hkey2(x, "\u00e9".b), sp_hget2(x, "a".encode("UTF-16LE"))] }
 t('keys: String subclass') { x = { "a" => 1 }; k = JitStr.new("a"); sp_hset2(x, JitStr.new("b"), 2); [sp_hget2(x, k), sp_hkey2(x, k), x.keys.map(&:class), x.keys[0].frozen?] }
 t('keys: Symbol and String of one name') { x = { a: 1, "a" => 2 }; [sp_hget2(x, :a), sp_hget2(x, "a"), sp_hkey2(x, :b)] }
 t('existing String key kept') { k1 = "q".dup; x = { k1 => 1 }; sp_hset2(x, "q".dup, 2); [x, x.keys[0].equal?(k1)] }
@@ -3956,3 +3956,89 @@ warm do
 end
 t('sv_get, hot on the private member') { sv_holder_hot.sv_get }
 t('sv_set, hot on the private member') { sv_holder_hot.sv_set }
+
+# ---------------------------------------------------------------- 13. String#length and #size
+#
+# `s.length', `s.size', `@input.length' on a receiver the profile saw hold a String: the
+# characters in the String's encoding (JitRuntime.StringLength). Each body is made hot on ASCII
+# Strings and then given multi-byte, broken, binary and UTF-16 Strings, a subclass with and
+# without a length of its own, a String with a singleton length, an Array, nil; then String#length
+# is redefined, refined and made private in the middle of the run. `sl_hash' reaches `sl_size'
+# through a call on self (a bound callee), as Json's hash_slot_for reaches string_hash.
+
+puts '--- 13. String#length and #size ---'
+
+class SlBox
+  def initialize(s) = (@input = s; @index = 0)
+  attr_writer :input
+  def sl_more = @index < @input.length
+  def sl_len(s) = s.length
+  def sl_size(s) = s.size * 1_402_589
+  def sl_hash(s) = sl_size(s) & 15
+end
+
+class SlString < String
+  def length = 99
+end
+class SlPlainString < String; end
+
+sl = SlBox.new('abc')
+warm { |i| sl.sl_len('abcd'); sl.sl_size('ab' * (i % 4)); sl.sl_hash('xyz'); sl.sl_more }
+sl_inputs = ['abc', '', "h\u00e9llo", "\u3042\u3044", "\xff\xfe".dup.force_encoding('UTF-8'), "\xff\xfe".b,
+  "ab\u00e9".encode('UTF-16LE'), "\u{1F600}x", 'abc'.freeze, SlString.new('abc'), SlPlainString.new('abcd'),
+  [1, 2], nil, 5]
+sl_inputs.each do |s|
+  t("sl_len #{s.inspect}") { sl.sl_len(s) }
+  t("sl_size #{s.inspect}") { sl.sl_size(s) }
+  t("sl_hash #{s.inspect}") { sl.sl_hash(s) }
+  sl.input = s
+  t("sl_more #{s.inspect}") { sl.sl_more }
+end
+sl_single = +'abc'
+def sl_single.length = 42
+def sl_single.size = 43
+t('sl_len, a singleton length') { sl.sl_len(sl_single) }
+t('sl_size, a singleton size') { sl.sl_size(sl_single) }
+warm { sl.sl_len('ab'); sl.sl_size('ab'); sl.sl_hash('ab') }
+t('sl_len after a singleton, plain') { sl.sl_len('abc') }
+
+# hot again, then String#length redefined in the middle of a run
+sl_seen = []
+warm do |i|
+  if i == 60
+    class String
+      alias_method :sl_orig_length, :length
+      def length = -1
+    end
+  end
+  sl_seen << sl.sl_len('abcd')
+end
+t('sl_len, length redefined mid-run') { sl_seen.uniq }
+class String
+  alias_method :length, :sl_orig_length
+  remove_method :sl_orig_length
+end
+warm { sl.sl_len('ab') }
+t('sl_len, length restored') { sl.sl_len("\u00e9\u00e9") }
+
+warm { sl.sl_size('ab') }
+class String
+  private :size
+end
+t('sl_size, String#size private') { sl.sl_size('abc') }
+class String
+  public :size
+end
+t('sl_size, String#size public again') { sl.sl_size('abc') }
+
+module SlRefine
+  refine String do
+    def size = 1000
+  end
+end
+class SlBox
+  using SlRefine
+  def sl_rsize(s) = s.size
+end
+warm { sl.sl_rsize('abc') }
+t('sl_rsize under a refinement') { sl.sl_rsize('abc') }

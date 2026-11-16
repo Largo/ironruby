@@ -1149,6 +1149,17 @@ namespace IronRuby.Runtime.Jit {
 
             string name = node.MethodName;
             if (args.Length == 0) {
+                if (name != "empty?" && ObservedType(node.Target) == typeof(MutableString)) {
+                    // `s.size', `s.length' on a parameter or instance variable the profile saw hold a String
+                    // (Json's `s.size', `@input.length'): String#length, the characters in the String's
+                    // encoding (JitRuntime.StringLength); a receiver that is not a plain String deopts.
+                    var stringClass = KindClass(JitRuntime.KindString);
+                    if (!IsPlainLibraryMethod(stringClass, name) || !IsPublic(stringClass, name)) {
+                        throw Bail("String#" + name + " is not the built-in one");
+                    }
+                    type = JT.Int;
+                    return Ast.Call(JitRuntime.M("StringLength"), recv);
+                }
                 bool arrays, hashes;
                 RequireElementMethod(name, null, out arrays, out hashes);
                 RequireCollectionReceiver(node.Target, arrays, hashes, name);

@@ -619,6 +619,17 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        /// <summary>
+        /// String#length / #size of a String whose class is String itself (a subclass may override them,
+        /// and a singleton one is ruled out when compiling: JitCompiler.HasPlainInstances): the number
+        /// of characters in the String's encoding, a broken byte counting as one, as the library method
+        /// counts them. Anything else deopts.
+        /// </summary>
+        public static int StringLength(object recv) {
+            if (recv != null && recv.GetType() == typeof(MutableString)) { return ((MutableString)recv).GetCharacterCount(); }
+            throw Deopt();
+        }
+
         /// <summary>Array#empty?, Hash#empty?.</summary>
         public static bool IsEmpty(object recv, bool arrays, bool hashes) {
             return SizeOf(recv, arrays, hashes) == 0;
