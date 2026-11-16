@@ -4042,3 +4042,90 @@ class SlBox
 end
 warm { sl.sl_rsize('abc') }
 t('sl_rsize under a refinement') { sl.sl_rsize('abc') }
+
+# ---------------------------------------------------------------- 14. Integer#abs and Float#abs
+#
+# `x.abs', `@v = @v.abs * -1' (Bounce's Ball#bounce has `0 - @x_vel.abs'): Integer#abs of an Int32 is an Int64, of an
+# Int64 the same except at -2**63 (a Bignum, a deopt); Float#abs clears the sign: -0.0.abs is 0.0
+# and NaN stays NaN. Hot on the kind each was compiled for, then the edges, a Bignum, a Rational,
+# nil, and Integer#abs and Float#abs redefined in the middle of a run, made private, refined.
+# Integer#- is still the one section 8 replaced, so this section does without it.
+
+puts '--- 14. Integer#abs and Float#abs ---'
+
+class AbBall
+  def initialize(v) = (@v = v)
+  attr_accessor :v
+  def ab_m = (@v = @v.abs * -1)
+  def ab_x(x) = x.abs
+  def ab_f(x) = x.abs + 0.5
+end
+
+ab = AbBall.new(3)
+abf = AbBall.new(-1.5)
+warm { |i| ab.v = 60 + -i; ab.ab_m; ab.ab_x(60 + -i); ab.ab_f(i * -0.25) }
+[0, 7, -7, 2**31 + -1, -2**31, 2**31, -2**31 + -1, 2**62, -2**63 + 1, -2**63, 2**63, -2**64, 3.5, -0.0, 0.0,
+ Float::NAN, -Float::INFINITY, Rational(-1, 2), nil, 'x'].each do |x|
+  t("ab_x #{x.inspect}") { r = ab.ab_x(x); r.is_a?(Float) ? [r, r.nan? ? :nan : 1.0 / r] : r }
+  t("ab_f #{x.inspect}") { ab.ab_f(x) }
+  ab.v = x
+  t("ab_m #{x.inspect}") { [ab.ab_m, ab.v] }
+end
+warm { |i| abf.v = i * -0.5; abf.ab_m }
+[-0.0, Float::NAN, -2.5, 4, -2**63].each do |x|
+  abf.v = x
+  t("ab_m on a Float-hot ball, #{x.inspect}") { r = abf.ab_m; r.is_a?(Float) ? [r, r.nan? ? :nan : 1.0 / r] : r }
+end
+
+ab_seen = []
+warm do |i|
+  if i == 60
+    class Integer
+      alias_method :ab_orig_abs, :abs
+      def abs = 1000
+    end
+  end
+  ab_seen << ab.ab_x(-3)
+end
+t('ab_x, Integer#abs redefined mid-run') { ab_seen.uniq }
+class Integer
+  alias_method :abs, :ab_orig_abs
+  remove_method :ab_orig_abs
+end
+ab_seen = []
+warm do |i|
+  if i == 60
+    class Float
+      alias_method :ab_orig_abs, :abs
+      def abs = -1.0
+    end
+  end
+  ab_seen << ab.ab_f(-3.0)
+end
+t('ab_f, Float#abs redefined mid-run') { ab_seen.uniq }
+class Float
+  alias_method :abs, :ab_orig_abs
+  remove_method :ab_orig_abs
+end
+warm { |i| ab.ab_x(60 + -i) }
+t('ab_x, abs restored') { [ab.ab_x(-4), ab.ab_x(-4.5)] }
+class Integer
+  private :abs
+end
+t('ab_x, Integer#abs private') { ab.ab_x(-4) }
+class Integer
+  public :abs
+end
+t('ab_x, Integer#abs public again') { ab.ab_x(-4) }
+
+module AbRefine
+  refine Integer do
+    def abs = :refined
+  end
+end
+class AbBall
+  using AbRefine
+  def ab_r(x) = x.abs
+end
+warm { |i| ab.ab_r(i) }
+t('ab_r under a refinement') { ab.ab_r(-2) }

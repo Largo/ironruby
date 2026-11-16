@@ -21,12 +21,21 @@ class CsParser
   def more = @index < @input.length
 end
 
-SHAPES = %w[str_size str_length]
+# Bounce's Ball#bounce, `@x_vel = 0 - @x_vel.abs' (Util/perf/micro.rb's `abs'): Integer#abs and Float#abs
+class CsBall
+  def initialize(v); @v = v; end
+  def absm = (@v = 0 - @v.abs)
+end
+class CsFBall < CsBall; def absm = (@v = 0 - @v.abs); end
+
+SHAPES = %w[str_size str_length abs fabs]
 
 def run_shape(name)
   table = CsTable.new
   parser = CsParser.new('{"a": [1, 2, 3], "b": "xyz"}')
   key = 'abcdef'
+  ball = CsBall.new(7)
+  fball = CsFBall.new(-2.5)
   r = 0
   best = nil
   6.times do
@@ -35,6 +44,8 @@ def run_shape(name)
     case name
     when 'str_size'   then while i < N; r += table.hash_slot_for(key); i += 1; end
     when 'str_length' then while i < N; r += 1 if parser.more; i += 1; end
+    when 'abs'        then while i < N; r += ball.absm; i += 1; end
+    when 'fabs'       then while i < N; r += fball.absm; i += 1; end
     end
     d = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) - t
     best = d if best.nil? || d < best

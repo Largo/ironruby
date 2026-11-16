@@ -44,5 +44,41 @@ NoMethodError
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
         }
+
+        /// <summary>Integer#abs (an Int32's is an Int64, -2**63's a Bignum) and Float#abs (-0.0 is 0.0, NaN stays NaN).</summary>
+        public void JitCore_Abs1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class AbBall
+  def initialize(v) = (@v = v)
+  attr_accessor :v
+  def bounce = (@v = 0 - @v.abs)
+  def ab(x) = x.abs
+  def fab(x) = x.abs + 0.5
+end
+b = AbBall.new(3)
+200.times { |i| b.v = i - 100; b.bounce; b.ab(i - 100); b.fab(i * -0.25) }
+p [-2**31, -2**63, -2**64, 2**62, -5].map { |x| b.ab(x) }
+p [-0.0, Float::NAN, -Float::INFINITY].map { |x| b.fab(x) }, 1.0 / b.ab(-0.0)
+b.v = -2**63
+p b.bounce
+p((b.ab(nil) rescue $!.class))
+seen = []
+200.times do |i|
+  class Integer; alias_method :ab_orig, :abs; def abs = 1000; end if i == 100
+  seen << b.ab(-3)
+end
+p seen.uniq
+", @"
+[2147483648, 9223372036854775808, 18446744073709551616, 4611686018427387904, 5]
+[0.5, NaN, Infinity]
+Infinity
+-9223372036854775808
+NoMethodError
+[3, 1000]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
     }
 }

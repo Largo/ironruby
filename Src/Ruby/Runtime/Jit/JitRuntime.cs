@@ -955,6 +955,15 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        // ---- Integer#abs (JitCompiler.EmitCall) ------------------------------------------
+
+        /// <summary>Integer#abs of an Int64; -2**63, whose absolute value is a Bignum, is the generic code's to produce.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long AbsLong(long value) {
+            if (value == long.MinValue) { throw Deopt(); }
+            return (value < 0) ? -value : value;
+        }
+
         // ---- Float#to_i (JitCompiler.EmitCall) -------------------------------------------
 
         /// <summary>

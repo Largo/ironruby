@@ -1877,6 +1877,32 @@ namespace IronRuby.Runtime.Jit {
                 throw Bail("to_i on " + tt);
             }
 
+            // `n.abs' of an Integer or a Float (Bounce's `@x_vel.abs'): Integer#abs of an Int32 is an
+            // Int64 (-2**31 has none in an Int32), of an Int64 the same but for -2**63, whose absolute value is a
+            // Bignum the generic code makes (JitRuntime.AbsLong deopts); Float#abs clears the sign bit, so -0.0
+            // is 0.0 and a NaN stays one.
+            if (argc == 0 && node.Target != null && node.MethodName == "abs") {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (IsNumeric(tt)) {
+                    RequireBuiltin(tt, "abs");
+                    switch (tt) {
+                        case JT.Int:
+                            type = JT.Lng;
+                            return Ast.Call(typeof(Math).GetMethod("Abs", new[] { typeof(long) }), Ast.Convert(t, typeof(long)));
+                        case JT.Lng:
+                            _canDeopt = true;
+                            type = JT.Lng;
+                            return Ast.Call(JitRuntime.M("AbsLong"), t);
+                        default:
+                            type = JT.Dbl;
+                            return Ast.Call(typeof(Math).GetMethod("Abs", new[] { typeof(double) }), t);
+                    }
+                }
+                throw Bail("abs on " + tt);
+            }
+
             // `C.new(a, b)' ending the method (JitCompiler.Objects.cs).
             if (_ast != null && _loop == null && _keywords == null && node == TailConstruction(_ast)) {
                 return EmitConstruction(node, out type);
