@@ -248,8 +248,8 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// -X:JITCalls: a method the method JIT compiles calls the compiled bodies of other methods
-        /// of its receiver directly (Jit.JitStub.BindCallee, a prototype).
+        /// A method the method JIT compiles calls the compiled bodies of other methods of its
+        /// receiver directly (Jit.JitStub.BindCallee). On by default; -X:NoJITCalls turns it off.
         /// </summary>
         public bool JitCalls {
             get { return _jitCalls; }
@@ -324,7 +324,7 @@ namespace IronRuby.Runtime {
             _jit = GetOption(options, "JIT", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _osr = GetOption(options, "OSR", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _jitMethods = GetOption(options, "JITMethods", (string)null);
-            _jitCalls = GetOption(options, "JITCalls", false);
+            _jitCalls = GetOption(options, "JITCalls", true);
             _jitResume = GetOption(options, "JITResume", false);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;

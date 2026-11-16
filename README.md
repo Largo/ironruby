@@ -443,7 +443,8 @@ Two compilers specialize on the types a program actually uses. Both are **on by 
 guess:
 
 - **Method JIT** — a hot method body is replaced by a copy with unboxed `int`/`long`/`double`
-  locals, CLR arithmetic, no per-call scope, and direct calls for self-recursion. One integer
+  locals, CLR arithmetic, no per-call scope, and direct calls for self-recursion and for the
+  other compiled methods it calls on self (`-X:NoJITCalls` turns those off). One integer
   compare of a global method-table version guards redefinition, override, singleton methods,
   `prepend`, `include` and `alias`; refinements switch it off; overflow and division by zero
   deopt to the generic body.

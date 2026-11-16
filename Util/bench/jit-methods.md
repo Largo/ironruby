@@ -1,6 +1,8 @@
 # -X:JITMethods and -X:JITCalls: the method JIT's code as real methods, and calls between them
 
-Two prototypes, both off by default, and what they measured. Part 1 is `-X:JITMethods` alone,
+Two prototypes and what they measured, both off by default when this was written. `-X:JITCalls`
+is on by default since round thirteen of `Util/perf/LEDGER.md` (step 2 of the verdict at the end;
+`-X:NoJITCalls` turns it off), so where Part 2 says "with the switch" read "by default". Part 1 is `-X:JITMethods` alone,
 measured before master's method JIT learned to inline small callees; its numbers and its
 verdict stand as they were written. Part 2 is `-X:JITCalls`, the step Part 1 ends on, measured
 on top of that inliner, and ends with the verdict on both.

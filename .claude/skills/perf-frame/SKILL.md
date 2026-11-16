@@ -164,7 +164,7 @@ What went wrong doing exactly this, so that it does not again:
 ## 5. Verify in every mode
 
 The matrix must print CRuby's output with: the default; the switch off;
-`IR_LIGHT_FRAMES=0`; `-X:NoJIT -X:NoOSR`; `-X:JITCalls`; and `IR_CONFIG=R2R` after a
+`IR_LIGHT_FRAMES=0`; `-X:NoJIT -X:NoOSR`; `-X:NoJITCalls`; and `IR_CONFIG=R2R` after a
 Release build (the host whose prelude is precompiled). Also `Util/jit-matrix.rb`,
 `Util/jit-calls-matrix.rb`, and the two matrices of the shapes already let in.
 

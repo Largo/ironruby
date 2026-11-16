@@ -1,17 +1,19 @@
-# Differential matrix for -X:JITCalls (Src/Ruby/Runtime/Jit/JitStub.cs, BindCallee): a method the
-# method JIT compiles calls the typed bodies of the other methods it calls on self directly.
+# Differential matrix for direct calls (Src/Ruby/Runtime/Jit/JitStub.cs, BindCallee; on by default,
+# -X:NoJITCalls turns them off): a method the method JIT compiles calls the typed bodies of the
+# other methods it calls on self directly.
 # Run under CRuby and under ./ir.sh in each mode, and diff - the outputs must be identical:
 #
 #   ruby Util/jit-calls-matrix.rb > /tmp/mri.txt
-#   ./ir.sh -X:JITCalls Util/jit-calls-matrix.rb > /tmp/calls.txt
-#   ./ir.sh -X:JITCalls -X:JITMethods=run,tiered Util/jit-calls-matrix.rb > /tmp/methods.txt
+#   ./ir.sh Util/jit-calls-matrix.rb > /tmp/calls.txt
+#   ./ir.sh -X:NoJITCalls Util/jit-calls-matrix.rb > /tmp/nocalls.txt
+#   ./ir.sh -X:JITMethods=run,tiered Util/jit-calls-matrix.rb > /tmp/methods.txt
 #
 # Each caller is made hot with the types it is to be compiled for, and then probed where the
 # direct call has to give way: the callee redefined, overridden in a subclass or by a singleton
 # method, a deopt inside the callee, an argument the callee was not compiled for, a frozen
 # receiver, a constant the callee folded. What was bound is not part of the output; to see it:
 #
-#   IR_JIT_VERBOSE=1 ./ir.sh -X:JITCalls Util/jit-calls-matrix.rb 2>&1 >/dev/null | grep -a 'jit\]'
+#   IR_JIT_VERBOSE=1 ./ir.sh Util/jit-calls-matrix.rb 2>&1 >/dev/null | grep -a 'jit\]'
 
 def t(label)
   print label.ljust(48), ' => '
