@@ -342,6 +342,14 @@ and `release` (given gap 11's nil-constant fix, which is built and on the Reject
 `DeltaBlue`'s `remove_first`, and the start of `schedule` and `run_task`. This is perf/jcall's
 change with its restriction gone; measured against its numbers.
 
+Tried once, in another form, and rejected (`Util/perf/LEDGER.md`, Rejected, perf/resume2): the bodies the
+typed compiler declines compiled whole as a self-guarded tail, with no typed prefix. It was correct and
+exactly as fast as the generic body, 3% slower over the benchmarks: a self-guarded operation on objects in
+a body with a frame is what a call-site rule in the generic body already is. What that leaves of this
+stage is the part that keeps a typed, frameless prefix, and it pays only for methods whose time is in
+that prefix; for the methods named above the time is in the calls, and the gain has to come from the
+call itself (a compiled body entering a compiled body without the site, the boxes or the frame).
+
 **Stage 3 - resume (B).** The resumable generic body, resume points at statement boundaries,
 the frame-state map, per-statement undo marks, the per-try-region dispatch and the loop resume
 flag. First PR inside the stage: a test that the dispatch reaches a label inside a `while` body

@@ -217,12 +217,26 @@ Profile (`Util/perf/profile.sh`, self time):
    the gate's rows mapped to the faults below; and a staged plan whose first stage
    compiles `hold_self`. Stage 1 is in behind `-X:JITResume`, off by default (round
    eleven, see Landed): it compiles `hold_self` and is worth 13-14% on that shape and
-   nothing measurable on a benchmark, as the design expected. The gain this gap is about
-   starts at stage 2 (general calls after an effect, which `run_task`, `schedule`,
-   `push_disk` and `bounce` wait on); that is the next experiment here. With the switch
+   nothing measurable on a benchmark, as the design expected. With the switch
    `hold_self` is at 1.2-1.3 of CRuby and `bump`, the same method without its two
    attribute operations, at 1.4-1.6: what is left is the cost of entering the method,
    not of what it does.
+   Stage 2 was tried in round twelve as a second, untyped compile of the bodies the
+   typed compiler declines ("tail mode", perf/resume2, see Rejected): correct, and no
+   faster than the generic body on any of four shapes, 3% slower over the benchmarks.
+   It showed what this gap is not: the generic body with its call-site rules is already
+   what a compiled body of self-guarded object operations with a frame is. The time
+   moved from `CallSite.Target` into the bodies and stayed the same. Stage 1 gained
+   because its typed body has no frame and no boxes until a fallback. So an attempt here
+   must take away something the generic body cannot: the frame (a body that makes a
+   general call needs one for the callee's backtrace on every call, so this means calls
+   whose callee is a compiled body known not to look, `-X:JITCalls`' kind), or the
+   boxes and the dispatch between two compiled bodies (a typed body calling a typed
+   body's entry directly, arguments unboxed, with the caller's frame made only when the
+   callee falls back). Recompiling the same operations a second way is not it; do not
+   try stage 2 again as written. `Util/bench/jit-resume2-shapes.rb` has the four shapes
+   (Richards' `find_task`, `queue_packet`, `add_input_and_check_priority`, `schedule`) at
+   1.6, 1.1, 0.9 and 1.1 of CRuby for the next attempt to move.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
@@ -960,6 +974,45 @@ switch off nothing is compiled differently, so "Current numbers" stand.
   round five's other two branches the tree measured the same overall (0.965, 0.953, 0.974
   against 0.955, 0.952, 0.976) and DeltaBlue 3-10% slower in all three runs. Not merged.
   Its first version made Towers 9-11% slower, which is how gap 1 was found.
+- **perf/resume2 d239871a..c8ad27de - "tail mode": bodies the typed compiler declines,
+  compiled a second way** (round twelve, gap 1; stage 2 of `Docs/jit-resume-deopt.md`
+  behind `-X:JITResume`; new file `Jit/JitTail.cs`, 1,230 lines, 2,220 with its matrix
+  section and test). Not the design's stage 2 to the letter: instead of a typed prefix
+  with an `Obj` tail after the first effect, the whole body from its first statement as
+  operations that speculate on nothing or guard themselves on every run (Int32
+  arithmetic and comparison, `==`/`!=`, `nil?`, `!`, `a[i]`, `a[i] = v`, attribute
+  read and write, each re-checking the method version and the lookup's visibility),
+  every value an object, parameters and locals in object variables written through to
+  the scope once a call has made it, general calls through a light-scope site and then
+  the full site, the body in the generic frame's place (same name, line markers,
+  try/catch/finally, stack check, trace hooks), nothing that can deopt. Correct on
+  everything its author ran: jit-matrix section 13 the same on CRuby, default, `-X:NoJIT`,
+  the switch and a stress switch that makes every guard miss; the other matrices; the
+  full test suite; ruby/spec language with the switch; all thirteen benchmarks without
+  FAIL. With the switch Richards goes from 15 specialized and 4 rejected to 34 and 0,
+  Json from 11/9 to 39/0, CD from 25/2 to 39/0, Towers from 2 to 7 (its author's
+  counts, some from a build before the last two fixes).
+  And it buys nothing. The shapes, ns per call, ab.rb with 7 rounds, measured twice with
+  the columns reversed (CRuby / base / switch off / on): `find_task` 32.9 / 52.1 / 52.8 /
+  49.7 and 51.9 / 51.6 / 51.8; `queue_packet` 161.2 / 181.6 / 181.1 / 173.8 and 181.1 /
+  175.6 / 176.3; `add_input` 65.0 / 61.4 / 61.7 / 61.9 and 56.8 / 58.0 / 61.6; `schedule`
+  172.1 / 195.5 / 194.2 / 194.9 and 191.7 / 185.2 / 181.1: every on/off pair inside the
+  spread. All thirteen benchmarks, 12 s, both orders: with the switch 1.028 and 1.028 of
+  the base (Json 13% and 9% slower, Towers 10% and 10%, Bounce 7% and 7%; DeltaBlue
+  and CD level, Richards level in one run and 6% slower in the other). Without the switch the branch measured 1.016 and 1.020 of
+  the base, Richards 6-8% and NBody 4-8% slower in both orders, although nothing should
+  compile differently with it off; not looked into, since the branch is not merged, but
+  a merge would have had to explain it.
+  Where the time goes (its author's perf of Towers): `CallSite.Target` 38% -> 11%, the
+  method bodies 1.5-2 times their own time each, the sum unchanged or worse. A call-site
+  rule for `a + b` or an attribute is a class-version compare and the operation; an
+  inline guard and a helper call is the same work in another place, and the frame is
+  the generic frame. Two things made it worse before they were found: a guard that kept
+  one receiver class re-bound with a reflection lookup each time `!x.equal?(y)` saw true
+  after false (CD 35% slower; now four classes, and plain calls after 64 binds), and an
+  Array fast path that tested `HasInstancesWithOwnClass`, which is true for Array in
+  every process from start-up, so it never hit. Not merged; the branch is not pushed.
+  Kept from it: the shapes (`Util/bench/jit-resume2-shapes.rb`, 6197f6ab).
 - **`x == "lit"` without allocating the literal, in code the method JIT does not
   compile**: 80 B less per comparison in a micro test, no change in AWFY bytes (Json's
   comparisons already go through the JIT). Reverted.
