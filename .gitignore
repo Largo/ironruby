@@ -46,3 +46,4 @@ bin/
 
 # Util/build-markly.sh output: cmark-gfm built from the markly gem, per platform
 /Src/Libraries/Markly/native/build/
+/Src/Ruby/CApi/native/build/

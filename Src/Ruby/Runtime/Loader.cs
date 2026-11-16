@@ -759,7 +759,11 @@ namespace IronRuby.Runtime {
                     }
                 } else {
                     Debug.Assert(file.Path != null);
-                    try {
+                    if (IsNativeExtensionPath(file.Path) && IsNativeSharedObject(file.Path)) {
+                        // a C extension compiled against IronRuby's ruby.h (Src/Ruby/CApi)
+                        CApi.CApi.LoadExtension(_context, file.Path);
+                        loaded = null;
+                    } else try {
                         Assembly assembly = LoadAssemblyFromFile(file.Path);
                         if (!DomainManager.LoadAssembly(assembly)) {
                             // The runtime has seen the assembly, which it reports once: maybe in a require that failed
@@ -805,6 +809,39 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// True for the file name of a compiled CRuby extension (what a gem's extconf.rb builds).
         /// </summary>
+        /// <summary>
+        /// True for an ELF or Mach-O file: what a C compiler makes of an extension, as against a
+        /// CLR assembly that happens to be named .so.
+        /// </summary>
+        private static bool IsNativeSharedObject(string/*!*/ path) {
+            try {
+                using (var stream = File.OpenRead(path)) {
+                    var magic = new byte[4];
+                    if (stream.Read(magic, 0, 4) != 4) {
+                        return false;
+                    }
+                    if ((magic[0] == 0x7f && magic[1] == (byte)'E' && magic[2] == (byte)'L' && magic[3] == (byte)'F') ||
+                        (magic[0] == 0xcf && magic[1] == 0xfa && magic[2] == 0xed && magic[3] == 0xfe)) {
+                        return true;
+                    }
+                    // a PE DLL (Windows) without CLR metadata: a CLR assembly is a PE file too
+                    if (magic[0] == (byte)'M' && magic[1] == (byte)'Z') {
+                        stream.Position = 0;
+                        using (var pe = new System.Reflection.PortableExecutable.PEReader(stream)) {
+                            return !pe.HasMetadata;
+                        }
+                    }
+                    return false;
+                }
+            } catch (IOException) {
+                return false;
+            } catch (UnauthorizedAccessException) {
+                return false;
+            } catch (BadImageFormatException) {
+                return false;
+            }
+        }
+
         private static bool IsNativeExtensionPath(string path) {
             if (path == null) {
                 return false;

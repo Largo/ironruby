@@ -1217,6 +1217,10 @@ namespace IronRuby.Builtins {
             return this;
         }
 
+        public bool IsTemporarilyLocked {
+            get { return (_flags & IsTemporarilyLockedFlag) != 0; }
+        }
+
         /// <summary>rb_str_unlocktmp.</summary>
         public MutableString/*!*/ UnlockTemporarily() {
             _flags &= ~IsTemporarilyLockedFlag;

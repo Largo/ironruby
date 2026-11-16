@@ -72,9 +72,20 @@ module Gem
   # So insert at the first standard library directory instead, which is the
   # same position relative to the library that CRuby uses, and still behind -I
   # and RUBYLIB.
+  #
+  # On Windows ir.cmd puts the directories on $LOAD_PATH with backslashes, and a
+  # forward-slash copy of one comes later: compared as written, the first match
+  # was that copy, so a newer installed version of a default gem stayed behind
+  # the one in Src/StdLib (`gem "json"` resolved, `require "json"` did not use it).
 
   def self.load_path_insert_index
-    indexes = ironruby_stdlib_dirs.filter_map {|dir| $LOAD_PATH.index(dir) }
+    dirs = ironruby_stdlib_dirs
+    dirs = dirs.map {|dir| dir.tr("\\", "/").downcase } if File::ALT_SEPARATOR
+    indexes = $LOAD_PATH.each_index.select do |i|
+      entry = $LOAD_PATH[i].to_s
+      entry = entry.tr("\\", "/").downcase if File::ALT_SEPARATOR
+      dirs.include?(entry)
+    end
     indexes.min || $LOAD_PATH.index(RbConfig::CONFIG["sitelibdir"]) || 0
   end
 
@@ -112,6 +123,7 @@ module Gem
           end
           next unless spec
           next unless spec.metadata.is_a?(Hash) && spec.metadata["ironruby_pinned"]
+          next if ironruby_native_gem?(spec.name)
           pinned[spec.name] = spec.version
         end
       rescue StandardError
@@ -216,6 +228,55 @@ module Gem
       installer.instance_variable_set(:@env_shebang, false)
     end
     true
+  end
+
+  ##
+  # Whether this IronRuby can build and load C extensions: it has the C API
+  # (libironruby-capi next to the executable, Src/Ruby/CApi) and a compiler
+  # configured in RbConfig.  Linux x64 so far.
+
+  def self.ironruby_capi?
+    return @__ironruby_capi__ unless @__ironruby_capi__.nil?
+    @__ironruby_capi__ =
+      begin
+        !RbConfig::CONFIG["CC"].to_s.empty? &&
+          %w[libironruby-capi.so libironruby-capi.dll].any? {|lib| File.exist?(File.join(RbConfig::CONFIG["bindir"], lib)) }
+      rescue StandardError
+        false
+      end
+  end
+
+  ##
+  # The libraries IronRuby implements itself (sqlite3, nokogiri, ...) for which
+  # the real gem, C extension and all, is wanted instead: IRONRUBY_NATIVE_GEMS
+  # names them, separated by commas or spaces ("*" for all).  For such a name the
+  # built-in stops being pinned, `gem install` compiles the extension, and the
+  # installed gem is activated like any other - ahead of the built-in on
+  # $LOAD_PATH.  Needs the C API (ironruby_capi?).
+
+  # RubyGems runs nmake for an mswin RUBY_PLATFORM; IronRuby's extensions are built with
+  # MinGW and its make (rbconfig.rb, mkmf.rb in Src/StdLib/ironruby).
+  if RUBY_PLATFORM.include?("mswin") && ironruby_capi? && !ENV["MAKE"] && !ENV["make"]
+    ENV["MAKE"] = "make"
+  end
+
+  def self.ironruby_native_gems
+    @__ironruby_native_gems__ ||= (ENV["IRONRUBY_NATIVE_GEMS"] || "").split(/[\s,]+/).reject(&:empty?).freeze
+  end
+
+  def self.ironruby_native_gem?(name)
+    ironruby_capi? && (ironruby_native_gems.include?(name) || ironruby_native_gems.include?("*"))
+  end
+
+  ##
+  # Whether `gem install` / Bundler should compile +spec+'s C extension: with the
+  # C API, for every gem except the libraries IronRuby provides itself (unless
+  # IRONRUBY_NATIVE_GEMS asks for them).
+
+  def self.ironruby_build_extension?(spec)
+    return false unless ironruby_capi?
+    return true if ironruby_native_gem?(spec.name)
+    !ironruby_default_gem_names.include?(spec.name)
   end
 
   ##
@@ -436,12 +497,13 @@ module Gem
     end
 
     ##
-    # Never compile a C extension.
+    # Compile a C extension only where IronRuby has the C API (see
+    # Gem.ironruby_build_extension?); otherwise never.
     #
     # RubyGems builds a gem's extensions lazily, the first time something
     # activates it - installing a gem builds its dependencies' extensions too.
-    # On IronRuby that can only fail: there is no ruby.h and no CRuby ABI to
-    # compile against.  The attempt writes a half-built Makefile and a
+    # Without the C API (Windows and macOS so far) that can only fail: there is
+    # no CRuby ABI to compile against.  The attempt writes a half-built Makefile and a
     # gem_make.out into the gem's directory before it fails, and takes the whole
     # `gem install` down with it.
     #
@@ -454,6 +516,7 @@ module Gem
     def build_extensions # :nodoc:
       return if extensions.empty?
       return if default_gem?
+      return super if Gem.ironruby_build_extension?(self)
 
       Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
       nil
@@ -492,6 +555,20 @@ module Gem
   module IronRubyNoExtensionBuild # :nodoc:
     def build_extensions
       return if spec.extensions.empty?
+
+      # With the C API the extension is built as on CRuby. One that does not build
+      # (a compiler error, an extension that reaches into CRuby's internals) leaves
+      # the gem as it was before IronRuby had a C API - its Ruby files installed,
+      # the extension missing - rather than failing the whole install.
+      if Gem.ironruby_build_extension?(spec)
+        begin
+          return super
+        rescue Gem::Ext::BuildError => e
+          raise if Gem.ironruby_native_gem?(spec.name)
+          warn "IronRuby could not build the C extension of #{spec.full_name}; installing its Ruby files only " \
+               "(#{e.message.lines.first.to_s.strip})"
+        end
+      end
 
       name = spec.full_name
       Gem.ironruby_ignored_gems << name unless Gem.ironruby_ignored_gems.include?(name)
@@ -572,6 +649,7 @@ module Gem
       @__ironruby_provided_library__ =
         begin
           !default_gem? &&
+            !Gem.ironruby_native_gem?(name) &&
             Gem.ironruby_default_gem_names.include?(name) &&
             respond_to?(:extensions) && !extensions.empty?
         rescue StandardError

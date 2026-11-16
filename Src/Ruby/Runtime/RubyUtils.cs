@@ -1794,7 +1794,22 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Wakes <paramref name="thread"/> if it is blocked, so that it picks up what is parked for it.
         /// </summary>
+        /// <summary>
+        /// Installed by the C API (CApi.Threads.cs): runs the unblocking function of a C extension's
+        /// rb_thread_call_without_gvl that <paramref name="thread"/> is in, as MRI does when it
+        /// interrupts a thread - Thread#wakeup, #raise, #kill, a signal for the main thread.
+        /// </summary>
+        public static Action<Thread> NativeUnblockHook;
+
+        public static void UnblockNative(Thread/*!*/ thread) {
+            var hook = NativeUnblockHook;
+            if (hook != null) {
+                hook(thread);
+            }
+        }
+
         public static void NudgeThread(Thread/*!*/ thread) {
+            UnblockNative(thread);
             Thread key = thread;
             object waitMonitor = null;
             using (new UninterruptedLock(_pendingAsyncExceptions)) {

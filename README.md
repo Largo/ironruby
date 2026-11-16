@@ -340,9 +340,12 @@ so irb completes with its `TypeCompletor`, as on CRuby.  IronRuby never uses the
 installed on the same machine: a gem it needs is installed for IronRuby, with `igem install`
 or Bundler.
 
-A C extension is never built: there is no `ruby.h` to compile against.  Such a gem is left alone -
-its `.rb` files load, a real `require` of the `.so` raises `LoadError`, and the pure-Ruby
-fallback most of them carry is used instead.  For the popular gems that have no fallback,
+On Linux x64 and Windows x64 (MinGW gcc, as RubyInstaller uses) there is a Ruby C API: an
+extension compiled against IronRuby's `ruby.h` can be `require`d, and `gem install` builds a gem's
+C extension as CRuby does - see [`Src/Ruby/CApi/README.md`](Src/Ruby/CApi/README.md) for what it
+covers and for `IRONRUBY_NATIVE_GEMS`, which swaps a built-in library such as sqlite3 for the real
+gem.  An extension that does not build is left alone - its `.rb` files load, a real `require` of
+the `.so` raises `LoadError`, and the pure-Ruby fallback most of them carry is used instead.  For the popular gems that have no fallback,
 IronRuby ships the C half itself, in C# or over a .NET library, as JRuby ships `-java` gems:
 `sqlite3`, `nokogiri` (over AngleSharp), `puma`, `nio4r`, `bcrypt`, `msgpack`, `oj`, `ffi`,
 `websocket-driver` and `markly`.  All but `markly` are default gems, so Bundler resolves a

@@ -1719,7 +1719,7 @@ namespace IronRuby.Builtins {
         internal bool TryGetPlainAllocation(out Func<RubyClass, object> allocator) {
             allocator = null;
             if (IsSingletonClass || _isUninitializedAllocation || _structInfo != null || !(_isRubyClass || IsObjectClass) || IsException() ||
-                _factories.Length != 0) {
+                _factories.Length != 0 || CAllocator != null) {
                 return false;
             }
 
@@ -1819,7 +1819,14 @@ namespace IronRuby.Builtins {
                 && (type == typeof(object) || typeof(RubyObject).IsAssignableFrom(type) || typeof(BasicObject).IsAssignableFrom(type))
                 && (args.SimpleArgumentCount > 0 || args.Signature.HasSplattedArgument || args.Signature.HasRhsArgument);
 
-            if (isRubyInitializer || isLibraryInitializer && _isRubyClass || objectInitializerWithArguments) {
+            // a class with a C allocator is always allocated through it, then initialized
+            bool cAllocated = CAllocator != null;
+            if (cAllocated) {
+                objectInitializerWithArguments = isLibraryMethod && !isLibraryInitializer
+                    && (args.SimpleArgumentCount > 0 || args.Signature.HasSplattedArgument || args.Signature.HasRhsArgument);
+            }
+
+            if (cAllocated || isRubyInitializer || isLibraryInitializer && _isRubyClass || objectInitializerWithArguments) {
                 // allocate and initialize:
                 bool allocatorFound = BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name));
                 if (metaBuilder.Error) {
@@ -1972,6 +1979,59 @@ namespace IronRuby.Builtins {
             return (type == null || type == typeof(object)) ? null : type;
         }
 
+        // A C extension's allocator (rb_define_alloc_func): inherited by subclasses, as MRI's is.
+        private Func<RubyClass, object> _cAllocator;
+
+        /// <summary>
+        /// The allocator a C extension gave this class or the nearest superclass that has one.
+        /// </summary>
+        internal Func<RubyClass, object> CAllocator {
+            get {
+                for (RubyClass cls = this; cls != null; cls = cls.SuperClass) {
+                    if (cls._cAllocator != null) {
+                        return cls._cAllocator;
+                    }
+                }
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// An instance as Class#allocate makes one when no C allocator is involved: what a C
+        /// extension's allocator gets from rb_get_alloc_func(superclass)(klass).
+        /// </summary>
+        internal object AllocateBuiltin() {
+            Type type = GetUnderlyingSystemType();
+            if (type == typeof(object)) {
+                type = typeof(RubyObject);
+            }
+            if (_structInfo != null) {
+                return RubyOps.AllocateStructInstance(this);
+            }
+            ConstructorInfo ctor;
+            if (IsException() && (ctor = GetConstructor(type, typeof(string))) != null) {
+                return ctor.Invoke(new object[] { Name });
+            }
+            if ((ctor = GetConstructor(type, typeof(RubyClass))) != null) {
+                return ctor.Invoke(new object[] { this });
+            }
+            if ((ctor = GetConstructor(type, typeof(RubyContext))) != null) {
+                return ctor.Invoke(new object[] { Context });
+            }
+            if ((ctor = GetConstructor(type)) != null) {
+                return ctor.Invoke(Array.Empty<object>());
+            }
+            throw RubyExceptions.CreateTypeError(String.Format("allocator undefined for {0}", Name));
+        }
+
+        internal void SetCAllocator(Func<RubyClass, object> allocator) {
+            using (Context.ClassHierarchyLocker()) {
+                _cAllocator = allocator;
+                // rules that allocate instances of this class and its subclasses were built without it
+                MethodsUpdated("allocator");
+            }
+        }
+
         public bool BuildAllocatorCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, Func<Expression>/*!*/ defaultExceptionMessage) {
             var newExpression = GetAllocatorNewExpression(args, defaultExceptionMessage);
             if (newExpression != null) {
@@ -1983,6 +2043,11 @@ namespace IronRuby.Builtins {
         }
 
         private Expression GetAllocatorNewExpression(CallArguments/*!*/ args, Func<Expression>/*!*/ defaultExceptionMessage) {
+            var cAllocator = CAllocator;
+            if (cAllocator != null) {
+                return Ast.Invoke(AstUtils.Constant(cAllocator), AstUtils.Convert(args.TargetExpression, typeof(RubyClass)));
+            }
+
             Type type = GetUnderlyingSystemType();
 
             if (type == typeof(object)) {
