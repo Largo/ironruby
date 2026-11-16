@@ -391,6 +391,7 @@ namespace IronRuby.Tests {
                 JitMethods1,
                 JitCore_StringLength1,
                 JitCore_Abs1,
+                JitCore_CollectionEqualsNil1,
                 BlockLoopEachIndex1,
 
                 RangeConditionInclusive1,

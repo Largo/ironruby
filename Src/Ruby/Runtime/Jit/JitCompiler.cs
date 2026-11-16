@@ -1948,6 +1948,10 @@ namespace IronRuby.Runtime.Jit {
                     // number, an Array) would deopt on every call. An instance variable is typed by the receiver
                     // that turned the method hot (ObservedType).
                     Type observed = ObservedType(node.Target);
+                    if ((observed == typeof(RubyArray) || observed == typeof(Hash)) && node.MethodName != "equal?" &&
+                        args.Expressions[0] is Literal && ((Literal)args.Expressions[0]).Value == null) {
+                        return EmitCollectionEqualsNil(node.MethodName, l, out type);
+                    }
                     if (observed == null || observed != typeof(RubyObject) && observed != typeof(void) &&
                         observed != typeof(bool) && observed != typeof(RubySymbol)) {
                         throw Bail(node.MethodName + " on a " + ((observed == null) ? "receiver of unknown type" : observed.Name));
@@ -2083,6 +2087,31 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M("IsNil"), Ast.Constant(_context), value, Ast.Constant(site));
             }
             MSA.Expression test = Ast.Call(JitRuntime.M("IsIdentical"), Ast.Constant(_context), value, other, Ast.Constant(site));
+            return (name == "!=") ? Ast.Not(test) : test;
+        }
+
+        /// <summary>
+        /// `v == nil', `v != nil' with a v the profile saw hold an Array or a Hash (som.rb's `@storage == nil'):
+        /// Array#== and Hash#== of an object that is no Array (Hash) are false unless it responds to to_ary
+        /// (to_hash), which nil does not while NilClass has neither (rb_ary_equal, rb_hash_equal); a v that is
+        /// neither is compared as EmitIdentityCall's IsIdentical would, nil included
+        /// (JitRuntime.CollectionEqualsNil).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitCollectionEqualsNil(string/*!*/ name, MSA.Expression/*!*/ value, out JT type) {
+            if (!_refinements.IsEmpty) { throw Bail(name + " with refinements active"); }
+            var nilClass = KindClass(JitRuntime.KindNil);
+            bool arrays = IsPlainLibraryMethod(ArrayClass, "==") && IsPublic(ArrayClass, "==") && NoConversion(nilClass, "to_ary") &&
+                (name == "==" || IsPlainLibraryMethod(ArrayClass, "!=") && IsPublic(ArrayClass, "!="));
+            bool hashes = IsPlainLibraryMethod(HashClass, "==") && IsPublic(HashClass, "==") && NoConversion(nilClass, "to_hash") &&
+                (name == "==" || IsPlainLibraryMethod(HashClass, "!=") && IsPublic(HashClass, "!="));
+            if (!arrays && !hashes) { throw Bail(name + " of nil: neither Array's nor Hash's is the built-in one"); }
+            var equals = new JitRuntime.IdentityCallSite("==", LibraryMethods("==", _context.BasicObjectClass, KindClass(JitRuntime.KindNil),
+                KindClass(JitRuntime.KindTrue), KindClass(JitRuntime.KindFalse), KindClass(JitRuntime.KindSymbol)), null);
+            var site = (name == "==") ? equals : new JitRuntime.IdentityCallSite(name, LibraryMethods(name, _context.BasicObjectClass), equals);
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("CollectionEqualsNil"), Ast.Constant(_context), value, Ast.Constant(site),
+                Ast.Constant(arrays), Ast.Constant(hashes));
             return (name == "!=") ? Ast.Not(test) : test;
         }
 

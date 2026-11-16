@@ -80,5 +80,39 @@ NoMethodError
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
         }
+
+        /// <summary>`@storage == nil' on an Array: false, unless nil has to_ary, when Array#== asks nil == ary.</summary>
+        public void JitCore_CollectionEqualsNil1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class EnVec
+  def initialize(s) = (@storage = s)
+  attr_accessor :storage
+  def at(idx)
+    return nil if @storage == nil || idx >= @storage.length
+    @storage[idx]
+  end
+  def cap = @storage == nil ? 0 : @storage.size
+end
+class EnArray < Array
+  def ==(o) = :en_array_eq
+end
+v = EnVec.new([1, 2, 3])
+200.times { |i| v.at(i % 4); v.cap }
+p [[4, 5], nil, { 0 => :h }, EnArray[1, 2], 'str'].map { |s| v.storage = s; [v.at(0), v.cap] }
+v.storage = [1]
+seen = []
+200.times do |i|
+  class NilClass; def to_ary = []; def ==(o) = o.is_a?(Array) || equal?(o); end if i == 100
+  seen << v.cap
+end
+p seen.uniq
+", @"
+[[4, 2], [nil, 0], [:h, 1], [nil, 0], [""s"", 3]]
+[1, 0]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
+        }
     }
 }

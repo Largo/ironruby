@@ -412,6 +412,20 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// `v == nil' (JitCompiler.EmitCollectionEqualsNil): false for an Array or a Hash itself (not a
+        /// subclass; a singleton == is ruled out when compiling) when <paramref name="arrays"/> or
+        /// <paramref name="hashes"/> says its == is the library one and nil has no to_ary or to_hash;
+        /// any other v is IsIdentical's, which deopts for one whose == it cannot answer.
+        /// </summary>
+        public static bool CollectionEqualsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site, bool arrays, bool hashes) {
+            if (value != null) {
+                Type t = value.GetType();
+                if (t == typeof(RubyArray) && arrays || t == typeof(Hash) && hashes) { return false; }
+            }
+            return IsIdentical(context, value, null, site);
+        }
+
+        /// <summary>
         /// `v == "lit"': String#== of a String whose class is String itself (a subclass may override
         /// ==, and an instance with a singleton == is ruled out when compiling: JitCompiler.
         /// HasPlainInstances) compares the contents. The literal is the one frozen copy the compiler

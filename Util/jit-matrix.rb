@@ -4129,3 +4129,110 @@ class AbBall
 end
 warm { |i| ab.ab_r(i) }
 t('ab_r under a refinement') { ab.ab_r(-2) }
+
+# ---------------------------------------------------------------- 15. an Array or Hash == nil
+#
+# `@storage == nil' and `@storage != nil' (som.rb's Vector#at and #capacity) on a receiver the
+# profile saw hold an Array or a Hash: Array#== and Hash#== of nil are false while nil has no
+# to_ary / to_hash (JitRuntime.CollectionEqualsNil). Hot on an Array, then given nil, a Hash, a
+# String, subclasses with an == of their own, an object with one, an Array with a singleton ==;
+# then nil given to_ary and an == of its own (Array#== then asks nil == ary), and Array#== and
+# Hash#!= redefined and made private, in the middle of a run.
+
+puts '--- 15. an Array or Hash == nil ---'
+
+class EnVec
+  def initialize(s) = (@storage = s)
+  attr_accessor :storage
+  def en_at(idx)
+    return nil if @storage == nil || idx >= @storage.length
+    @storage[idx]
+  end
+  def en_cap = @storage == nil ? 0 : @storage.size
+  def en_ne = (@storage != nil)
+  def en_x(x) = (x == nil)
+end
+class EnArray < Array
+  def ==(o) = :en_array_eq
+end
+class EnHash < Hash; end
+class EnObj
+  def ==(o) = :en_obj_eq
+  def length = 1
+  def [](i) = :en_obj_at
+  def size = 5
+  def inspect = '#<EnObj>'
+end
+
+en = EnVec.new([1, 2, 3])
+enh = EnVec.new({ 1 => 2 })
+warm { |i| en.en_at(i % 4); en.en_cap; en.en_ne; en.en_x([i]) }
+warm { enh.en_ne }
+en_single = [7, 8]
+def en_single.==(o) = :en_single_eq
+[[4, 5], nil, { 0 => :h }, EnHash[0, :eh], 'str', EnArray[1, 2], EnObj.new, [], en_single].each do |s|
+  en.storage = s
+  t("en_at #{s.inspect}") { en.en_at(0) }
+  t("en_cap #{s.inspect}") { en.en_cap }
+  t("en_ne #{s.inspect}") { en.en_ne }
+  t("en_x #{s.inspect}") { en.en_x(s) }
+  enh.storage = s
+  t("en_ne (Hash-hot) #{s.inspect}") { enh.en_ne }
+end
+
+en.storage = [1]
+en_seen = []
+warm do |i|
+  if i == 60
+    class NilClass
+      def to_ary = []
+      def ==(o) = (o == []) ? :nil_eq_ary : equal?(o)
+    end
+  end
+  en_seen << en.en_x([])
+end
+t('en_x, nil given to_ary and == mid-run') { en_seen.uniq }
+class NilClass
+  remove_method :to_ary
+  remove_method :==
+end
+warm { en.en_x([]) }
+en_seen = []
+warm do |i|
+  if i == 60
+    class Array
+      alias_method :en_orig_eq, :==
+      def ==(o) = o.nil? ? :array_eq_nil : en_orig_eq(o)
+    end
+  end
+  en_seen << en.en_x([1])
+end
+t('en_x, Array#== redefined mid-run') { en_seen.uniq }
+class Array
+  alias_method :==, :en_orig_eq
+  remove_method :en_orig_eq
+end
+enh.storage = { 1 => 2 }
+warm { enh.en_ne }
+en_seen = []
+warm do |i|
+  if i == 60
+    class Hash
+      def !=(o) = :hash_ne
+    end
+  end
+  en_seen << enh.en_ne
+end
+t('en_ne, Hash#!= defined mid-run') { en_seen.uniq }
+class Hash
+  remove_method :!=
+end
+warm { en.en_x([]) }
+class Array
+  private :==
+end
+t('en_x, Array#== private') { en.en_x([]) }
+class Array
+  public :==
+end
+t('en_x, Array#== public again') { en.en_x([]) }

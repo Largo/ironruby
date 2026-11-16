@@ -28,7 +28,17 @@ class CsBall
 end
 class CsFBall < CsBall; def absm = (@v = 0 - @v.abs); end
 
-SHAPES = %w[str_size str_length abs fabs]
+# som.rb's Vector#at and #capacity (DeltaBlue, CD, Json): `@storage == nil' on an Array
+class CsVector
+  def initialize; @storage = Array.new(16, 1); end
+  def at(idx)
+    return nil if @storage == nil || idx >= @storage.length
+    @storage[idx]
+  end
+  def capacity = @storage == nil ? 0 : @storage.size
+end
+
+SHAPES = %w[str_size str_length abs fabs vec_at vec_capacity]
 
 def run_shape(name)
   table = CsTable.new
@@ -36,6 +46,7 @@ def run_shape(name)
   key = 'abcdef'
   ball = CsBall.new(7)
   fball = CsFBall.new(-2.5)
+  vector = CsVector.new
   r = 0
   best = nil
   6.times do
@@ -46,6 +57,8 @@ def run_shape(name)
     when 'str_length' then while i < N; r += 1 if parser.more; i += 1; end
     when 'abs'        then while i < N; r += ball.absm; i += 1; end
     when 'fabs'       then while i < N; r += fball.absm; i += 1; end
+    when 'vec_at'     then while i < N; r += vector.at(i & 15); i += 1; end
+    when 'vec_capacity' then while i < N; r += vector.capacity; i += 1; end
     end
     d = Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) - t
     best = d if best.nil? || d < best
