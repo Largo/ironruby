@@ -101,15 +101,30 @@ region, jumping only to labels directly inside it**:
 - the method's dispatch is the first statement inside the method's try, and jumps to a
   top-level resume label, or to the label just before a `while` statement that contains the
   target;
+- a resume point in a branch of an `if`/`unless` in statement position needs no dispatch of
+  its own. A conditional is not a try region: the expression compiler and `LightCompiler`
+  both give a `ConditionalExpression` a label scope a jump may enter
+  (`LabelScopeKind.Statement`; `Try` and `Expression` scopes are the ones that refuse). So the
+  dispatch of the region the `if` is in jumps straight to the label in the branch, or to the
+  label before a `while` in it, and the test, whose outcome the typed body already acted on,
+  is not evaluated again;
 - a loop being resumed is entered through its head with a resume index set (`#resume`, a
   local of the resumable body): its condition is `#resume != 0 || cond`, so the condition the
   typed body already evaluated is not evaluated again; the first statement inside the loop
-  body's innermost try is the loop's dispatch, which clears `#resume` and jumps to the label
-  in that body, or to the head of a nested loop that contains it, the same way.
+  body's innermost try is the loop's dispatch. When the target label is directly in that body
+  (or in an `if` branch of it), the dispatch clears `#resume` and jumps to it. When the target
+  is in a nested loop, the dispatch jumps to the label just before that `while` statement and
+  leaves `#resume` as it is: the nested loop's condition has to pass on it as well, and the
+  nested loop's dispatch needs the index. `#resume` is cleared once, by the dispatch of the
+  loop whose body holds the target, and from then on every loop condition, the enclosing
+  loops' included, is evaluated for real.
 
-Each jump then stays inside one try region, which is what the compiler allows. Whether the DLR
-interpreter (`LightCompiler`), which runs the generic body before it is compiled, allows the
-same is the first thing stage 3 tests.
+Each jump then stays inside one try region, which is what the compiler allows. That is read
+from the two compilers' label rules, not run. Stage 3's first test runs it: whether the DLR
+interpreter (`LightCompiler`), which runs the generic body before it is compiled, takes the
+jumps into a loop's try, and whether both take the jump into an `if` branch as IronRuby emits
+it (a conditional with a value even where the value is dropped; if that is refused, the
+resumable body emits a statement-position `if` as a void one).
 
 What it handles: everything A cannot - typed results, a changed world (check versions and
 tracing after anything that ran Ruby code, resume when they moved), a scope that has been
@@ -223,7 +238,8 @@ a profile.
   resumable body and hands its result back as `Obj`; the caller goes on if it takes `Obj` there,
   and resumes itself otherwise.
 - **The "caller in flight"** window (`jit-methods.md`, Part 2) closes for impure bodies with B:
-  a version check after the loop's safe point, resuming at the loop's next iteration.
+  a version check after the loop's safe point, resuming at the start of the body of the
+  iteration that has just been entered (stage 5).
 - **`OnDeopt` accounting.** The entry retires a specialization whose deopt rate is high. A
   fallback is cheaper than a deopt but can still be taken on every call (a site that sees a
   second class every time). Fallbacks and resumes count as deopts for that purpose, or a body
@@ -318,8 +334,10 @@ change with its restriction gone; measured against its numbers.
 **Stage 3 - resume (B).** The resumable generic body, resume points at statement boundaries,
 the frame-state map, per-statement undo marks, the per-try-region dispatch and the loop resume
 flag. First PR inside the stage: a test that the dispatch reaches a label inside a `while` body
-nested in another, through both loops' heads, under both the expression compiler and the DLR
-interpreter, with the condition not evaluated again. Unlocks typed arithmetic after an effect (Towers' `push_disk`/`move_top_disk`, Bounce's
+nested in another, through both loops' heads, and a label in a branch of an `if` (at the top
+level and in a loop body), under both the expression compiler and the DLR interpreter, with no
+loop condition and no `if` test evaluated on the way in, and with both loops' conditions
+evaluated again from the next iteration on. Unlocks typed arithmetic after an effect (Towers' `push_disk`/`move_top_disk`, Bounce's
 `bounce`), `append`'s loop after its store, and `tree_insert`'s `Node.new` in mid-body (a
 construction followed by guards). Also bodies with locals whose scope gets made (they resume at
 the next statement), and bodies that see tracing turn on.
@@ -327,6 +345,16 @@ the next statement), and bodies that see tracing turn on.
 **Stage 4 - absorb callee deopts at the call boundary** for inlined and bound callees after an
 effect, as above; `JitCode.Deopts` means "before the first effect".
 
-**Stage 5 - the in-flight window** for impure bodies: a version check after each loop safe point,
-resuming at the next iteration through the loop's head and its dispatch (stage 3). Then `-X:JITResume` on by default, after a full sweep and the
-benchmark suite, if stages 1-4 measured as faster.
+**Stage 5 - the in-flight window** for impure bodies: a version check after each loop safe point.
+The typed loop's safe point comes after the iteration's condition and before its body
+(`EmitWhile`: test, safe point, body), so a check that fails there is inside an iteration that
+has been entered: the resume point is the first statement of the loop's body, reached through
+the loop's head with `#resume` set and its dispatch (stage 3), and the condition, which the
+typed body has just evaluated as true, is not evaluated again. The other case, a resume that
+stands *before* a loop's condition (the statement boundary before the `while`, or a check
+that were placed at the back edge), is not a loop resume at all: it jumps to the label before
+the `while` statement with `#resume` clear, and the generic code evaluates the condition. Stage
+5 has only the first case; a check at the back edge would be the second, and must not be given
+the first's index, which would run an iteration whose condition nobody evaluated. Then
+`-X:JITResume` on by default, after a full sweep and the benchmark suite, if stages 1-4
+measured as faster.
