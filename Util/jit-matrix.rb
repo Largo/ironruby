@@ -2864,6 +2864,21 @@ class NilClass; alias_method :jit_saved_nil?, :nil?; def nil? = :nil_redefined; 
 t('NilClass#nil? redefined') { ids.first(5).map(&:sp_isnil) }
 class NilClass; alias_method :nil?, :jit_saved_nil?; end
 t('and restored') { ids.first(5).map(&:sp_isnil) }
+# NilClass#nil? removed: nil answers with Kernel#nil?, which is false of every receiver, at a site
+# compiled before the removal and at one compiled under it. Nothing else runs meanwhile: core
+# methods written in Ruby ask nil? too.
+def sp_isnil_late(x) = x.nil?
+id_nil, id_true, id_sym = ids[0], ids[1], ids[3]
+class NilClass; remove_method :nil?; end
+k = 0
+while k < HOT
+  sp_isnil_late(nil); sp_isnil_late(k)
+  k += 1
+end
+nil_removed = [id_nil.sp_isnil, id_true.sp_isnil, id_sym.sp_isnil, id_nil.sp_nn, sp_isnil_late(nil), sp_isnil_late(1), nil.nil?]
+class NilClass; alias_method :nil?, :jit_saved_nil?; end
+t('NilClass#nil? removed') { nil_removed }
+t('and restored') { ids.first(5).map(&:sp_isnil) + [sp_isnil_late(nil), sp_isnil_late(1)] }
 class Symbol; alias_method :jit_saved_eq, :==; def ==(o) = :sym_eq; end
 t('Symbol#== redefined') { ids.map(&:sp_fwd) }
 class Symbol; alias_method :==, :jit_saved_eq; end

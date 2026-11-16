@@ -1970,9 +1970,16 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ EmitIdentityCall(string/*!*/ name, MSA.Expression/*!*/ value, MSA.Expression other, out JT type) {
             if (!_refinements.IsEmpty) { throw Bail(name + " with refinements active"); }
-            JitRuntime.IdentityCallSite site;
+            JitRuntime.IdentityCallSite site, nilSite = null;
             if (name == "nil?") {
-                site = new JitRuntime.IdentityCallSite(name, LibraryMethods(name, _context.ObjectClass, _context.NilClass), null);
+                // Kernel#nil? and NilClass#nil? answer differently (JitRuntime.IsNil), so each has a site
+                // of its own; with NilClass's removed, NilClass resolves to Kernel's too and nil has none.
+                var kernel = LibraryMethods(name, _context.ObjectClass);
+                var nil = LibraryMethods(name, _context.ObjectClass, _context.NilClass);
+                site = new JitRuntime.IdentityCallSite(name, kernel, null);
+                if (nil.Length == 2 && nil[1] != kernel[0]) {
+                    nilSite = new JitRuntime.IdentityCallSite(name, new[] { nil[1] }, null);
+                }
             } else {
                 var equals = new JitRuntime.IdentityCallSite("==", LibraryMethods("==", _context.BasicObjectClass, KindClass(JitRuntime.KindNil),
                     KindClass(JitRuntime.KindTrue), KindClass(JitRuntime.KindFalse), KindClass(JitRuntime.KindSymbol)), null);
@@ -1982,7 +1989,8 @@ namespace IronRuby.Runtime.Jit {
             _canDeopt = true;
             type = JT.Bool;
             if (other == null) {
-                return Ast.Call(JitRuntime.M("IsNil"), Ast.Constant(_context), value, Ast.Constant(site));
+                return Ast.Call(JitRuntime.M("IsNil"), Ast.Constant(_context), value, Ast.Constant(site),
+                    Ast.Constant(nilSite, typeof(JitRuntime.IdentityCallSite)));
             }
             MSA.Expression test = Ast.Call(JitRuntime.M("IsIdentical"), Ast.Constant(_context), value, other, Ast.Constant(site));
             return (name == "!=") ? Ast.Not(test) : test;

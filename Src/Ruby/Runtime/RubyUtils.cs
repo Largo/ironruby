@@ -321,6 +321,14 @@ namespace IronRuby.Runtime {
             return FormatObjectPrefix(context, context.GetClassDisplayName(obj), GetObjectId(context, obj));
         }
 
+        /// <summary>
+        /// MRI's rb_any_to_s of nil, what Kernel#to_s and Kernel#inspect answer for it: the address is
+        /// Qnil itself. Binary, as rb_any_to_s's strings are.
+        /// </summary>
+        public static MutableString/*!*/ NilToMutableString() {
+            return MutableString.CreateMutable("#<NilClass:0x0000000000000004>", RubyEncoding.Binary);
+        }
+
         public static MutableString/*!*/ AppendFormatHexObjectId(MutableString/*!*/ str, long objectId) {
             return str.AppendFormat("0x{0:x16}", 2 * objectId);
         }

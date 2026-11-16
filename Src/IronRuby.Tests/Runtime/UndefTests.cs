@@ -276,5 +276,106 @@ d.bar
 #<NameError: undefined method 'f' for class 'E'>
 ");
         }
+
+        /// <summary>
+        /// Kernel#nil? is false of every receiver, nil included (MRI's rb_false): nil answers true with
+        /// NilClass#nil? alone. With that one removed nil.nil? is false, from a call site that was
+        /// already hot too.
+        /// </summary>
+        public void NilClassRemoveMethod1() {
+            TestOutput(@"
+kernel_nil = Kernel.instance_method(:nil?)
+p kernel_nil.bind_call(nil), kernel_nil.bind_call(1)
+
+def hot(x) = x.nil?
+200.times { hot(nil); hot(1) }
+p hot(nil), hot(1)
+
+class NilClass; remove_method :nil?; end
+p nil.nil?, 1.nil?, nil.send(:nil?), [nil, 1].map(&:nil?)
+p nil.method(:nil?).owner, nil.respond_to?(:nil?)
+p hot(nil), hot(1)
+
+class NilClass; def nil? = :mine; end
+p nil.nil?, hot(nil), hot(1)
+class NilClass; remove_method :nil?; end
+p nil.nil?, hot(nil)
+
+class NilClass; def nil? = super; end
+p nil.nil?
+class NilClass; undef_method :nil?; end
+begin
+  nil.nil?
+rescue NoMethodError => e
+  puts e.message
+end
+p 1.nil?, nil.respond_to?(:nil?)
+", @"
+false
+false
+true
+false
+false
+false
+false
+[false, false]
+Kernel
+true
+false
+false
+:mine
+:mine
+false
+false
+false
+false
+undefined method 'nil?' for nil
+false
+false
+");
+        }
+
+        /// <summary>
+        /// The same for the other methods of NilClass that Kernel has a fallback for: Kernel#to_s and
+        /// Kernel#inspect of nil are MRI's rb_any_to_s. to_a and the operators have none.
+        /// </summary>
+        public void NilClassRemoveMethod2() {
+            TestOutput(@"
+class NilClass; remove_method :to_s; end
+p nil.to_s, ""#{nil}"", nil.to_s.encoding
+p nil.inspect, [nil].to_s
+class NilClass; remove_method :inspect; end
+puts nil.inspect, [nil].inspect, nil.inspect.encoding
+class NilClass; remove_method :to_a; end
+puts [*nil].size
+begin
+  nil.to_a
+rescue NoMethodError => e
+  puts e.message
+end
+[:&, :|, :^].each do |op|
+  NilClass.send(:remove_method, op)
+  begin
+    nil.send(op, true)
+  rescue NoMethodError => e
+    puts e.message
+  end
+end
+", @"
+""#<NilClass:0x0000000000000004>""
+""#<NilClass:0x0000000000000004>""
+#<Encoding:BINARY (ASCII-8BIT)>
+""nil""
+""[nil]""
+#<NilClass:0x0000000000000004>
+[#<NilClass:0x0000000000000004>]
+ASCII-8BIT
+0
+undefined method 'to_a' for nil
+undefined method '&' for nil
+undefined method '|' for nil
+undefined method '^' for nil
+");
+        }
     }
 }

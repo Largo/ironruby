@@ -1470,7 +1470,8 @@ namespace IronRuby.Builtins {
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("to_s")]
         public static MutableString/*!*/ ToS(object self) {
-            return self == null ? MutableString.CreateEmpty() : MutableString.Create(self.ToString(), RubyEncoding.UTF8);
+            // "" is NilClass#to_s. This one is rb_any_to_s, which nil reaches with NilClass#to_s removed.
+            return self == null ? RubyUtils.NilToMutableString() : MutableString.Create(self.ToString(), RubyEncoding.UTF8);
         }
 
         /// <summary>
@@ -1483,6 +1484,11 @@ namespace IronRuby.Builtins {
 
             RubyClass cls;
             var context = tosConversion.Context;
+            // nil has no instance variables, so MRI's rb_obj_inspect is rb_any_to_s: NilClass#to_s, which
+            // the conversion below would call, is not asked.
+            if (self == null) {
+                return RubyUtils.NilToMutableString();
+            }
             // Ruby 1.8 fell back to #to_s when the object had no instance variables; 1.9 dropped
             // that, so a stateless object with a custom #to_s still inspects as "#<Foo:0x...>",
             // and so does a BasicObject, which has no #to_s to fall back to at all.
@@ -1500,10 +1506,12 @@ namespace IronRuby.Builtins {
 
         #region nil?, __id__, object_id
 
+        // MRI's rb_false: false of every receiver. nil answers true with NilClass#nil?, not here, so
+        // with that one removed (or Kernel#nil? bound to nil, or reached by super) nil.nil? is false.
         // thread-safe:
         [RubyMethod("nil?")]
         public static bool IsNil(object self) {
-            return self == null;
+            return false;
         }
 
         // There is no Kernel#id.  Ruby 1.8 had one, deprecated in favour of #object_id,

@@ -286,7 +286,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>
         /// The call site of an identity method - `v.nil?', `v == w', `v != w', `v.equal?(w)' - on a
         /// receiver of any type: the class the method was last found on to be one of the library
-        /// methods the compiler named (Kernel#nil? and NilClass#nil?; BasicObject#== and its
+        /// methods the compiler named (Kernel#nil? or NilClass#nil?, a site each; BasicObject#== and its
         /// equal?/!=, and the == of nil, true, false and Symbol, which are identity too), under which global method version. A user nil? or == anywhere on the way -
         /// a class's own, a singleton method (it gives the object a class of its own), a module
         /// included or prepended, a private copy - resolves to something else, and the call deopts
@@ -389,12 +389,18 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// `v.nil?': Kernel#nil? is false and NilClass#nil? true, which is whether v is nil, once the
-        /// site found v's class to answer nil? with one of them.
+        /// `v.nil?': NilClass#nil? is true and Kernel#nil? false of every receiver (MRI's rb_true and
+        /// rb_false), so the answer is which of the two v's class resolves nil? to, not whether v is
+        /// nil: with NilClass#nil? removed nil answers with Kernel's, false. nilSite expects
+        /// NilClass's own method alone (null when it was not the library's at compile time), site
+        /// Kernel's alone; only nil can reach NilClass#nil?, NilClass having no subclasses.
         /// </summary>
-        public static bool IsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site) {
+        public static bool IsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site, IdentityCallSite nilSite) {
+            if (value == null && nilSite != null && (nilSite.IsBoundTo(context.NilClass) || nilSite.Bind(context.NilClass))) {
+                return true;
+            }
             RequireIdentityMethod(context, value, site);
-            return value == null;
+            return false;
         }
 
         /// <summary>
