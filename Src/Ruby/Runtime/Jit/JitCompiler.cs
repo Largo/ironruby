@@ -1325,6 +1325,18 @@ namespace IronRuby.Runtime.Jit {
             JT lt;
             bool known = TryLookup(Key(target), out p, out lt);
             bool storedOnly = (op == null) && IsNumeric(rhsType) && IsStoredOnly(target);
+            if (!known && IsNestedLocal(target)) {
+                // a local of an inner block run in place, first assigned here: a CLR local of the copy (JitCompiler.Nest.cs)
+                if (op != null) { throw Bail("op-assign of an unassigned local: " + target.Name); }
+                if (rhsType == JT.None || rhsType == JT.Never) { throw Bail("a block local assigned a value that jumps away"); }
+                if (storedOnly) {
+                    rhs = BoxForStore(rhs, rhsType);
+                    rhsType = JT.Obj;
+                }
+                p = Declare(Key(target), rhsType);
+                type = rhsType;
+                return Ast.Assign(p, rhs);
+            }
             if (!known && _loop != null) {
                 // The slot exists in the tuple whether or not the loop has read it yet, and it
                 // is written back on the way out, so it has to be bound rather than declared.
@@ -1714,7 +1726,11 @@ namespace IronRuby.Runtime.Jit {
         // ---- calls -------------------------------------------------------------------------
 
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
-            if (node.Block != null) { throw Bail("call with a block: " + node.MethodName); }
+            if (node.Block != null) {
+                // an iterator with a literal block inside a core iterator's outlined loop: run in place (JitCompiler.Nest.cs)
+                if (_loop != null && WritesReceivers) { return EmitNestedBlockLoop(node, out type); }
+                throw Bail("call with a block: " + node.MethodName);
+            }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
 

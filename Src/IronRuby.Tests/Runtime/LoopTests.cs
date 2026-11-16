@@ -354,6 +354,42 @@ TypeError
         }
 
         /// <summary>
+        /// A block loop whose block holds another core iterator with a literal block runs the inner loop in place
+        /// (JitCompiler.Nest.cs): a Float crossing the inner block, a bound of another type on a late outer
+        /// iteration, and the backtrace of an error raised in the inner block.
+        /// </summary>
+        public void BlockLoopNested1() {
+            TestOutput(@"
+require 'ruby4'
+class P; attr_accessor :x, :v; def initialize(x); @x = x; @v = 0.5; end; end
+def pairs(ps); e = 0.0; ps.each_index { |i| a = ps[i]; ((i + 1)...ps.size).each { |j| b = ps[j]; d = a.x - b.x; e += d * d * a.v * b.v } }; e; end
+def tt(n, m); s = 0; n.times { |i| m.times { |j| s += i * j } }; s; end
+def sum(a, hi); s = 0; a.each_index { |i| t = i * 2; (i...hi).each { |j| s += j + t } }; s; end
+ps = Array.new(8) { |i| P.new(i + 0.5) }
+e = 0.0
+3000.times { e += pairs(ps) }
+p e
+r = 0
+3000.times { |k| r += tt(8, k == 2500 ? 2.5 : 3) rescue r += 1000 }
+p r
+r = 0
+3000.times { |k| r += sum((0...8).to_a, k == 2900 ? 8.5 : 8) rescue r += 1000 }
+p r
+def rz(a, z); s = 0; a.each_index { |i| (0...3).each { |j| s += 10 / (z - j) } }; s
+rescue ZeroDivisionError => e
+  e.backtrace_locations[0, 5].map(&:label)
+end
+3000.times { rz((0...8).to_a, 9) }
+p rz((0...8).to_a, 2)
+", @"
+252000.0
+462916
+1008120
+[""Integer#/"", ""block (2 levels) in Object#rz"", ""Range#each"", ""block in Object#rz"", ""Array#each_index""]
+");
+        }
+
+        /// <summary>
         /// A global variable read or assigned in a specialized method or an outlined loop (JitCompiler.EmitGlobalRead,
         /// EmitGlobalWrite): the value it holds now, whatever it is, through an alias too; what an assignment stores
         /// is what a read sees, and trace_var still sees every assignment. A special variable, an undefined one, or
