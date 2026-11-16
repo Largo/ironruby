@@ -414,10 +414,13 @@ namespace IronRuby.Runtime.Jit {
             // Name it, so a count that creeps up can be traced to the construct responsible.
             JitRuntime.Rejected++;
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
-                    _declaringModule.Name ?? "main", _ast.Name, _arity);
+                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen): {3}",
+                    _declaringModule.Name ?? "main", _ast.Name, _arity, _declineReason ?? "no reason recorded");
             }
         }
+
+        // IR_JIT_VERBOSE=1: why TrySpecialize gave up, for the `declined' line (GiveUp).
+        private string _declineReason;
 
         // Under _sync: the generic body, for good.
         private void Settle() {
@@ -746,16 +749,18 @@ namespace IronRuby.Runtime.Jit {
                     }
                     return true;
                 }
+                // (a bailout has printed its `rejected' line already)
+                _declineReason = JitCompiler.LastDecline ?? "the compiler bailed out (see the `rejected' line)";
                 return false;
             }
 
             // (a body with direct calls was only compiled for a receiver class the profile pinned: Callees)
             bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null || code.DirectCalls;
             if (needsClassGuard) {
-                if (_receiverClass == null || _polymorphicReceiver) { return false; }
-                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                if (_receiverClass == null || _polymorphicReceiver) { _declineReason = "a class guard on a receiver of several classes"; return false; }
+                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { _declineReason = "the self-call resolves elsewhere"; return false; }
                 // the inlined self-calls were resolved on the class of the sampled receiver
-                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { return false; }
+                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { _declineReason = "an inlined self-call of another class"; return false; }
             }
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the

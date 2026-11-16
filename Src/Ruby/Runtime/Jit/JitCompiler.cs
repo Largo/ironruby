@@ -135,7 +135,10 @@ namespace IronRuby.Runtime.Jit {
             get { return _canDeoptValue; }
             set {
                 _canDeoptValue = value;
-                if (value && !_pure) { _deoptAfterEffect = true; }
+                if (value && !_pure) {
+                    if (!_deoptAfterEffect && JitRuntime.Verbose) { _firstDeoptAfterEffect = _emitting ?? "?"; }
+                    _deoptAfterEffect = true;
+                }
                 if (value && _unloggedStoreBefore) { _deoptAfterUnloggedStore = true; }
             }
         }
@@ -145,6 +148,9 @@ namespace IronRuby.Runtime.Jit {
         // an effect still finds nothing done and may restart it. A loop's next iteration and a
         // nested self-call run deopts emitted before effects that have already happened.
         private bool _deoptAfterEffect;
+        // IR_JIT_VERBOSE=1: the node being emitted when _deoptAfterEffect was first set, for the `declined' line.
+        private string _firstDeoptAfterEffect;
+        private string _emitting;
         private bool _hasLoop;
         // The body writes an instance variable. A write to a frozen object deopts (JitRuntime.SetIVar)
         // so that the generic body raises the FrozenError from a real frame; it is always the first
@@ -546,6 +552,7 @@ namespace IronRuby.Runtime.Jit {
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
             // how many there can be; a guess that does not settle is rejected.
+            if (JitRuntime.Verbose) { LastDecline = null; }
             JT guess = JT.None;
             bool arrayParameters = true;
             bool unloggedWrites = true;
@@ -562,7 +569,7 @@ namespace IronRuby.Runtime.Jit {
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
-                if (c._selfDelegateType == null) { return null; }
+                if (c._selfDelegateType == null) { return Declined("too many parameters"); }
 
                 JT actual;
                 MSA.Expression body;
@@ -609,7 +616,7 @@ namespace IronRuby.Runtime.Jit {
                 // explicit `return' hands back.
                 JT result = (c._returnUnion == JT.None) ? actual : Merge(actual, c._returnUnion);
                 if (result != c._selfReturn) {
-                    if (result == guess) { return null; }    // did not settle
+                    if (result == guess) { return Declined("the return type did not settle"); }
                     guess = result;
                     continue;
                 }
@@ -625,16 +632,19 @@ namespace IronRuby.Runtime.Jit {
 
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
                 // already done is observable (see _deoptAfterEffect).
-                if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) { return null; }
+                if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) {
+                    return Declined(c._deoptAfterEffect ? "a deopt after an effect (" + c._firstDeoptAfterEffect + ")" :
+                        c._hasLoop ? "a loop in a body that can deopt and has an effect" : "a self-call in a body that can deopt and has an effect");
+                }
                 // The construction is the last thing its own invocation does, but not the last thing the body does
                 // when the body calls itself: the outer invocation goes on after the inner one's initialize has run,
                 // which may have redefined an operator the body has inlined. The self-call does not check the
                 // method version again, so such a body stays generic.
-                if (c._construction && c._selfCall) { return null; }
+                if (c._construction && c._selfCall) { return Declined("a construction in a self-recursive body"); }
 
                 // A loop of a body called directly has a safe point that runs what is waiting where it
                 // is; this body's own deopt instead once it writes logged elements (MethodSafePoint).
-                if (c._hashWrite && c._calleeLoop) { return null; }
+                if (c._hashWrite && c._calleeLoop) { return Declined("logged element writes and a callee with a loop"); }
 
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {
@@ -696,6 +706,19 @@ namespace IronRuby.Runtime.Jit {
                     InlinedOnArgumentClass = c._inlinedOnArgumentClass,
                 };
             }
+            return Declined("the return type did not settle");
+        }
+
+        /// <summary>
+        /// Why the last TryCompile on this thread returned null without a bailout, for the `declined' line of
+        /// IR_JIT_VERBOSE=1 (JitStub.GiveUp); null when it did not. Only written under the switch, and only
+        /// read by the stub that called TryCompile, on the same thread, right after.
+        /// </summary>
+        [ThreadStatic]
+        internal static string LastDecline;
+
+        private static JitCode Declined(string/*!*/ reason) {
+            if (JitRuntime.Verbose) { LastDecline = reason; }
             return null;
         }
 
@@ -952,6 +975,18 @@ namespace IronRuby.Runtime.Jit {
         /// node kinds the screen rejected, so the omission shows up there.
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
+            if (!JitRuntime.Verbose) { return EmitNode(node, out type); }
+            // IR_JIT_VERBOSE=1: the node a deopt after an effect is emitted for (_firstDeoptAfterEffect)
+            string outer = _emitting;
+            _emitting = Describe(node);
+            try {
+                return EmitNode(node, out type);
+            } finally {
+                _emitting = outer;
+            }
+        }
+
+        private MSA.Expression/*!*/ EmitNode(RExpr/*!*/ node, out JT type) {
             if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
             // Deep enough to run this thread out of stack: the method stays interpreted (see StackGuard).
             if (!StackGuard.IsSufficient) { throw Bail("nested too deeply for the stack"); }
@@ -1059,6 +1094,17 @@ namespace IronRuby.Runtime.Jit {
             if (member != null && _loop != null) { return EmitMemberOpAssign(member, out type); }
 
             throw Bail("node: " + node.GetType().Name);
+        }
+
+        // IR_JIT_VERBOSE=1: a node as the `declined' line names it.
+        private static string/*!*/ Describe(RExpr/*!*/ node) {
+            var call = node as MethodCall;
+            if (call != null) { return "call " + call.MethodName + " at line " + node.Location.Start.Line; }
+            var assign = node as SimpleAssignmentExpression;
+            if (assign != null && assign.Left is AttributeAccess) {
+                return "attribute write " + ((AttributeAccess)assign.Left).Name + " at line " + node.Location.Start.Line;
+            }
+            return node.GetType().Name + " at line " + node.Location.Start.Line;
         }
 
         /// <summary>
