@@ -279,6 +279,15 @@ Profile (`Util/perf/profile.sh`, self time):
    compiled. `ObjectConstruction` could read a stub's `Target` too.
    Re-measured in round ten: `LightLambda::Run*` is about 0.8% of Richards' self time in
    total. Too small for the bar; closed.
+   It was also built once, in the session of #215 after its round six (perf/hop, 102bcaa1
+   and fca7d08e, never pushed): rules and `ObjectConstruction` read a cell per method body
+   that takes the compiled delegate when it arrives. `LightLambda::Run*` went from 3.7% of
+   Towers, 2.3% of Richards, 1.4% of Json and 1.1% of DeltaBlue to nothing, the full sweep
+   and the matrices passed - and the least CPU time of a fixed run of the five benchmarks
+   (`Util/perf/cputime.rb`, five rounds, the baseline twice) was 1.004 of the baseline's,
+   whose own second column was 0.996. The frames go; the time does not. That confirms the
+   close: a frame's share of a profile is not what removing it saves when all it did was
+   forward.
 6. **Richards: the worker block that contains a nested block** (`DATA_SIZE.times { }`
    inside the create_worker block): its scope is never reused and the inner Proc is made
    on every call - about 40% of what Richards still allocates. Needs reuse decided at
