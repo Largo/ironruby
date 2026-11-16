@@ -215,7 +215,14 @@ Profile (`Util/perf/profile.sh`, self time):
    operation re-checking the method version itself, and a resumable generic body for
    what that cannot take (typed results, loops); the state a materialized scope needs;
    the gate's rows mapped to the faults below; and a staged plan whose first stage
-   compiles `hold_self`. Not implemented.
+   compiles `hold_self`. Stage 1 is in behind `-X:JITResume`, off by default (round
+   eleven, see Landed): it compiles `hold_self` and is worth 13-14% on that shape and
+   nothing measurable on a benchmark, as the design expected. The gain this gap is about
+   starts at stage 2 (general calls after an effect, which `run_task`, `schedule`,
+   `push_disk` and `bounce` wait on); that is the next experiment here. With the switch
+   `hold_self` is at 1.2-1.3 of CRuby and `bump`, the same method without its two
+   attribute operations, at 1.4-1.6: what is left is the cost of entering the method,
+   not of what it does.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
@@ -861,6 +868,56 @@ matrix's `each_index` blocks specialized.
   elements (the first measurement had 10x), 2.5x over 16 (2.2x) and 1.3x over 5 (1.2x),
   where entering the loop is most of the cost.
 
+Round eleven: one experiment on master f37be3b1 (2026-11-16, 4 cores, load 0.3-1.4 while
+measuring), stage 1 of `Docs/jit-resume-deopt.md`. **It does not meet the step's rule
+and is in the tree all the same**, because the design lands each stage behind the switch
+and says of this one that it is worth it for the mechanism, not the number. With the
+switch off nothing is compiled differently, so "Current numbers" stand.
+
+- **perf/resume1, 4375167a 01df6f28 (merged in d809920a) - `-X:JITResume`: an attribute
+  operation after a typed body's first effect falls back to its own call** (gap 1).
+  `IR_JIT_VERBOSE=1` now says why a method that passed the pre-screen was declined
+  (`a deopt after an effect (attribute write task_holding= at line 216)`), and for
+  Richards' `Scheduler#hold_self` and the three shapes of
+  `Util/bench/jit-resume-shapes.rb` that was the only reason. With the switch `o.x` and
+  `o.x = v` on another object after the first effect check the receiver's class, the
+  method version, frozen-ness and tracing themselves (`JitRuntime.TryReadAttr`,
+  `TryWriteAttr`) and, when a check fails, make the source's call once on the operands
+  already evaluated: through a site with a light scope and the declaring scope, then
+  through the full site with a scope made once per invocation, inside a light frame's
+  try and finally, with the line kept for a backtrace and a stack check. Only bodies
+  with no parameters and no locals; after the first fallback only literals, self,
+  instance variable reads and other self-guarded attribute operations; no loop,
+  self-call, element write, construction or explicit `return` in such a body; not the
+  Struct member pair. Per call, `Util/perf/ab.rb -r 7`, two runs with the columns in
+  both orders (CRuby / without the switch / with it): `hold_self` 39.8-43.6 / 60.8-61.2
+  / 52.4-52.6 (0.87, 0.86), `hold_w` 33.7-35.7 / 53.9-55.4 / 46.3-49.6 (0.92, 0.84),
+  `hold_ww` 49.1-50.0 / 69.1-69.3 / 60.6-62.0 (0.87, 0.90); the two controls that were
+  compiled before, `bump` and `peek`, within their spread. All thirteen AWFY, two runs,
+  both orders: with the switch 1.009 and 1.013 of f37be3b1, without it 1.018 and 0.996,
+  nothing slower by 5% in both; Richards, the one benchmark with such a method (it is
+  the only method in all thirteen whose `declined` line becomes `specialized`), 1.009
+  and 1.061. The micro table, two runs, both orders: no line slower by 5% in both.
+  Start-up the same (1.48-1.62 s). The gate: IronRuby.Tests with the one failure
+  f37be3b1 has; `Util/jit-matrix.rb` (section 11 is new: 26 rows and a threads row, each
+  shown by `RS_CHECK=1` to be specialized and to fall back) the same under CRuby, the
+  JIT, `-X:NoJIT`, `-X:JITResume` and `-X:JITResume -X:NoJIT -X:NoOSR`; hot-shapes,
+  jit-calls, ivar, raise, hash-struct and block-given matrices the same as f37be3b1 with
+  the switch off, on, and on with `-X:JITCalls`; a sweep of all five ruby/spec suites
+  with the switch on (32,285 examples) with nothing the list of known failures does not
+  name, and one of the merged tree without it.
+  The merged tree (with d4a97243, below) against the branch before it: the three shapes
+  0.90, 0.83 and 0.90 with the switch; all thirteen 1.019 and 1.003 in the two orders.
+  Towers was 8% slower in both (109.8 against 101.2 ms, 106.1 against 98.6) and is the
+  same in eight alternating processes of each build (medians 102.5 and 101.8 ms, the
+  two ranges 98.6-108.0 and 96.3-105.1): d4a97243 changes what a site does when it
+  binds, which Towers does once.
+  What it says about the gap: compiling the body takes 8-9 ns off `hold_self`'s 61, and
+  the method is still 9-13 ns slower than CRuby's with both attribute operations inline.
+  A body of this size is dominated by its entry (`bump`, one ivar increment, is 37-43 ns
+  against CRuby's 26-28), so compiling more leaf bodies buys little; the calls *between*
+  compiled bodies are where stage 2 has to pay.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -1187,6 +1244,27 @@ Windows on net11.0, ruby/spec language, the wasm host) passes on the same commit
   block-local names that occur nowhere else in the file. The same probe expected only 5
   or 23 from a method while another thread redefined its callee, where 14 (one call
   before the redefinition, one after) is as right; CRuby can print it too.
+
+### Caught by the gate (round eleven)
+
+- **A compiled `o.x` read through an accessor a subclass had made private** - on master,
+  not from the change being gated (fixed in d4a97243). `class Hidden < Node; private
+  :val, :val=; end`, and `o.val` in a hot body answered with the variable where CRuby
+  raises NoMethodError; the same for `protected`, for the writer, and for a Struct
+  member. `private :x` in a subclass leaves an entry there that only forwards to the
+  inherited method, resolution follows it, and the method it returns is the
+  superclass's public one: the JIT asked that method for its visibility
+  (`resolved.Info.IsPublic`) where the lookup has it (`GetMethodLookup(name).Visibility`).
+  The experiment's own matrix had a private row and a protected row and passed both:
+  their classes *defined* the accessors private. The gate's fourth question now names
+  the third kind of receiver (`.claude/skills/perf-gate`). A row for "private" tests one
+  of the ways a method gets to be private.
+- **The probe that found it failed first for a reason of its own**: it expected a
+  subclass's protected writer to be callable from an instance of the superclass, which
+  CRuby refuses too, and the script died on that line before reaching anything else;
+  and its second version compared an `inspect` that prints the object's address. Print
+  the exception's class and message per row and go on (as the matrices' `t` does), and
+  no addresses.
 
 Not from this work, found on the way and still open: a self-recursive method with a
 logged Hash store slows down about 1000x past 65,536 levels of recursion (the shared

@@ -82,9 +82,9 @@ ruby Util/perf/awfy.rb 8 "new=env IR_CONFIG=Release <tree>/ir.sh"     # any FAIL
 <tree>/ir.sh -X:NoJIT -X:NoOSR <a script the change speeds up>         # same output as with them on
 ```
 
-Three shapes got past this gate once and were found in review, and a fourth got past its
-author's checks and was caught here (`Util/perf/LEDGER.md`, "Faults the gate missed").
-Ask each of them of every change:
+Three shapes got past this gate once and were found in review, a fourth got past its
+author's checks and was caught here, and a fifth had been on master since before the gate
+existed (`Util/perf/LEDGER.md`, "Faults the gate missed"). Ask each of them of every change:
 - Can a frame that this makes cheaper recurse - directly, through a block it passes, through
   a callee - without passing a stack check? Run it a million deep: it must raise
   SystemStackError, not end the process.
@@ -100,6 +100,12 @@ Ask each of them of every change:
   receiver with a private method of that name, one with a protected one called from an
   unrelated class, one with `method_missing`, and a refinement active where the caller is
   defined.
+- Does a fast path decide from a resolved method whether a call may reach it? Make the
+  method private or protected in two ways: where it is defined, and with `private :x` in a
+  subclass of the class that defines it. The second leaves an entry that only forwards to the
+  inherited method; resolution follows it and returns the superclass's method, whose own
+  visibility is still public. The visibility is the lookup's
+  (`RubyModule.GetMethodLookup(name).Visibility`), not `resolved.Info`'s.
 
 Write one new differential case for the shortcut itself: the shape it accelerates, run hot
 (a few thousand iterations, past the JIT thresholds), with the thing that must invalidate
