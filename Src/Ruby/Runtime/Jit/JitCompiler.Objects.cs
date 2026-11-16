@@ -984,6 +984,8 @@ namespace IronRuby.Runtime.Jit {
             internal object LoopSelf;
             // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
             internal bool LongRuns;
+            // -X:JITResume: the body may fall back to an attribute operation's call after its first effect (JitResume.cs).
+            internal JitResumeInfo Resume;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
@@ -1413,8 +1415,9 @@ namespace IronRuby.Runtime.Jit {
         /// element store does, so the iteration stays restartable; one the writer would make by
         /// adding the variable or raising deopts before it is made. The value is v.
         /// </summary>
-        private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
-            if (_loop == null) { return EmitMethodAttrWrite(node, op, right, out type); }
+        private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, SimpleAssignmentExpression assignment,
+            out JT type) {
+            if (_loop == null) { return EmitMethodAttrWrite(node, op, right, assignment, out type); }
             var receiverLocal = node.Qualifier as LocalVariable;
             if (op != null || node.IsSafeNavigation || receiverLocal == null) {
                 throw Bail("attribute assignment " + node.Name);
@@ -1625,6 +1628,13 @@ namespace IronRuby.Runtime.Jit {
                 JT rt;
                 receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
             }
+            // -X:JITResume: after the first effect the read guards itself and falls back to the call, and its value is an
+            // object - the guarded unboxing below would be a deopt (JitCompiler.Resume.cs). (Kernel#block_given?'s light
+            // site answers for the frame, which the fallback has no answer for.)
+            if (CanFallBack(target) && node.MethodName != "block_given?") {
+                type = JT.Obj;
+                return EmitFallbackRead(node, receiver, variableName);
+            }
             _canDeopt = true;
             MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), receiver,
                 Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, explicitReceiver)));
@@ -1643,7 +1653,8 @@ namespace IronRuby.Runtime.Jit {
         /// from the real call. The store is observable, so nothing emitted after it may deopt
         /// (_deoptAfterEffect). `self.x = v' may call a private writer. The value is v.
         /// </summary>
-        private MSA.Expression/*!*/ EmitMethodAttrWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+        private MSA.Expression/*!*/ EmitMethodAttrWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, SimpleAssignmentExpression assignment,
+            out JT type) {
             if (op != null || node.IsSafeNavigation || !_refinements.IsEmpty) { throw Bail("attribute assignment " + node.Name); }
             var target = node.Qualifier;
             object sample;
@@ -1663,6 +1674,21 @@ namespace IronRuby.Runtime.Jit {
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
             var receiverTemp = Ast.Variable(typeof(object), "#receiver");
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            // -X:JITResume: after the first effect - which may be in the operands, emitted above - the store guards itself
+            // and falls back to the call, on the operands already evaluated (JitCompiler.Resume.cs). Its value is v.
+            if (CanFallBack(target) && assignment != null) {
+                var boxed = Ast.Variable(typeof(object), "#boxed");
+                _ivarWrite = true;
+                _effectNotOnSelf = true;
+                type = valueType;
+                return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp, boxed },
+                    Ast.Assign(receiverTemp, receiver),
+                    Ast.Assign(valueTemp, value),
+                    Ast.Assign(boxed, BoxForStore(valueTemp, valueType)),
+                    EmitFallbackWrite(assignment, node.Name, receiverTemp, boxed, variableName),
+                    valueTemp
+                );
+            }
             _canDeopt = true;
             _pure = false;
             _ivarWrite = true;

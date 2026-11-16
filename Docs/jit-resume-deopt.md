@@ -1,6 +1,8 @@
 # A deopt that does not restart the body: design
 
-Status: design only, nothing here is implemented. It answers gap 1 of `Util/perf/LEDGER.md`
+Status: stage 1 is implemented behind `-X:JITResume` (off by default; `Src/Ruby/Runtime/Jit/JitResume.cs`,
+`JitCompiler.Resume.cs`, matrix section 11 of `Util/jit-matrix.rb`), narrowed as its section says; the rest
+is design only. It answers gap 1 of `Util/perf/LEDGER.md`
 ("Calls of other methods from hot bodies"): `CallSite.Target` is 24-32% of every benchmark,
 and Richards, Towers, DeltaBlue, Bounce and CD's `tree_insert` all wait on one rule of the
 method JIT.
@@ -311,10 +313,19 @@ matrix in `Util/jit-matrix.rb`. Nothing below is merged before its rows exist.
   receiver of another class with its own `task_holding=`, a private one, a frozen one, a
   `method_missing`) and compares output with CRuby 4.0's.
 
-Not yet shown: that the deopt after an effect is the *only* thing keeping `hold_self` out. Gap
-11's table found it with the earlier obstacles patched; on master, `IR_JIT_VERBOSE=1` on Richards
-prints `declined Scheduler/hold_self arity 0 (passed the pre-screen)` with no reason. The
-stage's first step is to make that line name its reason, and to confirm that it is this one.
+Shown: the deopt after an effect is the only thing keeping `hold_self` out. `IR_JIT_VERBOSE=1`
+names the reason now (`declined Scheduler/hold_self arity 0 (passed the pre-screen): a deopt after
+an effect (attribute write task_holding= at line 216)`), and with the switch Richards' `hold_self`
+is specialized and nothing else in AWFY changes.
+
+As built, stage 1 is narrower than the list above: the fallbacks are on explicit receivers other
+than self (`@o.x`, `@o.x = v`), not on the Struct member pair (a Struct operation after an effect
+still declines the body), and a body with fallbacks that also has a self-call, a loop, element
+writes, a construction or an explicit `return` is declined. After the first fallback only literals,
+self, instance variable reads and self-guarded attribute operations may be emitted. The typed body
+stays part of its entry; a fallback's call and the hooks run in a small lambda named as the generic
+body's frame, which keeps the line in `PrecompiledFrames` while the call runs (a separate typed body
+cost ~4 ns a call). The light frame's filter is a catch that rethrows what is not its own.
 
 Expected gain, if it is: `hold_self` is 2.0% of Richards inclusive and 0.9% self (gap 11's table). Compiled,
 its two attribute calls become inline ivar accesses, so most of the 2.0% goes: about 1-1.5% of
