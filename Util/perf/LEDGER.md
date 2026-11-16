@@ -1094,6 +1094,38 @@ first step was to measure what was already in the tree and off.
   Array fast path that tested `HasInstancesWithOwnClass`, which is true for Array in
   every process from start-up, so it never hit. Not merged; the branch is not pushed.
   Kept from it: the shapes (`Util/bench/jit-resume2-shapes.rb`, 6197f6ab).
+- **perf/undo a06d9dc7, reverted by its author in 9b4c2fdd - logged instance variable,
+  attribute and Struct member stores, taken back on a deopt** (round fourteen, gap 1; the
+  first of three experiments of a workflow on TruffleRuby's JIT techniques). The other
+  way to let a guard fail after an effect: instead of continuing, make the restart
+  invisible, as the typed bodies already do for Array and Hash element writes
+  (`JitUndoLog`). A store of an existing instance variable of self, an `attr_writer`
+  store on another object and a Struct member store log (object, slot, old, new) and
+  no longer count as effects; a rollback puts the old value back only where the slot
+  still holds what the body stored (a compare-exchange, so another thread's store in
+  between is kept); a frozen receiver, a variable that would have to be added, a full
+  log and a receiver that is not a RubyObject deopt before anything is written. Used
+  only on a second compile of a body the first would decline for a deopt after an
+  effect; no loops; such a body is not inlined or bound. `Scheduler#hold_self` and
+  DeltaBlue's `Vector#remove_first` went from declined to specialized, and
+  `Util/jit-matrix.rb` was CRuby's (section 10 under `ED_CHECK=1`: 94 specialized, 36
+  deopted after their effect, against 50 and 14).
+  And the compiled bodies were slower than the generic ones they replace. Its author's
+  numbers, taken at a load of 2.4 to 4.6 and not measured again by anyone: `hold_self`
+  66.7 -> 76.2 ns, `hold_w` 57.5 -> 75.3, `hold_ww` 73.8 -> 93.6, two `@x += 1` in a
+  row 60.9 -> 79.8; an attribute write then a read, and an increment then arithmetic,
+  within the spread; Richards 1.022 and DeltaBlue 0.974 in six alternating processes,
+  ranges overlapping. Where it goes: the entry's try/finally around the log, taking
+  and releasing the thread's log, and a checked out-of-line store that writes five
+  fields of a log entry; with the try/finally removed (unsafe, to see) the bodies came
+  down to the generic body's speed and no further, because the generic code already
+  does these stores through inline caches in about 27 ns.
+  With round twelve this closes both cheap ways around the rule: neither continuing in
+  untyped compiled code nor undoing pays, for the same reason - what a small body of
+  stores costs is its entry and its bracket, not its stores. It also says that for
+  Richards' and DeltaBlue's declined methods the rule is no longer the first obstacle:
+  after it come the nil constant, `abs`, `== nil` on an Array and calls whose callee has
+  no typed body (perf/core, the workflow's second experiment, takes those).
 - **`x == "lit"` without allocating the literal, in code the method JIT does not
   compile**: 80 B less per comparison in a micro test, no change in AWFY bytes (Json's
   comparisons already go through the JIT). Reverted.
