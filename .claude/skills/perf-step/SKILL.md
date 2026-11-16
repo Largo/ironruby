@@ -90,7 +90,9 @@ ruby Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFI
 
 While iterating, name the two or three benchmarks the hypothesis is about after `--`: a
 run of those takes a minute. That subset is a hint, not a result. The whole suite (no
-`--`, all thirteen, about five minutes for two trees) is run:
+`--`: thirteen, about five minutes for two trees; with `--whole` Havlak too, which makes
+it AWFY's fourteen and about seven minutes - CRuby 4.0 fails Havlak, so it only compares
+IronRuby trees and TruffleRuby) is run, with `--whole` at least once per decision:
 
 - before deciding (step 3), twice;
 - on the merged tree after every merge (step 4), against the tree before the merge;
