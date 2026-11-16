@@ -448,6 +448,56 @@ end
 t('zero divisor on 1 call in 3') { [r, errors] }
 t('zero divisor, then fine') { sp_div_sometimes(100, 7) }
 
+# ---------------------------------------------------------------- 3e. a deopt deep in a recursion
+
+def sp_fact(n)
+  # out of Int64 on the way back up, from 21! on: the deopt unwinds to the outermost entry, whose
+  # generic re-run enters the typed body again one level down, which deopts in the same place. So
+  # every entry deopts, and no generic call returns to be timed before the recursion is over: the
+  # entry is retired on the deopts alone
+  n <= 1 ? 1 : n * sp_fact(n - 1)
+end
+
+def sp_hdeep(h, k)
+  # a Hash store that is not the last statement is logged, and the self-calls nest in one undo
+  # log: 65,536 levels down it is full, which deopts the outermost entry, and so on as above -
+  # this one used to go on for hours rather than end in SystemStackError
+  h[k] = k
+  return 0 if k == 0
+  sp_hdeep(h, k - 1) + 1
+end
+
+def sp_hdeep_leaf(h, k, c, period)
+  # the same with a call that returns every `period' levels, so some entries get through
+  h[k] = k
+  return 0 if k == 0
+  if c == 0
+    sp_hdeep_leaf(h, 0, 1, period)
+    c = period
+  end
+  sp_hdeep_leaf(h, k - 1, c - 1, period) + 1
+end
+
+# What a recursion that ended in SystemStackError left in the Hash: every level it reached, once.
+def jit_deep_keys(h, top)
+  [h.keys.first == top, h.size == top - h.keys.last + 1, h.all? { |k, v| k == v }]
+end
+
+puts
+puts '--- 3e. a deopt deep in a recursion ---'
+warm { |i| sp_fact(i % 15) }
+t('factorial, in Int64') { sp_fact(20) }
+t('factorial, out of Int64 one level up') { sp_fact(21) }
+t('factorial, 1500 levels') { r = 0; 4.times { r = sp_fact(1500) }; [r.to_s.size, r % 1_000_000_007] }
+t('factorial, then small') { [sp_fact(12), sp_fact(25)] }
+warm { |i| sp_hdeep({}, i % 5) }
+t('Hash stores, 1000 levels') { x = {}; [sp_hdeep(x, 1000), x.size, x.keys.first, x.keys.last] }
+t('Hash stores, more levels than there is stack') { x = {}; begin; sp_hdeep(x, 10**7); rescue SystemStackError => e; [e.class, jit_deep_keys(x, 10**7)]; end }
+t('Hash stores, then 1000 levels') { x = {}; [sp_hdeep(x, 1000), x.size] }
+warm { |i| sp_hdeep_leaf({}, i % 5, 2, 2) }
+t('... with a call that returns every 100 levels') { x = {}; begin; sp_hdeep_leaf(x, 10**7, 1, 100); rescue SystemStackError => e; e.class; end }
+t('... then 1000 levels') { x = {}; [sp_hdeep_leaf(x, 1000, 1, 100), x.size] }
+
 # ---------------------------------------------------------------- 4. division
 
 def sp_div(a, b)

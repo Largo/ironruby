@@ -498,18 +498,37 @@ namespace IronRuby.Runtime.Jit {
         // runs out first just closes, and the entry counts nothing until the next deopt: a method
         // that does not deopt writes nothing on its calls that the threads calling it share.
         //
+        // The rule needs generic only for a window in which some entry ran its typed body to the
+        // end. One in which every entry deopted (m <= n - 1) is retired without it: the typed body
+        // saved nothing there whatever the generic one costs, and that cost may not come. A generic
+        // call is timed when it returns, and in a recursion none returns before the one below it
+        // has, while a method that calls itself is where every entry deopts: a deopt deep in the
+        // recursion - the product that outgrows Int64 on the way back up, the undo log full 65,536
+        // element stores down (JitUndoLog) - unwinds to the outermost entry, whose generic re-run
+        // enters the typed body again one level down, which deopts in the same place. That is work
+        // growing with the square of the depth, at up to 20 ms a deopt, and an entry kept until a
+        // generic call had been timed was kept through all of it: a factorial of 2000 took 250
+        // times what its generic body takes, and a method storing into a Hash and calling itself
+        // 10**7 deep ran for hours on its way to SystemStackError. For the same reason an entry
+        // whose probes are used up without one having timed a call is not kept on: it is retired
+        // like one that deopts too often, and the calls timed while it cools down are the next
+        // chance of a figure.
+        //
         // A retired entry is tried again later, because the deopts may come from one phase of the
         // input - large values while a program sets up, small ones for the millions of calls after
         // that - and retiring it for good then made a 10-statement method 3x slower for the rest of
         // the process. The method keeps its compiled entry and runs the generic body until both
         // CoolCheckCalls generic calls and a cool-down have passed; the cool-down starts at
         // CoolDownMs and doubles at each retirement. A retry that fails again costs one more window
-        // of deopts, about 0.2 ms, against a cool-down of at least 8 ms; after MaxRetirements the
-        // method keeps its generic body for good.
+        // of deopts, about 0.2 ms, against a cool-down of at least 8 ms; where a deopt unwinds a
+        // deep recursion a window costs up to a second, so the cool-down is also at least
+        // RetryCostFactor times what the window that retired the entry cost. After MaxRetirements
+        // the method keeps its generic body for good.
         internal const int MaxDeopts = 16;
         private const int DeoptWindow = MaxDeopts * 64;
         private const int MaxRetirements = 8;
         private const int CoolDownMs = 8;
+        private const int RetryCostFactor = 16;
         private const int CoolCheckCalls = 1024;
         private const int CoolSampleMask = 7;    // Cool times one generic call in 8, at random
         private const int ProbeCalls = 2 * MaxDeopts;  // and every one in a probe
@@ -561,13 +580,17 @@ namespace IronRuby.Runtime.Jit {
 
             int entries = DeoptWindow - spec.Countdown;
             int deopts = spec.WindowDeopts - 1;
-            if (spec.DeoptCost > 0 && (_deoptCost == 0 || spec.DeoptCost < _deoptCost)) { _deoptCost = spec.DeoptCost; }
+            long windowDeopt = spec.DeoptCost;
+            if (windowDeopt > 0 && (_deoptCost == 0 || windowDeopt < _deoptCost)) { _deoptCost = windowDeopt; }
             long deopt = _deoptCost;
             long generic = _genericCost;
             // close the window; the next deopt opens another
             spec.Countdown = 0;
             if (deopt <= 0) { return; }
-            if (generic <= 0 || 4 * deopts * deopt <= 5 * (entries - deopts) * generic) {
+            // Not timed yet is a reason to keep the entry only while a timing would decide (some entry
+            // of the window did not deopt) and can still come (a probe is left).
+            bool awaitingGeneric = generic <= 0 && entries > deopts && _probes < MaxProbes;
+            if (awaitingGeneric || generic > 0 && 4 * deopts * deopt <= 5 * (entries - deopts) * generic) {
                 if (generic > 0 && JitRuntime.Verbose) {
                     Console.Error.WriteLine("[jit] kept {0}/{1} arity {2}: {3} deopts in {4} calls ({5})",
                         _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, Costs(deopt, generic));
@@ -603,14 +626,15 @@ namespace IronRuby.Runtime.Jit {
                 if (_state != Specialized || spec != _current) { return; }
                 JitRuntime.DeoptRetired++;
                 bool final = ++_retirements > MaxRetirements;
+                long coolDown = Math.Max((Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
+                    RetryCostFactor * deopts * ((windowDeopt > 0) ? windowDeopt : deopt));
                 if (JitRuntime.Verbose) {
                     Console.Error.WriteLine("[jit] retired {0}/{1} arity {2}: {3} deopts in {4} calls ({5}){6}",
                         _declaringModule.Name ?? "main", _ast.Name, _arity, spec.WindowDeopts, entries, Costs(deopt, generic),
-                        final ? ", for good" : String.Format(", retry in {0} ms", CoolDownMs << (_retirements - 1)));
+                        final ? ", for good" : String.Format(", retry in {0} ms", coolDown * 1000 / Stopwatch.Frequency));
                 }
                 if (!final) {
-                    StartCooling(Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
-                        CoolCheckCalls, CoolSampleMask);
+                    StartCooling(Stopwatch.GetTimestamp() + coolDown, CoolCheckCalls, CoolSampleMask);
                     return;
                 }
                 Settle();
@@ -658,8 +682,9 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private static string/*!*/ Costs(long deopt, long generic) {
-            return String.Format("deopt {0:F1} us, generic {1:F2} us",
-                deopt * 1e6 / Stopwatch.Frequency, generic * 1e6 / Stopwatch.Frequency);
+            return (generic > 0) ? String.Format("deopt {0:F1} us, generic {1:F2} us",
+                deopt * 1e6 / Stopwatch.Frequency, generic * 1e6 / Stopwatch.Frequency)
+                : String.Format("deopt {0:F1} us, generic not timed", deopt * 1e6 / Stopwatch.Frequency);
         }
 
         /// <summary>
@@ -703,8 +728,8 @@ namespace IronRuby.Runtime.Jit {
                 spec.WindowDeopts = 0;
                 JitRuntime.DeoptRetried++;
                 if (JitRuntime.Verbose) {
-                    Console.Error.WriteLine("[jit] retrying {0}/{1} arity {2} (generic {3:F2} us)", _declaringModule.Name ?? "main", _ast.Name, _arity,
-                        _genericCost * 1e6 / Stopwatch.Frequency);
+                    Console.Error.WriteLine("[jit] retrying {0}/{1} arity {2} ({3})", _declaringModule.Name ?? "main", _ast.Name, _arity,
+                        (_genericCost > 0) ? String.Format("generic {0:F2} us", _genericCost * 1e6 / Stopwatch.Frequency) : "generic not timed");
                 }
                 _state = Specialized;
                 _direct = spec.Direct;
