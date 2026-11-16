@@ -65,6 +65,17 @@ Rounds seven to ten changed none of these five on purpose (Json's allocation fel
 round nine); what they did is in the direct comparisons of the trees under "Landed" (CD
 and Permute in round seven, NBody, CD and Json in round nine, List in round ten).
 
+Round thirteen (2026-11-16, fd13114a, after a restart of the container; load 0.9-1.1):
+direct calls between compiled methods are on by default, and of the thirteen only List
+moves. One run of all thirteen, CRuby / IronRuby / IronRuby with `-X:NoJITCalls`, us:
+DeltaBlue 41713 / 52406 / 54565, Richards 312449 / 367417 / 339484 (the same in ten
+alternating processes of each, see Landed), Json 87081 / 77069 / 74644, CD 729060 /
+465810 / 491252, Bounce 88910 / 81601 / 82789, List 98116 / 27677 / 38776, Mandelbrot
+801788 / 49336 / 50309, NBody 1581301 / 1249594 / 1260251, Permute 109624 / 143146 /
+137417, Queens 95590 / 85373 / 81990, Sieve 157016 / 124852 / 122915, Storage 139218 /
+86894 / 89555, Towers 107800 / 101096 / 99371. Geomean IronRuby/CRuby 0.672, with
+`-X:NoJITCalls` 0.687; List 0.28 of CRuby, from 0.38-0.40.
+
 Bytes allocated per iteration (`Util/perf/alloc.rb`; it moves by about 0.3% between
 invocations, unlike the timings), MB, round six -> round seven -> now: DeltaBlue 24.9 ->
 24.2 -> 24.6, Richards 19.6 -> 19.3 -> 13.9, Json 35.8 -> 35.9 -> 30.7, CD 516.2 -> 226.2 ->
@@ -237,6 +248,20 @@ Profile (`Util/perf/profile.sh`, self time):
    try stage 2 again as written. `Util/bench/jit-resume2-shapes.rb` has the four shapes
    (Richards' `find_task`, `queue_packet`, `add_input_and_check_priority`, `schedule`) at
    1.6, 1.1, 0.9 and 1.1 of CRuby for the next attempt to move.
+   Round thirteen took the part of that which was already built: `-X:JITCalls`, a typed
+   body calling the typed body of another method on self, is on by default (see Landed).
+   It reaches what has a typed callee: List's `tail` (28% of List), CD's `magnitude`. It
+   does not reach this gap's methods, because their callees have no typed body: in
+   Richards `device_in_add`, `work_in_add` and `add_input_and_check_priority` are now
+   offered to the compiler and declined at `append` (no typed body: a deopt after an
+   effect) or `NO_WORK` (gap 11); in Json `HashIndexTable#add` and `#get` at
+   `hash_slot_for`; in DeltaBlue `Dictionary#at` at `match`; in CD `RedBlackTree#get`
+   at `node.value` and `Node#successor` at `x.right`, attribute reads on a local (the
+   result of the bound `find_node` in `get`, which has no profile; a local that holds
+   self in `successor`): `get` binds `find_node` and fails only there, a small thing to
+   try for gap 3. So what is left here is what keeps the callees
+   out, the effect rule, and for calls on another receiver the binder's reach (it binds
+   calls on self only; the inliner already checks a class at a call on a parameter).
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
@@ -931,6 +956,62 @@ switch off nothing is compiled differently, so "Current numbers" stand.
   A body of this size is dominated by its entry (`bump`, one ivar increment, is 37-43 ns
   against CRuby's 26-28), so compiling more leaf bodies buys little; the calls *between*
   compiled bodies are where stage 2 has to pay.
+
+Round thirteen: one experiment on fa69240d (2026-11-16, 4 cores, a container restarted
+during the round; load 0.5-1.3 while measuring). No new code in the JIT: the round's
+first step was to measure what was already in the tree and off.
+
+- **perf/calls aaba4635 (merged in fd13114a) - direct calls between compiled methods on
+  by default** (gap 1; `-X:NoJITCalls` turns them off, `-X:JITCalls` is still accepted).
+  The prototype of `Util/bench/jit-methods.md`, Part 2: a typed body calls the typed
+  body of another method it calls on self, where the inliner declines the callee (a
+  loop, an effect, a self-call). It had been measured on its own shapes and never on
+  the benchmarks. Six alternating processes of a fixed length per build and benchmark,
+  median of the per-process medians, without / with the switch on fa69240d: List 39241
+  (38315-40579) / 28271 (27492-28575) us, 0.720; the other twelve between 0.978 (NBody)
+  and 1.034 (Richards), each with overlapping ranges; geomean 0.976. awfy.rb, both
+  orders, four runs with the switch on the base build (two of them of four benchmarks)
+  and two with the candidate build: List 0.71, 0.70, 0.71, 0.75, 0.74 and 0.71; geomean 0.986 and 0.984 for the candidate;
+  no benchmark slower by 5% in both orders (CD 1.15 in one run and 0.98 in the other,
+  Towers 1.00 and 1.12, Queens 1.02 and 1.08). The geomean alone is under the step's 3%:
+  it is kept for List, a whole benchmark 28% faster, and because nothing pays for it.
+  What changes in the JIT's decisions, all thirteen compared line by line: List's `tail`
+  binds `is_shorter_than` (a callee with a `while`), CD's `Vector3D#magnitude` binds
+  `squared_magnitude`; eight methods in Richards, Json, DeltaBlue and CD pass the wider
+  screen and are then declined (gap 1 lists them), which costs each 40 to 120 profiled
+  calls and nothing after: Richards, with three of them, is 344854 (332415-353663)
+  without and 343535 (328345-365110) with direct calls in ten alternating processes on
+  the merged build, though single awfy.rb runs of it ranged from 0.92 to 1.14. The
+  micro table, two runs, both orders: no line slower by 5% in both. Start-up 1.49 and
+  1.47 s, best of ten.
+  The gate: IronRuby.Tests fails `Exception_CauseRaisedInClause1` on both trees and
+  nothing else (`JitCalls1` now checks that the default binds and that an engine with
+  the option off does not, `JitMethods1` sets it both ways); jit-calls, jit, ivar,
+  raise, int, hash-struct, block-given, light-rest, hash-order, block-loop, osr-array,
+  hot-shapes, the two block-scope-reuse matrices, ivar-stress and the inline matrix
+  (one case per process) print what fa69240d prints, with direct calls on and with
+  `-X:NoJITCalls` (raise and inline differ from CRuby in 2 lines each on both trees,
+  int only in `hash` values); a sweep of all five ruby/spec suites, 32,285 examples,
+  with nothing the list of known failures does not name; and a probe of 33 lines, eight
+  of them shown by `IR_JIT_VERBOSE=1` to run a bound call: a bound callee recursing a
+  million deep (SystemStackError, and the same answers afterwards), a callee that writes
+  an instance variable and then meets an overflow, a Float, a String or nil (each write
+  done once; those callers are declined, as a deopt after an effect), a bound callee's
+  nil, false, 0 and found element tested for truth, a callee overridden, made private
+  or protected, or overridden privately in a subclass, undefined with `method_missing`,
+  given a singleton method, refined elsewhere, and four threads making one caller hot:
+  CRuby's output on both trees.
+  A difference from CRuby that the probes for this round found on master, and that
+  direct calls widen from inlined callees to bound ones: a caller inside its typed
+  body's loop goes on calling the callee it was compiled with when another thread
+  redefines that callee, until the caller returns (`until done?(i, limit)` over an
+  inlined `done?` never ends after `done?` is redefined to answer true; CRuby and
+  `-X:NoJIT` see the new method at the next call). `jit-methods.md` calls it the caller
+  in flight and gives the fix for a pure body, a version check after the loop's safe
+  point with a deopt there; an impure one needs gap 1's resume. In practice a caller
+  with a loop and a callee with effects is declined anyway (a loop in a body that can
+  deopt and has an effect), so what direct calls add is callees with loops of their own.
+  Not fixed in this round.
 
 ## Rejected
 
