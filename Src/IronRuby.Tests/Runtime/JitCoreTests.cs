@@ -27,7 +27,7 @@ class SlString < String
 end
 b = SlBox.new('abc')
 200.times { |i| b.len('abcd'); b.hash_of('ab' * (i % 4)); b.slot('xyz'); b.more }
-p [""héllo"", ""\xff\xfe"".dup.force_encoding('UTF-8'), ""\xff"".b, ""abé"".encode('UTF-16LE'), ""\u{1F600}x"",
+p [""héllo"", ""\xff\xfe"".dup.force_encoding('UTF-8'), ""\xff"".dup.force_encoding('BINARY'), ""abé"".encode('UTF-16LE'), ""\u{1F600}x"",
    SlString.new('abc'), [1, 2]].map { |s| [b.len(s), b.slot(s)] }
 p((b.len(nil) rescue $!.class))
 seen = []
@@ -59,7 +59,7 @@ end
 b = AbBall.new(3)
 200.times { |i| b.v = i - 100; b.bounce; b.ab(i - 100); b.fab(i * -0.25) }
 p [-2**31, -2**63, -2**64, 2**62, -5].map { |x| b.ab(x) }
-p [-0.0, Float::NAN, -Float::INFINITY].map { |x| b.fab(x) }, 1.0 / b.ab(-0.0)
+p [-0.0, 0.0 / 0.0, -1.0 / 0.0].map { |x| b.fab(x) }, 1.0 / b.ab(-0.0)
 b.v = -2**63
 p b.bounce
 p((b.ab(nil) rescue $!.class))
