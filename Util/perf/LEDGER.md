@@ -6,57 +6,60 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-14, the code of a6b1c629 (round ten on top of round nine and of #215 through
-9b2936fa), Release net10.0, 4 cores, load 1.0. The container was restarted between rounds
-nine and ten and has been slower since (CRuby's NBody 1.61 s before, 1.93 s now), so
-this table's microseconds do not compare with round nine's; the ratios do. CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM
-Native). The machine's speed differs between sessions by tens of percent (CRuby's own
-numbers move with it), so compare ratios, not microseconds; and in this session one
-tree's figure for one benchmark moved by 10%, sometimes 20%, from one run to the next
-(the last column of ratios below is two more runs of the same binaries an hour before).
+2026-11-16, f37be3b1 (master after #216 to #227: round ten, the perf areas, the
+source-generated initializers, `-X:JITCalls`, `each_index`), Release net10.0, 4 cores (Xeon,
+2.10 GHz), `git status` clean. Load average 2.96 when the AWFY run began (the build had
+just ended), 1.05 when it ended, 1.0 through the micro table. The container was restarted
+again before this measurement and is a different machine from round ten's: CRuby's NBody
+1.93 s then, 1.56 s now, and CRuby's short calls gained more than IronRuby's did (below).
+CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM Native). The machine's speed
+differs between sessions by tens of percent, so compare ratios, not microseconds, and
+ratios across sessions only with a build of the older tree beside them.
 
-Are-We-Fast-Yet, all thirteen, steady state, µs per iteration (lower is better); the
-microseconds are the last run's:
+Are-We-Fast-Yet, all thirteen, steady state, µs per iteration (lower is better), one run;
+the last column is the ratio recorded for round ten (a6b1c629, another machine):
 
-| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | two runs before |
+| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | round ten |
 |---|---:|---:|---:|---:|---:|
-| Richards | 341414 | 409318 | 17496 | 1.20 | 1.08, 1.29 |
-| DeltaBlue | 47759 | 56291 | 12896 | 1.18 | 1.22, 1.16 |
-| Permute | 133041 | 154267 | 7039 | 1.16 | 1.07, 1.22 |
-| Towers | 128759 | 123816 | 5352 | 0.96 | 1.04, 0.94 |
-| Bounce | 102599 | 93906 | 2528 | 0.92 | 1.06, 1.73 |
-| Json | 95510 | 86375 | 7709 | 0.90 | 1.04, 0.97 |
-| Queens | 107845 | 97480 | 7330 | 0.90 | 0.92, 0.86 |
-| Sieve | 170274 | 142517 | 8240 | 0.84 | 0.82, 0.86 |
-| NBody | 1928277 | 1551819 | 18804 | 0.80 | 0.68, 0.81 |
-| CD | 852830 | 601192 | 36126 | 0.70 | 0.65, 0.71 |
-| Storage | 179481 | 105347 | 18668 | 0.59 | 0.86, 0.58 |
-| List | 119618 | 44220 | 7720 | 0.37 | 0.40, 0.39 |
-| Mandelbrot | 1124512 | 154915 | 54940 | 0.14 | 0.13, 0.14 |
+| DeltaBlue | 40257 | 49579 | 1821 | 1.23 | 1.18 |
+| Permute | 113028 | 130404 | 6289 | 1.15 | 1.16 |
+| Richards | 334877 | 340521 | 14810 | 1.02 | 1.20 |
+| Json | 80796 | 76531 | 7334 | 0.95 | 0.90 |
+| Queens | 91887 | 82354 | 6239 | 0.90 | 0.90 |
+| Bounce | 93258 | 82912 | 2214 | 0.89 | 0.92 |
+| Towers | 111587 | 97759 | 4746 | 0.88 | 0.96 |
+| Sieve | 148448 | 122726 | 7002 | 0.83 | 0.84 |
+| NBody | 1556841 | 1260939 | 15645 | 0.81 | 0.80 |
+| CD | 719615 | 501951 | 38816 | 0.70 | 0.70 |
+| Storage | 139119 | 85812 | 16751 | 0.62 | 0.59 |
+| List | 98972 | 38077 | 6749 | 0.38 | 0.37 |
+| Mandelbrot | 803319 | 48764 | 41664 | 0.06 | 0.14 |
 
-Geomean of the thirteen: IronRuby/CRuby 0.730, and 0.750 and 0.779 in the two runs
-before (the second has Bounce at 1.73, a cell that was 1.00 of the tree before in six
-alternating processes); TruffleRuby/CRuby 0.053. On the tree of round nine it was 0.785,
-0.800 and 0.768, and 0.785 again with #215's `!=` binding merged in (Permute 1.28 ->
-1.17); TruffleRuby's DeltaBlue has been 12.7-12.9 ms since round nine and was 3.6 in
-round seven's run. CRuby's own figures move too: Json was 81, 93 and 106 ms in the three runs, which
-is all of Json's 1.02, 0.87, 0.74. On the tree of round seven it was 0.804 and 0.787 (NBody
+Geomean of the thirteen: IronRuby/CRuby 0.678 (0.730, 0.750 and 0.779 in round ten's three
+runs); TruffleRuby/CRuby 0.048. What moved is Mandelbrot: with a build of a6b1c629 beside
+master on this machine it is 122.8 -> 48.8 ms (DeltaBlue 51.6 -> 49.8, Richards 332.8 ->
+330.0 in the same invocation), from something merged since round ten that was not looked
+for; `Integer#<<` and `#>>` specialized in the JIT (9997c5bc) is the likely one, since its
+inner loop shifts. Without Mandelbrot the other twelve have a geomean of 0.829 against
+round ten's 0.839: level. TruffleRuby's DeltaBlue was 1.8 ms in this run, 12.7-12.9 since
+round nine and 3.6 in round seven's. On the tree of round nine the geomean was 0.785,
+0.800 and 0.768; on the tree of round seven 0.804 and 0.787 (NBody
 1.21 and 1.08, CD 0.70 and 0.66), and on the
 tree of round five, at the start of the session, it was 0.872 (Permute 1.49, Richards
 1.33, CD, Json and DeltaBlue 1.17, NBody 1.07): the first time the eight benchmarks
 beyond the original five were run at all.
 
-The five measured from the start, IronRuby/CRuby; "now" is the three runs above, the
-other columns are what was recorded when each round landed, in other sessions:
+The five measured from the start, IronRuby/CRuby; "now" is the run above, the other
+columns are what was recorded when each round landed, in other sessions:
 
-| benchmark | now | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DeltaBlue | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
-| Richards | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
-| Json | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
-| Bounce | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
-| Towers | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
-| geomean | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
+| benchmark | now | r10 | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DeltaBlue | 1.23 | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
+| Richards | 1.02 | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
+| Json | 0.95 | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
+| Bounce | 0.89 | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
+| Towers | 0.88 | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
+| geomean | 0.99 | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
 
 Rounds seven to ten changed none of these five on purpose (Json's allocation fell in
 round nine); what they did is in the direct comparisons of the trees under "Landed" (CD
@@ -77,56 +80,62 @@ this one; the tree before that merge gave 13.9), and List 8.2 -> 0.6 in round te
 (`is_shorter_than` compiled: its two cursors are no longer read through call sites).
 The other eleven are where round nine left them.
 
-Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on the tree of
-round ten; a line moves by 15-20% from run to run on this machine, so a ratio is good to
-about that:
+Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on f37be3b1; a line
+moves by 15-20% from run to run on this machine, so a ratio is good to about that. Against
+round ten's table IronRuby's nanoseconds fell on every line and several ratios still rose
+by 10-19% (`ivar_rw` 1.47 -> 1.63, `getter` 1.20 -> 1.37, `each4` 1.04 -> 1.22, `short4`
+1.06 -> 1.26, in a second run too): that is this machine, not the tree. A build of
+a6b1c629 beside master (`ab.rb`, four rounds, twelve lines) has the same ratios to CRuby
+(`ivar_rw` 1.43, `getter` 1.25, `each4` 1.25) and master at 0.95-1.07 of it, every row
+marked `overlap`; seven of the twelve lean 5-7% slower on master, which four rounds do
+not show to be a difference and which the next measurement should look at again:
 
 | op | CRuby | IronRuby | ratio | start |
 |---|---:|---:|---:|---:|
-| empty | 24.5 | 25.2 | 1.03 | 1.23 |
-| ivar_rw | 39.7 | 58.3 | 1.47 | 2.72 |
-| getter | 28.7 | 34.4 | 1.20 | 3.17 |
-| attr | 20.3 | 4.3 | 0.21 | 0.80 |
-| cmp | 29.5 | 34.4 | 1.17 | 3.58 |
-| abs | 35.7 | 58.4 | 1.64 | 3.07 |
-| arr | 43.9 | 46.6 | 1.06 | 1.82 |
-| nil? | 26.7 | 38.4 | 1.44 | 3.48 |
-| == | 29.6 | 32.6 | 1.10 | 3.35 |
-| yield | 42.4 | 65.3 | 1.54 | 2.57 |
-| each4 | 264.5 | 275.5 | 1.04 | 1.87 |
-| while10 | 212.8 | 43.6 | 0.20 | 0.23 |
-| new2 | 104.5 | 86.3 | 0.83 | 1.47 |
-| symcase | 36.3 | 34.3 | 0.94 | 1.03 |
-| str== | 121.2 | 59.1 | 0.49 | 1.44 |
-| poly2 | 62.1 | 43.7 | 0.70 | 2.11 |
-| blockeach | 78.2 | 59.4 | 0.76 | 2.33 |
-| lit== | 244.8 | 67.7 | 0.28 | 0.94 |
-| swap | 70.3 | 67.5 | 0.96 | 1.35 |
-| locattr | 73.8 | 47.6 | 0.64 | 1.38 |
-| sqrtw | 52.1 | 2.8 | 0.05 | 1.34 |
-| rangeeach | 72.9 | 2.1 | 0.03 | 0.87 |
-| blkattr | 88.7 | 76.8 | 0.87 | 1.12 |
-| selfcall | 114.6 | 35.1 | 0.31 | 0.99 |
-| veach1 | 235.2 | 379.6 | 1.61 | 1.59 |
-| veach2 | 327.0 | 448.6 | 1.37 | 1.37 |
-| veach4 | 504.7 | 592.2 | 1.17 | 1.38 |
-| veach100 | 8026.1 | 7087.8 | 0.88 | 1.04 |
-| rangelit | 190.2 | 103.0 | 0.54 | 0.87 |
-| short4 | 376.1 | 400.3 | 1.06 | 1.41 |
-| s_each1 | 87.8 | 193.8 | 2.21 | 2.11 |
-| s_times1 | 107.8 | 197.3 | 1.83 | 2.07 |
-| s_map1 | 124.1 | 207.3 | 1.67 | 1.93 |
-| s_any1 | 79.1 | 187.4 | 2.37 | 6.15 |
-| s_each2 | 127.1 | 222.2 | 1.75 | 1.70 |
-| s_times2 | 145.7 | 222.0 | 1.52 | 1.57 |
-| s_map2 | 169.3 | 239.6 | 1.42 | 1.29 |
-| s_any2 | 113.8 | 214.9 | 1.89 | 4.54 |
-| s_each4 | 209.5 | 265.1 | 1.27 | 1.25 |
-| s_times4 | 216.8 | 272.0 | 1.25 | 1.27 |
-| s_map4 | 269.7 | 291.2 | 1.08 | 1.05 |
-| s_any4 | 183.2 | 259.9 | 1.42 | 3.09 |
-| listwalk | 155.2 | 69.5 | 0.45 | 0.71 |
-| treefind | 1501.0 | 571.3 | 0.38 | 0.60 |
+| empty | 19.9 | 22.3 | 1.12 | 1.23 |
+| ivar_rw | 33.0 | 53.8 | 1.63 | 2.72 |
+| getter | 23.7 | 32.4 | 1.37 | 3.17 |
+| attr | 17.1 | 3.9 | 0.23 | 0.80 |
+| cmp | 24.6 | 30.3 | 1.23 | 3.58 |
+| abs | 29.8 | 52.6 | 1.77 | 3.07 |
+| arr | 35.0 | 42.0 | 1.20 | 1.82 |
+| nil? | 23.5 | 34.0 | 1.45 | 3.48 |
+| == | 24.6 | 27.8 | 1.13 | 3.35 |
+| yield | 44.7 | 54.5 | 1.22 | 2.57 |
+| each4 | 189.6 | 231.8 | 1.22 | 1.87 |
+| while10 | 187.7 | 40.7 | 0.22 | 0.23 |
+| new2 | 91.7 | 74.1 | 0.81 | 1.47 |
+| symcase | 29.5 | 28.9 | 0.98 | 1.03 |
+| str== | 100.0 | 49.4 | 0.49 | 1.44 |
+| poly2 | 54.5 | 36.1 | 0.66 | 2.11 |
+| blockeach | 57.8 | 50.6 | 0.88 | 2.33 |
+| lit== | 201.3 | 59.1 | 0.29 | 0.94 |
+| swap | 62.2 | 58.4 | 0.94 | 1.35 |
+| locattr | 61.0 | 42.7 | 0.70 | 1.38 |
+| sqrtw | 44.7 | 2.5 | 0.06 | 1.34 |
+| rangeeach | 46.3 | 1.8 | 0.04 | 0.87 |
+| blkattr | 77.2 | 61.9 | 0.80 | 1.12 |
+| selfcall | 89.4 | 31.7 | 0.35 | 0.99 |
+| veach1 | 181.3 | 317.9 | 1.75 | 1.59 |
+| veach2 | 229.7 | 362.5 | 1.58 | 1.37 |
+| veach4 | 367.7 | 509.3 | 1.39 | 1.38 |
+| veach100 | 5135.0 | 5609.6 | 1.09 | 1.04 |
+| rangelit | 158.4 | 88.4 | 0.56 | 0.87 |
+| short4 | 285.4 | 359.4 | 1.26 | 1.41 |
+| s_each1 | 76.6 | 169.0 | 2.21 | 2.11 |
+| s_times1 | 91.7 | 194.5 | 2.12 | 2.07 |
+| s_map1 | 107.4 | 180.5 | 1.68 | 1.93 |
+| s_any1 | 69.0 | 164.3 | 2.38 | 6.15 |
+| s_each2 | 112.7 | 194.7 | 1.73 | 1.70 |
+| s_times2 | 125.9 | 204.6 | 1.63 | 1.57 |
+| s_map2 | 140.8 | 211.1 | 1.50 | 1.29 |
+| s_any2 | 98.5 | 180.4 | 1.83 | 4.54 |
+| s_each4 | 186.5 | 234.0 | 1.25 | 1.25 |
+| s_times4 | 187.7 | 244.2 | 1.30 | 1.27 |
+| s_map4 | 242.5 | 245.1 | 1.01 | 1.05 |
+| s_any4 | 160.7 | 216.1 | 1.34 | 3.09 |
+| listwalk | 141.6 | 67.7 | 0.48 | 0.71 |
+| treefind | 1244.7 | 501.1 | 0.40 | 0.60 |
 
 `lit==`, `swap` and `locattr` are round seven's shapes, and their "start" is round six: a
 literal as the receiver of `==`, two element stores in one method, Float attr reads on
@@ -181,7 +190,8 @@ Profile (`Util/perf/profile.sh`, self time):
 ## Gaps, worst first
 
 1. **Calls of other methods from hot bodies** (`CallSite.Target` 24-32% of every
-   benchmark; `abs` 1.48, `ivar_rw` 1.42, `yield` 1.39, `nil?` 1.36). Richards' `run_task`
+   benchmark; `abs` 1.77 and 1.35 in two runs, `ivar_rw` 1.63, `nil?` 1.45, `getter` 1.37,
+   `yield` 1.22 and 1.40). Richards' `run_task`
    and `schedule` (11.6%), Towers' `push_disk`/`move_top_disk`, DeltaBlue's `remove_first`
    and Bounce's `bounce` all fail one rule of the method JIT: nothing that can deopt may
    follow an effect, because a deopt re-runs the generic body from the start. A second
