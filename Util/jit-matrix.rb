@@ -3856,3 +3856,103 @@ if RS_STATS
   $stderr.puts "[rs] failures: #{$rs_failures.inspect}"
   exit 1 unless $rs_failures.empty?
 end
+
+# ---------------------------------------------------------------- 12. an accessor a subclass makes private
+#
+# `private :x' (or `protected :x') in a subclass of the class that defines x leaves an entry in
+# the subclass that only forwards to the inherited method. Method resolution follows it, and the
+# method it arrives at is the superclass's public one: a compiled `o.x' that asked the method
+# for its visibility read or wrote the variable where the call raises NoMethodError (attribute
+# readers and writers and Struct members did, until the lookup's visibility was asked instead).
+# Each body is made hot on the superclass and then given an instance of the subclass, and once
+# more hot on the subclass from the start.
+
+puts '--- 12. an accessor a subclass makes private ---'
+
+class SvNode
+  attr_accessor :val, :other, :n
+  def initialize
+    @val = 0
+    @other = nil
+    @n = 0
+  end
+  def sv_peek = @other.val
+  def sv_poke = (@other.val = :w)
+  # hold_self's shape: with -X:JITResume the two attribute operations fall back to their calls
+  def sv_hold
+    @n += 1
+    @other.val = :h
+    @other.val
+  end
+  # with an implicit or a self receiver the private accessor is the caller's own to call
+  def sv_own = val
+  def sv_own_write = (self.val = :own)
+end
+class SvProtected < SvNode
+  protected :val, :val=
+end
+class SvPrivate < SvNode
+  private :val, :val=
+end
+# made public again further down: the entry nearest the receiver's class decides
+class SvPublicAgain < SvPrivate
+  public :val, :val=
+end
+SvStruct = Struct.new(:m)
+class SvStructPrivate < SvStruct
+  private :m, :m=
+end
+class SvHolder
+  attr_accessor :s
+  def sv_get = @s.m
+  def sv_set = (@s.m = 5)
+end
+
+sv_node = SvNode.new
+sv_node.other = SvNode.new
+warm { sv_node.sv_peek; sv_node.sv_poke; sv_node.sv_hold }
+t('sv_peek, plain') { sv_node.sv_peek }
+[SvProtected, SvPrivate, SvPublicAgain].each do |sv_class|
+  sv_node.other = sv_class.new
+  t("sv_peek, #{sv_class}") { sv_node.sv_peek }
+  t("sv_poke, #{sv_class}") { sv_node.sv_poke }
+  t("sv_hold, #{sv_class}") { sv_node.sv_hold }
+  t("sv_hold again, #{sv_class}") { [sv_node.sv_hold, sv_node.n] }
+end
+sv_node.other = SvNode.new
+t('sv_hold, plain again') { [sv_node.sv_hold, sv_node.n] }
+
+sv_hot = SvNode.new
+sv_hot.other = SvPrivate.new
+warm do
+  begin; sv_hot.sv_peek; rescue NoMethodError; end
+  begin; sv_hot.sv_poke; rescue NoMethodError; end
+  begin; sv_hot.sv_hold; rescue NoMethodError; end
+end
+t('sv_peek, hot on SvPrivate') { sv_hot.sv_peek }
+t('sv_poke, hot on SvPrivate') { sv_hot.sv_poke }
+t('sv_hold, hot on SvPrivate') { sv_hot.sv_hold }
+t('sv_hold count') { sv_hot.n }
+
+sv_self = SvPrivate.new
+warm { sv_self.sv_own; sv_self.sv_own_write }
+t('sv_own, a private reader on self') { [sv_self.sv_own_write, sv_self.sv_own] }
+sv_self = SvProtected.new
+warm { sv_self.sv_own; sv_self.sv_own_write }
+t('sv_own, a protected reader on self') { [sv_self.sv_own_write, sv_self.sv_own] }
+
+sv_holder = SvHolder.new
+sv_holder.s = SvStruct.new(1)
+warm { sv_holder.sv_get; sv_holder.sv_set }
+t('sv_get, plain') { [sv_holder.sv_get, sv_holder.sv_set] }
+sv_holder.s = SvStructPrivate.new(1)
+t('sv_get, a private Struct member') { sv_holder.sv_get }
+t('sv_set, a private Struct member') { sv_holder.sv_set }
+sv_holder_hot = SvHolder.new
+sv_holder_hot.s = SvStructPrivate.new(1)
+warm do
+  begin; sv_holder_hot.sv_get; rescue NoMethodError; end
+  begin; sv_holder_hot.sv_set; rescue NoMethodError; end
+end
+t('sv_get, hot on the private member') { sv_holder_hot.sv_get }
+t('sv_set, hot on the private member') { sv_holder_hot.sv_set }

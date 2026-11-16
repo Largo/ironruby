@@ -482,6 +482,115 @@ nil
         }
 
         /// <summary>
+        /// `private :x' or `protected :x' in a subclass leaves an entry there that forwards to the inherited x, and the
+        /// method the resolution arrives at is the superclass's public one. A compiled `o.x', `o.x = v' or Struct member
+        /// access asks the lookup for the visibility (JitRuntime.SelfAttrSite.Resolve) and makes the call, which raises
+        /// CRuby 4.0's NoMethodError; asking the method, it read and wrote the variable. With -X:JITResume the
+        /// attribute operations after an effect fall back to the same call.
+        /// </summary>
+        public void JitAttrVisibility1() {
+            // (this file's line ends are CRLF, the script's "\n")
+            string expected = JitAttrVisibilityExpected.Replace("\r", "");
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITResume"] = true; });
+            AreEqual(engine.CreateScriptSourceFromString(JitAttrVisibilityScript, "jitattrvisibility.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                expected);
+            AreEqual(Engine.CreateScriptSourceFromString(JitAttrVisibilityScript, "jitattrvisibility.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                expected);
+        }
+
+        private const string JitAttrVisibilityScript = @"
+class VNode
+  attr_accessor :val, :other, :n
+  def initialize
+    @val = 0
+    @other = nil
+    @n = 0
+  end
+  def peek
+    @other.val
+  end
+  def poke
+    @other.val = :w
+  end
+  def hold
+    @n += 1
+    @other.val = :h
+    @other.val
+  end
+end
+class VProtected < VNode
+  protected :val, :val=
+end
+class VPrivate < VNode
+  private :val, :val=
+end
+class VPublicAgain < VPrivate
+  public :val, :val=
+end
+VStruct = Struct.new(:m)
+class VStructPrivate < VStruct
+  private :m, :m=
+end
+class VHolder
+  attr_accessor :s
+  def get
+    @s.m
+  end
+  def set
+    @s.m = 5
+  end
+end
+
+$out = []
+def t
+  $out << yield.inspect
+rescue NoMethodError => e
+  $out << e.message
+end
+
+node = VNode.new
+node.other = VNode.new
+holder = VHolder.new
+holder.s = VStruct.new(1)
+# an error message's first use defines methods, which sends hot bodies back to profiling: once before the warm-up
+t { nil.val }
+i = 0
+while i < 400
+  node.peek
+  node.poke
+  node.hold
+  holder.get
+  holder.set
+  i += 1
+end
+[VProtected, VPrivate, VPublicAgain].each do |c|
+  node.other = c.new
+  t { node.peek }
+  t { node.poke }
+  t { node.hold }
+end
+t { node.n }
+holder.s = VStructPrivate.new(1)
+t { holder.get }
+t { holder.set }
+$out.join(""\n"")
+";
+
+        private const string JitAttrVisibilityExpected = @"undefined method 'val' for nil
+protected method 'val' called for an instance of VProtected
+protected method 'val=' called for an instance of VProtected
+protected method 'val=' called for an instance of VProtected
+private method 'val' called for an instance of VPrivate
+private method 'val=' called for an instance of VPrivate
+private method 'val=' called for an instance of VPrivate
+0
+:w
+:h
+403
+private method 'm' called for an instance of VStructPrivate
+private method 'm=' called for an instance of VStructPrivate";
+
+        /// <summary>
         /// -X:JITResume (Docs/jit-resume-deopt.md, stage 1, off by default): Richards' Scheduler#hold_self - an ivar
         /// increment, then an attribute write and an attribute read on another object - is specialized only under the
         /// switch, and then falls back to the call of each attribute operation whose guard fails after the first

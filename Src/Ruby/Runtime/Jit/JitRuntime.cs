@@ -542,12 +542,26 @@ namespace IronRuby.Runtime.Jit {
             }
 
             /// <summary>
+            /// What `name' calls on an object of cls, or not found when <paramref name="publicOnly"/> and a call
+            /// with an explicit receiver would not reach it. The visibility is the lookup's and not the method's:
+            /// `private :x' in a subclass leaves an entry there that only forwards to the inherited x
+            /// (SuperForwarderInfo), the resolution follows it, and the method it finds is still public.
+            /// </summary>
+            internal static IronRuby.Runtime.Calls.MethodResolutionResult Resolve(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
+                var lookup = cls.GetMethodLookup(name);
+                if (publicOnly && lookup.Visibility != RubyMethodVisibility.Public) {
+                    return IronRuby.Runtime.Calls.MethodResolutionResult.NotFound;
+                }
+                return lookup.Result;
+            }
+
+            /// <summary>
             /// The instance variable `name' reads on cls, if it is an attr_reader there (a public one,
             /// if <paramref name="publicOnly"/>).
             /// </summary>
             internal static string ReaderVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
-                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
-                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return null; }
+                var resolved = Resolve(cls, name, publicOnly);
+                if (!resolved.Found) { return null; }
                 var reader = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeReaderInfo;
                 return (reader != null) ? reader.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, false);
             }
@@ -557,8 +571,8 @@ namespace IronRuby.Runtime.Jit {
             /// that is one in all but name, see TrivialAccessorVariable).
             /// </summary>
             internal static string WriterVariable(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly) {
-                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
-                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return null; }
+                var resolved = Resolve(cls, name, publicOnly);
+                if (!resolved.Found) { return null; }
                 var writer = resolved.Info as IronRuby.Runtime.Calls.RubyAttributeWriterInfo;
                 return (writer != null) ? writer.InstanceVariableName : TrivialAccessorVariable(cls, resolved.Info, true);
             }
@@ -755,8 +769,8 @@ namespace IronRuby.Runtime.Jit {
 
             /// <summary>The index of the Struct member `name' reads (writes) on cls, if it is that member method; else -1.</summary>
             internal static int Member(RubyClass/*!*/ cls, string/*!*/ name, bool publicOnly, bool writer) {
-                var resolved = cls.ResolveMethod(name, IronRuby.Runtime.Calls.VisibilityContext.AllVisible);
-                if (!resolved.Found || (publicOnly && !resolved.Info.IsPublic)) { return -1; }
+                var resolved = SelfAttrSite.Resolve(cls, name, publicOnly);
+                if (!resolved.Found) { return -1; }
                 var custom = resolved.Info as IronRuby.Runtime.Calls.RubyCustomMethodInfo;
                 if (custom == null || custom.StructMember < 0 || custom.IsStructWriter != writer) { return -1; }
                 return custom.StructMember;
