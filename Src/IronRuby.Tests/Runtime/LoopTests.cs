@@ -461,23 +461,23 @@ nil
         }
 
         /// <summary>
-        /// -X:JITCalls (a prototype, off by default): a method the JIT compiles calls the typed bodies of the
+        /// Direct calls (on by default, -X:NoJITCalls): a method the JIT compiles calls the typed bodies of the
         /// other methods it calls on self directly. What the callee's entry would have guarded falls to the
         /// caller's: a callee redefined, overridden in a subclass, deopting, or passed a type it was not
         /// compiled for still gives CRuby 4.0's output.
         /// </summary>
         public void JitCalls1() {
             int bound = IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies;
-            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITCalls"] = true; });
-            AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+            AreEqual(Engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                 JitCallsExpected);
             // the output is the same when nothing is bound: tot's call of acc, a callee with a loop, is one
             // the inliner never takes, and Shape#area's of side is another
             Assert(IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies >= bound + 2);
             bound = IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies;
-            AreEqual(Engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITCalls"] = false; });
+            AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                 JitCallsExpected);
-            // and without the switch nothing is
+            // and with -X:NoJITCalls nothing is
             Assert(IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies == bound);
         }
 
@@ -683,7 +683,7 @@ s = RSched.new(RTask.new(:plain))
 
         /// <summary>
         /// -X:JITMethods (a prototype, off by default): the method JIT's typed bodies as static methods of a runtime
-        /// assembly, in each of its modes, alone and with -X:JITCalls, whose direct calls are then calls of those
+        /// assembly, in each of its modes, alone and with direct calls, which are then calls of those
         /// methods. The tree compiler is IronRuby.JitEmit.dll, which this project references so that it sits next
         /// to IronRuby.dll; without it the switch would compile as before, so the test checks that bodies were emitted.
         /// </summary>
@@ -694,8 +694,8 @@ s = RSched.new(RTask.new(:plain))
                 int failed = IronRuby.Runtime.Jit.JitMethodEmitter.Failed;
                 var engine = IronRuby.Ruby.CreateEngine((setup) => {
                     setup.Options["JITMethods"] = mode.TrimEnd('+');
-                    // with -X:JITCalls
-                    if (mode.EndsWith("+")) { setup.Options["JITCalls"] = true; }
+                    // with direct calls, and without them (-X:NoJITCalls)
+                    setup.Options["JITCalls"] = mode.EndsWith("+");
                 });
                 AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitmethods.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                     JitCallsExpected);

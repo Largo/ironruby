@@ -22,7 +22,7 @@
  *     `using'd. A method added to an active refinement bumps the global method version too.
  *   - The receiver's immediate class is pinned whenever the specialized body contains a
  *     direct self-call, so that call cannot be a call to an override.
- *   - -X:JITCalls (a prototype, off by default): a call of another method on self is bound to
+ *   - Direct calls (on by default, -X:NoJITCalls turns them off): a call of another method on self is bound to
  *     that method's typed body (BindCallee), resolved from the same pinned class under the same
  *     method version; the guards the callee's own entry would make move to the caller's entry
  *     and the callee's deopts end there.

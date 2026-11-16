@@ -731,10 +731,14 @@ namespace IronRuby.Hosting {
                             LanguageSetup.Options["JITMethods"] = "run";
                             return;
 
-                        // a prototype: a typed body calls the typed bodies of other methods of its
-                        // receiver directly (Runtime/Jit/JitStub.cs, BindCallee)
+                        // a typed body calls the typed bodies of other methods of its receiver directly
+                        // (Runtime/Jit/JitStub.cs, BindCallee); on by default
                         case "JITCalls":
                             LanguageSetup.Options["JITCalls"] = ScriptingRuntimeHelpers.True;
+                            return;
+
+                        case "NoJITCalls":
+                            LanguageSetup.Options["JITCalls"] = ScriptingRuntimeHelpers.False;
                             return;
 
                         // stage 1 of Docs/jit-resume-deopt.md: an attribute operation after a typed body's first
@@ -984,6 +988,7 @@ namespace IronRuby.Hosting {
                 { "-X:ObjectSpace",              "let ObjectSpace.each_object find objects, not just modules (slows down Object#new)" },
                 { "-X:NoJIT",                    "disable the method JIT (type-specialized method bodies), which is on by default" },
                 { "-X:NoOSR",                    "disable on-stack replacement (specializing a loop while it runs), on by default" },
+                { "-X:NoJITCalls",               "the method JIT does not bind a compiled method's calls of other compiled methods on self" },
                 { "-X:NoAdaptiveCompilation",    "disable adaptive compilation - all code will be compiled" },
                 { "-X:CompilationThreshold",     "the number of iterations before the interpreter starts compiling" },
                 { "-X:PassExceptions",           "do not catch exceptions that are unhandled by script code" },
