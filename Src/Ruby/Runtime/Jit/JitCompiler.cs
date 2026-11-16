@@ -85,6 +85,10 @@ namespace IronRuby.Runtime.Jit {
         // The body calls the typed bodies of other methods: the entry pins the receiver class they
         // were resolved from.
         internal bool DirectCalls;
+        // -X:JITResume: the body falls back to an operation's call at so many sites after its first effect, takes the
+        // block after its parameters and makes its frame (JitResume.cs); null when it has none.
+        internal JitResumeInfo Resume;
+        internal int FallbackSites;
     }
 
     /// <summary>
@@ -562,6 +566,7 @@ namespace IronRuby.Runtime.Jit {
                 c._hints = hints;
                 c._refinements = refinements;
                 c._callees = callees;
+                c._resume = (hints != null && keywords == null && supplied < 0 && paramTypes.Length == 0) ? hints.Resume : null;
                 c._noArrayLocals = !arrayParameters;
                 if (hints != null && hints.SelfSample != null) { c._ivarProfile = IVarProfile(context, hints.SelfSample); }
                 c._noUnloggedWrites = !unloggedWrites;
@@ -646,6 +651,14 @@ namespace IronRuby.Runtime.Jit {
                 // is; this body's own deopt instead once it writes logged elements (MethodSafePoint).
                 if (c._hashWrite && c._calleeLoop) { return Declined("logged element writes and a callee with a loop"); }
 
+                // -X:JITResume: a body with fallbacks is a light frame (WrapResumeBody), whose value is an object
+                if (c._fallbackSites > 0) {
+                    string obstacle = c.ResumeObstacle();
+                    if (obstacle != null) { return Declined("fallbacks after an effect in a body with " + obstacle); }
+                    body = c.WrapResumeBody(body, actual);
+                    actual = JT.Obj;
+                }
+
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {
                     body = new StackCheckPlacer(c._selfCalls).Visit(body);
@@ -660,6 +673,8 @@ namespace IronRuby.Runtime.Jit {
                     parameters.Add(p);
                     functionScope.Remove(p);
                 }
+                // the block, last (JitStub.BuildEntry)
+                if (c._fallbackSites > 0) { parameters.Add(c._blockVariable); }
                 if (c._undoLog != null) {
                     // the element writes are logged where the entry's mark says (JitStub.WithUndoLog)
                     c._safePointDeopts.Value = true;
@@ -680,11 +695,12 @@ namespace IronRuby.Runtime.Jit {
                     body = Ast.Block(functionScope, body);
                 }
                 return new JitCode {
-                    Lambda = Ast.Lambda(c._selfDelegateType, body, "jit$" + ast.Name, parameters),
+                    Lambda = Ast.Lambda((c._fallbackSites > 0) ? typeof(Func<object, Proc, object>) : c._selfDelegateType, body, "jit$" + ast.Name, parameters),
                     SelfCell = c._selfCell,
                     ReturnType = actual,
                     ParameterTypes = c._resolvedTypes,
-                    CanDeopt = c._canDeopt || c._ivarWrite,
+                    // (a body with fallbacks counts its entries for OnDeopt, which they are counted by)
+                    CanDeopt = c._canDeopt || c._ivarWrite || c._fallbackSites > 0,
                     EmittedSelfCall = c._selfCall,
                     UsesConstants = c._usesConstants,
                     UsesUndoLog = c._hashWrite,
@@ -704,6 +720,8 @@ namespace IronRuby.Runtime.Jit {
                         ast.Parameters.Mandatory.Length == paramTypes.Length,
                     InlinedSelfClass = c._inlinedSelfClass,
                     InlinedOnArgumentClass = c._inlinedOnArgumentClass,
+                    Resume = (c._fallbackSites > 0) ? c._resume : null,
+                    FallbackSites = c._fallbackSites,
                 };
             }
             return Declined("the return type did not settle");
@@ -906,12 +924,9 @@ namespace IronRuby.Runtime.Jit {
                 type = JT.Obj;
                 parts.Add(temps[run.Count - 1]);
             } else {
-                int skip = run.Count;
                 JT t = JT.Obj;
-                int k = 0;
-                foreach (var statement in statements) {
-                    if (k++ < skip) { continue; }
-                    parts.Add(Emit(statement, out t));
+                for (int k = run.Count; k < statements.Count; k++) {
+                    parts.Add(EmitTopStatement(statements, k, out t));
                 }
                 type = t;
             }
@@ -945,7 +960,7 @@ namespace IronRuby.Runtime.Jit {
             var parts = new List<MSA.Expression>(count);
             type = JT.None;
             for (int i = start; i < statements.Count; i++) {
-                parts.Add(Emit(statements[i], out type));
+                parts.Add(EmitTopStatement(statements, i, out type));
             }
             return (parts.Count == 1) ? parts[0] : Ast.Block(ClrType(type), parts);
         }
@@ -954,6 +969,10 @@ namespace IronRuby.Runtime.Jit {
             if (statements == null || statements.Count == 0) {
                 type = JT.Obj;
                 return Ast.Constant(null, typeof(object));
+            }
+            if (_resume != null && _ast != null && statements == _ast.Body.Statements) {
+                // the method's own statements, which may carry :line hooks (EmitTopStatement)
+                return EmitStatements(statements, 0, out type);
             }
             if (statements.Count == 1) {
                 return Emit(statements.First, out type);
@@ -975,15 +994,22 @@ namespace IronRuby.Runtime.Jit {
         /// node kinds the screen rejected, so the omission shows up there.
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
-            if (!JitRuntime.Verbose) { return EmitNode(node, out type); }
-            // IR_JIT_VERBOSE=1: the node a deopt after an effect is emitted for (_firstDeoptAfterEffect)
-            string outer = _emitting;
-            _emitting = Describe(node);
-            try {
-                return EmitNode(node, out type);
-            } finally {
-                _emitting = outer;
+            MSA.Expression result;
+            if (!JitRuntime.Verbose) {
+                result = EmitNode(node, out type);
+            } else {
+                // IR_JIT_VERBOSE=1: the node a deopt after an effect is emitted for (_firstDeoptAfterEffect)
+                string outer = _emitting;
+                _emitting = Describe(node);
+                try {
+                    result = EmitNode(node, out type);
+                } finally {
+                    _emitting = outer;
+                }
             }
+            // -X:JITResume: a node whose code comes after a fallback speculates on nothing or guards itself (JitCompiler.Resume.cs)
+            if (_fallbackSites > 0 && !IsTailNode(node)) { throw Bail("after a fallback: " + Describe(node)); }
+            return result;
         }
 
         private MSA.Expression/*!*/ EmitNode(RExpr/*!*/ node, out JT type) {
@@ -1285,7 +1311,7 @@ namespace IronRuby.Runtime.Jit {
             }
 
             var attribute = node.Left as AttributeAccess;
-            if (attribute != null) { return EmitAttributeWrite(attribute, op, node.Right, out type); }
+            if (attribute != null) { return EmitAttributeWrite(attribute, op, node.Right, node, out type); }
 
             var target = node.Left as LocalVariable;
             if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }

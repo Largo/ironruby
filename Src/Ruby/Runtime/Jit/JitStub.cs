@@ -784,6 +784,7 @@ namespace IronRuby.Runtime.Jit {
             spec.Version = version;
             spec.PinnedClass = needsClassGuard ? _receiverClass : null;
             spec.Typed = typed;
+            if (code.Resume != null) { code.Resume.Specialization = spec; }
             spec.Entry = CompileEntry(BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec));
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
@@ -803,10 +804,11 @@ namespace IronRuby.Runtime.Jit {
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
             if (code.DirectCalls) { JitRuntime.DirectCallBodies++; }
+            if (code.Resume != null) { JitRuntime.ResumeBodies++; }
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}",
+                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}{6}",
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, code.EmittedSelfCall ? " (self-call)" : "",
-                    code.DirectCalls ? " (direct calls)" : "");
+                    code.DirectCalls ? " (direct calls)" : "", (code.Resume != null) ? " (fallbacks: " + code.FallbackSites + " sites)" : "");
             }
             return true;
         }
@@ -884,8 +886,9 @@ namespace IronRuby.Runtime.Jit {
                 return null;
             }
             // Element writes are undone by the entry's undo log, or are the last thing the body does; a
-            // construction runs an initialize, which may redefine what the caller has bound.
-            if (code.WritesElements || code.Construction) { return null; }
+            // construction runs an initialize, which may redefine what the caller has bound. A body with
+            // fallbacks (-X:JITResume) takes the block and makes its frame, which its entry is for.
+            if (code.WritesElements || code.Construction || code.Resume != null) { return null; }
             // The body's own inlined and direct calls were resolved from the class its entry pins.
             if (spec.PinnedClass != null && spec.PinnedClass != receiverClass) { return null; }
 
@@ -926,7 +929,23 @@ namespace IronRuby.Runtime.Jit {
 
         private JitCompiler.ReceiverHints/*!*/ Hints() {
             return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample,
-                ArgClasses = ArgClasses() };
+                ArgClasses = ArgClasses(), Resume = ResumeInfo() };
+        }
+
+        /// <summary>
+        /// -X:JITResume: what the typed body needs to fall back to an operation's call after its first effect
+        /// (JitResume.cs), for a body stage 1 takes - no parameters, no locals (JitCompiler.IsResumeCandidate) - of a
+        /// method whose generic frame it can stand for: one compiled from its source, with a frame name (Named), a
+        /// declaring scope and no refinements recorded. Null otherwise, and the body is compiled as without the switch.
+        /// </summary>
+        private JitResumeInfo ResumeInfo() {
+            if (!_context.RubyOptions.JitResume || _frameName == null || _declaringScope == null || _definitionRefinements != null ||
+                _keywords != null || _arity != 0 || _hasDefault != null || !JitCompiler.IsResumeCandidate(_ast)) {
+                return null;
+            }
+            string path = JitResumeInfo.PathOf(_frameName);
+            if (path == null) { return null; }
+            return new JitResumeInfo(_frameName, path, _ast.Location.End.Line, _ast.Name, _declaringScope, _declaringModule);
         }
 
         private RubyClass[][]/*!*/ ArgClasses() {
@@ -1166,8 +1185,10 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            var typedArgs = new MSA.Expression[_typedCount + 1];
+            // -X:JITResume: a body with fallbacks takes the block last, for the frame it makes (JitFrame)
+            var typedArgs = new MSA.Expression[_typedCount + 1 + ((code.Resume != null) ? 1 : 0)];
             typedArgs[0] = self;
+            if (code.Resume != null) { typedArgs[_typedCount + 1] = blk; }
             for (int i = 0; i < _typedCount; i++) {
                 if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; continue; }
                 switch (code.ParameterTypes[i]) {

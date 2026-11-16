@@ -3483,3 +3483,376 @@ if ED_STATS
   $stderr.puts "[ed] #{ed_count.inspect}; failures: #{ed_failures.size}"
   exit 1 unless ed_failures.empty?
 end
+
+# ---------------------------------------------------------------- 11. fallbacks after an effect
+#
+# -X:JITResume (Docs/jit-resume-deopt.md, stage 1): an attribute write or read on another object
+# after the body's first effect guards itself and, when its guard fails, makes the source's call
+# once, on the operands already evaluated, and the typed body goes on. Each case below is a
+# hold_self-shaped method (no parameters, no locals) of a class of its own, made hot with plain
+# RsTask receivers and then called with a receiver its guards miss, so that the compiled body
+# falls back. Everything a probe needs - the odd classes, singleton methods, the refinement -
+# is defined before the warm-up: a method defined after it fails the body's version check at
+# its entry, and the probe would run the generic body instead.
+#
+# RS_CHECK=1 under ./ir.sh -X:JITResume reads the JIT's counters around each warm-up and probe,
+# prints them per case to stderr and exits 1 when a case meant to fall back did not specialize
+# or did not fall back:
+#
+#   RS_CHECK=1 ./ir.sh -X:JITResume Util/jit-matrix.rb > /dev/null
+#
+# The same file runs under ruby, ./ir.sh, ./ir.sh -X:NoJIT and ./ir.sh -X:JITResume; all four
+# print the same.
+
+class RsTask
+  attr_accessor :task_holding, :flag
+  attr_reader :link
+  def initialize(link = nil)
+    @link = link
+    @task_holding = false
+    @flag = nil
+  end
+  def state = [@task_holding, @flag]
+end
+
+class RsSched
+  attr_accessor :hold_count, :current_task, :other, :box
+  def initialize(task)
+    @hold_count = 0
+    @current_task = task
+    @other = RsTask.new(:other_link)
+    @box = RsTask.new
+  end
+end
+
+# hold_self, as Richards has it
+RS_HOLD = <<~RUBY
+  @hold_count += 1
+  @current_task.task_holding = true
+  @current_task.link
+RUBY
+
+# Each case: a name, the body of RsSched#rs_<name>, and the receiver it is probed with (made
+# before the warm-up).
+def rs_define(name, body)
+  RsSched.class_eval "def rs_#{name}\n#{body}end\n", __FILE__, __LINE__
+end
+
+$rs_log = []
+
+# A receiver of another class with its own writer and reader.
+class RsOdd
+  def task_holding=(v)
+    $rs_log << [:odd_write, v]
+  end
+  def link
+    $rs_log << :odd_read
+    :odd_link
+  end
+end
+
+class RsPrivate
+  attr_reader :link
+  private def task_holding=(v)
+    $rs_log << [:private_write, v]
+  end
+end
+
+class RsProtected
+  attr_reader :link
+  protected def task_holding=(v)
+    $rs_log << [:protected_write, v]
+  end
+end
+
+class RsMissing
+  def method_missing(name, *args)
+    $rs_log << [:missing, name, args]
+    :missing_result
+  end
+  def respond_to_missing?(*) = true
+end
+
+module RsRefinement
+  refine RsTask do
+    def task_holding=(v)
+      $rs_log << [:refined_write, v]
+    end
+  end
+end
+
+# The callee redefines RsTask#link and removes RsTask#flag= for the rest of the body.
+class RsRedefiner
+  def task_holding=(v)
+    $rs_log << [:redefining, v]
+    RsTask.class_eval { def link = :redefined_link }
+  end
+end
+
+class RsRemover
+  def task_holding=(v)
+    $rs_log << [:removing, v]
+    RsTask.class_eval { remove_method :flag= }
+  end
+end
+
+# The callee turns on a TracePoint for the rest of the body: :line for the next statement and
+# :return for the method, as CRuby reports them. It listens for :c_call too, which sends the
+# read after it to its call, but :c_call is not printed: CRuby reports one for the attr_reader
+# `link' and IronRuby, JIT or not, reports none for an attribute reader.
+$rs_tp_events = []
+class RsTracer
+  def task_holding=(v)
+    $rs_tp = TracePoint.new(:line, :return, :c_call) do |tp|
+      if tp.method_id == :rs_traced && tp.event != :c_call
+        $rs_tp_events << [tp.event, tp.lineno, tp.method_id]
+      end
+    end
+    $rs_tp.enable
+  end
+end
+
+# The callee calls the method it was called from again, without end.
+class RsRecurser
+  def task_holding=(v)
+    $rs_sched_rec.rs_recurse
+  end
+end
+
+# The callee calls it again three times, each invocation falling back on its own.
+class RsReenter
+  def task_holding=(v)
+    $rs_log << [:reenter, v, $rs_sched_re.hold_count]
+    $rs_sched_re.rs_reenter if $rs_sched_re.hold_count < 4
+  end
+  def link = :reenter_link
+end
+
+class RsRaiser
+  def task_holding=(v)
+    raise ArgumentError, 'raised by the writer'
+  end
+  def link
+    raise ArgumentError, 'raised by the reader'
+  end
+end
+
+# Kernel#binding as the reader: the binding of the method that falls back.
+class RsBinder
+  alias_method :link, :binding
+  public :link
+end
+
+# The writer returns from the method through a proc made in that method's binding.
+class RsReturner
+  def task_holding=(v)
+    $rs_returner_box.task_holding.eval('proc { return 7 }').call
+  end
+end
+
+# Regexp#=~ as the writer sets $~ in the method that falls back; Regexp.last_match as the reader
+# reads it there.
+class RsRegexp < Regexp
+  alias_method :task_holding=, :=~
+end
+class << Regexp
+  alias_method :link, :last_match
+end
+
+class RsSingletonHolder; end
+rs_singleton = RsTask.new(:singleton_link)
+def rs_singleton.task_holding=(v)
+  $rs_log << [:singleton_write, v]
+end
+
+class RsRefinedSched < RsSched
+  using RsRefinement
+  def rs_refined
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+end
+
+rs_define 'other_class', RS_HOLD
+rs_define 'private', RS_HOLD
+rs_define 'protected', RS_HOLD
+rs_define 'missing', RS_HOLD
+rs_define 'frozen', RS_HOLD
+rs_define 'singleton', RS_HOLD
+rs_define 'nil_receiver', RS_HOLD
+rs_define 'traced', "@hold_count += 1\n@current_task.task_holding = true\n@other.link\n"
+rs_define 'raise_write', RS_HOLD
+rs_define 'recurse', RS_HOLD
+rs_define 'reenter', RS_HOLD
+# the operand of the falling-back write is the effect, and the value is the expression's
+rs_define 'operand_effect', "@current_task.task_holding = (@hold_count += 1)\n"
+# two writes and a read, the second and the read on another receiver
+rs_define 'redefine', "@hold_count += 1\n@current_task.task_holding = true\n@other.link\n"
+rs_define 'remove', "@hold_count += 1\n@current_task.task_holding = true\n@other.flag = :set\n@other.link\n"
+# a reader that raises, on a later line than the first fallback
+rs_define 'raise_read', "@hold_count += 1\n@box.task_holding = true\n@current_task.link\n"
+rs_define 'binding', "@hold_count += 1\n@box.task_holding = @current_task.link\n@box.flag = :after\n"
+rs_define 'returned', "@hold_count += 1\n@box.task_holding = @other.link\n@current_task.task_holding = true\n:fell_through\n"
+rs_define 'last_match', "@hold_count += 1\n@current_task.task_holding = :abc\n@other.link\n"
+
+RS_STATS =
+  if ENV['RS_CHECK'] == '1' && defined?(System::Type)
+    t = System::Type.get_type('IronRuby.Runtime.Jit.JitRuntime, IronRuby')
+    flags = System::Reflection::BindingFlags.Static | System::Reflection::BindingFlags.NonPublic
+    %w[Specialized FallbackCount Invalidations].map { |f| t.get_field(f, flags) }
+  end
+
+def rs_stats
+  RS_STATS ? RS_STATS.map { |f| f.get_value(nil).to_i } : [0, 0, 0]
+end
+
+$rs_failures = []
+
+# Warms rs_<name> on a sched of its own with plain receivers, then sets what the probe needs and
+# calls it once inside t; checks that the probe fell back (RS_CHECK) unless it is not meant to.
+def rs_case(name, sched, falls_back: true, count: true)
+  plain = sched.current_task
+  plain_other = sched.other
+  plain_box = sched.box
+  before = rs_stats
+  warm { sched.send(:"rs_#{name}") }
+  spec = rs_stats[0] + -before[0]
+  sched.hold_count = 0
+  sched.current_task = plain
+  sched.other = plain_other
+  sched.box = plain_box
+  yield sched
+  $rs_log = []
+  before = rs_stats
+  t("rs_#{name}") { sched.send(:"rs_#{name}") }
+  fallbacks = rs_stats[1] + -before[1]
+  invalidations = rs_stats[2] + -before[2]
+  puts "  log #{$rs_log.inspect} hold_count #{count ? sched.hold_count.inspect : sched.hold_count > 0}"
+  return unless RS_STATS
+  ok = !falls_back || (spec > 0 && fallbacks > 0 && invalidations == 0)
+  $rs_failures << name unless ok
+  $stderr.puts "[rs] rs_#{name} specialized=#{spec} fallbacks=#{fallbacks} invalidations=#{invalidations}#{ok ? '' : ' FAIL'}"
+end
+
+puts
+puts '--- 11. fallbacks after an effect ---'
+
+rs_case('other_class', RsSched.new(RsTask.new(RsTask.new))) { |s| s.current_task = RsOdd.new }
+rs_case('private', RsSched.new(RsTask.new)) { |s| s.current_task = RsPrivate.new }
+rs_case('protected', RsSched.new(RsTask.new)) { |s| s.current_task = RsProtected.new }
+rs_case('missing', RsSched.new(RsTask.new)) { |s| s.current_task = RsMissing.new }
+rs_frozen = RsTask.new(:frozen_link)
+rs_frozen.freeze
+rs_case('frozen', RsSched.new(RsTask.new)) { |s| s.current_task = rs_frozen }
+puts "  frozen receiver after: #{rs_frozen.state.inspect}"
+rs_case('singleton', RsSched.new(RsTask.new)) { |s| s.current_task = rs_singleton }
+rs_case('nil_receiver', RsSched.new(RsTask.new)) { |s| s.current_task = nil }
+rs_case('operand_effect', RsSched.new(RsTask.new)) { |s| s.current_task = RsOdd.new }
+# the refinement is active where rs_refined is defined, so its call is the refined writer
+rs_case('refined', RsRefinedSched.new(RsTask.new), falls_back: false) { |s| s.current_task = RsTask.new(:refined_link) }
+
+rs_case('traced', RsSched.new(RsTask.new)) { |s| s.current_task = RsTracer.new; s.other = RsTask.new(:traced_link) }
+$rs_tp.disable
+puts "  events #{$rs_tp_events.inspect}"
+
+rs_case('raise_write', RsSched.new(RsTask.new)) do |s|
+  s.current_task = RsRaiser.new
+end
+rs_bt = begin
+  RsSched.new(RsRaiser.new).rs_raise_write
+rescue ArgumentError => e
+  e.backtrace_locations.first(2).map { |l| "#{File.basename(l.path)}:#{l.lineno}:#{l.label}" }
+end
+puts "  backtrace #{rs_bt.inspect}"
+rs_case('raise_read', RsSched.new(RsTask.new)) { |s| s.current_task = RsRaiser.new }
+rs_bt = begin
+  rs_s = RsSched.new(RsRaiser.new)
+  rs_s.rs_raise_read
+rescue ArgumentError => e
+  e.backtrace_locations.first(2).map { |l| "#{File.basename(l.path)}:#{l.lineno}:#{l.label}" }
+end
+puts "  backtrace #{rs_bt.inspect}"
+rs_bt = begin
+  RsSched.new(rs_frozen).rs_frozen
+rescue FrozenError => e
+  e.backtrace_locations.first(1).map { |l| "#{File.basename(l.path)}:#{l.lineno}:#{l.label}" }
+end
+puts "  frozen backtrace #{rs_bt.inspect}"
+
+$rs_sched_rec = RsSched.new(RsTask.new)
+rs_case('recurse', $rs_sched_rec, count: false) { |s| s.current_task = RsRecurser.new }
+$rs_sched_re = RsSched.new(RsTask.new)
+rs_case('reenter', $rs_sched_re) { |s| s.current_task = RsReenter.new }
+
+rs_case('redefine', RsSched.new(RsTask.new)) { |s| s.current_task = RsRedefiner.new }
+# put back as an attr_reader (a method that reads @link would be inlined, not read as an attribute)
+RsTask.class_eval { remove_method :link; attr_reader :link }
+puts "  plain read after: #{RsTask.new(:restored).link.inspect}"
+rs_case('remove', RsSched.new(RsTask.new)) { |s| s.current_task = RsRemover.new }
+RsTask.class_eval { attr_writer :flag }
+
+# the binding the reader took is the method's: its receiver, its block, no locals
+rs_bind_sched = RsSched.new(RsTask.new)
+rs_case('binding', rs_bind_sched) { |s| s.current_task = RsBinder.new }
+rs_b = rs_bind_sched.box.task_holding
+puts "  binding #{rs_b.class} receiver #{rs_b.receiver.equal?(rs_bind_sched)} locals #{rs_b.local_variables.inspect} " \
+     "block_given? #{rs_b.eval('block_given?')}"
+rs_bind_sched.current_task = RsBinder.new
+rs_bind_sched.rs_binding { :the_block }
+rs_b = rs_bind_sched.box.task_holding
+puts "  with a block: block_given? #{rs_b.eval('block_given?')} yield #{rs_b.eval('yield').inspect} box #{rs_bind_sched.box.flag.inspect}"
+
+# the writer yields to the method's block through the binding the reader took in the same call
+class RsYielder
+  alias_method :link, :binding
+  public :link
+  def task_holding=(v)
+    $rs_yield_sched.box.task_holding.eval('yield')
+  end
+end
+rs_define 'yield', "@hold_count += 1\n@box.task_holding = @current_task.link\n@current_task.task_holding = true\n:after_yield\n"
+$rs_yield_sched = RsSched.new(RsTask.new)
+rs_case('yield', $rs_yield_sched) { |s| s.current_task = RsYielder.new }
+t('rs_yield break') { $rs_yield_sched.rs_yield { break :broke } }
+t('rs_yield value') { $rs_yield_sched.rs_yield { :ignored } }
+t('rs_yield next') { [1, 2].map { |rs_yield_v| $rs_yield_sched.rs_yield { next rs_yield_v } } }
+def rs_yield_return = $rs_yield_sched.rs_yield { return :returned_from_caller }
+t('rs_yield return') { rs_yield_return }
+t('rs_yield raise') { $rs_yield_sched.rs_yield { raise IndexError } }
+
+# a proc made in the binding returns from the method; kept, it raises LocalJumpError afterwards
+rs_ret_sched = RsSched.new(RsTask.new)
+$rs_returner_box = rs_ret_sched.box
+rs_case('returned', rs_ret_sched) { |s| s.other = RsBinder.new; s.current_task = RsReturner.new }
+rs_kept = rs_ret_sched.box.task_holding.eval('proc { return 8 }')
+t('rs_returned kept proc') { rs_kept.call }
+
+rs_case('last_match', RsSched.new(RsTask.new)) { |s| s.current_task = RsRegexp.new('b'); s.other = Regexp }
+
+# Four threads through one body, with receivers of two classes; names found nowhere else, and
+# each thread's receivers its own.
+class RsThreadOdd
+  attr_reader :written
+  def task_holding=(v)
+    @written = v
+  end
+  def link = :odd_link
+end
+rs_define 'threads', RS_HOLD
+rs_thr_scheds = Array.new(4) { |k| RsSched.new(k.even? ? RsTask.new(:even_link) : RsThreadOdd.new) }
+rs_thr_warm = RsSched.new(RsTask.new)
+warm { rs_thr_warm.rs_threads }
+rs_thr_results = rs_thr_scheds.map do |rs_thr_sched|
+  Thread.new(rs_thr_sched) do |rs_thr_own|
+    rs_thr_links = Hash.new(0)
+    2000.times { rs_thr_links[rs_thr_own.rs_threads] += 1 }
+    [rs_thr_own.hold_count, rs_thr_links]
+  end
+end.map(&:value)
+puts "  threads #{rs_thr_results.inspect}"
+
+if RS_STATS
+  $stderr.puts "[rs] failures: #{$rs_failures.inspect}"
+  exit 1 unless $rs_failures.empty?
+end

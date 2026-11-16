@@ -72,9 +72,9 @@ namespace IronRuby.Runtime.Jit {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} direct-calls={8} compile={7:F1}ms",
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} direct-calls={8} resume-bodies={9} fallbacks={10} compile={7:F1}ms",
                     Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired, DeoptRetried,
-                    CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency, DirectCallBodies);
+                    CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency, DirectCallBodies, ResumeBodies, FallbackCount);
                 PrintScreenReasons();
             };
         }

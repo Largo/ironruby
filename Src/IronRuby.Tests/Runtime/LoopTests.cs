@@ -482,6 +482,97 @@ nil
         }
 
         /// <summary>
+        /// -X:JITResume (Docs/jit-resume-deopt.md, stage 1, off by default): Richards' Scheduler#hold_self - an ivar
+        /// increment, then an attribute write and an attribute read on another object - is specialized only under the
+        /// switch, and then falls back to the call of each attribute operation whose guard fails after the first
+        /// effect, without running the body again: a receiver of another class, a private writer, a frozen receiver
+        /// and method_missing give CRuby 4.0's output, and the body goes on running typed afterwards.
+        /// </summary>
+        public void JitResume1() {
+            int bodies = IronRuby.Runtime.Jit.JitRuntime.ResumeBodies;
+            int fallbacks = IronRuby.Runtime.Jit.JitRuntime.FallbackCount;
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITResume"] = true; });
+            AreEqual(engine.CreateScriptSourceFromString(JitResumeScript, "jitresume.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitResumeExpected);
+            Assert(IronRuby.Runtime.Jit.JitRuntime.ResumeBodies == bodies + 1);
+            // ROdd's writer and reader, RMissing's, RPrivate's writer, the frozen receiver's
+            Assert(IronRuby.Runtime.Jit.JitRuntime.FallbackCount >= fallbacks + 6);
+            // without the switch hold_self is declined (a deopt after an effect) and nothing falls back
+            bodies = IronRuby.Runtime.Jit.JitRuntime.ResumeBodies;
+            fallbacks = IronRuby.Runtime.Jit.JitRuntime.FallbackCount;
+            AreEqual(Engine.CreateScriptSourceFromString(JitResumeScript, "jitresume.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitResumeExpected);
+            Assert(IronRuby.Runtime.Jit.JitRuntime.ResumeBodies == bodies);
+            Assert(IronRuby.Runtime.Jit.JitRuntime.FallbackCount == fallbacks);
+        }
+
+        private const string JitResumeScript = @"
+class RTask
+  attr_accessor :task_holding
+  attr_reader :link
+  def initialize(link)
+    @link = link
+    @task_holding = false
+  end
+end
+class ROdd
+  def task_holding=(v)
+    $log << [:odd, v]
+  end
+  def link = :odd_link
+end
+class RPrivate
+  attr_reader :link
+  private
+  def task_holding=(v)
+    $log << [:private, v]
+  end
+end
+class RMissing
+  def method_missing(name, *args)
+    $log << [name, args]
+    :missing
+  end
+  def respond_to_missing?(*) = true
+end
+class RSched
+  attr_accessor :hold_count, :current_task
+  def initialize(task)
+    @hold_count = 0
+    @current_task = task
+  end
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+end
+def probe(s, probes, frozen)
+  r = []
+  probes.each do |task|
+    s.current_task = task
+    r << (s.hold_self rescue $!.class)
+    r << s.hold_count
+  end
+  r << frozen.task_holding << $log.inspect
+  s.current_task = RTask.new(:again)
+  r << s.hold_self << s.hold_count
+end
+frozen = RTask.new(:frozen_link).freeze
+# the ones that raise last: an error message made defines methods, which sends the rest to the generic
+# body (the entry's method version)
+probes = [ROdd.new, RMissing.new, RPrivate.new, frozen]
+# everything the probes run, once before anything is hot: a library class first used defines its methods
+$log = []
+probe(RSched.new(RTask.new(:first)), probes, frozen)
+$log = []
+s = RSched.new(RTask.new(:plain))
+100.times { s.hold_self }
+([s.hold_count, s.current_task.task_holding] + probe(s, probes, frozen)).join(',')
+";
+        private const string JitResumeExpected = "100,true,odd_link,101,missing,102,NoMethodError,103,FrozenError,104,false,[[:odd, true], [:task_holding=, [true]], [:link, []]],again,105";
+
+        /// <summary>
         /// -X:JITMethods (a prototype, off by default): the method JIT's typed bodies as static methods of a runtime
         /// assembly, in each of its modes, alone and with -X:JITCalls, whose direct calls are then calls of those
         /// methods. The tree compiler is IronRuby.JitEmit.dll, which this project references so that it sits next
