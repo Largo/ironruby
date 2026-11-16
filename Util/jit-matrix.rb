@@ -3287,3 +3287,199 @@ wd = jit_walk_list(6); wd.nxt.freeze
 t('walk: restored, a frozen node') { [sp_walk_shorter(jit_walk_list(2), jit_walk_list(2)), sp_walk_last(wd)] }
 JitWalkNode.send(:remove_method, :nxt)
 t('walk: reader removed') { sp_walk_last(jit_walk_list(3)) }
+
+# ---------------------------------------------------------------- 10. an effect, then a deopt
+#
+# The method JIT's rule is that nothing that can deopt may follow an effect: a deopt re-runs
+# the generic body from the start, so an effect before it would run twice, or a write taken
+# back would be lost. Three of the faults the gate missed (Util/perf/LEDGER.md) were in this
+# rule's bookkeeping, so before the rule is relaxed every (effect, deopt source, order) is
+# here: each effect below with each deopt source, in four orders - the effect's statement
+# before the deopt's and after it, and the two as the left and the right operand of one +.
+# Every method is made hot with Int64s and then probed once with the deopt's trigger, once
+# more without it, and then the state each effect leaves is printed: an effect that ran twice
+# or a write that was lost shows up there, not only in the return value.
+#
+# A probe proves something only if the compiled body itself deopts, after the effect. Anything
+# that defines a method (Struct.new included) before the probe fails the body's version check
+# at its entry instead, and a warm-up that deopts gets the entry retired, so that the probe
+# runs the generic body. ED_CHECK=1 under ./ir.sh counts, around each warm-up and each probe,
+# the JIT's deopts and invalidations, prints them per case to stderr and exits 1 when a
+# specialized case deopted while warming up, or when one whose effect comes first and whose
+# trigger is not a method or constant changed beforehand (those invalidate at the entry by
+# design) did not deopt in its body without an invalidation. An invalidation while warming
+# up is allowed: a body that calls another method is specialized again once its callee is.
+#
+#   ED_CHECK=1 ./ir.sh Util/jit-matrix.rb > /dev/null
+#
+# The Array and Hash stores count in place (an append would deopt every warm-up call), so
+# that either one run twice leaves something else behind.
+#
+# The methods are written out by class_eval from the tables, as ordinary defs of EdBox; to
+# see one, take its effect and deopt from the tables (ed_<effect>_<deopt>_<order>).
+
+class EdNode
+  attr_reader :v
+  def initialize(v)
+    $ed_made += 1
+    @v = v
+  end
+end
+
+ED_OTHER = Struct.new(:v)
+
+class EdBox
+  attr_accessor :v
+  attr_reader :w, :n, :a, :h, :r
+  attr_writer :t
+  def initialize(other)
+    @o = other
+    reset
+  end
+  def reset
+    @w = 0; @n = 0; @a = [0, 0]; @h = { 0 => 0 }; @r = 1; @t = 0
+  end
+  # The same ivars set in another order, so that @r is read through another shape of EdBox.
+  # A read that misses its cache takes the uncached path rather than deopting, so @r is also a
+  # Float here: the value read that way is what fails the body's type guard.
+  def init_reversed(other)
+    @t = 0; @r = 1.5; @h = { 0 => 0 }; @a = [0, 0]; @n = 0; @w = 0
+    @o = other
+    self
+  end
+  def bump(k)
+    $ed_calls += 1
+    k
+  end
+  def twice(x) = x * 2
+  def helper(x) = x + 1
+  def state = [@w, @o.v, @n, @a, @h, @r, $ed_calls, $ed_made, $ed_g]
+end
+
+ED_K = 1
+
+def ed_reset
+  $ed_calls = 0; $ed_made = 0; $ed_g = 0
+end
+ed_reset
+
+ED_EFFECTS = {
+  'ivar'   => '(@w = x)',
+  'attr'   => '(@o.v = x)',
+  'opasgn' => '(@n += 1)',
+  'call'   => 'bump(1)',
+  'new'    => 'EdNode.new(1).v',
+  'astore' => '(@a[0] = @a[0] + 1)',
+  'hstore' => '(@h[0] = @h[0] + 1)',
+  'global' => '($ed_g += 1)',
+}
+
+# Each deopt source with how its probe triggers it: an argument that overflows Int64 in the
+# body (2**62 is an Int64 here, as the warm-up's arguments are), a receiver of another shape
+# (whose @r is a Float), @t made a Float, or a method or constant changed around the call and
+# put back after it.
+ED_DEOPTS = {
+  'type'     => ['(@t + x)', :float],
+  'shape'    => ['(@r + x)', :shape],
+  'call2'    => ['twice(x)', 2**62],
+  'redef'    => ['helper(x)', :redef],
+  'overflow' => ['(x * 4)', 2**62],
+  'nilconst' => ['(ED_K + x)', :nilconst],
+}
+
+ED_ORDERS = {
+  'seq'  => ->(e, d) { "#{e}\n    #{d}" },
+  'rseq' => ->(e, d) { "r = #{d}\n    #{e}\n    r" },
+  'lop'  => ->(e, d) { "#{e} + #{d}" },
+  'rop'  => ->(e, d) { "#{d} + #{e}" },
+}
+
+ED_EFFECTS.each do |en, e|
+  ED_DEOPTS.each do |dn, (d, _)|
+    ED_ORDERS.each do |on, order|
+      EdBox.class_eval <<~RUBY, __FILE__, __LINE__ + 1
+        def ed_#{en}_#{dn}_#{on}(x)
+          #{order.(e, d)}
+        end
+      RUBY
+    end
+  end
+end
+
+# ED_CHECK: the JIT's counters, read by reflection (IronRuby only).
+ED_STATS =
+  if ENV['ED_CHECK'] == '1' && defined?(System::Type)
+    t = System::Type.get_type('IronRuby.Runtime.Jit.JitRuntime, IronRuby')
+    flags = System::Reflection::BindingFlags.Static | System::Reflection::BindingFlags.NonPublic
+    %w[Specialized Deopts Invalidations].map { |f| t.get_field(f, flags) }
+  end
+
+def ed_stats
+  ED_STATS ? ED_STATS.map { |f| f.get_value(nil).to_i } : [0, 0, 0]
+end
+
+# Not a - b: section 8 left Integer#- redefined.
+def ed_delta(before) = ed_stats.zip(before).map { |a, b| a + -b }
+
+$ed_probe_stats = nil
+
+def ed_probe(name, trigger)
+  other = ED_OTHER.new(0)
+  box = trigger == :shape ? EdBox.allocate.init_reversed(other) : EdBox.new(other)
+  ed_reset
+  x = trigger.is_a?(Numeric) ? trigger : 2**40
+  case trigger
+  when :float then box.t = 1.5
+  when :redef then EdBox.class_eval { def helper(x) = x * 3 }
+  when :nilconst then Object.send(:remove_const, :ED_K); Object.const_set(:ED_K, nil)
+  end
+  before = ed_stats
+  begin
+    v = box.send(name, x)
+    r = "#{v.inspect} (#{v.class})"
+  rescue Exception => ex
+    r = ex.class.to_s
+  ensure
+    $ed_probe_stats = ed_delta(before)
+    case trigger
+    when :redef then EdBox.class_eval { def helper(x) = x + 1 }
+    when :nilconst then Object.send(:remove_const, :ED_K); Object.const_set(:ED_K, 1)
+    end
+  end
+  first = box.state
+  again = box.send(name, 2**40 + 3)
+  [r, first, again, box.state]
+end
+
+puts
+puts '--- 10. an effect, then something that can deopt ---'
+# The callees hot first, so that a case's warm-up specializes only the case itself.
+ed_callee = EdBox.new(ED_OTHER.new(0))
+warm { |i| ed_callee.bump(1); ed_callee.twice(2**40 + i); ed_callee.helper(2**40 + i); EdNode.new(1).v }
+ed_failures = []
+ed_count = Hash.new(0)
+ED_EFFECTS.each_key do |en|
+  ED_DEOPTS.each do |dn, (_, trigger)|
+    ED_ORDERS.each_key do |on|
+      name = :"ed_#{en}_#{dn}_#{on}"
+      hot_box = EdBox.new(ED_OTHER.new(0))
+      before = ed_stats
+      warm { |i| hot_box.send(name, 2**40 + i) }
+      spec, wdeopts, winv = ed_delta(before)
+      t(name.to_s) { ed_probe(name, trigger) }
+      next unless ED_STATS
+      _, deopts, inv = $ed_probe_stats
+      after_effect = %w[seq lop].include?(on) && !%i[redef nilconst].include?(trigger)
+      ok = spec == 0 || (wdeopts == 0 && (!after_effect || (deopts > 0 && inv == 0)))
+      ed_count[spec > 0 ? :specialized : :not_specialized] += 1
+      ed_count[:deopted_after_effect] += 1 if spec > 0 && after_effect && deopts > 0 && inv == 0
+      ed_failures << name unless ok
+      $stderr.puts "[ed] #{name} specialized=#{spec} warm-deopts=#{wdeopts} warm-invalidations=#{winv} " \
+                   "probe-deopts=#{deopts} probe-invalidations=#{inv}#{ok ? '' : ' FAIL'}"
+    end
+  end
+end
+if ED_STATS
+  $stderr.puts "[ed] #{ed_count.inspect}; failures: #{ed_failures.size}"
+  exit 1 unless ed_failures.empty?
+end
