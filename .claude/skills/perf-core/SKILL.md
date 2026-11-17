@@ -99,6 +99,7 @@ CRuby; measured on four-element receivers, good to about 30%):
 | a call of a Ruby `__x__` helper that makes a scope | +124 to +128 | inline it, or make it light |
 | one call of a C# method or C# `__x__` helper on self | +8 to +12 | |
 | `super`, a block passed on, `rescue`, keywords | keep the method out of light frames | keep them off the common path |
+| a body that needs a scope anywhere, even when the common case returns on line 1 | the whole scope, +150 ns (`String("a")`) | answer the common case, call a private method with the rest |
 | a string interpolation that calls something, `"#{x.class} ..."` (even on an error path) | the method needs its scope after the rewrite | `x.class.to_s + " ..."` |
 | one `while` iteration with a `yield` | ~100 / 50 | leave loops over elements in C# |
 
