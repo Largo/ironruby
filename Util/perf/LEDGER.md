@@ -443,12 +443,12 @@ Profile (`Util/perf/profile.sh`, self time):
     (`Util/bench/core-small.rb`, 67 calls on four elements; `Util/bench/truffleruby-lessons.md`
     section 3). The cause is the entry, not the method: a rest parameter, a named block,
     one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
-    `sum { }` 6.5, `Kernel#String` 6.2, `Array#sum` 5.3, `to_h { }`
+    `Kernel#String` 6.2, `Array#sum` 5.3, `to_h { }`
     4.5, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `min_by` 3.6, `Hash#sum { }` 3.6, `then` 3.2,
     `take_while` 3.0, `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
     `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
     and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0), and so is `Array#dig`
-    (15.1 -> 6.1, see Landed). One method per run of
+    (15.1 -> 6.1, see Landed), and `Array#sum` with a block (6.5 -> 3.3). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
     (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
@@ -472,6 +472,14 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/sum, ccc3608d + its follow-up (/perf-core) - `Array#sum` with a block adds its
+  values itself**, as MRI's `ary_sum` does: Integers, then Floats with the compensated
+  sum, and anything else handed to Enumerable#sum's fold from where it got to.
+  `a.sum { |x| x + 1 }` 1421 -> 868 ns (CRuby 236), over Floats 2175 -> 1539 (312); the
+  call without a block unchanged. Learned: a prelude loop must count with `i = i.succ`, not
+  `i += 1` (a redefined Integer#+ made it skip elements); an Enumerator is too dear for a
+  hot fallback; and a body grown by a rarely used path made the common call 5% slower until
+  the path became a method of its own. `Hash#sum { }` (3.5) is still Enumerable#sum's.
 - **perf/dig, b0bbefed (/perf-core) - `Array#dig` steps into the next level without two
   Ruby helpers that make a scope**: `[[1, 2]].dig(0, 1)` 682 -> 356 ns on the merged build
   against the commit before (CRuby 60), `dig(0)` 328 -> 158, three keys into a Hash 784 ->
