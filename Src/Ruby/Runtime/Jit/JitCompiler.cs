@@ -1881,7 +1881,9 @@ namespace IronRuby.Runtime.Jit {
             // Int64 (-2**31 has none in an Int32), of an Int64 the same but for -2**63, whose absolute value is a
             // Bignum the generic code makes (JitRuntime.AbsLong deopts); Float#abs clears the sign bit, so -0.0
             // is 0.0 and a NaN stays one.
-            if (argc == 0 && node.Target != null && node.MethodName == "abs") {
+            // A receiver the profile saw hold something else (an object with an attr_reader :abs) is left
+            // to the calls below, which compile the attribute read.
+            if (argc == 0 && node.Target != null && node.MethodName == "abs" && MayBeNumeric(ObservedType(node.Target))) {
                 JT tt;
                 var t = Emit(node.Target, out tt);
                 t = NumericIVar(node.Target, t, ref tt);
@@ -2126,6 +2128,10 @@ namespace IronRuby.Runtime.Jit {
             return result.ToArray();
         }
 
+        private static bool MayBeNumeric(Type observed) {
+            return observed == null || observed == typeof(int) || observed == typeof(double) || observed == typeof(System.Numerics.BigInteger);
+        }
+
         private static bool IsNumeric(JT t) {
             return t == JT.Int || t == JT.Lng || t == JT.Dbl;
         }
@@ -2243,9 +2249,12 @@ namespace IronRuby.Runtime.Jit {
             return IsBuiltinMethod(cls, name) && IsPublic(cls, name);
         }
 
+        // The visibility a call sees: `private :!=' in Array, where the method is BasicObject's, stores a
+        // forwarder that ResolveMethod follows to BasicObject#!=, whose own visibility is still public;
+        // the lookup reads the forwarder's (RubyModule.GetMethodLookup).
         private static bool IsPublic(RubyClass/*!*/ cls, string/*!*/ name) {
-            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
-            return resolved.Found && resolved.Info.Visibility == RubyMethodVisibility.Public;
+            var lookup = cls.GetMethodLookup(name);
+            return lookup.Result.Found && lookup.Visibility == RubyMethodVisibility.Public;
         }
 
         // RequireBuiltin's answers so far in this compile. IsBuiltinMethod resolves the method and

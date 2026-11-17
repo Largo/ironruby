@@ -114,5 +114,44 @@ p seen.uniq
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
         }
+        /// <summary>
+        /// `a != nil' with `!=' made private or protected in Array or Hash, where the method is BasicObject's (the class
+        /// keeps a forwarder whose visibility is the call's); an Int64 abs and -2**63; an attr_reader named abs.
+        /// </summary>
+        public void JitCore_Review1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+def ne(a) = (a != nil)
+def neh(h) = (h != nil)
+def la(m, n)
+  x = m * n
+  x.abs
+end
+class V
+  attr_reader :abs
+  def initialize(a) = (@abs = a)
+end
+def va(v) = v.abs + 1
+a = [1]
+h = { 1 => 2 }
+v = V.new(3)
+200.times { |i| ne(a); neh(h); la(i + 1, -3_000_000_000); va(v) }
+seen = []
+200.times do |i|
+  class Array; private :!=; end if i == 100
+  seen << (ne(a) rescue $!.class)
+end
+p seen.uniq
+class Hash; protected :!=; end
+p((neh(h) rescue $!.message))
+p [la(7, -3_000_000_000), la(-2**62, 2), va(v), va(V.new(-1.5)), va(-4)]
+", @"
+[true, NoMethodError]
+""protected method '!=' called for an instance of Hash""
+[21000000000, 9223372036854775808, 4, -0.5, 5]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 4, System.String.Format("methods specialized: {0} (expected at least 4)", specializedHere));
+        }
     }
 }

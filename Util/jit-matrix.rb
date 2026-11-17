@@ -4236,3 +4236,45 @@ class Array
   public :==
 end
 t('en_x, Array#== public again') { en.en_x([]) }
+# ---------------------------------------------------------------- 16. review of 13-15
+# `!=' made private or protected in Array or Hash (or Object) where the method is BasicObject's: the
+# class keeps a forwarder whose visibility is the call's, not BasicObject#!='s. An Int64 abs and its
+# -2**63, and an object whose attr_reader is named abs.
+def rv_ne(a) = (a != nil)
+def rv_neh(h) = (h != nil)
+def rv_la(m, n)
+  x = m * n
+  x.abs
+end
+class RvAttr
+  attr_reader :abs
+  def initialize(a) = (@abs = a)
+end
+def rv_attr(v) = v.abs + 1
+rv_a = [1]
+rv_h = { 1 => 2 }
+rv_v = RvAttr.new(3)
+warm { |i| rv_ne(rv_a); rv_neh(rv_h); rv_la(i + 1, -3_000_000_000); rv_attr(rv_v) }
+t('rv_ne Array, public') { rv_ne(rv_a) }
+rv_seen = []
+warm do |i|
+  class Array; private :!=; end if i == 60
+  rv_seen << (rv_ne(rv_a) rescue $!.class)
+end
+t('rv_ne, Array#!= made private mid-run') { rv_seen.uniq }
+t('rv_ne Hash, Array#!= private') { rv_neh(rv_h) }
+class Array; public :!=; end
+class Hash; protected :!=; end
+t('rv_ne Hash, Hash#!= protected') { rv_neh(rv_h) }
+t('rv_ne Array, Array#!= public again') { rv_ne(rv_a) }
+class Hash; public :!=; end
+class Object; private :!=; end
+t('rv_ne Array, Object#!= private') { rv_ne(rv_a) }
+class Object; public :!=; end
+t('rv_ne Array, Object#!= public again') { rv_ne(rv_a) }
+t('rv_la Int64') { rv_la(7, -3_000_000_000) }
+t('rv_la -2**63') { rv_la(-2**62, 2) }
+t('rv_la -2**62') { rv_la(2**61, -2) }
+t('rv_attr Integer') { rv_attr(rv_v) }
+t('rv_attr Float') { rv_attr(RvAttr.new(-1.5)) }
+t('rv_attr Integer#abs') { rv_attr(-4) }

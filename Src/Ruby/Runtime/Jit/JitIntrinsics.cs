@@ -315,7 +315,7 @@ namespace IronRuby.Runtime.Jit {
 
             private bool Resolves(RubyClass/*!*/ cls) {
                 var resolved = cls.ResolveMethod(Name, Calls.VisibilityContext.AllVisible);
-                return resolved.Found && resolved.Info.IsPublic && Array.IndexOf(_expected, resolved.Info) >= 0
+                return resolved.Found && cls.GetMethodLookup(Name).Visibility == RubyMethodVisibility.Public && Array.IndexOf(_expected, resolved.Info) >= 0
                     && (_calls == null || _calls.Resolves(cls));
             }
 
