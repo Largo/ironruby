@@ -70,6 +70,21 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
         }
 
+        /// <summary>
+        /// What rb_define_alloc_func is to a class written in C, for a class of the Ruby-written core (set.rb)
+        /// whose state is a Hash: each new instance of the class and of its subclasses is allocated with a copy
+        /// of <paramref name="prototype"/> - empty, with its default value and its way of comparing keys - in
+        /// the hidden instance variable <paramref name="name"/> (see Kernel#__ir_hidden_ivar__), so that the
+        /// state MRI's allocator makes is there whether or not the class's own #initialize runs.
+        /// </summary>
+        [RubyMethod("__ir_define_allocator__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyClass/*!*/ DefineAllocator(RubyClass/*!*/ self, [NotNull]RubySymbol/*!*/ name, [NotNull]Hash/*!*/ prototype) {
+            var context = self.Context;
+            string variable = RubyUtils.GetHiddenInstanceVariableName(name.ToString());
+            self.SetAllocationInitializer(obj => context.SetInstanceVariable(obj, variable, new Hash(prototype)));
+            return self;
+        }
+
         [RubyMethod("superclass")]
         public static RubyClass GetSuperclass(RubyClass/*!*/ self) {
             // A singleton class inherits along the same chain as the object it belongs to: the

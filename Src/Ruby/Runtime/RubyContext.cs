@@ -3013,14 +3013,16 @@ namespace IronRuby.Runtime {
         // 
         // Copies instance variables from source to target object.
         // If the source has a singleton class it's members are copied to the target as well.
-        // Assumes a fresh instance of target, with no instance data.
+        // Assumes a fresh instance of target, with no instance data - other than the state the allocator
+        // of its class gave it (RubyClass.CAllocator: Set's table), which the source's replaces.
         //
         public void CopyInstanceData(object source, object target, bool copySingletonMembers) {
             RubyInstanceData targetData = null;
             Debug.Assert(!copySingletonMembers || !(source is RubyModule));
-            Debug.Assert(TryGetInstanceData(target) == null);
+            Debug.Assert(TryGetInstanceData(target) == null || GetClassOf(target).CAllocator != null);
             // target object is not a singleton:
-            Debug.Assert(!copySingletonMembers || TryGetSingletonOf(target, ref targetData) == null && targetData == null);
+            Debug.Assert(!copySingletonMembers || TryGetSingletonOf(target, ref targetData) == null &&
+                (targetData == null || GetClassOf(target).CAllocator != null));
             
             RubyInstanceData sourceData = TryGetInstanceData(source);
             if (sourceData != null) {

@@ -310,8 +310,9 @@ namespace IronRuby.Runtime {
         internal void CopyInstanceVariablesTo(RubyInstanceData/*!*/ dup, object copy) {
             InstanceVariableShape shape;
             var s = GetStable(out shape);
-            if (shape != InstanceVariableShape.Complex && dup._ivars == InstanceVariableShape.EmptySlots) {
-                // The copy is a fresh object nobody else has seen yet: it gets the same shape.
+            if (shape != InstanceVariableShape.Complex && (dup._ivars == InstanceVariableShape.EmptySlots || dup.Shape == shape)) {
+                // The copy is a fresh object nobody else has seen yet: it gets the same shape. One whose
+                // allocator gave it the very variables the source has (a Set and its table) has it already.
                 if (shape.Count == 0) {
                     return;
                 }

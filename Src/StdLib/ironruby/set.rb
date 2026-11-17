@@ -218,6 +218,12 @@
 class Set
   include Enumerable
 
+  # MRI's Set has an allocator (set.c, set_s_alloc) that makes the table, so a set is whole
+  # before #initialize runs and without it: Set.allocate, a subclass (its #initialize is
+  # Set::SubclassCompatible's, which does not call this one), an #initialize that does not
+  # call super, and a Set#initialize a program defined itself.
+  __ir_define_allocator__(:@__hash__, ::Hash.new(false))
+
   # Creates a new set containing the given objects.
   #
   #     Set[1, 2]                   # => #<Set: {1, 2}>
@@ -239,8 +245,6 @@ class Set
   #     Set.new(1..5)                         #=> #<Set: {1, 2, 3, 4, 5}>
   #     Set.new([1, 2, 3]) { |x| x * x }      #=> #<Set: {1, 4, 9}>
   def initialize(enum = nil, &block) # :yields: o
-    @__hash__ ||= Hash.new(false)
-
     enum.nil? and return
 
     if block
@@ -856,20 +860,18 @@ class Set
   __hide_constant__ :InspectKey
 
   # Ruby 4.0 made Set a core class and gave it the literal-looking form
-  # "Set[1, 2]"; a subclass keeps the older "#<MySet: {1, 2}>", unless it is one of
-  # Set::CoreSet, which has the core behaviour ("MySet[1, 2]").
+  # "Set[1, 2]", which a subclass of Set::CoreSet has too ("MySet[1, 2]"); a subclass
+  # of Set itself keeps the older "#<MySet: {1, 2}>", from Set::SubclassCompatible#inspect.
   def inspect
     ids = (Thread.current[InspectKey] ||= [])
-    plain = __core_set__?
 
     if ids.include?(object_id)
-      return plain ? "#{self.class}[...]" : sprintf('#<%s: {...}>', self.class.name)
+      return "#{self.class}[...]"
     end
 
     ids << object_id
     begin
-      body = to_a.inspect[1..-2]
-      return plain ? "#{self.class}[#{body}]" : sprintf('#<%s: {%s}>', self.class, body)
+      return "#{self.class}[#{to_a.inspect[1..-2]}]"
     ensure
       ids.pop
     end
@@ -877,41 +879,44 @@ class Set
 
   alias to_s inspect
 
-  # Set itself pretty-prints in the Ruby 4.0 "Set[...]" form, subclasses in
-  # the older one, as #inspect does.
+  # The Ruby 4.0 "Set[...]" form, as #inspect has it and as pp.rb defines these two for
+  # the core Set; a subclass of Set itself has Set::SubclassCompatible's.
   def pretty_print(pp)  # :nodoc:
-    if __core_set__?
-      return pp.group(1, "#{self.class}[", ']') {
-        pp.seplist(self) { |o|
-          pp.pp o
-        }
-      }
-    end
-
-    pp.group(1, sprintf('#<%s:', self.class.name), '>') {
-      pp.breakable
-      pp.group(1, '{', '}') {
-        pp.seplist(self) { |o|
-          pp.pp o
-        }
+    pp.group(1, "#{self.class.name}[", ']') {
+      pp.seplist(self) { |o|
+        pp.pp o
       }
     }
   end
 
   def pretty_print_cycle(pp)    # :nodoc:
-    return pp.text(empty? ? "#{self.class}[]" : "#{self.class}[...]") if __core_set__?
-    pp.text sprintf('#<%s: {%s}>', self.class.name, empty? ? '' : '...')
+    name = self.class.name
+    pp.text(empty? ? "#{name}[]" : "#{name}[...]")
   end
 
-  def __core_set__? # :nodoc:
-    instance_of?(::Set) || is_a?(CoreSet)
-  end
-  private :__core_set__?
-
-  # In Ruby 4.0 a direct subclass of the core Set is given Set::SubclassCompatible, the
-  # behaviour of the pure-Ruby Set before it, while a subclass of CoreSet keeps the core
-  # behaviour. IronRuby's Set is that pure-Ruby Set, so only #inspect tells them apart.
+  # A subclass of CoreSet has the core behaviour: the class is made before the hook
+  # below is, as in set.c, so it is not given Set::SubclassCompatible.
   class CoreSet < Set; end
+
+  class << self
+    private
+
+    # set.c's set_s_inherited. A direct subclass of the core Set is given
+    # Set::SubclassCompatible - the standard library's set/subclass_compatible.rb, the
+    # methods of the Set written in Ruby that Ruby had before 4.0 - above Set's own, and
+    # Set::SubclassCompatible::ClassMethods on its singleton class. So such a class is
+    # initialized by SubclassCompatible#initialize and not by Set#initialize, whatever
+    # that is: one a program defines by reopening Set is not run for its subclasses.
+    def inherited(subclass)
+      if equal?(::Set)
+        # rb_require: the loader itself, not a #require in scope (RubyGems' is Kernel#require)
+        ::Kernel.require("set/subclass_compatible.rb")
+        subclass.include(SubclassCompatible)
+        subclass.extend(SubclassCompatible::ClassMethods)
+      end
+      nil
+    end
+  end
 end
 
 module Enumerable

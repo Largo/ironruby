@@ -1004,6 +1004,7 @@ namespace IronRuby.Tests {
                 Marshal_Misc1,
                 Marshal_LoadFloat1,
                 Marshal_SetIVars1,
+                Set_SubclassCompatible1,
                 Marshal_NameError1,
                 Integer_SqrtPowDigits1,
                 Prelude_DataStructErrors1,

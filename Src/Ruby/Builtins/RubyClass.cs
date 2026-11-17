@@ -810,6 +810,10 @@ namespace IronRuby.Builtins {
                 _superClass, null, null, _structInfo, isRubyClass, IsSingletonClass, ModuleRestrictions.None
             );
 
+            // The copy allocates as the original does (class.c, rb_mod_init_copy: the allocator is copied): its
+            // superclass is the original's, which need not have this allocator.
+            result._cAllocator = _cAllocator;
+
             if (!IsSingletonClass) {
                 // singleton members are copied here, not in InitializeCopy, and the singleton class's
                 // own instance variables with them (rb_singleton_class_clone):
@@ -1996,17 +2000,32 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // What AllocateBuiltin found to make this class's instances when they are plain Ruby objects: the
+        // underlying type it depends on does not change once there is one.
+        private Func<RubyClass, object> _plainAllocator;
+        private static readonly Func<RubyClass, object>/*!*/ _RubyObjectAllocator = cls => new RubyObject(cls);
+
         /// <summary>
         /// An instance as Class#allocate makes one when no C allocator is involved: what a C
         /// extension's allocator gets from rb_get_alloc_func(superclass)(klass).
         /// </summary>
         internal object AllocateBuiltin() {
+            var plainAllocator = _plainAllocator;
+            if (plainAllocator != null) {
+                return plainAllocator(this);
+            }
             Type type = GetUnderlyingSystemType();
             if (type == typeof(object)) {
                 type = typeof(RubyObject);
             }
             if (_structInfo != null) {
                 return RubyOps.AllocateStructInstance(this);
+            }
+            // a plain Ruby object, as Class#new makes one without a rule (TryGetPlainAllocation)
+            plainAllocator = (type == typeof(RubyObject)) ? _RubyObjectAllocator : RubyTypeDispenser.TryGetObjectAllocator(type);
+            if (plainAllocator != null) {
+                _plainAllocator = plainAllocator;
+                return plainAllocator(this);
             }
             ConstructorInfo ctor;
             if (IsException() && (ctor = GetConstructor(type, typeof(string))) != null) {
@@ -2030,6 +2049,22 @@ namespace IronRuby.Builtins {
                 // rules that allocate instances of this class and its subclasses were built without it
                 MethodsUpdated("allocator");
             }
+        }
+
+        /// <summary>
+        /// Gives a class of the Ruby-written core an allocator, as rb_define_alloc_func gives one written in C
+        /// (Class#__ir_define_allocator__): <paramref name="initializer"/> is handed each new instance of the class
+        /// and of its subclasses as it is allocated - before #initialize runs, and when it does not run at all
+        /// (Class#allocate) or is not the class's own (a redefined one, one that does not call super) - to give it
+        /// the state MRI's allocator makes. Set's table is made this way (set.c, set_s_alloc).
+        /// </summary>
+        public void SetAllocationInitializer(Action<object>/*!*/ initializer) {
+            ContractUtils.RequiresNotNull(initializer, nameof(initializer));
+            SetCAllocator(cls => {
+                object obj = cls.AllocateBuiltin();
+                initializer(obj);
+                return obj;
+            });
         }
 
         public bool BuildAllocatorCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, Func<Expression>/*!*/ defaultExceptionMessage) {

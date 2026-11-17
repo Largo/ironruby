@@ -3507,6 +3507,83 @@ true
         }
 
         /// <summary>
+        /// A direct subclass of Set is given Set::SubclassCompatible (set.c, set_s_inherited) and Set::CoreSet's are not:
+        /// SubclassCompatible#initialize makes its instances, not Set#initialize - so one a program defines by reopening
+        /// Set is not run for them - and the allocator makes the table, with or without an #initialize that calls super.
+        /// </summary>
+        public void Set_SubclassCompatible1() {
+            TestOutput(@"
+require 'ruby4'
+class Sub < Set; end
+class Core < Set::CoreSet; end
+class Init < Set
+  def initialize(a, b = nil); @a = a; super(b); end
+  attr_reader :a
+end
+class NoSuper < Set
+  def initialize(*); end
+end
+p Sub.ancestors, Class.new(Sub).ancestors[1, 3], Core.ancestors, Sub.singleton_class.ancestors[0, 3]
+p Sub.instance_method(:initialize).owner, Init.instance_method(:initialize).super_method.owner, Core.instance_method(:initialize).owner
+p Sub.method(:[]).owner, Core.method(:[]).owner, Set.method(:new).owner, Sub.method(:new).owner
+p Set.new([1, 2]) { |x| x * 2 }, Set.new(1..3), Sub.new([1, 2]).to_a, Sub.new([1, 2]) { |x| x * 2 }, Sub[1], Core.new([1, 2])
+s = Init.new(:a, [1, 2]); p s.a, s, Init[3].a
+p NoSuper.new([1]).add(3).to_a, Set.allocate.add(1), Sub.allocate.size, Set.dup.new([1]).to_a
+p((Sub.new(1) rescue $!), (Sub.new(1, 2) rescue $!), (Set.new(1) rescue $!), (Init.new rescue $!))
+p Set.instance_method(:inspect).bind_call(Sub[1]), Sub[1].dup << 2, Sub[1] ^ [1, 2], Marshal.load(Marshal.dump(Sub[1]))
+p Set.private_methods(false).include?(:inherited), (Set::SubclassCompatible rescue $!)
+p $LOADED_FEATURES.count { |f| f.end_with?('/set/subclass_compatible.rb') }
+class Set
+  def initialize(size = 3); @items = [size]; end
+  def items; @items; end
+end
+p Set.new.items, Set.new(5).items, Sub.new.items, Set.instance_method(:initialize).owner, Sub.new([4]), Set.new.add(1)
+", @"
+[Sub, Set::SubclassCompatible, Set, Enumerable, Object, Kernel, BasicObject]
+[Sub, Set::SubclassCompatible, Set]
+[Core, Set::CoreSet, Set, Enumerable, Object, Kernel, BasicObject]
+[#<Class:Sub>, Set::SubclassCompatible::ClassMethods, #<Class:Set>]
+Set::SubclassCompatible
+Set::SubclassCompatible
+Set
+Set::SubclassCompatible::ClassMethods
+#<Class:Set>
+Class
+Class
+Set[2, 4]
+Set[1, 2, 3]
+[1, 2]
+#<Sub: {2, 4}>
+#<Sub: {1}>
+Core[1, 2]
+:a
+#<Init: {1, 2}>
+[3]
+[3]
+Set[1]
+0
+[1]
+#<ArgumentError: value must be enumerable>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
+#<ArgumentError: value must be enumerable>
+#<ArgumentError: wrong number of arguments (given 0, expected 1..2)>
+""Sub[1]""
+#<Sub: {1, 2}>
+#<Sub: {2}>
+#<Sub: {1}>
+true
+#<NameError: private constant Set::SubclassCompatible referenced>
+1
+[3]
+[5]
+nil
+Set
+#<Sub: {4}>
+Set[1]
+");
+        }
+
+        /// <summary>
         /// An exception MRI dumped loads as MRI loads it: "bt_locations" is not an instance variable of the result, which
         /// has no Locations; a NoMethodError's message dumped as a NameError::message is its string, and NameError's name,
         /// NoMethodError's args and private_call? are the error's own again - and IronRuby writes them as MRI does. The
