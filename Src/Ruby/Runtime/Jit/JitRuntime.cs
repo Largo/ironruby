@@ -943,24 +943,55 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>GuardDouble(GetIVar(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double GetIVarDouble(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            double value;
-            if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
-                return value;
+            if (self is RubyObject obj) {
+                var data = obj._instanceData;
+                if (data != null) {
+                    object[] slots = data._ivars;
+                    var entry = site.Cache;
+                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                        if (entry.Raw && slot is FloatLocation location) {
+                            return location.Value;
+                        }
+                        if (slot is double) {
+                            return (double)slot;
+                        }
+                    }
+                }
             }
             return GetIVarDoubleSlow(context, self, site);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static double GetIVarDoubleSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            // the site's second shape (RubyOps.TryReadCachedFloat), then the object read
+            double value;
+            if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
+                return value;
+            }
             return GuardDouble(GetIVar(context, self, site));
         }
 
         /// <summary>GuardDouble(ReadSelfAttr(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double ReadSelfAttrDouble(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            double value;
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
-                return value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass)) {
+                var data = obj._instanceData;
+                if (data != null) {
+                    object[] slots = data._ivars;
+                    var entry = site.Variable.Cache;
+                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                        if (entry.Raw && slot is FloatLocation location) {
+                            return location.Value;
+                        }
+                        if (slot is double) {
+                            return (double)slot;
+                        }
+                    }
+                }
             }
             return ReadSelfAttrDoubleSlow(context, self, site);
         }
@@ -968,36 +999,77 @@ namespace IronRuby.Runtime.Jit {
         // out of line, so that the inlined part stays a shape compare and a slot read
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static double ReadSelfAttrDoubleSlow(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            // the site's second shape (RubyOps.TryReadCachedFloat), then the object read
+            double value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
+                return value;
+            }
             return GuardDouble(ReadSelfAttr(context, self, site));
         }
 
         /// <summary>SpeculateDouble(GetIVar(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double GetIVarSpeculateDouble(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
-            double value;
-            if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
-                return value;
+            if (self is RubyObject obj) {
+                var data = obj._instanceData;
+                if (data != null) {
+                    object[] slots = data._ivars;
+                    var entry = site.Cache;
+                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                        if (entry.Raw && slot is FloatLocation location) {
+                            return location.Value;
+                        }
+                        if (slot is double) {
+                            return (double)slot;
+                        }
+                    }
+                }
             }
             return GetIVarSpeculateDoubleSlow(context, self, site);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static double GetIVarSpeculateDoubleSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            // the site's second shape (RubyOps.TryReadCachedFloat), then the object read
+            double value;
+            if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
+                return value;
+            }
             return SpeculateDouble(GetIVar(context, self, site));
         }
 
         /// <summary>SpeculateDouble(ReadSelfAttr(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static double ReadSelfAttrSpeculateDouble(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            double value;
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
-                return value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass)) {
+                var data = obj._instanceData;
+                if (data != null) {
+                    object[] slots = data._ivars;
+                    var entry = site.Variable.Cache;
+                    if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                        if (entry.Raw && slot is FloatLocation location) {
+                            return location.Value;
+                        }
+                        if (slot is double) {
+                            return (double)slot;
+                        }
+                    }
+                }
             }
             return ReadSelfAttrSpeculateDoubleSlow(context, self, site);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static double ReadSelfAttrSpeculateDoubleSlow(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            // the site's second shape (RubyOps.TryReadCachedFloat), then the object read
+            double value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
+                return value;
+            }
             return SpeculateDouble(ReadSelfAttr(context, self, site));
         }
 

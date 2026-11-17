@@ -5062,9 +5062,13 @@ namespace IronRuby.Runtime {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
                 if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                    // raw or plain alike: a plain array never holds a FloatLocation, so the test for one
-                    // just fails there, and the read needs no flag
-                    return RubyInstanceData.TryReadFloat(RubyInstanceData.GetSlot(slots, entry.Index), out value);
+                    object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                    if (entry.Raw) {
+                        return RubyInstanceData.TryReadFloat(slot, out value);
+                    }
+                    // a plain object's slot never holds a FloatLocation: the type test GuardDouble made
+                    value = (slot is double) ? (double)slot : 0;
+                    return slot is double;
                 }
                 // kept small, for it is inlined into every typed read: the rest out of line
                 return TryReadCachedFloatSlow(slots, site, entry, out value);
