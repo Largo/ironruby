@@ -289,3 +289,32 @@ t("object_id stable across ivar changes") do
   [o.object_id == id, o.dup.object_id != id, o.clone.object_id != id]
 end
 t("each_object sees them") { ObjectSpace.each_object(Class).include?(Plain) }
+
+# ---------------------------------------------------------------- Float variables stored raw
+# The method JIT stores a Float it holds as a double raw (RubyInstanceData, "Float locations");
+# everything below must see the Float as if it were boxed. Util/jit-matrix.rb, section 19, has
+# the JIT's own rows.
+
+class FlRaw
+  attr_accessor :v
+  def initialize; @x = 0.0; @v = 0.5; end
+  def put(d) = (@x = d * 1.0)
+  def add(d) = (@x += d)
+  def x = @x
+end
+def fl_raw_attr(o, d) = (o.v = o.v * d)
+flr = FlRaw.new
+200.times { |i| flr.put(i * 0.5); flr.add(0.25); fl_raw_attr(flr, 1.0) }
+def fl_raw(v)
+  o = FlRaw.new; o.put(v); o.add(0.0); fl_raw_attr(o, 1.0); o
+end
+t("fl: YAML round trip") { require 'yaml'; o = fl_raw(0.375); y = YAML.dump(o); [y.lines.grep(/x:|v:/), YAML.unsafe_load(y).x] }
+t("fl: Marshal round trip") { m = Marshal.load(Marshal.dump(fl_raw(-0.0))); [m.x, 1 / m.x, m.v] }
+t("fl: inspect") { fl_raw(1.0e-320).inspect.sub(/0x\h+/, '') }
+t("fl: instance_variable_get/set") { o = fl_raw(2.5); r = [o.instance_variable_get(:@x)]; o.instance_variable_set(:@x, 'str'); r << o.x << o.add('!') }
+t("fl: remove") { o = fl_raw(2.5); [o.remove_instance_variable(:@x), o.instance_variables, o.put(1.5), o.instance_variables] }
+t("fl: dup/clone/initialize_copy") { o = fl_raw(2.5); d = o.dup; c = o.clone; d.add(1.0); c.add(2.0); [o.x, d.x, c.x] }
+t("fl: freeze") { o = fl_raw(2.5); o.freeze; [(o.put(1.0) rescue $!.class), (fl_raw_attr(o, 2.0) rescue $!.class), o.x, o.v] }
+t("fl: Struct member") { s = Struct.new(:a).new(1.5); s.instance_variable_set(:@q, 2.5); [s.a, s.instance_variables] }
+t("fl: Ractor.make_shareable") { o = fl_raw(3.5); Ractor.make_shareable(o); [Ractor.shareable?(o), o.frozen?, o.x] }
+t("fl: binding sees the value") { o = fl_raw(4.5); o.instance_eval { binding }.eval('@x') }

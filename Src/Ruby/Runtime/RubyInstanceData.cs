@@ -77,7 +77,61 @@ namespace IronRuby.Runtime {
     ///
     /// A too-complex object's array is { Complex, ComplexInstanceVariables } and every operation
     /// on it takes lock(this).
+    ///
+    /// FLOAT LOCATIONS
+    ///
+    /// A slot may hold a <see cref="FloatLocation"/> instead of a value: a Float stored raw, so that
+    /// the typed code of the method JIT and the loop tiers, which carries Floats as doubles, writes
+    /// one without boxing it (JitRuntime.SetIVarDouble and the other *Double helpers). Only they put
+    /// one there - the first raw store into a slot that does not hold one allocates it, as a box would,
+    /// and the stores after it write its field. Every other write stores the value itself, which
+    /// replaces the location: so whether a variable is raw is a property of the slot's content, not
+    /// of the shape, and a type change is an ordinary store that needs no new shape and invalidates
+    /// nothing. Every other read goes through <see cref="ValueOf"/>, which boxes the location's
+    /// Float - the same box again while the value has not changed (FloatLocation.Boxed: an
+    /// object_id is per box). The location belongs to one variable of one object, holding Floats, for its whole
+    /// life: it is never reused for another variable, another type or another object (a copy gets
+    /// boxes, CopyInstanceVariablesTo), and once replaced it is dead. So a reader that loaded it, or
+    /// a writer that stores into it after it was replaced, deals with a value that really was that
+    /// variable's - the late write is ordered before the store that replaced the location, which
+    /// happened during it. A Move copies the reference, so the location goes on living in the new
+    /// array, and the write-then-re-read protocol above applies to its field as to a slot: a raw
+    /// write re-reads element 0 after storing the field. The field is a double in a class, 8-byte
+    /// aligned, so its loads and stores are atomic on the 64-bit platforms IronRuby ships for
+    /// (linux-x64, win-x64, osx-arm64); a location is published by a reference store, which the CLR
+    /// orders after the constructor's write of the field.
     /// </remarks>
+    /// <summary>
+    /// A Float instance variable stored raw: see RubyInstanceData, "Float locations". Only ever in a
+    /// slot array, never handed out as a value (<see cref="RubyInstanceData.ValueOf"/>).
+    /// </summary>
+    internal sealed class FloatLocation {
+        internal double Value;
+
+        // The box the generic reads last handed out, theirs to reuse while it still holds the bits
+        // of Value: so that `@x.equal?(@x)', `@x.object_id == @x.object_id' and a dup sharing the
+        // value say what they said of the box the baseline stored (an object_id is per box). The
+        // raw writes never touch it. Readers race only to make two boxes of one value.
+        private object _box;
+
+        internal FloatLocation(double value) {
+            Value = value;
+        }
+
+        internal object/*!*/ Boxed {
+            get {
+                double value = Value;
+                object box = Volatile.Read(ref _box);
+                if (box != null && BitConverter.DoubleToInt64Bits((double)box) == BitConverter.DoubleToInt64Bits(value)) {
+                    return box;
+                }
+                box = value;
+                Volatile.Write(ref _box, box);
+                return box;
+            }
+        }
+    }
+
     public sealed class RubyInstanceData : IRubyObjectState {
         // TODO: compress
 
@@ -165,6 +219,15 @@ namespace IronRuby.Runtime {
         #endregion
 
         #region Instance Variables: layout
+
+        /// <summary>
+        /// The value a slot holds: the slot itself, or the Float of a <see cref="FloatLocation"/>, boxed.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        internal static object ValueOf(object slot) {
+            var location = slot as FloatLocation;
+            return (location != null) ? location.Boxed : slot;
+        }
 
         /// <summary>
         /// Element 0 of a slot array - its shape or a sentinel - read with acquire semantics, so
@@ -274,7 +337,7 @@ namespace IronRuby.Runtime {
             var table = new ComplexInstanceVariables(shape.Count + 1);
             var names = shape.GetNames();
             for (int i = 0; i < names.Length; i++) {
-                table.Set(names[i], s[i + 1]);
+                table.Set(names[i], ValueOf(s[i + 1]));
             }
             return Publish(s, new object[] { InstanceVariableShape.Complex, table }) ? table : null;
         }
@@ -318,7 +381,8 @@ namespace IronRuby.Runtime {
 
                 var slots = new object[s.Length];
                 for (int i = 1; i <= shape.Count; i++) {
-                    var value = s[i];
+                    // a FloatLocation is the original's: the copy gets the Float boxed
+                    var value = ValueOf(s[i]);
                     var state = value as IPerObjectState;
                     slots[i] = state != null ? state.CopyFor(copy) : value;
                 }
@@ -363,7 +427,7 @@ namespace IronRuby.Runtime {
                 var names = shape.GetNames();
                 var result = new List<KeyValuePair<string, object>>(names.Length);
                 for (int i = 0; i < names.Length; i++) {
-                    result.Add(new KeyValuePair<string, object>(names[i], s[i + 1]));
+                    result.Add(new KeyValuePair<string, object>(names[i], ValueOf(s[i + 1])));
                 }
                 return result;
             }
@@ -380,7 +444,7 @@ namespace IronRuby.Runtime {
 
             int index = shape.IndexOf(name);
             if (index > 0) {
-                value = s[index];
+                value = ValueOf(s[index]);
                 return true;
             }
 
@@ -412,13 +476,13 @@ namespace IronRuby.Runtime {
             // of a superclass whose subclasses add variables of their own) does not thrash
             var entry = site.Cache;
             if (shape == entry.OtherShape) {
-                return s[entry.OtherIndex];
+                return ValueOf(s[entry.OtherIndex]);
             }
 
             int index = shape.IndexOf(site.Name);
             if (index > 0) {
                 site.Update(entry.Remember(shape, index));
-                return s[index];
+                return ValueOf(s[index]);
             }
             return null;
         }
@@ -453,7 +517,7 @@ namespace IronRuby.Runtime {
                     }
 
                     // read after the barrier: the latest value any writer stored
-                    value = s[index];
+                    value = ValueOf(s[index]);
 
                     object[] newSlots;
                     if (newShape.Count == 0) {
@@ -630,6 +694,43 @@ namespace IronRuby.Runtime {
                 return Interlocked.CompareExchange(ref _ivars, first, s) == s;
             }
 
+            return false;
+        }
+
+        /// <summary>
+        /// Fast path of a cached raw write of a Float (the typed code's): as <see cref="TrySetCached"/>
+        /// for a variable the object has, into its <see cref="FloatLocation"/>, or a new one. False if the
+        /// cache does not apply: the caller boxes the Float and takes the ordinary path.
+        /// Frozen state checked by caller.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        internal static bool TryWriteFloat(object[]/*!*/ slots, object shape, int index, double value) {
+            var location = GetSlot(slots, index) as FloatLocation;
+            if (location != null) {
+                location.Value = value;
+            } else {
+                SetSlot(slots, index, new FloatLocation(value));
+            }
+            // as for any write: if the slots moved under it, the caller redoes it where they are now
+            return ShapeOf(slots) == shape;
+        }
+
+        /// <summary>
+        /// The Float a slot holds - raw in a <see cref="FloatLocation"/> or boxed - for the typed code's
+        /// reads; false if it holds anything else.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadFloat(object slot, out double value) {
+            var location = slot as FloatLocation;
+            if (location != null) {
+                value = location.Value;
+                return true;
+            }
+            if (slot is double) {
+                value = (double)slot;
+                return true;
+            }
+            value = 0;
             return false;
         }
 

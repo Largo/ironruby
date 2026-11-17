@@ -5016,11 +5016,43 @@ namespace IronRuby.Runtime {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
                 if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                    value = RubyInstanceData.GetSlot(slots, entry.Index);
+                    // a Float the typed code stored raw is boxed (RubyInstanceData, "Float locations")
+                    value = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
                     return true;
                 }
             }
             value = null;
+            return false;
+        }
+
+        // TryReadCached of a variable that holds a Float, for the typed code: the double, without
+        // boxing a raw one. False for a miss or a variable that holds anything else.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCachedFloat(RubyInstanceData data, InstanceVariableSite/*!*/ site, out double value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    return RubyInstanceData.TryReadFloat(RubyInstanceData.GetSlot(slots, entry.Index), out value);
+                }
+            }
+            value = 0;
+            return false;
+        }
+
+        // TryWriteCached of a Float the typed code holds raw: into the variable's FloatLocation
+        // (RubyInstanceData.TryWriteFloat). False for a miss, an add, a frozen object or a shape
+        // changed under it: the caller boxes the Float and takes the ordinary path.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryWriteCachedFloat(RubyInstanceData data, double value, InstanceVariableSite/*!*/ site) {
+            if (data != null && !data._frozen) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.Shape && entry.Next == null) {
+                    return RubyInstanceData.TryWriteFloat(slots, shape, entry.Index, value);
+                }
+            }
             return false;
         }
 
@@ -5048,7 +5080,7 @@ namespace IronRuby.Runtime {
             object[] slots = data._ivars;
             var entry = site.Cache;
             if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                return RubyInstanceData.GetSlot(slots, entry.Index);
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
@@ -5076,7 +5108,7 @@ namespace IronRuby.Runtime {
             object[] slots = data._ivars;
             var entry = site.Cache;
             if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                return RubyInstanceData.GetSlot(slots, entry.Index);
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
@@ -5106,7 +5138,7 @@ namespace IronRuby.Runtime {
             object[] slots = data._ivars;
             var entry = site.Cache;
             if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                return RubyInstanceData.GetSlot(slots, entry.Index);
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
