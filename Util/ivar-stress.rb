@@ -72,7 +72,13 @@ def p_upd(o) = (o.a = o.a + 1.0)
 PKINDS = [Float, Integer, NilClass]
 pwarm = Class.new(PBase)
 300.times { o = pwarm.new; p_upd(o); p_upd(o); o.setb(2.5); o.setb(3.5); o.ga; o.gb }
-promoted_before = System::Type.get_type('IronRuby.Runtime.RubyInstanceData, IronRuby').get_property('Promotions').get_value(nil, nil) if defined?(System)
+# IronRuby's count of promotions (0 elsewhere, and on a build without it)
+def promotions
+  return 0 unless defined?(System::Type)
+  prop = System::Type.get_type('IronRuby.Runtime.RubyInstanceData, IronRuby').get_property('Promotions')
+  prop ? prop.get_value(nil, nil) : 0
+end
+promoted_before = promotions
 prounds = [ITERS / 2000, 5].max
 prounds.times do |round|
   cls = Object.const_set(:"PRound#{round}", Class.new(PBase))      # named: Marshal dumps them
@@ -127,10 +133,7 @@ prounds.times do |round|
   stop = true
   writers.each(&:join)
 end
-if defined?(System)
-  promoted = System::Type.get_type('IronRuby.Runtime.RubyInstanceData, IronRuby').get_property('Promotions').get_value(nil, nil) - promoted_before
-  $stderr.puts "promotions during the promotion part: #{promoted}" if ENV['IVAR_STRESS_VERBOSE']
-end
+$stderr.puts "promotions during the promotion part: #{promotions - promoted_before}" if ENV['IVAR_STRESS_VERBOSE']
 
 
 readers = objects.map do |obj|
