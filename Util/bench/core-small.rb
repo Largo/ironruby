@@ -86,6 +86,7 @@ class H
   def m71; @nh.dig(0, :k, 0); end
   def m72; @f.sum { |x| x * 2 }.to_i; end
   def m73; @a.sum(10) { |x| x * 3 }; end
+  def m74; String(@i).size + String(nil).size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 def t(name, n)
@@ -169,3 +170,4 @@ t("dig_arr_var", N) { |n| i = 0; s = 0; while i < n; s += h.m70; i += 1; end; s 
 t("dig_arr_hash", N) { |n| i = 0; s = 0; while i < n; s += h.m71; i += 1; end; s }
 t("sum_blk_float", N) { |n| i = 0; s = 0; while i < n; s += h.m72; i += 1; end; s }
 t("sum_blk_init", N) { |n| i = 0; s = 0; while i < n; s += h.m73; i += 1; end; s }
+t("String(int)", N) { |n| i = 0; s = 0; while i < n; s += h.m74; i += 1; end; s }

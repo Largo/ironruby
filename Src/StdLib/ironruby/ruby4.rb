@@ -12369,8 +12369,17 @@ module Kernel
   # rb_String: #to_str if there is one, otherwise #to_s - and #to_s not existing, or
   # answering something that is not a String, is a TypeError rather than a NoMethodError
   # or a silently wrong result.
+  #
+  # A String is answered here and everything else in __ir_string__: with that body in it -
+  # a rescue, a singleton class, a dozen locals - this method made a scope on every call,
+  # 220 ns for String("a") where CRuby takes 40.
   def String(object)
     return object if ::String === object
+    __ir_string__(object)
+  end
+  module_function :String
+
+  def __ir_string__(object)
     # a BasicObject has neither respond_to? nor to_s: only its #to_s (through method_missing) can help
     basic = !(::Kernel === object)
     if !basic && object.respond_to?(:to_str)
@@ -12404,7 +12413,7 @@ module Kernel
     end
     converted
   end
-  module_function :String
+  private :__ir_string__
 
   # rb_f_puts forwards to $stdout.puts, so a redefined or mocked #puts on $stdout is what
   # runs (Kernel#print and #p write to it directly instead). It forwards with rb_funcallv,
