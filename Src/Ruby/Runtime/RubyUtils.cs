@@ -441,8 +441,36 @@ namespace IronRuby.Runtime {
             if (obj == null) return NilObjectId;
             if (obj is bool) return (bool)obj ? TrueObjectId : FalseObjectId;
             if (obj is int) return GetFixnumId((int)obj);
+            if (obj is double) {
+                long id;
+                if (TryGetFlonumId((double)obj, out id)) return id;
+            }
 
             return context.GetInstanceData(obj).ObjectId;
+        }
+
+        /// <summary>
+        /// The object_id of a Float that CRuby holds as an immediate (a flonum: rb_float_new_inline in
+        /// internal/numeric.h): the value itself, so two Floats of the same value have the same id, however
+        /// they came about - `1.5.object_id == 1.5.object_id', and a Float that typed code stored raw in an
+        /// instance variable (RubyInstanceData, "Float locations") read back through two boxes. Per box, the
+        /// id of the same value differed from one read to the next. False for the Floats CRuby allocates
+        /// (-0.0, and exponents outside about 1.7e-77..1.2e77): theirs is per object there too.
+        /// </summary>
+        public static bool TryGetFlonumId(double value, out long id) {
+            ulong bits = unchecked((ulong)BitConverter.DoubleToInt64Bits(value));
+            int top = (int)(bits >> 60) & 0x7;
+            if (bits != 0x3000000000000000UL && (top == 3 || top == 4)) {
+                bits = (bits << 3) | (bits >> 61);
+                id = unchecked((long)((bits & ~1UL) | 2UL));
+                return true;
+            }
+            if (bits == 0) {
+                id = unchecked((long)0x8000000000000002UL);
+                return true;
+            }
+            id = 0;
+            return false;
         }
 
         private const int CachedCharCount = 256;

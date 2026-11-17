@@ -253,5 +253,25 @@ NoMethodError
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 4, System.String.Format("methods specialized: {0} (expected at least 4)", specializedHere));
         }
+
+        // A Float CRuby holds as an immediate has the object_id its value gives (RubyUtils.TryGetFlonumId): the
+        // same for every Float of that value, where an id per box differed between two reads of one variable
+        // that typed code had stored raw. Outside the flonum range (-0.0, 1.0e308) it stays per object.
+        public void FloatObjectId1() {
+            TestOutput(@"
+p 1.5.object_id, 0.0.object_id, (-1.5).object_id
+a = 1.5; b = 0.5 * 3
+p a.object_id == b.object_id, (-0.0).object_id == (-0.0).object_id, 1.0e308.object_id == 1.0e308.object_id
+x = 1.0e308; p x.object_id == x.object_id
+", @"
+-18014398509481982
+-9223372036854775806
+-18014398509481978
+true
+false
+false
+true
+");
+        }
     }
 }
