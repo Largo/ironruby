@@ -165,6 +165,7 @@ namespace IronRuby.Runtime.Jit {
             if (scope == null) { throw Bail("constant without a scope: " + node.Name); }
             string name = node.Name;
             object value;
+            WeakReference storageWeakValue;
             if (node.Qualifier != null) {
                 var qualifier = node.Qualifier as ConstantVariable;
                 if (qualifier == null) { throw Bail("constant qualified by an expression: " + name); }
@@ -181,6 +182,7 @@ namespace IronRuby.Runtime.Jit {
                     RequireNotDeprecated(module.GetConstantOwnerNoLock(name), name);
                     _resolvedConstantOwner = module.GetConstantOwnerNoLock(name) ?? module;
                     value = storage.Value;
+                    storageWeakValue = storage.WeakValue;
                 }
             } else {
                 using (_context.ClassHierarchyLocker()) {
@@ -203,10 +205,15 @@ namespace IronRuby.Runtime.Jit {
                         _resolvedConstantOwner = owner;
                     }
                     value = storage.Value;
+                    storageWeakValue = storage.WeakValue;
                 }
             }
-            // an autoload not yet run resolves to no value here; nil is not worth telling apart from it
-            if (value == null || value is RubyModule.AutoloadedConstant) { throw Bail("constant without a value: " + name); }
+            // A constant whose value is nil (Richards' `NO_WORK = nil') has a storage that says so - its
+            // weak value is ConstantSiteCache.WeakNull, as the generic site's cache keeps it - while an
+            // autoload that has not run resolves to an empty storage or an AutoloadedConstant.
+            if (value == null && storageWeakValue != ConstantSiteCache.WeakNull || value is RubyModule.AutoloadedConstant) {
+                throw Bail("constant without a value: " + name);
+            }
             _usesConstants = true;
             return value;
         }
@@ -331,7 +338,7 @@ namespace IronRuby.Runtime.Jit {
                 var module = value as RubyModule;
                 if (module != null) { return EmitModuleTest(module, subject); }
                 if (value is int) { return EmitFixnumTest((int)value, subject); }
-                throw Bail("when of a constant holding a " + value.GetType().Name);
+                throw Bail("when of a constant holding " + ((value == null) ? "nil" : "a " + value.GetType().Name));
             }
 
             var literal = expr as Literal;
@@ -1018,6 +1025,12 @@ namespace IronRuby.Runtime.Jit {
                 object sample = (_hints != null) ? _hints.SelfSample : null;
                 object value;
                 if (sample == null || !_context.TryGetInstanceVariable(sample, ivar.Name, out value)) { return null; }
+                return (value == null) ? typeof(void) : value.GetType();
+            }
+            var constant = receiver as ConstantVariable;
+            if (constant != null) {
+                // the value the constant has now, which the constant version guard keeps (EmitConstant)
+                object value = ResolveConstant(constant);
                 return (value == null) ? typeof(void) : value.GetType();
             }
             var local = receiver as LocalVariable;

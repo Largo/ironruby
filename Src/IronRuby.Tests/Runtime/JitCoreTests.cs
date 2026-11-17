@@ -153,5 +153,61 @@ p [la(7, -3_000_000_000), la(-2**62, 2), va(v), va(V.new(-1.5)), va(-4)]
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 4, System.String.Format("methods specialized: {0} (expected at least 4)", specializedHere));
         }
+
+        /// <summary>
+        /// `NONE == x', `NONE != x' with NONE a constant whose value is nil (Richards' NO_WORK): its storage holds
+        /// ConstantSiteCache.WeakNull, unlike an autoload not yet run, and the comparison is `x is nil'; then
+        /// NilClass#== redefined and the constant removed in the middle of a run.
+        /// </summary>
+        public void JitCore_NilConstant1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+NONE = nil
+class Q
+  def initialize(h) = (@head = h)
+  attr_accessor :head
+  def eq = (NONE == @head)
+  def ne = (NONE != @head)
+end
+class Base
+  INH = nil
+end
+class Sub < Base
+  def inh(x) = (INH == x)
+end
+q = Q.new(:a)
+s = Sub.new
+200.times { |i| q.head = i.even? ? :a : [i]; q.eq; q.ne; s.inh(nil) }
+q.head = nil
+p [q.eq, q.ne, s.inh(nil), s.inh(0)]
+seen = []
+200.times do |i|
+  q.head = i.even? ? nil : :a
+  if i == 100
+    class NilClass
+      alias_method :orig_eq, :==
+      def ==(o) = :nil_eq
+    end
+  end
+  seen << q.eq << q.ne
+end
+p seen.uniq
+class NilClass
+  remove_method :==, :orig_eq
+end
+seen = []
+200.times do |i|
+  Base.send(:remove_const, :INH) if i == 100
+  seen << (s.inh(nil) rescue $!.class)
+end
+p seen.uniq
+", @"
+[true, false, true, false]
+[true, false, :nil_eq]
+[true, NameError]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
     }
 }
