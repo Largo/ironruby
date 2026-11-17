@@ -35,19 +35,30 @@ namespace IronRuby.Runtime {
         public WeakList() {
         }
 
+        // Enumerations of this list in progress (they nest: a walk of the dependents may reach the same
+        // module again). An enumeration goes by index, so entries may be added under it, but nothing may be
+        // removed: Prune moves entries down, and the walk would skip some - classes whose method version or
+        // mixins it was there to update.
+        private int _enumerations;
+
         public IEnumerator<T> GetEnumerator() {
             int deadCount = 0;
-            for (int i = 0; i < _list.Count; i++) {
-                object item = _list[i].Target;
-                if (item != null) {
-                    yield return (T)item;
-                } else {
-                    deadCount++;
+            _enumerations++;
+            try {
+                for (int i = 0; i < _list.Count; i++) {
+                    object item = _list[i].Target;
+                    if (item != null) {
+                        yield return (T)item;
+                    } else {
+                        deadCount++;
+                    }
                 }
+            } finally {
+                _enumerations--;
             }
 
             // deadCount is greated than 1/5 of total => remove dead (the threshold is arbitrary, might need tuning):
-            if (deadCount > 5 && deadCount > _list.Count / 5) {
+            if (_enumerations == 0 && deadCount > 5 && deadCount > _list.Count / 5) {
                 Prune();
             }
         }
@@ -58,7 +69,7 @@ namespace IronRuby.Runtime {
 
 
         public void Add(WeakReference item) {
-            if (_list.Count >= _pruneAt) {
+            if (_enumerations == 0 && _list.Count >= _pruneAt) {
                 Prune();
                 _pruneAt = Math.Max(16, _list.Count * 2);
             }
