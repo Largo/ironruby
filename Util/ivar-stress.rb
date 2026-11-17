@@ -173,6 +173,89 @@ writers.each(&:join)
 running = false
 movers.each(&:join)
 
+# Floats stored raw (RubyInstanceData, "Float locations"): thread t owns @f<t> of one shared
+# object and `x' of one shared body, and writes them through typed code that stores raw - a
+# hot method's `@f<t> = d * 1.0', an outlined Array#each's `b.x = b.x + 64.0' (attr_accessor) -
+# with values tagged t, flipping them now and then to an Integer of the same value (a generic
+# store that replaces the location) and back, while the other threads read all of them raw
+# (`@f<u> + 0.0', `b.x * 1.0' in typed code) and boxed (`@f<u>', instance_variable_get) and add
+# and remove variables of their own on the same objects (moves). Every value read must be
+# tagged with its variable's owner and never go backwards for one reader; at the end each
+# variable holds what its owner wrote last.
+class FShared
+end
+THREADS.times do |t|
+  FShared.class_eval <<-RUBY
+    def fw#{t}(d) = (@f#{t} = d * 1.0)
+    def fr#{t} = @f#{t} + 0.0
+    def fg#{t} = @f#{t}
+  RUBY
+end
+class FBody
+  attr_accessor :x
+  def initialize(x) = (@x = x)
+end
+def fbody_step(list) = list.each { |b| b.x = b.x + 64.0 }
+def fbody_read(list) = list.map { |b| b.x * 1.0 }
+
+fs = FShared.new
+fbodies = Array.new(THREADS) { |t| FBody.new(t.to_f) }
+THREADS.times { |t| 100.times { |i| fs.__send__(:"fw#{t}", (i * TAG + t).to_f); fs.__send__(:"fr#{t}"); fs.__send__(:"fg#{t}") } }
+fwarm = Array.new(8) { FBody.new(0.0) }
+300.times { fbody_step(fwarm); fbody_read(fwarm) }
+flast = Array.new(THREADS)
+fthreads = THREADS.times.map do |t|
+  Thread.new do
+    w = :"fw#{t}"
+    mine = [fbodies[t]] * 8
+    seen = Array.new(THREADS, -1)
+    bseen = Array.new(THREADS, -1)
+    n = 0
+    ITERS.times do |i|
+      v = i * TAG + t
+      if i % 97 == 0
+        fs.instance_variable_set(:"@f#{t}", v)                       # an Integer: the location dies
+        fbodies[t].x = fbodies[t].x.to_i                             # same value, an Integer
+      else
+        fs.__send__(w, v.to_f)
+      end
+      fbody_step(mine) if i % 5 == 0
+      got = fs.__send__(:"fg#{t}")
+      record.("own @f#{t} read back #{got.inspect}, wrote #{v}") unless got == v
+      u = i % THREADS
+      x = (i.even? ? fs.__send__(:"fr#{u}") : fs.instance_variable_get(:"@f#{u}"))
+      if x
+        k = x.to_i
+        record.("@f#{u} read #{x.inspect}: not tagged #{u}") unless k % TAG == u && x == k
+        record.("@f#{u} went back from #{seen[u]} to #{k}") if k < seen[u]
+        seen[u] = k if k > seen[u]
+      end
+      fbody_read(fbodies).each_with_index do |bx, b|
+        k = bx.to_i
+        record.("body #{b} x #{bx.inspect}: not tagged #{b}") unless k % TAG == b && bx == k
+        record.("body #{b} x went back from #{bseen[b]} to #{k}") if k < bseen[b]
+        bseen[b] = k if k > bseen[b]
+      end
+      if i % 7 == 0
+        name = :"@g#{t}_#{n % 5}"
+        fs.instance_variable_set(name, i)
+        fbodies[(t + 1) % THREADS].instance_variable_set(name, i)
+        if n.odd?
+          fs.remove_instance_variable(name)
+          fbodies[(t + 1) % THREADS].remove_instance_variable(name)
+        end
+        n += 1
+      end
+    end
+    flast[t] = [fs.__send__(:"fg#{t}"), fbodies[t].x]
+  end
+end
+fthreads.each(&:join)
+THREADS.times do |t|
+  got = [fs.instance_variable_get(:"@f#{t}"), fbodies[t].x]
+  record.("final @f#{t}/x of body #{t} #{got.inspect}, owner last read #{flast[t].inspect}") unless got == flast[t]
+end
+
 if failures.empty?
   puts "OK (#{THREADS} threads x #{ITERS} iterations, #{objects.size} shared objects)"
 else
