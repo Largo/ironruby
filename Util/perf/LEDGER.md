@@ -596,6 +596,21 @@ Profile (`Util/perf/profile.sh`, self time):
     looked. First guess, unverified: the module's list of dependent classes takes a weak
     reference per singleton class ever made and is scanned on each update. Outside
     AWFY, but DCI-style code and anything that extends per request pays it.
+    Round sixteen fixed the growth (perf/extend, see Landed): the guess was right, and
+    an extend is now 11-25 us whatever came before, ten times less at 20,000 and thirty
+    at 200,000. What is left, from its author's `IR_BIND_TRACE=1` runs, is the first
+    call on each brand-new class, still 20 times CRuby for `extend`: 2-7 us to bind a
+    precompiled dispatcher for `o.foo` on a new singleton class; 70-120 us for the first
+    call of a method defined in `Class.new { def x }` or by `def o.x`, because
+    `RubyMethodBody.GetDelegate` compiles the body again for each declaring module (the
+    module is baked into the code; making the body independent of it has to keep
+    `super` and refinements right); and for a new Struct class full rules instead of
+    precompiled dispatchers, about 113 us for `new` and 51 us for a getter, since the
+    getter's and setter's rule generators are closures made per class and never match
+    a shared rule. Also unexplained by measurement: a `Struct.new` moves the global
+    method version (reading the code: `new` and `[]` added to the struct class's
+    singleton class override `Class#new`, which invalidates sites on override), so it
+    throws away every running loop's copy and every typed body's entry.
 20. **Array and Hash are not safe under concurrent mutation** - a correctness gap, listed
     here because the fix has a speed price and the papers say how to keep it at zero for
     code that does not share. Eight threads appending to one Array raise "Source array
@@ -1299,6 +1314,37 @@ with both merged (perf/safept with perf/core2 merged into it, d338750c).
   differ from CRuby in the lines the baseline differs in); the reviewer's probes again
   on the final build; all five ruby/spec suites, 32,285 examples, nothing the list of
   known failures lacks; no FAIL in two runs of all fourteen.
+
+Round sixteen: three experiments on cd0d906c, each by a subagent in its own worktree,
+beside one another (so the authors' timings are at loads of 4 to 14, and mine for the
+first were taken while the third was still running). `havlak` ended as a breakdown (gap
+25, and `Kernel#loop` in C# under Rejected).
+
+- **perf/extend f4b38652 d5685f40 (merged in 8e844238) - a module's dependent classes
+  are looked up in constant time** (gap 19). `extend` and `include` add the class to
+  the module's weak list of dependents after searching the list for it, and the list
+  kept every singleton class ever made for the module; `WeakList` now has a set beside
+  the list, `Contains` replaces the two searches, and Add prunes dead entries each time
+  the list has doubled. Three alternating runs of 20,000, before -> after in ms, load
+  5-7: `Object.new.extend(M)` with a call 5180 / 5352 / 4847 -> 527 / 491 / 451 (0.09),
+  `Class.new.include(M)` 5218 / 6032 / 5749 -> 947 / 1010 / 991 (0.17); `Class.new` with
+  a `def` 2336-2767 -> 2300-2344, a singleton `def`, `define_method` and `const_set`
+  level, `Struct.new` 6.8-12.3 s against 7.2-9.8 s. Its author's: 200,000 extends 72 ->
+  2.2 s, RSS flat at 269-279 MB over 2,000,000. My probe of 60,000 extends among
+  classes, subclasses and modules that include M, followed by every kind of change to
+  M, prints CRuby's output on both trees and takes 4.4 s where it took 41 (CRuby 0.17).
+  The second commit is mine: an enumeration of the list goes by index, and the walks
+  of dependents add to other modules' lists as they go, so a prune from Add under an
+  enumeration of the same list would make the walk skip classes. Reading the walks
+  found no case that does it; the list now counts its enumerations and prunes at none.
+  The gate: IronRuby.Tests with the baseline's one failure; `Util/extend-matrix.rb`
+  (new, 14 rows) and the hot-shapes, jit, jit-calls, ivar, hash-struct, block-loop and
+  osr-array matrices as CRuby's, tiers on and off; all five ruby/spec suites, 32,285
+  examples, nothing new; the fourteen benchmarks 1.043 and 1.005 of the baseline at
+  load 3-9 (Storage 1.36 and CD 1.21 in the first run, 0.99 and 0.98 in the second),
+  and what was slower in both orders level in alternating processes: Queens 1.014,
+  Towers 1.002, Richards 0.915, micro `getter` 1.03 and `==` 1.01 overlapping;
+  start-up 1510 against 1520 ms, best of fifteen.
 
 ## Rejected
 
