@@ -225,8 +225,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal static object ValueOf(object slot) {
-            var location = slot as FloatLocation;
-            return (location != null) ? location.Boxed : slot;
+            // inlined into every cached read: a type check, and the boxing out of line
+            return (slot is FloatLocation) ? BoxedValueOf(slot) : slot;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static object BoxedValueOf(object slot) {
+            return ((FloatLocation)slot).Boxed;
         }
 
         /// <summary>
