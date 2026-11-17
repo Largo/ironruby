@@ -381,11 +381,30 @@ rescue ZeroDivisionError => e
 end
 3000.times { rz((0...8).to_a, 9) }
 p rz((0...8).to_a, 2)
+def gw(n, m); c = 0; begin; n.times { |i| m.times { |j| c += 1; $gw = c } }; rescue RuntimeError; end; c - $gw; end
+$gw = 0
+300.times { gw(20, 20) }
+p (1..3).map {
+  q = Queue.new
+  th = Thread.new { q << 1; gw(100_000, 50_000) }
+  q.pop; sleep 0.05; th.raise(""stop"")
+  d = th.value
+  d == 0 || d == 1
+}
+def fl(flags, acc, n); n.times { |i| f = flags[0]; f.times { |j| acc[0] = acc[0] + j + 1 } }; end
+5.times { fl([2], [0], 2000) }
+flags = [0]; acc = [0]
+th = Thread.new { sleep 0.03; Integer.class_eval { remove_method :times; def times; yield 98; self; end }; flags[0] = 1 }
+fl(flags, acc, 30_000_000)
+th.join
+p [acc[0] % 99 == 0, acc[0] > 0]
 ", @"
 252000.0
 462916
 1008120
 [""Integer#/"", ""block (2 levels) in Object#rz"", ""Range#each"", ""block in Object#rz"", ""Array#each_index""]
+[true, true, true]
+[true, true]
 ");
         }
 

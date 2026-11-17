@@ -354,6 +354,15 @@ namespace IronRuby.Runtime.Jit {
             return RubyModule.GlobalMethodVersion == snapshot;
         }
 
+        /// <summary>
+        /// An iterator run in place in an outlined loop (JitCompiler.Nest.cs), each time the outer iteration
+        /// reaches it: a method redefined since the copy was entered deopts, and the generic code calls the
+        /// iterator the outer iteration finds now.
+        /// </summary>
+        public static void NestedIteratorOk(int snapshot) {
+            if (RubyModule.GlobalMethodVersion != snapshot) { throw Deopt(); }
+        }
+
         /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
         public static void EntryStale(object/*!*/ specialization) {
             var spec = (JitStub.Specialization)specialization;

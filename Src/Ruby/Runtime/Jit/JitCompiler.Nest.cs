@@ -41,6 +41,15 @@ namespace IronRuby.Runtime.Jit {
         // the outlined block's own (_scopeDepth) and no deeper than this are declared, not bound to tuple slots.
         private int _nestDepth;
 
+        // Whether an iterator has been run in place in this body: its safe point deopts in the middle of an outer
+        // iteration, which a global store earlier in that iteration does not survive (see EmitNestedBlockLoop).
+        private bool _nestedLoops;
+
+        /// <summary>A global store in a body that runs an iterator in place bails (see EmitNestedBlockLoop).</summary>
+        private void CheckGlobalStoreBesideNest(string/*!*/ what) {
+            if (_nestedLoops) { throw Bail(what + " beside an iterator run in place"); }
+        }
+
         /// <summary>Whether an unbound local is one of an inner block run in place, which a first assignment declares.</summary>
         private bool IsNestedLocal(LocalVariable/*!*/ local) {
             return _loop != null && local.DefinitionLexicalDepth > _scopeDepth && local.DefinitionLexicalDepth <= _nestDepth;
@@ -62,11 +71,25 @@ namespace IronRuby.Runtime.Jit {
                 ? _context.GetClass(typeof(IronRuby.Builtins.Range))
                 : ClassOfType(JT.Int, false);
             if (!IsPublicBuiltin(cls, nested.Iterator)) { throw Bail(nested.Iterator + " is not the built-in one"); }
+            // The outer copy checks the method version only on entry, but the generic code would look the iterator
+            // up on each outer iteration: one redefined since (by another thread, while the copy runs) must be
+            // seen by the next outer iteration that reaches the call. Read after the entry guard's version, so a
+            // move between the two only makes this one fail.
+            int version = RubyModule.GlobalMethodVersion;
+
+            // A Thread#raise (or a trap) stops the inner loop at its safe point by a deopt, which takes the outer
+            // iteration back to its top and lets the generic code deliver the exception there - before it gets to
+            // store a global again. A global stored earlier in the iteration would then be left ahead of the
+            // locals it was stored from, which go back to the snapshot: such a body is not taken (a global stored
+            // after this point bails in EmitGlobalWrite).
+            _nestedLoops = true;
+            if (_globalsWritten != null && _globalsWritten.Count > 0) { throw Bail("global variable stored beside an iterator run in place"); }
 
             // The receiver, then the argument: `(a...b)' evaluates a, then b; `a.upto(b)' a, then b.
             var from = Ast.Variable(typeof(long), "#from");
             var to = Ast.Variable(typeof(long), "#to");
             var init = new System.Collections.Generic.List<MSA.Expression>();
+            init.Add(Ast.Call(JitRuntime.M("NestedIteratorOk"), Ast.Constant(version)));
             if (nested.From != null) {
                 init.Add(Ast.Assign(from, EmitIntegerBound(nested.From)));
             } else {

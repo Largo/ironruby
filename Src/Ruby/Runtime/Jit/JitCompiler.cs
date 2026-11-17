@@ -1164,6 +1164,7 @@ namespace IronRuby.Runtime.Jit {
             JT vt;
             var v = Emit(right, out vt);
             if (_globalsRead != null && _globalsRead.Contains(variable)) { throw Bail("global variable $" + node.Name + " read and written"); }
+            CheckGlobalStoreBesideNest("global variable $" + node.Name + " stored");
             if (_globalsWritten == null) { _globalsWritten = new HashSet<GlobalVariable>(); }
             _globalsWritten.Add(variable);
             _canDeopt = true;
@@ -1210,6 +1211,7 @@ namespace IronRuby.Runtime.Jit {
                 _globalsRead.UnionWith(code.GlobalsRead);
             }
             if (code.GlobalsWritten != null) {
+                if (code.GlobalsWritten.Count > 0) { CheckGlobalStoreBesideNest("call: " + name + " stores a global variable"); }
                 if (_globalsWritten == null) { _globalsWritten = new HashSet<GlobalVariable>(); }
                 _globalsWritten.UnionWith(code.GlobalsWritten);
             }
