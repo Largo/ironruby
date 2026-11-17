@@ -1294,7 +1294,7 @@ def sp_case_str(s)
   case s
   when "foo" then 1
   when "bar", "baz" then 2
-  when "é" then 3
+  when "\u00e9" then 3
   else 0
   end
 end
@@ -1424,7 +1424,7 @@ t('case of Integer literals, subclasses') { [JitArr.new, JitHash.new, JitStr.new
 warm { |i| sp_case_sym([:add, :sub, :mul, :div, :mod][i % 5]) }
 t('case of a Symbol') { [:add, :sub, :mul, :div, :mod, "add", nil, 1].map { |s| sp_case_sym(s) } }
 warm { |i| sp_case_str(["foo", "bar", "baz", "qux"][i % 4]) }
-t('case of a String') { ["foo", "bar", "baz", "qux", "é", "é".b, "foo".b, JitStr.new("foo"), :foo, nil, 1, 2.0, true].map { |s| sp_case_str(s) } }
+t('case of a String') { ["foo", "bar", "baz", "qux", "\u00e9", "\u00e9".b, "foo".b, JitStr.new("foo"), :foo, nil, 1, 2.0, true].map { |s| sp_case_str(s) } }
 warm { |i| sp_case_cond(i - 60) }
 t('case without a subject') { [sp_case_cond(-5), sp_case_cond(0), sp_case_cond(5)] }
 warm { |i| sp_case_const(["a", 1][i % 2]) }
@@ -1847,7 +1847,7 @@ t('a default proc that writes the hash') { dw = Hash.new { |hh, k| hh[k] = k * 3
 t('a mutable default value') { dv = Hash.new([]); x = sp_hget2(dv, 1); x << 1; [dv, dv.default, sp_hget2(dv, 2)] }
 t('keys: nil, Float, Bignum, Array, Int64') { x = {}; [nil, 2.5, 2**70, [1], 2**40, -0.0].each_with_index { |k, j| sp_hset2(x, k, j) }; [nil, 2.5, 2**70, [1], 2**40, 0.0, 1.0].map { |k| [sp_hget2(x, k), sp_hkey2(x, k)] } }
 t('keys: 1 and 1.0') { x = { 1 => :i, 1.0 => :f }; [sp_hget2(x, 1), sp_hget2(x, 1.0), sp_hkey2(x, 1.0), sp_hfetch2(x, 2.0)] }
-t('keys: String encodings') { x = { "é" => 1, "a" => 2 }; [sp_hget2(x, "é"), sp_hget2(x, "é".b), sp_hget2(x, "a".b), sp_hkey2(x, "é".b), sp_hget2(x, "a".encode("UTF-16LE"))] }
+t('keys: String encodings') { x = { "\u00e9" => 1, "a" => 2 }; [sp_hget2(x, "\u00e9"), sp_hget2(x, "\u00e9".b), sp_hget2(x, "a".b), sp_hkey2(x, "\u00e9".b), sp_hget2(x, "a".encode("UTF-16LE"))] }
 t('keys: String subclass') { x = { "a" => 1 }; k = JitStr.new("a"); sp_hset2(x, JitStr.new("b"), 2); [sp_hget2(x, k), sp_hkey2(x, k), x.keys.map(&:class), x.keys[0].frozen?] }
 t('keys: Symbol and String of one name') { x = { a: 1, "a" => 2 }; [sp_hget2(x, :a), sp_hget2(x, "a"), sp_hkey2(x, :b)] }
 t('existing String key kept') { k1 = "q".dup; x = { k1 => 1 }; sp_hset2(x, "q".dup, 2); [x, x.keys[0].equal?(k1)] }
@@ -3956,3 +3956,325 @@ warm do
 end
 t('sv_get, hot on the private member') { sv_holder_hot.sv_get }
 t('sv_set, hot on the private member') { sv_holder_hot.sv_set }
+
+# ---------------------------------------------------------------- 13. String#length and #size
+#
+# `s.length', `s.size', `@input.length' on a receiver the profile saw hold a String: the
+# characters in the String's encoding (JitRuntime.StringLength). Each body is made hot on ASCII
+# Strings and then given multi-byte, broken, binary and UTF-16 Strings, a subclass with and
+# without a length of its own, a String with a singleton length, an Array, nil; then String#length
+# is redefined, refined and made private in the middle of the run. `sl_hash' reaches `sl_size'
+# through a call on self (a bound callee), as Json's hash_slot_for reaches string_hash.
+
+puts '--- 13. String#length and #size ---'
+
+class SlBox
+  def initialize(s) = (@input = s; @index = 0)
+  attr_writer :input
+  def sl_more = @index < @input.length
+  def sl_len(s) = s.length
+  def sl_size(s) = s.size * 1_402_589
+  def sl_hash(s) = sl_size(s) & 15
+end
+
+class SlString < String
+  def length = 99
+end
+class SlPlainString < String; end
+
+sl = SlBox.new('abc')
+warm { |i| sl.sl_len('abcd'); sl.sl_size('ab' * (i % 4)); sl.sl_hash('xyz'); sl.sl_more }
+sl_inputs = ['abc', '', "h\u00e9llo", "\u3042\u3044", "\xff\xfe".dup.force_encoding('UTF-8'), "\xff\xfe".b,
+  "ab\u00e9".encode('UTF-16LE'), "\u{1F600}x", 'abc'.freeze, SlString.new('abc'), SlPlainString.new('abcd'),
+  [1, 2], nil, 5]
+sl_inputs.each do |s|
+  t("sl_len #{s.inspect}") { sl.sl_len(s) }
+  t("sl_size #{s.inspect}") { sl.sl_size(s) }
+  t("sl_hash #{s.inspect}") { sl.sl_hash(s) }
+  sl.input = s
+  t("sl_more #{s.inspect}") { sl.sl_more }
+end
+sl_single = +'abc'
+def sl_single.length = 42
+def sl_single.size = 43
+t('sl_len, a singleton length') { sl.sl_len(sl_single) }
+t('sl_size, a singleton size') { sl.sl_size(sl_single) }
+warm { sl.sl_len('ab'); sl.sl_size('ab'); sl.sl_hash('ab') }
+t('sl_len after a singleton, plain') { sl.sl_len('abc') }
+
+# hot again, then String#length redefined in the middle of a run
+sl_seen = []
+warm do |i|
+  if i == 60
+    class String
+      alias_method :sl_orig_length, :length
+      def length = -1
+    end
+  end
+  sl_seen << sl.sl_len('abcd')
+end
+t('sl_len, length redefined mid-run') { sl_seen.uniq }
+class String
+  alias_method :length, :sl_orig_length
+  remove_method :sl_orig_length
+end
+warm { sl.sl_len('ab') }
+t('sl_len, length restored') { sl.sl_len("\u00e9\u00e9") }
+
+warm { sl.sl_size('ab') }
+class String
+  private :size
+end
+t('sl_size, String#size private') { sl.sl_size('abc') }
+class String
+  public :size
+end
+t('sl_size, String#size public again') { sl.sl_size('abc') }
+
+module SlRefine
+  refine String do
+    def size = 1000
+  end
+end
+class SlBox
+  using SlRefine
+  def sl_rsize(s) = s.size
+end
+warm { sl.sl_rsize('abc') }
+t('sl_rsize under a refinement') { sl.sl_rsize('abc') }
+
+# ---------------------------------------------------------------- 14. Integer#abs and Float#abs
+#
+# `x.abs', `@v = @v.abs * -1' (Bounce's Ball#bounce has `0 - @x_vel.abs'): Integer#abs of an Int32 is an Int64, of an
+# Int64 the same except at -2**63 (a Bignum, a deopt); Float#abs clears the sign: -0.0.abs is 0.0
+# and NaN stays NaN. Hot on the kind each was compiled for, then the edges, a Bignum, a Rational,
+# nil, and Integer#abs and Float#abs redefined in the middle of a run, made private, refined.
+# Integer#- is still the one section 8 replaced, so this section does without it.
+
+puts '--- 14. Integer#abs and Float#abs ---'
+
+class AbBall
+  def initialize(v) = (@v = v)
+  attr_accessor :v
+  def ab_m = (@v = @v.abs * -1)
+  def ab_x(x) = x.abs
+  def ab_f(x) = x.abs + 0.5
+end
+
+ab = AbBall.new(3)
+abf = AbBall.new(-1.5)
+warm { |i| ab.v = 60 + -i; ab.ab_m; ab.ab_x(60 + -i); ab.ab_f(i * -0.25) }
+[0, 7, -7, 2**31 + -1, -2**31, 2**31, -2**31 + -1, 2**62, -2**63 + 1, -2**63, 2**63, -2**64, 3.5, -0.0, 0.0,
+ Float::NAN, -Float::INFINITY, Rational(-1, 2), nil, 'x'].each do |x|
+  t("ab_x #{x.inspect}") { r = ab.ab_x(x); r.is_a?(Float) ? [r, r.nan? ? :nan : 1.0 / r] : r }
+  t("ab_f #{x.inspect}") { ab.ab_f(x) }
+  ab.v = x
+  t("ab_m #{x.inspect}") { [ab.ab_m, ab.v] }
+end
+warm { |i| abf.v = i * -0.5; abf.ab_m }
+[-0.0, Float::NAN, -2.5, 4, -2**63].each do |x|
+  abf.v = x
+  t("ab_m on a Float-hot ball, #{x.inspect}") { r = abf.ab_m; r.is_a?(Float) ? [r, r.nan? ? :nan : 1.0 / r] : r }
+end
+
+ab_seen = []
+warm do |i|
+  if i == 60
+    class Integer
+      alias_method :ab_orig_abs, :abs
+      def abs = 1000
+    end
+  end
+  ab_seen << ab.ab_x(-3)
+end
+t('ab_x, Integer#abs redefined mid-run') { ab_seen.uniq }
+class Integer
+  alias_method :abs, :ab_orig_abs
+  remove_method :ab_orig_abs
+end
+ab_seen = []
+warm do |i|
+  if i == 60
+    class Float
+      alias_method :ab_orig_abs, :abs
+      def abs = -1.0
+    end
+  end
+  ab_seen << ab.ab_f(-3.0)
+end
+t('ab_f, Float#abs redefined mid-run') { ab_seen.uniq }
+class Float
+  alias_method :abs, :ab_orig_abs
+  remove_method :ab_orig_abs
+end
+warm { |i| ab.ab_x(60 + -i) }
+t('ab_x, abs restored') { [ab.ab_x(-4), ab.ab_x(-4.5)] }
+class Integer
+  private :abs
+end
+t('ab_x, Integer#abs private') { ab.ab_x(-4) }
+class Integer
+  public :abs
+end
+t('ab_x, Integer#abs public again') { ab.ab_x(-4) }
+
+module AbRefine
+  refine Integer do
+    def abs = :refined
+  end
+end
+class AbBall
+  using AbRefine
+  def ab_r(x) = x.abs
+end
+warm { |i| ab.ab_r(i) }
+t('ab_r under a refinement') { ab.ab_r(-2) }
+
+# ---------------------------------------------------------------- 15. an Array or Hash == nil
+#
+# `@storage == nil' and `@storage != nil' (som.rb's Vector#at and #capacity) on a receiver the
+# profile saw hold an Array or a Hash: Array#== and Hash#== of nil are false while nil has no
+# to_ary / to_hash (JitRuntime.CollectionEqualsNil). Hot on an Array, then given nil, a Hash, a
+# String, subclasses with an == of their own, an object with one, an Array with a singleton ==;
+# then nil given to_ary and an == of its own (Array#== then asks nil == ary), and Array#== and
+# Hash#!= redefined and made private, in the middle of a run.
+
+puts '--- 15. an Array or Hash == nil ---'
+
+class EnVec
+  def initialize(s) = (@storage = s)
+  attr_accessor :storage
+  def en_at(idx)
+    return nil if @storage == nil || idx >= @storage.length
+    @storage[idx]
+  end
+  def en_cap = @storage == nil ? 0 : @storage.size
+  def en_ne = (@storage != nil)
+  def en_x(x) = (x == nil)
+end
+class EnArray < Array
+  def ==(o) = :en_array_eq
+end
+class EnHash < Hash; end
+class EnObj
+  def ==(o) = :en_obj_eq
+  def length = 1
+  def [](i) = :en_obj_at
+  def size = 5
+  def inspect = '#<EnObj>'
+end
+
+en = EnVec.new([1, 2, 3])
+enh = EnVec.new({ 1 => 2 })
+warm { |i| en.en_at(i % 4); en.en_cap; en.en_ne; en.en_x([i]) }
+warm { enh.en_ne }
+en_single = [7, 8]
+def en_single.==(o) = :en_single_eq
+[[4, 5], nil, { 0 => :h }, EnHash[0, :eh], 'str', EnArray[1, 2], EnObj.new, [], en_single].each do |s|
+  en.storage = s
+  t("en_at #{s.inspect}") { en.en_at(0) }
+  t("en_cap #{s.inspect}") { en.en_cap }
+  t("en_ne #{s.inspect}") { en.en_ne }
+  t("en_x #{s.inspect}") { en.en_x(s) }
+  enh.storage = s
+  t("en_ne (Hash-hot) #{s.inspect}") { enh.en_ne }
+end
+
+en.storage = [1]
+en_seen = []
+warm do |i|
+  if i == 60
+    class NilClass
+      def to_ary = []
+      def ==(o) = (o == []) ? :nil_eq_ary : equal?(o)
+    end
+  end
+  en_seen << en.en_x([])
+end
+t('en_x, nil given to_ary and == mid-run') { en_seen.uniq }
+class NilClass
+  remove_method :to_ary
+  remove_method :==
+end
+warm { en.en_x([]) }
+en_seen = []
+warm do |i|
+  if i == 60
+    class Array
+      alias_method :en_orig_eq, :==
+      def ==(o) = o.nil? ? :array_eq_nil : en_orig_eq(o)
+    end
+  end
+  en_seen << en.en_x([1])
+end
+t('en_x, Array#== redefined mid-run') { en_seen.uniq }
+class Array
+  alias_method :==, :en_orig_eq
+  remove_method :en_orig_eq
+end
+enh.storage = { 1 => 2 }
+warm { enh.en_ne }
+en_seen = []
+warm do |i|
+  if i == 60
+    class Hash
+      def !=(o) = :hash_ne
+    end
+  end
+  en_seen << enh.en_ne
+end
+t('en_ne, Hash#!= defined mid-run') { en_seen.uniq }
+class Hash
+  remove_method :!=
+end
+warm { en.en_x([]) }
+class Array
+  private :==
+end
+t('en_x, Array#== private') { en.en_x([]) }
+class Array
+  public :==
+end
+t('en_x, Array#== public again') { en.en_x([]) }
+# ---------------------------------------------------------------- 16. review of 13-15
+# `!=' made private or protected in Array or Hash (or Object) where the method is BasicObject's: the
+# class keeps a forwarder whose visibility is the call's, not BasicObject#!='s. An Int64 abs and its
+# -2**63, and an object whose attr_reader is named abs.
+def rv_ne(a) = (a != nil)
+def rv_neh(h) = (h != nil)
+def rv_la(m, n)
+  x = m * n
+  x.abs
+end
+class RvAttr
+  attr_reader :abs
+  def initialize(a) = (@abs = a)
+end
+def rv_attr(v) = v.abs + 1
+rv_a = [1]
+rv_h = { 1 => 2 }
+rv_v = RvAttr.new(3)
+warm { |i| rv_ne(rv_a); rv_neh(rv_h); rv_la(i + 1, -3_000_000_000); rv_attr(rv_v) }
+t('rv_ne Array, public') { rv_ne(rv_a) }
+rv_seen = []
+warm do |i|
+  class Array; private :!=; end if i == 60
+  rv_seen << (rv_ne(rv_a) rescue $!.class)
+end
+t('rv_ne, Array#!= made private mid-run') { rv_seen.uniq }
+t('rv_ne Hash, Array#!= private') { rv_neh(rv_h) }
+class Array; public :!=; end
+class Hash; protected :!=; end
+t('rv_ne Hash, Hash#!= protected') { rv_neh(rv_h) }
+t('rv_ne Array, Array#!= public again') { rv_ne(rv_a) }
+class Hash; public :!=; end
+class Object; private :!=; end
+t('rv_ne Array, Object#!= private') { rv_ne(rv_a) }
+class Object; public :!=; end
+t('rv_ne Array, Object#!= public again') { rv_ne(rv_a) }
+t('rv_la Int64') { rv_la(7, -3_000_000_000) }
+t('rv_la -2**63') { rv_la(-2**62, 2) }
+t('rv_la -2**62') { rv_la(2**61, -2) }
+t('rv_attr Integer') { rv_attr(rv_v) }
+t('rv_attr Float') { rv_attr(RvAttr.new(-1.5)) }
+t('rv_attr Integer#abs') { rv_attr(-4) }

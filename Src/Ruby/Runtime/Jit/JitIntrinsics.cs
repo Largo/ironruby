@@ -315,7 +315,7 @@ namespace IronRuby.Runtime.Jit {
 
             private bool Resolves(RubyClass/*!*/ cls) {
                 var resolved = cls.ResolveMethod(Name, Calls.VisibilityContext.AllVisible);
-                return resolved.Found && resolved.Info.IsPublic && Array.IndexOf(_expected, resolved.Info) >= 0
+                return resolved.Found && cls.GetMethodLookup(Name).Visibility == RubyMethodVisibility.Public && Array.IndexOf(_expected, resolved.Info) >= 0
                     && (_calls == null || _calls.Resolves(cls));
             }
 
@@ -409,6 +409,20 @@ namespace IronRuby.Runtime.Jit {
             }
             RequireIdentityMethod(context, value, site);
             return (value is bool) ? value.Equals(other) : ReferenceEquals(value, other);
+        }
+
+        /// <summary>
+        /// `v == nil' (JitCompiler.EmitCollectionEqualsNil): false for an Array or a Hash itself (not a
+        /// subclass; a singleton == is ruled out when compiling) when <paramref name="arrays"/> or
+        /// <paramref name="hashes"/> says its == is the library one and nil has no to_ary or to_hash;
+        /// any other v is IsIdentical's, which deopts for one whose == it cannot answer.
+        /// </summary>
+        public static bool CollectionEqualsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site, bool arrays, bool hashes) {
+            if (value != null) {
+                Type t = value.GetType();
+                if (t == typeof(RubyArray) && arrays || t == typeof(Hash) && hashes) { return false; }
+            }
+            return IsIdentical(context, value, null, site);
         }
 
         /// <summary>
@@ -616,6 +630,17 @@ namespace IronRuby.Runtime.Jit {
                 if (t == typeof(RubyArray) && arrays) { return ((RubyArray)recv).Count; }
                 if (t == typeof(Hash) && hashes) { return ((Hash)recv).Count; }
             }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// String#length / #size of a String whose class is String itself (a subclass may override them,
+        /// and a singleton one is ruled out when compiling: JitCompiler.HasPlainInstances): the number
+        /// of characters in the String's encoding, a broken byte counting as one, as the library method
+        /// counts them. Anything else deopts.
+        /// </summary>
+        public static int StringLength(object recv) {
+            if (recv != null && recv.GetType() == typeof(MutableString)) { return ((MutableString)recv).GetCharacterCount(); }
             throw Deopt();
         }
 

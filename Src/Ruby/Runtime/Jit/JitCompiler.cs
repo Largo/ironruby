@@ -1895,6 +1895,34 @@ namespace IronRuby.Runtime.Jit {
                 throw Bail("to_i on " + tt);
             }
 
+            // `n.abs' of an Integer or a Float (Bounce's `@x_vel.abs'): Integer#abs of an Int32 is an
+            // Int64 (-2**31 has none in an Int32), of an Int64 the same but for -2**63, whose absolute value is a
+            // Bignum the generic code makes (JitRuntime.AbsLong deopts); Float#abs clears the sign bit, so -0.0
+            // is 0.0 and a NaN stays one.
+            // A receiver the profile saw hold something else (an object with an attr_reader :abs) is left
+            // to the calls below, which compile the attribute read.
+            if (argc == 0 && node.Target != null && node.MethodName == "abs" && MayBeNumeric(ObservedType(node.Target))) {
+                JT tt;
+                var t = Emit(node.Target, out tt);
+                t = NumericIVar(node.Target, t, ref tt);
+                if (IsNumeric(tt)) {
+                    RequireBuiltin(tt, "abs");
+                    switch (tt) {
+                        case JT.Int:
+                            type = JT.Lng;
+                            return Ast.Call(typeof(Math).GetMethod("Abs", new[] { typeof(long) }), Ast.Convert(t, typeof(long)));
+                        case JT.Lng:
+                            _canDeopt = true;
+                            type = JT.Lng;
+                            return Ast.Call(JitRuntime.M("AbsLong"), t);
+                        default:
+                            type = JT.Dbl;
+                            return Ast.Call(typeof(Math).GetMethod("Abs", new[] { typeof(double) }), t);
+                    }
+                }
+                throw Bail("abs on " + tt);
+            }
+
             // `C.new(a, b)' ending the method (JitCompiler.Objects.cs).
             if (_ast != null && _loop == null && _keywords == null && node == TailConstruction(_ast)) {
                 return EmitConstruction(node, out type);
@@ -1940,6 +1968,10 @@ namespace IronRuby.Runtime.Jit {
                     // number, an Array) would deopt on every call. An instance variable is typed by the receiver
                     // that turned the method hot (ObservedType).
                     Type observed = ObservedType(node.Target);
+                    if ((observed == typeof(RubyArray) || observed == typeof(Hash)) && node.MethodName != "equal?" &&
+                        args.Expressions[0] is Literal && ((Literal)args.Expressions[0]).Value == null) {
+                        return EmitCollectionEqualsNil(node.MethodName, l, out type);
+                    }
                     if (observed == null || observed != typeof(RubyObject) && observed != typeof(void) &&
                         observed != typeof(bool) && observed != typeof(RubySymbol)) {
                         throw Bail(node.MethodName + " on a " + ((observed == null) ? "receiver of unknown type" : observed.Name));
@@ -2078,6 +2110,31 @@ namespace IronRuby.Runtime.Jit {
             return (name == "!=") ? Ast.Not(test) : test;
         }
 
+        /// <summary>
+        /// `v == nil', `v != nil' with a v the profile saw hold an Array or a Hash (som.rb's `@storage == nil'):
+        /// Array#== and Hash#== of an object that is no Array (Hash) are false unless it responds to to_ary
+        /// (to_hash), which nil does not while NilClass has neither (rb_ary_equal, rb_hash_equal); a v that is
+        /// neither is compared as EmitIdentityCall's IsIdentical would, nil included
+        /// (JitRuntime.CollectionEqualsNil).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitCollectionEqualsNil(string/*!*/ name, MSA.Expression/*!*/ value, out JT type) {
+            if (!_refinements.IsEmpty) { throw Bail(name + " with refinements active"); }
+            var nilClass = KindClass(JitRuntime.KindNil);
+            bool arrays = IsPlainLibraryMethod(ArrayClass, "==") && IsPublic(ArrayClass, "==") && NoConversion(nilClass, "to_ary") &&
+                (name == "==" || IsPlainLibraryMethod(ArrayClass, "!=") && IsPublic(ArrayClass, "!="));
+            bool hashes = IsPlainLibraryMethod(HashClass, "==") && IsPublic(HashClass, "==") && NoConversion(nilClass, "to_hash") &&
+                (name == "==" || IsPlainLibraryMethod(HashClass, "!=") && IsPublic(HashClass, "!="));
+            if (!arrays && !hashes) { throw Bail(name + " of nil: neither Array's nor Hash's is the built-in one"); }
+            var equals = new JitRuntime.IdentityCallSite("==", LibraryMethods("==", _context.BasicObjectClass, KindClass(JitRuntime.KindNil),
+                KindClass(JitRuntime.KindTrue), KindClass(JitRuntime.KindFalse), KindClass(JitRuntime.KindSymbol)), null);
+            var site = (name == "==") ? equals : new JitRuntime.IdentityCallSite(name, LibraryMethods(name, _context.BasicObjectClass), equals);
+            _canDeopt = true;
+            type = JT.Bool;
+            MSA.Expression test = Ast.Call(JitRuntime.M("CollectionEqualsNil"), Ast.Constant(_context), value, Ast.Constant(site),
+                Ast.Constant(arrays), Ast.Constant(hashes));
+            return (name == "!=") ? Ast.Not(test) : test;
+        }
+
         // The library methods `name' resolves to on the classes: the first must be one, the others are
         // left out when they are not.
         private RubyMemberInfo[]/*!*/ LibraryMethods(string/*!*/ name, RubyClass/*!*/ first, params RubyClass[]/*!*/ others) {
@@ -2087,6 +2144,10 @@ namespace IronRuby.Runtime.Jit {
                 if (IsBuiltinMethod(cls, name)) { result.Add(cls.ResolveMethod(name, VisibilityContext.AllVisible).Info); }
             }
             return result.ToArray();
+        }
+
+        private static bool MayBeNumeric(Type observed) {
+            return observed == null || observed == typeof(int) || observed == typeof(double) || observed == typeof(System.Numerics.BigInteger);
         }
 
         private static bool IsNumeric(JT t) {
@@ -2206,9 +2267,12 @@ namespace IronRuby.Runtime.Jit {
             return IsBuiltinMethod(cls, name) && IsPublic(cls, name);
         }
 
+        // The visibility a call sees: `private :!=' in Array, where the method is BasicObject's, stores a
+        // forwarder that ResolveMethod follows to BasicObject#!=, whose own visibility is still public;
+        // the lookup reads the forwarder's (RubyModule.GetMethodLookup).
         private static bool IsPublic(RubyClass/*!*/ cls, string/*!*/ name) {
-            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
-            return resolved.Found && resolved.Info.Visibility == RubyMethodVisibility.Public;
+            var lookup = cls.GetMethodLookup(name);
+            return lookup.Result.Found && lookup.Visibility == RubyMethodVisibility.Public;
         }
 
         // RequireBuiltin's answers so far in this compile. IsBuiltinMethod resolves the method and
