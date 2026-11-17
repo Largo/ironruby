@@ -76,6 +76,21 @@ alternating processes of each, see Landed), Json 87081 / 77069 / 74644, CD 72906
 86894 / 89555, Towers 107800 / 101096 / 99371. Geomean IronRuby/CRuby 0.672, with
 `-X:NoJITCalls` 0.687; List 0.28 of CRuby, from 0.38-0.40.
 
+Round fourteen (2026-11-17, 80813950; another host again, slower: CRuby's NBody 2.11 s;
+load 1.2-1.9): nested block loops and three core operations in typed bodies. One run of
+all fourteen (`awfy.rb 12 --whole`), CRuby / IronRuby / TruffleRuby, us, and
+IronRuby/CRuby: DeltaBlue 46689 / 54633 / 9425, 1.17; Richards 337929 / 411619 / 17035,
+1.22; Json 93255 / 85816 / 7648, 0.92; CD 807667 / 544757 / 35712, 0.67; Bounce 98770 /
+94401 / 2482, 0.96; List 114517 / 30928 / 7647, 0.27; Mandelbrot 1110815 / 59279 / 53393,
+0.05; NBody 2109390 / 828860 / 17734, 0.39; Permute 128164 / 157725 / 6831, 1.23; Queens
+105279 / 97781 / 7119, 0.93; Sieve 175409 / 149600 / 8061, 0.85; Storage 175170 / 100244
+/ 17728, 0.57; Towers 127484 / 115948 / 5321, 0.91; Havlak FAIL (CRuby 4.0 cannot run
+it) / 3741379 / 151728. Geomean of the thirteen CRuby runs: IronRuby/CRuby 0.629 (0.672
+in round thirteen), TruffleRuby/CRuby 0.051. NBody is at 0.39 of CRuby, from 0.79.
+Havlak, measured for the first time, is 25 times TruffleRuby's time, in the same band
+as the others (5 for DeltaBlue's cold run to 47 for NBody); nobody has looked at where
+its time goes.
+
 Bytes allocated per iteration (`Util/perf/alloc.rb`; it moves by about 0.3% between
 invocations, unlike the timings), MB, round six -> round seven -> now: DeltaBlue 24.9 ->
 24.2 -> 24.6, Richards 19.6 -> 19.3 -> 13.9, Json 35.8 -> 35.9 -> 30.7, CD 516.2 -> 226.2 ->
@@ -262,6 +277,21 @@ Profile (`Util/perf/profile.sh`, self time):
    try for gap 3. So what is left here is what keeps the callees
    out, the effect rule, and for calls on another receiver the binder's reach (it binds
    calls on self only; the inliner already checks a class at a call on a parameter).
+   Round fourteen (a workflow of three experiments, see Landed and Rejected) took the
+   single core operations that declined whole methods: `String#length`/`size`, `abs`
+   and `== nil` on an Array or Hash are operations of the typed body now, and Json
+   compiles five more methods (`string_hash`, `hash_slot_for`, `HashIndexTable#add` and
+   `#get` through bound calls), DeltaBlue and CD `Vector#at` and `#capacity`. No
+   benchmark moved for it. What declines the hot ones now: Json's `read_char` and
+   `read` at `!=` on a String with a non-literal operand, and behind them `read_digit`,
+   `skip_white_space` and `read_string`; Richards' `append`, `add_input_and_check_priority`
+   and two `initialize` at the nil constant (gap 11; both were started in perf/core and
+   left as unapplied diffs, not kept); Bounce's `bounce`, past `abs` now, at a deopt
+   after an effect; DeltaBlue's `recalculate` at `is_input` and `value` at `new`; List's
+   `Element#length` at `length` on nil. And the round closed the second cheap way round
+   the effect rule (perf/undo: logged stores are slower than the generic body), so
+   `bounce`, `hold_self` and `remove_first` wait for a body that is cheaper to enter,
+   not for a rule.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
@@ -301,6 +331,14 @@ Profile (`Util/perf/profile.sh`, self time):
    they are never offered to the loop compiler. What NBody needs next is a block loop
    whose body may hold another outlined iterator, the inner block's loop emitted in
    place; `each_with_index` needs two parameters, which the screen does not take either.
+   Round fourteen built that (see Landed, perf/nest): the inner `Range#each`, `times`,
+   `upto` or `downto` block runs in place inside the outer block's loop. NBody 0.59 of
+   its time, 1364 -> 602 MB per iteration, 0.39 of CRuby. What is left of NBody: `energy`'s
+   loops are entered too rarely to be outlined; an inner `each_index` or `Array#each` is
+   not a kind that runs in place; an outer block that stores a global beside the inner
+   iterator is refused (a Thread#raise at the inner safe point restarts the outer
+   iteration, which takes locals back and cannot take a global back); and TruffleRuby is
+   still 47 times faster on it.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -1013,6 +1051,74 @@ first step was to measure what was already in the tree and off.
   deopt and has an effect), so what direct calls add is callees with loops of their own.
   Not fixed in this round.
 
+Round fourteen: three experiments on 45708767, side by side, as a workflow ("get
+TruffleRuby's tricks with the JIT to work here too"): each built by a subagent in its own
+worktree, then given to an independent reviewer whose only job was to find an input on
+which it differs from CRuby where the baseline does not, then repaired once. The
+container was restarted five times during it (other hosts; nothing on disk was lost, each
+restart cost the running agents' work in progress). Two landed, one is under Rejected
+(perf/undo). Measured by me on 2026-11-17 on a quiet machine (load 0.7-1.3), gated on
+the tree with both merged.
+
+- **perf/nest 7503ea01 47d030be (merged in c256bd77) - a core iterator's nested literal
+  block runs in place inside a block loop** (gap 2). The block-loop screen took only
+  innermost blocks; an outer block may now hold `(a...b).each`, `n.times`, `a.upto(b)`
+  or `a.downto(b)` with a literal block that itself passes the screen, and the loop
+  emitter (`Jit/JitCompiler.Nest.cs`) writes the inner loop inside the outer one: bounds
+  evaluated once per outer iteration in source order, Int32 bounds or a deopt, the
+  inner block's parameter and locals as CLR locals, a safe point of its own, the
+  library's own iterator checked when compiling and again (the method version) each
+  time an outer iteration reaches it. NBody, five alternating processes per build:
+  1447104 (1428887-1493588) -> 858503 (836480-876876) us, 0.593; in two runs of all
+  fourteen with the columns both ways 0.577 and 0.600, and 0.587 and 0.605 on the
+  merged tree; 1364 -> 602 MB per iteration (its author's figure). Its author's shapes,
+  an `each_index` block over an inner `Range#each` or `times` of 1, 2, 4 and 100
+  elements: 0.34, 0.24, 0.14 and 0.42 of before, so short inner runs gain most and
+  nothing pays an entry. Richards and Sieve were 4-6% slower than the baseline in both
+  of those runs and are 1.004 and 1.014 in six alternating processes, ranges
+  overlapping; no JIT decision of any benchmark but NBody's changes.
+  The review (23 probe files, 85 shapes of locals and shadowing among them) found two faults
+  that need a second thread, both fixed by narrowing: a Thread#raise caught at the
+  inner safe point restarts the outer iteration, whose locals are taken back while a
+  global it stored is not, so an outer block that stores a global beside the in-place
+  iterator is refused (16 to 21 of 30 runs showed it before); and an iterator
+  redefined by another thread went on running in place, hence the per-iteration
+  version check. It also found that eight of the author's matrix rows never ran the
+  nested copy (their outer runs were under the block's floor of five); they do now.
+- **perf/core 122581ca 079d660f 04c9d48e 4ce34feb 7a0a1948 (merged in 80813950) -
+  `String#length`/`#size`, `Integer#abs`/`Float#abs` and `v == nil`/`v != nil` on an
+  Array or a Hash as operations of a typed body** (gap 1; TruffleRuby's core methods
+  as specialized nodes). Each used to decline the whole method. `Util/bench/jit-core-
+  shapes.rb`, ab.rb with five rounds, both column orders, CRuby / before / after in ns:
+  `str_size` 60.0 / 117.7 / 57.6 (0.49, 0.48), `str_length` 41.4 / 70.7 / 54.1 (0.77,
+  0.75), `abs` 42.8 / 75.9 / 54.1 (0.71, 0.73), `fabs` 65.4 / 77.9 / 58.1 (0.75, 0.76),
+  `vec_at` 107.8 / 114.8 / 68.4 (0.60, 0.61), `vec_capacity` 95.5 / 84.2 / 53.2 (0.63,
+  0.62). It is kept for those: the fourteen benchmarks are 0.993 and 0.992 of the
+  baseline with it alone (Json 0.975 and 0.953, and 86228 (84309-86342) against 87304
+  (86731-88603) in six alternating processes: about 1%). Gap 1 says which methods it
+  compiles and what declines the rest.
+  The review (120 probe files) found `a != nil` answering true where `!=` had been made
+  private or protected - the guard read the visibility of the method a forwarder
+  resolves to, the fault of round eleven in a new place and the reason for the gate's
+  fifth question; the fix reads the lookup's visibility in `IsPublic` and
+  `IdentityCallSite.Resolves`, which corrects the same test on the String and identity
+  comparisons master already compiled. And `v.abs` through an `attr_reader` named abs
+  was no longer compiled; it is again.
+- Both together against 45708767+ledger (c2747ab2): all fourteen 0.960, the thirteen in
+  the other order 0.962; NBody 0.587 and 0.605; nothing else outside 5% in both. The
+  micro table, two runs, both orders: `abs` 0.70 and 0.65, `rangeeach` 0.52 and 0.50,
+  `blkattr` 0.78 and 0.80, no line slower by 5% in both. Start-up 1.50 and 1.49 s.
+  The gate, on the tree with both: IronRuby.Tests with the one failure the baseline
+  has; jit (1162 lines with the new sections 13-16), block-loop (193), jit-calls, ivar,
+  osr-array, hash-struct, block-given, light-rest, hot-shapes, the two
+  block-scope-reuse matrices and the inline matrix the same as the baseline run on the
+  new matrix files, and CRuby's where the baseline's is (raise and inline differ from
+  CRuby in two lines each on both); all five ruby/spec suites, 32,285 examples, with
+  nothing the list of known failures lacks; and the reviewers' 143 probes run again on
+  CRuby, the baseline and the merged tree: 124 the same on all three, one that the
+  baseline fails and the merged tree passes (a private `!=`), 18 that differ from CRuby
+  on both, of which two are worse on the merged tree - see "Caught by the review".
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -1461,6 +1567,44 @@ NoMethodError; `%w[apple banana].any?(/(an)+/)` leaves `$~` nil where CRuby sets
 the caller; `[].method(:any?).owner` is Enumerable (CRuby: Array), and
 `Enumerable.instance_method(:any?).bind(arr).call(pattern)` walks an Array subclass
 without calling its `each`, which CRuby's Enumerable#any? does call.
+
+### Caught by the review (round fourteen)
+
+The first round whose experiments went to a reviewer who had not built them, with one
+instruction: find an input where the candidate differs from CRuby and the baseline does
+not. Two reviews, 143 probe files, each run on CRuby, the baseline, the candidate and the
+candidate with `-X:NoJIT -X:NoOSR`, and counted only where `IR_JIT_VERBOSE=1` or
+`IR_OSR_VERBOSE=1` showed the new path compiled. Both verdicts were "fail", with three
+candidate-only wrong results between them (above, under Landed), all fixed before the
+gate. The authors' own matrices and the tests had passed. What the authors' checks
+missed is what they have missed before: a visibility read from the resolved method, a
+second thread at the right moment, and rows that do not reach the path they are about.
+
+Left open, and on master before the round:
+
+- **A compiled loop that is running does not see a method another thread redefines.**
+  A loop copy checks the method version when it is entered, not while it runs. Master
+  shows it for `Array#size` in an outlined `while`, for an inlined `Integer#to_i`, and
+  for an inlined or bound callee in a typed method body (round thirteen); perf/core adds
+  `String#length`, `Integer#abs` and `Array#==` to it, the one difference the gate let
+  through because the class was already there (two of the reviewers' probes print
+  CRuby's answer on the baseline and not on the merged tree for that reason). The
+  outlined loop has a safe point at the top of every iteration that already hands the
+  loop back at an iteration boundary: checking the version there closes it for outlined
+  loops and block loops at one compare per iteration (perf/nest does exactly that for
+  its inner iterator), and for a pure typed method body the same check may deopt. Not
+  counted as a failed specialization, or a thread that loads a library beside a running
+  loop retires the loop. The next thing to build; it needs the loop benchmarks beside it.
+- A Thread#raise into an outlined loop whose inner `while` stores a global leaves the
+  global ahead of the local it was stored from (the reviewers' `p06w.rb`; the fault
+  perf/nest was narrowed to avoid, in the shape master already compiles).
+- `module Enumerable; private :!=; end` followed by `public :!=` there leaves Array
+  without `!=` (NoMethodError; CRuby answers). JIT off as well: it is in the visibility
+  forwarders, not in a fast path.
+- From earlier rounds, still open: `remove_method :nil?` on NilClass (round twelve);
+  no `:c_call` for attribute accessors (round eleven).
+- Reported by a reviewer and not reproduced by me in three lines: a warmed
+  `3.times { }` site after `private :times` raising an internal ArgumentError.
 
 How far one benchmark moves by itself, measured in round eight: Bounce's iteration time
 wanders between 63 and 88 ms inside one process, in stretches of 25 to 50 iterations,
