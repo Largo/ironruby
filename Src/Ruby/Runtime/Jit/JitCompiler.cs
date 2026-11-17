@@ -2268,15 +2268,16 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// The guarded unboxing of an instance variable read: GuardDouble of GetIVar or ReadSelfAttr
-        /// becomes their Double version, which reads a Float the typed code stored raw without boxing it
+        /// The guarded unboxing of an instance variable read: GuardDouble (SpeculateDouble) of GetIVar or
+        /// ReadSelfAttr becomes their Double (SpeculateDouble) version, which reads a Float the typed code stored raw without boxing it
         /// (RubyInstanceData, "Float locations"). Both deopt on the same values.
         /// </summary>
         internal static MSA.Expression/*!*/ GuardIVarRead(string/*!*/ guard, MSA.Expression/*!*/ read) {
             var call = read as MSA.MethodCallExpression;
-            if (guard == "GuardDouble" && call != null && call.Object == null) {
-                if (call.Method == JitRuntime.M("GetIVar")) { return Ast.Call(JitRuntime.M("GetIVarDouble"), call.Arguments); }
-                if (call.Method == JitRuntime.M("ReadSelfAttr")) { return Ast.Call(JitRuntime.M("ReadSelfAttrDouble"), call.Arguments); }
+            if ((guard == "GuardDouble" || guard == "SpeculateDouble") && call != null && call.Object == null) {
+                string suffix = (guard == "GuardDouble") ? "Double" : "SpeculateDouble";
+                if (call.Method == JitRuntime.M("GetIVar")) { return Ast.Call(JitRuntime.M("GetIVar" + suffix), call.Arguments); }
+                if (call.Method == JitRuntime.M("ReadSelfAttr")) { return Ast.Call(JitRuntime.M("ReadSelfAttr" + suffix), call.Arguments); }
             }
             return Ast.Call(JitRuntime.M(guard), read);
         }

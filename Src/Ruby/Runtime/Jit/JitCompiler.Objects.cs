@@ -921,7 +921,7 @@ namespace IronRuby.Runtime.Jit {
             if (other == JT.Dbl) {
                 // the receiver may be either: Integer#op(Float) and Float#op both have to be the library ones
                 if (leftObject) { RequireBuiltin(JT.Int, op); }
-                number = Ast.Call(JitRuntime.M("SpeculateDouble"), leftObject ? l : r);
+                number = GuardIVarRead("SpeculateDouble", leftObject ? l : r);
                 numberType = JT.Dbl;
             } else {
                 number = Ast.Call(JitRuntime.M("SpeculateLong"), leftObject ? l : r);

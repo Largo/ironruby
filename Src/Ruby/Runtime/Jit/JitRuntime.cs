@@ -947,6 +947,11 @@ namespace IronRuby.Runtime.Jit {
             if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
                 return value;
             }
+            return GetIVarDoubleSlow(context, self, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static double GetIVarDoubleSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
             return GuardDouble(GetIVar(context, self, site));
         }
 
@@ -957,7 +962,43 @@ namespace IronRuby.Runtime.Jit {
             if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
                 return value;
             }
+            return ReadSelfAttrDoubleSlow(context, self, site);
+        }
+
+        // out of line, so that the inlined part stays a shape compare and a slot read
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static double ReadSelfAttrDoubleSlow(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
             return GuardDouble(ReadSelfAttr(context, self, site));
+        }
+
+        /// <summary>SpeculateDouble(GetIVar(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double GetIVarSpeculateDouble(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            double value;
+            if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
+                return value;
+            }
+            return GetIVarSpeculateDoubleSlow(context, self, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static double GetIVarSpeculateDoubleSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            return SpeculateDouble(GetIVar(context, self, site));
+        }
+
+        /// <summary>SpeculateDouble(ReadSelfAttr(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double ReadSelfAttrSpeculateDouble(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            double value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
+                return value;
+            }
+            return ReadSelfAttrSpeculateDoubleSlow(context, self, site);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static double ReadSelfAttrSpeculateDoubleSlow(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            return SpeculateDouble(ReadSelfAttr(context, self, site));
         }
 
         /// <summary>SetIVar of a Float the body holds raw.</summary>
