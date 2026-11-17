@@ -454,6 +454,35 @@ module RdConst
     c
   end
 end
+# Each row below meets a loop of its own: a site whose copy went stale is rebuilt under what is defined
+# then (and may not be specializable while a core method is redefined), so a loop shared with an earlier
+# row would not be compiled when the next redefinition comes.
+%w[alias dm trap].each do |k|
+  eval <<~RUBY
+    def rd_size_#{k}(a, flag)
+      c = 0; seen = 0; after = 0
+      while after < 1000
+        if seen == 1
+          c += a.size
+          after += 1
+        end
+        seen = 1 if flag[0] == 1
+      end
+      c
+    end
+  RUBY
+end
+def rd_length_pre(s, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c += s.length
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
 module RdZero; def length = ($rd_zero ? 0 : super); end
 
 t('running loop: Array#size redefined') {
@@ -493,14 +522,14 @@ t('running loop: a folded constant reassigned') {
 t('running loop: Array#size by alias') {
   flag = [0]
   th = rd_after_a_while(flag) { Array.class_eval { alias_method :__rd_size, :size; def __rd_zero = 0; alias_method :size, :__rd_zero } }
-  r = rd_size([1, 2], flag); th.join
+  r = rd_size_alias([1, 2], flag); th.join
   Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size; remove_method :__rd_zero }
   r
 }
 t('running loop: Array#size by define_method') {
   flag = [0]
   th = rd_after_a_while(flag) { Array.class_eval { alias_method :__rd_size, :size; define_method(:size) { 0 } } }
-  r = rd_size([1, 2], flag); th.join
+  r = rd_size_dm([1, 2], flag); th.join
   Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
   r
 }
@@ -508,7 +537,7 @@ t('running loop: Array#size from a trap handler') {
   flag = [0]
   old = Signal.trap('USR2') { Array.class_eval { alias_method :__rd_size, :size; def size = 0 }; flag[0] = 1 }
   th = Thread.new { sleep 0.05; Process.kill('USR2', Process.pid) }
-  r = rd_size([1, 2], flag); th.join
+  r = rd_size_trap([1, 2], flag); th.join
   Signal.trap('USR2', old)
   Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
   r
@@ -540,7 +569,7 @@ t('running loop: String#length by prepend') {
   flag = [0]
   $rd_zero = true
   th = rd_after_a_while(flag) { String.prepend(RdZero) }
-  r = rd_length(+"ab", flag); th.join
+  r = rd_length_pre(+"ab", flag); th.join
   $rd_zero = false
   r
 }

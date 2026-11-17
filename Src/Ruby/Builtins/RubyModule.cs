@@ -1063,11 +1063,13 @@ namespace IronRuby.Builtins {
                 return false;
             };
 
+            int version = GlobalMethodVersion;
             visitor(this);
             ForEachRecursivelyDependentClass(visitor);
-            // a compiled loop that is running checks the method version again at its next iteration: once
-            // for the whole update, after every version it bumped
-            RubyUtils.InvalidateCompiledCode();
+            // A compiled loop that is running checks the method version again at its next iteration: once for
+            // the whole update, after every version it bumped, and only if the global version moved - an update
+            // of modules alone (an extend, a singleton class) leaves every compiled body and loop current.
+            if (GlobalMethodVersion != version) { RubyUtils.InvalidateCompiledCode(); }
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5} rules={3,-5}", Name, reason, affectedModules, affectedRules), "UPDATED");
         }
@@ -1080,6 +1082,7 @@ namespace IronRuby.Builtins {
         internal void AllDependentMethodsUpdated(string/*!*/ reason) {
             Context.RequiresClassHierarchyLock();
 
+            int version = GlobalMethodVersion;
             var visited = new HashSet<RubyModule>(ReferenceEqualityComparer<RubyModule>.Instance);
             var stack = new Stack<RubyModule>();
             stack.Push(this);
@@ -1096,7 +1099,7 @@ namespace IronRuby.Builtins {
                 }
             }
             // as in MethodsUpdated
-            RubyUtils.InvalidateCompiledCode();
+            if (GlobalMethodVersion != version) { RubyUtils.InvalidateCompiledCode(); }
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5}", Name, reason, visited.Count), "UPDATED");
         }
@@ -1767,7 +1770,13 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             InitializeConstantsNoLock();
-            _context.ConstantsChanged();
+            ConstantStorage previous;
+            if (_constants.TryGetValue(name, out previous) && !previous.IsRemoved) {
+                // assigned again: a running loop that folded it must see the new value
+                _context.ConstantReassigned();
+            } else {
+                _context.ConstantsChanged();
+            }
 
             // assigned by the file an autoload of the constant is running: kept by the autoload until it is done
             ConstantStorage existing;
@@ -2161,12 +2170,12 @@ namespace IronRuby.Builtins {
             object namespaceValue;
             if (_namespaceTracker != null && _namespaceTracker.TryGetValue(name, out namespaceValue)) {
                 _constants[name] = ConstantStorage.Removed;
-                _context.ConstantsChanged();
+                _context.ConstantReassigned();
                 value = namespaceValue;
                 result = true;
             } else if (result) {
                 _constants.Remove(name);
-                _context.ConstantsChanged();
+                _context.ConstantReassigned();
             }
 
             if (result) {

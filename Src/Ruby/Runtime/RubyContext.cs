@@ -282,10 +282,20 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// A constant was set, removed or may resolve differently: the constant caches, the typed bodies
-        /// and the outlined loops that folded one find out by ConstantAccessVersion, and a compiled loop
-        /// that is running by the code epoch (RubyUtils.InvalidateCompiledCode), at its next iteration.
+        /// and the outlined loops that folded one find out by ConstantAccessVersion, on their next entry.
         /// </summary>
         internal void ConstantsChanged() {
+            ConstantAccessVersion++;
+        }
+
+        /// <summary>
+        /// An existing constant was assigned again or removed: the one change to constants that a running
+        /// compiled loop which folded the constant must see at its next iteration, as CRuby's next read does.
+        /// A new constant, a mixin, an autoload starting or ending move ConstantAccessVersion only
+        /// (ConstantsChanged): no loop has folded what they change, and moving the code epoch for them made
+        /// every running loop in the process hand itself back.
+        /// </summary>
+        internal void ConstantReassigned() {
             ConstantAccessVersion++;
             RubyUtils.InvalidateCompiledCode();
         }
