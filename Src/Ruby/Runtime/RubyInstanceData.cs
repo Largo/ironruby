@@ -81,25 +81,35 @@ namespace IronRuby.Runtime {
     /// FLOAT LOCATIONS
     ///
     /// A slot may hold a <see cref="FloatLocation"/> instead of a value: a Float stored raw, so that
-    /// the typed code of the method JIT and the loop tiers, which carries Floats as doubles, writes
-    /// one without boxing it (JitRuntime.SetIVarDouble and the other *Double helpers). Only they put
-    /// one there - the first raw store into a slot that does not hold one allocates it, as a box would,
-    /// and the stores after it write its field. Every other write stores the value itself, which
-    /// replaces the location: so whether a variable is raw is a property of the slot's content, not
-    /// of the shape, and a type change is an ordinary store that needs no new shape and invalidates
-    /// nothing. Every other read goes through <see cref="ValueOf"/>, which boxes the location's
-    /// Float - the same box again while the value has not changed (FloatLocation.Boxed: an
-    /// object_id is per box). The location belongs to one variable of one object, holding Floats, for its whole
-    /// life: it is never reused for another variable, another type or another object (a copy gets
-    /// boxes, CopyInstanceVariablesTo), and once replaced it is dead. So a reader that loaded it, or
-    /// a writer that stores into it after it was replaced, deals with a value that really was that
-    /// variable's - the late write is ordered before the store that replaced the location, which
-    /// happened during it. A Move copies the reference, so the location goes on living in the new
-    /// array, and the write-then-re-read protocol above applies to its field as to a slot: a raw
-    /// write re-reads element 0 after storing the field. The field is a double in a class, 8-byte
-    /// aligned, so its loads and stores are atomic on the 64-bit platforms IronRuby ships for
-    /// (linux-x64, win-x64, osx-arm64); a location is published by a reference store, which the CLR
-    /// orders after the constructor's write of the field.
+    /// the typed code of the method JIT and the loop tiers, which carries Floats as doubles, updates
+    /// one without boxing it (JitRuntime.SetIVarDouble and the other *Double helpers).
+    ///
+    /// Rawness belongs to the shape. Every shape has a raw twin (<see cref="InstanceVariableShape.RawTwin"/>:
+    /// same names, same slots, IsRaw), every transition from a raw shape leads to a raw shape, and a
+    /// FloatLocation is only ever stored into an array whose element 0 is raw. An array is raw or not
+    /// for its whole life: element 0 only ever changes in place to Busy and back to a child (same
+    /// tree) or to Moved (dead). An object becomes raw by a Move (TryPromote): under lock(this) the
+    /// old array is retired as for any Move, the slots copied, the location stored, and the new
+    /// array published with the raw twin already in its element 0. So a reader that loaded a plain
+    /// shape reads from an array that never holds a location, and a site entry knows from its own
+    /// field (Entry.Raw) whether the slot it reads may hold one: a read of an object without raw
+    /// Floats does exactly what it did before. Only a raw read looks at the slot (<see cref="ValueOf"/>),
+    /// boxing a location's Float - the same box again while the value has not changed.
+    ///
+    /// Policy: a typed store promotes the object when it overwrites a slot that already holds a Float
+    /// (the variable is being updated); a store that adds the variable or replaces anything else
+    /// stores a box, so Floats set once (constructors) never cost a Move and a location.
+    ///
+    /// In a raw array the first raw store into a slot allocates its location and later ones write its
+    /// field; every other write stores the value itself, which replaces the location (a type change
+    /// is an ordinary store: no new shape, nothing to invalidate). A location belongs to one variable
+    /// of one object, holds only Floats, and is never reused (a copy gets boxes): a reader that loaded
+    /// it, or a writer that stores into it after it was replaced, deals with a value that variable
+    /// really had - the late write is ordered before the store that replaced it, which happened
+    /// during it. A Move copies the reference; a raw write re-reads element 0 as any write does. The
+    /// field is an 8-aligned double, atomic on the 64-bit platforms IronRuby ships for (linux-x64,
+    /// win-x64, osx-arm64); a location is published by a reference store, which the CLR orders after
+    /// the constructor's write of the field.
     /// </remarks>
     /// <summary>
     /// A Float instance variable stored raw: see RubyInstanceData, "Float locations". Only ever in a
@@ -229,6 +239,15 @@ namespace IronRuby.Runtime {
             return (slot is FloatLocation) ? BoxedValueOf(slot) : slot;
         }
 
+        /// <summary>
+        /// The value a slot of an array of <paramref name="shape"/> holds: only a raw shape's slots
+        /// are looked at.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        internal static object ValueOf(InstanceVariableShape/*!*/ shape, object slot) {
+            return shape.IsRaw ? ValueOf(slot) : slot;
+        }
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static object BoxedValueOf(object slot) {
             return ((FloatLocation)slot).Boxed;
@@ -342,7 +361,7 @@ namespace IronRuby.Runtime {
             var table = new ComplexInstanceVariables(shape.Count + 1);
             var names = shape.GetNames();
             for (int i = 0; i < names.Length; i++) {
-                table.Set(names[i], ValueOf(s[i + 1]));
+                table.Set(names[i], ValueOf(shape, s[i + 1]));
             }
             return Publish(s, new object[] { InstanceVariableShape.Complex, table }) ? table : null;
         }
@@ -387,7 +406,7 @@ namespace IronRuby.Runtime {
                 var slots = new object[s.Length];
                 for (int i = 1; i <= shape.Count; i++) {
                     // a FloatLocation is the original's: the copy gets the Float boxed
-                    var value = ValueOf(s[i]);
+                    var value = ValueOf(shape, s[i]);
                     var state = value as IPerObjectState;
                     slots[i] = state != null ? state.CopyFor(copy) : value;
                 }
@@ -432,7 +451,7 @@ namespace IronRuby.Runtime {
                 var names = shape.GetNames();
                 var result = new List<KeyValuePair<string, object>>(names.Length);
                 for (int i = 0; i < names.Length; i++) {
-                    result.Add(new KeyValuePair<string, object>(names[i], ValueOf(s[i + 1])));
+                    result.Add(new KeyValuePair<string, object>(names[i], ValueOf(shape, s[i + 1])));
                 }
                 return result;
             }
@@ -449,7 +468,7 @@ namespace IronRuby.Runtime {
 
             int index = shape.IndexOf(name);
             if (index > 0) {
-                value = ValueOf(s[index]);
+                value = ValueOf(shape, s[index]);
                 return true;
             }
 
@@ -481,13 +500,16 @@ namespace IronRuby.Runtime {
             // of a superclass whose subclasses add variables of their own) does not thrash
             var entry = site.Cache;
             if (shape == entry.OtherShape) {
-                return ValueOf(s[entry.OtherIndex]);
+                // the second shape is the one being read now: make it the first, so that the fast
+                // path sees it (a class's objects come in two shapes once some are raw)
+                site.Update(entry.Remember(shape, entry.OtherIndex));
+                return ValueOf(shape, s[entry.OtherIndex]);
             }
 
             int index = shape.IndexOf(site.Name);
             if (index > 0) {
                 site.Update(entry.Remember(shape, index));
-                return ValueOf(s[index]);
+                return ValueOf(shape, s[index]);
             }
             return null;
         }
@@ -522,7 +544,7 @@ namespace IronRuby.Runtime {
                     }
 
                     // read after the barrier: the latest value any writer stored
-                    value = ValueOf(s[index]);
+                    value = ValueOf(shape, s[index]);
 
                     object[] newSlots;
                     if (newShape.Count == 0) {
@@ -710,6 +732,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal static bool TryWriteFloat(object[]/*!*/ slots, object shape, int index, double value) {
+            Debug.Assert(((InstanceVariableShape)shape).IsRaw);
             var location = GetSlot(slots, index) as FloatLocation;
             if (location != null) {
                 location.Value = value;
@@ -718,6 +741,60 @@ namespace IronRuby.Runtime {
             }
             // as for any write: if the slots moved under it, the caller redoes it where they are now
             return ShapeOf(slots) == shape;
+        }
+
+        /// <summary>
+        /// A typed write of a Float into slot <paramref name="index"/> of <paramref name="s"/>, whose
+        /// shape <paramref name="shape"/> is not raw (the caller saw it in element 0). By the promotion
+        /// policy (see "Float locations"): a slot that holds a Float already - the variable is being
+        /// updated, not set once - gets its object promoted, every other one gets the Float boxed.
+        /// The shape the variable is now in - <paramref name="shape"/> or its raw twin - for the
+        /// caller's site; null if the write did not happen (the slots moved): the caller redoes it
+        /// the ordinary way.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        internal InstanceVariableShape TryWriteFloatPlain(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value) {
+            Debug.Assert(!shape.IsRaw);
+            if (GetSlot(s, index) is double) {
+                var raw = TryPromote(s, shape, index, value);
+                if (raw != null) {
+                    return raw;
+                }
+                // the raw tree is full, or the slots changed under us: the ordinary way
+                return null;
+            }
+            SetSlot(s, index, value);
+            return (ShapeOf(s) == shape) ? shape : null;
+        }
+
+        /// <summary>
+        /// Makes the object raw: a Move (under lock(this), the old array retired as for any Move) to a
+        /// new array whose element 0 is the raw twin of <paramref name="shape"/>, the slots copied after
+        /// the barrier and <paramref name="value"/> stored at <paramref name="index"/> in a new
+        /// FloatLocation before the array is published. A FloatLocation is therefore never in an array
+        /// whose element 0 is not raw: a reader of the old array sees the old shape and the old values,
+        /// and a writer that stored into the old array is copied or meets Moved and redoes its write.
+        /// Null if it did not happen: no raw twin, or <paramref name="s"/> is not the current array of
+        /// that shape any more.
+        /// </summary>
+        private InstanceVariableShape TryPromote(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value) {
+            var raw = shape.RawTwin;
+            if (raw == null) {
+                return null;
+            }
+            lock (this) {
+                if (Volatile.Read(ref _ivars) != s || !TryRetire(s, shape)) {
+                    return null;
+                }
+                var slots = new object[s.Length];
+                Array.Copy(s, 1, slots, 1, shape.Count);
+                slots[index] = new FloatLocation(value);
+                slots[0] = raw;
+                if (!Publish(s, slots)) {
+                    throw Assert.Unreachable;
+                }
+            }
+            return raw;
         }
 
         /// <summary>

@@ -748,7 +748,7 @@ namespace IronRuby.Runtime.Jit {
             }
             // a raw Float (RubyInstanceData, "Float locations") is logged boxed: its location is
             // replaced by the store and dead from then on
-            object old = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, index));
+            object old = RubyInstanceData.ValueOf((InstanceVariableShape)shape, RubyInstanceData.GetSlot(slots, index));
             RubyInstanceData.SetSlot(slots, index, value);
             if (RubyInstanceData.ShapeOf(slots) != shape) {
                 // the slots moved under the write (another thread added or removed a variable):
@@ -1008,18 +1008,32 @@ namespace IronRuby.Runtime.Jit {
                 variable.Update(entry.Remember(current, index));
             }
             object old = RubyInstanceData.GetSlot(slots, index);
-            var location = old as FloatLocation;
-            if (location != null) {
-                // read and written by this thread alone here; another thread's store in between is
-                // a race the generic code has too (the rollback would then undo it)
-                log.ReplacedFloat(data, variable.Name, location.Value);
+            var plain = (InstanceVariableShape)shape;
+            if (plain.IsRaw) {
+                var location = old as FloatLocation;
+                if (location != null) {
+                    // read and written by this thread alone here; another thread's store in between is
+                    // a race the generic code has too (the rollback would then undo it)
+                    log.ReplacedFloat(data, variable.Name, location.Value);
+                } else {
+                    log.Replaced(data, variable.Name, old);
+                }
+                if (RubyInstanceData.TryWriteFloat(slots, shape, index, value)) {
+                    return;
+                }
             } else {
+                // a boxed store, or the object's promotion (RubyInstanceData.TryWriteFloatPlain)
                 log.Replaced(data, variable.Name, old);
+                var now = data.TryWriteFloatPlain(slots, plain, index, value);
+                if (now != null) {
+                    if (now != plain) {
+                        variable.Update(variable.Cache.Remember(now, index));
+                    }
+                    return;
+                }
             }
-            if (!RubyInstanceData.TryWriteFloat(slots, shape, index, value)) {
-                // the slots moved under the write: make it again where they are now
-                data.SetInstanceVariable(variable.Name, value);
-            }
+            // the slots moved under the write: make it again where they are now
+            data.SetInstanceVariable(variable.Name, value);
         }
 
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):

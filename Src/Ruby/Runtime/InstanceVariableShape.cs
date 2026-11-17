@@ -50,6 +50,14 @@ namespace IronRuby.Runtime {
 
         internal static readonly InstanceVariableShape/*!*/ Root = new InstanceVariableShape(null, null, 0);
 
+        /// <summary>
+        /// The root of the raw tree: the twins of the shapes under <see cref="Root"/>, whose slot arrays
+        /// may hold a <see cref="FloatLocation"/> (RubyInstanceData, "Float locations"). Every
+        /// transition from a raw shape leads to a raw shape; an array's element 0 is raw or not for
+        /// the array's whole life, since an object only becomes raw by a Move to a new array.
+        /// </summary>
+        internal static readonly InstanceVariableShape/*!*/ RawRoot = new InstanceVariableShape(null, null, 0, true);
+
         // Sentinels. None of them is ever the shape a site caches, so a fast path that meets one
         // falls to the slow path, which knows what to do:
         //   Busy    - a lock-free add is between claiming the slot array and publishing the new shape
@@ -68,6 +76,10 @@ namespace IronRuby.Runtime {
         private readonly InstanceVariableShape _parent;
         private readonly string _name;
         private readonly int _count;
+        private readonly bool _isRaw;
+
+        // The raw twin of a shape of the plain tree, made on demand.
+        private InstanceVariableShape _rawTwin;
 
         // null, a single child (whose _name is the key), or a Dictionary that is never mutated
         // once published - a new child copies it. Read without a lock.
@@ -78,10 +90,44 @@ namespace IronRuby.Runtime {
         private Dictionary<string, int> _index;
         private string[] _names;
 
-        private InstanceVariableShape(InstanceVariableShape parent, string name, int count) {
+        private InstanceVariableShape(InstanceVariableShape parent, string name, int count)
+            : this(parent, name, count, false) {
+        }
+
+        private InstanceVariableShape(InstanceVariableShape parent, string name, int count, bool isRaw) {
             _parent = parent;
             _name = name;
             _count = count;
+            _isRaw = isRaw;
+        }
+
+        /// <summary>Whether the slots of an array with this shape may hold FloatLocations.</summary>
+        internal bool IsRaw {
+            get { return _isRaw; }
+        }
+
+        /// <summary>
+        /// The raw shape with the same variables in the same slots; this one if it is raw. Null if
+        /// the raw tree has reached its limits.
+        /// </summary>
+        internal InstanceVariableShape RawTwin {
+            get {
+                if (_isRaw) {
+                    return this;
+                }
+                var twin = Volatile.Read(ref _rawTwin);
+                if (twin == null) {
+                    twin = RawRoot;
+                    foreach (var n in GetNames()) {
+                        twin = twin.GetChild(n);
+                        if (twin == null) {
+                            return null;
+                        }
+                    }
+                    Volatile.Write(ref _rawTwin, twin);
+                }
+                return twin;
+            }
         }
 
         /// <summary>
@@ -169,7 +215,7 @@ namespace IronRuby.Runtime {
                     return null;
                 }
 
-                child = new InstanceVariableShape(this, name, _count + 1);
+                child = new InstanceVariableShape(this, name, _count + 1, _isRaw);
                 var transitions = _transitions;
                 if (transitions == null) {
                     Volatile.Write(ref _transitions, child);
@@ -212,7 +258,7 @@ namespace IronRuby.Runtime {
         /// order; null if it cannot be had within the limits.
         /// </summary>
         internal InstanceVariableShape WithoutVariable(string/*!*/ name) {
-            var result = Root;
+            var result = _isRaw ? RawRoot : Root;
             foreach (var n in GetNames()) {
                 if (n != name) {
                     result = result.GetChild(n);
@@ -338,6 +384,11 @@ namespace IronRuby.Runtime {
             internal readonly InstanceVariableShape OtherShape;
             internal readonly int OtherIndex;
 
+            // Shape.IsRaw and OtherShape.IsRaw, at hand in the entry a read has loaded anyway: only
+            // a read of a raw shape's slot looks at what the slot holds (RubyInstanceData.ValueOf).
+            internal readonly bool Raw;
+            internal readonly bool OtherRaw;
+
             internal Entry(InstanceVariableShape shape, int index, InstanceVariableShape next, int capacity)
                 : this(shape, index, next, capacity, null, 0) {
             }
@@ -350,6 +401,8 @@ namespace IronRuby.Runtime {
                 Capacity = capacity;
                 OtherShape = otherShape;
                 OtherIndex = otherIndex;
+                Raw = shape != null && shape.IsRaw;
+                OtherRaw = otherShape != null && otherShape.IsRaw;
             }
 
             /// <summary>
