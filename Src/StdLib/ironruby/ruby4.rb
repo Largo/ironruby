@@ -1284,11 +1284,15 @@ class Array
   # builtins count (numeric.rb): a redefined Integer#+ is for the sum, not for which elements
   # it visits.
   def sum(init = 0, &block)
-    unless block
-      result = __numeric_sum__(init)
-      return result unless result.nil?
-      return super
-    end
+    return __array_sum__(init, &block) if block
+    result = __numeric_sum__(init)
+    return result unless result.nil?
+    super
+  end
+
+  # Array#sum with a block (see there). A method of its own so that #sum without one stays
+  # the small method it was: with this body in it, that call was 5% slower.
+  def __array_sum__(init, &block)
     acc = init
     i = 0
     while i < size
@@ -1329,6 +1333,7 @@ class Array
     end
     acc
   end
+  private :__array_sum__
 
   # (The block is named and passed on, not wrapped in `{ |e| yield e }`: a block literal
   # made the call without a block 6% slower.)
