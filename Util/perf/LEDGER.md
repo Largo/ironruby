@@ -619,6 +619,21 @@ Profile (`Util/perf/profile.sh`, self time):
     not explain the first two; the experiment starts with finding out (a one-character
     needle straight to a span search, `match?` without a Match object). Outside AWFY;
     it is what JSON escaping, `strscan` and log parsing spend.
+22. **A `begin`/`rescue` or `ensure` in a method costs about 80 ns per call when nothing
+    is raised**: `def r(x) begin; x + 1; rescue StandardError; 0; end end` 106 ns against
+    CRuby's 24, the same with `ensure` 112 against 27 (`Util/bench/zjit-post-shapes.rb`,
+    one loaded run: factors). Gap 9 seen from the caller: no light frame, no typed body.
+    A .NET `try` costs nothing on the path that does not throw, so the experiment is to
+    find what the method does around the handler (the scope, the saving of `$!`, the
+    frame) and let a body whose handler is not entered run as light as one without.
+    And **a raise that is rescued costs 6.3 us against 0.64**: a .NET exception per use.
+23. **A method made by `define_method` is called at 2.3 times CRuby's time** (64 against
+    28 ns; a `def` of the same body 31; YJIT 2-5 ns): the method JIT takes no block as a
+    method body. Rails-style code defines most of its small methods this way.
+24. **Struct with `keyword_init: true`: creating an object is 3.2 times CRuby** (1162
+    against 369 ns; positional creation is level at 142 against 131). And
+    `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
+    two parameters).
 
 ## Landed
 
