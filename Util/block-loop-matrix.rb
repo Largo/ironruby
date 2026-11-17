@@ -376,3 +376,131 @@ t('... Array#size redefined') { bl_ei_sum((0...N).to_a) }
 class Array; alias_method :size, :__bl_size; private :size; end
 t('... Array#size private') { bl_ei_sum((0...N).to_a) }
 class Array; public :size; remove_method :__bl_size; end
+
+# ---------------------------------------------------------------- nested iterators run in place
+# A block that holds `(a...b).each { |j| }', `n.times { |j| }', `a.upto(b) { |j| }' or
+# `a.downto(b) { |j| }' as a statement is outlined with the inner loop emitted inside the outer one
+# (JitCompiler.Nest.cs). Every outer loop runs hot first; what must make the inner loop fall back
+# happens on a late outer iteration: a bound of another type, an empty or backwards range, a
+# redefined iterator, a jump or a raise in the inner block. Nothing may run twice.
+class BlNestP; attr_accessor :x, :v; def initialize(x); @x = x; @v = 0.5; end; end
+def bl_n_sum(a, hi); s = 0; a.each_index { |i| t = i * 2; (i...hi).each { |j| s += j + t } }; s; end
+def bl_n_times(n, m); s = 0; n.times { |i| m.times { |j| s += i * j } }; s; end
+def bl_n_upto(n); s = 0; 1.upto(n) { |i| i.downto(1) { |j| s += j } }; s; end
+def bl_n_float(a, k); e = 0.0; a.each_index { |i| x = a[i] * 0.5; ((i + 1)...k).each { |j| d = x - j; e += d * d } }; e; end
+def bl_n_outer_write(a); s = 0; a.each_index { |i| m = 0; (0...3).each { |j| m += j * i }; s += m }; s; end
+def bl_n_fresh(a); r = 0; a.each_index { |i| (0...2).each { |j| x = j + 1; r += x } }; r; end
+def bl_n_last(n); n.times { |i| 3.times { |j| j } }; end
+def bl_n_shadow(a); x = 7; a.each_index { |i| (0...2).each { |j; x| x = j } }; x; end
+t('nested: each_index / Range#each') { r = 0; 3000.times { |k| r += bl_n_sum((0...6).to_a, 6) }; r }
+t('nested: times / times') { r = 0; 3000.times { r += bl_n_times(8, 5) }; r }
+t('nested: upto / downto') { r = 0; 3000.times { r += bl_n_upto(9) }; r }
+t('nested: Float crossing the inner block') { r = 0.0; 3000.times { |k| r += bl_n_float([1, 2, 3, 4, 5], 5) }; r.round(6) }
+t('nested: outer local written inside') { r = 0; 3000.times { r += bl_n_outer_write((0...5).to_a) }; r }
+t('nested: block local fresh per iteration') { r = 0; 3000.times { r += bl_n_fresh((0...5).to_a) }; r }
+t('nested: value of the outer iterator') { r = nil; 3000.times { r = bl_n_last(9) }; r }
+t('nested: shadowed local') { r = nil; 3000.times { r = bl_n_shadow((0...8).to_a) }; r }
+t('nested: a Float bound late') { r = 0; 3000.times { |k| r += bl_n_sum((0...6).to_a, k == 2500 ? 6.5 : 6) rescue r += 1000 }; r }
+t('nested: a Bignum bound late') { r = 0; 3000.times { |k| r += bl_n_sum((0...6).to_a, k == 2500 ? -2**64 : 6) }; r }
+t('nested: an empty and a backwards range') { r = 0; 3000.times { |k| r += bl_n_sum((0...6).to_a, k > 2500 ? 0 : 6) }; r }
+t('nested: a String bound late') { r = 0; 3000.times { |k| r += (bl_n_times(8, k == 2500 ? "x" : 3) rescue 7) }; r }
+$bl_n_count = 0
+def bl_n_bound; $bl_n_count += 1; 3; end
+def bl_n_eval_once(a); s = 0; a.each_index { |i| (i...bl_n_bound).each { |j| s += j } }; s; end
+t('nested: bound evaluated once per outer step') { r = 0; 3000.times { r += bl_n_eval_once([0, 1, 2]) }; [r, $bl_n_count] }
+def bl_n_break(a); s = 0; a.each_index { |i| v = (0...10).each { |j| break j * 10 if j == i }; s += v }; s; end
+def bl_n_next(a); s = 0; a.each_index { |i| (0...4).each { |j| next if j == 1; s += j } }; s; end
+def bl_n_return(a); a.each_index { |i| (0...4).each { |j| return [i, j] if i == 2 && j == 3 } }; :no; end
+def bl_n_redo(a); c = 0; a.each_index { |i| f = false; (0...3).each { |j| c += 1; (f = true; redo) if j == 1 && !f } }; c; end
+t('nested: break leaves the inner loop') { r = 0; 3000.times { r += bl_n_break((1..8).to_a) }; r }
+t('nested: next') { r = 0; 3000.times { r += bl_n_next((1..8).to_a) }; r }
+t('nested: return') { r = nil; 3000.times { r = bl_n_return([0, 1, 2, 3]) }; r }
+t('nested: redo') { r = 0; 3000.times { r += bl_n_redo((1..8).to_a) }; r }
+def bl_n_raise(a, z); s = 0; a.each_index { |i| (0...3).each { |j| s += 10 / (z - j) } }; s
+rescue ZeroDivisionError => e
+  e.backtrace_locations[0, 5].map { |l| l.label }
+end
+t('nested: raise in the inner block') { r = nil; 3000.times { |k| r = bl_n_raise((0...8).to_a, k == 2999 ? 2 : 9) }; r }
+def bl_n_caller_probe; caller(0, 4).map { |l| l[/'.*'/] }; end
+def bl_n_caller(a, z); r = nil; a.each_index { |i| (0...2).each { |j| r = bl_n_caller_probe if z && j == 1 } }; r; end
+t('nested: caller from the inner block') { r = nil; 3000.times { |k| r = bl_n_caller([1], k == 2999) }; r }
+t('nested: throw across both') { r = 0; 3000.times { |k| r += catch(:x) { [1, 2].each_index { |i| (0...3).each { |j| throw :x, 100 if k == 2999 && j == 2 } }; 1 } }; r }
+def bl_n_proc(a); ps = []; a.each_index { |i| (0...2).each { |j| ps << proc { i * 10 + j } if i == 0 } }; ps.map(&:call); end
+t('nested: proc made in the inner block') { r = nil; 3000.times { r = bl_n_proc((1..8).to_a) }; r }
+def bl_n_binding(a); r = nil; a.each_index { |i| (0...2).each { |j| r = binding.local_variable_get(:j) } }; r; end
+t('nested: binding in the inner block') { r = nil; 3000.times { r = bl_n_binding((1..8).to_a) }; r }
+def bl_n_bg(a); r = nil; a.each_index { |i| (0...2).each { |j| r = block_given? } }; r; end
+t('nested: block_given?') { r = nil; 3000.times { r = bl_n_bg((1..8).to_a) }; r }
+def bl_n_notkind(a); s = 0; a.each_index { |i| [1, 2].each_with_index { |x, j| s += x * j } }; s; end
+t('nested: an inner iterator that is not a kind') { r = 0; 3000.times { r += bl_n_notkind((1..8).to_a) }; r }
+def bl_n_threeways(a); s = 0; a.each_index { |i| 2.times { |j| 2.times { |k| s += i + j + k } } }; s; end
+t('nested: three levels') { r = 0; 3000.times { r += bl_n_threeways((0...8).to_a) }; r }
+def bl_n_pairs(ps)
+  e = 0.0
+  ps.each_index { |i| a = ps[i]; ((i + 1)...ps.size).each { |j| b = ps[j]; d = a.x - b.x; e += d * d * a.v * b.v; b.x = b.x - d * 0.001 } }
+  e
+end
+t('nested: NBody shape, a body frozen late') {
+  ps = Array.new(5) { |i| BlNestP.new(i + 0.5) }
+  e = 0.0
+  3000.times { |k| ps[3].freeze if k == 2500; e += (bl_n_pairs(ps) rescue 1.0) }
+  [e.round(6), ps.map { |p| p.x.round(9) }]
+}
+t('nested: before Range#each is redefined') { r = 0; 3000.times { r += bl_n_sum((0...8).to_a, 4) }; r }
+class Range; alias_method :__bl_n_each, :each; def each; yield 100; self; end; end
+t('nested: Range#each redefined') { r = 0; 30.times { r += bl_n_sum((0...8).to_a, 4) }; r }
+class Range; alias_method :each, :__bl_n_each; remove_method :__bl_n_each; end
+def bl_n_inner_times(a, m); s = 0; a.each_index { |i| m.times { |j| s += i * 10 + j } }; s; end
+t('nested: before Integer#times is redefined') { r = 0; 3000.times { r += bl_n_inner_times((0...8).to_a, 3) }; r }
+class Integer; alias_method :__bl_n_times, :times; def times; yield 7; self; end; end
+t('nested: Integer#times redefined') { r = 0; 30.times { r += bl_n_inner_times((0...8).to_a, 3) }; r }
+class Integer; alias_method :times, :__bl_n_times; remove_method :__bl_n_times; end
+t('nested: and restored') { r = 0; 3000.times { r += bl_n_inner_times((0...8).to_a, 3) + bl_n_times(8, 5) }; r }
+def bl_n_long(n, m); s = 0; n.times { |i| 0.upto(m) { |j| s += j & i } }; s; end
+t('nested: Thread#raise into a long inner loop') {
+  300.times { bl_n_long(20, 20) }
+  q = Queue.new
+  th = Thread.new { begin; q << 1; bl_n_long(100_000, 50_000); rescue => e; e.message; end }
+  q.pop; sleep 0.05; th.raise("stop"); th.value
+}
+# Thread#raise stops the inner loop at its safe point: a global the iteration stored before that is
+# left as it was stored, never ahead of the local it was stored from.
+def bl_n_global(n, m)
+  c = 0
+  begin
+    n.times { |i| m.times { |j| c += 1; $bl_n_w = c } }
+  rescue RuntimeError
+  end
+  c - $bl_n_w
+end
+t('nested: Thread#raise after a global store') {
+  $bl_n_w = 0
+  300.times { bl_n_global(20, 20) }
+  (1..5).map {
+    q = Queue.new
+    th = Thread.new { q << 1; bl_n_global(100_000, 50_000) }
+    q.pop; sleep 0.05; th.raise("stop")
+    d = th.value
+    d == 0 || d == 1
+  }
+}
+# Integer#times redefined by another thread while the outer loop runs: the outer iterations that
+# see the flag it sets afterwards call the new method.
+def bl_n_flag(flags, acc, n); n.times { |i| f = flags[0]; f.times { |j| acc[0] = acc[0] + j + 1 } }; end
+t('nested: Integer#times redefined by another thread') {
+  5.times { bl_n_flag([2], [0], 2000) }
+  flags = [0]; acc = [0]
+  th = Thread.new { sleep 0.03; Integer.class_eval { alias_method :__bl_n_t2, :times; def times; yield 98; self; end }; flags[0] = 1 }
+  bl_n_flag(flags, acc, 30_000_000)
+  th.join
+  Integer.class_eval { alias_method :times, :__bl_n_t2; remove_method :__bl_n_t2 }
+  [acc[0] % 99 == 0, acc[0] > 0]
+}
+t('nested: TracePoint enabled late') {
+  c = 0; r = 0
+  tp = TracePoint.new(:line) { c += 1 }
+  3000.times { |k| tp.enable if k == 2998; r += bl_n_times(8, 2) }
+  tp.disable; [r, c > 0]
+}
+def bl_n_deep(n); n.zero? ? 0 : [1, 2, 3, 4, 5, 6].each_index { |i| (0...1).each { |j| bl_n_deep(n - 1) if i == 0 } }; end
+t('nested: recursion a million deep') { bl_n_deep(1_000_000) }

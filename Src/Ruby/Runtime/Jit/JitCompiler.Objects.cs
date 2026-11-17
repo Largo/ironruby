@@ -106,6 +106,15 @@ namespace IronRuby.Runtime.Jit {
                 _other.Add(Key(node));
                 return true;
             }
+
+            // An iterator's literal block, which an outlined loop may run in place (JitCompiler.Nest.cs):
+            // what its body reads is read in the loop.
+            public override void Exit(MethodCall/*!*/ node) {
+                var block = node.Block as BlockDefinition;
+                if (block != null) {
+                    foreach (var statement in block.Body) { statement.Walk(this); }
+                }
+            }
         }
 
         /// <summary>
