@@ -1771,8 +1771,9 @@ namespace IronRuby.Builtins {
 
             InitializeConstantsNoLock();
             ConstantStorage previous;
-            if (_constants.TryGetValue(name, out previous) && !previous.IsRemoved) {
-                // assigned again: a running loop that folded it must see the new value
+            if (_constants.TryGetValue(name, out previous) && !previous.IsRemoved && !(previous.Value is AutoloadedConstant)) {
+                // assigned again: a running loop that folded it must see the new value (none has folded an
+                // autoload that has not run: the file it loads assigning the constant is no reassignment)
                 _context.ConstantReassigned();
             } else {
                 _context.ConstantsChanged();
