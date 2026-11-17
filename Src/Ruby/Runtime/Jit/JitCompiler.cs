@@ -74,8 +74,10 @@ namespace IronRuby.Runtime.Jit {
         // _pure and _effectNotOnSelf, and each includes what the bodies this one calls brought.
         internal bool Deopts, IvarWrite, Pure, EffectNotOnSelf;
         // The body, or one it calls, has a `while' loop, and so a safe point that runs Ruby code
-        // (JitRuntime.MethodSafePoint).
+        // (JitRuntime.MethodLoopSafePointSlow).
         internal bool HasLoop;
+        // What the body's loops' safe points check: the stub fills in the versions it compiled the body under.
+        internal JitLoopGuard LoopGuard;
         // The body writes Hash or Array elements, logged or not, or ends in a construction, which runs an
         // initialize: neither is called directly (JitStub.BindCallee).
         internal bool WritesElements, Construction;
@@ -341,13 +343,15 @@ namespace IronRuby.Runtime.Jit {
             // the Arrays the body indexes directly (ArrayLocal), each a variable the entry loads by the
             // expression paired with it - null when the local does not hold a plain Array; or null
             internal List<KeyValuePair<MSA.ParameterExpression, MSA.Expression>> Arrays;
+            // what the loop's safe points check the versions against (EmitLoopSafePoint)
+            internal JitLoopGuard Guard;
         }
 
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
             Func<string, JT> ivarProfile, Func<string, string> attrProfile,
             Func<LocalVariable, KeyValuePair<MSA.Expression, object>?> peekLocal, RubyScope constantScope, ReceiverHints hints,
-            RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts) {
+            RefinementActivation/*!*/ refinements, out List<JitLoopSlot> slots, out bool canDeopt, out JitLoopFacts facts, long epoch = 0) {
 
             slots = null;
             canDeopt = false;
@@ -356,6 +360,7 @@ namespace IronRuby.Runtime.Jit {
             MSA.Expression body;
             for (bool arrayLocals = true; ; arrayLocals = false) {
                 c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile, attrProfile, peekLocal, constantScope);
+                c._compileEpoch = epoch;
                 c._hints = hints;
                 c._refinements = refinements;
                 c._noArrayLocals = !arrayLocals;
@@ -393,6 +398,7 @@ namespace IronRuby.Runtime.Jit {
             facts.UndoLog = c._undoLog;
             facts.UndoMark = c._undoMark;
             facts.Arrays = c._arrayLoads;
+            facts.Guard = c._loopGuard;
             // the back-edge safe point hands the loop back through the deopt
             // catch, so the catch is always needed - but it fires at the top of an iteration,
             // before anything observable, so it does not make an impure body unspecializable.
@@ -551,7 +557,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords,
             RefinementActivation/*!*/ refinements, int supplied, RubyScope constantScope, ReceiverHints hints,
-            Func<string, int, JitCallee> callees) {
+            Func<string, int, JitCallee> callees, long epoch = 0) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
@@ -563,6 +569,7 @@ namespace IronRuby.Runtime.Jit {
             bool unloggedEarlyWrites = true;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
+                c._compileEpoch = epoch;
                 c._hints = hints;
                 c._refinements = refinements;
                 c._callees = callees;
@@ -648,7 +655,7 @@ namespace IronRuby.Runtime.Jit {
                 if (c._construction && c._selfCall) { return Declined("a construction in a self-recursive body"); }
 
                 // A loop of a body called directly has a safe point that runs what is waiting where it
-                // is; this body's own deopt instead once it writes logged elements (MethodSafePoint).
+                // is; this body's own deopt instead once it writes logged elements (MethodLoopSafePointSlow).
                 if (c._hashWrite && c._calleeLoop) { return Declined("logged element writes and a callee with a loop"); }
 
                 // -X:JITResume: a body with fallbacks is a light frame (WrapResumeBody), whose value is an object
@@ -694,6 +701,11 @@ namespace IronRuby.Runtime.Jit {
                 if (functionScope.Count > 0) {
                     body = Ast.Block(functionScope, body);
                 }
+                // A body that can deopt and has a loop is pure (or it was declined above), and one that logs its
+                // element writes takes them back: either may deopt at its loop's safe point when a method it was
+                // compiled under is redefined while it runs, and the generic body restarts the call. Not one that
+                // cannot deopt otherwise: its entry has no handler, nor do the callers that call it directly.
+                c._loopGuard.MayDeopt = c._canDeopt || c._safePointDeopts.Value;
                 return new JitCode {
                     Lambda = Ast.Lambda((c._fallbackSites > 0) ? typeof(Func<object, Proc, object>) : c._selfDelegateType, body, "jit$" + ast.Name, parameters),
                     SelfCell = c._selfCell,
@@ -707,6 +719,7 @@ namespace IronRuby.Runtime.Jit {
                     Deopts = c._canDeopt,
                     IvarWrite = c._ivarWrite,
                     Pure = c._pure,
+                    LoopGuard = c._loopGuard,
                     EffectNotOnSelf = c._effectNotOnSelf,
                     HasLoop = c._hasLoop || c._calleeLoop,
                     WritesElements = c._hashWrite || c._unloggedWrite,
@@ -1468,18 +1481,20 @@ namespace IronRuby.Runtime.Jit {
             // An inner loop of an outlined one deopts to the *outer* iteration's top, which
             // re-runs part of that iteration: only allowed for a pure body, as for any deopt.
             if (_loop != null && node != _loop) { _canDeopt = true; }
-            // In a method a safe point runs what is waiting (a trap handler, say) where it is, and the
-            // body goes on - unless the body writes elements (see MethodSafePoint), which it only
-            // knows once it has been emitted.
-            MSA.Expression safePoint = (_loop != null)
-                ? Ast.Call(JitRuntime.M("OsrSafePoint"))
-                : Ast.Call(JitRuntime.M("MethodSafePoint"), Ast.Constant(_safePointDeopts));
+            // The same check sees a method or a constant the code was built on changed by another thread
+            // while the loop runs (EmitLoopSafePoint). In a method a safe point runs what is
+            // waiting (a trap handler, say) where it is, and the body goes on - unless the body writes
+            // elements, or the version moved and the body may deopt, which it only knows once it has
+            // been emitted.
+            var epoch = NewLoopEpoch();
+            MSA.Expression safePoint = EmitLoopSafePoint(epoch);
 
             var iteration = (snapshot != null)
                 ? Ast.Block(snapshot, Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body)
                 : Ast.Block(Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body);
 
-            return Ast.Block(typeof(object),
+            return Ast.Block(typeof(object), (epoch != null) ? new[] { epoch } : new MSA.ParameterExpression[0],
+                StartLoopEpoch(epoch),
                 Ast.Loop(iteration, exit, cont),
                 Ast.Constant(null, typeof(object))
             );
@@ -1492,6 +1507,57 @@ namespace IronRuby.Runtime.Jit {
         // Set once a method body is known to write Hash or Array elements: its safe points then deopt
         // rather than run Ruby code in the middle of writes a later deopt would take back.
         private readonly StrongBox<bool>/*!*/ _safePointDeopts = new StrongBox<bool>();
+
+        // What the code is compiled under, for its loops' safe points to check (EmitLoopSafePoint);
+        // whoever compiles it fills it in (JitLoopCompiler, JitStub).
+        private readonly JitLoopGuard/*!*/ _loopGuard = new JitLoopGuard();
+
+        // The code epoch read before the code was compiled (JitLoopGuard.Set): its loops' safe points compare the
+        // safe-point word with it, as an immediate.
+        private long _compileEpoch;
+
+        /// <summary>
+        /// A typed method body's loop keeps an epoch local, which starts from the one the body last found
+        /// current; null in an outlined loop, which has none (see EmitLoopSafePoint).
+        /// </summary>
+        private MSA.ParameterExpression NewLoopEpoch() {
+            return (_loop != null) ? null : Ast.Variable(typeof(long), "#epoch");
+        }
+
+        private MSA.Expression/*!*/ StartLoopEpoch(MSA.ParameterExpression epoch) {
+            return (epoch != null)
+                ? (MSA.Expression)Ast.Assign(epoch, Ast.Field(Ast.Constant(_loopGuard), JitLoopGuard.EpochField))
+                : AstUtils.Empty();
+        }
+
+        /// <summary>
+        /// The safe point at the top of an iteration: the safe-point word compared with the code epoch the code
+        /// was compiled at, an immediate, so that the loop keeps no register for it.
+        ///
+        /// In an outlined loop a word that has moved hands the loop back, always: what is not taken in the loop
+        /// (a waiting interrupt, a method or constant changed, or a constant the copy did not fold) the site
+        /// sorts out (OsrLoopSite.Run), so the path out of the loop is a throw, and the CLR JIT keeps nothing
+        /// live across it. (A slow path that returned and let the loop go on made it spill the loop's counter:
+        /// an `each' over an Array ran 15-30% slower.)
+        ///
+        /// A typed method body's safe point may run a trap handler in place and go on (as MethodSafePoint did), so
+        /// its slow path returns: when the word has moved, the loop's epoch local says whether the move has been
+        /// looked at already, and the slow path brings the local up to date when it lets the body go on. After a
+        /// move that left the body current (a constant it did not fold) its loops pay a second compare.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitLoopSafePoint(MSA.ParameterExpression epoch) {
+            var word = Ast.Property(null, typeof(RubyUtils).GetProperty("SafePointWord"));
+            var moved = Ast.NotEqual(word, Ast.Constant(_compileEpoch));
+            if (epoch == null) {
+                return Ast.IfThen(moved, Ast.Throw(Ast.Call(JitRuntime.M("OsrHandBack"))));
+            }
+            return Ast.IfThen(moved,
+                Ast.IfThen(
+                    Ast.NotEqual(word, epoch),
+                    Ast.Assign(epoch, Ast.Call(JitRuntime.M("MethodLoopSafePointSlow"), Ast.Constant(_loopGuard), Ast.Constant(_safePointDeopts)))
+                )
+            );
+        }
 
         private MSA.Expression/*!*/ EmitSnapshot() {
             if (_slots.Count == 0 && _undoLog == null) { return AstUtils.Empty(); }

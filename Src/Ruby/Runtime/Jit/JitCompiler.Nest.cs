@@ -71,11 +71,6 @@ namespace IronRuby.Runtime.Jit {
                 ? _context.GetClass(typeof(IronRuby.Builtins.Range))
                 : ClassOfType(JT.Int, false);
             if (!IsPublicBuiltin(cls, nested.Iterator)) { throw Bail(nested.Iterator + " is not the built-in one"); }
-            // The outer copy checks the method version only on entry, but the generic code would look the iterator
-            // up on each outer iteration: one redefined since (by another thread, while the copy runs) must be
-            // seen by the next outer iteration that reaches the call. Read after the entry guard's version, so a
-            // move between the two only makes this one fail.
-            int version = RubyModule.GlobalMethodVersion;
 
             // A Thread#raise (or a trap) stops the inner loop at its safe point by a deopt, which takes the outer
             // iteration back to its top and lets the generic code deliver the exception there - before it gets to
@@ -89,7 +84,12 @@ namespace IronRuby.Runtime.Jit {
             var from = Ast.Variable(typeof(long), "#from");
             var to = Ast.Variable(typeof(long), "#to");
             var init = new System.Collections.Generic.List<MSA.Expression>();
-            init.Add(Ast.Call(JitRuntime.M("NestedIteratorOk"), Ast.Constant(version)));
+            // The generic code looks the iterator up each time the outer iteration reaches the call: one redefined
+            // since the outer iteration's safe point (by another thread) must be seen here, before the iterator
+            // runs at all - an empty range included. The loop's own safe point, once before it, then on each turn.
+            var epoch = NewLoopEpoch();
+            init.Add(StartLoopEpoch(epoch));
+            init.Add(EmitLoopSafePoint(epoch));
             if (nested.From != null) {
                 init.Add(Ast.Assign(from, EmitIntegerBound(nested.From)));
             } else {
@@ -132,7 +132,7 @@ namespace IronRuby.Runtime.Jit {
             var test = (nested.Step > 0) ? Ast.LessThanOrEqual(from, to) : Ast.GreaterThanOrEqual(from, to);
             var iteration = new System.Collections.Generic.List<MSA.Expression>();
             iteration.Add(Ast.IfThen(Ast.Not(test), Ast.Break(exit)));
-            iteration.Add(Ast.Call(JitRuntime.M("OsrSafePoint")));
+            iteration.Add(EmitLoopSafePoint(epoch));
             if (parameter != null) {
                 // from is within [from, to] of two Int32 bounds here
                 iteration.Add(Ast.Assign(parameter, Ast.Convert(from, typeof(int))));
@@ -143,6 +143,7 @@ namespace IronRuby.Runtime.Jit {
             var variables = new System.Collections.Generic.List<MSA.ParameterExpression>(declared);
             variables.Add(from);
             variables.Add(to);
+            if (epoch != null) { variables.Add(epoch); }
             init.Add(Ast.Loop(Ast.Block(iteration), exit));
             init.Add(Ast.Constant(null, typeof(object)));
             type = JT.Obj;

@@ -731,14 +731,16 @@ namespace IronRuby.Runtime.Jit {
             // newer than what the compiler resolved against - each built-in operator it checks, and
             // the self-call check below. Read after, a method redefined (on another thread) while a
             // large body compiled would be inside the snapshot, and the entry would go on running
-            // the operator it replaced.
+            // the operator it replaced. The code epoch the body's loops start from is read before both
+            // (JitLoopGuard.Set).
+            long epoch = RubyUtils.CodeEpoch;
             int version = RubyModule.GlobalMethodVersion;
             int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
             var hints = Hints();
             var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints,
-                Callees(refinements, version, constantVersion)));
+                Callees(refinements, version, constantVersion), epoch), epoch, version, constantVersion);
             if (code == null) {
                 // A call the body could inline - or, with -X:JITCalls, bind - is of a method that has not been
                 // specialized yet: a caller called once per call of its callee turns hot first. Profile on, a
@@ -993,6 +995,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private bool TrySpecializePerCount(RefinementActivation/*!*/ refinements) {
             // read before compiling, as in TrySpecialize
+            long epoch = RubyUtils.CodeEpoch;
             int version = RubyModule.GlobalMethodVersion;
             int constantVersion = _context.ConstantAccessVersion;
 
@@ -1005,7 +1008,7 @@ namespace IronRuby.Runtime.Jit {
             for (int k = 0; k <= optionalCount; k++) {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
                 var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints(),
-                    bind));
+                    bind, epoch), epoch, version, constantVersion);
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
                     if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
@@ -1714,7 +1717,14 @@ namespace IronRuby.Runtime.Jit {
         // An exception rarely leaves one - a raise deopts first - but the stack check at its entry (#128) does.
         private string _frameName;
 
-        private JitCode Named(JitCode code) {
+        /// <summary>
+        /// The compiled body, under the method's frame name, with the versions it was compiled under given to
+        /// its loops' safe points (JitCompiler.EmitLoopSafePoint).
+        /// </summary>
+        private JitCode Named(JitCode code, long epoch, int version, int constantVersion) {
+            if (code != null) {
+                code.LoopGuard.Set(epoch, version, code.UsesConstants ? _context : null, constantVersion);
+            }
             if (code != null && _frameName != null) {
                 code.Lambda = Ast.Lambda(code.Lambda.Type, code.Lambda.Body, _frameName, code.Lambda.Parameters);
             }

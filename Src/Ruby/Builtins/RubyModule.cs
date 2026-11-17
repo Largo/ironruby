@@ -1044,6 +1044,8 @@ namespace IronRuby.Builtins {
             if (IsClass) {
                 Version.Method = Interlocked.Increment(ref _globalMethodVersion);
                 Interlocked.Increment(ref _methodTableVersion);
+                // a compiled loop that is running checks the version again at its next iteration
+                RubyUtils.InvalidateCompiledCode();
             }
         }
 
@@ -1550,7 +1552,7 @@ namespace IronRuby.Builtins {
                 } else if (_privateConstants != null) {
                     _privateConstants.Remove(name);
                 }
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
         }
 
@@ -1608,7 +1610,7 @@ namespace IronRuby.Builtins {
                 }
                 _deprecatedConstants.Add(name);
                 _context.NoteDeprecatedConstant();
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
         }
 
@@ -1762,7 +1764,7 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             InitializeConstantsNoLock();
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             // assigned by the file an autoload of the constant is running: kept by the autoload until it is done
             ConstantStorage existing;
@@ -1784,7 +1786,7 @@ namespace IronRuby.Builtins {
             ConstantStorage existing;
             if (_constants != null && _constants.TryGetValue(name, out existing) && !existing.IsRemoved && ReferenceEquals(existing.Value, autoloaded)) {
                 Mutate();
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
                 _constants[name] = new ConstantStorage(value);
                 if (sourcePath != null) {
                     SetConstantLocationNoLock(name, sourcePath, sourceLine);
@@ -2156,12 +2158,12 @@ namespace IronRuby.Builtins {
             object namespaceValue;
             if (_namespaceTracker != null && _namespaceTracker.TryGetValue(name, out namespaceValue)) {
                 _constants[name] = ConstantStorage.Removed;
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
                 value = namespaceValue;
                 result = true;
             } else if (result) {
                 _constants.Remove(name);
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
 
             if (result) {
@@ -3639,7 +3641,7 @@ namespace IronRuby.Builtins {
             }
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
         }
 
         /// <summary>
@@ -3736,7 +3738,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
         }
 
         private static RubyModule[]/*!*/ SpliceBefore(RubyModule/*!*/[]/*!*/ list, int index, RubyModule/*!*/[]/*!*/ added) {
@@ -3786,7 +3788,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -3832,7 +3834,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
