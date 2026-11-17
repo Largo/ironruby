@@ -201,6 +201,9 @@ def fbody_read(list) = list.map { |b| b.x * 1.0 }
 fs = FShared.new
 fbodies = Array.new(THREADS) { |t| FBody.new(t.to_f) }
 THREADS.times { |t| 100.times { |i| fs.__send__(:"fw#{t}", (i * TAG + t).to_f); fs.__send__(:"fr#{t}"); fs.__send__(:"fg#{t}") } }
+# back to the first value its owner will write: a reader that saw a warm-up value would otherwise take
+# the owner's first writes for a variable going backwards
+THREADS.times { |t| fs.__send__(:"fw#{t}", t.to_f) }
 fwarm = Array.new(8) { FBody.new(0.0) }
 300.times { fbody_step(fwarm); fbody_read(fwarm) }
 flast = Array.new(THREADS)
