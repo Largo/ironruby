@@ -209,5 +209,49 @@ p seen.uniq
             int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
             Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
         }
+
+        /// <summary>
+        /// Float instance variables the typed code stores raw (RubyInstanceData, "Float locations"): `@x op= f',
+        /// `@x = f' and `o.x = f' hot, then everything generic reads, copies, replaces or refuses the raw value.
+        /// </summary>
+        public void JitCore_FloatIVars1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class FiObj
+  attr_accessor :v
+  def initialize = (@x = 0.0; @v = 0.5)
+  def add(d) = (@x += d)
+  def put(d) = (@x = d * 1.0)
+  def get = @x + 0.0
+  def x = @x
+end
+def fi_attr(o, d) = (o.v = o.v * d)
+o = FiObj.new
+200.times { |i| o.put(i * 0.5); o.add(0.25); o.get; fi_attr(o, 1.0) }
+o.put(2.5); fi_attr(o, 2.0)
+p [o.x, o.v, o.instance_variable_get(:@x), o.instance_variables, o.x.equal?(o.x), o.x.object_id == o.x.object_id]
+d = o.dup; d.add(1.0); fi_attr(d, 2.0)
+p [o.x, o.v, d.x, d.v]
+p Marshal.load(Marshal.dump(o)).x
+o.put(-0.0); p [o.x, 1 / o.x]
+o.instance_variable_set(:@x, nil); p((o.add(1.0) rescue $!.class))
+o.instance_variable_set(:@x, 2); p [o.add(0.5), o.get]
+o.put(1.5); p o.remove_instance_variable(:@x), o.instance_variables
+o.put(3.5); o.freeze
+p [(o.put(1.0) rescue $!.class), (o.add(1.0) rescue $!.class), (fi_attr(o, 3.0) rescue $!.class), o.x, o.v]
+", @"
+[2.5, 1.0, 2.5, [:@x, :@v], true, true]
+[2.5, 1.0, 3.5, 2.0]
+2.5
+[-0.0, -Infinity]
+NoMethodError
+[2.5, 2.5]
+1.5
+[:@v]
+[FrozenError, FrozenError, FrozenError, 3.5, 1.0]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 4, System.String.Format("methods specialized: {0} (expected at least 4)", specializedHere));
+        }
     }
 }

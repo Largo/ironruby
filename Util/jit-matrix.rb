@@ -4486,3 +4486,80 @@ class NcQueue
   def nc_auto = (NC_AUTO == @head)
 end
 t('nc_auto, autoload not loadable') { (ncq.nc_auto rescue $!.class) }
+
+# ---------------------------------------------------------------- 19. Float instance variables stored raw
+# The typed code stores a Float it holds as a double into a FloatLocation in the variable's slot
+# (RubyInstanceData, "Float locations"): `@x = f', `@x op= f' here, `o.x = f' in a method
+# (WriteAttr: Util/ivar-matrix.rb, the refinement above keeps it out of this file) and in a block
+# loop (WriteSelfAttr: Util/block-loop-matrix.rb); its guarded Float reads read the location raw.
+# Everything else - instance_variable_get, inspect, dup, Marshal, YAML, a generic `@x' - boxes it,
+# and every generic write replaces it. Each row runs the raw paths hot first, then something that
+# must see, replace, copy or refuse the raw value.
+class FlObj
+  def initialize; @x = 0.0; @y = 1; @z = :z; end
+  def sp_fl_add(d) = (@x += d)
+  def sp_fl_put(d) = (@x = d * 1.0)
+  def sp_fl_get = @x + 0.0
+  def get_x = @x
+end
+fl = FlObj.new
+warm { |i| fl.sp_fl_add(0.5); fl.sp_fl_put(i * 0.25); fl.sp_fl_get }
+t('fl: raw state seen by everything') do
+  o = FlObj.new; 5.times { o.sp_fl_add(0.5) }
+  [o.get_x, o.sp_fl_get, o.instance_variable_get(:@x), o.instance_variables, o.instance_variable_defined?(:@x),
+   o.inspect.sub(/0x\h+/, ''), o.instance_variables.map { |v| o.instance_variable_get(v) }]
+end
+t('fl: dup and clone get copies') do
+  o = FlObj.new; o.sp_fl_put(1.5); d = o.dup; c = o.clone
+  3.times { d.sp_fl_add(1.0); c.sp_fl_add(2.0) }
+  o.sp_fl_add(0.25)
+  [o.get_x, d.get_x, c.get_x]
+end
+t('fl: frozen refuses a raw store') do
+  o = FlObj.new; o.sp_fl_put(1.5); o.freeze
+  [(o.sp_fl_add(1.0) rescue $!.class), (o.sp_fl_put(2.0) rescue $!.class), o.get_x]
+end
+t('fl: Marshal same bytes as boxed') do
+  o = FlObj.new; o.sp_fl_put(2.75); g = FlObj.new; g.instance_variable_set(:@x, 2.75)
+  m = Marshal.load(Marshal.dump(o))
+  [Marshal.dump(o) == Marshal.dump(g), m.get_x, m.instance_variables]
+end
+t('fl: flip to nil, Integer, object and back') do
+  o = FlObj.new; o.sp_fl_put(1.5)
+  r = []
+  o.instance_variable_set(:@x, nil); r << (o.sp_fl_add(1.0) rescue $!.class) << o.get_x
+  o.instance_variable_set(:@x, 2); r << o.sp_fl_add(0.5) << o.sp_fl_get
+  o.instance_variable_set(:@x, :sym); r << (o.sp_fl_get rescue $!.class)
+  o.sp_fl_put(3.0); r << o.sp_fl_add(1.0) << o.get_x
+  o.sp_fl_put(7.5); o.instance_variable_set(:@x, 9); r << o.get_x << o.sp_fl_add(1.0)
+  r
+end
+t('fl: removed and re-added') do
+  o = FlObj.new; o.sp_fl_put(4.5)
+  r = [o.remove_instance_variable(:@x), o.instance_variables, (o.sp_fl_get rescue $!.class), o.get_x]
+  o.sp_fl_put(5.5); r << o.instance_variables << o.get_x << o.sp_fl_add(1.0)
+  o.remove_instance_variable(:@y); o.sp_fl_add(1.0); r << o.instance_variables << o.get_x
+end
+t('fl: special values') do
+  o = FlObj.new
+  [-0.0, Float::INFINITY, -Float::INFINITY, 1.0e-320, 1.7976931348623157e308, 5.0e-324].map do |v|
+    o.sp_fl_put(v); x = o.get_x
+    [x, (1 / x rescue $!.class), o.sp_fl_get, o.instance_variable_get(:@x).equal?(x)]
+  end + [(o.sp_fl_put(Float::NAN); o.get_x.nan?)]
+end
+# (the bits themselves are not observable: IronRuby's pack and unpack make every NaN the canonical one)
+t('fl: NaNs of several bit patterns') do
+  o = FlObj.new
+  [0x7ff8000000000001, 0xfff8000000000000, 0x7ff0000000000001, 0xfff0000000000abc].map do |bits|
+    o.sp_fl_put([bits].pack('Q<').unpack1('D'))
+    [o.get_x.nan?, o.sp_fl_get.nan?, o.instance_variable_get(:@x).nan?]
+  end
+end
+t('fl: identity') do
+  o = FlObj.new
+  [1.5, 1.0e-320, 1.7976931348623157e308].map do |v|
+    o.sp_fl_put(v)
+    [o.get_x.equal?(o.get_x), o.get_x.object_id == o.get_x.object_id, o.instance_variable_get(:@x).equal?(o.get_x)]
+  end
+end
+t('fl: to Integer by the typed code') { o = FlObj.new; o.sp_fl_put(1.5); [o.get_x.to_i, o.get_x.class] }

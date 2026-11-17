@@ -746,7 +746,9 @@ namespace IronRuby.Runtime.Jit {
                 }
                 variable.Update(entry.Remember(current, index));
             }
-            object old = RubyInstanceData.GetSlot(slots, index);
+            // a raw Float (RubyInstanceData, "Float locations") is logged boxed: its location is
+            // replaced by the store and dead from then on
+            object old = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, index));
             RubyInstanceData.SetSlot(slots, index, value);
             if (RubyInstanceData.ShapeOf(slots) != shape) {
                 // the slots moved under the write (another thread added or removed a variable):
@@ -929,6 +931,95 @@ namespace IronRuby.Runtime.Jit {
                 return true;
             }
             return false;
+        }
+
+        // ---- Float instance variables stored raw (RubyInstanceData, "Float locations") -------------
+        // The typed code carries a Float as a double. Its reads of a variable it has seen hold a Float
+        // (GuardDouble of GetIVar / ReadSelfAttr) and its stores of a double are these: the same checks
+        // and the same fast path as their object versions, reading and writing the variable's
+        // FloatLocation without a box. Anything else goes the object version's way, boxed.
+
+        /// <summary>GuardDouble(GetIVar(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double GetIVarDouble(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            double value;
+            if (self is RubyObject obj && RubyOps.TryReadCachedFloat(obj._instanceData, site, out value)) {
+                return value;
+            }
+            return GuardDouble(GetIVar(context, self, site));
+        }
+
+        /// <summary>GuardDouble(ReadSelfAttr(...)) without boxing a raw Float (JitCompiler.GuardIVarRead).</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double ReadSelfAttrDouble(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            double value;
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryReadCachedFloat(obj._instanceData, site.Variable, out value)) {
+                return value;
+            }
+            return GuardDouble(ReadSelfAttr(context, self, site));
+        }
+
+        /// <summary>SetIVar of a Float the body holds raw.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void SetIVarDouble(RubyContext/*!*/ context, object self, double value, InstanceVariableSite/*!*/ site) {
+            if (self is RubyObject obj && RubyOps.TryWriteCachedFloat(obj._instanceData, value, site)) {
+                return;
+            }
+            SetIVarUncached(context, self, value, site);
+        }
+
+        /// <summary>WriteAttr of a Float the body holds raw.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void WriteAttrDouble(RubyContext/*!*/ context, object self, double value, SelfAttrSite/*!*/ site) {
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryWriteCachedFloat(obj._instanceData, value, site.Variable)) {
+                return;
+            }
+            WriteAttrUncached(context, self, value, site);
+        }
+
+        /// <summary>
+        /// WriteSelfAttr of a Float the body holds raw: the same checks and the same undo log entry, the
+        /// old value logged raw when it was raw, so that neither the store nor its log entry boxes.
+        /// </summary>
+        public static void WriteSelfAttrDouble(object self, double value, SelfAttrSite/*!*/ site, JitUndoLog/*!*/ log) {
+            var obj = self as RubyObject;
+            if (obj == null || (!site.IsBoundTo(obj.ImmediateClass) && !site.Bind(obj.ImmediateClass))) {
+                throw Deopt();
+            }
+            var data = obj._instanceData;
+            if (data == null || data._frozen || log.IsFull) {
+                throw Deopt();
+            }
+            object[] slots = data._ivars;
+            var shape = RubyInstanceData.ShapeOf(slots);
+            var variable = site.Variable;
+            var entry = variable.Cache;
+            int index;
+            if (shape == entry.Shape && entry.Next == null) {
+                index = entry.Index;
+            } else if (shape == entry.OtherShape) {
+                index = entry.OtherIndex;
+            } else {
+                var current = (InstanceVariableShape)shape;
+                index = current.IsSentinel ? 0 : current.IndexOf(variable.Name);
+                if (index == 0) {
+                    throw Deopt();
+                }
+                variable.Update(entry.Remember(current, index));
+            }
+            object old = RubyInstanceData.GetSlot(slots, index);
+            var location = old as FloatLocation;
+            if (location != null) {
+                // read and written by this thread alone here; another thread's store in between is
+                // a race the generic code has too (the rollback would then undo it)
+                log.ReplacedFloat(data, variable.Name, location.Value);
+            } else {
+                log.Replaced(data, variable.Name, old);
+            }
+            if (!RubyInstanceData.TryWriteFloat(slots, shape, index, value)) {
+                // the slots moved under the write: make it again where they are now
+                data.SetInstanceVariable(variable.Name, value);
+            }
         }
 
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):

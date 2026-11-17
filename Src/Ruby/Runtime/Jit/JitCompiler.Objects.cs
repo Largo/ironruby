@@ -1496,8 +1496,12 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(ClrType(valueType), new[] { receiver, valueTemp },
                 Ast.Assign(receiver, Ast.Convert(written ? (MSA.Expression)bound : peek.Value.Key, typeof(object))),
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteSelfAttr"), receiver, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
+                (valueType == JT.Dbl)
+                    // a Float stored raw (RubyInstanceData, "Float locations")
+                    ? Ast.Call(JitRuntime.M("WriteSelfAttrDouble"), receiver, valueTemp,
+                        Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog)
+                    : Ast.Call(JitRuntime.M("WriteSelfAttr"), receiver, BoxForStore(valueTemp, valueType),
+                        Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
                 valueTemp
             );
         }
@@ -1676,7 +1680,7 @@ namespace IronRuby.Runtime.Jit {
             string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
             if (guard == null) { type = JT.Obj; return read; }
             type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
-            return Ast.Call(JitRuntime.M(guard), read);
+            return GuardIVarRead(guard, read);
         }
 
         /// <summary>
@@ -1730,8 +1734,12 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp },
                 Ast.Assign(receiverTemp, receiver),
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
+                (valueType == JT.Dbl)
+                    // a Float stored raw (RubyInstanceData, "Float locations")
+                    ? Ast.Call(JitRuntime.M("WriteAttrDouble"), Ast.Constant(_context), receiverTemp, valueTemp,
+                        Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true)))
+                    : Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
+                        Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
                 valueTemp
             );
         }

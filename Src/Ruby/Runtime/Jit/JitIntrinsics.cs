@@ -43,6 +43,7 @@ namespace IronRuby.Runtime.Jit {
             internal object Target;   // a Hash, a RubyArray or an object's RubyInstanceData
             internal object Key;      // a Hash's key, an instance variable's name
             internal object Old;
+            internal double OldFloat; // an instance variable's raw Float (Index 1)
             internal int Index;       // the replaced entry or element, or -1: the key was appended
         }
 
@@ -103,6 +104,16 @@ namespace IronRuby.Runtime.Jit {
             e.Index = 0;
         }
 
+        // a raw Float (JitRuntime.WriteSelfAttrDouble), kept unboxed: boxed only by a rollback
+        internal void ReplacedFloat(RubyInstanceData/*!*/ data, string/*!*/ name, double old) {
+            ref Entry e = ref Add();
+            e.Target = data;
+            e.Key = name;
+            e.Old = null;
+            e.OldFloat = old;
+            e.Index = 1;
+        }
+
         internal void Appended(Hash/*!*/ hash, object/*!*/ key) {
             ref Entry e = ref Add();
             e.Target = hash;
@@ -140,7 +151,7 @@ namespace IronRuby.Runtime.Jit {
                     array.JitRestoreElement(e.Index, e.Old);
                 } else if (data != null) {
                     // an attr_writer's store (JitRuntime.WriteSelfAttr): the variable gets its old value back
-                    data.SetInstanceVariable((string)e.Key, e.Old);
+                    data.SetInstanceVariable((string)e.Key, (e.Index == 1) ? (object)e.OldFloat : e.Old);
                 } else if (e.Index < 0) {
                     ((Hash)e.Target).JitUndoAppend(e.Key);
                 } else {

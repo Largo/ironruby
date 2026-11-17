@@ -562,3 +562,43 @@ t('running block loop: nested, Array#size redefined') {
   Array.class_eval { alias_method :size, :__bl_rd; remove_method :__bl_rd }
   r
 }
+
+# ---------------------------------------------------------------- Float instance variables stored raw
+# `b.v -= d * b.x' through attr_accessor in an outlined each: the store of a Float the loop holds
+# as a double goes into the variable's FloatLocation (JitRuntime.WriteSelfAttrDouble, its undo log
+# entry raw too) and the reads read it raw (ReadSelfAttrDouble). A frozen body, a body whose
+# variable holds a Rational or nil part way through, must come out as the generic loop leaves them.
+class BlFlBody
+  attr_accessor :x, :v
+  def initialize(x, v); @x = x; @v = v; end
+end
+def bl_fl_loop(bodies, d)
+  bodies.each { |b| b.v -= d * b.x; b.x += b.v }
+  bodies.size
+end
+def bl_fl_bodies = (0...8).map { |i| BlFlBody.new(i * 0.5, 0.25) }
+def bl_fl_state(bodies) = bodies.map { |b| [b.x, b.v] }
+blfl = bl_fl_bodies
+400.times { bl_fl_loop(blfl, 0.001) }
+t('fl: loop results') { bl_fl_loop(blfl, 0.001); bl_fl_state(blfl) }
+t('fl: values seen by everything') { b = blfl[3]; [b.instance_variable_get(:@x), b.inspect.sub(/0x\h+/, ''), Marshal.load(Marshal.dump(b)).v, b.dup.x] }
+t('fl: frozen body in a hot loop') do
+  bs = bl_fl_bodies; bs[3].freeze
+  [(bl_fl_loop(bs, 0.01) rescue $!.class), bl_fl_state(bs)]
+end
+t('fl: Rational in a hot loop deopts, same result') do
+  bs = bl_fl_bodies; bs[4].x = 2r; bs[6].v = 3r
+  [bl_fl_loop(bs, 0.01), bl_fl_state(bs)]
+end
+t('fl: nil in a hot loop raises after earlier stores') do
+  bs = bl_fl_bodies; bs[5].x = nil
+  [(bl_fl_loop(bs, 0.01) rescue $!.class), bl_fl_state(bs)]
+end
+t('fl: variable removed, then the loop') do
+  bs = bl_fl_bodies; bs[2].remove_instance_variable(:@v)
+  [(bl_fl_loop(bs, 0.01) rescue $!.class), bl_fl_state(bs)]
+end
+t('fl: Integer set generically, then the loop') do
+  bs = bl_fl_bodies; bl_fl_loop(bs, 0.01); bs[1].instance_variable_set(:@v, 1)
+  [bl_fl_loop(bs, 0.01), bl_fl_state(bs), bl_fl_loop(bs, 0.01), bl_fl_state(bs)]
+end
