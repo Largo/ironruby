@@ -1044,8 +1044,6 @@ namespace IronRuby.Builtins {
             if (IsClass) {
                 Version.Method = Interlocked.Increment(ref _globalMethodVersion);
                 Interlocked.Increment(ref _methodTableVersion);
-                // a compiled loop that is running checks the version again at its next iteration
-                RubyUtils.InvalidateCompiledCode();
             }
         }
 
@@ -1067,6 +1065,9 @@ namespace IronRuby.Builtins {
 
             visitor(this);
             ForEachRecursivelyDependentClass(visitor);
+            // a compiled loop that is running checks the method version again at its next iteration: once
+            // for the whole update, after every version it bumped
+            RubyUtils.InvalidateCompiledCode();
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5} rules={3,-5}", Name, reason, affectedModules, affectedRules), "UPDATED");
         }
@@ -1094,6 +1095,8 @@ namespace IronRuby.Builtins {
                     }
                 }
             }
+            // as in MethodsUpdated
+            RubyUtils.InvalidateCompiledCode();
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5}", Name, reason, visited.Count), "UPDATED");
         }
