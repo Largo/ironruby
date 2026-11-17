@@ -71,7 +71,10 @@ namespace IronRuby.Runtime.Jit {
         /// is args[<paramref name="scopeArgIndex"/>].
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
-            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex, bool longRuns = false) {
+            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex,
+            out JitLoopGuard loopGuard, bool longRuns = false) {
+
+            loopGuard = null;
 
             // The refinements active where the loop is written: the operators it inlines are resolved
             // under them, as its call sites would resolve them.
@@ -82,7 +85,9 @@ namespace IronRuby.Runtime.Jit {
             // What the prologue's version guard compares against: read before the compiler
             // resolves anything (see JitStub.TrySpecialize), so that a method table change racing
             // with the compile leaves the copy stale rather than right for good. The same for the
-            // constants the body folds.
+            // constants the body folds. The code epoch the loop's safe points start from is read before
+            // either (JitLoopGuard.Set).
+            long epoch = RubyUtils.CodeEpoch;
             int version = RubyModule.GlobalMethodVersion;
             int constantVersion = context.ConstantAccessVersion;
 
@@ -202,7 +207,7 @@ namespace IronRuby.Runtime.Jit {
                 hints.LoopSelf = args[selfArgIndex];
             }
             MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, attrProfile, peek, scope, hints,
-                refinements, out slots, out canDeopt, out facts);
+                refinements, out slots, out canDeopt, out facts, epoch);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -363,11 +368,15 @@ namespace IronRuby.Runtime.Jit {
                 new[] { argsParameter }
             );
 
+            Func<object[], object> compiled;
             try {
-                return lambda.Compile();
+                compiled = lambda.Compile();
             } catch (Exception) {
                 return null;
             }
+            facts.Guard.Set(epoch, version, facts.UsesConstants ? context : null, constantVersion);
+            loopGuard = facts.Guard;
+            return compiled;
         }
     }
 

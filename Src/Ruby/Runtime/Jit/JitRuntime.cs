@@ -299,41 +299,63 @@ namespace IronRuby.Runtime.Jit {
         // ---- safe points -----------------------------------------------------------------
 
         /// <summary>
-        /// The back-edge safe point of an outlined (OSR) loop. A specialized copy keeps the Ruby
-        /// locals in CLR locals, so it must not let a Thread#raise escape from the middle of
-        /// itself - the tuples would be left holding the values from the loop's entry. Instead
-        /// it hands the loop back at the iteration boundary, through the deopt path that already
-        /// stores the locals home, and the generic loop's own safe point (RubyUtils.SafePoint,
-        /// first thing on its back edge) delivers the exception. OsrLoopSite.Run does not count
-        /// this as a failed specialization.
+        /// The safe point at the top of every iteration of a compiled loop (JitCompiler.EmitLoopSafePoint) compares
+        /// the safe-point word (RubyUtils.SafePointWord) with the code epoch the code was compiled at. The word
+        /// moves when safe-point work is waiting (a Thread#raise, a Thread#kill, a signal, a finalizer) or the
+        /// code epoch does (a method table or a constant changed, on any thread), so the one compare that saw
+        /// interrupts now sees both.
         ///
-        /// For a JIT-specialized *method* body use RubyUtils.SafePoint instead: a deopt there
-        /// re-runs the whole method generically, and an interrupt can simply be thrown.
+        /// In an outlined (OSR) loop the copy hands the loop back at the iteration boundary when it has moved:
+        /// the copy keeps the Ruby locals in CLR locals, so it must not let a Thread#raise escape from the middle
+        /// of itself - the tuples would be left holding the values from the loop's entry - and it must not go on
+        /// with a method it inlined or bound (Array#size, a callee) or a constant it folded after another thread
+        /// changed it: CRuby calls the new method at the next call. The deopt path stores the locals home; the
+        /// generic loop's own safe point (RubyUtils.SafePoint, first thing on its back edge) delivers the
+        /// exception, and the generic loop calls what is defined now. OsrLoopSite.Run counts none of it as a
+        /// failed specialization: it builds a copy for the new epoch (the move may have changed nothing the copy
+        /// was built on, a constant it did not fold, but the copy compares with its own epoch).
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void OsrSafePoint() {
-            if (RubyUtils.IsSafePointRequested) {
-                throw SafePointDeopt();
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static Exception/*!*/ OsrHandBack() {
+            if (Osr.OsrLoopSite.Verbose) {
+                Console.Error.WriteLine("[osr]   safe point: {0}, handed back",
+                    RubyUtils.IsSafePointRequested ? "an interrupt is waiting" : "a method or a constant changed");
             }
+            return JitDeoptException.Instance;
         }
 
         /// <summary>
-        /// A loop's safe point in a specialized method. What is waiting runs here, and the body goes on -
-        /// unless <paramref name="deopt"/> says the body writes Hash or Array elements: a trap handler
-        /// run in the middle of those could change an element a later deopt takes back to what it was
-        /// before the handler ran. Such a body deopts instead (it is one that may: JitCompiler takes no
-        /// impure body that can deopt), and the generic body runs what is waiting at its first safe point.
+        /// The slow path of a typed method body's loop safe point, taken when the safe-point word is neither the
+        /// epoch the body was compiled at nor the one the loop last saw. What is waiting runs here and the body
+        /// goes on - unless <paramref name="deopt"/> says the body writes Hash or Array elements: a trap handler
+        /// run in the middle of those could change an element a later deopt takes back to what it was before the
+        /// handler ran. Such a body deopts instead (it is one that may: JitCompiler takes no impure body that can
+        /// deopt), and the generic body runs what is waiting at its first safe point.
+        ///
+        /// A method or a constant the body was compiled under that changed since - on another thread, or in the
+        /// handler just run - deopts a body that may deopt (guard.MayDeopt: nothing it has done is observable, so
+        /// the generic body restarts the call, and calls the new method); an impure one cannot, and goes on with
+        /// what it was compiled with until it returns. Answers the epoch the loop is to compare with from now on.
         /// </summary>
-        public static void MethodSafePoint(StrongBox<bool>/*!*/ deopt) {
-            if (RubyUtils.IsSafePointRequested) {
-                MethodSafePointSlow(deopt);
-            }
-        }
-
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static void MethodSafePointSlow(StrongBox<bool>/*!*/ deopt) {
-            if (deopt.Value) { throw SafePointDeopt(); }
-            RubyUtils.SafePoint();
+        public static long MethodLoopSafePointSlow(JitLoopGuard/*!*/ guard, StrongBox<bool>/*!*/ deopt) {
+            if (RubyUtils.IsSafePointRequested) {
+                if (deopt.Value) { throw SafePointDeopt(); }
+                RubyUtils.SafePoint();
+            }
+            // read before the versions: a change after this read moves the word past it again
+            long epoch = RubyUtils.CodeEpoch;
+            if (guard.Stale) {
+                if (guard.MayDeopt) {
+                    if (Verbose) { Console.Error.WriteLine("[jit] safe point: a method or a constant the body was compiled under changed, deopt"); }
+                    throw SafePointDeopt();
+                }
+                // an impure body: it goes on, and does not look again until something else changes
+                return epoch;
+            }
+            // what changed is nothing the body was built on (a constant it did not fold): it is still current
+            guard.Epoch = epoch;
+            return epoch;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -354,15 +376,6 @@ namespace IronRuby.Runtime.Jit {
             return RubyModule.GlobalMethodVersion == snapshot;
         }
 
-        /// <summary>
-        /// An iterator run in place in an outlined loop (JitCompiler.Nest.cs), each time the outer iteration
-        /// reaches it: a method redefined since the copy was entered deopts, and the generic code calls the
-        /// iterator the outer iteration finds now.
-        /// </summary>
-        public static void NestedIteratorOk(int snapshot) {
-            if (RubyModule.GlobalMethodVersion != snapshot) { throw Deopt(); }
-        }
-
         /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
         public static void EntryStale(object/*!*/ specialization) {
             var spec = (JitStub.Specialization)specialization;
@@ -378,10 +391,13 @@ namespace IronRuby.Runtime.Jit {
             spec.Stub.OnDeopt(spec, (thrown != 0) ? caught - thrown : -1);
         }
 
-        /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>
+        /// <summary>
+        /// An outlined loop was compiled under an older method or constant version: hand it back, and the
+        /// site, which finds its guard stale, builds it again (OsrLoopSite.Run) without counting a deopt.
+        /// </summary>
         public static object OsrVersionStale() {
             if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: method version"); }
-            return Osr.OsrLoopSite.Retype;
+            return Osr.OsrLoopSite.Retry;
         }
 
         /// <summary>An entry guard of an outlined loop did not hold; hand the loop back.</summary>
@@ -990,6 +1006,46 @@ namespace IronRuby.Runtime.Jit {
 
         internal static MethodInfo/*!*/ M(string/*!*/ name) {
             return typeof(JitRuntime).GetMethod(name, BindingFlags.Public | BindingFlags.Static);
+        }
+    }
+    /// <summary>
+    /// What one piece of compiled code with a loop (an outlined loop's copy, a typed method body) was built
+    /// under, for the safe point at the top of each iteration to check again when the code epoch has moved
+    /// (JitCompiler.EmitLoopSafePoint). Filled in by whoever compiled it (JitLoopCompiler, JitStub) before
+    /// the code first runs.
+    /// </summary>
+    public sealed class JitLoopGuard {
+        /// <summary>
+        /// The code epoch at which Version and ConstantVersion were last found current (RubyUtils.CodeEpoch):
+        /// a loop starts from it, and takes its safe point's slow path only when the word has moved since.
+        /// </summary>
+        public long Epoch;
+        internal int Version;
+        internal int ConstantVersion;
+        // the runtime whose constants the code folded; null if it folded none
+        internal RubyContext ConstantsOf;
+        // a typed method body may deopt at its loop's safe point (see MethodLoopSafePointSlow)
+        internal bool MayDeopt;
+
+        internal static readonly System.Reflection.FieldInfo/*!*/ EpochField = typeof(JitLoopGuard).GetField("Epoch");
+
+        /// <summary>
+        /// Records the versions the code was compiled under, with the epoch read before them (an epoch read
+        /// after could hide a change between the two reads).
+        /// </summary>
+        internal void Set(long epoch, int version, RubyContext constantsOf, int constantVersion) {
+            Version = version;
+            ConstantsOf = constantsOf;
+            ConstantVersion = constantVersion;
+            System.Threading.Volatile.Write(ref Epoch, epoch);
+        }
+
+        /// <summary>A method table or a constant the code was built on has changed since.</summary>
+        internal bool Stale {
+            get {
+                return RubyModule.GlobalMethodVersion != Version ||
+                    (ConstantsOf != null && System.Threading.Volatile.Read(ref ConstantsOf.ConstantAccessVersion) != ConstantVersion);
+            }
         }
     }
 }

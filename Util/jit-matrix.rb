@@ -4278,7 +4278,97 @@ t('rv_la -2**62') { rv_la(2**61, -2) }
 t('rv_attr Integer') { rv_attr(rv_v) }
 t('rv_attr Float') { rv_attr(RvAttr.new(-1.5)) }
 t('rv_attr Integer#abs') { rv_attr(-4) }
-# ---------------------------------------------------------------- 17. a constant whose value is nil
+
+# ---------------------------------------------------------------- 17. redefined by another thread while a typed body loops
+# A typed method body whose loop is running when another thread redefines something it was compiled
+# under (an inlined core method, an inlined callee, a bound callee) deopts at the loop's next safe point
+# when it may (it can deopt anyway, so nothing it did is observable), and the generic body runs the call
+# again under the new method (JitRuntime.MethodLoopSafePointSlow). The other thread redefines and THEN
+# sets the flag; the loop counts only iterations after the one that saw the flag. Each method is warmed
+# with short calls (IR_JIT_VERBOSE=1: "specialized"), then called once for long; "safe point: ... deopt".
+
+def jr_after_a_while(flag)
+  Thread.new { |; t0|
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
+    yield
+    flag[0] = 1
+  }
+end
+def jr_size(a, flag, n)
+  c = 0; seen = 0; after = 0
+  while after < n
+    if seen == 1
+      c += a.size
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+class JrK
+  def k(x) = x * 2
+  def inl(flag, n)
+    c = 0; seen = 0; after = 0
+    while after < n
+      if seen == 1
+        c += k(3)
+        after += 1
+      end
+      seen = 1 if flag[0] == 1
+    end
+    c
+  end
+  # a callee with a loop of its own is not inlined: with -X:JITCalls it is bound (called directly)
+  def b(x); i = 0; s = 0; while i < x; s += 2; i += 1; end; s; end
+  def bnd(flag, n)
+    c = 0; seen = 0; after = 0
+    while after < n
+      if seen == 1
+        c += b(1)
+        after += 1
+      end
+      seen = 1 if flag[0] == 1
+    end
+    c
+  end
+end
+3000.times { jr_size([1, 2], [1], 10) }
+t('typed loop: Array#size redefined by another thread') {
+  flag = [0]
+  th = jr_after_a_while(flag) { Array.class_eval { alias_method :__jr_size, :size; def size = 0 } }
+  r = jr_size([1, 2], flag, 1000); th.join
+  Array.class_eval { alias_method :size, :__jr_size; remove_method :__jr_size }
+  r
+}
+3000.times { jr_size([1, 2], [1], 10) }
+t('typed loop: Array#size redefined by a trap handler') {
+  flag = [0]
+  old = Signal.trap('USR2') { Array.class_eval { alias_method :__jr_size, :size; def size = 0 }; flag[0] = 1 }
+  th = Thread.new { sleep 0.05; Process.kill('USR2', Process.pid) }
+  r = jr_size([1, 2], flag, 1000); th.join
+  Signal.trap('USR2', old)
+  Array.class_eval { alias_method :size, :__jr_size; remove_method :__jr_size }
+  r
+}
+t('typed loop: entered again afterwards') { 3000.times { jr_size([1, 2], [1], 10) }; jr_size([1, 2], [1], 10) }
+jo = JrK.new
+3000.times { jo.k(1); jo.inl([1], 10) }
+t('typed loop: an inlined callee redefined') {
+  flag = [0]
+  th = jr_after_a_while(flag) { JrK.class_eval { def k(x) = 0 } }
+  r = jo.inl(flag, 1000); th.join
+  r
+}
+3000.times { jo.b(2); jo.bnd([1], 10) }
+t('typed loop: a bound callee redefined') {
+  flag = [0]
+  th = jr_after_a_while(flag) { JrK.class_eval { def b(x) = 0 } }
+  r = jo.bnd(flag, 1000); th.join
+  r
+}
+
+# ---------------------------------------------------------------- 18. a constant whose value is nil
 #
 # `NO_WORK == x', `NO_WORK != x' (Richards), NO_WORK a constant set to nil: the storage's weak value
 # is ConstantSiteCache.WeakNull, which tells it from an autoload that has not run; NilClass#== being
@@ -4286,7 +4376,7 @@ t('rv_attr Integer#abs') { rv_attr(-4) }
 # autoload, private_constant, deprecate_constant, found through a lexical scope and an ancestor,
 # Object::X against a nested X; NilClass#== redefined and NilClass#!= made private mid-run.
 
-puts '--- 17. a constant whose value is nil ---'
+puts '--- 18. a constant whose value is nil ---'
 
 NC_NONE = nil
 class NcQueue

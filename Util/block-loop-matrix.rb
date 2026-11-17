@@ -504,3 +504,61 @@ t('nested: TracePoint enabled late') {
 }
 def bl_n_deep(n); n.zero? ? 0 : [1, 2, 3, 4, 5, 6].each_index { |i| (0...1).each { |j| bl_n_deep(n - 1) if i == 0 } }; end
 t('nested: recursion a million deep') { bl_n_deep(1_000_000) }
+
+# ---------------------------------------------------------------- redefined by another thread while the loop runs
+# The outlined copy of a block loop that is running when another thread redefines a method it inlined
+# hands the loop back at its next iteration (JitRuntime.OsrHandBack), and the iterator's generic loop
+# yields to a block that calls the new method. The other thread redefines and THEN sets the flag; the
+# block counts only yields after the one that saw the flag. IR_OSR_VERBOSE=1: "(times): specialized",
+# "safe point: a method or a constant changed, handed back", "stale, rebuilt".
+def bl_rd_after_a_while(flag)
+  Thread.new { |; t0|
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
+    yield
+    flag[0] = 1
+  }
+end
+def bl_rd_times(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    100_000.times { |i| if seen == 1 && after < 1000; c += a.size; after += 1; end; seen = 1 if flag[0] == 1 }
+  end
+  c
+end
+def bl_rd_each(a, big, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    big.each { |x| if seen == 1 && after < 1000; c += a.size; after += 1; end; seen = 1 if flag[0] == x }
+  end
+  c
+end
+def bl_rd_nested(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    10_000.times { |i| 10.times { |j| if seen == 1 && after < 1000; c += a.size; after += 1; end }; seen = 1 if flag[0] == 1 }
+  end
+  c
+end
+t('running block loop: times, Array#size redefined') {
+  flag = [0]
+  th = bl_rd_after_a_while(flag) { Array.class_eval { alias_method :__bl_rd, :size; def size = 0 } }
+  r = bl_rd_times([1, 2], flag); th.join
+  Array.class_eval { alias_method :size, :__bl_rd; remove_method :__bl_rd }
+  r
+}
+t('running block loop: each, Array#size redefined') {
+  flag = [0]
+  big = Array.new(100_000, 1)
+  th = bl_rd_after_a_while(flag) { Array.class_eval { alias_method :__bl_rd, :size; def size = 0 } }
+  r = bl_rd_each([1, 2], big, flag); th.join
+  Array.class_eval { alias_method :size, :__bl_rd; remove_method :__bl_rd }
+  r
+}
+t('running block loop: nested, Array#size redefined') {
+  flag = [0]
+  th = bl_rd_after_a_while(flag) { Array.class_eval { alias_method :__bl_rd, :size; def size = 0 } }
+  r = bl_rd_nested([1, 2], flag); th.join
+  Array.class_eval { alias_method :size, :__bl_rd; remove_method :__bl_rd }
+  r
+}

@@ -2368,22 +2368,77 @@ namespace IronRuby.Runtime {
         // edge. The price is that while one thread has work parked, every thread's safe points
         // take the slow path; that lasts until the work is delivered, and a thread that dies with
         // an exception still parked for it has it dropped (ThreadOps.RubyThreadStart).
-        private static int _safePointRequests;
+        //
+        // The count is the high half of a 64-bit word whose low half is the code epoch: a number
+        // bumped by every change compiled code may have been built on - a method table change
+        // (RubyModule.GlobalMethodVersion) or a constant's (RubyContext.ConstantAccessVersion).
+        // A compiled loop compares the whole word with the epoch it was compiled at, so a pending
+        // interrupt and a method redefined by another thread while the loop runs are seen by the
+        // same single test at the top of each iteration (JitCompiler.EmitLoopSafePoint), as
+        // TruffleRuby's safepoints see both. The epoch is the low half and stays below 2^31, so
+        // the loop's word with no work waiting fits a sign-extended 32-bit immediate: the test is
+        // one `cmp qword [word], imm32', as the interrupt test alone was one `cmp dword [count], 0'
+        // (an epoch in the high half took a 64-bit immediate in a register, and the empty-bodied
+        // `times' loop was 14% slower for it). The two halves change atomically on the one word,
+        // so neither can lose the other's update; the count never goes below zero.
+        private static long _safePointWord;
+
+        // one request, in the high half
+        private const long RequestUnit = 1L << 32;
+        // the epoch's bits
+        private const long EpochMask = 0x7FFFFFFF;
+
+        // The count alone: the high half of the word, read as an int (little-endian, as every
+        // platform IronRuby runs on is), so that the interrupt test stays a 32-bit compare with 0.
+        private static ref int Requests {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get { return ref Unsafe.Add(ref Unsafe.As<long, int>(ref _safePointWord), 1); }
+        }
 
         /// <summary>Records one piece of work a safe point has to pick up.</summary>
         public static void RequestSafePoint() {
-            Interlocked.Increment(ref _safePointRequests);
+            Interlocked.Add(ref _safePointWord, RequestUnit);
         }
 
         /// <summary>The work recorded by <see cref="RequestSafePoint"/> has been taken.</summary>
         public static void SafePointRequestDone() {
-            Interlocked.Decrement(ref _safePointRequests);
+            Interlocked.Add(ref _safePointWord, -RequestUnit);
+        }
+
+        /// <summary>
+        /// The whole safe-point word, for compiled loops: it differs from the epoch a loop was compiled
+        /// at (the word with a zero count) when safe-point work is waiting or the code epoch moved. One
+        /// volatile load, which the CLR JIT inlines into emitted code.
+        /// </summary>
+        public static long SafePointWord {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get { return Volatile.Read(ref _safePointWord); }
+        }
+
+        /// <summary>The code epoch alone: the safe-point word with the count masked off.</summary>
+        public static long CodeEpoch {
+            get { return Volatile.Read(ref _safePointWord) & EpochMask; }
+        }
+
+        /// <summary>
+        /// Something compiled code may have been built on has changed (a method table, a constant):
+        /// every compiled loop that is running checks what it was built under at its next iteration.
+        /// Called after the version that says what changed has been bumped, so a loop that sees the
+        /// new epoch also sees the new version. The interlocked add is a full fence.
+        /// </summary>
+        public static void InvalidateCompiledCode() {
+            long old, word = Volatile.Read(ref _safePointWord);
+            do {
+                old = word;
+                // the epoch wraps within its 31 bits, never into the count
+                word = Interlocked.CompareExchange(ref _safePointWord, (old & ~EpochMask) | ((old + 1) & EpochMask), old);
+            } while (word != old);
         }
 
         /// <summary>True while any safe-point work is outstanding. One volatile load.</summary>
         public static bool IsSafePointRequested {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get { return Volatile.Read(ref _safePointRequests) != 0; }
+            get { return Volatile.Read(ref Requests) != 0; }
         }
 
         /// <summary>
@@ -2398,7 +2453,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void SafePoint() {
-            if (Volatile.Read(ref _safePointRequests) != 0) {
+            if (Volatile.Read(ref Requests) != 0) {
                 SafePointSlow();
             }
         }
@@ -2541,10 +2596,10 @@ namespace IronRuby.Runtime {
 
         private static void CheckAsyncException(bool atBlockingCall, bool killOnly) {
             // Everything below - a fiber being reclaimed, a parked signal, a parked finalizer, an
-            // exception parked by Thread#raise / #kill - is counted in _safePointRequests while it is
+            // exception parked by Thread#raise / #kill - is counted in _safePointWord while it is
             // outstanding, so with none of it there is nothing to look up. Mutex#lock and Monitor#enter
             // come through here on every call.
-            if (Volatile.Read(ref _safePointRequests) == 0) {
+            if (Volatile.Read(ref Requests) == 0) {
                 return;
             }
 
