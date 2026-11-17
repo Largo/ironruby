@@ -2034,6 +2034,18 @@ namespace IronRuby.Runtime.Jit {
                     // number, an Array) would deopt on every call. An instance variable is typed by the receiver
                     // that turned the method hot (ObservedType).
                     Type observed = ObservedType(node.Target);
+                    if (observed == typeof(void) && node.Target is ConstantVariable && node.MethodName != "equal?" && _refinements.IsEmpty) {
+                        // `NO_WORK == x' (Richards), NO_WORK a constant whose value is nil, which the constant
+                        // version guard keeps: NilClass#== (and BasicObject#!=, which calls it) being the public
+                        // library methods, checked here and kept by the method version, it is `x is nil', and
+                        // cannot deopt
+                        var nilClass = KindClass(JitRuntime.KindNil);
+                        if (IsPublicBuiltin(nilClass, "==") && (node.MethodName == "==" || IsPublicBuiltin(nilClass, "!="))) {
+                            type = JT.Bool;
+                            var isNil = Ast.Equal(Coerce(r, rt, JT.Obj), Ast.Constant(null, typeof(object)));
+                            return (node.MethodName == "!=") ? Ast.Not(isNil) : isNil;
+                        }
+                    }
                     if ((observed == typeof(RubyArray) || observed == typeof(Hash)) && node.MethodName != "equal?" &&
                         args.Expressions[0] is Literal && ((Literal)args.Expressions[0]).Value == null) {
                         return EmitCollectionEqualsNil(node.MethodName, l, out type);

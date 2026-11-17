@@ -4367,3 +4367,122 @@ t('typed loop: a bound callee redefined') {
   r = jo.bnd(flag, 1000); th.join
   r
 }
+
+# ---------------------------------------------------------------- 18. a constant whose value is nil
+#
+# `NO_WORK == x', `NO_WORK != x' (Richards), NO_WORK a constant set to nil: the storage's weak value
+# is ConstantSiteCache.WeakNull, which tells it from an autoload that has not run; NilClass#== being
+# the library one, the comparison is `x is nil'. Hot, then the constant reassigned, removed, an
+# autoload, private_constant, deprecate_constant, found through a lexical scope and an ancestor,
+# Object::X against a nested X; NilClass#== redefined and NilClass#!= made private mid-run.
+
+puts '--- 18. a constant whose value is nil ---'
+
+NC_NONE = nil
+class NcQueue
+  def initialize(h) = (@head = h)
+  attr_accessor :head
+  def nc_eq = (NC_NONE == @head)
+  def nc_ne = (NC_NONE != @head)
+  def nc_obj = (Object::NC_NONE == @head)
+  def nc_attr(x) = (x.nil? ? 1 : 2) + (NC_NONE == x ? 10 : 20)
+end
+module NcOuter
+  NC_NONE = :nested
+  class NcInner
+    def nc_lex(x) = (NC_NONE == x)
+    def nc_top(x) = (::NC_NONE == x)
+  end
+end
+class NcBase
+  NC_INH = nil
+end
+class NcSub < NcBase
+  def nc_inh(x) = (NC_INH == x)
+end
+ncq = NcQueue.new(nil)
+nci = NcOuter::NcInner.new
+ncs = NcSub.new
+warm { |i| ncq.head = i.even? ? :a : [i]; ncq.nc_eq; ncq.nc_ne; ncq.nc_obj; ncq.nc_attr(ncq.head); nci.nc_lex(:nested); nci.nc_top(nil); ncs.nc_inh(nil) }
+[nil, false, 0, :nested, [], Object.new.freeze].each do |h|
+  ncq.head = h
+  t("nc_eq #{h.class}") { ncq.nc_eq }
+  t("nc_ne #{h.class}") { ncq.nc_ne }
+  t("nc_obj #{h.class}") { ncq.nc_obj }
+  t("nc_lex #{h.class}") { nci.nc_lex(h) }
+  t("nc_top #{h.class}") { nci.nc_top(h) }
+  t("nc_inh #{h.class}") { ncs.nc_inh(h) }
+end
+ncq.head = :a
+nc_seen = []
+warm do |i|
+  ncq.head = i.even? ? nil : :a
+  if i == 60
+    $VERBOSE, nc_v = nil, $VERBOSE
+    Object.const_set(:NC_NONE, :reassigned)
+    $VERBOSE = nc_v
+  end
+  nc_seen << ncq.nc_eq << ncq.nc_ne
+end
+t('nc_eq, NC_NONE reassigned mid-run') { nc_seen.uniq }
+t('nc_eq of :reassigned') { ncq.head = :reassigned; [ncq.nc_eq, ncq.nc_ne] }
+$VERBOSE, nc_v = nil, $VERBOSE
+NC_NONE = nil
+$VERBOSE = nc_v
+ncq.head = :a
+warm { ncq.nc_eq }
+ncq.head = nil
+nc_seen = []
+warm do |i|
+  NcBase.send(:remove_const, :NC_INH) if i == 60
+  nc_seen << (ncs.nc_inh(nil) rescue $!.class)
+end
+t('nc_inh, NC_INH removed mid-run') { nc_seen.uniq }
+class NcBase; NC_INH = nil; private_constant :NC_INH; end
+t('nc_inh, private_constant') { ncs.nc_inh(nil) rescue $!.class }
+class NcBase; deprecate_constant :NC_INH; end
+t('nc_inh, deprecated') { $VERBOSE, nc_v = nil, $VERBOSE; r = ncs.nc_inh(nil); $VERBOSE = nc_v; r }
+nc_seen = []
+warm do |i|
+  if i == 60
+    class NilClass
+      alias_method :nc_orig_eq, :==
+      def ==(o) = :nil_eq
+    end
+  end
+  ncq.head = i.even? ? nil : :a
+  nc_seen << ncq.nc_eq << ncq.nc_ne
+end
+t('nc_eq, NilClass#== redefined mid-run') { nc_seen.uniq }
+class NilClass
+  alias_method :==, :nc_orig_eq
+  remove_method :nc_orig_eq
+end
+ncq.head = :a
+warm { ncq.nc_ne }
+ncq.head = nil
+nc_seen = []
+warm do |i|
+  class NilClass; private :!=; end if i == 60
+  nc_seen << (ncq.nc_ne rescue $!.class)
+end
+t('nc_ne, NilClass#!= made private mid-run') { nc_seen.uniq }
+class NilClass; public :!=; end
+t('nc_ne, NilClass#!= public again') { ncq.nc_ne }
+module NcRefine
+  refine NilClass do
+    def ==(o) = :refined
+  end
+end
+using NcRefine
+class NcQueue
+  def nc_ref = (NC_NONE == @head)
+end
+ncq.head = :a
+warm { ncq.nc_ref }
+t('nc_ref, NilClass#== refined') { ncq.nc_ref }
+autoload :NC_AUTO, File.join(__dir__, 'nc-no-such-file')
+class NcQueue
+  def nc_auto = (NC_AUTO == @head)
+end
+t('nc_auto, autoload not loadable') { (ncq.nc_auto rescue $!.class) }
