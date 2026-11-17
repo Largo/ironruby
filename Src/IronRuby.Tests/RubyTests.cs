@@ -940,6 +940,7 @@ namespace IronRuby.Tests {
                 ConstantPaths1,
                 HiddenConstants1,
                 PreludeHiddenState1,
+                ExtendMany1,
                 Scenario_MainSingleton,
                 Time_LoadZone1,
                 Time_DumpLoadedZone1,

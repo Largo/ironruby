@@ -22,6 +22,16 @@ namespace IronRuby.Runtime {
         where T : class {
         private readonly List<WeakReference/*!*/> _list = new List<WeakReference>();
 
+        // The same references, for Contains: a module that is extended into many objects gets a new singleton
+        // class in its list per object, and a linear search per extend made extending quadratic (gap 19).
+        // WeakReference does not override Equals, so this is a set of references by identity; it works because
+        // a module hands out one WeakReference for itself (RubyModule.WeakSelf).
+        private readonly HashSet<WeakReference/*!*/> _set = new HashSet<WeakReference>();
+
+        // Add prunes when the list has doubled since the last prune, so entries whose targets died are dropped
+        // even if nothing ever enumerates the list, at amortized constant cost per Add.
+        private int _pruneAt = 16;
+
         public WeakList() {
         }
 
@@ -48,7 +58,20 @@ namespace IronRuby.Runtime {
 
 
         public void Add(WeakReference item) {
+            if (_list.Count >= _pruneAt) {
+                Prune();
+                _pruneAt = Math.Max(16, _list.Count * 2);
+            }
             _list.Add(item);
+            _set.Add(item);
+        }
+
+        /// <summary>
+        /// True if this exact reference was added and has not been pruned; a reference whose target died may
+        /// still be found, which is harmless since a dead target cannot be added again.
+        /// </summary>
+        public bool Contains(WeakReference item) {
+            return _set.Contains(item);
         }
 
         private void Prune() {
@@ -59,6 +82,8 @@ namespace IronRuby.Runtime {
                         _list[j] = _list[i];
                     }
                     j++;
+                } else {
+                    _set.Remove(_list[i]);
                 }
                 i++;
             }
