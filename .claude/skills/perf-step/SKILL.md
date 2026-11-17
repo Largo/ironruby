@@ -93,9 +93,8 @@ ruby Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFI
 
 While iterating, name the two or three benchmarks the hypothesis is about after `--`: a
 run of those takes a minute. That subset is a hint, not a result. The whole suite (no
-`--`: thirteen, about five minutes for two trees; with `--whole` Havlak too, which makes
-it AWFY's fourteen and about seven minutes - CRuby 4.0 fails Havlak, so it only compares
-IronRuby trees and TruffleRuby) is run, with `--whole` at least once per decision:
+`--`: all fourteen AWFY benchmarks, about seven minutes for two trees; `--quick` leaves
+Havlak out and takes five, for iterating only) is run:
 
 - before deciding (step 3), twice;
 - on the merged tree after every merge (step 4), against the tree before the merge;
@@ -105,7 +104,7 @@ IronRuby trees and TruffleRuby) is run, with `--whole` at least once per decisio
 ## 3. Decide
 
 Numbers an agent took while other builds were running are a hint. Before deciding, measure
-again yourself with nothing else running (`uptime`), twice, on all thirteen benchmarks: a
+again yourself with nothing else running (`uptime`), twice, on all fourteen benchmarks: a
 change aimed at one benchmark is kept or rejected on what it does to the whole suite.
 Give awfy.rb the two trees in one order for the first run and the other order for the
 second (`/perf-gate`, step 4, says why), and put every candidate of a round in one

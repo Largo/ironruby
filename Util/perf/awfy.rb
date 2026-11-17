@@ -13,42 +13,37 @@
 #
 # The inner-iteration counts are Util/benchsuite/catalog.rb's (AWFY's rebench.conf / 10).
 #
-# These thirteen are the default. The fourteenth, Havlak, makes the suite whole and is run only
-# when asked for - `--whole` anywhere before `--`, or its name after it:
-#
-#   ruby Util/perf/awfy.rb 12 --whole "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release ../wt-x/ir.sh"
-#
-# AWFY's som.rb reopens Set, which Ruby 4.0 made a core class, so CRuby 4.0 fails it (a FAIL in
-# its column, and no part in its geomean); IronRuby and TruffleRuby run it. One iteration takes
-# seconds whatever the inner count, so it gets at least a minute per interpreter: a whole run
-# of two trees is about seven minutes, the default about five. Use it when deciding on a
-# change and after a merge, not while iterating.
+# All fourteen benchmarks of the suite run by default, on every interpreter, from a copy of the
+# checkout in which som.rb's Set has another name (Util/perf/awfy_dir.rb says why: without that
+# CRuby 4.0 fails Havlak). `--quick` anywhere before `--` leaves Havlak out while iterating; one
+# iteration of it takes seconds whatever the inner count, so it gets at least a minute per
+# interpreter: a run of two trees is about seven minutes, with `--quick` about five. A decision
+# is made on all fourteen. (`--whole`, which used to add Havlak, is accepted and means nothing.)
 INNER = { 'DeltaBlue' => 1200, 'Richards' => 10, 'Json' => 10, 'CD' => 100, 'Bounce' => 150,
           'List' => 150, 'Mandelbrot' => 500, 'NBody' => 250_000, 'Permute' => 100,
-          'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60 }
-WHOLE = { 'Havlak' => 15 }
+          'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60, 'Havlak' => 15 }
+SLOW = ['Havlak']
 SLOW_SECS = 60
 require 'shellwords'
-root = File.expand_path('../..', __dir__)
-home = ENV['PERF_HOME'] || File.join(File.dirname(root), 'ironruby-perf')
-dir = File.join(home, 'awfy/benchmarks/Ruby')
-abort "no #{dir}: run Util/perf/setup.sh" unless File.directory?(dir)
+require_relative 'awfy_dir'
+dir = awfy_dir(File.expand_path('../..', __dir__))
 # CRuby buffers stdout on a pipe and the run ends with SIGKILL: without this it prints nothing.
 sync = File.join(__dir__, 'sync.rb')
 
 secs = Float(ARGV.shift)
 i = ARGV.index('--')
 only = i ? ARGV[i + 1..] : []
-whole = (i ? ARGV[0...i] : ARGV).include?('--whole')
-ARGV.delete_at(ARGV.index('--whole')) if whole
+flags = (i ? ARGV[0...i] : ARGV).select { |a| a == '--whole' || a == '--quick' }
+quick = flags.include?('--quick')
+flags.each { |f| ARGV.delete_at(ARGV.index(f)) }
 i = ARGV.index('--')
 interps = (i ? ARGV[0...i] : ARGV).map { |s| s.split('=', 2) }
 fmt = "%-11s" + " %12s" * interps.size + "\n"
 printf fmt, 'benchmark', *interps.map(&:first)
 cols = Array.new(interps.size) { [] }
-INNER.merge(WHOLE).each do |b, inner|
-  next unless only.empty? ? (whole || !WHOLE.key?(b)) : only.include?(b)
-  limit = WHOLE.key?(b) ? [secs, SLOW_SECS].max : secs
+INNER.each do |b, inner|
+  next unless only.empty? ? !(quick && SLOW.include?(b)) : only.include?(b)
+  limit = SLOW.include?(b) ? [secs, SLOW_SECS].max : secs
   row = interps.map do |name, cmd|
     # cmd is a command line, as documented; the paths this script adds are quoted (a checkout or PERF_HOME with a space)
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)

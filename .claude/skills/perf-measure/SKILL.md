@@ -38,8 +38,8 @@ ruby Util/perf/awfy.rb 12 cruby=ruby "ir=env IR_CONFIG=Release ./ir.sh" \
 ruby Util/perf/micro-table.rb cruby=ruby "ir=env IR_CONFIG=Release ./ir.sh"
 ```
 
-- That is all thirteen AWFY benchmarks (about 8 minutes at 12 s each on three
-  interpreters), and it is what goes into the ledger: the first five rounds measured only
+- That is all fourteen AWFY benchmarks (about 11 minutes on three interpreters: 12 s
+  each, a minute for Havlak; CRuby runs Havlak too since awfy.rb renames som.rb's Set), and it is what goes into the ledger: the first five rounds measured only
   the five object-oriented ones (`-- Bounce Richards Json DeltaBlue Towers`), which left
   the worst one (Permute, 1.49 of CRuby) unseen and would have hidden a regression in
   arrays, floats or closures. A subset is for iterating on one experiment

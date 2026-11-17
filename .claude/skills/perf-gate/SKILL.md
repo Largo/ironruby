@@ -174,7 +174,7 @@ ruby $BASE/Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release $BASE/ir.sh" "new=en
 ruby $BASE/Util/perf/awfy.rb 12 "new=env IR_CONFIG=Release $NEW/ir.sh" "base=env IR_CONFIG=Release $BASE/ir.sh"
 ```
 
-Give one of the two runs `--whole` (Havlak as well: all fourteen of AWFY, a minute more per tree).
+Both runs are of all fourteen AWFY benchmarks, Havlak included: that is awfy.rb's default.
 The second run has the columns the other way round on purpose. Which column runs first
 moves single benchmarks by more than the 5% this step allows: in four runs of round six
 Towers was 7-10% slower in whichever tree ran second and NBody 1-6% faster. A benchmark
