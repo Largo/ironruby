@@ -38,7 +38,10 @@ Where the ideas come from:
 `Util/bench/README.md` says what the JIT and OSR tiers already do and decline; read it
 before proposing something they already cover. `Util/bench/truffleruby-lessons.md` has
 what TruffleRuby keeps in Ruby and in Java, what a core method written in Ruby costs here
-part by part, and a ranked list of what transfers.
+part by part, and a ranked list of what transfers. `Util/bench/daloze-lessons.md` has
+what the papers, posts and talks of TruffleRuby's lead give: unboxed instance variables,
+array storage strategies, thread-safe collections without a GVL, safepoints, what each
+AWFY benchmark is meant to stress, and how they measure.
 
 Two kinds of gap have a skill of their own, with the steps and the traps of that kind of
 work; use it for the experiment and come back here to decide and to record:

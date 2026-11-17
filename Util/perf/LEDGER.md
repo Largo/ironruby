@@ -361,6 +361,13 @@ Profile (`Util/perf/profile.sh`, self time):
    iterator is refused (a Thread#raise at the inner safe point restarts the outer
    iteration, which takes locals back and cannot take a global back); and TruffleRuby is
    still 47 times faster on it.
+   Untried, and the largest thing left here (`Util/bench/daloze-lessons.md`, idea 1): an
+   instance variable that holds a Float kept unboxed. Every Float written to `@x` is a
+   box today (`RubyInstanceData._ivars` is one `object[]`), and NBody's remaining 602 MB
+   per iteration is mostly those. The paper on thread-safe objects gives the rule that
+   makes it safe without locking reads - a storage location belongs to one pair of
+   variable and type and is never reused, a type change takes a new location - which
+   fits the lock-free move protocol the instance variables already have.
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -589,6 +596,29 @@ Profile (`Util/perf/profile.sh`, self time):
     looked. First guess, unverified: the module's list of dependent classes takes a weak
     reference per singleton class ever made and is scanned on each update. Outside
     AWFY, but DCI-style code and anything that extends per request pays it.
+20. **Array and Hash are not safe under concurrent mutation** - a correctness gap, listed
+    here because the fix has a speed price and the papers say how to keep it at zero for
+    code that does not share. Eight threads appending to one Array raise "Source array
+    was not long enough" out of the Array's copy (two runs of three); eight threads
+    inserting into one Hash raise IndexOutOfRange or lose entries (383005 and 394876 of
+    400000, with wrong values). CRuby prints the right answer, and so do TruffleRuby's
+    collections by design. `Util/bench/daloze-lessons.md`, sections 3 and 5: a shared
+    bit per collection, set when the collection becomes reachable from a global, a
+    constant or another thread, and a lock only on shared ones; their numbers are no
+    measurable cost for local collections and 14% for a shared Hash on one thread. The
+    stop-the-world safepoint their design uses for one transition does not exist here,
+    and the design without it is written out there. Not started: it is a decision about
+    what IronRuby promises, not an experiment of this loop.
+21. **Searching a String**: `s.index('"')` over 10 KB is 5 times CRuby's time (748
+    against 146 ns); `re.match?(s)` on a UTF-8 String takes four times what `re =~ s`
+    takes (3.1 against 0.76 us for a character class not found in 10 KB; on a binary
+    String `match?` takes 0.47 us), although `match?` has less to do; a short anchored
+    match is 1.3 to 1.5 times CRuby (`/\A[+-]?\d+/.match("12345 rest")` 663 against 452
+    ns). One run beside two builds, so factors only; shapes and a reading of the three
+    entry points are in `Util/bench/daloze-lessons.md`, section 6. Reading the code did
+    not explain the first two; the experiment starts with finding out (a one-character
+    needle straight to a span search, `match?` without a Match object). Outside AWFY;
+    it is what JSON escaping, `strscan` and log parsing spend.
 
 ## Landed
 

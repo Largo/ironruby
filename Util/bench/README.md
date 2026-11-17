@@ -123,6 +123,11 @@ and the host language, measures what a core method written in Ruby costs here ag
 same method in C# (`prelude-cost.rb`, `core-small.rb`, `core-inventory.rb`), and ranks what
 transfers.
 
+`daloze-lessons.md` is the same kind of reading of Benoit Daloze's papers, blog and talks
+(thread-safe objects and collections, safepoints, Are-We-Fast-Yet, regexps): ranked ideas
+with their sources, eight probes of what a runtime without a GVL must get right (two fail
+today), and what their way of measuring has that `Util/perf/` lacks.
+
 ## Fiber switches and parked-thread GC cost
 
 `fiber.rb` measures resume/yield round trips, create-and-complete time, and forced
