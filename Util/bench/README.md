@@ -128,6 +128,10 @@ transfers.
 with their sources, eight probes of what a runtime without a GVL must get right (two fail
 today), and what their way of measuring has that `Util/perf/` lacks.
 
+`zjit-lessons.md` does the same for the ZJIT status post of October 2026, with
+`zjit-post-shapes.rb`: the shapes a JIT for application code is built around (exception
+handlers, `define_method` methods, Struct objects, Hash iteration), measured here.
+
 ## Fiber switches and parked-thread GC cost
 
 `fiber.rb` measures resume/yield round trips, create-and-complete time, and forced

@@ -1029,12 +1029,8 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(dependentClass);
 
-            if (!isNew) {
-                foreach (var cls in DependentClasses) {
-                    if (ReferenceEquals(dependentClass, cls)) {
-                        return;
-                    }
-                }
+            if (!isNew && DependentClasses.Contains(dependentClass.WeakSelf)) {
+                return;
             }
 
             DependentClasses.Add(dependentClass.WeakSelf);
@@ -3878,12 +3874,8 @@ namespace IronRuby.Builtins {
 
             if (_dependentModules == null) {
                 _dependentModules = new WeakList<RubyModule>();
-            } else {
-                foreach (var module in _dependentModules) {
-                    if (ReferenceEquals(dependentModule, module)) {
-                        return;
-                    }
-                }
+            } else if (_dependentModules.Contains(dependentModule.WeakSelf)) {
+                return;
             }
 
             _dependentModules.Add(dependentModule.WeakSelf);

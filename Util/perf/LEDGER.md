@@ -596,6 +596,21 @@ Profile (`Util/perf/profile.sh`, self time):
     looked. First guess, unverified: the module's list of dependent classes takes a weak
     reference per singleton class ever made and is scanned on each update. Outside
     AWFY, but DCI-style code and anything that extends per request pays it.
+    Round sixteen fixed the growth (perf/extend, see Landed): the guess was right, and
+    an extend is now 11-25 us whatever came before, ten times less at 20,000 and thirty
+    at 200,000. What is left, from its author's `IR_BIND_TRACE=1` runs, is the first
+    call on each brand-new class, still 20 times CRuby for `extend`: 2-7 us to bind a
+    precompiled dispatcher for `o.foo` on a new singleton class; 70-120 us for the first
+    call of a method defined in `Class.new { def x }` or by `def o.x`, because
+    `RubyMethodBody.GetDelegate` compiles the body again for each declaring module (the
+    module is baked into the code; making the body independent of it has to keep
+    `super` and refinements right); and for a new Struct class full rules instead of
+    precompiled dispatchers, about 113 us for `new` and 51 us for a getter, since the
+    getter's and setter's rule generators are closures made per class and never match
+    a shared rule. Also unexplained by measurement: a `Struct.new` moves the global
+    method version (reading the code: `new` and `[]` added to the struct class's
+    singleton class override `Class#new`, which invalidates sites on override), so it
+    throws away every running loop's copy and every typed body's entry.
 20. **Array and Hash are not safe under concurrent mutation** - a correctness gap, listed
     here because the fix has a speed price and the papers say how to keep it at zero for
     code that does not share. Eight threads appending to one Array raise "Source array
@@ -619,6 +634,47 @@ Profile (`Util/perf/profile.sh`, self time):
     not explain the first two; the experiment starts with finding out (a one-character
     needle straight to a span search, `match?` without a Match object). Outside AWFY;
     it is what JSON escaping, `strscan` and log parsing spend.
+22. **A `begin`/`rescue` or `ensure` in a method costs about 80 ns per call when nothing
+    is raised**: `def r(x) begin; x + 1; rescue StandardError; 0; end end` 106 ns against
+    CRuby's 24, the same with `ensure` 112 against 27 (`Util/bench/zjit-post-shapes.rb`,
+    one loaded run: factors). Gap 9 seen from the caller: no light frame, no typed body.
+    A .NET `try` costs nothing on the path that does not throw, so the experiment is to
+    find what the method does around the handler (the scope, the saving of `$!`, the
+    frame) and let a body whose handler is not entered run as light as one without.
+    And **a raise that is rescued costs 6.3 us against 0.64**: a .NET exception per use.
+23. **A method made by `define_method` is called at 2.3 times CRuby's time** (64 against
+    28 ns; a `def` of the same body 31; YJIT 2-5 ns): the method JIT takes no block as a
+    method body. Rails-style code defines most of its small methods this way.
+24. **Struct with `keyword_init: true`: creating an object is 3.2 times CRuby** (1162
+    against 369 ns; positional creation is level at 142 against 131). And
+    `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
+    two parameters).
+25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
+    sixteen's breakdown; its author's numbers, taken beside two other experiments at load
+    2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
+    s per iteration against IronRuby's 3.8-4.8. By phase, IronRuby/CRuby: allocating the
+    per-node objects 0.64, the DFS 1.87, `identify_edges` 1.18, the main `downto` loop
+    1.49. It allocates 2.72 GB per iteration (66 `find_loops` of about 53 MB), and about
+    half of that is the `Range#each` inside som.rb's `Vector#each` and `has_some`: 52,000
+    calls per `find_loops` at about 500 B each (the Range, the Proc, the BlockParam and
+    the method's scope) - gaps 13 and 14, whose two obvious steps are under Rejected.
+    Other bytes per operation: `IdentitySet#add` 987, `find_set` over a chain of three
+    971, `at_put` of an existing key 693, `loop { return }` 536, `Dictionary#at` 71.
+    Per operation in ns, CRuby / IronRuby / TruffleRuby: `Dictionary#at` 225 / 164 / 23,
+    `at_put` 500 / 384 / 52, `Vector#each` over 1-3 elements 363 / 457 / 25,
+    `IdentitySet#add` 496 / 839 / 35, a new node 163 / 125 / 1.6, `find_set` 886 / 969 /
+    54, `has_some` 473 / 530 / 51, `loop { return }` 110 / 288, the DFS per node 1705 /
+    2976: the single operations are at CRuby's speed, the composite ones (a block passed
+    on through two layers of `&block`, `loop`) are not. The method JIT specializes 21
+    methods, declines 3 and screens out 109: `Dictionary#at` at a call of `match` on a
+    local assigned in its loop, `Vector#remove_first` at a deopt after an effect,
+    `split_bucket` at an attribute write on a receiver that was not profiled, and
+    `find_loops`, `do_dfs`, the steps, `SomSet#add`/`contains`, `find_set` and `append` at
+    `new`, `each` and `has_some`; five `while` loops are retired at calls. Recursion
+    depth is not it: the DFS goes 424 deep, and recursion through `Vector#each` costs
+    475 ns a level at depth 10 and 552 at depth 1000. Narrow things to try: let
+    `Dictionary#at` compile (type a call on a local assigned in the loop); the per-call
+    cost of `(a..b).each { |i| yield ... }` (gap 14); `loop` through gap 22.
 
 ## Landed
 
@@ -1259,6 +1315,37 @@ with both merged (perf/safept with perf/core2 merged into it, d338750c).
   on the final build; all five ruby/spec suites, 32,285 examples, nothing the list of
   known failures lacks; no FAIL in two runs of all fourteen.
 
+Round sixteen: three experiments on cd0d906c, each by a subagent in its own worktree,
+beside one another (so the authors' timings are at loads of 4 to 14, and mine for the
+first were taken while the third was still running). `havlak` ended as a breakdown (gap
+25, and `Kernel#loop` in C# under Rejected).
+
+- **perf/extend f4b38652 d5685f40 (merged in 8e844238) - a module's dependent classes
+  are looked up in constant time** (gap 19). `extend` and `include` add the class to
+  the module's weak list of dependents after searching the list for it, and the list
+  kept every singleton class ever made for the module; `WeakList` now has a set beside
+  the list, `Contains` replaces the two searches, and Add prunes dead entries each time
+  the list has doubled. Three alternating runs of 20,000, before -> after in ms, load
+  5-7: `Object.new.extend(M)` with a call 5180 / 5352 / 4847 -> 527 / 491 / 451 (0.09),
+  `Class.new.include(M)` 5218 / 6032 / 5749 -> 947 / 1010 / 991 (0.17); `Class.new` with
+  a `def` 2336-2767 -> 2300-2344, a singleton `def`, `define_method` and `const_set`
+  level, `Struct.new` 6.8-12.3 s against 7.2-9.8 s. Its author's: 200,000 extends 72 ->
+  2.2 s, RSS flat at 269-279 MB over 2,000,000. My probe of 60,000 extends among
+  classes, subclasses and modules that include M, followed by every kind of change to
+  M, prints CRuby's output on both trees and takes 4.4 s where it took 41 (CRuby 0.17).
+  The second commit is mine: an enumeration of the list goes by index, and the walks
+  of dependents add to other modules' lists as they go, so a prune from Add under an
+  enumeration of the same list would make the walk skip classes. Reading the walks
+  found no case that does it; the list now counts its enumerations and prunes at none.
+  The gate: IronRuby.Tests with the baseline's one failure; `Util/extend-matrix.rb`
+  (new, 14 rows) and the hot-shapes, jit, jit-calls, ivar, hash-struct, block-loop and
+  osr-array matrices as CRuby's, tiers on and off; all five ruby/spec suites, 32,285
+  examples, nothing new; the fourteen benchmarks 1.043 and 1.005 of the baseline at
+  load 3-9 (Storage 1.36 and CD 1.21 in the first run, 0.99 and 0.98 in the second),
+  and what was slower in both orders level in alternating processes: Queens 1.014,
+  Towers 1.002, Richards 0.915, micro `getter` 1.03 and `==` 1.01 overlapping;
+  start-up 1510 against 1520 ms, best of fifteen.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -1522,6 +1609,17 @@ Round ten:
   Numbers are the author's, taken beside another experiment. What it says: a core
   operation is worth adding to the typed body when the method around it then compiles,
   and for Json's readers that needs the effect rule first.
+- **`Kernel#loop` in C#** (round sixteen, perf/havlak, gap 25; built and reverted by its
+  author, nothing committed). `loop` is in the prelude with a `begin`/`rescue
+  StopIteration`, which keeps it out of light frames; in C# (a yield loop, a catch, the
+  exception's `result` through a call site, the blockless form left to the prelude) a
+  matrix of 26 cases and the backtraces were the same as CRuby's. `loop { return }` 536 ->
+  352 B per call, Havlak 2724 -> 2682 MB per iteration; the shape at 0.72-0.90 of before
+  and Havlak at 0.954 and 0.983 in six alternating processes, every one of them
+  overlapping at load 4-14. Not shown to reach the bar, and not re-measured on a quiet
+  machine: what `loop` pays is what every method with a `rescue` pays (gap 22: about 80
+  ns per call when nothing is raised), so the step to take is that one, in the compiler,
+  and `loop` stays in Ruby.
 
 ## Regressions
 
