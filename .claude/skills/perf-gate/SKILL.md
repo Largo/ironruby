@@ -26,6 +26,10 @@ git -C <tree> diff --stat <base>...HEAD
 - Uncommitted changes in the baseline checkout make the baseline something other than the
   commit the candidate branched from, and every comparison below is against it: commit or
   stash them, and rebuild the baseline, first.
+- The candidate's Release build must be of its last commit: build it here (console and
+  tests) before measuring or probing anything, whatever its author says was built. In
+  round fifteen a worktree's console build still held two steps its author had dropped
+  from the branch, and the first measurement and probe were of those.
 
 - Whole-file churn means line endings or a BOM were rewritten: fix that first (CLAUDE.md).
 - A `*.Generated.cs` in the diff must come from its generator. A `[RubyMethod]`,
@@ -204,6 +208,14 @@ allocated nothing more anywhere, and made `a.each { |x| s += x }` over one or tw
 1.5 to 2 times slower. For a change to the method JIT's screen, compare the whole
 `[jit] specialized= rejected= screen-rejected=` line of every benchmark, not only what is
 newly specialized: a method that is newly wrapped and then declined is a cost.
+
+A change that adds a way for compiled code to be invalidated (a version, an epoch, a guard
+that hands a loop back) is measured with the events that do *not* concern the code: a
+second thread, and a second runtime in the process, that extends objects, defines new
+constants, singleton methods and classes, and autoloads, beside a hot loop, with
+`IR_OSR_VERBOSE=1`'s `stale=` and `IR_JIT_VERBOSE=1`'s `invalidations=` next to the
+baseline's. In round fifteen every check that changed something the loop was built on
+passed, and a loop beside a thread calling `extend` was 15 times slower.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.

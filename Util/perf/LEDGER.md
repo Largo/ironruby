@@ -91,6 +91,16 @@ Havlak, measured for the first time, is 25 times TruffleRuby's time, in the same
 as the others (5 for DeltaBlue's cold run to 47 for NBody); nobody has looked at where
 its time goes.
 
+Round fifteen (2026-11-17, ea86fa35; load 1.0-1.2): a constant whose value is nil in the
+method JIT, and loops that see a redefinition while they run. Neither is aimed at a benchmark and none moved: all fourteen
+(`awfy.rb 12 --whole`, the tree before / after, both column orders) 0.994 and 1.007, so
+the table above stands. IronRuby alone, us, before / after in the first run: DeltaBlue
+48841 / 49797, Richards 346862 / 352748, Json 74782 / 72318, CD 472757 / 503289 (1.021
+in eight alternating processes), Bounce 81700 / 85563 (0.997 in eight), List 27535 /
+27094, Mandelbrot 48955 / 49113, NBody 688502 / 679864, Permute 135807 / 133501, Queens
+82300 / 83109, Sieve 136331 / 129789, Storage 92000 / 88190, Towers 98740 / 91177, Havlak
+3878371 / 3902921.
+
 Bytes allocated per iteration (`Util/perf/alloc.rb`; it moves by about 0.3% between
 invocations, unlike the timings), MB, round six -> round seven -> now: DeltaBlue 24.9 ->
 24.2 -> 24.6, Richards 19.6 -> 19.3 -> 13.9, Json 35.8 -> 35.9 -> 30.7, CD 516.2 -> 226.2 ->
@@ -292,6 +302,18 @@ Profile (`Util/perf/profile.sh`, self time):
    the effect rule (perf/undo: logged stores are slower than the generic body), so
    `bounce`, `hold_self` and `remove_first` wait for a body that is cheaper to enter,
    not for a rule.
+   Round fifteen (perf/core2) went down the two chains that were left. The nil constant
+   is compiled now (gap 11), and Richards' two `initialize` with it; `append` then
+   declines at "a deopt after an effect (call link at line 54)". `==`/`!=` between two
+   Strings with a non-literal operand and `String#[]` with an Integer were built and
+   dropped (0.92 and 0.91 on their shapes): with them Json's `read` declines at a deopt
+   after `@index += 1`. So both chains end at the effect rule again. A survey of what
+   declines in all fourteen found no core operation left that repeats: List's,
+   DeltaBlue's and CD's hot declines are calls of user methods on another receiver,
+   Havlak's are calls and an attribute write on a receiver that was not profiled.
+   Untried: Json's `read` has no parameters and no locals, so the stage-1 resume of
+   `-X:JITResume` (a fallback call in place of a deopt) could take `String#length` and
+   `String#[]` after the store; it is the one hot method found so far that stage 1 fits.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
@@ -483,6 +505,8 @@ Profile (`Util/perf/profile.sh`, self time):
     (`create_handler`, `create_device`, idler, worker: 23.2, 13.6, 9.8 and 7.0% inclusive),
     which the method JIT does not take at all. So Richards waits on gap 1: general calls
     from compiled code, and a deopt that does not restart the body.
+    Round fifteen landed it after all (perf/core2, see Landed), for its own shape and not
+    for Richards: `NIL_CONST == x` in a small method is 0.63-0.66 of before. Closed.
 12. **One site, four receiver classes, two speeds**: `recv != other` in a loop over four
     plain classes takes about 105 ns or about 280 ns per iteration, the same binary, from
     one process to the next (three of six runs slow on 9f4d44f8). Two and three classes
@@ -556,6 +580,15 @@ Profile (`Util/perf/profile.sh`, self time):
     iterator compiled with its block, and at twice CRuby's time for the same source: the
     loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
     `yield <expr>`"). This is what keeps per-element loops in C#.
+19. **`Object.new.extend(M)` is 200 to 300 times CRuby's time and grows with the number
+    of objects extended**: 20,000 in a `while` loop take 4.5 s, 40,000 11.0 s, 200,000
+    72 s, with and without the JIT and OSR; CRuby takes 0.23 s for 200,000 (1.1 us each).
+    `Struct.new(:a)` is 105-115 us each against 3.6 (300,000: 32-35 s against 1.1 s),
+    `Class.new { def x; 3; end }` 15 us against 0.7. Found in round fifteen by a probe
+    written for something else (a loop whose own body changes method tables); nobody has
+    looked. First guess, unverified: the module's list of dependent classes takes a weak
+    reference per singleton class ever made and is scanned on each update. Outside
+    AWFY, but DCI-style code and anything that extends per request pays it.
 
 ## Landed
 
@@ -1119,6 +1152,83 @@ the tree with both merged.
   baseline fails and the merged tree passes (a private `!=`), 18 that differ from CRuby
   on both, of which two are worse on the merged tree - see "Caught by the review".
 
+Round fifteen: two experiments on 87bb0b5f, side by side, each by a subagent in its own
+worktree; the larger one then went to an independent reviewer, and back to its author
+once. Measured by me on 2026-11-17 on a quiet machine (load 1.0-1.2), gated on the tree
+with both merged (perf/safept with perf/core2 merged into it, d338750c).
+
+- **perf/core2 d03fe1e7 (merged in 29aed06d) - a constant whose value is nil in the
+  method JIT** (gaps 1 and 11). `ResolveConstant` declined every constant without a
+  value because an autoload that has not run has none either; the constant's storage
+  tells them apart (`ConstantSiteCache.WeakNull`). A nil constant is now a value like
+  another under the constant version guard, `NIL_CONST == x` and `!= x` are `x is nil`
+  while `NilClass#==` and `BasicObject#!=` are the public library methods and no
+  refinement is active, and a constant receiver's observed type is its value's type.
+  `Util/bench/jit-core-shapes.rb` `nil_const`, ab.rb with five rounds, CRuby / before /
+  after in ns: 33.3 / 62.3 / 39.4 and 33.9 / 60.5 / 39.7 with the columns reversed
+  (0.63, 0.66), the other six shapes overlapping. Kept for that shape: all fourteen
+  benchmarks are 0.972 and 0.999 of the baseline with it alone, Richards 1.003 and
+  1.026 - it compiles two more `initialize` there and nothing hot (gap 1). My probe of
+  139 lines (nil constants compared, tested, assigned, used as receivers; constants
+  holding an Array, a String, numbers, a Hash, a Struct and an object with readers; the
+  constant reassigned to another type and to nil, `NilClass#==` redefined, removed and
+  made private, `BasicObject#!=` redefined, singleton methods on the constant's object)
+  prints the same on CRuby, the baseline, the build and the build with the tiers off.
+  One thing went wrong on the way: the Release console build in the worktree was older
+  than the last commit and still held the two steps its author had dropped (the DLL
+  was 1.5 KB larger than one built from the commit), so my first measurement and probe
+  were of something else. Both were repeated on a build made from the commit.
+- **perf/safept 3e8a7bc3 3a52d160 59828ec0 826c652c 2b7faaf5 a8d443c8 (merged in
+  ea86fa35) - a compiled loop that is running sees a method another thread redefines**
+  (the first open item of "Caught by the review (round fourteen)"; TruffleRuby's
+  safepoints, which see an interrupt and an invalidation with one check). The count of
+  waiting safe-point work became the high half of a 64-bit word whose low half is a
+  code epoch; a compiled loop compares the whole word with the epoch it was compiled
+  at, an immediate, where it compared the count with zero - still one compare per
+  iteration (`cmp qword [word], imm32`; an epoch kept in a register local made `each`
+  1.13-1.34, one in the high half made `times` 1.14, so the layout is the result of
+  measuring). The epoch moves when the global method version moved in an update, and
+  when an existing constant is assigned again or removed. An outlined loop, a block
+  loop and an in-place iterator hand themselves back by a throw (a slow path that
+  returned made the CLR JIT spill the loop counter: `each` 15-30% slower), and
+  `OsrLoopSite.Run` builds a copy under the current versions without counting a failed
+  specialization - the entry guard's version failure no longer uses up one of three
+  retypes either - no sooner than eight times the last compilation's time after it. A
+  typed method body's loop takes a slow path (`JitRuntime.MethodLoopSafePointSlow`)
+  that runs what is waiting, checks the versions, and deopts when the body may.
+  What it fixes, on rows that run under CRuby, the build and the build with the tiers
+  off (`Util/osr-array-matrix.rb` section 10, the last section of
+  `Util/block-loop-matrix.rb`, `Util/jit-matrix.rb` section 17; the other thread
+  redefines and then sets a flag, and the loop counts from the iteration after it saw
+  the flag): Array#size, String#length, Integer#abs, Integer#+ and a folded constant in
+  an outlined loop, by `def`, alias, `define_method` and `prepend`, from a trap handler
+  and from a rescue of Thread#raise; `times`, `each` and nested `times`; a typed body
+  with a core operation, an inlined callee and a bound callee. The baseline gets eight
+  of the outlined rows, four of the typed-body rows and two of the block rows wrong.
+  What it costs, against the unchanged build: the lightest loops (`r15` shapes: empty
+  `while`, nested `while`, `times`, `each`, nested `times`), ab.rb with seven rounds,
+  0.98 / 0.95 / 0.96 / 1.03 / 0.89 and with the columns reversed 1.00 / 1.04 / 1.01 /
+  1.14 / 0.99, every row overlapping; a typed body with a short loop is faster, its safe
+  point being an inline compare where it was a call (micro `while10` 40.0 -> 31.7 and
+  42.5 -> 33.4 ns, 0.79 in both orders); the micro table has no other line outside 5%
+  in both orders but `s_each2` (1.06, 1.06), which is 180.2 against 179.7 ns in a
+  process of its own, as are `s_each1`, `s_each4`, `s_times4`, `s_map1`, `empty` and
+  `poly2` (0.97-1.02, all overlapping); the benchmarks are under "Current numbers";
+  start-up 1.55 and 1.47 s.
+  What is still exposed: a typed body with an effect and a loop that holds nothing
+  that can deopt (an instance variable store and Float arithmetic) keeps the old method
+  until it returns; a redefinition that lands between an iteration's check and its use
+  is seen one iteration late; the method version is global, so a redefinition anywhere
+  hands back every running loop (10,000 of them beside one loop: 127-136 rebuilds,
+  about 11% of the loop's time compiling, 8.1 s against 7.5 s).
+- The gate, on the tree with both: IronRuby.Tests with the one failure the baseline
+  has (the two branches alone and together); jit (1214 lines with sections 17 and 18),
+  osr-array, block-loop, jit-calls, hot-shapes, ivar, hash-struct, block-given and
+  light-rest as CRuby's, with the tiers off and with `-X:NoJITCalls` too (int and raise
+  differ from CRuby in the lines the baseline differs in); the reviewer's probes again
+  on the final build; all five ruby/spec suites, 32,285 examples, nothing the list of
+  known failures lacks; no FAIL in two runs of all fourteen.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -1374,6 +1484,14 @@ Round ten:
   estimated 2-4% of CD, below what CD's noise lets a round show. Gap 3 lists the four,
   the safety conditions (a pure `initialize`, a deopt before a construction that is not
   current, never under `-X:ObjectSpace`) and the matrix that pins the semantics.
+- **`==`/`!=` between two Strings with a non-literal operand, and `String#[]` with an
+  Integer, as operations of a typed body** (round fifteen, perf/core2, gap 1; built and
+  dropped by their author, the diffs are not kept on the branch). 0.92 and 0.91 on
+  their shapes, under the 15% a micro line needs, and they compile nothing hot: with
+  both, Json's `read` gets as far as a deopt after `@index += 1` and is declined there.
+  Numbers are the author's, taken beside another experiment. What it says: a core
+  operation is worth adding to the typed body when the method around it then compiles,
+  and for Json's readers that needs the effect rule first.
 
 ## Regressions
 
@@ -1583,6 +1701,8 @@ second thread at the right moment, and rows that do not reach the path they are 
 Left open, and on master before the round:
 
 - **A compiled loop that is running does not see a method another thread redefines.**
+  (Closed in round fifteen by perf/safept, except for a typed body with an effect; see
+  Landed. What follows is the entry as it was written.)
   A loop copy checks the method version when it is entered, not while it runs. Master
   shows it for `Array#size` in an outlined `while`, for an inlined `Integer#to_i`, and
   for an inlined or bound callee in a typed method body (round thirteen); perf/core adds
@@ -1614,3 +1734,33 @@ baseline was at 64 in both runs of one comparison and at 79-82 in six processes 
 iterations each). Storage, Towers and DeltaBlue show the same kind of swing. A
 difference between two trees on such a benchmark is settled by separate processes of a
 fixed length taken alternately (perf-gate, step 4), not by more awfy.rb runs.
+
+### Caught by the review (round fifteen)
+
+perf/safept went to a reviewer with the same instruction as in round fourteen, plus one:
+say where the candidate is clearly slower than the baseline. Seventeen probe files. No
+wrong result; three probes that the baseline fails and the candidate passes; and one cost
+that every check of the author's had passed, because all of them changed something the
+loop was built on:
+
+- **A change to something unrelated made every running loop slow.** The epoch moved on
+  every bump of the constant version (a new constant, `include`, `extend`, an autoload
+  starting and ending) and on every method table update whether or not the global
+  method version moved. A `while` loop over `a.size` beside a thread looping
+  `Object.new.extend(M)` took 2.2-2.8 s in place of 0.13-0.18 s (CRuby 1.32 s), beside
+  one defining new constants 1.5 s in place of 0.07 s, and a thread in a second runtime
+  of the process did the same to the first: the copy was handed back, found not stale,
+  thrown away all the same and built again after the spacing. Fixed by moving the epoch
+  only where a compiled copy can be stale (2b7faaf5). The author's numbers after it:
+  every probe within noise of the baseline, no stale copy except beside `Struct.new`,
+  which moves the method version on the baseline too.
+- **The same thing once more, found by a probe of mine after that fix:** the file an
+  autoload loads assigns a name the module already holds (the autoload's placeholder),
+  which counted as a reassignment. A loop beside a thread that autoloads 300 constants:
+  1.3 s in place of 0.25 s, about 30 copies rebuilt; 0.27-0.31 s after a8d443c8.
+
+What to take from it for the gate: a change that adds a way for compiled code to be
+invalidated is measured with the invalidating events that do NOT concern the code, from
+another thread and from another runtime, and with the verbose counters (`stale=`,
+`invalidations=`) beside the baseline's. And a candidate's build is checked against its
+last commit before anything is measured on it (see perf/core2 under Landed).
