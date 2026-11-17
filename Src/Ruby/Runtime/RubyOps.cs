@@ -5027,6 +5027,23 @@ namespace IronRuby.Runtime {
             return false;
         }
 
+        // The cached read of a variable of an object whose shape is raw (RubyInstanceData, "Float
+        // locations"), for a caller that TryReadCached has just turned away: the same protocol, and
+        // a Float comes boxed (the same box again while the value is unchanged).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCachedRaw(RubyInstanceData data, InstanceVariableSite/*!*/ site, out object value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    value = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
+                    return true;
+                }
+            }
+            value = null;
+            return false;
+        }
+
         // The site's second shape, for the typed code, whose sites see a class's objects in two shapes
         // once some have been promoted to raw Floats (RubyInstanceData, "Float locations").
         // A raw second shape becomes the first, so that the inlined path reads it from then on; a plain

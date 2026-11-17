@@ -669,10 +669,6 @@ namespace IronRuby.Runtime.Jit {
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static object ReadSelfAttrUncached(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
-            // An object of a class whose instances are born raw (RubyInstanceData, "Float locations")
-            // comes here too, since the inlined read only knows plain shapes: GetInstanceVariable(site)
-            // below reads the site's raw shape first. No check of its own for it here, which every miss
-            // of a site that sees many shapes would pay.
             var obj = self as RubyObject;
             RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
             if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
@@ -680,7 +676,27 @@ namespace IronRuby.Runtime.Jit {
             }
             if (obj != null) {
                 var data = obj._instanceData;
-                return (data != null) ? data.GetInstanceVariable(site.Variable) : null;
+                if (data == null) {
+                    return null;
+                }
+                // An object of a class whose instances are born raw (RubyInstanceData, "Float locations")
+                // comes here on every read, since the inlined read only knows plain shapes: its hit is
+                // taken here, after the one class check, and not left to GetInstanceVariable(site), which
+                // costs such a class's Integer and object attributes a fifth more. A miss of a site that
+                // sees many shapes pays two loads and a compare for it, and gets them back where the object
+                // has the site's second shape: that hit is taken here as well, by the protocol of the
+                // inlined read (element 0 is a shape, so the array is live and the index is its slot).
+                object[] slots = data._ivars;
+                var entry = site.Variable.Cache;
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.Shape) {
+                    if (entry.PlainShape == null && entry.Next == null) {
+                        return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
+                    }
+                } else if (shape == entry.OtherShape) {
+                    return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.OtherIndex));
+                }
+                return data.GetInstanceVariable(site.Variable);
             }
             RequireIsolationCheckFree(context, self, site.Variable);
             return RubyOps.ReadInstanceVariable(context, self, site.Variable);

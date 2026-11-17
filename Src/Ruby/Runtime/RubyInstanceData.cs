@@ -22,6 +22,37 @@ using System;
 
 namespace IronRuby.Runtime {
     /// <summary>
+    /// A Float instance variable stored raw: see RubyInstanceData, "Float locations". Only ever in a
+    /// slot array, never handed out as a value (<see cref="RubyInstanceData.ValueOf"/>).
+    /// </summary>
+    internal sealed class FloatLocation {
+        internal double Value;
+
+        // The box the generic reads last handed out, theirs to reuse while it still holds the bits
+        // of Value: so that `@x.equal?(@x)', `@x.object_id == @x.object_id' and a dup sharing the
+        // value say what they said of the box the baseline stored (an object_id is per box). The
+        // raw writes never touch it. Readers race only to make two boxes of one value.
+        private object _box;
+
+        internal FloatLocation(double value) {
+            Value = value;
+        }
+
+        internal object/*!*/ Boxed {
+            get {
+                double value = Value;
+                object box = Volatile.Read(ref _box);
+                if (box != null && BitConverter.DoubleToInt64Bits((double)box) == BitConverter.DoubleToInt64Bits(value)) {
+                    return box;
+                }
+                box = value;
+                Volatile.Write(ref _box, box);
+                return box;
+            }
+        }
+    }
+
+    /// <summary>
     /// Stores the per-instance data that all Ruby objects need (frozen?, instance_variables, etc)
     /// Stored in a lookaside weak hashtable for types that don't implement IRubyObject (i.e. .NET types).
     /// </summary>
@@ -111,37 +142,6 @@ namespace IronRuby.Runtime {
     /// win-x64, osx-arm64); a location is published by a reference store, which the CLR orders after
     /// the constructor's write of the field.
     /// </remarks>
-    /// <summary>
-    /// A Float instance variable stored raw: see RubyInstanceData, "Float locations". Only ever in a
-    /// slot array, never handed out as a value (<see cref="RubyInstanceData.ValueOf"/>).
-    /// </summary>
-    internal sealed class FloatLocation {
-        internal double Value;
-
-        // The box the generic reads last handed out, theirs to reuse while it still holds the bits
-        // of Value: so that `@x.equal?(@x)', `@x.object_id == @x.object_id' and a dup sharing the
-        // value say what they said of the box the baseline stored (an object_id is per box). The
-        // raw writes never touch it. Readers race only to make two boxes of one value.
-        private object _box;
-
-        internal FloatLocation(double value) {
-            Value = value;
-        }
-
-        internal object/*!*/ Boxed {
-            get {
-                double value = Value;
-                object box = Volatile.Read(ref _box);
-                if (box != null && BitConverter.DoubleToInt64Bits((double)box) == BitConverter.DoubleToInt64Bits(value)) {
-                    return box;
-                }
-                box = value;
-                Volatile.Write(ref _box, box);
-                return box;
-            }
-        }
-    }
-
     public sealed class RubyInstanceData : IRubyObjectState {
         // TODO: compress
 
@@ -784,16 +784,6 @@ namespace IronRuby.Runtime {
             return (ShapeOf(s) == shape) ? shape : null;
         }
 
-        /// <summary>
-        /// Makes the object raw: a Move (under lock(this), the old array retired as for any Move) to a
-        /// new array whose element 0 is the raw twin of <paramref name="shape"/>, the slots copied after
-        /// the barrier and <paramref name="value"/> stored at <paramref name="index"/> in a new
-        /// FloatLocation before the array is published. A FloatLocation is therefore never in an array
-        /// whose element 0 is not raw: a reader of the old array sees the old shape and the old values,
-        /// and a writer that stored into the old array is copied or meets Moved and redoes its write.
-        /// Null if it did not happen: no raw twin, or <paramref name="s"/> is not the current array of
-        /// that shape any more.
-        /// </summary>
         private static int _Promotions;
 
         /// <summary>
@@ -804,6 +794,16 @@ namespace IronRuby.Runtime {
             get { return Volatile.Read(ref _Promotions); }
         }
 
+        /// <summary>
+        /// Makes the object raw: a Move (under lock(this), the old array retired as for any Move) to a
+        /// new array whose element 0 is the raw twin of <paramref name="shape"/>, the slots copied after
+        /// the barrier and <paramref name="value"/> stored at <paramref name="index"/> in a new
+        /// FloatLocation before the array is published. A FloatLocation is therefore never in an array
+        /// whose element 0 is not raw: a reader of the old array sees the old shape and the old values,
+        /// and a writer that stored into the old array is copied or meets Moved and redoes its write.
+        /// Null if it did not happen: no raw twin, or <paramref name="s"/> is not the current array of
+        /// that shape any more.
+        /// </summary>
         private InstanceVariableShape TryPromote(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value) {
             var raw = shape.RawTwin;
             if (raw == null) {

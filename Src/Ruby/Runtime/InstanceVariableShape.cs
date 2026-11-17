@@ -108,10 +108,6 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// The raw shape with the same variables in the same slots; this one if it is raw. Null if
-        /// the raw tree has reached its limits.
-        /// </summary>
-        /// <summary>
         /// The plain shape with the same variables in the same slots; this one if it is plain. Null if
         /// the tree has reached its limits.
         /// </summary>
@@ -135,6 +131,10 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The raw shape with the same variables in the same slots; this one if it is raw. Null if
+        /// the raw tree has reached its limits.
+        /// </summary>
         internal InstanceVariableShape RawTwin {
             get {
                 if (_isRaw) {
