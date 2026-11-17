@@ -5015,16 +5015,11 @@ namespace IronRuby.Runtime {
             if (data != null) {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
-                // a raw shape is never PlainShape (RubyInstanceData, "Float locations"): a plain object's
-                // read is the compare and the load it always was, and a raw one's is tried only after
-                // that compare has failed, where the read would have left the inlined path anyway
-                object shape = RubyInstanceData.ShapeOf(slots);
-                if (shape == entry.PlainShape) {
+                // a raw shape is never PlainShape (RubyInstanceData, "Float locations"): this inlined read
+                // is the compare and the load it always was; a raw object's read is the first thing
+                // the out-of-line readers try (ReadInstanceVariable and the rest)
+                if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
                     value = RubyInstanceData.GetSlot(slots, entry.Index);
-                    return true;
-                }
-                if (shape == entry.Shape) {
-                    value = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
                     return true;
                 }
             }

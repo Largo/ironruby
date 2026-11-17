@@ -670,6 +670,15 @@ namespace IronRuby.Runtime.Jit {
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static object ReadSelfAttrUncached(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
             var obj = self as RubyObject;
+            if (obj != null && obj._instanceData != null && site.IsBoundTo(obj.ImmediateClass)) {
+                // an object of a class whose instances are born raw (RubyInstanceData, "Float locations"):
+                // the inlined read only knows plain shapes
+                object[] slots = obj._instanceData._ivars;
+                var entry = site.Variable.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape && entry.Raw) {
+                    return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
+                }
+            }
             RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
             if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
                 throw Deopt();
