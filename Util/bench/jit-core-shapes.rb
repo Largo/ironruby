@@ -21,6 +21,13 @@ class CsParser
   def more = @index < @input.length
 end
 
+# Richards' `NO_WORK == queue_head', NO_WORK a constant whose value is nil
+CS_NO_WORK = nil
+class CsQueue
+  def initialize; @head = Object.new; end
+  def empty = CS_NO_WORK == @head ? 1 : 2
+end
+
 # Bounce's Ball#bounce, `@x_vel = 0 - @x_vel.abs' (Util/perf/micro.rb's `abs'): Integer#abs and Float#abs
 class CsBall
   def initialize(v); @v = v; end
@@ -38,7 +45,7 @@ class CsVector
   def capacity = @storage == nil ? 0 : @storage.size
 end
 
-SHAPES = %w[str_size str_length abs fabs vec_at vec_capacity]
+SHAPES = %w[str_size str_length nil_const abs fabs vec_at vec_capacity]
 
 def run_shape(name)
   table = CsTable.new
@@ -47,6 +54,7 @@ def run_shape(name)
   ball = CsBall.new(7)
   fball = CsFBall.new(-2.5)
   vector = CsVector.new
+  queue = CsQueue.new
   r = 0
   best = nil
   6.times do
@@ -55,6 +63,7 @@ def run_shape(name)
     case name
     when 'str_size'   then while i < N; r += table.hash_slot_for(key); i += 1; end
     when 'str_length' then while i < N; r += 1 if parser.more; i += 1; end
+    when 'nil_const'  then while i < N; r += queue.empty; i += 1; end
     when 'abs'        then while i < N; r += ball.absm; i += 1; end
     when 'fabs'       then while i < N; r += fball.absm; i += 1; end
     when 'vec_at'     then while i < N; r += vector.at(i & 15); i += 1; end
