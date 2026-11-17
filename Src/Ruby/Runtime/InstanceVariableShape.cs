@@ -400,19 +400,25 @@ namespace IronRuby.Runtime {
             // An adding write: the shape after the variable is added; null otherwise.
             internal readonly InstanceVariableShape Next;
 
-            // An adding write from no variables at all: how many slots to allocate.
-            internal readonly int Capacity;
+            // An adding write from no variables at all: how many slots to allocate. An adding entry
+            // has no second shape and only an adding entry has a capacity, so the two share a field:
+            // the entry is allocated on every miss of a site that sees many shapes, and stays the
+            // size it was before PlainShape.
+            private readonly int _capacityOrOtherIndex;
+            internal int Capacity { get { return _capacityOrOtherIndex; } }
 
             // A second shape the variable was found in, and its slot there - the site's previous
             // entry, so a site that sees two shapes in turn stays cached. Checked after Shape,
             // and never for an adding write.
             internal readonly InstanceVariableShape OtherShape;
-            internal readonly int OtherIndex;
+            internal int OtherIndex { get { return _capacityOrOtherIndex; } }
 
-            // Shape.IsRaw and OtherShape.IsRaw, at hand in the entry a read has loaded anyway: only
-            // a read of a raw shape's slot looks at what the slot holds (RubyInstanceData.ValueOf).
-            internal readonly bool Raw;
-            internal readonly bool OtherRaw;
+            // Shape.IsRaw, from the entry a read has loaded anyway: only a read of a raw shape's slot
+            // looks at what the slot holds (RubyInstanceData.ValueOf). For an entry that has a shape.
+            internal bool Raw { get { return PlainShape == null; } }
+
+            // OtherShape.IsRaw. For an entry that has a second shape.
+            internal bool OtherRaw { get { return OtherShape.IsRaw; } }
 
             // Shape if it is plain, else null (which never matches): what the generic cached reads
             // compare element 0 with, so that they execute what they did before raw shapes existed
@@ -428,12 +434,10 @@ namespace IronRuby.Runtime {
                 Shape = shape;
                 Index = index;
                 Next = next;
-                Capacity = capacity;
+                Debug.Assert(capacity == 0 || otherShape == null);
+                _capacityOrOtherIndex = (otherShape != null) ? otherIndex : capacity;
                 OtherShape = otherShape;
-                OtherIndex = otherIndex;
-                Raw = shape != null && shape.IsRaw;
-                PlainShape = Raw ? null : shape;
-                OtherRaw = otherShape != null && otherShape.IsRaw;
+                PlainShape = (shape != null && shape.IsRaw) ? null : shape;
             }
 
             /// <summary>

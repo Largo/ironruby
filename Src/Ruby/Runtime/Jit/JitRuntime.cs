@@ -669,16 +669,11 @@ namespace IronRuby.Runtime.Jit {
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static object ReadSelfAttrUncached(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
+            // An object of a class whose instances are born raw (RubyInstanceData, "Float locations")
+            // comes here too, since the inlined read only knows plain shapes: GetInstanceVariable(site)
+            // below reads the site's raw shape first. No check of its own for it here, which every miss
+            // of a site that sees many shapes would pay.
             var obj = self as RubyObject;
-            if (obj != null && obj._instanceData != null && site.IsBoundTo(obj.ImmediateClass)) {
-                // an object of a class whose instances are born raw (RubyInstanceData, "Float locations"):
-                // the inlined read only knows plain shapes
-                object[] slots = obj._instanceData._ivars;
-                var entry = site.Variable.Cache;
-                if (RubyInstanceData.ShapeOf(slots) == entry.Shape && entry.Raw) {
-                    return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
-                }
-            }
             RubyClass cls = (obj != null) ? obj.ImmediateClass : ClassOf(context, self);
             if (!site.IsBoundTo(cls) && !site.Bind(cls)) {
                 throw Deopt();
@@ -958,13 +953,14 @@ namespace IronRuby.Runtime.Jit {
                     object[] slots = data._ivars;
                     var entry = site.Cache;
                     if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        // a box first: a plain object's read is the shape compare and GuardDouble's test,
+                        // as before. A location is only ever in a raw array, so its type says it all.
                         object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (entry.Raw && slot is FloatLocation location) {
-                            return location.Value;
-                        }
                         if (slot is double) {
                             return (double)slot;
+                        }
+                        if (slot is FloatLocation location) {
+                            return location.Value;
                         }
                     }
                 }
@@ -991,13 +987,14 @@ namespace IronRuby.Runtime.Jit {
                     object[] slots = data._ivars;
                     var entry = site.Variable.Cache;
                     if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        // a box first: a plain object's read is the shape compare and GuardDouble's test,
+                        // as before. A location is only ever in a raw array, so its type says it all.
                         object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (entry.Raw && slot is FloatLocation location) {
-                            return location.Value;
-                        }
                         if (slot is double) {
                             return (double)slot;
+                        }
+                        if (slot is FloatLocation location) {
+                            return location.Value;
                         }
                     }
                 }
@@ -1025,13 +1022,14 @@ namespace IronRuby.Runtime.Jit {
                     object[] slots = data._ivars;
                     var entry = site.Cache;
                     if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        // a box first: a plain object's read is the shape compare and GuardDouble's test,
+                        // as before. A location is only ever in a raw array, so its type says it all.
                         object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (entry.Raw && slot is FloatLocation location) {
-                            return location.Value;
-                        }
                         if (slot is double) {
                             return (double)slot;
+                        }
+                        if (slot is FloatLocation location) {
+                            return location.Value;
                         }
                     }
                 }
@@ -1058,13 +1056,14 @@ namespace IronRuby.Runtime.Jit {
                     object[] slots = data._ivars;
                     var entry = site.Variable.Cache;
                     if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                        // no out parameter and no flag on a plain object's read: as GuardDouble's test
+                        // a box first: a plain object's read is the shape compare and GuardDouble's test,
+                        // as before. A location is only ever in a raw array, so its type says it all.
                         object slot = RubyInstanceData.GetSlot(slots, entry.Index);
-                        if (entry.Raw && slot is FloatLocation location) {
-                            return location.Value;
-                        }
                         if (slot is double) {
                             return (double)slot;
+                        }
+                        if (slot is FloatLocation location) {
+                            return location.Value;
                         }
                     }
                 }
