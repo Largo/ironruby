@@ -634,6 +634,32 @@ Profile (`Util/perf/profile.sh`, self time):
     against 369 ns; positional creation is level at 142 against 131). And
     `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
     two parameters).
+25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
+    sixteen's breakdown; its author's numbers, taken beside two other experiments at load
+    2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
+    s per iteration against IronRuby's 3.8-4.8. By phase, IronRuby/CRuby: allocating the
+    per-node objects 0.64, the DFS 1.87, `identify_edges` 1.18, the main `downto` loop
+    1.49. It allocates 2.72 GB per iteration (66 `find_loops` of about 53 MB), and about
+    half of that is the `Range#each` inside som.rb's `Vector#each` and `has_some`: 52,000
+    calls per `find_loops` at about 500 B each (the Range, the Proc, the BlockParam and
+    the method's scope) - gaps 13 and 14, whose two obvious steps are under Rejected.
+    Other bytes per operation: `IdentitySet#add` 987, `find_set` over a chain of three
+    971, `at_put` of an existing key 693, `loop { return }` 536, `Dictionary#at` 71.
+    Per operation in ns, CRuby / IronRuby / TruffleRuby: `Dictionary#at` 225 / 164 / 23,
+    `at_put` 500 / 384 / 52, `Vector#each` over 1-3 elements 363 / 457 / 25,
+    `IdentitySet#add` 496 / 839 / 35, a new node 163 / 125 / 1.6, `find_set` 886 / 969 /
+    54, `has_some` 473 / 530 / 51, `loop { return }` 110 / 288, the DFS per node 1705 /
+    2976: the single operations are at CRuby's speed, the composite ones (a block passed
+    on through two layers of `&block`, `loop`) are not. The method JIT specializes 21
+    methods, declines 3 and screens out 109: `Dictionary#at` at a call of `match` on a
+    local assigned in its loop, `Vector#remove_first` at a deopt after an effect,
+    `split_bucket` at an attribute write on a receiver that was not profiled, and
+    `find_loops`, `do_dfs`, the steps, `SomSet#add`/`contains`, `find_set` and `append` at
+    `new`, `each` and `has_some`; five `while` loops are retired at calls. Recursion
+    depth is not it: the DFS goes 424 deep, and recursion through `Vector#each` costs
+    475 ns a level at depth 10 and 552 at depth 1000. Narrow things to try: let
+    `Dictionary#at` compile (type a call on a local assigned in the loop); the per-call
+    cost of `(a..b).each { |i| yield ... }` (gap 14); `loop` through gap 22.
 
 ## Landed
 
@@ -1537,6 +1563,17 @@ Round ten:
   Numbers are the author's, taken beside another experiment. What it says: a core
   operation is worth adding to the typed body when the method around it then compiles,
   and for Json's readers that needs the effect rule first.
+- **`Kernel#loop` in C#** (round sixteen, perf/havlak, gap 25; built and reverted by its
+  author, nothing committed). `loop` is in the prelude with a `begin`/`rescue
+  StopIteration`, which keeps it out of light frames; in C# (a yield loop, a catch, the
+  exception's `result` through a call site, the blockless form left to the prelude) a
+  matrix of 26 cases and the backtraces were the same as CRuby's. `loop { return }` 536 ->
+  352 B per call, Havlak 2724 -> 2682 MB per iteration; the shape at 0.72-0.90 of before
+  and Havlak at 0.954 and 0.983 in six alternating processes, every one of them
+  overlapping at load 4-14. Not shown to reach the bar, and not re-measured on a quiet
+  machine: what `loop` pays is what every method with a `rescue` pays (gap 22: about 80
+  ns per call when nothing is raised), so the step to take is that one, in the compiler,
+  and `loop` stays in Ruby.
 
 ## Regressions
 
