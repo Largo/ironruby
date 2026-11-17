@@ -142,6 +142,13 @@ In the order they usually pay:
    TruffleRuby's `Primitive.array_inject(...) if Primitive.is_a?(self, Array)`.
 5. `::Symbol === x` rather than `x.is_a?(Symbol)` for a value that may be a BasicObject.
 
+6. **A loop in the prelude counts with `i = i.succ`, not `i += 1`**, as CRuby's own Ruby
+   builtins do (`numeric.rb`): a program that redefines Integer#+ must not change which
+   elements are visited (`Array#sum`'s first loop skipped every other one).
+7. **A rare path that needs a lot of code goes into a private method of its own.** A body
+   that grew by a fallback made the common call 5% slower on `Array#sum`; an Enumerator
+   made on a hot fallback cost 2 us. Measure the form that did not change, too.
+
 What this skill does not do: move the method to C#, change what it returns or raises, or
 write a per-element loop in Ruby (a `while ... yield` runs at 100 ns per element against 9
 for a C# iterator; that needs the loop compiler to learn `yield`).
