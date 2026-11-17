@@ -1272,13 +1272,79 @@ class Array
   # An Array of Integers and Floats is summed in C# (ArrayOps.NumericSum), the same way.
   # The initial value is a parameter with MRI's default, not one of a rest Array: the method
   # takes at most one argument, as MRI's does, and a call makes no Array to count them in.
-  def sum(init = 0)
-    unless block_given?
+  #
+  # With a block, the values are added here, element by element, as MRI's ary_sum does:
+  # going to Enumerable#sum cost a Proc, a splat and five type tests per element, 1.4 us for
+  # four. Integers first; at the first Float (with Integers, Floats or Rationals so far) the
+  # Float loop, with the compensated summation Enumerable#sum does - its rules, copied
+  # branch for branch. At the first value that is none of those, the elements left go to
+  # Enumerable#sum's fold itself, starting from the sum so far (__sum_rest__), so that each
+  # block call is still followed by its addition before the next one, as in MRI. Like MRI's,
+  # this does not go through #each. The index moves with #succ, not with +, as MRI's own Ruby
+  # builtins count (numeric.rb): a redefined Integer#+ is for the sum, not for which elements
+  # it visits.
+  def sum(init = 0, &block)
+    unless block
       result = __numeric_sum__(init)
       return result unless result.nil?
+      return super
     end
-    super
+    acc = init
+    i = 0
+    while i < size
+      x = yield(self[i])
+      i = i.succ
+      if ::Integer === x && ::Integer === acc
+        acc = acc + x
+        next
+      end
+      unless ::Float === x && (::Integer === acc || ::Float === acc || ::Rational === acc)
+        return __sum_rest__(acc, x, i, &block)
+      end
+      acc = acc.to_f
+      compensation = 0.0
+      while true
+        # x is an Integer, a Float or a Rational
+        x = x.to_f
+        if acc.nan?
+          # a NaN stays
+        elsif x.nan?
+          acc = x
+          compensation = 0.0
+        elsif x.infinite?
+          acc = (acc.infinite? == -x.infinite?) ? (0.0 / 0.0) : x
+          compensation = 0.0
+        elsif !acc.infinite?
+          t = acc + x
+          compensation += acc.abs >= x.abs ? (acc - t) + x : (x - t) + acc
+          acc = t
+        end
+        return acc + compensation unless i < size
+        x = yield(self[i])
+        i = i.succ
+        unless ::Integer === x || ::Float === x || ::Rational === x
+          return __sum_rest__(acc + compensation, x, i, &block)
+        end
+      end
+    end
+    acc
   end
+
+  # (The block is named and passed on, not wrapped in `{ |e| yield e }`: a block literal
+  # made the call without a block 6% slower.)
+  # Enumerable#sum's fold over the value x and the elements from index i on, through the
+  # block, from acc: what Array#sum hands on at a value it does not add itself.
+  def __sum_rest__(acc, x, i)
+    rest = ::Enumerator.new do |y|
+      y.yield(x)
+      while i < size
+        y.yield(yield(self[i]))
+        i = i.succ
+      end
+    end
+    rest.sum(acc)
+  end
+  private :__sum_rest__
 
   def intersect?(other)
     !(self & other).empty?

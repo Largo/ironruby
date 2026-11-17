@@ -13,7 +13,7 @@ $stdout.sync = true
 P = Struct.new(:x, :y)
 class V; include Comparable; attr_reader :v; def initialize(v); @v = v; end; def <=>(o); @v <=> o.v; end; end
 class H
-  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @v = V.new(1); @i = 5; @n = [[1, 2]]; @nh = [{k: [3]}]; @ki = 0; end
+  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @v = V.new(1); @i = 5; @n = [[1, 2]]; @nh = [{k: [3]}]; @ki = 0; @f = [1.5, 2.5, 0.5, 1.0]; end
   def m0; s = 0; @a.each { |x| s += x }; s; end
   def m1; s = 0; @a.each_with_index { |x, i| s += x + i }; s; end
   def m3; @a.inject(0) { |s, x| s + x }; end
@@ -84,6 +84,8 @@ class H
   def m69; @n.dig(0).size; end
   def m70; @n.dig(0, 1, ) + @n.dig(@ki, 0); end
   def m71; @nh.dig(0, :k, 0); end
+  def m72; @f.sum { |x| x * 2 }.to_i; end
+  def m73; @a.sum(10) { |x| x * 3 }; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 def t(name, n)
@@ -165,3 +167,5 @@ t("sym_to_proc", N) { |n| i = 0; s = 0; while i < n; s += h.m68; i += 1; end; s 
 t("dig_arr1", N) { |n| i = 0; s = 0; while i < n; s += h.m69; i += 1; end; s }
 t("dig_arr_var", N) { |n| i = 0; s = 0; while i < n; s += h.m70; i += 1; end; s }
 t("dig_arr_hash", N) { |n| i = 0; s = 0; while i < n; s += h.m71; i += 1; end; s }
+t("sum_blk_float", N) { |n| i = 0; s = 0; while i < n; s += h.m72; i += 1; end; s }
+t("sum_blk_init", N) { |n| i = 0; s = 0; while i < n; s += h.m73; i += 1; end; s }
