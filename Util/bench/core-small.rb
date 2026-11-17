@@ -13,7 +13,7 @@ $stdout.sync = true
 P = Struct.new(:x, :y)
 class V; include Comparable; attr_reader :v; def initialize(v); @v = v; end; def <=>(o); @v <=> o.v; end; end
 class H
-  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @v = V.new(1); @i = 5; @n = [[1, 2]]; end
+  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @v = V.new(1); @i = 5; @n = [[1, 2]]; @nh = [{k: [3]}]; @ki = 0; end
   def m0; s = 0; @a.each { |x| s += x }; s; end
   def m1; s = 0; @a.each_with_index { |x, i| s += x + i }; s; end
   def m3; @a.inject(0) { |s, x| s + x }; end
@@ -81,6 +81,9 @@ class H
   def m66; @s.start_with?("ab") ? 1 : 0; end
   def m67; @s.center(10).size; end
   def m68; @a.map(&:to_s).size; end
+  def m69; @n.dig(0).size; end
+  def m70; @n.dig(0, 1, ) + @n.dig(@ki, 0); end
+  def m71; @nh.dig(0, :k, 0); end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 def t(name, n)
@@ -159,3 +162,6 @@ t("dig_arr", N) { |n| i = 0; s = 0; while i < n; s += h.m65; i += 1; end; s }
 t("str_start", N) { |n| i = 0; s = 0; while i < n; s += h.m66; i += 1; end; s }
 t("str_center", N) { |n| i = 0; s = 0; while i < n; s += h.m67; i += 1; end; s }
 t("sym_to_proc", N) { |n| i = 0; s = 0; while i < n; s += h.m68; i += 1; end; s }
+t("dig_arr1", N) { |n| i = 0; s = 0; while i < n; s += h.m69; i += 1; end; s }
+t("dig_arr_var", N) { |n| i = 0; s = 0; while i < n; s += h.m70; i += 1; end; s }
+t("dig_arr_hash", N) { |n| i = 0; s = 0; while i < n; s += h.m71; i += 1; end; s }

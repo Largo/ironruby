@@ -1171,8 +1171,23 @@ class Array
   # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
   # Range or an arithmetic sequence, because there would be no way to keep
   # digging into the several elements that would answer.
+  #
+  # The step into the next level is written out rather than left to __dig_step__: that
+  # helper and __array_to_int__ are Ruby methods that make a scope on every call, and
+  # four of those calls were nine tenths of [[1, 2]].dig(0, 1). One more key - the
+  # common case - is passed as itself; more go through __dig_step__, whose splat would
+  # keep this method from running without a scope (IR_LIGHT_FRAMES=why). A BasicObject in
+  # the middle has no #nil? or #respond_to? to ask, and is the TypeError CRuby's
+  # rb_check_funcall makes of it.
   def dig(key, *rest)
-    __dig_step__(self[__array_to_int__(key)], rest)
+    value = self[::Integer === key ? key : __array_to_int__(key)]
+    return value if rest.empty? || nil.equal?(value)
+    unless __ir_responds_to__(value, :dig)
+      # not "#{...}": an interpolated call would make this method need its scope
+      raise TypeError, __ir_class_of__(value).to_s + " does not have #dig method"
+    end
+    return value.dig(rest[0]) if rest.size == 1
+    __dig_step__(value, rest)
   end unless method_defined?(:dig)
 
   # No Array#sum here on purpose: Enumerable#sum already does the compensated
