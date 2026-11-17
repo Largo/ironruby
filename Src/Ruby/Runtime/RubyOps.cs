@@ -5015,9 +5015,16 @@ namespace IronRuby.Runtime {
             if (data != null) {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
-                // a raw shape is never PlainShape: its reads go out of line (RubyInstanceData, "Float locations")
-                if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+                // a raw shape is never PlainShape (RubyInstanceData, "Float locations"): a plain object's
+                // read is the compare and the load it always was, and a raw one's is tried only after
+                // that compare has failed, where the read would have left the inlined path anyway
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.PlainShape) {
                     value = RubyInstanceData.GetSlot(slots, entry.Index);
+                    return true;
+                }
+                if (shape == entry.Shape) {
+                    value = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
                     return true;
                 }
             }
@@ -5155,8 +5162,12 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.PlainShape) {
                 return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            if (shape == entry.Shape) {
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
@@ -5183,8 +5194,12 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.PlainShape) {
                 return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            if (shape == entry.Shape) {
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
@@ -5213,8 +5228,12 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.PlainShape) {
                 return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            if (shape == entry.Shape) {
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
