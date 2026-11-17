@@ -905,7 +905,8 @@ namespace IronRuby.Runtime.Jit {
             if (data != null && (data._frozen || data._ivars != InstanceVariableShape.EmptySlots)) { return null; }
             int count = site.Shape.Count;
             var result = new object[Math.Max(count, obj.ImmediateClass.InstanceVariableCapacity) + 1];
-            result[0] = site.Shape;
+            // born raw if its class's instances get their Floats promoted (RubyInstanceData, "Float locations")
+            result[0] = obj.ImmediateClass.FloatsRaw ? (site.Shape.RawTwin ?? site.Shape) : site.Shape;
             return result;
         }
 
@@ -962,7 +963,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>SetIVar of a Float the body holds raw.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void SetIVarDouble(RubyContext/*!*/ context, object self, double value, InstanceVariableSite/*!*/ site) {
-            if (self is RubyObject obj && RubyOps.TryWriteCachedFloat(obj._instanceData, value, site)) {
+            if (self is RubyObject obj && RubyOps.TryWriteCachedFloat(obj._instanceData, value, site, obj.ImmediateClass)) {
                 return;
             }
             SetIVarUncached(context, self, value, site);
@@ -971,7 +972,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>WriteAttr of a Float the body holds raw.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void WriteAttrDouble(RubyContext/*!*/ context, object self, double value, SelfAttrSite/*!*/ site) {
-            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryWriteCachedFloat(obj._instanceData, value, site.Variable)) {
+            if (self is RubyObject obj && site.IsBoundTo(obj.ImmediateClass) && RubyOps.TryWriteCachedFloat(obj._instanceData, value, site.Variable, obj.ImmediateClass)) {
                 return;
             }
             WriteAttrUncached(context, self, value, site);
@@ -1024,7 +1025,7 @@ namespace IronRuby.Runtime.Jit {
             } else {
                 // a boxed store, or the object's promotion (RubyInstanceData.TryWriteFloatPlain)
                 log.Replaced(data, variable.Name, old);
-                var now = data.TryWriteFloatPlain(slots, plain, index, value);
+                var now = data.TryWriteFloatPlain(slots, plain, index, value, obj.ImmediateClass);
                 if (now != null) {
                     if (now != plain) {
                         variable.Update(variable.Cache.Remember(now, index));

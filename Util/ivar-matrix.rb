@@ -94,6 +94,81 @@ def targets
   }
 end
 
+# ---------------------------------------------------------------- Float variables stored raw
+# (first: the sections after it push the shape tree past its limits, and a full tree has no raw
+# twins, so nothing would be promoted after them)
+# The method JIT stores a Float it holds as a double raw (RubyInstanceData, "Float locations");
+# everything below must see the Float as if it were boxed. Util/jit-matrix.rb, section 19, has
+# the JIT's own rows.
+
+class FlRaw
+  attr_accessor :v
+  def initialize; @x = 0.0; @v = 0.5; end
+  def put(d) = (@x = d * 1.0)
+  def add(d) = (@x += d)
+  def x = @x
+end
+def fl_raw_attr(o, d) = (o.v = o.v * d)
+flr = FlRaw.new
+200.times { |i| flr.put(i * 0.5); flr.add(0.25); fl_raw_attr(flr, 1.0) }
+def fl_raw(v)
+  o = FlRaw.new; o.put(v); o.add(0.0); fl_raw_attr(o, 1.0); o
+end
+t("fl: YAML round trip") { require 'yaml'; o = fl_raw(0.375); y = YAML.dump(o); [y.lines.grep(/x:|v:/), YAML.unsafe_load(y).x] }
+t("fl: Marshal round trip") { m = Marshal.load(Marshal.dump(fl_raw(-0.0))); [m.x, 1 / m.x, m.v] }
+t("fl: inspect") { fl_raw(1.0e-320).inspect.sub(/0x\h+/, '') }
+t("fl: instance_variable_get/set") { o = fl_raw(2.5); r = [o.instance_variable_get(:@x)]; o.instance_variable_set(:@x, 'str'); r << o.x << o.add('!') }
+t("fl: remove") { o = fl_raw(2.5); [o.remove_instance_variable(:@x), o.instance_variables, o.put(1.5), o.instance_variables] }
+t("fl: dup/clone/initialize_copy") { o = fl_raw(2.5); d = o.dup; c = o.clone; d.add(1.0); c.add(2.0); [o.x, d.x, c.x] }
+t("fl: freeze") { o = fl_raw(2.5); o.freeze; [(o.put(1.0) rescue $!.class), (fl_raw_attr(o, 2.0) rescue $!.class), o.x, o.v] }
+t("fl: Struct member") { s = Struct.new(:a).new(1.5); s.instance_variable_set(:@q, 2.5); [s.a, s.instance_variables] }
+t("fl: Ractor.make_shareable") { o = fl_raw(3.5); Ractor.make_shareable(o); [Ractor.shareable?(o), o.frozen?, o.x] }
+t("fl: binding sees the value") { o = fl_raw(4.5); o.instance_eval { binding }.eval('@x') }
+
+# Promotion (RubyInstanceData, "Float locations"): a typed store that overwrites a Float moves the
+# object to the raw twin of its shape, and its class's later instances are born raw. A site that
+# sees promoted and plain objects of one class side by side, removal and growth in the raw tree,
+# a raw object pushed past the shape limits, and copies of raw objects.
+class FlPro
+  attr_accessor :a, :b
+  def initialize(a, b) = (@a = a; @b = b)
+end
+def fl_pro_store(o, d) = (o.a = o.a + d)
+def fl_pro_read(o) = o.a * 1.0
+plain = FlPro.new(1.5, :p)                 # made before its class learns to be raw
+200.times { |i| o = FlPro.new(i * 0.5, i); fl_pro_store(o, 0.25); fl_pro_store(o, 0.25); fl_pro_read(o) }
+t("fl promote: plain and born-raw objects at one site") do
+  born = FlPro.new(2.5, :b)
+  r = []
+  4.times { fl_pro_store(plain, 1.0); fl_pro_store(born, 1.0); r << fl_pro_read(plain) << fl_pro_read(born) }
+  r + [plain.a, born.a, plain.instance_variables, born.instance_variables]
+end
+t("fl promote: generic reads and writes of born-raw objects") do
+  o = FlPro.new(1.0, 2); fl_pro_store(o, 1.0)
+  o.b = 3.5; o.a = :sym
+  r = [o.a, o.b, (fl_pro_store(o, 1.0) rescue $!.class)]
+  o.a = 4.0; fl_pro_store(o, 1.0); r << o.a << o.instance_variable_get(:@a) << o.inspect.sub(/0x\h+/, '')
+end
+t("fl promote: remove and grow in the raw tree") do
+  o = FlPro.new(1.0, 2); fl_pro_store(o, 1.0)
+  o.remove_instance_variable(:@b); fl_pro_store(o, 1.0)
+  10.times { |i| o.instance_variable_set(:"@g#{i}", i * 1.5) }
+  fl_pro_store(o, 1.0)
+  [o.a, o.instance_variables.size, o.instance_variable_get(:@g9), o.remove_instance_variable(:@a), o.instance_variables.first(2)]
+end
+t("fl promote: raw object made too complex") do
+  o = FlPro.new(1.0, 2); fl_pro_store(o, 1.0)
+  300.times { |i| o.instance_variable_set(:"@z#{rand(1 << 30)}_#{i}", i) }
+  fl_pro_store(o, 1.0)
+  [o.a, fl_pro_read(o), o.instance_variables.size]
+end
+t("fl promote: dup, clone, Marshal of raw objects") do
+  o = FlPro.new(1.0, 2); fl_pro_store(o, 1.0); fl_pro_store(o, 1.0)
+  d = o.dup; c = o.clone; m = Marshal.load(Marshal.dump(o))
+  fl_pro_store(d, 10.0); fl_pro_store(c, 20.0); fl_pro_store(m, 30.0)
+  [o.a, d.a, c.a, m.a, d.b, Marshal.dump(o) == Marshal.dump(FlPro.new(3.0, 2))]
+end
+
 # ---------------------------------------------------------------- basic operations
 
 targets.each do |name, obj|
@@ -289,32 +364,3 @@ t("object_id stable across ivar changes") do
   [o.object_id == id, o.dup.object_id != id, o.clone.object_id != id]
 end
 t("each_object sees them") { ObjectSpace.each_object(Class).include?(Plain) }
-
-# ---------------------------------------------------------------- Float variables stored raw
-# The method JIT stores a Float it holds as a double raw (RubyInstanceData, "Float locations");
-# everything below must see the Float as if it were boxed. Util/jit-matrix.rb, section 19, has
-# the JIT's own rows.
-
-class FlRaw
-  attr_accessor :v
-  def initialize; @x = 0.0; @v = 0.5; end
-  def put(d) = (@x = d * 1.0)
-  def add(d) = (@x += d)
-  def x = @x
-end
-def fl_raw_attr(o, d) = (o.v = o.v * d)
-flr = FlRaw.new
-200.times { |i| flr.put(i * 0.5); flr.add(0.25); fl_raw_attr(flr, 1.0) }
-def fl_raw(v)
-  o = FlRaw.new; o.put(v); o.add(0.0); fl_raw_attr(o, 1.0); o
-end
-t("fl: YAML round trip") { require 'yaml'; o = fl_raw(0.375); y = YAML.dump(o); [y.lines.grep(/x:|v:/), YAML.unsafe_load(y).x] }
-t("fl: Marshal round trip") { m = Marshal.load(Marshal.dump(fl_raw(-0.0))); [m.x, 1 / m.x, m.v] }
-t("fl: inspect") { fl_raw(1.0e-320).inspect.sub(/0x\h+/, '') }
-t("fl: instance_variable_get/set") { o = fl_raw(2.5); r = [o.instance_variable_get(:@x)]; o.instance_variable_set(:@x, 'str'); r << o.x << o.add('!') }
-t("fl: remove") { o = fl_raw(2.5); [o.remove_instance_variable(:@x), o.instance_variables, o.put(1.5), o.instance_variables] }
-t("fl: dup/clone/initialize_copy") { o = fl_raw(2.5); d = o.dup; c = o.clone; d.add(1.0); c.add(2.0); [o.x, d.x, c.x] }
-t("fl: freeze") { o = fl_raw(2.5); o.freeze; [(o.put(1.0) rescue $!.class), (fl_raw_attr(o, 2.0) rescue $!.class), o.x, o.v] }
-t("fl: Struct member") { s = Struct.new(:a).new(1.5); s.instance_variable_set(:@q, 2.5); [s.a, s.instance_variables] }
-t("fl: Ractor.make_shareable") { o = fl_raw(3.5); Ractor.make_shareable(o); [Ractor.shareable?(o), o.frozen?, o.x] }
-t("fl: binding sees the value") { o = fl_raw(4.5); o.instance_eval { binding }.eval('@x') }

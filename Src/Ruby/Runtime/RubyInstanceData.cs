@@ -500,9 +500,6 @@ namespace IronRuby.Runtime {
             // of a superclass whose subclasses add variables of their own) does not thrash
             var entry = site.Cache;
             if (shape == entry.OtherShape) {
-                // the second shape is the one being read now: make it the first, so that the fast
-                // path sees it (a class's objects come in two shapes once some are raw)
-                site.Update(entry.Remember(shape, entry.OtherIndex));
                 return ValueOf(shape, s[entry.OtherIndex]);
             }
 
@@ -643,6 +640,10 @@ namespace IronRuby.Runtime {
                 if (s.Length == 1) {
                     // the first variable: nothing to copy, nobody writing
                     Debug.Assert(index == 1);
+                    if (hintClass != null && hintClass.FloatsRaw) {
+                        // born raw: its class's instances get their Floats promoted
+                        next = next.RawTwin ?? next;
+                    }
                     var first = new object[capacity + 1];
                     first[0] = next;
                     first[1] = value;
@@ -716,7 +717,9 @@ namespace IronRuby.Runtime {
                 // the object's first variable
                 // the class may have learnt since the site was filled that its instances get more
                 var first = new object[Math.Max(entry.Capacity, ownerClass != null ? ownerClass.InstanceVariableCapacity : 0) + 1];
-                first[0] = entry.Next;
+                // born raw if its class's instances get their Floats promoted (the site's Next may be
+                // either: rawness only permits FloatLocations)
+                first[0] = (ownerClass != null && ownerClass.FloatsRaw) ? (entry.Next.RawTwin ?? entry.Next) : entry.Next;
                 first[1] = value;
                 return Interlocked.CompareExchange(ref _ivars, first, s) == s;
             }
@@ -753,11 +756,17 @@ namespace IronRuby.Runtime {
         /// the ordinary way.
         /// </summary>
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        internal InstanceVariableShape TryWriteFloatPlain(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value) {
+        internal InstanceVariableShape TryWriteFloatPlain(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value,
+            RubyClass ownerClass) {
             Debug.Assert(!shape.IsRaw);
             if (GetSlot(s, index) is double) {
                 var raw = TryPromote(s, shape, index, value);
                 if (raw != null) {
+                    if (ownerClass != null && !ownerClass.FloatsRaw) {
+                        // its later instances are born raw and need no Move (a Move's process-wide
+                        // barrier costs a few hundred ns)
+                        ownerClass.FloatsRaw = true;
+                    }
                     return raw;
                 }
                 // the raw tree is full, or the slots changed under us: the ordinary way
@@ -777,6 +786,16 @@ namespace IronRuby.Runtime {
         /// Null if it did not happen: no raw twin, or <paramref name="s"/> is not the current array of
         /// that shape any more.
         /// </summary>
+        private static int _Promotions;
+
+        /// <summary>
+        /// How many objects have been promoted to raw Float storage, in all runtimes of the process: a
+        /// diagnostic for tests and tools (as JitRuntime.Specialized), nothing reads it.
+        /// </summary>
+        public static int Promotions {
+            get { return Volatile.Read(ref _Promotions); }
+        }
+
         private InstanceVariableShape TryPromote(object[]/*!*/ s, InstanceVariableShape/*!*/ shape, int index, double value) {
             var raw = shape.RawTwin;
             if (raw == null) {
@@ -794,6 +813,7 @@ namespace IronRuby.Runtime {
                     throw Assert.Unreachable;
                 }
             }
+            Interlocked.Increment(ref _Promotions);
             return raw;
         }
 

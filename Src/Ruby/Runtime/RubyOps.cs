@@ -5028,6 +5028,23 @@ namespace IronRuby.Runtime {
             return false;
         }
 
+        // The site's second shape, for the typed code, whose sites see a class's objects in two shapes
+        // once some have been promoted to raw Floats (RubyInstanceData, "Float locations").
+        private static bool TryReadCachedFloatOther(object[]/*!*/ slots, InstanceVariableSite.Entry/*!*/ entry, out double value) {
+            if (RubyInstanceData.ShapeOf(slots) == entry.OtherShape) {
+                object slot = RubyInstanceData.GetSlot(slots, entry.OtherIndex);
+                if (entry.OtherRaw) {
+                    return RubyInstanceData.TryReadFloat(slot, out value);
+                }
+                if (slot is double) {
+                    value = (double)slot;
+                    return true;
+                }
+            }
+            value = 0;
+            return false;
+        }
+
         // TryReadCached of a variable that holds a Float, for the typed code: the double, without
         // boxing a raw one. False for a miss or a variable that holds anything else.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -5044,6 +5061,8 @@ namespace IronRuby.Runtime {
                         value = (double)slot;
                         return true;
                     }
+                } else if (entry.OtherShape != null) {
+                    return TryReadCachedFloatOther(slots, entry, out value);
                 }
             }
             value = 0;
@@ -5054,7 +5073,7 @@ namespace IronRuby.Runtime {
         // (RubyInstanceData.TryWriteFloat). False for a miss, an add, a frozen object or a shape
         // changed under it: the caller boxes the Float and takes the ordinary path.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool TryWriteCachedFloat(RubyInstanceData data, double value, InstanceVariableSite/*!*/ site) {
+        internal static bool TryWriteCachedFloat(RubyInstanceData data, double value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
             if (data != null && !data._frozen) {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
@@ -5063,15 +5082,29 @@ namespace IronRuby.Runtime {
                     if (entry.Raw) {
                         return RubyInstanceData.TryWriteFloat(slots, shape, entry.Index, value);
                     }
-                    // not raw yet: a boxed store, or the promotion (RubyInstanceData.TryWriteFloatPlain)
-                    var now = data.TryWriteFloatPlain(slots, entry.Shape, entry.Index, value);
-                    if (now != null && now != entry.Shape) {
-                        site.Update(entry.Remember(now, entry.Index));
+                    return TryWriteCachedFloatPlain(data, slots, entry.Shape, entry.Index, value, site, ownerClass);
+                }
+                if (shape == entry.OtherShape) {
+                    // the second shape: promoted and plain objects of one class side by side
+                    if (entry.OtherRaw) {
+                        return RubyInstanceData.TryWriteFloat(slots, shape, entry.OtherIndex, value);
                     }
-                    return now != null;
+                    return TryWriteCachedFloatPlain(data, slots, entry.OtherShape, entry.OtherIndex, value, site, ownerClass);
                 }
             }
             return false;
+        }
+
+        // Not raw yet: a boxed store, or the promotion (RubyInstanceData.TryWriteFloatPlain), after
+        // which the site knows the raw shape first and the plain one second.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryWriteCachedFloatPlain(RubyInstanceData/*!*/ data, object[]/*!*/ slots, InstanceVariableShape/*!*/ shape,
+            int index, double value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            var now = data.TryWriteFloatPlain(slots, shape, index, value, ownerClass);
+            if (now != null && now != shape) {
+                site.Update(site.Cache.Remember(now, index));
+            }
+            return now != null;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
