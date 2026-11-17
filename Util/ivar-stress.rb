@@ -52,6 +52,87 @@ end
 def tag_of(v) = v % TAG
 def seq_of(v) = v / TAG
 
+# Promotion (RubyInstanceData, "Float locations"): a typed Float store that overwrites a Float moves
+# the object to the raw twin of its shape, and its class's later instances are born raw. Each round
+# makes a fresh class (so its objects start plain) with a pool of objects; half the threads promote
+# them (`o.a = o.a + 1.0', `@b = d * 1.0' in specialized methods), store an Integer or nil now and
+# then, and add and remove variables of their own, while the other half read them every way there
+# is - `@a' in a method, the attr_reader, instance_variable_get, instance_variables with each value,
+# dup, Marshal - and check the class of every value: only what a thread stores (Float, Integer,
+# nil), never a FloatLocation or anything else. It runs first: the parts after it fill the shape
+# tree, and a full tree has no raw twins to promote to.
+class PBase
+  attr_accessor :a
+  def initialize = (@a = 0.5; @b = 1.5)
+  def ga = @a
+  def gb = @b
+  def setb(d) = (@b = d * 1.0)
+end
+def p_upd(o) = (o.a = o.a + 1.0)
+PKINDS = [Float, Integer, NilClass]
+pwarm = Class.new(PBase)
+300.times { o = pwarm.new; p_upd(o); p_upd(o); o.setb(2.5); o.setb(3.5); o.ga; o.gb }
+promoted_before = System::Type.get_type('IronRuby.Runtime.RubyInstanceData, IronRuby').get_property('Promotions').get_value(nil, nil) if defined?(System)
+prounds = [ITERS / 2000, 5].max
+prounds.times do |round|
+  cls = Object.const_set(:"PRound#{round}", Class.new(PBase))      # named: Marshal dumps them
+  pool = Array.new(64) { cls.new }
+  stop = false
+  writers = (0...THREADS / 2).map do |t|
+    Thread.new do
+      i = 0
+      until stop && i > 2000
+        o = pool[(i * 7 + t) % pool.size]
+        begin
+          case i % 53
+          when 0 then o.instance_variable_set(:@a, i)
+          when 1 then o.instance_variable_set(:@b, nil)
+          when 2 then o.a = 0.25
+          when 3 then o.setb(0.5)
+          else
+            p_upd(o) if o.a.is_a?(Float)
+            o.setb(i * 0.5)
+          end
+          if i % 11 == 0
+            name = :"@w#{t}_#{i % 3}"
+            o.instance_variable_set(name, i)
+            o.remove_instance_variable(name) if i.odd?
+          end
+        rescue NoMethodError, TypeError, NameError
+          # a racing Integer/nil store or a racing remove: only the values read are checked
+        end
+        i += 1
+      end
+    end
+  end
+  readers = (THREADS / 2...THREADS).map do |t|
+    Thread.new do
+      2000.times do |i|
+        o = pool[(i * 5 + t) % pool.size]
+        vals = case i % 6
+               when 0 then [o.ga, o.gb]
+               when 1 then [o.a]
+               when 2 then [o.instance_variable_get(:@a), o.instance_variable_get(:@b)]
+               when 3 then o.instance_variables.map { |n| o.instance_variable_get(n) }
+               when 4 then d = o.dup; [d.ga, d.gb, d.a]
+               else m = Marshal.load(Marshal.dump(o)); [m.ga, m.gb]
+               end
+        vals.each do |v|
+          record.("promotion round #{round}: read a #{v.class}: #{v.inspect}") unless PKINDS.any? { |k| k === v }
+        end
+      end
+    end
+  end
+  readers.each(&:join)
+  stop = true
+  writers.each(&:join)
+end
+if defined?(System)
+  promoted = System::Type.get_type('IronRuby.Runtime.RubyInstanceData, IronRuby').get_property('Promotions').get_value(nil, nil) - promoted_before
+  $stderr.puts "promotions during the promotion part: #{promoted}" if ENV['IVAR_STRESS_VERBOSE']
+end
+
+
 readers = objects.map do |obj|
   if obj.is_a?(Shared)
     [->(t) { obj.__send__(:"r#{t}") }, ->(t, v) { obj.__send__(:"w#{t}", v) }]

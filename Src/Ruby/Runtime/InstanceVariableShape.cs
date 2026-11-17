@@ -78,8 +78,9 @@ namespace IronRuby.Runtime {
         private readonly int _count;
         private readonly bool _isRaw;
 
-        // The raw twin of a shape of the plain tree, made on demand.
+        // The raw twin of a shape of the plain tree, and the plain twin of a raw one, made on demand.
         private InstanceVariableShape _rawTwin;
+        private InstanceVariableShape _plainTwin;
 
         // null, a single child (whose _name is the key), or a Dictionary that is never mutated
         // once published - a new child copies it. Read without a lock.
@@ -110,6 +111,30 @@ namespace IronRuby.Runtime {
         /// The raw shape with the same variables in the same slots; this one if it is raw. Null if
         /// the raw tree has reached its limits.
         /// </summary>
+        /// <summary>
+        /// The plain shape with the same variables in the same slots; this one if it is plain. Null if
+        /// the tree has reached its limits.
+        /// </summary>
+        internal InstanceVariableShape PlainTwin {
+            get {
+                if (!_isRaw) {
+                    return this;
+                }
+                var twin = Volatile.Read(ref _plainTwin);
+                if (twin == null) {
+                    twin = Root;
+                    foreach (var n in GetNames()) {
+                        twin = twin.GetChild(n);
+                        if (twin == null) {
+                            return null;
+                        }
+                    }
+                    Volatile.Write(ref _plainTwin, twin);
+                }
+                return twin;
+            }
+        }
+
         internal InstanceVariableShape RawTwin {
             get {
                 if (_isRaw) {

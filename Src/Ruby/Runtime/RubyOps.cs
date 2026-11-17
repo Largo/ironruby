@@ -5084,6 +5084,10 @@ namespace IronRuby.Runtime {
                     }
                     return TryWriteCachedFloatPlain(data, slots, entry.Shape, entry.Index, value, site, ownerClass);
                 }
+                if (shape == entry.Shape) {
+                    // adding the variable (a constructor's `@x = 1.5'): boxed, by the cached add
+                    return data.TrySetCached(entry, value, ownerClass);
+                }
                 if (shape == entry.OtherShape) {
                     // the second shape: promoted and plain objects of one class side by side
                     if (entry.OtherRaw) {

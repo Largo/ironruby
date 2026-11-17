@@ -717,9 +717,13 @@ namespace IronRuby.Runtime {
                 // the object's first variable
                 // the class may have learnt since the site was filled that its instances get more
                 var first = new object[Math.Max(entry.Capacity, ownerClass != null ? ownerClass.InstanceVariableCapacity : 0) + 1];
-                // born raw if its class's instances get their Floats promoted (the site's Next may be
-                // either: rawness only permits FloatLocations)
-                first[0] = (ownerClass != null && ownerClass.FloatsRaw) ? (entry.Next.RawTwin ?? entry.Next) : entry.Next;
+                // born raw if and only if its class's instances get their Floats promoted: the site's
+                // Next may be of either tree, since a site sees the instances of several classes
+                var next = entry.Next;
+                if (ownerClass != null && ownerClass.FloatsRaw != next.IsRaw) {
+                    next = (ownerClass.FloatsRaw ? next.RawTwin : next.PlainTwin) ?? next;
+                }
+                first[0] = next;
                 first[1] = value;
                 return Interlocked.CompareExchange(ref _ivars, first, s) == s;
             }
