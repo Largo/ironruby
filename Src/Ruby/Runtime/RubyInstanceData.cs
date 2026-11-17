@@ -499,6 +499,10 @@ namespace IronRuby.Runtime {
             // the site's second entry: an `@x` that sees two shapes in turn (say, in a method
             // of a superclass whose subclasses add variables of their own) does not thrash
             var entry = site.Cache;
+            if (shape == entry.Shape && entry.Next == null) {
+                // a raw shape, which the cached reads leave to this path
+                return ValueOf(shape, s[entry.Index]);
+            }
             if (shape == entry.OtherShape) {
                 return ValueOf(shape, s[entry.OtherIndex]);
             }

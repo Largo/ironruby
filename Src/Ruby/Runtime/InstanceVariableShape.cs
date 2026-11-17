@@ -414,6 +414,11 @@ namespace IronRuby.Runtime {
             internal readonly bool Raw;
             internal readonly bool OtherRaw;
 
+            // Shape if it is plain, else null (which never matches): what the generic cached reads
+            // compare element 0 with, so that they execute what they did before raw shapes existed
+            // and a read of a raw object goes out of line, where ValueOf boxes a raw Float.
+            internal readonly InstanceVariableShape PlainShape;
+
             internal Entry(InstanceVariableShape shape, int index, InstanceVariableShape next, int capacity)
                 : this(shape, index, next, capacity, null, 0) {
             }
@@ -427,6 +432,7 @@ namespace IronRuby.Runtime {
                 OtherShape = otherShape;
                 OtherIndex = otherIndex;
                 Raw = shape != null && shape.IsRaw;
+                PlainShape = Raw ? null : shape;
                 OtherRaw = otherShape != null && otherShape.IsRaw;
             }
 

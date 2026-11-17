@@ -5015,12 +5015,9 @@ namespace IronRuby.Runtime {
             if (data != null) {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
-                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                // a raw shape is never PlainShape: its reads go out of line (RubyInstanceData, "Float locations")
+                if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
                     value = RubyInstanceData.GetSlot(slots, entry.Index);
-                    if (entry.Raw) {
-                        // a Float the typed code stored raw is boxed (RubyInstanceData, "Float locations")
-                        value = RubyInstanceData.ValueOf(value);
-                    }
                     return true;
                 }
             }
@@ -5134,9 +5131,8 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                object value = RubyInstanceData.GetSlot(slots, entry.Index);
-                return entry.Raw ? RubyInstanceData.ValueOf(value) : value;
+            if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+                return RubyInstanceData.GetSlot(slots, entry.Index);
             }
             return data.GetInstanceVariable(site);
         }
@@ -5163,9 +5159,8 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                object value = RubyInstanceData.GetSlot(slots, entry.Index);
-                return entry.Raw ? RubyInstanceData.ValueOf(value) : value;
+            if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+                return RubyInstanceData.GetSlot(slots, entry.Index);
             }
             return data.GetInstanceVariable(site);
         }
@@ -5194,9 +5189,8 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
-                object value = RubyInstanceData.GetSlot(slots, entry.Index);
-                return entry.Raw ? RubyInstanceData.ValueOf(value) : value;
+            if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
+                return RubyInstanceData.GetSlot(slots, entry.Index);
             }
             return data.GetInstanceVariable(site);
         }
