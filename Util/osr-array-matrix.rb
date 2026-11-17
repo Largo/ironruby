@@ -374,3 +374,194 @@ def mj_rebind(a, b)
   s
 end
 t('method: the parameter reassigned') { (0...300).sum { mj_rebind([1, 2, 3, 4, 5, 6], [10, 20, 30, 40, 50, 60]) } }
+
+# ---------------------------------------------------------------- 10. redefined by another thread while the loop runs
+# A copy that is already running when another thread redefines something it was built on (an inlined
+# core method, an inlined callee, a constant it folded) hands the loop back at its next iteration, and
+# the generic loop calls what is defined now (JitRuntime.OsrHandBack). The other thread redefines and
+# THEN sets the flag; the loop counts only iterations after the one that saw the flag, so every counted
+# iteration starts after the redefinition and the answer is CRuby's, every run. Each loop is in a method
+# called once, so it is the outlined copy that meets the redefinition (IR_OSR_VERBOSE=1: "specialized",
+# then "safe point: a method or a constant changed, handed back", then "stale, rebuilt" and
+# "specialized" again as the rest of the loop is compiled anew).
+
+# Runs the block on a thread of its own after the loop has been running for a while, then sets the flag.
+def rd_after_a_while(flag)
+  Thread.new { |; t0|
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
+    yield
+    flag[0] = 1
+  }
+end
+
+def rd_size(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c += a.size
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+def rd_length(s, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c += s.length
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+def rd_abs(n, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c += n.abs
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+def rd_plus(flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c = c + 7
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+# (an outlined copy inlines no Ruby callee: an inlined or a bound one is in jit-matrix.rb, section 17)
+module RdConst
+  K = 5
+  def self.go(flag)
+    c = 0; seen = 0; after = 0
+    while after < 1000
+      if seen == 1
+        c += K
+        after += 1
+      end
+      seen = 1 if flag[0] == 1
+    end
+    c
+  end
+end
+module RdZero; def length = ($rd_zero ? 0 : super); end
+
+t('running loop: Array#size redefined') {
+  flag = [0]
+  th = rd_after_a_while(flag) { Array.class_eval { alias_method :__rd_size, :size; def size = 0 } }
+  r = rd_size([1, 2], flag); th.join
+  Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
+  r
+}
+t('running loop: String#length redefined') {
+  flag = [0]
+  th = rd_after_a_while(flag) { String.class_eval { alias_method :__rd_length, :length; def length = 0 } }
+  r = rd_length(+"ab", flag); th.join
+  String.class_eval { alias_method :length, :__rd_length; remove_method :__rd_length }
+  r
+}
+t('running loop: Integer#abs redefined') {
+  flag = [0]
+  th = rd_after_a_while(flag) { Integer.class_eval { alias_method :__rd_abs, :abs; def abs = 0 } }
+  r = rd_abs(-2, flag); th.join
+  Integer.class_eval { alias_method :abs, :__rd_abs; remove_method :__rd_abs }
+  r
+}
+t('running loop: Integer#+ redefined') {
+  flag = [0]
+  th = rd_after_a_while(flag) { Integer.class_eval { alias_method :__rd_plus, :+; def +(o) = (o.equal?(7) ? 1000 : __rd_plus(o)) } }
+  r = rd_plus(flag); th.join
+  Integer.class_eval { alias_method :+, :__rd_plus; remove_method :__rd_plus }
+  r
+}
+t('running loop: a folded constant reassigned') {
+  flag = [0]
+  th = rd_after_a_while(flag) { RdConst.send(:remove_const, :K); RdConst.const_set(:K, 0) }
+  r = RdConst.go(flag); th.join
+  r
+}
+t('running loop: Array#size by alias') {
+  flag = [0]
+  th = rd_after_a_while(flag) { Array.class_eval { alias_method :__rd_size, :size; def __rd_zero = 0; alias_method :size, :__rd_zero } }
+  r = rd_size([1, 2], flag); th.join
+  Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size; remove_method :__rd_zero }
+  r
+}
+t('running loop: Array#size by define_method') {
+  flag = [0]
+  th = rd_after_a_while(flag) { Array.class_eval { alias_method :__rd_size, :size; define_method(:size) { 0 } } }
+  r = rd_size([1, 2], flag); th.join
+  Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
+  r
+}
+t('running loop: Array#size from a trap handler') {
+  flag = [0]
+  old = Signal.trap('USR2') { Array.class_eval { alias_method :__rd_size, :size; def size = 0 }; flag[0] = 1 }
+  th = Thread.new { sleep 0.05; Process.kill('USR2', Process.pid) }
+  r = rd_size([1, 2], flag); th.join
+  Signal.trap('USR2', old)
+  Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
+  r
+}
+class RdStop < StandardError; end
+def rd_spin(a)
+  c = 0
+  while true
+    c += a.size
+  end
+end
+t('running loop: Array#size from a rescue, the loop entered again') {
+  main = Thread.current
+  th = Thread.new { sleep 0.05; main.raise(RdStop) }
+  begin
+    rd_spin([1, 2])
+  rescue RdStop
+    Array.class_eval { alias_method :__rd_size, :size; def size = 0 }
+  ensure
+    th.join
+  end
+  flag = [1]
+  r = rd_size([1, 2], flag)
+  Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
+  r
+}
+# last: a prepended module stays (its method answers the original once the row is over)
+t('running loop: String#length by prepend') {
+  flag = [0]
+  $rd_zero = true
+  th = rd_after_a_while(flag) { String.prepend(RdZero) }
+  r = rd_length(+"ab", flag); th.join
+  $rd_zero = false
+  r
+}
+# A thread that loads a library beside a running loop: 10,000 methods defined one by one. The loop must
+# neither be retired for it nor spend its time compiling (OsrLoopSite.StaleRebuildSpacing), and it is
+# compiled again once the definitions stop (IR_OSR_VERBOSE=1: "specialized" after the last "stale").
+class RdLib; end
+def rd_lib_loop(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 3_000_000
+    if seen == 1
+      c += a.size
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+t('running loop: 10,000 methods defined beside it') {
+  flag = [0]
+  th = Thread.new { 10_000.times { |k| RdLib.class_eval("def m#{k}; #{k}; end") }; flag[0] = 1 }
+  r = rd_lib_loop([1, 2], flag); th.join
+  [r, RdLib.new.m9999]
+}

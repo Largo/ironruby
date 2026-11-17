@@ -409,6 +409,77 @@ p [acc[0] % 99 == 0, acc[0] > 0]
         }
 
         /// <summary>
+        /// A compiled loop that is running when another thread redefines a method it was built on - an outlined
+        /// `while' inlining Array#size, a block loop over `times', a typed method body inlining a callee - calls the
+        /// new method from its next iteration on (JitRuntime.OsrHandBack, MethodLoopSafePointSlow); it checked the
+        /// method version only on entry before. The thread redefines, then sets the flag, and the loop counts only
+        /// iterations after the one that saw the flag, so the output is CRuby 4.0's every run.
+        /// </summary>
+        public void JitRunningLoopRedefined1() {
+            TestOutput(@"
+def after_a_while(flag)
+  Thread.new { |; t0|
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
+    yield
+    flag[0] = 1
+  }
+end
+def w(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c += a.size
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+def bt(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    100_000.times { |i| if seen == 1 && after < 1000; c += a.size; after += 1; end; seen = 1 if flag[0] == 1 }
+  end
+  c
+end
+class K
+  def k(x) = x * 2
+  def m(flag, n)
+    c = 0; seen = 0; after = 0
+    while after < n
+      if seen == 1
+        c += k(3)
+        after += 1
+      end
+      seen = 1 if flag[0] == 1
+    end
+    c
+  end
+end
+flag = [0]
+th = after_a_while(flag) { Array.class_eval { alias_method :__size, :size; def size = 0 } }
+p w([1, 2], flag); th.join
+Array.class_eval { alias_method :size, :__size; remove_method :__size }
+flag = [0]
+th = after_a_while(flag) { Array.class_eval { alias_method :__size, :size; def size = 0 } }
+p bt([1, 2], flag); th.join
+Array.class_eval { alias_method :size, :__size; remove_method :__size }
+o = K.new
+3000.times { o.k(1); o.m([1], 10) }
+flag = [0]
+th = after_a_while(flag) { K.class_eval { def k(x) = 0 } }
+p o.m(flag, 1000); th.join
+p w([1, 2], [1])
+", @"
+0
+0
+0
+2000
+");
+        }
+
+        /// <summary>
         /// A global variable read or assigned in a specialized method or an outlined loop (JitCompiler.EmitGlobalRead,
         /// EmitGlobalWrite): the value it holds now, whatever it is, through an alias too; what an assignment stores
         /// is what a read sees, and trace_var still sees every assignment. A special variable, an undefined one, or
