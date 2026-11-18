@@ -175,8 +175,11 @@ flat_map          11553.2 (0.2)  11404.5 (0.0)  0.987
   time and no instructions; an allocation saved shows only as the allocation's own
   instructions, not as the collections it would have caused elsewhere. Read it as a
   filter:
-  - the shape the change was meant to move counts the same: the change does nothing
-    there. Stop, without timing it;
+  - the shape the change was meant to move counts the same: the change took no work off
+    that path. Stop, without timing it, if taking work off was the point (a scope not
+    made, a helper not called, an argument not boxed). If what it was meant to save is
+    not instructions - a cache miss, a mispredicted branch, a collection that happens
+    elsewhere - the count cannot judge it either way: time it;
   - it counts fewer: time it (step 2, `-r 4`, the third arm) when the machine is quiet,
     and report that number;
   - a shape the change was not meant to move counts the same: it has not moved, and need

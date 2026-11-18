@@ -26,8 +26,11 @@ minutes and can run beside a sweep, a build or another session:
 3. `ruby Util/perf/ab.rb -i` on the shapes the change is meant to move and on two or three
    it is not (`/perf-ab`, step 7): instructions per call, which do not need an idle CPU.
 
-An attempt whose shapes count the same instructions as the baseline is rejected there,
-with no gate run for it. Attempts that pass may be committed one after another on one
+An attempt that was meant to take work off a path (a scope not made, a helper not called)
+and whose shapes count the same instructions as the baseline is rejected there, with no
+gate run for it. One that was meant to save something that is not instructions - a cache
+miss, a mispredicted branch, a collection - is not judged by the count: it is timed
+(`/perf-ab`, steps 2 to 4) before it goes on. Attempts that pass may be committed one after another on one
 branch and gated together: the gate judges the branch against the commit it left. When
 such a branch fails a step, `git bisect` between that commit and the tip, with the failing
 step as the test, names the commit; fix or drop it and run the gate again. Nothing is
