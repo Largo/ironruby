@@ -25,6 +25,8 @@
  *     raises the FrozenError from the write the source makes, after whatever that write evaluated.
  *   - No exception but a deopt can leave such a body: its helpers throw nothing else, and it has no
  *     safe point (no call, no loop) for a Thread#raise to land at.
+ * A variable written both as an Int32 and as an Int64 (Bounce's `@x += @x_vel' and then `@x = x_limit') is held in
+ * one long and stored through NarrowLong, the box the generic body stores (TrySinkIVarWrite, a round more).
  * Not with a loop, a self-call, an explicit return, fallbacks, or any effect other than these
  * writes (_pure at the end of the body): those are what IsSinkSafe's retry leaves to the old rule.
  * Not tried at all for a body with a `while' or with keyword or optional parameters (TryCompile).
@@ -66,6 +68,14 @@ namespace IronRuby.Runtime.Jit {
         private MSA.ParameterExpression _sinkCounter;
         private HashSet<MSA.Expression> _sinkOrderings;
         private int _sinkSites;
+        // Variables held as a long because the body writes them both as an Int and as a Lng (TryCompile carries the
+        // set from round to round), and those whose two integer types this round met: they ask for a round that
+        // holds them so. In practice that is one round per variable, not one in all: the first conflicting write
+        // is stored where it stands, the body is no longer pure, and every later write leaves TrySinkIVarWrite
+        // before its own conflict is looked at (Ball#bounce: a round for @x, then one for @y). The rounds end,
+        // since each adds a name; a body that can never hold its writes may still spend one on a name first.
+        internal HashSet<string> _sinkWide;
+        internal List<string> _sinkWiden;
 
         private SunkIVar FindSunk(string/*!*/ name) {
             if (_sunk != null) {
@@ -86,8 +96,17 @@ namespace IronRuby.Runtime.Jit {
             if (!_sinkStores || _loop != null || vt == JT.None || vt == JT.Never) { return null; }
             if (!_pure || _effectNotOnSelf) {
                 // something observable came first: the order of the two is the source's only if stored here
-                if (_sunk != null) { _sinkObstacle = "an effect before a held-back write"; }
+                if (_sunk != null && _sinkObstacle == null) { _sinkObstacle = "an effect before a held-back write"; }
                 return null;
+            }
+            // An Integer written as an Int32 and as an Int64 is one Ruby class in two representations: held in one long,
+            // and stored through NarrowLong, which boxes a value that fits an Int32 as the Int32 the generic body stores.
+            // A Float and an Integer, or a number and an object, are not widened: a Float is stored raw (SetIVarDouble)
+            // and an Integer boxed, and one typed local cannot say which of the two classes the variable holds.
+            if (vt == JT.Int && _sinkWide != null && _sinkWide.Contains(name)) {
+                v = Coerce(v, JT.Int, JT.Lng);
+                vt = JT.Lng;
+                type = JT.Lng;
             }
             var sunk = FindSunk(name);
             if (sunk == null) {
@@ -105,6 +124,14 @@ namespace IronRuby.Runtime.Jit {
                 sunk.FirstSite = _sinkSites;
                 _sunk.Add(sunk);
             } else if (sunk.Type != vt) {
+                if (IsInteger(sunk.Type) && IsInteger(vt) && (_sinkWide == null || !_sinkWide.Contains(name))) {
+                    if (_sinkWiden == null) { _sinkWiden = new List<string>(); }
+                    if (!_sinkWiden.Contains(name)) { _sinkWiden.Add(name); }
+                    if (_sinkObstacle == null) {
+                        _sinkObstacle = "writes of " + name + " as " + sunk.Type + " and " + vt;
+                    }
+                    return null;
+                }
                 _sinkObstacle = "writes of " + name + " as " + sunk.Type + " and " + vt;
                 return null;
             }
@@ -250,11 +277,16 @@ namespace IronRuby.Runtime.Jit {
             // Integer arithmetic that deopts on overflow, a zero divisor or a shift it cannot make
             "AddInt", "SubInt", "MulInt", "DivInt", "ModInt", "ShrInt", "AddLong", "SubLong", "MulLong", "DivLong", "ModLong",
             "ShlLong", "ShrLong", "AbsLong", "MathSqrt",
+            // a long boxed as an Integer (an Int32 from the small-integer cache when it fits): no Ruby code, no throw
+            "NarrowLong",
         };
 
         // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)
         private static readonly MethodInfo/*!*/ _absLong = typeof(Math).GetMethod("Abs", new[] { typeof(long) });
         private static readonly MethodInfo/*!*/ _absDouble = typeof(Math).GetMethod("Abs", new[] { typeof(double) });
+        // a CLR bool as Ruby's true or false (Coerce): one of two cached boxes, no Ruby code, no throw; and the truth of
+        // an object (IsTrueMethod, RubyOps.IsTrue): a test for nil and false, which calls nothing
+        private static readonly MethodInfo/*!*/ _booleanToObject = typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetMethod("BooleanToObject");
 
         private static bool HasWhileLoop(MethodDeclaration/*!*/ ast) {
             var finder = new LoopFinder();
@@ -297,7 +329,7 @@ namespace IronRuby.Runtime.Jit {
 
             private static bool IsSafe(MethodInfo/*!*/ m) {
                 if (m.DeclaringType == typeof(JitRuntime)) { return _sinkSafeHelpers.Contains(m.Name); }
-                return m == _absLong || m == _absDouble;
+                return m == _absLong || m == _absDouble || m == _booleanToObject || m == IsTrueMethod;
             }
 
             protected override MSA.Expression VisitInvocation(MSA.InvocationExpression node) {
