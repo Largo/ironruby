@@ -447,7 +447,7 @@ Profile (`Util/perf/profile.sh`, self time):
     section 3). The cause is the entry, not the method: a rest parameter, a named block,
     one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
     `Array#sum` 5.3, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `Hash#sum { }` 3.6, `then` 3.2,
-    `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
+    `uniq` 2.9, `filter_map` 2.4, `tally` 2.1; and
     `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
     and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0), and so is `Array#dig`
     (15.1 -> 6.1, see Landed), and `Array#sum` with a block (6.5 -> 3.3), and `String("a")`
@@ -458,7 +458,8 @@ Profile (`Util/perf/profile.sh`, self time):
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
     (`min_by(2)` 3.8 -> 1.9). Open beside speed: `min_by(n)`'s tie order is input order,
     MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
-    now Array's own as in MRI). One method per run of
+    now Array's own as in MRI), and `flat_map` (2.2 -> 1.7). `uniq` is not this skill's:
+    its C# method alone costs what the call does (500 ns against CRuby's 230). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
     (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
@@ -486,6 +487,9 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/fm (/perf-core) - `flat_map` of an Array**: one value per element and
+  `Array.try_convert` for the block's answer, as MRI's `flat_map_i`: 1820 -> 1406 ns
+  (CRuby 835), scalar answers 1348 -> 1043 (777).
 - **perf/tw (/perf-core) - `Array#take_while` and `#drop_while` are Array's own, as in MRI**:
   620 -> 522 and 676 -> 522 ns (CRuby 236), and eight cases now match CRuby (owner,
   backtrace frames, a subclass's own #each, an Array shrinking under the block).
