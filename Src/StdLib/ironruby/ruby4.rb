@@ -233,7 +233,13 @@ module Enumerable
     result = []
     # Like #map, the yielded values reach the block as they were yielded:
     # `yield 1, 2` is 1 to a one-parameter block, not [1, 2].
-    each { |*values| v = block.call(*values); result << v if v }
+    # An Array whose #each is the built-in one yields one value per element: the block
+    # takes it as it is, without the `|*values|` Array and the splat back (2.1x MRI).
+    if __plain_list__?
+      each { |item| v = yield(item); result << v if v }
+    else
+      each { |*values| v = block.call(*values); result << v if v }
+    end
     result
   end unless method_defined?(:filter_map)
 
