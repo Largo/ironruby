@@ -135,7 +135,10 @@ namespace IronRuby.Runtime.Jit {
             get { return _canDeoptValue; }
             set {
                 _canDeoptValue = value;
-                if (value && !_pure) { _deoptAfterEffect = true; }
+                if (value && !_pure) {
+                    if (JitRuntime.Verbose) { NoteDeoptAfterEffect(EmitterOnStack()); }
+                    _deoptAfterEffect = true;
+                }
                 if (value && _unloggedStoreBefore) { _deoptAfterUnloggedStore = true; }
             }
         }
@@ -145,6 +148,9 @@ namespace IronRuby.Runtime.Jit {
         // an effect still finds nothing done and may restart it. A loop's next iteration and a
         // nested self-call run deopts emitted before effects that have already happened.
         private bool _deoptAfterEffect;
+        // IR_JIT_VERBOSE: the emitters that set it, in the order they ran: the operations the body is declined
+        // for, the first of them first.
+        private List<string> _deoptAfterEffectAt;
         private bool _hasLoop;
         // The body writes an instance variable. A write to a frozen object deopts (JitRuntime.SetIVar)
         // so that the generic body raises the FrozenError from a real frame; it is always the first
@@ -188,6 +194,42 @@ namespace IronRuby.Runtime.Jit {
         private JitBailout/*!*/ Bail(string/*!*/ reason) {
             if ((JitRuntime.Verbose || Osr.OsrLoopSite.Verbose) && _bailReason == null) { _bailReason = reason; }
             return JitBailout.Instance;
+        }
+
+        /// <summary>
+        /// Why the last TryCompile on this thread returned null, for IR_JIT_VERBOSE=1: JitStub.GiveUp
+        /// prints it on the line that names the declined method. Only written under IR_JIT_VERBOSE.
+        /// </summary>
+        [ThreadStatic]
+        internal static string DeclineReason;
+
+        private static JitCode Declined(string/*!*/ reason) {
+            if (JitRuntime.Verbose) { DeclineReason = reason; }
+            return null;
+        }
+
+        // IR_JIT_VERBOSE: the method that assigned _canDeopt, by name (EmitMethodAttrWrite, GuardInt...).
+        // The frames of this method and of the property's setter come first, unless the runtime inlined them.
+        private static string/*!*/ EmitterOnStack() {
+            var trace = new System.Diagnostics.StackTrace(1, false);
+            for (int i = 0; i < trace.FrameCount; i++) {
+                var method = trace.GetFrame(i).GetMethod();
+                if (method != null && method.Name != "set__canDeopt" && method.Name != "EmitterOnStack") { return method.Name; }
+            }
+            return "?";
+        }
+
+        private void NoteDeoptAfterEffect(string/*!*/ emitter) {
+            if (_deoptAfterEffectAt == null) { _deoptAfterEffectAt = new List<string>(); }
+            if (_deoptAfterEffectAt.Count == 0 || _deoptAfterEffectAt[_deoptAfterEffectAt.Count - 1] != emitter) { _deoptAfterEffectAt.Add(emitter); }
+        }
+
+        // IR_JIT_VERBOSE: which half of TryCompile's rule on deopts in a body with an effect refused it.
+        private string/*!*/ DeoptAfterEffectReason() {
+            if (_deoptAfterEffect) {
+                return "a deopt after an effect (" + (_deoptAfterEffectAt != null ? String.Join(", ", _deoptAfterEffectAt) : "?") + ")";
+            }
+            return _hasLoop ? "a deopt and an effect in a body with a loop" : "a deopt and an effect in a body that calls itself";
         }
 
         // A method with keyword parameters: its keyword locals are typed parameters too, after the
@@ -562,7 +604,7 @@ namespace IronRuby.Runtime.Jit {
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
-                if (c._selfDelegateType == null) { return null; }
+                if (c._selfDelegateType == null) { return Declined("no delegate type for so many parameters"); }
 
                 JT actual;
                 MSA.Expression body;
@@ -576,7 +618,7 @@ namespace IronRuby.Runtime.Jit {
                         Console.Error.WriteLine("[jit] rejected {0} arity {1}: {2}", ast.Name, paramTypes.Length,
                             c._bailReason ?? "unsupported construct");
                     }
-                    return null;
+                    return Declined(c._bailReason ?? "unsupported construct");
                 }
 
                 // An Array parameter loaded once (ArrayParameter) is one the body does not assign, and
@@ -609,7 +651,7 @@ namespace IronRuby.Runtime.Jit {
                 // explicit `return' hands back.
                 JT result = (c._returnUnion == JT.None) ? actual : Merge(actual, c._returnUnion);
                 if (result != c._selfReturn) {
-                    if (result == guess) { return null; }    // did not settle
+                    if (result == guess) { return Declined("the return type did not settle"); }
                     guess = result;
                     continue;
                 }
@@ -625,16 +667,18 @@ namespace IronRuby.Runtime.Jit {
 
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
                 // already done is observable (see _deoptAfterEffect).
-                if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) { return null; }
+                if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) {
+                    return Declined(c.DeoptAfterEffectReason());
+                }
                 // The construction is the last thing its own invocation does, but not the last thing the body does
                 // when the body calls itself: the outer invocation goes on after the inner one's initialize has run,
                 // which may have redefined an operator the body has inlined. The self-call does not check the
                 // method version again, so such a body stays generic.
-                if (c._construction && c._selfCall) { return null; }
+                if (c._construction && c._selfCall) { return Declined("a construction in a body that calls itself"); }
 
                 // A loop of a body called directly has a safe point that runs what is waiting where it
                 // is; this body's own deopt instead once it writes logged elements (MethodSafePoint).
-                if (c._hashWrite && c._calleeLoop) { return null; }
+                if (c._hashWrite && c._calleeLoop) { return Declined("logged element writes and a directly called body with a loop"); }
 
                 // the stack check a method's scope would make (#128), where the method calls itself
                 if (c._selfCall) {
@@ -696,7 +740,7 @@ namespace IronRuby.Runtime.Jit {
                     InlinedOnArgumentClass = c._inlinedOnArgumentClass,
                 };
             }
-            return null;
+            return Declined("the return type did not settle in five rounds");
         }
 
         /// <summary>The CLR shape of the typed body's parameters: a keyword whose default it evaluates is boxed.</summary>

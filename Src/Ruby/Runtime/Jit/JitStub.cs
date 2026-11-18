@@ -356,10 +356,12 @@ namespace IronRuby.Runtime.Jit {
                 // held while compiling, so a stub keeps no object of the program alive
                 _selfSample = self;
                 _argSample = args;
+                if (JitRuntime.Verbose) { JitCompiler.DeclineReason = null; }
                 if (!TrySpecialize()) {
                     GiveUp();
                 }
-            } catch (Exception) {
+            } catch (Exception e) {
+                Declined("the compiler threw " + e.GetType().Name);
                 GiveUp();
             } finally {
                 _selfSample = null;
@@ -414,9 +416,17 @@ namespace IronRuby.Runtime.Jit {
             // Name it, so a count that creeps up can be traced to the construct responsible.
             JitRuntime.Rejected++;
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
-                    _declaringModule.Name ?? "main", _ast.Name, _arity);
+                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen): {3}",
+                    _declaringModule.Name ?? "main", _ast.Name, _arity, JitCompiler.DeclineReason ?? "no reason recorded");
+                JitCompiler.DeclineReason = null;
             }
+        }
+
+        // IR_JIT_VERBOSE: a refusal of the stub's own, after the compiler accepted the body or before it
+        // was asked; GiveUp prints it (JitCompiler.DeclineReason is the compiler's).
+        private static bool Declined(string/*!*/ reason) {
+            if (JitRuntime.Verbose) { JitCompiler.DeclineReason = reason; }
+            return false;
         }
 
         // Under _sync: the generic body, for good.
@@ -718,7 +728,7 @@ namespace IronRuby.Runtime.Jit {
             RefinementActivation refinements = RefinementActivation.Empty;
             if (_definitionRefinements != null) {
                 refinements = _definitionRefinements.Value;
-                if (refinements == null) { return false; }
+                if (refinements == null) { return Declined("refinements that follow the declaring scope"); }
             }
             if (_perCountMandatory >= 0) { return TrySpecializePerCount(refinements); }
 
@@ -752,10 +762,16 @@ namespace IronRuby.Runtime.Jit {
             // (a body with direct calls was only compiled for a receiver class the profile pinned: Callees)
             bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null || code.DirectCalls;
             if (needsClassGuard) {
-                if (_receiverClass == null || _polymorphicReceiver) { return false; }
-                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                if (_receiverClass == null || _polymorphicReceiver) {
+                    return Declined("a self-call, an inlined call or a direct call, and receivers of more than one class");
+                }
+                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) {
+                    return Declined("a self-call that does not resolve to this method");
+                }
                 // the inlined self-calls were resolved on the class of the sampled receiver
-                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { return false; }
+                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) {
+                    return Declined("calls inlined on a class that is not the profiled receiver's");
+                }
             }
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the
@@ -984,7 +1000,10 @@ namespace IronRuby.Runtime.Jit {
                     bind));
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
-                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
+                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) {
+                        Declined("a self-call, and receivers of more than one class or a call that does not resolve to this method");
+                        continue;
+                    }
                     pinned = true;
                 }
                 if (code.DirectCalls) { pinned = true; }
