@@ -239,6 +239,9 @@ namespace IronRuby.Compiler.Ast {
                     parentScope = parent;
                 }
             }
+            if (gen.Census != null) {
+                gen.Census.CountBlock(lazyScope != null);
+            }
 
             var bodyTry = AstUtils.Try(
                 statements
