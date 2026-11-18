@@ -1102,6 +1102,17 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Obj: helper = "IndexObj"; break;
                 default: throw Bail("[] with a " + indexType + " index");
             }
+            if (indexType != JT.Obj && ObservedType(receiver) == typeof(MutableString)) {
+                // `@input[@index]' on a receiver the profile saw hold a String (Json's `read'): String#[] with an
+                // Integer (JitRuntime.StringIndex); a receiver that is not a plain String deopts.
+                var stringClass = KindClass(JitRuntime.KindString);
+                if (!IsPlainLibraryMethod(stringClass, "[]") || !IsPublic(stringClass, "[]")) {
+                    throw Bail("String#[] is not the built-in one");
+                }
+                _canDeopt = true;
+                type = JT.Obj;
+                return Ast.Call(JitRuntime.M("StringIndex"), recv, Ast.Convert(index, typeof(long)));
+            }
             bool arrays, hashes;
             RequireElementMethod("[]", "default", out arrays, out hashes);
             RequireCollectionReceiver(receiver, arrays, hashes, "[]");

@@ -655,6 +655,38 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        /// <summary>
+        /// `a == b', `a != b' between two Strings whose class is String itself (a subclass may override ==, and
+        /// an instance with a singleton == is ruled out when compiling): String#== compares the contents, as
+        /// the library method does (MutableStringOps.StringEquals). Anything else deopts, to the generic call.
+        /// </summary>
+        public static bool StringEqualsString(object a, object b) {
+            if (a != null && b != null && a.GetType() == typeof(MutableString) && b.GetType() == typeof(MutableString)) {
+                return ((MutableString)a).Equals((MutableString)b);
+            }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// String#[](Integer) of a String whose class is String itself, as the library method
+        /// (MutableStringOps.GetChar) computes it: the character at a character index, counted from the
+        /// end when negative, nil past either end. An index that is not an int, which the library would
+        /// convert, and any other receiver deopt.
+        /// </summary>
+        public static object StringIndex(object recv, long index) {
+            if (recv != null && recv.GetType() == typeof(MutableString) && index == (int)index) {
+                var self = ((MutableString)recv).PrepareForCharacterRead();
+                int length = self.KnowsCharIndexIsClrIndex ? self.GetCharCount() : self.GetCharacterCount();
+                int i = (int)index;
+                if (i < 0) { i += length; }
+                if (i < 0 || i >= length) { return null; }
+                int count = 1;
+                self.ToClrRange(ref i, ref count);
+                return self.GetSlice(i, count);
+            }
+            throw Deopt();
+        }
+
         /// <summary>Array#empty?, Hash#empty?.</summary>
         public static bool IsEmpty(object recv, bool arrays, bool hashes) {
             return SizeOf(recv, arrays, hashes) == 0;
