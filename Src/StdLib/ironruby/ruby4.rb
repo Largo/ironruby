@@ -1213,6 +1213,30 @@ module Kernel
 end
 
 class Array
+  # MRI's rb_ary_take_while and rb_ary_drop_while are Array's own: an index loop, not #each
+  # (Enumerable's went through the prelude's wrapper and a generic C# walk, 3x MRI; a
+  # subclass's own #each is not called, and a backtrace shows Array#take_while), and the
+  # answer is the plain Array slice the loop stopped at. The index moves with #succ.
+  def take_while
+    return to_enum(:take_while) { nil } unless block_given?
+    i = 0
+    while i < size
+      break unless yield(self[i])
+      i = i.succ
+    end
+    self[0, i]
+  end
+
+  def drop_while
+    return to_enum(:drop_while) { nil } unless block_given?
+    i = 0
+    while i < size
+      break unless yield(self[i])
+      i = i.succ
+    end
+    self[i, size] || []
+  end
+
   # The C# Array#sort_by (a stable merge sort) under a name of its own, for
   # Enumerable#__sort_by_key__: min_by(n), max_by(n) and sort_by of an Array must not
   # change when a program redefines Array#sort_by.
