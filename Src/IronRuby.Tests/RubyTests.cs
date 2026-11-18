@@ -422,6 +422,7 @@ namespace IronRuby.Tests {
                 Array_SliceHugeLength1,
                 Array_SplatBlockYield1,
                 Array_NumericSumMinShift1,
+                Array_SumFloatInit1,
                 Enumerable_TallyGroupBy1,
                 Enumerable_ZipEnumerated1,
                 IListOps_EnumerateRecursively1,
