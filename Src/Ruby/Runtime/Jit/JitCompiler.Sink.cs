@@ -46,10 +46,11 @@ namespace IronRuby.Runtime.Jit {
             internal string Name;
             internal JT Type;
             internal MSA.ParameterExpression Value, Written;
-            // the run-time position of its first write among the held variables (0: not written), and whether
-            // that first write, in the source, is a top-level statement
+            // the run-time position of its first write among the held variables (0: not written)
             internal MSA.ParameterExpression Order;
-            internal bool FirstDefinite;
+            // the first and last of the body's held writes (numbered as emitted, which is the order they run in) that are
+            // of this variable
+            internal int FirstSite, LastSite;
         }
 
         // Sinking is tried for this body (TryCompile turns it off for a retry); the variables held back,
@@ -63,6 +64,7 @@ namespace IronRuby.Runtime.Jit {
         // in, which the stores keep when it may differ from the source's (FinishSunkStores; removed where it may not)
         private MSA.ParameterExpression _sinkCounter;
         private HashSet<MSA.Expression> _sinkOrderings;
+        private int _sinkSites;
 
         private SunkIVar FindSunk(string/*!*/ name) {
             if (_sunk != null) {
@@ -93,19 +95,20 @@ namespace IronRuby.Runtime.Jit {
                     Value = Ast.Variable(ClrType(vt), "#sunk" + name),
                     Written = Ast.Variable(typeof(bool), "#written" + name),
                     Order = Ast.Variable(typeof(int), "#order" + name),
-                    FirstDefinite = IsTopStatement(node),
                 };
                 if (_sunk == null) {
                     _sunk = new List<SunkIVar>(); _sunkDefinite = new HashSet<string>();
                     _sinkCounter = Ast.Variable(typeof(int), "#order");
                     _sinkOrderings = new HashSet<MSA.Expression>();
                 }
+                sunk.FirstSite = _sinkSites;
                 _sunk.Add(sunk);
             } else if (sunk.Type != vt) {
                 _sinkObstacle = "writes of " + name + " as " + sunk.Type + " and " + vt;
                 return null;
             }
             _ivarWrite = true;
+            sunk.LastSite = _sinkSites++;
             if (IsTopStatement(node)) { _sunkDefinite.Add(name); }
             var temp = Ast.Variable(ClrType(vt), "#value");
             var ordering = Ast.IfThen(Ast.Equal(sunk.Order, Ast.Constant(0)),
@@ -163,13 +166,14 @@ namespace IronRuby.Runtime.Jit {
             var boxed = (last != null) ? Ast.Variable(typeof(object), "#boxed") : null;
 
             // The order of the stores is the order in which a variable the object does not have yet is added, which
-            // instance_variables, inspect and Marshal show. The source's order of first writes is the run-time order
-            // when every variable's first write is a top-level statement (they run in that order, each once) or
-            // there is one variable; otherwise the stores follow the order recorded as the body ran (#order-x).
-            bool ordered = _sunk.Count > 1;
-            if (ordered) {
-                ordered = false;
-                foreach (var s in _sunk) { if (!s.FirstDefinite) { ordered = true; } }
+            // instance_variables, inspect and Marshal show. The writes run in the order they were emitted (no loop,
+            // no jump), so when every write of each variable comes before every write of the next one (in the order
+            // of their first writes) the variables are first written in that order on any path, whichever of them
+            // it skips (Json's read: @line, @column, @index, then @current in either arm). Otherwise - `if c then
+            // @b = 1 else @a = 1; @b = 2 end' - the stores follow the order recorded as the body ran (#order-x).
+            bool ordered = false;
+            for (int i = 1; i < _sunk.Count; i++) {
+                if (_sunk[i - 1].LastSite > _sunk[i].FirstSite) { ordered = true; }
             }
             if (!ordered) { body = new OrderingRemover(_sinkOrderings).Visit(body); }
 
