@@ -94,6 +94,7 @@ class H
   def m80; @a.max_by(2) { |x| x }.size; end
   def m81; @a.drop_while { |x| x < 3 }.size; end
   def m82; @a.flat_map { |x| x }.size; end
+  def m83; @a.uniq { |x| x & 1 }.size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 def t(name, n)
@@ -185,3 +186,4 @@ t("hash_sort_by", N) { |n| i = 0; s = 0; while i < n; s += h.m79; i += 1; end; s
 t("max_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m80; i += 1; end; s }
 t("drop_while", N) { |n| i = 0; s = 0; while i < n; s += h.m81; i += 1; end; s }
 t("flat_map_scalar", N) { |n| i = 0; s = 0; while i < n; s += h.m82; i += 1; end; s }
+t("uniq_blk", N) { |n| i = 0; s = 0; while i < n; s += h.m83; i += 1; end; s }
