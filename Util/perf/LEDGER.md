@@ -312,6 +312,35 @@ Profile (`Util/perf/profile.sh`, self time):
    Everything else that is hot and not compiled is refused by the screen before the
    compiler sees it: over the fourteen, beyond what every process refuses at start-up,
    78 methods for a `new` in the middle of the body, 28 for `first`, 27 for `times`.
+   After round eighteen four benchmarks are slower than CRuby (Havlak 1.54-1.61,
+   DeltaBlue 1.19-1.30, Permute 1.21, Richards 1.16-1.21). Profiles of three of them on
+   981d2704 (`Util/perf/profile.sh`, self time) beside the JIT's decisions, to choose by
+   where the time is and not by what the list above happens to name:
+   - DeltaBlue: `CallSite.Target` 23.2%, `jitentry$execute` 6.7%, block in `Vector#each`
+     4.8% (gap 14), `Vector#append` 2.5% (screen: `new`), block in `Plan#execute` 2.1%,
+     `Planner#add_propagate` 1.5% (screen: `with`), `AbstractConstraint#satisfy` 1.5%
+     (screen: `raise`). `remove_first` and `choose_method`, which the list above names,
+     are not among the first sixteen (under 1.4% each): making them hold their writes
+     would buy nothing that can be measured. Not worth a round.
+   - Richards: `CallSite.Target` 31.4%, `Scheduler#schedule` 7.5% (screen: the call in
+     `trace(...) if TRACING`, a constant that is false; behind it calls on another
+     receiver in a `while`), `run_task` 4.7% (screen: a Proc's `call`), the
+     create_handler block 4.1%, `queue_packet` 3.0% (screen: it calls `find_task` on
+     self, which is refused for `raise 'find_task failed' unless t`), `find_task` 1.8%,
+     `add_input_and_check_priority` 2.7% and `append` 2.1% (the effect rule, writes to
+     other objects).
+   - Permute: `Permute#permute` 18.0% and its `downto` block 9.7% (gap 4: the screen
+     refuses the method for `downto`, the loop tier the block for `swap/2`, a call),
+     `jitentry$swap` 11.8%, `CallSite.Target` 15.7%, `Object::GetType` 5.2%.
+   One reason repeats across them and across ordinary Ruby: a `raise` in a cold branch
+   keeps the whole method from the compiler, and with it every caller that would bind
+   it (`find_task` -> `queue_packet`, `release`; DeltaBlue's `satisfy`; Json's
+   `read_required_char`, `read_value`, `read_name`, `parse` and the three `read_true`,
+   `read_false`, `read_null` behind them). A `raise` can be a deopt where a deopt is
+   allowed: the generic body runs again from the top and raises, with its own frame for
+   the backtrace. In progress (round nineteen, perf/raise). After it, by the same data:
+   a statement guarded by a constant that is false (`... if TRACING`) dropped under the
+   constant's version, for `schedule`.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
