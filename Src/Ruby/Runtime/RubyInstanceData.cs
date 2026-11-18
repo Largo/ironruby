@@ -500,7 +500,7 @@ namespace IronRuby.Runtime {
             // of a superclass whose subclasses add variables of their own) does not thrash
             var entry = site.Cache;
             if (shape == entry.Shape && entry.Next == null) {
-                // a raw shape, which the cached reads leave to this path
+                // (a raw shape too, for the readers that do not go through RubyOps.TryReadCached)
                 return ValueOf(shape, s[entry.Index]);
             }
             if (shape == entry.OtherShape) {

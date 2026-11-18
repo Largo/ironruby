@@ -357,15 +357,8 @@ namespace IronRuby.Runtime.Calls {
             if (self != null && self.GetType() == typeof(RubyObject)) {
                 var robj = Unsafe.As<RubyObject>(self);
                 object value;
-                if (robj.ImmediateClass.Version.Method == Version) {
-                    if (RubyOps.TryReadCached(robj._instanceData, Site, out value)) {
-                        return value;
-                    }
-                    // an object with raw Floats (RubyInstanceData, "Float locations"), which the read
-                    // above leaves out: here and not three calls away, since every read of it comes by
-                    if (RubyOps.TryReadCachedRaw(robj._instanceData, Site, out value)) {
-                        return value;
-                    }
+                if (robj.ImmediateClass.Version.Method == Version && RubyOps.TryReadCached(robj._instanceData, Site, out value)) {
+                    return value;
                 }
             }
             IRubyObject obj = GetRubyObject(self, out cls);
