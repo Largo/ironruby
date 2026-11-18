@@ -73,6 +73,23 @@ namespace IronRuby.Builtins {
             return loaded;
         }
 
+        /// <summary>
+        /// What the method JIT and the light frames make of every method the files define, without running the files:
+        /// an Array of Hashes, one for each method (IronRuby.Runtime.Jit.JitCensus). Util/perf/census.rb sums it up.
+        /// </summary>
+        [RubyMethod("jit_census", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ JitCensus(RubyContext/*!*/ context, RubyModule/*!*/ self, [NotNull]RubyArray/*!*/ paths) {
+            var files = new List<string>(paths.Count);
+            foreach (object path in paths) {
+                var str = path as MutableString;
+                if (str == null) {
+                    throw RubyExceptions.CreateTypeError("jit_census takes an Array of paths");
+                }
+                files.Add(str.ConvertToString());
+            }
+            return IronRuby.Runtime.Jit.JitCensus.Run(context, files);
+        }
+
         [RubyModule("Clr", Restrictions = ModuleRestrictions.NoUnderlyingType)]
         public static class Clr {
             [RubyMethod("profile", RubyMethodAttributes.PublicSingleton)]
