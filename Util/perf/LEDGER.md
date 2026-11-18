@@ -287,6 +287,9 @@ Profile (`Util/perf/profile.sh`, self time):
    Untried: Json's `read` has no parameters and no locals, so the stage-1 resume of
    `-X:JITResume` (a fallback call in place of a deopt) could take `String#length` and
    `String#[]` after the store; it is the one hot method found so far that stage 1 fits.
+   In progress (round seventeen, perf/jread): that, or the late guards hoisted before the
+   first store; `read_char`, `read_digit` and `skip_white_space` only wait for `read`
+   ("waiting for a callee"), so the four are one experiment.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
