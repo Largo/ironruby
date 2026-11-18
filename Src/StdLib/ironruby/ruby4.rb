@@ -464,17 +464,21 @@ module Enumerable
   end unless method_defined?(:each_with_object)
 
   # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
-  def min_by(*args, &block)
-    if args.size > 1
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+  #
+  # min_by and max_by take the count as an optional parameter, not as a rest Array (the rest
+  # only counts arguments past the first, for the error), and an Array whose #each is the
+  # built-in one is walked with a one-value block (__list_extreme_by__): the generic walk's
+  # `|*values|` block and __enum_item__ per element made [4 elements].min_by { } 3.1x MRI.
+  def min_by(n = (no_n = true; nil), *extra, &block)
+    __by_arity_error__(extra) unless extra.empty?
+    unless block
+      return no_n ? to_enum(:min_by) { size if respond_to?(:size) } : to_enum(:min_by, n) { size if respond_to?(:size) }
     end
-    return to_enum(:min_by, *args) { size if respond_to?(:size) } unless block
-    args = [] if args.size == 1 && args[0].nil?
-    if args.empty?
-      __extreme_by__(-1, &block)
-    else
-      __sort_by_key__(block).first(__count_arg__(args[0]))
+    if n.nil?
+      return __list_extreme_by__(-1, &block) if __plain_list__?
+      return __extreme_by__(-1, &block)
     end
+    __sort_by_key__(block).first(__count_arg__(n))
   end unless method_defined?(:min_by)
 
   # The first element whose key compares best: a later equal key does not replace it, a
@@ -502,17 +506,52 @@ module Enumerable
   end
   private :__extreme_by__
 
-  def max_by(*args, &block)
-    if args.size > 1
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+  # __extreme_by__ over an Array whose #each is the built-in one (__plain_list__?): that
+  # #each yields one value per element, so the block takes it as it is - no `|*values|`
+  # Array and no __enum_item__ per element. It still goes through #each, as MRI's
+  # Enumerable#min_by does: a backtrace from the block shows Array#each under min_by.
+  def __list_extreme_by__(direction)
+    best = nil
+    best_key = nil
+    found = false
+    each do |item|
+      key = yield(item)
+      if found
+        c = (key <=> best_key)
+        __extreme_by_error__(key, best_key) if c.nil?
+        better = (direction < 0) ? c < 0 : c > 0
+      else
+        better = found = true
+      end
+      if better
+        best_key = key
+        best = item
+      end
     end
-    return to_enum(:max_by, *args) { size if respond_to?(:size) } unless block
-    args = [] if args.size == 1 && args[0].nil?
-    if args.empty?
-      __extreme_by__(1, &block)
-    else
-      __sort_by_key__(block).reverse.first(__count_arg__(args[0]))
+    best
+  end
+  private :__list_extreme_by__
+
+  def __extreme_by_error__(key, best_key)
+    raise ArgumentError, "comparison of #{key.class} with #{::Comparable.__cmp_operand__(best_key)} failed"
+  end
+  private :__extreme_by_error__
+
+  def __by_arity_error__(extra)
+    raise ArgumentError, "wrong number of arguments (given #{extra.size + 1}, expected 0..1)"
+  end
+  private :__by_arity_error__
+
+  def max_by(n = (no_n = true; nil), *extra, &block)
+    __by_arity_error__(extra) unless extra.empty?
+    unless block
+      return no_n ? to_enum(:max_by) { size if respond_to?(:size) } : to_enum(:max_by, n) { size if respond_to?(:size) }
     end
+    if n.nil?
+      return __list_extreme_by__(1, &block) if __plain_list__?
+      return __extreme_by__(1, &block)
+    end
+    __sort_by_key__(block).reverse.first(__count_arg__(n))
   end unless method_defined?(:max_by)
 
   # nil is not a count: `max(nil)` is the plain no-argument form, not an error.
