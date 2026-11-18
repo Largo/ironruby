@@ -445,7 +445,7 @@ Profile (`Util/perf/profile.sh`, self time):
     (`Util/bench/core-small.rb`, 67 calls on four elements; `Util/bench/truffleruby-lessons.md`
     section 3). The cause is the entry, not the method: a rest parameter, a named block,
     one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
-    `Array#sum` 5.3, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `min_by` 3.6, `Hash#sum { }` 3.6, `then` 3.2,
+    `Array#sum` 5.3, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `Hash#sum { }` 3.6, `then` 3.2,
     `take_while` 3.0, `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
     `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
     and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0), and so is `Array#dig`
@@ -454,7 +454,7 @@ Profile (`Util/perf/profile.sh`, self time):
     in `Kernel#__ir_string__`, which asks whether #respond_to? is Kernel's
     (`method(:respond_to?).owner`) and calls #to_s through `bind_call`; CRuby decides that in
     C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
-    `Array#to_h { }` is done too (4.7 -> 2.3). One method per run of
+    `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
     (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
@@ -478,6 +478,11 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/minby (/perf-core) - `min_by` and `max_by` without a rest Array or a `|*values|`
+  block**: `[1, 2, 3, 4].min_by { }` 1339 -> 1032 ns on the merged build (CRuby 448),
+  `max_by` 1300 -> 969. Still #each underneath, because CRuby's backtraces show Array#each
+  under an Enumerable method; an index loop that dropped that frame was caught by
+  Backtrace_LibraryFrames1.
 - **perf/toh (/perf-core) - `Array#to_h` as MRI's `rb_ary_to_h`**: an index loop,
   `block_given?` once, each pair through `Array.try_convert`. `[1, 2, 3, 4].to_h { }` 2120 ->
   1276 ns on the merged build (CRuby 548), `[[1, 2]].to_h` 796 -> 376 (114); three cases now
