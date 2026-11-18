@@ -3483,3 +3483,614 @@ if ED_STATS
   $stderr.puts "[ed] #{ed_count.inspect}; failures: #{ed_failures.size}"
   exit 1 unless ed_failures.empty?
 end
+
+# ---------------------------------------------------------------- 11. a fallback after an effect
+#
+# -X:JITResume (Docs/jit-resume-deopt.md, stage 1): after a body's first effect an attribute
+# read or write is self-guarded - it checks the receiver's class, the method version, that the
+# receiver is not frozen and that nothing is traced - and when the check fails it makes the
+# source's call for that one operation and the body goes on. So a body like Richards'
+# Scheduler#hold_self compiles, and every way its two attribute operations can turn out not to
+# be the attribute the profile saw is here. Each row has classes of its own (jr_make writes
+# them from JR_SOURCE, in a file named after the row, so that a backtrace reads the same
+# everywhere), makes hold_self hot with a plain task, and then probes it with the odd one; the
+# counter printed with each result shows an effect run twice or lost.
+#
+# A row's classes are all defined before its warm-up: a method defined after it would fail the
+# body's version check at the entry, and the probe would run the generic body. ED_CHECK=1 under
+# ./ir.sh reads the JIT's counters around each warm-up and probe, prints them to stderr and
+# exits 1 when a specialized row's probe moved no fallback. With JR_EXPECT=1 as well (a run
+# with -X:JITResume) it exits 1 for a row marked to compile that was not specialized.
+#
+#   ED_CHECK=1 JR_EXPECT=1 ./ir.sh -X:JITResume Util/jit-matrix.rb > /dev/null
+
+JR_SOURCE = <<~'RUBY'
+  class JrTask_NAME
+    attr_accessor :task_holding, :link
+  end
+  class JrSched_NAME
+    attr_accessor :hold_count, :current_task
+    def initialize(task)
+      @hold_count = 0
+      @current_task = task
+    end
+    def hold_self
+      @hold_count += 1
+      @current_task.task_holding = true
+      @current_task.link
+    end
+  end
+RUBY
+
+JR_FALLBACKS = ED_STATS && System::Type.get_type('IronRuby.Runtime.Jit.JitRuntime, IronRuby')
+  .get_field('Fallbacks', System::Reflection::BindingFlags.Static | System::Reflection::BindingFlags.NonPublic)
+
+def jr_fallbacks = JR_FALLBACKS ? JR_FALLBACKS.get_value(nil).to_i : 0
+
+$jr_rows = []
+
+# The row's classes: `before', then JR_SOURCE with `body' in place of hold_self and `extra' after it.
+def jr_make(name, extra = '', body = nil, before = nil)
+  eval(before, TOPLEVEL_BINDING, "jr_#{name}_before.rb", 1) if before
+  src = JR_SOURCE.gsub('_NAME', "_#{name}")
+  src = src.sub(/^  def hold_self\n.*?^  end\n/m, body) if body
+  eval(src + extra, TOPLEVEL_BINDING, "jr_#{name}.rb", 1)
+  [Object.const_get("JrSched_#{name}"), Object.const_get("JrTask_#{name}")]
+end
+
+# A scheduler of the row's class with a plain task, its hold_self made hot.
+def jr_hot(name, sched_class, task_class, compiles = true, task = task_class.new)
+  task.link = :plain
+  sched = sched_class.new(task)
+  before = ed_stats
+  warm { |_| sched.hold_self }
+  spec, wdeopts, = ed_delta(before)
+  $jr_rows << [name, spec, wdeopts, compiles]
+  sched.hold_count = 0
+  sched
+end
+
+# The probe: the block's value, or the exception's class and message, with the fallbacks it took.
+def jr_t(label, sched, falls_back = true)
+  before = jr_fallbacks
+  print label.ljust(56), ' => '
+  begin
+    v = yield
+    puts "#{v.inspect} count=#{sched.hold_count}"
+  rescue Exception => e
+    puts "#{e.class}: #{e.message.lines.first.to_s.gsub(/0x\h+/, '0x')} count=#{sched.hold_count}"
+  ensure
+    $jr_rows.last << jr_fallbacks + -before if ED_STATS && falls_back
+  end
+end
+
+def jr_frames(e) = e.backtrace.first(3).map { |f| f.sub(/\A.*\//, '') }
+
+puts
+puts '--- 11. a fallback after an effect ---'
+
+# a receiver of another class, with a writer and a reader of its own
+s_c, _ = jr_make('other', <<~RUBY)
+  class JrOdd_other
+    attr_reader :log
+    def initialize; @log = []; end
+    def task_holding=(v); @log << [:w, v]; :ignored; end
+    def link; @log << :r; :odd; end
+  end
+RUBY
+s = jr_hot('other', s_c, _)
+odd = JrOdd_other.new
+s.current_task = odd
+jr_t('another class: its own writer and reader', s) { [s.hold_self, odd.log.dup, s.hold_self, odd.log] }
+
+# private and protected accessors, called with a receiver
+s_c, t_c = jr_make('private_w', <<~RUBY)
+  class JrOdd_private_w
+    attr_accessor :task_holding, :link
+    private :task_holding=
+  end
+RUBY
+s = jr_hot('private_w', s_c, t_c)
+s.current_task = JrOdd_private_w.new
+jr_t('a private writer', s) { s.hold_self }
+jr_t('a private writer, again', s) { s.hold_self }
+
+s_c, t_c = jr_make('private_r', <<~RUBY)
+  class JrOdd_private_r
+    attr_accessor :task_holding, :link
+    private :link
+  end
+RUBY
+s = jr_hot('private_r', s_c, t_c)
+odd = JrOdd_private_r.new
+s.current_task = odd
+jr_t('a private reader', s) { s.hold_self }
+jr_t('a private reader: the write before it stays', s) { odd.task_holding }
+
+s_c, t_c = jr_make('protected', <<~RUBY)
+  class JrOdd_protected
+    attr_accessor :task_holding, :link
+    protected :task_holding=, :link
+  end
+  class JrKin_protected < JrSched_protected
+    attr_accessor :task_holding, :link
+    protected :task_holding=, :link
+  end
+RUBY
+s = jr_hot('protected', s_c, t_c)
+s.current_task = JrOdd_protected.new
+jr_t('a protected writer of an unrelated class', s) { s.hold_self }
+kin = JrKin_protected.new(nil)
+kin.send(:link=, :kin)
+s.current_task = kin
+jr_t('a protected writer of a subclass of self\'s class', s) { s.hold_self }
+k2 = JrKin_protected.new(kin)
+jr_t('protected accessors called from the subclass', k2) { [k2.hold_self, kin.send(:task_holding)] }
+
+# a frozen receiver
+s_c, t_c = jr_make('frozen')
+s = jr_hot('frozen', s_c, t_c)
+s.current_task = t_c.new.freeze
+jr_t('a frozen receiver', s) { s.hold_self }
+jr_t('a frozen receiver, again', s) { s.hold_self }
+
+# method_missing, and nothing at all
+s_c, t_c = jr_make('missing', <<~RUBY)
+  class JrOdd_missing
+    attr_reader :log
+    def initialize; @log = []; end
+    def method_missing(name, *args); @log << [name, args]; :missed; end
+    def respond_to_missing?(*) = true
+  end
+  class JrBare_missing
+  end
+RUBY
+s = jr_hot('missing', s_c, t_c)
+odd = JrOdd_missing.new
+s.current_task = odd
+jr_t('method_missing', s) { [s.hold_self, odd.log] }
+s.current_task = JrBare_missing.new
+jr_t('no writer at all', s) { s.hold_self }
+s.current_task = nil
+jr_t('nil', s) { s.hold_self }
+s.current_task = 12
+jr_t('an Integer', s) { s.hold_self }
+
+# the fallback's callee redefines the reader the body reads next, and puts a plain task back
+s_c, t_c = jr_make('redef', <<~RUBY)
+  class JrOdd_redef
+    def initialize(sched, task); @sched = sched; @task = task; end
+    def task_holding=(v)
+      JrTask_redef.class_eval { def link; [:redefined, @link]; end }
+      @sched.current_task = @task
+    end
+  end
+RUBY
+s = jr_hot('redef', s_c, t_c)
+plain = s.current_task
+s.current_task = JrOdd_redef.new(s, plain)
+jr_t('the callee redefines the reader read next', s) { [s.hold_self, s.hold_self] }
+
+# the fallback's callee redefines the writer itself
+s_c, t_c = jr_make('redef_w', <<~RUBY)
+  class JrOdd_redef_w
+    def initialize(sched, task); @sched = sched; @task = task; end
+    def link
+      JrTask_redef_w.class_eval { def task_holding=(v); @task_holding = [:redefined, v]; end }
+      @sched.current_task = @task
+      :odd
+    end
+    def task_holding=(v); end
+  end
+RUBY
+s = jr_hot('redef_w', s_c, t_c)
+plain = s.current_task
+s.current_task = JrOdd_redef_w.new(s, plain)
+jr_t('the callee redefines the writer', s) { [s.hold_self, s.hold_self, plain.task_holding] }
+
+# a singleton method on the receiver, defined by the callee
+s_c, t_c = jr_make('single', <<~RUBY)
+  class JrOdd_single
+    def initialize(sched, task); @sched = sched; @task = task; end
+    def task_holding=(v)
+      def @task.link; :singleton; end
+      @sched.current_task = @task
+    end
+  end
+RUBY
+s = jr_hot('single', s_c, t_c)
+s.current_task = JrOdd_single.new(s, s.current_task)
+jr_t('the callee gives the next receiver a singleton reader', s) { [s.hold_self, s.hold_self] }
+
+# a TracePoint enabled by the fallback's callee sees the rest of the body
+s_c, t_c = jr_make('trace', <<~RUBY)
+  class JrOdd_trace
+    attr_accessor :link
+    def initialize(tp); @tp = tp; @link = :traced; end
+    def task_holding=(v); @tp.enable; end
+  end
+RUBY
+s = jr_hot('trace', s_c, t_c)
+jr_events = []
+jr_tp = TracePoint.new(:line, :return) do |tp|
+  jr_events << [tp.event, tp.lineno, tp.method_id] if tp.path.end_with?('jr_trace.rb')
+end
+s.current_task = JrOdd_trace.new(jr_tp)
+jr_t('a TracePoint enabled by the callee', s) do
+  begin
+    r = s.hold_self
+  ensure
+    jr_tp.disable
+  end
+  [r, jr_events]
+end
+jr_events.clear
+jr_t('the TracePoint disabled again', s) { s.current_task = t_c.new; [s.hold_self, jr_events] }
+# the same body on one line: a line is reported once, however many statements it has
+jr_one_line = "  def hold_self; @hold_count += 1; @current_task.task_holding = true; @current_task.link; end\n"
+s_c, t_c = jr_make('trace1', <<~RUBY, jr_one_line)
+  class JrOdd_trace1
+    attr_accessor :link
+    def initialize(tp); @tp = tp; @link = :traced; end
+    def task_holding=(v); @tp.enable; end
+  end
+RUBY
+s = jr_hot('trace1', s_c, t_c)
+jr_events.clear
+jr_tp1 = TracePoint.new(:line, :return) do |tp|
+  jr_events << [tp.event, tp.lineno, tp.method_id] if tp.path.end_with?('jr_trace1.rb')
+end
+s.current_task = JrOdd_trace1.new(jr_tp1)
+jr_t('a TracePoint enabled by the callee, the body on one line', s) do
+  begin
+    r = s.hold_self
+  ensure
+    jr_tp1.disable
+  end
+  [r, jr_events]
+end
+
+# a fallback that raises: the backtrace has one frame of hold_self, at the line of the operation
+s_c, t_c = jr_make('raise', <<~RUBY)
+  class JrOdd_raise
+    attr_accessor :fail_on
+    def task_holding=(v)
+      raise ArgumentError, 'from the writer' if @fail_on == :w
+    end
+    def link
+      raise ArgumentError, 'from the reader' if @fail_on == :r
+      :ok
+    end
+  end
+RUBY
+s = jr_hot('raise', s_c, t_c)
+odd = JrOdd_raise.new
+s.current_task = odd
+def jr_backtrace(s)
+  s.hold_self
+rescue => e
+  [e.message, jr_frames(e)]
+end
+odd.fail_on = :w
+jr_t('the writer raises', s) { jr_backtrace(s) }
+odd.fail_on = :r
+jr_t('the reader raises', s) { jr_backtrace(s) }
+odd.fail_on = nil
+jr_t('neither raises', s) { s.hold_self }
+s.current_task = t_c.new.freeze
+jr_t('FrozenError from a frozen receiver: its frames', s) do
+  begin
+    s.hold_self
+  rescue FrozenError => e
+    jr_frames(e)
+  end
+end
+s.current_task = nil
+jr_t('NoMethodError from nil: its frames', s) do
+  begin
+    s.hold_self
+  rescue NoMethodError => e
+    jr_frames(e)
+  end
+end
+
+# a refinement of the reader, active where hold_self is written, and one active only here
+jr_refined = <<~RUBY
+  using JrRefine_refined
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+RUBY
+s_c, t_c = jr_make('refined', '', jr_refined, <<~RUBY)
+  class JrOdd_refined
+    attr_accessor :task_holding, :link
+  end
+  module JrRefine_refined
+    refine JrOdd_refined do
+      def link; [:refined, super]; end
+    end
+  end
+RUBY
+s = jr_hot('refined', s_c, t_c, false)
+odd = JrOdd_refined.new
+odd.link = :odd
+s.current_task = odd
+jr_t('a refinement active where the body is written', s) { s.hold_self }
+
+s_c, t_c = jr_make('refined_here', <<~RUBY)
+  class JrOdd_refined_here
+    attr_writer :link
+    def task_holding=(v); @task_holding = v; nil; end
+    def link = @link.itself
+  end
+  module JrRefine_refined_here
+    refine JrOdd_refined_here do
+      def link; [:refined, super]; end
+    end
+  end
+RUBY
+s = jr_hot('refined_here', s_c, t_c)
+odd = JrOdd_refined_here.new
+odd.link = :odd
+s.current_task = odd
+jr_t('a refinement that is not active there', s) { s.hold_self }
+
+# recursion through the fallback: SystemStackError, and the process goes on
+s_c, t_c = jr_make('recurse', <<~RUBY)
+  class JrOdd_recurse
+    def initialize(sched); @sched = sched; end
+    def task_holding=(v); @sched.hold_self; end
+    def link; :never; end
+  end
+RUBY
+s = jr_hot('recurse', s_c, t_c)
+s.current_task = JrOdd_recurse.new(s)
+jr_t('recursion through the writer', s) do
+  begin
+    s.hold_self
+  rescue SystemStackError => e
+    [e.class, s.hold_count > 100]
+  ensure
+    s.hold_count = 0
+  end
+end
+# bounded: the inner invocations finish, and the outer one goes on after its fallback
+s_c, t_c = jr_make('reenter', <<~RUBY)
+  class JrOdd_reenter
+    attr_reader :depth
+    def initialize(sched); @sched = sched; @depth = 0; end
+    def task_holding=(v)
+      @depth += 1
+      @sched.hold_self if @depth < 5
+    end
+    def link; [:depth, @depth]; end
+  end
+RUBY
+s = jr_hot('reenter', s_c, t_c)
+s.current_task = JrOdd_reenter.new(s)
+jr_t('the writer calls the body again, five deep', s) { s.hold_self }
+
+# library methods that take the caller's scope, reached through an alias
+s_c, t_c = jr_make('scope', <<~RUBY)
+  class JrOdd_scope
+    attr_accessor :task_holding
+    public :binding, :__method__, :block_given?
+    alias_method :link, :binding
+  end
+  class JrOdd_scope_method
+    attr_accessor :task_holding
+    alias_method :link, :__method__
+    public :link
+  end
+  class JrOdd_scope_callee
+    attr_accessor :task_holding
+    alias_method :link, :__callee__
+    public :link
+  end
+  class JrSched_scope
+    alias_method :held, :hold_self
+  end
+RUBY
+s = jr_hot('scope', s_c, t_c)
+s.current_task = JrOdd_scope.new
+jr_t('the reader is Kernel#binding', s) do
+  b = s.hold_self
+  kept = b.eval('proc { return 7 }')
+  [b.class, b.receiver.equal?(s), b.local_variables, b.eval('@hold_count'), b.eval('block_given?'),
+   begin; kept.call; rescue LocalJumpError => e; e.class; end]
+end
+jr_t('the reader is Kernel#binding, called with a block', s) do
+  b = s.hold_self { 9 }
+  [b.eval('block_given?'), begin; b.eval('yield'); rescue LocalJumpError => e; e.class; end]
+end
+s.current_task = JrOdd_scope_method.new
+jr_t('the reader is Kernel#__method__', s) { s.hold_self }
+s.current_task = JrOdd_scope_callee.new
+jr_t('the reader is Kernel#__callee__, the body called by an alias', s) { [s.held, s.hold_self, s.held] }
+
+# two fallbacks of one invocation share its scope: the first sets $~, the second reads it
+jr_two = <<~RUBY
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = @pattern
+    @other.link
+  end
+  attr_writer :other, :pattern
+RUBY
+s_c, t_c = jr_make('match', <<~RUBY, jr_two)
+  class JrOdd_match < String
+    alias_method :task_holding=, :=~
+  end
+  class << Regexp
+    alias_method :link, :last_match
+  end
+RUBY
+task = t_c.new
+task.link = :plain
+s = s_c.new(task)
+s.other = task
+s.pattern = /b+/
+before = ed_stats
+warm { |_| s.hold_self }
+$jr_rows << ['match', *ed_delta(before).first(2), true]
+s.hold_count = 0
+jr_t('two operations, both plain', s) { s.hold_self }
+s.current_task = JrOdd_match.new('abbc')
+s.other = Regexp
+jr_t('the writer sets $~, the reader reads it', s) { m = s.hold_self; m && m[0] }
+s.current_task = task
+jr_t('a plain writer leaves $~ alone', s) { m = s.hold_self; m && m[0] }
+
+# the writer is Kernel#eval, and what it evaluates returns from the body
+s_c, t_c = jr_make('eval', <<~RUBY, jr_two)
+  class JrOdd_eval
+    public :eval
+    alias_method :task_holding=, :eval
+  end
+  class JrNever_eval
+    def link = raise('the body went on')
+  end
+RUBY
+task = t_c.new
+task.link = :plain
+s = s_c.new(task)
+s.other = task
+s.pattern = 'return [:returned, @hold_count]'
+before = ed_stats
+warm { |_| s.hold_self }
+$jr_rows << ['eval', *ed_delta(before).first(2), true]
+s.hold_count = 0
+s.current_task = JrOdd_eval.new
+s.other = JrNever_eval.new
+jr_t('the writer evaluates a return', s) { [s.hold_self, s.hold_self] }
+s.pattern = '@hold_count * 10'
+s.other = task
+jr_t('the writer evaluates an expression', s) { s.hold_self }
+
+# self frozen: the first write raises, from the generic body
+s_c, t_c = jr_make('frozen_self')
+s = jr_hot('frozen_self', s_c, t_c)
+s.freeze
+jr_t('a frozen self', s, false) { s.hold_self }
+
+# the attributes are self's: a subclass with private methods of those names, which a call
+# without a receiver and `self.x = v' reach, and one without the reader
+jr_self = <<~RUBY
+  attr_accessor :task_holding, :link
+  def hold_self
+    @hold_count += 1
+    self.task_holding = true
+    link
+  end
+RUBY
+s_c, t_c = jr_make('self', <<~RUBY, jr_self)
+  class JrSub_self < JrSched_self
+    private
+    def task_holding=(v); @seen = [:private_writer, v]; end
+    def link; [:private_reader, @seen]; end
+  end
+  class JrBare_self < JrSched_self
+    undef_method :link
+  end
+RUBY
+s = s_c.new(nil)
+s.link = :plain
+before = ed_stats
+warm { |_| s.hold_self }
+$jr_rows << ['self', *ed_delta(before).first(2), true]
+s = JrSub_self.new(nil)
+jr_t('private accessors of a subclass, called on self', s) { s.hold_self }
+s = JrBare_self.new(nil)
+jr_t('no reader on self: a NameError', s) { s.hold_self }
+
+# the task is a Struct: its member writer and reader
+s_c, t_c = jr_make('struct', <<~RUBY)
+  JrStruct_struct = Struct.new(:task_holding, :link)
+  JrOther_struct = Struct.new(:link, :task_holding)
+  class JrOdd_struct
+    def task_holding=(v); @w = v; end
+    def link; [:odd, @w]; end
+  end
+RUBY
+# (every member given: section 8 left Integer#- redefined, which IronRuby's Struct#initialize, written
+# in Ruby, uses to fill in the rest)
+s = jr_hot('struct', s_c, JrStruct_struct, true, JrStruct_struct.new(nil, nil))
+jr_t('a Struct task', s) { s.current_task.link = :member; [s.hold_self, s.current_task.to_a] }
+s.current_task = JrOther_struct.new(:other, nil)
+jr_t('a Struct of another class', s) { [s.hold_self, s.current_task.to_a] }
+s.current_task = JrOdd_struct.new
+jr_t('not a Struct', s) { s.hold_self }
+s.current_task = JrStruct_struct.new(nil, :cold).freeze
+jr_t('a frozen Struct', s) { s.hold_self }
+
+# receivers of three classes that all have the attributes: no fallback, whatever the site remembers
+s_c, t_c = jr_make('three', <<~RUBY)
+  class JrSecond_three
+    attr_accessor :task_holding, :link
+  end
+  class JrThird_three < JrTask_three
+  end
+  class JrLater_three
+  end
+RUBY
+s = jr_hot('three', s_c, t_c)
+jr_tasks = [s.current_task, JrSecond_three.new, JrThird_three.new]
+jr_tasks[1].link = :second
+jr_tasks[2].link = :third
+jr_t('three classes with the attributes, in turn', s, false) do
+  r = []
+  12.times do |i|
+    s.current_task = jr_tasks[i % 3]
+    r << s.hold_self
+    # (a method defined half way: what the site remembers is of an older method version)
+    JrLater_three.class_eval { def later; end } if i == 6
+  end
+  [r, jr_tasks.map(&:task_holding)]
+end
+
+# four threads through one body, the receivers of two classes
+s_c, t_c = jr_make('threads', <<~RUBY)
+  class JrOdd_threads
+    attr_reader :writes
+    def initialize; @writes = 0; end
+    def task_holding=(v); @writes += 1; end
+    def link; :odd; end
+  end
+RUBY
+jr_hot('threads', s_c, t_c)
+jr_before = jr_fallbacks
+jr_results = Array.new(4)
+jr_threads = (0...4).map do |jr_k|
+  Thread.new(jr_k) do |jr_index|
+    jr_plain = t_c.new
+    jr_plain.link = :plain
+    jr_odd = JrOdd_threads.new
+    jr_sched = s_c.new(jr_plain)
+    jr_seen = Hash.new(0)
+    jr_i = 0
+    while jr_i < 20_000
+      jr_sched.current_task = (jr_i + jr_index).odd? ? jr_odd : jr_plain
+      jr_seen[jr_sched.hold_self] += 1
+      jr_i += 1
+    end
+    jr_results[jr_index] = [jr_sched.hold_count, jr_odd.writes, jr_seen.sort_by { |k, _| k.to_s }]
+  end
+end
+jr_threads.each(&:join)
+# (a body that falls back on every other call is retired before long: what counts is that it fell back at all)
+$jr_rows.last << jr_fallbacks + -jr_before if ED_STATS
+puts 'four threads, receivers of two classes'.ljust(56) + ' => ' + jr_results.inspect
+
+if ED_STATS
+  jr_failures = []
+  $jr_rows.each do |name, spec, wdeopts, compiles, *fallbacks|
+    reached = fallbacks.empty? || fallbacks.sum > 0
+    ok = (spec == 0 || (wdeopts == 0 && reached)) && !(ENV['JR_EXPECT'] == '1' && compiles && spec == 0)
+    jr_failures << name unless ok
+    $stderr.puts "[jr] #{name} specialized=#{spec} warm-deopts=#{wdeopts} fallbacks=#{fallbacks.inspect}#{ok ? '' : ' FAIL'}"
+  end
+  $stderr.puts "[jr] specialized: #{$jr_rows.count { |r| r[1] > 0 }} of #{$jr_rows.size}; failures: #{jr_failures.size}"
+  exit 1 unless jr_failures.empty?
+end
