@@ -447,7 +447,7 @@ Profile (`Util/perf/profile.sh`, self time):
     section 3). The cause is the entry, not the method: a rest parameter, a named block,
     one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
     `Array#sum` 5.3, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `Hash#sum { }` 3.6, `then` 3.2,
-    `uniq` 2.9, `filter_map` 2.4, `tally` 2.1; and
+    `uniq` 2.9, `tally` 2.1; and
     `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
     and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0), and so is `Array#dig`
     (15.1 -> 6.1, see Landed), and `Array#sum` with a block (6.5 -> 3.3), and `String("a")`
@@ -487,6 +487,8 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/fmap (/perf-core) - `filter_map` of an Array with a one-value block**: 959 -> 775
+  ns (CRuby 472).
 - **perf/uniq (/perf-core, correctness with a small gain) - `Array#uniq { }` as MRI's
   `rb_ary_uniq`**: no block call for one element or none, an index walk, five probes now
   CRuby's; 885 -> 763 ns (CRuby 350), short of the 15% a speed change needs - the Hash of
