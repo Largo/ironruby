@@ -395,5 +395,57 @@ false
 true
 ");
         }
+
+        // A `raise' (or `fail') in a typed body is a deopt (JitCompiler.EmitRaise): the generic body runs again and
+        // raises, so the exception, its backtrace (with the frame of a caller that binds the method) and the held-back
+        // write before it are the generic body's; a class with a `raise' of its own that returns goes on. Expected
+        // output from CRuby 4.0.
+        public void JitCore_RaiseDeopt1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class RdTable
+  attr_reader :n
+  def initialize = (@t = { 1 => 10 }; @n = 0)
+  def find(i)
+    t = @t[i]
+    raise IndexError, 'no ' + i.to_s unless t
+    t
+  end
+  def q(i) = find(i)
+  def bump(i)
+    @n = @n + 1
+    fail ArgumentError if i < 0
+    @n
+  end
+end
+class RdOwn < RdTable
+  def raise(*a) = nil
+end
+o = RdTable.new
+out = []
+200.times do |k|
+  miss = k == 0 || k == 60 || k == 130
+  begin
+    out << o.q(miss ? 2 : 1) unless miss
+    o.q(2) if miss
+  rescue IndexError => e
+    out << [k, e.message, e.backtrace.size > 2, e.backtrace[0][/:(\d+):/, 1].to_i, e.backtrace[1][/'(.*)'/, 1]]
+  end
+  begin
+    o.bump(miss ? -1 : 1)
+  rescue ArgumentError => e
+    out << [k, e.class, o.n]
+  end
+end
+p out.reject { |x| x == 10 }
+own = RdOwn.new
+p (1..100).map { |i| own.find(i % 50 == 0 ? 2 : 1) }.uniq
+", @"
+[[0, ""no 2"", true, 7, ""RdTable#q""], [0, ArgumentError, 1], [60, ""no 2"", true, 7, ""RdTable#q""], [60, ArgumentError, 61], [130, ""no 2"", true, 7, ""RdTable#q""], [130, ArgumentError, 131]]
+[10, nil]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
     }
 }
