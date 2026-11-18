@@ -657,8 +657,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         // The fast path - a plain Ruby object of the bound class, the variable at the slot the
         // site has seen - is inlined into the body (as GetIVar's is): RubyOps.TryReadCached keeps
-        // RubyInstanceData's read protocol, and reads an object with raw Floats after one more
-        // compare. Everything else, binding included, is out of line.
+        // RubyInstanceData's read protocol. Everything else, binding included, is out of line.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object ReadSelfAttr(RubyContext/*!*/ context, object self, SelfAttrSite/*!*/ site) {
             object value;
@@ -681,13 +680,20 @@ namespace IronRuby.Runtime.Jit {
                     return null;
                 }
                 // The site's second shape is read here, by the protocol of the inlined read (element 0 is
-                // a shape, so the array is live and the index is its slot): a site that sees an object
-                // in two shapes in turn - plain and raw ones of a class, once some have been promoted
-                // (RubyInstanceData, "Float locations") - reads the second without the lookup's call.
+                // a shape, so the array is live and the index is its slot): a site that sees objects in
+                // two shapes in turn reads the second without the lookup's call.
                 object[] slots = data._ivars;
                 var entry = site.Variable.Cache;
-                if (RubyInstanceData.ShapeOf(slots) == entry.OtherShape) {
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.OtherShape) {
                     return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.OtherIndex));
+                }
+                // An object of a class whose instances are born raw (RubyInstanceData, "Float locations")
+                // comes here on every read, since the inlined read only knows plain shapes: its hit is
+                // taken here, after the one class check, and not left to GetInstanceVariable(site), which
+                // costs such a class's Integer and object attributes a fifth more.
+                if (shape == entry.Shape && entry.PlainShape == null && entry.Next == null) {
+                    return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
                 }
                 return data.GetInstanceVariable(site.Variable);
             }

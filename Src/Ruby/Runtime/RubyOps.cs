@@ -5015,18 +5015,27 @@ namespace IronRuby.Runtime {
             if (data != null) {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
-                object shape = RubyInstanceData.ShapeOf(slots);
-                // a raw shape is never PlainShape (RubyInstanceData, "Float locations"): a plain object's
-                // read is the compare and the load it always was
-                if (shape == entry.PlainShape) {
+                // a raw shape is never PlainShape (RubyInstanceData, "Float locations"): this inlined read
+                // is the compare and the load it always was; a raw object's read is the first thing
+                // the out-of-line readers try (ReadInstanceVariable and the rest)
+                if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
                     value = RubyInstanceData.GetSlot(slots, entry.Index);
                     return true;
                 }
-                // an object whose shape is raw, one more compare after a miss: read here too, since
-                // every read of such an object comes this way (a call out of line cost its Integer and
-                // object variables a fifth). A raw Float comes boxed, the same box again while the
-                // value is unchanged.
-                if (shape == entry.Shape && entry.Next == null) {
+            }
+            value = null;
+            return false;
+        }
+
+        // The cached read of a variable of an object whose shape is raw (RubyInstanceData, "Float
+        // locations"), for a caller that TryReadCached has just turned away: the same protocol, and
+        // a Float comes boxed (the same box again while the value is unchanged).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCachedRaw(RubyInstanceData data, InstanceVariableSite/*!*/ site, out object value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
                     value = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
                     return true;
                 }
