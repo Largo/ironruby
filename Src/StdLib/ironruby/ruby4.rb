@@ -565,7 +565,13 @@ module Enumerable
 
   # Sorts by the block's key, keeping input order for equal keys so that
   # `min_by(n)` and `max_by(n)` agree with MRI on ties.
+  #
+  # An Array whose #each is the built-in one is sorted by the C# Array#sort_by, taken under a
+  # private name when the prelude loads (a program's own Array#sort_by does not change
+  # min_by): it is a stable merge sort, so equal keys keep their input order as here. The
+  # Ruby comparison block below cost more than everything else for a short Array.
   def __sort_by_key__(block)
+    return __list_sort_by__(&block) if __plain_list__?
     decorated = []
     index = 0
     each do |*values|
@@ -1207,6 +1213,11 @@ module Kernel
 end
 
 class Array
+  # The C# Array#sort_by (a stable merge sort) under a name of its own, for
+  # Enumerable#__sort_by_key__: min_by(n), max_by(n) and sort_by of an Array must not
+  # change when a program redefines Array#sort_by.
+  alias :__list_sort_by__ :sort_by
+  private :__list_sort_by__
   # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
   # Range or an arithmetic sequence, because there would be no way to keep
   # digging into the several elements that would answer.
