@@ -23,9 +23,8 @@
  *     is overwritten by a value this one read earlier.
  *   - A frozen self: the first store's frozen check deopts, before any store, and the generic body
  *     raises the FrozenError from the write the source makes, after whatever that write evaluated.
- *   - An exception that leaves the body without a deopt (a typed body raises none of its own today;
- *     this is for whatever a helper may) stores what was written first, as the source would have
- *     before the exception.
+ *   - No exception but a deopt can leave such a body: its helpers throw nothing else, and it has no
+ *     safe point (no call, no loop) for a Thread#raise to land at.
  * Not with a loop, a self-call, an explicit return, fallbacks, or any effect other than these
  * writes (_pure at the end of the body): those are what IsSinkSafe's retry leaves to the old rule.
  *
@@ -116,11 +115,12 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// The body with its held-back writes stored at the end (and before an exception that is not a deopt leaves
-        /// it), or the body as it is if it has none. Called with the body's effects as emitted: the stores are this
-        /// body's effects from here on, and their frozen check its last deopt.
+        /// The body with its held-back writes stored at the end, or the body as it is if it has none. Called with the
+        /// body's effects as emitted: the stores are this body's effects from here on, and their frozen check its last
+        /// deopt. A body whose value is that of its last statement, a held-back write of a number, answers the box it
+        /// stores (as SetIVar would), not a second one boxed by its entry: <paramref name="type"/> becomes Obj then.
         /// </summary>
-        private MSA.Expression/*!*/ FinishSunkStores(MSA.Expression/*!*/ body) {
+        private MSA.Expression/*!*/ FinishSunkStores(MSA.Expression/*!*/ body, ref JT type) {
             if (_sunk == null) { return body; }
             if (_sinkObstacle == null && !_pure) { _sinkObstacle = "an effect other than the held-back writes"; }
             if (_sinkObstacle == null) {
@@ -130,15 +130,33 @@ namespace IronRuby.Runtime.Jit {
             }
             if (_sinkObstacle != null) { return body; }
 
+            // the last statement's held-back write, whose value is the body's
+            SunkIVar last = null;
+            var statements = _ast.Body.Statements;
+            var lastWrite = (statements != null && statements.Count > 0) ? statements.Last as SimpleAssignmentExpression : null;
+            var lastTarget = (lastWrite != null) ? lastWrite.Left as InstanceVariable : null;
+            if (lastTarget != null) {
+                last = FindSunk(lastTarget.Name);
+                if (last != null && (last.Type == JT.Obj || last.Type == JT.Dbl || last.Value.Type != body.Type || !_sunkDefinite.Contains(last.Name))) {
+                    last = null;
+                }
+            }
+            var boxed = (last != null) ? Ast.Variable(typeof(object), "#boxed") : null;
+
             var variables = new List<MSA.ParameterExpression>();
-            var init = new List<MSA.Expression>();
+            var all = new List<MSA.Expression>();
             var stores = new List<MSA.Expression>();
             foreach (var s in _sunk) {
                 variables.Add(s.Value);
                 variables.Add(s.Written);
-                init.Add(Ast.Assign(s.Written, Ast.Constant(false)));
-                init.Add(Ast.Assign(s.Value, Ast.Default(s.Value.Type)));
+                all.Add(Ast.Assign(s.Written, Ast.Constant(false)));
+                all.Add(Ast.Assign(s.Value, Ast.Default(s.Value.Type)));
                 var site = Ast.Constant(new InstanceVariableSite(s.Name));
+                if (s == last) {
+                    stores.Add(Ast.Assign(boxed, Coerce(s.Value, s.Type, JT.Obj)));
+                    stores.Add(Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, boxed, site));
+                    continue;
+                }
                 stores.Add(Ast.IfThen(s.Written, (s.Type == JT.Dbl)
                     ? Ast.Call(JitRuntime.M("SetIVarDouble"), Ast.Constant(_context), _self, s.Value, site)
                     : Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(s.Value, s.Type, JT.Obj), site)));
@@ -147,18 +165,20 @@ namespace IronRuby.Runtime.Jit {
             _canDeopt = true;
             _pure = false;
 
-            var flush = Ast.Block(typeof(void), stores);
+            // No try: the body calls nothing but the helpers IsSinkSafe lets through, which throw nothing but a deopt,
+            // and it has no safe point a Thread#raise could land at (no call, no loop), so no other exception can
+            // leave it with a write held back.
             var result = Ast.Variable(body.Type, "#result");
-            var e = Ast.Variable(typeof(Exception), "#e");
-            var all = new List<MSA.Expression>(init);
-            all.Add(Ast.TryCatch(
-                Ast.Block(typeof(void), Ast.Assign(result, body)),
-                Ast.Catch(typeof(JitDeoptException), Ast.Rethrow()),
-                Ast.Catch(e, Ast.Block(flush, Ast.Rethrow()))
-            ));
-            all.Add(flush);
-            all.Add(result);
             variables.Add(result);
+            all.Add(Ast.Assign(result, body));
+            all.AddRange(stores);
+            if (last != null) {
+                variables.Add(boxed);
+                all.Add(boxed);
+                type = JT.Obj;
+                return Ast.Block(typeof(object), variables, all);
+            }
+            all.Add(result);
             return Ast.Block(body.Type, variables, all);
         }
 

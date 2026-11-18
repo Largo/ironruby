@@ -814,7 +814,7 @@ namespace IronRuby.Runtime.Jit {
             }
             var defaults = EmitOmittedDefaults();
             var result = EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
-            result = FinishSunkStores(result);
+            result = FinishSunkStores(result, ref type);
             if (defaults != null) {
                 defaults.Add(result);
                 result = Ast.Block(ClrType(type), defaults);

@@ -256,5 +256,34 @@ Object.const_set(:JdRefined, k)
 k.class_eval("using JdRefine\n" + JD_SRC)
 t('jd: refined where read is defined') { jd_run(k.new(JD_TEXT.dup)) }
 
+# a body whose value is its last write (Bounce's Random#next): the box it stores is the value it answers
+class JdSeed
+  attr_accessor :seed
+  def initialize = (@seed = 74_755)
+  def jd_next
+    @seed = ((@seed * 1_309) + 13_849) & 65_535
+  end
+  def jd_two
+    @a = @seed + 1
+    @seed = @a * 4_611_686_018_427_387_903
+  end
+end
+jds = JdSeed.new
+t('jd: value of the last write') do
+  r = []
+  warm { |i| r << (jds.jd_next rescue $!.class); jds.seed = nil if i == 100 }
+  [r.sum { |x| x.is_a?(Integer) ? x : 0 }, r.last(2), (jds.jd_next rescue $!.class)]
+end
+jds = JdSeed.new
+t('jd: value of the last write, overflow to a Bignum') do
+  r = []
+  warm { |i| jds.seed = i < 60 ? 1 : 3; r << jds.jd_two }
+  [r.first, r.last, jds.instance_variable_get(:@a), jds.seed]
+end
+jds = JdSeed.new
+warm { jds.jd_next }
+jds.freeze
+t('jd: value of the last write, frozen') { [(jds.jd_next rescue $!.class), jds.seed] }
+
 # last: once any String has had a singleton length, no body compiles String#length
 jd_row('@input a singleton length') { |p| s = JD_TEXT.dup; def s.length = 2; p.input = s }
