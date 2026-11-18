@@ -395,6 +395,8 @@ namespace IronRuby.Tests {
                 JitCore_CollectionEqualsNil1,
                 JitCore_Review1,
                 JitCore_NilConstant1,
+                JitCore_FloatIVars1,
+                FloatObjectId1,
                 BlockLoopEachIndex1,
                 BlockLoopNested1,
 

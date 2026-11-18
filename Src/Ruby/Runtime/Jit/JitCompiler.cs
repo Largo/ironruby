@@ -1315,8 +1315,18 @@ namespace IronRuby.Runtime.Jit {
                 if (_effectNotOnSelf) { _canDeopt = true; }     // SetIVar deopts on a frozen self, here after an effect elsewhere
                 _pure = false;      // an ivar write is observable: nothing emitted after it may deopt (_deoptAfterEffect)
                 _ivarWrite = true;
+                var ivarSite = Ast.Constant(new InstanceVariableSite(ivarTarget.Name));
+                if (vt == JT.Dbl) {
+                    // a Float stored raw (RubyInstanceData, "Float locations"); the value stays a double
+                    var raw = Ast.Variable(typeof(double), "#value");
+                    type = JT.Dbl;
+                    return Ast.Block(typeof(double), new[] { raw },
+                        Ast.Assign(raw, v),
+                        Ast.Call(JitRuntime.M("SetIVarDouble"), Ast.Constant(_context), _self, raw, ivarSite),
+                        raw);
+                }
                 type = JT.Obj;
-                return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
+                return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), ivarSite);
             }
 
             var gvarTarget = node.Left as AstGlobalVariable;
@@ -1906,7 +1916,7 @@ namespace IronRuby.Runtime.Jit {
                         string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
                         if (guard == null) { type = JT.Obj; return read; }
                         type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
-                        return Ast.Call(JitRuntime.M(guard), read);
+                        return GuardIVarRead(guard, read);
                     }
                 }
             }
@@ -2143,7 +2153,7 @@ namespace IronRuby.Runtime.Jit {
                 switch (to) {
                     case JT.Int: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardInt"), e);
                     case JT.Lng: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardLong"), e);
-                    case JT.Dbl: _canDeopt = true; return Ast.Call(JitRuntime.M("GuardDouble"), e);
+                    case JT.Dbl: _canDeopt = true; return GuardIVarRead("GuardDouble", e);
                 }
             }
             throw Bail("call: " + name + " takes " + to + ", passed " + from);
@@ -2254,7 +2264,22 @@ namespace IronRuby.Runtime.Jit {
                 default: return e;
             }
             _canDeopt = true;
-            return Ast.Call(JitRuntime.M(guard), e);
+            return GuardIVarRead(guard, e);
+        }
+
+        /// <summary>
+        /// The guarded unboxing of an instance variable read: GuardDouble (SpeculateDouble) of GetIVar or
+        /// ReadSelfAttr becomes their Double (SpeculateDouble) version, which reads a Float the typed code stored raw without boxing it
+        /// (RubyInstanceData, "Float locations"). Both deopt on the same values.
+        /// </summary>
+        internal static MSA.Expression/*!*/ GuardIVarRead(string/*!*/ guard, MSA.Expression/*!*/ read) {
+            var call = read as MSA.MethodCallExpression;
+            if ((guard == "GuardDouble" || guard == "SpeculateDouble") && call != null && call.Object == null) {
+                string suffix = (guard == "GuardDouble") ? "Double" : "SpeculateDouble";
+                if (call.Method == JitRuntime.M("GetIVar")) { return Ast.Call(JitRuntime.M("GetIVar" + suffix), call.Arguments); }
+                if (call.Method == JitRuntime.M("ReadSelfAttr")) { return Ast.Call(JitRuntime.M("ReadSelfAttr" + suffix), call.Arguments); }
+            }
+            return Ast.Call(JitRuntime.M(guard), read);
         }
 
         /// <summary>The two representations of a Ruby Integer the specialized code carries.</summary>
