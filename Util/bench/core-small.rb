@@ -98,12 +98,20 @@ class H
   def m83; @a.uniq { |x| x & 1 }.size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
+# INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
+# seven sections as the time is. See Util/perf/instructions.rb.
+INSTR = ENV["INSTR"] && (require_relative "../perf/instructions"; Instructions.open || warn("no instruction counter (perf_event_open)"))
 def t(name, n)
   return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
-  best = 1e9; sum = nil
-  7.times { t0 = cpu; sum = yield n; d = cpu - t0; best = d if d < best }
-  printf "%-16s %9.1f ns  %d\n", name, best * 1e9 / n, sum
+  best = 1e9; fewest = nil; counted = !!INSTR; sum = nil
+  7.times do
+    c0 = INSTR && INSTR.read; t0 = cpu; sum = yield n; d = cpu - t0; c1 = INSTR && INSTR.read
+    best = d if d < best
+    # a read is nil once the counter is lost: then there is no count, rather than one of the sections that had it
+    if c0 && c1 then c = c1 - c0; fewest = c if fewest.nil? || c < fewest else counted = false end
+  end
+  printf "%-16s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, counted ? format("  %.1f instr", fewest.to_f / n) : ""
 end
 h = H.new
 N = (ENV["N"] || 1_000_000).to_i

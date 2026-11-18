@@ -214,7 +214,8 @@ slower with a Symbol; only the table showed it.
 
 - `spec/core/<class>` for the receiver classes and for `enumerable`, against the unchanged
   build, failing example names compared (not counts).
-- `/perf-gate ../wt-NAME`. IronRuby.Tests load the prelude from `Src/StdLib` when a test
+- `/perf-gate ../wt-NAME`, or its quick check now and the gate once for several methods
+  on one branch ("When to run it" there). IronRuby.Tests load the prelude from `Src/StdLib` when a test
   says `require 'ruby4'`, so they see the change.
 - A Release build precompiles the prelude into the R2R host's startup library; run the
   probes once with `IR_CONFIG=R2R` after building.
