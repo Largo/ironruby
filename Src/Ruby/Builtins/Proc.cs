@@ -69,6 +69,11 @@ namespace IronRuby.Builtins {
         // proc holds it, and that frame may make it again from it for its next call with the same literal (see TryReuse).
         private const int ReusableFlag = 8;
 
+        // The proc is a literal block that a light-frame Ruby method with a block parameter converted (RubyOps.EnterLightMethodNamingBlock):
+        // it stands for that method's frame as a library call's literal block stands for the call's, but a Ruby method that received
+        // a block hands a Proc object on, as one whose scope converted it does (see BlockParam.IsLiteralBlock).
+        private const int MethodConverterFlag = 16;
+
         /// <summary>
         /// The state few procs have, out of line: a Proc is allocated for every call with a literal block.
         /// </summary>
@@ -122,6 +127,21 @@ namespace IronRuby.Builtins {
                 ? (int)ProcKind.Proc | SelfConverterFlag | ReusableFlag
                 : (int)ProcKind.Proc | SelfConverterFlag;
             _activeFlowControlScope = this;
+        }
+
+        /// <summary>
+        /// ConvertAsFrame of a literal block for a light-frame method that names it (`def m(&amp;b)'): see MethodConverterFlag.
+        /// </summary>
+        internal void ConvertAsMethodFrame() {
+            _kind = (int)ProcKind.Proc | SelfConverterFlag | MethodConverterFlag;
+            _activeFlowControlScope = this;
+        }
+
+        /// <summary>
+        /// True if a Ruby method's light frame converted this proc (ConvertAsMethodFrame), rather than a library method's call.
+        /// </summary>
+        internal bool IsMethodConverted {
+            get { return (_kind & MethodConverterFlag) != 0; }
         }
 
         /// <summary>
