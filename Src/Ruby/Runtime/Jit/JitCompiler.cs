@@ -567,6 +567,11 @@ namespace IronRuby.Runtime.Jit {
             bool arrayParameters = true;
             bool unloggedWrites = true;
             bool unloggedEarlyWrites = true;
+            // a loop has a safe point, which a body holding writes back cannot have (JitCompiler.Sink.cs): not tried.
+            // Nor with keyword or optional parameters: their prologue and their defaults are emitted outside the
+            // block that declares the held values (EmitBody), and a default may write (`def m(x = (@a = 5))'), so
+            // such a body failed to compile and was declined where it used to be specialized.
+            bool sinkStores = !HasWhileLoop(ast) && keywords == null && ast.Parameters.Optional.Length == 0;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._compileEpoch = epoch;
@@ -578,6 +583,7 @@ namespace IronRuby.Runtime.Jit {
                 if (hints != null && hints.SelfSample != null) { c._ivarProfile = IVarProfile(context, hints.SelfSample); }
                 c._noUnloggedWrites = !unloggedWrites;
                 c._noUnloggedEarlyWrites = !unloggedEarlyWrites;
+                c._sinkStores = sinkStores;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -588,6 +594,11 @@ namespace IronRuby.Runtime.Jit {
                 try {
                     body = c.EmitBody(out actual);
                 } catch (JitBailout) {
+                    // a body that held writes back and bailed is tried again storing them where they are
+                    if (c._sunk != null && sinkStores) {
+                        if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] stores not held back in {0}: it bailed out ({1})", ast.Name, c._bailReason ?? "unsupported construct"); }
+                        sinkStores = false; round--; continue;
+                    }
                     // A `return' whose value does not fit the type this round assumed is not a
                     // rejection, it is a re-run against the type that does fit.
                     if (c._retype != JT.None && c._retype != c._selfReturn) { guess = c._retype; continue; }
@@ -596,6 +607,14 @@ namespace IronRuby.Runtime.Jit {
                             c._bailReason ?? "unsupported construct");
                     }
                     return null;
+                }
+
+                // Writes held back that the body cannot keep (JitCompiler.Sink.cs): compile it storing them where they are.
+                if (c._sunk != null && c._sinkObstacle != null) {
+                    if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] stores not held back in {0}: {1}", ast.Name, c._sinkObstacle); }
+                    sinkStores = false;
+                    round--;
+                    continue;
                 }
 
                 // An Array parameter loaded once (ArrayParameter) is one the body does not assign, and
@@ -802,6 +821,7 @@ namespace IronRuby.Runtime.Jit {
             }
             var defaults = EmitOmittedDefaults();
             var result = EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
+            result = FinishSunkStores(result, ref type);
             if (defaults != null) {
                 defaults.Add(result);
                 result = Ast.Block(ClrType(type), defaults);
@@ -1072,6 +1092,8 @@ namespace IronRuby.Runtime.Jit {
             var ivar = node as InstanceVariable;
             if (ivar != null) {
                 if (_loop != null && _ivarProfile == null) { throw Bail("instance variable in a loop entered without self"); }
+                var sunkRead = TrySunkIVarRead(ivar.Name, out type);
+                if (sunkRead != null) { return sunkRead; }
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(_context), _self, Ast.Constant(new InstanceVariableSite(ivar.Name)));
             }
@@ -1312,6 +1334,8 @@ namespace IronRuby.Runtime.Jit {
                 } else {
                     v = Emit(node.Right, out vt);
                 }
+                var sunk = TrySinkIVarWrite(node, ivarTarget.Name, v, vt, out type);
+                if (sunk != null) { return sunk; }
                 if (_effectNotOnSelf) { _canDeopt = true; }     // SetIVar deopts on a frozen self, here after an effect elsewhere
                 _pure = false;      // an ivar write is observable: nothing emitted after it may deopt (_deoptAfterEffect)
                 _ivarWrite = true;
@@ -2055,6 +2079,19 @@ namespace IronRuby.Runtime.Jit {
                             var isNil = Ast.Equal(Coerce(r, rt, JT.Obj), Ast.Constant(null, typeof(object)));
                             return (node.MethodName == "!=") ? Ast.Not(isNil) : isNil;
                         }
+                    }
+                    if (observed == typeof(MutableString) && node.MethodName != "equal?") {
+                        // `@current != ch' (Json's `read_char'): String#== between two Strings whose class is String
+                        // itself compares their contents (JitRuntime.StringEqualsString); anything else deopts
+                        var stringClass = KindClass(JitRuntime.KindString);
+                        if (!IsPlainLibraryMethod(stringClass, "==") || !IsPublic(stringClass, "==") ||
+                            node.MethodName == "!=" && (!IsPlainLibraryMethod(stringClass, "!=") || !IsPublic(stringClass, "!="))) {
+                            throw Bail("String#" + node.MethodName + " is not the built-in one");
+                        }
+                        _canDeopt = true;
+                        type = JT.Bool;
+                        MSA.Expression equal = Ast.Call(JitRuntime.M("StringEqualsString"), l, Coerce(r, rt, JT.Obj));
+                        return (node.MethodName == "!=") ? Ast.Not(equal) : equal;
                     }
                     if ((observed == typeof(RubyArray) || observed == typeof(Hash)) && node.MethodName != "equal?" &&
                         args.Expressions[0] is Literal && ((Literal)args.Expressions[0]).Value == null) {

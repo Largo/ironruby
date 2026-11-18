@@ -4563,3 +4563,9 @@ t('fl: identity') do
   end
 end
 t('fl: to Integer by the typed code') { o = FlObj.new; o.sp_fl_put(1.5); [o.get_x.to_i, o.get_x.class] }
+
+# ---------------------------------------------------------------- 20. instance variable writes held back
+#
+# In Util/jit-scan-matrix.rb, run the same way: its rows need String#length, #[] and #== to be the
+# library methods, and the sections above leave them aliased (13, and the redefinitions of section 3),
+# which keeps the method JIT from compiling `read' here at all.
