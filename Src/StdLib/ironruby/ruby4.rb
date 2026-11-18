@@ -275,11 +275,13 @@ module Enumerable
   # MRI does not simply fold with +: once a Float turns up it switches to
   # Kahan-Babuska compensated summation, which is why ([0.1] * 10).sum is
   # exactly 1.0 there and 0.9999999999999999 under a naive inject. Non-numeric
-  # elements (String, Array) keep the plain fold.
+  # elements (String, Array) keep the plain fold. From a Float initial value the
+  # compensated summation starts at once, as in MRI's enum_sum, so that Integers are
+  # added as Floats too: [10**16, 1, -10**16].each.sum(0.0) is 1.0, not 0.0.
   def sum(init = 0)
     acc = init
     compensation = 0.0
-    compensating = false
+    compensating = ::Float === init
     each do |*values|
       x = __enum_item__(values)
       x = yield(x) if block_given?
@@ -292,8 +294,8 @@ module Enumerable
         acc = acc.to_f
       end
       unless x.is_a?(Integer) || x.is_a?(Float) || x.is_a?(Rational)
-        # back out of float mode: settle the compensation before leaving it behind
-        acc += compensation
+        # back out of float mode. The compensation is dropped, not added in: MRI's
+        # sum_iter_Kahan_Babuska goes on from the Float sum alone (memo->f), and so does rb_ary_sum.
         compensation = 0.0
         compensating = false
         acc = acc + x
@@ -1052,11 +1054,17 @@ end
 
 class Range
   # An Integer range is summed in closed form (MRI's range_sum): (1..2**70).sum does not
-  # walk 2**70 elements. Anything else, and the block form, goes through Enumerable#sum.
+  # walk 2**70 elements. From an Integer that is RangeOps.IntRangeSum; from another
+  # initial value but a Float (which MRI sums element by element, compensated) it is here.
+  # Anything else, and the block form, goes through Enumerable#sum.
   def sum(init = 0, &block)
+    unless block
+      result = __int_range_sum__(init)
+      return result unless result.nil?
+    end
     from = self.begin
     to = self.end
-    if !block && from.is_a?(::Integer) && to.is_a?(::Integer)
+    if !block && from.is_a?(::Integer) && to.is_a?(::Integer) && !(::Float === init)
       to -= 1 if exclude_end?
       return init if to < from
       return init + (from + to) * (to - from + 1) / 2
@@ -1409,10 +1417,14 @@ class Array
   # this does not go through #each. The index moves with #succ, not with +, as MRI's own Ruby
   # builtins count (numeric.rb): a redefined Integer#+ is for the sum, not for which elements
   # it visits.
+  #
+  # A Float initial value is MRI 4.0's init_is_float: see __float_init_sum__. Without a block
+  # NumericSum does that too, for Integers and Floats.
   def sum(init = 0, &block)
     return __array_sum__(init, &block) if block
     result = __numeric_sum__(init)
     return result unless result.nil?
+    return __float_init_sum__(init, __ary_at__(0), 1) if ::Float === init
     super
   end
 
@@ -1428,7 +1440,8 @@ class Array
         acc = acc + x
         next
       end
-      unless ::Float === x && (::Integer === acc || ::Float === acc || ::Rational === acc)
+      unless ::Float === x && (::Integer === acc || ::Rational === acc)
+        # (a Float initial value ends up here at the first value: see __sum_rest__)
         return __sum_rest__(acc, x, i, &block)
       end
       acc = acc.to_f
@@ -1453,7 +1466,7 @@ class Array
         x = yield(__ary_at__(i))
         i = i.succ
         unless ::Integer === x || ::Float === x || ::Rational === x
-          return __sum_rest__(acc + compensation, x, i, &block)
+          return __sum_rest__(acc, x, i, &block)
         end
       end
     end
@@ -1461,11 +1474,83 @@ class Array
   end
   private :__array_sum__
 
+  # Array#sum from a Float initial value, with or without a block: MRI 4.0's init_is_float in
+  # rb_ary_sum. The initial value counts as an exact 0 to begin with. Integers and Rationals
+  # are summed exactly (__exact_add__: with the built-in arithmetic, as MRI's rb_big_plus and
+  # rb_rational_plus, whatever Integer#+ is now); if every value is one, the sum is the initial
+  # value plus that exact sum. At the first other value the compensated summation starts from
+  # the exact sum so far, with the initial value as its first addend and that value as its
+  # second, and goes on as #sum's Float loop does. So [10**16, 1, -10**16].sum(0.0) is 1.0
+  # and [1r/3, 2].sum(1.0) is 1.0 + (7/3).to_f, where adding each value to the Float lost
+  # the 1 and rounded twice. (MRI also calls the block a second time for that first other
+  # value, which looks like a slip in its goto: this calls it once.) x is the first value
+  # (through the block, if any) and i the index after it: the caller has already taken it.
+  def __float_init_sum__(init, x, i, &block)
+    exact = 0
+    while true
+      if ::Integer === x || ::Rational === x
+        exact = __exact_add__(exact, x)
+        return init + exact.to_f unless i < __ary_size__
+        x = __ary_at__(i)
+        x = yield(x) if block
+        i = i.succ
+        next
+      end
+      acc = exact.to_f
+      compensation = 0.0
+      y = init
+      pending = true
+      while true
+        # y is an Integer, a Float or a Rational
+        y = y.to_f
+        if acc.nan?
+          # a NaN stays
+        elsif y.nan?
+          acc = y
+          compensation = 0.0
+        elsif y.infinite?
+          acc = (acc.infinite? == -y.infinite?) ? (0.0 / 0.0) : y
+          compensation = 0.0
+        elsif !acc.infinite?
+          t = acc + y
+          compensation += acc.abs >= y.abs ? (acc - t) + y : (y - t) + acc
+          acc = t
+        end
+        if pending
+          # the value that ended the exact part
+          y = x
+          pending = false
+        else
+          return acc + compensation unless i < __ary_size__
+          y = __ary_at__(i)
+          y = yield(y) if block
+          i = i.succ
+        end
+        unless ::Integer === y || ::Float === y || ::Rational === y
+          # without the compensation, as in MRI (see Enumerable#sum)
+          return __sum_tail__(acc, y, i, &block) if block
+          return __sum_tail__(acc, y, i) { |e| e }
+        end
+      end
+    end
+  end
+  private :__float_init_sum__
+
   # (The block is named and passed on, not wrapped in `{ |e| yield e }`: a block literal
   # made the call without a block 6% slower.)
   # Enumerable#sum's fold over the value x and the elements from index i on, through the
   # block, from acc: what Array#sum hands on at a value it does not add itself.
-  def __sum_rest__(acc, x, i)
+  # A Float initial value comes here with the first value, and goes to __float_init_sum__:
+  # testing for it on the way into __array_sum__, or anywhere in it, made #sum with a block
+  # 1-3% slower.
+  def __sum_rest__(acc, x, i, &block)
+    return __float_init_sum__(acc, x, i, &block) if i == 1 && ::Float === acc
+    __sum_tail__(acc, x, i, &block)
+  end
+  private :__sum_rest__
+
+  # __sum_rest__'s fold itself, which __float_init_sum__ calls too.
+  def __sum_tail__(acc, x, i)
     rest = ::Enumerator.new do |y|
       y.yield(x)
       while i < __ary_size__
@@ -1475,7 +1560,7 @@ class Array
     end
     rest.sum(acc)
   end
-  private :__sum_rest__
+  private :__sum_tail__
 
   def intersect?(other)
     !(self & other).empty?

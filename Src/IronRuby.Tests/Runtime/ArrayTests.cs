@@ -316,6 +316,50 @@ TypeError
         }
 
         /// <summary>
+        /// Array#sum (NumericSum, __array_sum__, __float_init_sum__) and Enumerable#sum from a Float
+        /// initial value, as MRI 4.0 sums them: Array#sum adds Integers and Rationals exactly and the
+        /// initial value then (init_is_float), with the built-in Integer#+ even when it is redefined;
+        /// Enumerable#sum, and so Range#sum, starts the compensated summation at once. Leaving the
+        /// compensated sum at a non-number drops the compensation. Range#sum's closed form (RangeOps.IntRangeSum)
+        /// is for an Integer initial value only, and ignores a redefined Integer#+ as MRI's int_range_sum does. The block is called once per
+        /// element (MRI 4.0 calls it twice for the first one that is not an Integer or Rational).
+        /// </summary>
+        public void Array_SumFloatInit1() {
+            TestOutput(@"
+require 'ruby4'
+a = [10**16, 1, -10**16]
+b = a + [0.5]
+p [a.sum(0.0), a.sum(0.0) { |x| x }, a.each.sum(0.0), a.each.sum(0.0) { |x| x }]
+p [b.sum(0.0), b.sum(0.0) { |x| x }, b.each.sum(0.0), b.each.sum(0.0) { |x| x }]
+p [[1r/3, 2].sum(1.0), [1r/3, 2].sum(1.0) { |x| x }, [1r/3, 1r/3, 1r/3].sum(0.1), [1r/3, 1r/3, 1r/3].each.sum(0.1)]
+p [[].sum(-0.0), [].each.sum(-0.0), [0].sum(-0.0), (10**16..10**16 + 3).sum(0.0), (10**16..10**16 + 3).sum(0)]
+p [[3, Float::INFINITY].sum(1.0), [3, 1.0].sum(-Float::INFINITY), [3, -Float::INFINITY].sum(Float::INFINITY).nan?, [3, 1].sum(Float::NAN).nan?]
+c = Object.new
+def c.coerce(o) = [o, 0]
+p [([0.1] * 10 + [c]).sum, ([0.1] * 10 + [c]).sum(0.0) { |x| x }, ([0.1] * 10 + [c]).each.sum, [10**16, 1, c].each.sum(0.001)]
+n = 0
+p [1, 2, 2.5, 3].sum(0.0) { |x| n += 1; x }, n
+p(([1, ""a""].sum(0.0) rescue $!.class))
+class Integer
+  alias __test_plus +
+  def +(o) = __test_plus(o).__test_plus(100)
+end
+p [[1, 2].sum(0.0), [1, 2].sum(0.0) { |x| x }, [1, 2r].sum(0.0), [1, 2].each.sum(0.0), (1..4).sum, (1..4).sum(0.0)]
+", @"
+[1.0, 1.0, 1.0, 1.0]
+[1.5, 1.5, 1.5, 1.5]
+[3.3333333333333335, 3.3333333333333335, 1.1, 1.0999999999999999]
+[-0.0, 0.0, 0.0, 4.000000000000001e+16, 40000000000000006]
+[Infinity, -Infinity, true, true]
+[0.9999999999999999, 0.9999999999999999, 0.9999999999999999, 1.0e+16]
+8.5
+4
+TypeError
+[3.0, 3.0, 3.0, 3.0, 10, 10.0]
+");
+        }
+
+        /// <summary>
         /// Enumerable#tally and #group_by over an Array whose #each is the built-in one run in C#
         /// (Enumerable.ListTally, ListGroupBy); a subclass or singleton #each, or another Enumerable,
         /// still goes through #each. #tally stores the element itself as the key, as MRI's tally_up
