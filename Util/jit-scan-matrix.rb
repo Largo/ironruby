@@ -285,5 +285,111 @@ warm { jds.jd_next }
 jds.freeze
 t('jd: value of the last write, frozen') { [(jds.jd_next rescue $!.class), jds.seed] }
 
+# the order in which held-back writes add variables: instance_variables shows the order they were
+# first assigned at run time, which a branch can make other than the source's
+class JdOrd
+  def initialize(c) = (@c = c)
+  def jd_ord
+    if @c > 0
+      @b = 1
+    else
+      @a = 1
+      @b = 2
+    end
+    nil
+  end
+  def jd_ord2
+    @a = 1 if @c > 0
+    @b = 2
+    @a = 3
+    nil
+  end
+  def jd_ord3
+    @b = 1 if @c > 0
+    @a = 2
+    nil
+  end
+end
+t('jd: order of new variables, a branch') do
+  r = []
+  200.times { |i| o = JdOrd.new(i < 100 ? 1 : 0); o.jd_ord; r << o.instance_variables if i == 0 || i >= 150 }
+  r.uniq
+end
+t('jd: order of new variables, a conditional first write') do
+  r = []
+  200.times { |i| o = JdOrd.new(i % 2); o.jd_ord2; r << o.instance_variables if i >= 150 }
+  r.uniq
+end
+t('jd: order, a variable removed between calls') do
+  o = JdOrd.new(1)
+  r = []
+  200.times do |i|
+    o.instance_variable_set(:@c, i % 2)
+    o.remove_instance_variable(:@b) if i >= 150 && o.instance_variable_defined?(:@b)
+    o.remove_instance_variable(:@a) if i % 3 == 0 && o.instance_variable_defined?(:@a)
+    o.jd_ord3
+    r << o.instance_variables if i >= 150
+  end
+  r.uniq
+end
+t('jd: order, an object with many variables') do
+  r = []
+  200.times do |i|
+    o = JdOrd.new(i % 2)
+    40.times { |k| o.instance_variable_set(:"@v#{k}", k) }
+    o.jd_ord2
+    r << o.instance_variables.last(3) if i >= 150
+  end
+  r.uniq
+end
+class JdOrdSub < JdOrd
+  def initialize(c) = (@b = 0; @a = 0; @c = c)
+end
+t('jd: order, a subclass that made the variables in another order') do
+  r = []
+  200.times { |i| o = (i.odd? ? JdOrdSub : JdOrd).new(i % 2); o.jd_ord2; r << [o.class, o.instance_variables] if i >= 150 }
+  r.uniq
+end
+class JdOrdClass
+  @c = 0
+  class << self
+    def jd_cls
+      @b = 1 if @c > 0
+      @a = 2
+      nil
+    end
+    attr_accessor :c
+  end
+end
+t('jd: order, a class-level method') do
+  r = []
+  200.times do |i|
+    JdOrdClass.c = i % 2
+    JdOrdClass.remove_instance_variable(:@a) if JdOrdClass.instance_variable_defined?(:@a)
+    JdOrdClass.remove_instance_variable(:@b) if JdOrdClass.instance_variable_defined?(:@b)
+    JdOrdClass.jd_cls
+    r << JdOrdClass.instance_variables if i >= 150
+  end
+  r.uniq
+end
+
+@jd_mf = 0
+def jd_main
+  @jd_mb = 1 if @jd_mf > 0
+  @jd_ma = 2
+  nil
+end
+t('jd: order, main') do
+  r = []
+  200.times do |i|
+    @jd_mf = i % 2
+    remove_instance_variable(:@jd_ma) if instance_variable_defined?(:@jd_ma)
+    remove_instance_variable(:@jd_mb) if instance_variable_defined?(:@jd_mb)
+    jd_main
+    r << instance_variables.grep(/jd_m/) if i >= 150
+  end
+  r.uniq
+end
+
 # last: once any String has had a singleton length, no body compiles String#length
 jd_row('@input a singleton length') { |p| s = JD_TEXT.dup; def s.length = 2; p.input = s }

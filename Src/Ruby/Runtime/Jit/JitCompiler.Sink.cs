@@ -45,6 +45,10 @@ namespace IronRuby.Runtime.Jit {
             internal string Name;
             internal JT Type;
             internal MSA.ParameterExpression Value, Written;
+            // the run-time position of its first write among the held variables (0: not written), and whether
+            // that first write, in the source, is a top-level statement
+            internal MSA.ParameterExpression Order;
+            internal bool FirstDefinite;
         }
 
         // Sinking is tried for this body (TryCompile turns it off for a retry); the variables held back,
@@ -54,6 +58,10 @@ namespace IronRuby.Runtime.Jit {
         private List<SunkIVar> _sunk;
         private HashSet<string> _sunkDefinite;
         private string _sinkObstacle;
+        // `if (#order-x == 0) #order-x = ++#order' at each held write: the order the variables were first written
+        // in, which the stores keep when it may differ from the source's (FinishSunkStores; removed where it may not)
+        private MSA.ParameterExpression _sinkCounter;
+        private HashSet<MSA.Expression> _sinkOrderings;
 
         private SunkIVar FindSunk(string/*!*/ name) {
             if (_sunk != null) {
@@ -83,8 +91,14 @@ namespace IronRuby.Runtime.Jit {
                     Name = name, Type = vt,
                     Value = Ast.Variable(ClrType(vt), "#sunk" + name),
                     Written = Ast.Variable(typeof(bool), "#written" + name),
+                    Order = Ast.Variable(typeof(int), "#order" + name),
+                    FirstDefinite = IsTopStatement(node),
                 };
-                if (_sunk == null) { _sunk = new List<SunkIVar>(); _sunkDefinite = new HashSet<string>(); }
+                if (_sunk == null) {
+                    _sunk = new List<SunkIVar>(); _sunkDefinite = new HashSet<string>();
+                    _sinkCounter = Ast.Variable(typeof(int), "#order");
+                    _sinkOrderings = new HashSet<MSA.Expression>();
+                }
                 _sunk.Add(sunk);
             } else if (sunk.Type != vt) {
                 _sinkObstacle = "writes of " + name + " as " + sunk.Type + " and " + vt;
@@ -93,8 +107,12 @@ namespace IronRuby.Runtime.Jit {
             _ivarWrite = true;
             if (IsTopStatement(node)) { _sunkDefinite.Add(name); }
             var temp = Ast.Variable(ClrType(vt), "#value");
+            var ordering = Ast.IfThen(Ast.Equal(sunk.Order, Ast.Constant(0)),
+                Ast.Assign(sunk.Order, Ast.PreIncrementAssign(_sinkCounter)));
+            _sinkOrderings.Add(ordering);
             return Ast.Block(ClrType(vt), new[] { temp },
                 Ast.Assign(temp, v),
+                ordering,
                 Ast.Assign(sunk.Value, temp),
                 Ast.Assign(sunk.Written, Ast.Constant(true)),
                 temp
@@ -143,23 +161,55 @@ namespace IronRuby.Runtime.Jit {
             }
             var boxed = (last != null) ? Ast.Variable(typeof(object), "#boxed") : null;
 
+            // The order of the stores is the order in which a variable the object does not have yet is added, which
+            // instance_variables, inspect and Marshal show. The source's order of first writes is the run-time order
+            // when every variable's first write is a top-level statement (they run in that order, each once) or
+            // there is one variable; otherwise the stores follow the order recorded as the body ran (#order-x).
+            bool ordered = _sunk.Count > 1;
+            if (ordered) {
+                ordered = false;
+                foreach (var s in _sunk) { if (!s.FirstDefinite) { ordered = true; } }
+            }
+            if (!ordered) { body = new OrderingRemover(_sinkOrderings).Visit(body); }
+
             var variables = new List<MSA.ParameterExpression>();
             var all = new List<MSA.Expression>();
-            var stores = new List<MSA.Expression>();
+            var storeOf = new Dictionary<SunkIVar, MSA.Expression>();
             foreach (var s in _sunk) {
                 variables.Add(s.Value);
                 variables.Add(s.Written);
                 all.Add(Ast.Assign(s.Written, Ast.Constant(false)));
                 all.Add(Ast.Assign(s.Value, Ast.Default(s.Value.Type)));
+                if (ordered) {
+                    variables.Add(s.Order);
+                    all.Add(Ast.Assign(s.Order, Ast.Constant(0)));
+                }
                 var site = Ast.Constant(new InstanceVariableSite(s.Name));
                 if (s == last) {
-                    stores.Add(Ast.Assign(boxed, Coerce(s.Value, s.Type, JT.Obj)));
-                    stores.Add(Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, boxed, site));
+                    storeOf[s] = Ast.Block(typeof(void),
+                        Ast.Assign(boxed, Coerce(s.Value, s.Type, JT.Obj)),
+                        Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, boxed, site));
                     continue;
                 }
-                stores.Add(Ast.IfThen(s.Written, (s.Type == JT.Dbl)
+                storeOf[s] = (s.Type == JT.Dbl)
                     ? Ast.Call(JitRuntime.M("SetIVarDouble"), Ast.Constant(_context), _self, s.Value, site)
-                    : Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(s.Value, s.Type, JT.Obj), site)));
+                    : Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(s.Value, s.Type, JT.Obj), site);
+            }
+            var stores = new List<MSA.Expression>();
+            if (!ordered) {
+                // (the last statement's variable is written on every path)
+                foreach (var s in _sunk) { stores.Add((s == last) ? storeOf[s] : Ast.IfThen(s.Written, storeOf[s])); }
+            } else {
+                // the k-th store is that of the variable written k-th: a chain of tests per position
+                variables.Add(_sinkCounter);
+                all.Add(Ast.Assign(_sinkCounter, Ast.Constant(0)));
+                for (int k = 1; k <= _sunk.Count; k++) {
+                    MSA.Expression chain = Ast.Empty();
+                    for (int i = _sunk.Count - 1; i >= 0; i--) {
+                        chain = Ast.IfThenElse(Ast.Equal(_sunk[i].Order, Ast.Constant(k)), storeOf[_sunk[i]], chain);
+                    }
+                    stores.Add(chain);
+                }
             }
             // SetIVar deopts on a frozen self, at the first store, before anything observable: as for a body's first
             // write where the source makes it, _ivarWrite (set by TrySinkIVarWrite) is what says so, not _canDeopt,
@@ -193,8 +243,20 @@ namespace IronRuby.Runtime.Jit {
             "GetIVar", "GetIVarDouble", "GetIVarSpeculateDouble", "GuardInt", "GuardLong", "GuardDouble", "SpeculateDouble", "StringLength", "StringIndex", "StringEqualsLiteral", "StringEqualsString", "CaseString",
             // Integer arithmetic that deopts on overflow, a zero divisor or a shift it cannot make
             "AddInt", "SubInt", "MulInt", "DivInt", "ModInt", "ShrInt", "AddLong", "SubLong", "MulLong", "DivLong", "ModLong",
-            "ShlLong", "ShrLong",
+            "ShlLong", "ShrLong", "AbsLong", "MathSqrt",
         };
+
+        // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)
+        private static readonly MethodInfo/*!*/ _absLong = typeof(Math).GetMethod("Abs", new[] { typeof(long) });
+        private static readonly MethodInfo/*!*/ _absDouble = typeof(Math).GetMethod("Abs", new[] { typeof(double) });
+
+        private sealed class OrderingRemover : MSA.ExpressionVisitor {
+            private readonly HashSet<MSA.Expression> _orderings;
+            internal OrderingRemover(HashSet<MSA.Expression> orderings) { _orderings = orderings; }
+            public override MSA.Expression Visit(MSA.Expression node) {
+                return (node != null && _orderings.Contains(node)) ? Ast.Empty() : base.Visit(node);
+            }
+        }
 
         private sealed class SinkChecker : MSA.ExpressionVisitor {
             internal string Obstacle;
@@ -214,8 +276,7 @@ namespace IronRuby.Runtime.Jit {
 
             private static bool IsSafe(MethodInfo/*!*/ m) {
                 if (m.DeclaringType == typeof(JitRuntime)) { return _sinkSafeHelpers.Contains(m.Name); }
-                // checked arithmetic and conversions of numbers
-                return m.DeclaringType == typeof(Math) || m.DeclaringType == typeof(Convert);
+                return m == _absLong || m == _absDouble;
             }
 
             protected override MSA.Expression VisitInvocation(MSA.InvocationExpression node) {
