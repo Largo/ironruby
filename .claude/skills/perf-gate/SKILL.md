@@ -79,6 +79,15 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | light frames (`MethodDefinition.cs`), rules that answer for the frame (`DispatchIntrinsics.cs`) | `Util/block-given-matrix.rb`, `Util/light-rest-matrix.rb`, each also with its switch off and with `IR_LIGHT_FRAMES=0` |
 | calls a compiled method binds to another's typed body (on by default) | `Util/jit-calls-matrix.rb`, also with `-X:NoJITCalls` |
 
+A matrix is compared only after it is seen to end: `ruby FILE; echo $?` prints 0 and the
+output's last line is the file's last row. A file that dies of the same exception under
+CRuby and under every build prints the same four times; one did in round seventeen (a
+`p [..]` after `p` had become a local), and its last rows had not run for two commits.
+And for a change that lets more bodies compile, compare the `specialized` and `declined`
+lines of both builds on the matrices and on the probes as well as on the benchmarks: a
+body that was specialized before and is declined now is a fault of the change even when
+every answer is right ("no reason recorded" is an exception swallowed).
+
 And always, because an optimization that is only wrong when hot passes everything above:
 
 ```sh
