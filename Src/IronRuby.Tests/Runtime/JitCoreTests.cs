@@ -45,6 +45,62 @@ NoMethodError
             Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
         }
 
+        /// <summary>
+        /// Json's Parser#read: its instance variable writes are held back to the end of the typed body
+        /// (JitCompiler.Sink.cs), so that @input.length and @input[@index] may deopt after them; then
+        /// @input nil in the middle of a run, a frozen parser and a String with a broken byte.
+        /// </summary>
+        public void JitCore_SunkStores1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class JsP
+  attr_accessor :input, :index, :line, :current
+  def initialize(s) = (@input = s; @index = -1; @line = 1; @column = 0; @current = nil; read)
+  def read
+    if ""\n"" == @current
+      @line  += 1
+      @column = 0
+    end
+    @index += 1
+    if @index < @input.length
+      @current = @input[@index]
+    else
+      @current = nil
+    end
+  end
+  def read_char(ch)
+    return false if @current != ch
+    read
+    true
+  end
+  def state = [@index, @line, @column, @current]
+end
+q = JsP.new(""a\nb,é"" * 8)
+r = []
+200.times do |i|
+  q.input = nil if i == 150
+  q.index = -1 if q.current.nil? && i < 150
+  r << (q.read_char(',') ? :c : (q.read rescue $!.class))
+end
+p r.last(3), q.state
+q = JsP.new(""ab"")
+50.times { q.read; q.index = -1 if q.current.nil? }
+q.current = ""\n""
+q.freeze
+p((q.read rescue $!.class), q.state)
+q = JsP.new(""ab\xff"".dup.force_encoding('UTF-8'))
+p [q.read, q.read, q.read]
+", @"
+[NoMethodError, NoMethodError, NoMethodError]
+[77, 31, 0, ""b""]
+FrozenError
+[-1, 1, 0, ""\n""]
+[""b"", ""\xFF"", nil]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
+        }
+
         /// <summary>Integer#abs (an Int32's is an Int64, -2**63's a Bignum) and Float#abs (-0.0 is 0.0, NaN stays NaN).</summary>
         public void JitCore_Abs1() {
             int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
