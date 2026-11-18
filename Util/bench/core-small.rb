@@ -88,6 +88,8 @@ class H
   def m73; @a.sum(10) { |x| x * 3 }; end
   def m74; String(@i).size + String(nil).size; end
   def m75; @n.to_h.size; end
+  def m77; @a.max_by { |x| x & 1 }; end
+  def m78; @a.min_by(2) { |x| -x }.size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 def t(name, n)
@@ -173,3 +175,5 @@ t("sum_blk_float", N) { |n| i = 0; s = 0; while i < n; s += h.m72; i += 1; end; 
 t("sum_blk_init", N) { |n| i = 0; s = 0; while i < n; s += h.m73; i += 1; end; s }
 t("String(int)", N) { |n| i = 0; s = 0; while i < n; s += h.m74; i += 1; end; s }
 t("to_h_pairs", N) { |n| i = 0; s = 0; while i < n; s += h.m75; i += 1; end; s }
+t("max_by", N) { |n| i = 0; s = 0; while i < n; s += h.m77; i += 1; end; s }
+t("min_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m78; i += 1; end; s }
