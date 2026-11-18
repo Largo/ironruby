@@ -484,7 +484,11 @@ module Enumerable
       return __list_extreme_by__(-1, &block) if __plain_list__?
       return __extreme_by__(-1, &block)
     end
-    __sort_by_key__(block).first(__count_arg__(n))
+    # The count is checked before the block runs: MRI raises on a negative one, and answers
+    # [] for zero, without calling it.
+    count = __count_arg__(n)
+    return [] if count == 0
+    __sort_by_key__(block).first(count)
   end unless method_defined?(:min_by)
 
   # The first element whose key compares best: a later equal key does not replace it, a
@@ -557,7 +561,9 @@ module Enumerable
       return __list_extreme_by__(1, &block) if __plain_list__?
       return __extreme_by__(1, &block)
     end
-    __sort_by_key__(block).reverse.first(__count_arg__(n))
+    count = __count_arg__(n)
+    return [] if count == 0
+    __sort_by_key__(block).reverse.first(count)
   end unless method_defined?(:max_by)
 
   # nil is not a count: `max(nil)` is the plain no-argument form, not an error.
@@ -577,7 +583,7 @@ module Enumerable
   # min_by): it is a stable merge sort, so equal keys keep their input order as here. The
   # Ruby comparison block below cost more than everything else for a short Array.
   def __sort_by_key__(block)
-    return __list_sort_by__(&block) if __plain_list__?
+    return __list_sort_by_key__(&block) if __plain_list__?
     decorated = []
     index = 0
     each do |*values|
@@ -588,6 +594,23 @@ module Enumerable
     decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
   end
   private :__sort_by_key__
+
+  # The keys still come from a walk with #each, as in MRI's nmin_run: a backtrace from the
+  # block shows Array#each under min_by. Only the sort is the C# one: IListOps.SortBy asks
+  # its block for every key, in order and once each, before it sorts, so the block hands it
+  # the keys the walk made, one after the other. (Sorting [key, element] pairs and taking the
+  # elements out again cost twice as much.)
+  def __list_sort_by_key__
+    items = []
+    keys = []
+    each do |item|
+      items << item
+      keys << yield(item)
+    end
+    i = -1
+    items.__send__(:__list_sort_by__) { keys[i = i.succ] }
+  end
+  private :__list_sort_by_key__
 
   def minmax_by(&block)
     return to_enum(:minmax_by) { size if respond_to?(:size) } unless block
@@ -1204,13 +1227,15 @@ module Kernel
   private
 
   # shared tail of Array#dig / Hash#dig / Struct#dig: CRuby raises TypeError,
-  # not NoMethodError, when an intermediate element has no #dig
+  # not NoMethodError, when an intermediate element has no #dig. Like MRI's
+  # rb_check_funcall, it finds a private #dig and calls it, and asks a BasicObject, which
+  # has no #nil? or #respond_to?, nothing it cannot answer.
   def __dig_step__(value, rest)
-    return value if rest.empty? || value.nil?
-    unless value.respond_to?(:dig)
-      raise TypeError, "#{value.class} does not have #dig method"
+    return value if rest.empty? || nil.equal?(value)
+    unless __ir_responds_to__(value, :dig)
+      raise TypeError, "#{__ir_class_of__(value)} does not have #dig method"
     end
-    value.dig(*rest)
+    value.__send__(:dig, *rest)
   end
 
   # shared by Hash#to_h and Struct#to_h: validate the [key, value] pair a block
@@ -1232,6 +1257,14 @@ module Kernel
 end
 
 class Array
+  # The C# Array#length, #at and #[] under names of their own, for the Array methods below
+  # that walk their receiver by index as MRI's do: MRI reads the storage (RARRAY_LEN,
+  # RARRAY_AREF), so a subclass's own #size or #[] does not change what they visit or answer.
+  alias :__ary_size__ :length
+  alias :__ary_at__ :at
+  alias :__ary_slice__ :[]
+  private :__ary_size__, :__ary_at__, :__ary_slice__
+
   # MRI's rb_ary_take_while and rb_ary_drop_while are Array's own: an index loop, not #each
   # (Enumerable's went through the prelude's wrapper and a generic C# walk, 3x MRI; a
   # subclass's own #each is not called, and a backtrace shows Array#take_while), and the
@@ -1239,21 +1272,21 @@ class Array
   def take_while
     return to_enum(:take_while) { nil } unless block_given?
     i = 0
-    while i < size
-      break unless yield(self[i])
+    while i < __ary_size__
+      break unless yield(__ary_at__(i))
       i = i.succ
     end
-    self[0, i]
+    __ary_slice__(0, i)
   end
 
   def drop_while
     return to_enum(:drop_while) { nil } unless block_given?
     i = 0
-    while i < size
-      break unless yield(self[i])
+    while i < __ary_size__
+      break unless yield(__ary_at__(i))
       i = i.succ
     end
-    self[i, size] || []
+    __ary_slice__(i, __ary_size__) || []
   end
 
   # The C# Array#sort_by (a stable merge sort) under a name of its own, for
@@ -1271,15 +1304,15 @@ class Array
   # common case - is passed as itself; more go through __dig_step__, whose splat would
   # keep this method from running without a scope (IR_LIGHT_FRAMES=why). A BasicObject in
   # the middle has no #nil? or #respond_to? to ask, and is the TypeError CRuby's
-  # rb_check_funcall makes of it.
+  # rb_check_funcall makes of it. That function calls a private #dig too, hence __send__.
   def dig(key, *rest)
-    value = self[::Integer === key ? key : __array_to_int__(key)]
+    value = __ary_at__(::Integer === key ? key : __array_to_int__(key))
     return value if rest.empty? || nil.equal?(value)
     unless __ir_responds_to__(value, :dig)
       # not "#{...}": an interpolated call would make this method need its scope
       raise TypeError, __ir_class_of__(value).to_s + " does not have #dig method"
     end
-    return value.dig(rest[0]) if rest.size == 1
+    return value.__send__(:dig, rest[0]) if rest.size == 1
     __dig_step__(value, rest)
   end unless method_defined?(:dig)
 
@@ -1388,8 +1421,8 @@ class Array
   def __array_sum__(init, &block)
     acc = init
     i = 0
-    while i < size
-      x = yield(self[i])
+    while i < __ary_size__
+      x = yield(__ary_at__(i))
       i = i.succ
       if ::Integer === x && ::Integer === acc
         acc = acc + x
@@ -1416,8 +1449,8 @@ class Array
           compensation += acc.abs >= x.abs ? (acc - t) + x : (x - t) + acc
           acc = t
         end
-        return acc + compensation unless i < size
-        x = yield(self[i])
+        return acc + compensation unless i < __ary_size__
+        x = yield(__ary_at__(i))
         i = i.succ
         unless ::Integer === x || ::Float === x || ::Rational === x
           return __sum_rest__(acc + compensation, x, i, &block)
@@ -1435,8 +1468,8 @@ class Array
   def __sum_rest__(acc, x, i)
     rest = ::Enumerator.new do |y|
       y.yield(x)
-      while i < size
-        y.yield(yield(self[i]))
+      while i < __ary_size__
+        y.yield(yield(__ary_at__(i)))
         i = i.succ
       end
     end
@@ -4663,8 +4696,8 @@ class Array
     result = {}
     given = block_given?
     i = 0
-    while i < size
-      element = self[i]
+    while i < __ary_size__
+      element = __ary_at__(i)
       element = yield(element) if given
       pair = ::Array === element ? element : ::Array.try_convert(element)
       __to_h_pair_error__(element, pair, i) unless pair && pair.size == 2
@@ -4695,12 +4728,12 @@ class Array
   # It walked #each with block.call per element, 2.5x MRI. The index moves with #succ.
   def uniq(&block)
     return __uniq_without_block__ unless block
-    return self[0, size] if size <= 1
+    return __ary_slice__(0, __ary_size__) if __ary_size__ <= 1
     seen = {}
     result = []
     i = 0
-    while i < size
-      element = self[i]
+    while i < __ary_size__
+      element = __ary_at__(i)
       i = i.succ
       key = yield(element)
       unless seen.key?(key)

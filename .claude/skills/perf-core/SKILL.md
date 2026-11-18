@@ -117,6 +117,9 @@ difference as a share of the method's time on IronRuby; under 15%, pick another 
 specific than `body needs its scope after the rewrite`. To find the construct, copy the
 method's statements into one-line methods in a scratch file, *call each once* (a method
 is compiled, and reported, on its first call), and see which are not `light:`.
+Give each copy the parameters and the locals it reads (`def p1(rest); n = 0; ...`): a
+local left out is read as a method call, and the copy is not the statement any more. If a
+copy's answer differs from the method's, cut the method down instead.
 
 Worked example (2026-11-15): `[[1, 2]].dig(0, 1)` took 776 ns against `@n[0][1]`'s 68 and
 CRuby's 64. `dig` itself was light; its two helpers, `__array_to_int__` and `__dig_step__`,
@@ -156,12 +159,17 @@ In the order they usually pay:
    `inject`), CRuby calls #each, and a backtrace from the block shows `Array#each` under it
    (`Backtrace_LibraryFrames1` checks this): keep #each, and give it a one-value block when
    `__plain_list__?` says the built-in Array#each yields exactly one value per element.
+   An index loop reads the storage as CRuby's does, through the private aliases
+   `__ary_size__`, `__ary_at__` and `__ary_slice__`: `size` and `self[i]` would call a
+   subclass's own, and an Array subclass with its own #[] or #size then gave other answers.
 
 9. **A C# method the core already has, under a private alias taken when the prelude
    loads** (`alias :__list_sort_by__ :sort_by`), is often the cheapest helper: it is not a
    port to C#, and the alias keeps a program's redefinition of the public name from
    reaching the core method that uses it. Check that its semantics (stability, how it
-   re-reads the receiver's size, `break`) are the ones needed.
+   re-reads the receiver's size, `break`) are the ones needed, and that it does not take
+   over something rule 8 keeps: a C# method that calls the block itself drops the #each
+   frame, so hand it keys the #each walk made instead (`__list_sort_by_key__`).
 
 What this skill does not do: move the method to C#, change what it returns or raises, or
 write a per-element loop in Ruby (a `while ... yield` runs at 100 ns per element against 9

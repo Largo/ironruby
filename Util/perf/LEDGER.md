@@ -456,7 +456,7 @@ Profile (`Util/perf/profile.sh`, self time):
     (`method(:respond_to?).owner`) and calls #to_s through `bind_call`; CRuby decides that in
     C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
-    (`min_by(2)` 3.8 -> 1.9). Open beside speed: `min_by(n)`'s tie order is input order,
+    (`min_by(2)` 3.8 -> 2.9 after the review fix below). Open beside speed: `min_by(n)`'s tie order is input order,
     MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
     now Array's own as in MRI), and `flat_map` (2.2 -> 1.7), `filter_map` (2.1 -> 1.6).
     /perf-core loop stopped 2026-11-18: what is left above 2x (`Array#sum` and `Range#sum`
@@ -507,13 +507,19 @@ with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, b
   build (CRuby 698). Keys that do not compare now raise the key's error, as MRI. Learned:
   sorting four Arrays by `Array#<=>` cost 950 ns - prefer a C# method the prelude already
   has, taken under an alias at load so a redefinition cannot reach it.
+  Review fix (PR 228): the C# sort_by called the block itself, so a backtrace from it showed
+  Array#sort_by where MRI's shows Array#each, and a count of 0 or a negative one ran the
+  block before answering [] or raising. The keys now come from a walk with #each and are
+  handed to the C# sort by position, and the count is checked first: 1266 -> 2040 ns
+  (`max_by(2)` 1295 -> 2116), still under the 2676 before. Next lever: a C# helper that
+  sorts the elements by keys it is given, leaving out the second block call per element.
 - **perf/minby (/perf-core) - `min_by` and `max_by` without a rest Array or a `|*values|`
   block**: `[1, 2, 3, 4].min_by { }` 1339 -> 1032 ns on the merged build (CRuby 448),
   `max_by` 1300 -> 969. Still #each underneath, because CRuby's backtraces show Array#each
   under an Enumerable method; an index loop that dropped that frame was caught by
   Backtrace_LibraryFrames1.
 - **perf/toh (/perf-core) - `Array#to_h` as MRI's `rb_ary_to_h`**: an index loop,
-  `block_given?` once, each pair through `Array.try_convert`. `[1, 2, 3, 4].to_h { }` 2120 ->
+  `block_given?` once, each pair through `Array.try_convert`. `[1, 2, 3, 4].to_h { |x| [x, x] }` 2120 ->
   1276 ns on the merged build (CRuby 548), `[[1, 2]].to_h` 796 -> 376 (114); three cases now
   give CRuby's answer (an Array subclass with its own #to_ary, a bad #to_ary, a BasicObject).
 - **perf/string, a52c7501 (/perf-core) - `Kernel#String` answers a String without a
