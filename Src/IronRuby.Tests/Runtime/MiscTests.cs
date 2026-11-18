@@ -7224,6 +7224,7 @@ def w_two(&b); w_yield(&b); end
 def w_sym; [1, 2].map(&:to_s); end
 def w_local(f); yield1(&f); end
 def w_lambda(&b); lambda(&b); end
+def w_lambda_dup(&b); lambda(&b.dup); end
 def w_names(&b); yield1(&b); local_variables; end
 def r_return; w_two { return :returned }; :after; end
 def r_break; w_yield { break :broke }; end
@@ -7232,6 +7233,7 @@ p w_yield { |x| x + 1 }, w_given, w_given { }, w_take(&pr).equal?(pr), w_take, w
 p w_local(proc { |x| x + 100 }), w_local(:succ), w_names { }, r_return, r_break
 p 40.times.map { |i| w_yield { |x| x + i } }.sum, 40.times.map { |i| i.odd? ? w_given { } : w_given }.uniq
 begin; w_lambda { }; rescue ArgumentError => e; p e.message; end
+begin; w_lambda_dup { }; rescue ArgumentError => e; p e.message; end
 p w_lambda(&->(x) { x }).lambda?
 begin; w_local(1); rescue TypeError => e; p e.message; end
 def boom(&b); yield1(&b); raise ""boom""; end
@@ -7251,6 +7253,7 @@ nil
 :broke
 820
 [false, true]
+""the lambda method requires a literal block""
 ""the lambda method requires a literal block""
 true
 ""no implicit conversion of Integer into Proc""

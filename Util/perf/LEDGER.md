@@ -505,7 +505,9 @@ Profile (`Util/perf/profile.sh`, self time):
   block argument. One thing the matrix caught: a light frame that names its block stands for
   itself by that Proc, which `BlockParam.IsLiteralBlock` took for a library call's literal
   block, so `def w(&b) = lambda(&b)` made a lambda where CRuby raises; such a Proc is now
-  marked (`Proc.IsMethodConverted`). `prelude-cost.rb`, ten alternating rounds against
+  marked (`Proc.IsMethodConverted`), and
+  `IsLiteralBlock` asks the converter, so a `dup` or `clone` of it is not literal either (review;
+  `x.then { lambda(&b.dup) }` was already wrong on master). `prelude-cost.rb`, ten alternating rounds against
   master at load 2.5: `w_pass` (one layer) 362 -> 288 ns (0.80 of the switch-off build),
   `w_pass2` (two layers) 374 -> 268 (0.72), the bare call `w_raw` unchanged (CRuby 72, 112,
   152). Over spec/core of ten classes, 266 prelude methods are light frames against 238

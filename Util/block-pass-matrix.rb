@@ -85,6 +85,9 @@ def dm(name, &b); self.class.send(:define_method, name, &b); end
 def w_ie(o, &b); o.instance_exec(5, &b); end
 def w_proc(&b); proc(&b); end
 def w_lambda(&b); lambda(&b); end
+def w_lambda_dup(&b); lambda(&b.dup); end
+def w_lambda_clone(&b); lambda(&b.clone); end
+def w_lambda_in_block(x, &b); x.then { lambda(&b.dup) }; end
 def w_binding_callee(&b); binding_of(&b); end
 def binding_of(&b); b.binding.local_variable_get(:v); end
 def w_each(a, &b); a.each(&b); end
@@ -100,6 +103,10 @@ t('define_method') { dm(:dm_probe) { |x| x * 2 }; dm_probe(4) }
 t('instance_exec') { w_ie("s") { |x| [self, x] } }
 t('Kernel#proc') { w_proc { 9 }.call }
 t('Kernel#lambda keeps a proc a proc') { w_lambda { 9 }.lambda? }
+t('Kernel#lambda of a dup') { begin; w_lambda_dup { }.lambda?; rescue ArgumentError => e; e.message; end }
+t('Kernel#lambda of a clone') { begin; w_lambda_clone { }.lambda?; rescue ArgumentError => e; e.message; end }
+t('Kernel#lambda of a dup in a block') { begin; w_lambda_in_block(1) { }.lambda?; rescue ArgumentError => e; e.message; end }
+t('Kernel#lambda of a lambda\'s dup') { w_lambda_dup(&->() { }).lambda? }
 t('the block\'s binding') { v = 77; w_binding_callee { v } }
 t('Array#each') { r = []; w_each([1, 2]) { |x| r << x }; r }
 t('each_with_index') { r = []; w_each_with_index([:a]) { |x, i| r << [x, i] }; r }
