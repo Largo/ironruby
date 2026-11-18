@@ -504,6 +504,82 @@ nil
             }
         }
 
+        /// <summary>
+        /// -X:JITResume (a prototype, off by default; Docs/jit-resume-deopt.md, stage 1): a body whose attribute
+        /// operations come after an effect - Richards' Scheduler#hold_self - is compiled, each of them falling back
+        /// to the call it stands for when the receiver is not what the profile saw: another class with a writer of
+        /// its own, a private writer, a frozen receiver, method_missing. The effect before them runs once per call
+        /// whatever they do, and the output is CRuby 4.0's with the switch and without.
+        /// </summary>
+        public void JitResume1() {
+            int fallbacks = IronRuby.Runtime.Jit.JitRuntime.Fallbacks;
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITResume"] = true; });
+            AreEqual(engine.CreateScriptSourceFromString(JitResumeScript, "jitresume.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitResumeExpected);
+            // only a body compiled with fallbacks makes one, and each of the four odd receivers is one at least:
+            // the output is the same when hold_self stays generic
+            Assert(IronRuby.Runtime.Jit.JitRuntime.Fallbacks >= fallbacks + 4);
+            fallbacks = IronRuby.Runtime.Jit.JitRuntime.Fallbacks;
+            AreEqual(Engine.CreateScriptSourceFromString(JitResumeScript, "jitresume.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitResumeExpected);
+            // and without the switch it does stay generic
+            Assert(IronRuby.Runtime.Jit.JitRuntime.Fallbacks == fallbacks);
+        }
+
+        // hold_self made hot with a plain task, then called with each odd one, after the same calls of a cold
+        // copy of it; the output is CRuby 4.0's.
+        private const string JitResumeScript = @"
+class Task; attr_accessor :task_holding, :link; end
+class Sched
+  attr_accessor :hold_count, :current_task
+  def initialize(t); @hold_count = 0; @current_task = t; end
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+end
+class Cold < Sched
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+end
+class Other
+  attr_reader :seen
+  def task_holding=(v); @seen = [:w, v]; end
+  def link; :other; end
+end
+class Hidden; attr_accessor :task_holding, :link; private :task_holding=; end
+class Missing; def method_missing(n, *a); [n, a]; end; def respond_to_missing?(*) = true; end
+probe = lambda do |s, plain|
+  r = [s.hold_count]
+  other = Other.new
+  s.current_task = other
+  r << s.hold_self << other.seen.inspect << s.hold_count
+  s.current_task = Hidden.new
+  r << (begin; s.hold_self; rescue NoMethodError => e; e.message; end) << s.hold_count
+  s.current_task = Task.new.freeze
+  r << (begin; s.hold_self; rescue FrozenError => e; e.class; end) << s.hold_count
+  s.current_task = Missing.new
+  r << s.hold_self.inspect << s.hold_count
+  s.current_task = plain
+  r << s.hold_self << plain.task_holding << s.hold_count
+end
+plain = Task.new; plain.link = :plain
+# First on a class whose hold_self stays cold: what the probes define on their first use is then
+# defined before Sched#hold_self is compiled. A method defined after that fails the body's version
+# check at its entry, and the probes would run the generic body.
+cold = probe.call(Cold.new(plain), plain)
+s = Sched.new(plain)
+r = []
+120.times { r << s.hold_self }
+r = r.uniq + probe.call(s, plain) + cold
+r.join(',')
+";
+        private const string JitResumeExpected = "plain,120,other,[:w, true],121,private method 'task_holding=' called for an instance of Hidden,122,FrozenError,123,[:link, []],124,plain,true,125,0,other,[:w, true],1,private method 'task_holding=' called for an instance of Hidden,2,FrozenError,3,[:link, []],4,plain,true,5";
+
         // Callers and callees made hot, then probed where a direct call has to give way; the output is CRuby 4.0's.
         private const string JitCallsScript = @"
 def fib(k) = k < 2 ? k : fib(k - 1) + fib(k - 2)

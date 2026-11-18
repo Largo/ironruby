@@ -72,9 +72,9 @@ namespace IronRuby.Runtime.Jit {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} direct-calls={8} compile={7:F1}ms",
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} retired={5} retried={6} direct-calls={8} fallbacks={9} compile={7:F1}ms",
                     Specialized, Rejected, ScreenRejected, Deopts, Invalidations, DeoptRetired, DeoptRetried,
-                    CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency, DirectCallBodies);
+                    CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency, DirectCallBodies, Fallbacks);
                 PrintScreenReasons();
             };
         }
@@ -541,6 +541,35 @@ namespace IronRuby.Runtime.Jit {
                 return true;
             }
 
+            // -X:JITResume. A self-guarded operation (JitRuntime.TryReadAttr) goes on after a check that
+            // fails, so its site is asked about the same classes again and again, and resolving the method
+            // each time costs more than the call it stands for: a second class Name is the attribute on,
+            // and the class it was last found to be something else on, are remembered next to _bound.
+            private volatile Binding _alsoBound, _unbound;
+
+            /// <summary>
+            /// Whether Name is the attribute on cls, for a site that is not bound to it (IsBoundTo): by what is
+            /// remembered, or as Bind finds it - which then keeps a binding to another class that still holds.
+            /// </summary>
+            internal bool TryBind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                var also = _alsoBound;
+                if (also != null && also.Class == cls && also.Version == version) { return true; }
+                var unbound = _unbound;
+                if (unbound != null && unbound.Class == cls && unbound.Version == version) { return false; }
+                if ((Writer ? WriterVariable(cls, Name, PublicOnly) : ReaderVariable(cls, Name, PublicOnly)) != VariableName) {
+                    _unbound = new Binding(cls, version);
+                    return false;
+                }
+                var bound = _bound;
+                if (bound != null && bound.Version == version && bound.Class != cls) {
+                    _alsoBound = new Binding(cls, version);
+                } else {
+                    _bound = new Binding(cls, version);
+                }
+                return true;
+            }
+
             /// <summary>
             /// The instance variable `name' reads on cls, if it is an attr_reader there (a public one,
             /// if <paramref name="publicOnly"/>).
@@ -750,6 +779,29 @@ namespace IronRuby.Runtime.Jit {
                 int version = RubyModule.GlobalMethodVersion;
                 if (Member(cls, Name, PublicOnly, Writer) != Index) { return false; }
                 _bound = new Binding(cls, version);
+                return true;
+            }
+
+            // as SelfAttrSite's
+            private volatile Binding _alsoBound, _unbound;
+
+            /// <summary>As SelfAttrSite.TryBind.</summary>
+            internal bool TryBind(RubyClass/*!*/ cls) {
+                int version = RubyModule.GlobalMethodVersion;
+                var also = _alsoBound;
+                if (also != null && also.Class == cls && also.Version == version) { return true; }
+                var unbound = _unbound;
+                if (unbound != null && unbound.Class == cls && unbound.Version == version) { return false; }
+                if (Member(cls, Name, PublicOnly, Writer) != Index) {
+                    _unbound = new Binding(cls, version);
+                    return false;
+                }
+                var bound = _bound;
+                if (bound != null && bound.Version == version && bound.Class != cls) {
+                    _alsoBound = new Binding(cls, version);
+                } else {
+                    _bound = new Binding(cls, version);
+                }
                 return true;
             }
 

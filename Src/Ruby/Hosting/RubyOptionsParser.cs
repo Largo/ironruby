@@ -736,6 +736,12 @@ namespace IronRuby.Hosting {
                         case "JITCalls":
                             LanguageSetup.Options["JITCalls"] = ScriptingRuntimeHelpers.True;
                             return;
+
+                        // a prototype: an attribute operation after a typed body's first effect falls back
+                        // to the call instead of keeping the body generic (Runtime/Jit/JitRuntime.Resume.cs)
+                        case "JITResume":
+                            LanguageSetup.Options["JITResume"] = ScriptingRuntimeHelpers.True;
+                            return;
                     }
 
                     if (optionValue != null && optionValue.StartsWith("JITMethods=", StringComparison.Ordinal)) {

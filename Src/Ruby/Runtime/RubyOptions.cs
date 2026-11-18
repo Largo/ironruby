@@ -57,6 +57,7 @@ namespace IronRuby.Runtime {
         private readonly bool _osr;
         private readonly string _jitMethods;
         private readonly bool _jitCalls;
+        private readonly bool _jitResume;
 
 #if DEBUG
         public static bool CompileRegexps;
@@ -254,6 +255,15 @@ namespace IronRuby.Runtime {
             get { return _jitCalls; }
         }
 
+        /// <summary>
+        /// -X:JITResume: after the first effect of a body the method JIT compiles, an attribute read or
+        /// write that finds something else makes the call itself and the body goes on, instead of the
+        /// body being declined (Jit.JitRuntime.ResumeFallback, a prototype; Docs/jit-resume-deopt.md).
+        /// </summary>
+        public bool JitResume {
+            get { return _jitResume; }
+        }
+
         public string StandardLibraryPath {
             get { return _standardLibraryPath; }
         }
@@ -315,6 +325,7 @@ namespace IronRuby.Runtime {
             _osr = GetOption(options, "OSR", System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported);
             _jitMethods = GetOption(options, "JITMethods", (string)null);
             _jitCalls = GetOption(options, "JITCalls", false);
+            _jitResume = GetOption(options, "JITResume", false);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);

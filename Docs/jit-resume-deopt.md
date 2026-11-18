@@ -1,9 +1,10 @@
 # A deopt that does not restart the body: design
 
-Status: design only, nothing here is implemented. It answers gap 1 of `Util/perf/LEDGER.md`
-("Calls of other methods from hot bodies"): `CallSite.Target` is 24-32% of every benchmark,
-and Richards, Towers, DeltaBlue, Bounce and CD's `tree_insert` all wait on one rule of the
-method JIT.
+Status: stage 1 is built, as a prototype behind `-X:JITResume` (off by default; "Stage 1 as
+built" at the end says what it takes and what it leaves out). The rest is design. It answers
+gap 1 of `Util/perf/LEDGER.md` ("Calls of other methods from hot bodies"): `CallSite.Target` is
+24-32% of every benchmark, and Richards, Towers, DeltaBlue, Bounce and CD's `tree_insert` all
+wait on one rule of the method JIT.
 
 ## The rule, and why it costs so much
 
@@ -358,3 +359,74 @@ the `while` statement with `#resume` clear, and the generic code evaluates the c
 the first's index, which would run an iteration whose condition nobody evaluated. Then
 `-X:JITResume` on by default, after a full sweep and the benchmark suite, if stages 1-4
 measured as faster.
+
+## Stage 1 as built
+
+`-X:JITResume` (`RubyOptions.JitResume`; `JitCompiler.Resume.cs`, `JitRuntime.Resume.cs`,
+`JitStub.ResumeBody`). A body that `TryCompile` declines for a deopt after an effect is compiled
+once more with the attribute and Struct member operations after its first effect self-guarded
+(`JitRuntime.TryReadAttr`, `TryWriteAttr`, `TryReadStructMember`, `TryWriteStructMember`: the
+class, the method version, frozenness, and that no TracePoint listens for an event a typed body
+leaves out). Where the guard fails the operation is `JitRuntime.ResumeFallback`. Without the
+switch nothing is compiled differently, and with it only bodies that were declined before.
+`IR_JIT_VERBOSE=1` marks such a body `(fallbacks)` and prints `fallbacks=` in its last line.
+
+What the fallback carries, against the table "The state a continuation needs":
+
+- **The call** is the source's: two sites per operation with the flags `CallSiteBuilder` gives
+  the generic body's site, one bound with `HasLightScope` and the declaring scope, the other
+  the full one, used when the first answers `LightScopeRequired` (or `LightBlockGiven`).
+- **The scope** is made at most once per invocation (`ResumeFrame.MakeScope`: `EnterLightMethod`
+  for the flow-control frame, then `CreateMethodScopeLazy` with no locals, self, the block, the
+  declaring scope and module), and the body is wrapped in a catch of `MethodUnwinder` that
+  takes one aimed at that scope, and a finally that leaves the frame (`LeaveLightMethodFrame`).
+- **The block**: the typed body takes it as a second parameter (`JitCode.TakesBlock`).
+- **The alias** the method was called by is taken at the invocation's first fallback
+  (`RubyOps.TakePendingCallee`), before any Ruby code has run.
+- **Frame and line.** The typed body stays part of its entry, whose frame backtraces leave out.
+  A fallback is called through a trampoline compiled under the generic body's frame name, and
+  enters a `PrecompiledFrames` record with the statement's line around the call, as a compiled
+  generic body has for its whole run: one frame of the method, at the line of the operation.
+- **The stack** is checked in every fallback.
+- **Tracing.** The statements after the first self-guarded operation carry the generic body's
+  `:line` hooks, and the body its `:return` hook, behind the generic body's test and with the
+  scope made on demand.
+- **Accounting.** A fallback calls `JitStub.OnDeopt` with what it cost over the call itself, so
+  an entry that falls back on most calls is retired as one that deopts is. The constants are
+  the deopt path's, not tuned for fallbacks.
+- A body with fallbacks is never bound as a direct callee (`BindCallee`) and never inlined.
+- **The site** of a self-guarded operation is asked about the same classes on every call,
+  where a deopting one is asked once: it remembers a second class the name is the attribute
+  on, and the class it was last found to be something else on (`SelfAttrSite.TryBind`).
+  Without the first a task of two classes in turn resolved the method on every call and was
+  slower compiled than generic.
+
+Narrower than the stage's text above, to keep each of those exact:
+
+- **A flat list of statements.** No `if`, `unless`, `while`, `case`, `return`, `begin` or
+  `(a; b)` anywhere in the body, before the first effect either: the `:line` hooks are then one
+  per statement that starts a new line, which is what the generic body has, and a self-guarded
+  operation is always a statement of the method (or the value of an attribute write that is
+  one), never emitted before something that runs after it.
+- **After the first effect** only instance variable reads, literals, self, the self-guarded
+  operations, and `@x = v` of such a plain value while no self-guarded operation precedes it
+  (after one, self may have been frozen by a callee, and the write deopts on that).
+- **No** element or global write, construction, bound callee, loop or self-call in the body;
+  no refinement record (`using` where the method is defined); not with `-X:JITMethods`.
+- The body's value is an object (the filter's is).
+
+What it costs where it does not fit: a body compiled for one class of receiver that then
+gets another on every other call falls back, is retired, and is tried again eight times with
+the cool-down doubling (about two seconds in all) before it is retired for good; over that
+time `hold_self_odd` of `Util/bench/core-small.rb` is 8% more instructions and 13% more time
+than generic, and the same as generic afterwards. The retirement rule is the deopt path's.
+
+The rows are section 11 of `Util/jit-matrix.rb`; `ED_CHECK=1 JR_EXPECT=1` asserts that each
+row's body was specialized and that its probe moved the fallback counter.
+
+Not done: `:c_call` for the attribute a fallback calls under a TracePoint is whatever the
+generic site reports, which for an attr_reader or attr_writer is nothing, where CRuby reports
+one (not this stage's: the generic body is the same). Read from the code and not run: the
+instance variable read of a non-RubyObject self in a non-main Ractor deopts
+(`JitRuntime.GetIVar`, which the compiler does not count as something that can), after an
+effect too, as it would on master for `@a = 1; @b`.

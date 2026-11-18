@@ -984,6 +984,8 @@ namespace IronRuby.Runtime.Jit {
             internal object LoopSelf;
             // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
             internal bool LongRuns;
+            // -X:JITResume: what the fallbacks of the method's body would share, if it may have any (JitStub.ResumeBody).
+            internal JitRuntime.ResumeBody Resume;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
@@ -1625,6 +1627,11 @@ namespace IronRuby.Runtime.Jit {
                 JT rt;
                 receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
             }
+            if (_tailStatement) {
+                // after the first effect (JitCompiler.Resume.cs): the read under its own checks, or the call
+                var attrSite = Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, explicitReceiver));
+                return EmitGuardedRead(node, receiver, explicitReceiver, (r, v) => Ast.Call(JitRuntime.M("TryReadAttr"), r, attrSite, v), out type);
+            }
             _canDeopt = true;
             MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), receiver,
                 Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, explicitReceiver)));
@@ -1661,6 +1668,14 @@ namespace IronRuby.Runtime.Jit {
             JT valueType;
             var value = Emit(right, out valueType);
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            if (_tailStatement) {
+                // after the first effect (JitCompiler.Resume.cs): the store under its own checks, or the call
+                _ivarWrite = true;
+                if (explicitReceiver) { _effectNotOnSelf = true; }
+                var attrSite = Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true));
+                return EmitGuardedWrite(node, receiver, value, valueType, explicitReceiver,
+                    (r, v) => Ast.Call(JitRuntime.M("TryWriteAttr"), Ast.Constant(_context), r, v, attrSite), out type);
+            }
             var receiverTemp = Ast.Variable(typeof(object), "#receiver");
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
             _canDeopt = true;
@@ -1693,6 +1708,11 @@ namespace IronRuby.Runtime.Jit {
                 JT rt;
                 receiver = Coerce(Emit(node.Target, out rt), rt, JT.Obj);
             }
+            if (_tailStatement) {
+                // as EmitMethodAttrRead's
+                var memberSite = Ast.Constant(new JitRuntime.StructMemberSite(node.MethodName, member, explicitReceiver, false));
+                return EmitGuardedRead(node, receiver, explicitReceiver, (r, v) => Ast.Call(JitRuntime.M("TryReadStructMember"), r, memberSite, v), out type);
+            }
             _canDeopt = true;
             type = JT.Obj;
             return Ast.Call(JitRuntime.M("ReadStructMember"), receiver,
@@ -1706,6 +1726,14 @@ namespace IronRuby.Runtime.Jit {
             JT valueType;
             var value = Emit(right, out valueType);
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
+            if (_tailStatement) {
+                // as EmitMethodAttrWrite's
+                _ivarWrite = true;
+                if (explicitReceiver) { _effectNotOnSelf = true; }
+                var memberSite = Ast.Constant(new JitRuntime.StructMemberSite(node.Name, member, explicitReceiver, true));
+                return EmitGuardedWrite(node, receiver, value, valueType, explicitReceiver,
+                    (r, v) => Ast.Call(JitRuntime.M("TryWriteStructMember"), r, v, memberSite), out type);
+            }
             var receiverTemp = Ast.Variable(typeof(object), "#receiver");
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
             _canDeopt = true;

@@ -31,6 +31,10 @@
  *     division by zero raise JitDeoptException, caught at the entry,
  *     which re-runs the generic body from the top. JitCompiler only produces code that
  *     can deopt for a body with no observable effect, so the restart is invisible.
+ *   - -X:JITResume (a prototype, off by default): an attribute operation after a body's first
+ *     effect checks what it relies on itself and makes the call where the check fails
+ *     (JitRuntime.ResumeFallback), so nothing restarts; the body takes the method's block, and
+ *     its fallbacks count as its deopts.
  *
  * ***************************************************************************/
 
@@ -796,6 +800,10 @@ namespace IronRuby.Runtime.Jit {
             spec.PinnedClass = needsClassGuard ? _receiverClass : null;
             spec.Typed = typed;
             spec.Entry = CompileEntry(BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec));
+            if (code.HasFallbacks) {
+                // the body's fallbacks count as this specialization's deopts (JitRuntime.ResumeFallback)
+                hints.Resume.Specialization = spec;
+            }
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
                 spec.Direct = BuildDirectEntry(code, callee, version, spec).Compile();
@@ -815,9 +823,9 @@ namespace IronRuby.Runtime.Jit {
             JitRuntime.Specialized++;
             if (code.DirectCalls) { JitRuntime.DirectCallBodies++; }
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}",
+                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}{6}",
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, code.EmittedSelfCall ? " (self-call)" : "",
-                    code.DirectCalls ? " (direct calls)" : "");
+                    code.DirectCalls ? " (direct calls)" : "", code.HasFallbacks ? " (fallbacks)" : "");
             }
             return true;
         }
@@ -897,6 +905,9 @@ namespace IronRuby.Runtime.Jit {
             // Element writes are undone by the entry's undo log, or are the last thing the body does; a
             // construction runs an initialize, which may redefine what the caller has bound.
             if (code.WritesElements || code.Construction) { return null; }
+            // -X:JITResume: a fallback runs Ruby code, after which the caller would go on with what its own
+            // entry checked; and the body takes the method's block, which a direct call does not pass.
+            if (code.HasFallbacks || code.TakesBlock) { return null; }
             // The body's own inlined and direct calls were resolved from the class its entry pins.
             if (spec.PinnedClass != null && spec.PinnedClass != receiverClass) { return null; }
 
@@ -937,7 +948,60 @@ namespace IronRuby.Runtime.Jit {
 
         private JitCompiler.ReceiverHints/*!*/ Hints() {
             return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample,
-                ArgClasses = ArgClasses() };
+                ArgClasses = ArgClasses(), Resume = ResumeBody() };
+        }
+
+        // ---- -X:JITResume --------------------------------------------------------------------
+
+        // What the generic body's :line and :return hooks report as the path; null for a body without them.
+        private string _sourcePath;
+        // The frame the body's fallbacks run under: JitRuntime.ResumeFallback called from a method that has
+        // the generic body's name, so that a backtrace taken in a callee has this method's frame in it. The
+        // typed body itself is part of its entry, whose frame a backtrace leaves out.
+        private Func<JitRuntime.ResumeSite, object, Proc, JitRuntime.ResumeFrame, object, object, object> _resumeTrampoline;
+
+        /// <summary>
+        /// What the compiler needs to give the body fallbacks (JitCompiler.Resume.cs), or null if the method
+        /// may not have any: stage 1 of Docs/jit-resume-deopt.md takes a method with no parameters and no
+        /// locals, whose scope - should a callee ask for it - is self and the block and nothing that a typed
+        /// body would have to keep current. Not with a refinement record, which the scope would carry, nor
+        /// where the typed bodies are emitted as methods (-X:JITMethods).
+        /// </summary>
+        private JitRuntime.ResumeBody ResumeBody() {
+            if (!_context.RubyOptions.JitResume || _frameName == null || _sourcePath == null || _declaringScope == null ||
+                _definitionRefinements != null || _arity != 0 || _keywords != null || _perCountMandatory >= 0 ||
+                JitMethodEmitter.For(_context) != null) {
+                return null;
+            }
+            foreach (var local in _ast.DefinedScope) {
+                return null;
+            }
+            return new JitRuntime.ResumeBody(_context, _declaringScope, _declaringModule, _ast.Name, _frameName, _sourcePath,
+                _ast.Location.End.Line, ResumeTrampoline);
+        }
+
+        // Called by the thread that is compiling the method (it holds _compiling).
+        private Func<JitRuntime.ResumeSite, object, Proc, JitRuntime.ResumeFrame, object, object, object>/*!*/ ResumeTrampoline() {
+            if (_resumeTrampoline == null) {
+                var site = Ast.Parameter(typeof(JitRuntime.ResumeSite), "site");
+                var self = Ast.Parameter(typeof(object), "self");
+                var blk = Ast.Parameter(typeof(Proc), "block");
+                var frame = Ast.Parameter(typeof(JitRuntime.ResumeFrame), "frame");
+                var receiver = Ast.Parameter(typeof(object), "receiver");
+                var value = Ast.Parameter(typeof(object), "value");
+                var result = Ast.Variable(typeof(object), "#result");
+                // (the KeepAlive keeps the call out of tail position, where the runtime would drop this frame:
+                // JitCompiler.KeepOutOfTailPosition)
+                _resumeTrampoline = Ast.Lambda<Func<JitRuntime.ResumeSite, object, Proc, JitRuntime.ResumeFrame, object, object, object>>(
+                    Ast.Block(typeof(object), new[] { result },
+                        Ast.Assign(result, Ast.Call(JitRuntime.M("ResumeFallback"), site, self, blk, frame, receiver, value)),
+                        Ast.Call(typeof(GC).GetMethod("KeepAlive"), self),
+                        result
+                    ),
+                    _frameName, new[] { site, self, blk, frame, receiver, value }
+                ).Compile();
+            }
+            return _resumeTrampoline;
         }
 
         private RubyClass[][]/*!*/ ArgClasses() {
@@ -1180,8 +1244,12 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            var typedArgs = new MSA.Expression[_typedCount + 1];
+            var typedArgs = new MSA.Expression[_typedCount + (code.TakesBlock ? 2 : 1)];
             typedArgs[0] = self;
+            if (code.TakesBlock) {
+                // -X:JITResume: a callee of one of the body's fallbacks may ask for the method's scope
+                typedArgs[_typedCount + 1] = blk;
+            }
             for (int i = 0; i < _typedCount; i++) {
                 if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; continue; }
                 switch (code.ParameterTypes[i]) {
@@ -1719,7 +1787,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
-            RubyScope declaringScope, StrongBox<RefinementActivation> definitionRefinements, string frameName = null) {
+            RubyScope declaringScope, StrongBox<RefinementActivation> definitionRefinements, string frameName = null, string sourcePath = null) {
             JitRuntime.HookStats();
 
             // Tracing and coverage need the real frame. (A TracePoint enabled at run time is the
@@ -1766,6 +1834,7 @@ namespace IronRuby.Runtime.Jit {
             }
             stub._definitionRefinements = definitionRefinements;
             stub._frameName = frameName;
+            stub._sourcePath = sourcePath;
             return stub.Trampoline;
         }
 

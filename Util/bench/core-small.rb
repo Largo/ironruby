@@ -110,6 +110,22 @@ class Sch
   end
 end
 def hold_loop(sch, n); i = 0; s = 0; while i < n; s += sch.hold_self; i += 1; end; s + sch.hold_count; end
+# The same with the task changing on every call: between two classes that both have the attributes
+# (hold_self_2cls), and between one that has them and one with methods of those names (hold_self_odd),
+# which a body compiled for the attributes (-X:JITResume) has to fall back for.
+class Tk2; attr_accessor :task_holding, :link; end
+class TkOdd; def task_holding=(v); @h = v; end; def link; 5; end; end
+class Sch; attr_writer :current_task; end
+def hold_loop2(sch, a, b, n)
+  i = 0; s = 0
+  while i < n
+    sch.current_task = (i & 1) == 0 ? a : b
+    s += sch.hold_self
+    i += 1
+  end
+  s + sch.hold_count
+end
+def tk(c); t = c.new; t.link = 3; t; end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 # INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
 # seven sections as the time is. See Util/perf/instructions.rb.
@@ -211,3 +227,5 @@ t("drop_while", N) { |n| i = 0; s = 0; while i < n; s += h.m81; i += 1; end; s }
 t("flat_map_scalar", N) { |n| i = 0; s = 0; while i < n; s += h.m82; i += 1; end; s }
 t("uniq_blk", N) { |n| i = 0; s = 0; while i < n; s += h.m83; i += 1; end; s }
 t("hold_self", N) { |n| hold_loop(Sch.new, n) }
+t("hold_self_2cls", N) { |n| hold_loop2(Sch.new, tk(Tk), tk(Tk2), n) }
+t("hold_self_odd", N) { |n| hold_loop2(Sch.new, tk(Tk), TkOdd.new, n) }
