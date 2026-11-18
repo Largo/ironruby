@@ -214,6 +214,8 @@ end
 # ---- wrappers
 class Array
   def raw(a = 0); yield a; end
+  def w_pass(&block); raw(1, &block); end
+  def w_pass2(&block); w_pass(&block); end
   def w_splat(*args, &block); raw(*args, &block); end
   def w_splat_sel(*args, &block); args.empty? ? raw(&block) : raw(args[0], &block); end
   def w_opt(a = (no_a = true; nil), &block); no_a ? raw(&block) : raw(a, &block); end
@@ -281,6 +283,8 @@ class H
   def g_defy; @a.g_defy { |x| x }.size; end
   def g_y; @a.g_y { |x| x }.size; end
   def w_raw; @a.raw(1) { |x| x }; end
+  def w_pass; @a.w_pass { |x| x }; end
+  def w_pass2; @a.w_pass2 { |x| x }; end
   def w_splat; @a.w_splat(1) { |x| x }; end
   def w_splat_sel; @a.w_splat_sel(1) { |x| x }; end
   def w_opt; @a.w_opt(1) { |x| x }; end
@@ -412,6 +416,8 @@ t("g_defy", N) { |n| i = 0; s = 0; while i < n; s += h.g_defy; i += 1; end; s }
 
 # wrappers
 t("w_raw", N) { |n| i = 0; s = 0; while i < n; s += h.w_raw; i += 1; end; s }
+t("w_pass", N) { |n| i = 0; s = 0; while i < n; s += h.w_pass; i += 1; end; s }
+t("w_pass2", N) { |n| i = 0; s = 0; while i < n; s += h.w_pass2; i += 1; end; s }
 t("w_splat", N) { |n| i = 0; s = 0; while i < n; s += h.w_splat; i += 1; end; s }
 t("w_splat_sel", N) { |n| i = 0; s = 0; while i < n; s += h.w_splat_sel; i += 1; end; s }
 t("w_opt", N) { |n| i = 0; s = 0; while i < n; s += h.w_opt; i += 1; end; s }
