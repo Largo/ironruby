@@ -656,6 +656,42 @@ Profile (`Util/perf/profile.sh`, self time):
     475 ns a level at depth 10 and 552 at depth 1000. Narrow things to try: let
     `Dictionary#at` compile (type a call on a local assigned in the loop); the per-call
     cost of `(a..b).each { |i| yield ... }` (gap 14); `loop` through gap 22.
+26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
+    thing that has to stay fast while the tiers stay on by default, and it is not fast).
+    2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
+    `IR_CONFIG` is not set and what a release ships), best of five, ms, load 2.0 (an
+    experiment was building beside it): IronRuby / with `-X:NoJIT -X:NoOSR` / CRuby /
+    TruffleRuby native -
+    `-e 1` 526 / 538 / 54 / 18; `gem --version` 683 / 665 / 118 / 392; `gem list` 1651 /
+    1496 / 217 / 836; `-e 'require "irb"'` 1389 / 1316 / 153 / 663; `echo 1+1 | irb` 2184
+    / 2060 / 154 / not taken. (CRuby's and TruffleRuby's were taken at load 1.1 a few
+    minutes earlier.) The Release build without ReadyToRun, which is what this ledger's
+    "start-up" lines and the gate measured until now: 1644, 1912, 3475, 3214.
+    What that says: the tiers are 0-10% of it (most on `gem list`, where much Ruby runs
+    once), so switching them off buys nothing; RubyGems is about 165 ms of `-e 1`
+    (`--disable-gems`: 361); and the tools pay most after the runtime is up - `gem list`
+    1.0 s beyond `gem --version`, an irb session 1.7 s beyond `-e 1` - which is Ruby code
+    being parsed, compiled and run for the first time. Nobody has split that into
+    parsing, building expression trees, the .NET JIT on them, call-site rules being
+    made, and the cold code itself; that split is the first experiment here.
+    What exists already, outside this ledger: the ReadyToRun host with a start-up profile
+    (`Util/publish-r2r.sh`, `Util/make-startup-mibc.sh`; its header gives 1.37 -> 0.93 s
+    for `-e ''`); a start-up library built by `Util/aot/build-startup.sh` and checked by
+    `Util/aot/check-startup.sh` (`Util/aot/README.md`: the prelude compiled to IL in a
+    saved assembly, so that a process starts without parsing it); and a warm-start
+    prototype (`Util/warm/README.md`: a pool of processes that have already started,
+    `IR_SERVER=1`, by its own figures `-e 1` in 15 ms, 70 MB per idle worker). None of
+    these three was measured here.
+    How the others do it: CRuby compiles nothing at start and has its core in C;
+    TruffleRuby's native image has the core library loaded in the image (18 ms) and then
+    runs `gem` and `irb` cold in its interpreter, 3 to 4 times CRuby's time - the same
+    shape as here, at a third of the size.
+    Ways on, none tried in this loop: the split above; RubyGems and irb's own files in
+    the saved assembly as the prelude is; loading RubyGems lazily (TruffleRuby does);
+    what a cold call site costs to bind the first time, since a tool that runs each
+    site once pays only that; and whether the warm pool can be the default for
+    `gem` and `irb`. The gate times these commands now (perf-gate, step 4), so the
+    work on the tiers cannot make them worse unseen.
 
 ## Landed
 

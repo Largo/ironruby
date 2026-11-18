@@ -218,21 +218,28 @@ baseline's. In round fifteen every check that changed something the loop was bui
 passed, and a loop beside a thread calling `extend` was 15 times slower.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
-these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.
-The command-line tools are what start-up is for, and they run more Ruby before they answer
-than `-e 1` does (RubyGems, irb and its dependencies), so a change to when or what the tiers
-compile is timed on them as well, the same way, each within 5%:
+these do not see, on the ReadyToRun host: it is what `ir.sh` runs when `IR_CONFIG` is not
+set and what a release ships, a Release build on Linux makes it (`Src/Console/bin/R2R`),
+and it starts three times faster than the Release build beside it, so a time taken with
+`IR_CONFIG=Release` is not the start-up anybody sees. Ten times each on both trees, best
+of each, within 5%:
 
 ```sh
-$TREE/ir.sh -S gem --version
-$TREE/ir.sh -S gem list
-$TREE/ir.sh -e 'require "irb"'
+IR_CONFIG=R2R $TREE/ir.sh -e 1
+IR_CONFIG=R2R $TREE/ir.sh -S gem --version
+IR_CONFIG=R2R $TREE/ir.sh -S gem list
+IR_CONFIG=R2R $TREE/ir.sh -e 'require "irb"'
+echo '1+1' | IR_CONFIG=R2R $TREE/ir.sh -S irb
 ```
 
-The tiers are on by default and are meant to stay on; these three and `-e 1` are the price
-that is watched for it. At a7060a27 they took 1.6, 1.9, 3.5 and 3.2 s, of which the tiers
-were 0-10% (`-X:NoJIT -X:NoOSR`: 1.6, 1.8, 3.1, 3.2): start-up is the runtime, the prelude
-and RubyGems, not the JIT, and making it shorter is its own work.
+(`ls -l` the two `ir.dll` first: `ir.sh` falls back to nothing here, and a host older than
+the Release build is the tree before the change.) The command-line tools are what
+start-up is for, and they run more Ruby before they answer than `-e 1` does, so a change
+to when or what the tiers compile shows on them first. The tiers are on by default and
+are meant to stay on; these five are the price that is watched for it. At a7060a27 they
+took 0.53, 0.68, 1.65, 1.39 and 2.18 s, of which the tiers were 0-10% (`-X:NoJIT
+-X:NoOSR`: 0.54, 0.67, 1.50, 1.32, 2.06). Making start-up itself shorter is gap 26 of
+`Util/perf/LEDGER.md`.
 
 ## 5. Verdict
 
