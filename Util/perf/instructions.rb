@@ -3,7 +3,7 @@
 # when Util/perf/ab.rb -i asks for them:
 #
 #   counter = Instructions.open        # nil where there is no counter to open
-#   c0 = counter.read; ...; counter.read - c0
+#   c0 = counter.read; ...; c1 = counter.read      # nil if the counter was lost meanwhile
 #
 # Why count at all: on a machine other people are using, the time of the same binary on the
 # same shape moves by 10% and more from one process to the next, and what a change to a method's
@@ -42,8 +42,12 @@ module Instructions
       [Fiddle::TYPE_LONG, Fiddle::TYPE_VOIDP, Fiddle::TYPE_INT, Fiddle::TYPE_INT, Fiddle::TYPE_INT, Fiddle::TYPE_LONG], Fiddle::TYPE_LONG)
     @read = Fiddle::Function.new(libc['read'], [Fiddle::TYPE_INT, Fiddle::TYPE_VOIDP, Fiddle::TYPE_SIZE_T], Fiddle::TYPE_SSIZE_T)
     # struct perf_event_attr in its first version (64 bytes): type PERF_TYPE_HARDWARE (0), size,
-    # config PERF_COUNT_HW_INSTRUCTIONS (1), and of the flags exclude_kernel and exclude_hv.
-    attr = [0, 64, 1, 0, 0, 0, 0x60, 0, 0, 0].pack('LLQQQQQLLQ')
+    # config PERF_COUNT_HW_INSTRUCTIONS (1), and of the flags pinned, exclude_kernel and
+    # exclude_hv. Pinned, because an event that is not shares the CPU's counters by turns with
+    # whatever else is counting (another perf, a profiler) and then holds the instructions of
+    # part of a section with nothing to say so. A pinned event that cannot have its counter
+    # stops instead, and every read of it from then on is an end of file: .read is nil.
+    attr = [0, 64, 1, 0, 0, 0, 0x64, 0, 0, 0].pack('LLQQQQQLLQ')
     # pid 0 and cpu -1: this thread, on whichever CPU it runs
     @fd = syscall.call(SYS_PERF_EVENT_OPEN, attr, 0, -1, -1, 0)
     return nil if @fd < 0
@@ -53,6 +57,7 @@ module Instructions
     nil
   end
 
+  # The count so far, or nil once the kernel has taken the counter away (see `pinned` above).
   def self.read
     return nil unless @read.call(@fd, @buffer, 8) == 8
     @buffer[0, 8].unpack1('Q')

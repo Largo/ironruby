@@ -104,12 +104,14 @@ INSTR = ENV["INSTR"] && (require_relative "../perf/instructions"; Instructions.o
 def t(name, n)
   return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
-  best = 1e9; fewest = nil; sum = nil
+  best = 1e9; fewest = nil; counted = !!INSTR; sum = nil
   7.times do
-    c0 = INSTR && INSTR.read; t0 = cpu; sum = yield n; d = cpu - t0; c = INSTR && INSTR.read - c0
-    best = d if d < best; fewest = c if c && (fewest.nil? || c < fewest)
+    c0 = INSTR && INSTR.read; t0 = cpu; sum = yield n; d = cpu - t0; c1 = INSTR && INSTR.read
+    best = d if d < best
+    # a read is nil once the counter is lost: then there is no count, rather than one of the sections that had it
+    if c0 && c1 then c = c1 - c0; fewest = c if fewest.nil? || c < fewest else counted = false end
   end
-  printf "%-16s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, fewest ? format("  %.1f instr", fewest.to_f / n) : ""
+  printf "%-16s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, counted ? format("  %.1f instr", fewest.to_f / n) : ""
 end
 h = H.new
 N = (ENV["N"] || 1_000_000).to_i
