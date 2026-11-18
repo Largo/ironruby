@@ -1,6 +1,6 @@
 ---
 name: perf-ab
-description: Tell whether one IronRuby build is faster than another on small shapes (a core method call, a kind of method entry, a guard) where the difference is 10-30% and the machine is shared - alternating runs, pinned to idle CPUs, on-CPU time, a checksum per shape, and a spread that says when a difference is only noise. Use whenever a perf change needs a before/after number, when a benchmark line "looks slower" or "looks faster" and you are about to believe it, when asked "is this actually faster than master?", and from /perf-core and /perf-frame for their measurements. Not for the AWFY table or the ledger's numbers (/perf-measure) or for whether a change is safe (/perf-gate).
+description: Tell whether one IronRuby build is faster than another on small shapes (a core method call, a kind of method entry, a guard) where the difference is 10-30% and the machine is shared - alternating runs, pinned to idle CPUs, on-CPU time, a checksum per shape, and a spread that says when a difference is only noise; and, for the first look and for a machine that is busy with a sweep or a build, instructions per call (`ab.rb -i`), which are steady to parts in a thousand where time is not. Use whenever a perf change needs a before/after number, when a benchmark line "looks slower" or "looks faster" and you are about to believe it, when asked "is this actually faster than master?", and from /perf-core and /perf-frame for their measurements. Not for the AWFY table or the ledger's numbers (/perf-measure) or for whether a change is safe (/perf-gate).
 ---
 
 # Is it faster? A/B on small shapes
@@ -9,6 +9,10 @@ A change to how a method is entered moves a call by 50-100 ns out of 300. On thi
 machine the same binary measures 10-15% apart from one process to the next, so a single
 before/after pair proves nothing either way. `Util/perf/ab.rb` is the tool; this skill is how
 to use it and how to read it.
+
+Count instructions first (step 7, `ab.rb -i`): it takes two rounds, needs no quiet machine,
+and says whether the change did anything to the shape at all. Time (steps 2 to 4) is for
+the number that is reported, once, when the count has moved.
 
 Arguments: the two trees and the shapes. In `/perf-step`, `/perf-core` and `/perf-frame`
 the baseline is this checkout and the candidate `../wt-NAME`. For "is my branch faster
@@ -122,4 +126,65 @@ not keep goes into a scratch file outside the repository, written the same way:
 
 The rows, with CRuby's column, the rounds, and the noise seen in this run: "0.76 of master
 on `g_bg`, four rounds, no overlap; `e0`, untouched, 0.99 with spreads up to 22%" - not
-"24% faster".
+"24% faster". A result from `-i` is reported as instructions, not as a speed-up.
+
+## 7. Instructions instead of time (`-i`)
+
+```sh
+ruby Util/perf/ab.rb -i Util/bench/core-small.rb \
+     "base=env IR_CONFIG=Release ./ir.sh" "new=env IR_CONFIG=Release ../wt-NAME/ir.sh" -- each tap inject min_by flat_map
+```
+
+The shape files count the instructions of each timed section on the benchmark's own
+thread (`Util/perf/instructions.rb`: the CPU's counter, through `perf_event_open`) and
+`-i` shows the least section's instructions per call. A count does not depend on what
+else is running. The same two builds in the same ten minutes, at a load of 3 to 4 on
+eight CPUs (2026-11-18), by time with three rounds and by instructions with two:
+
+```
+ns (spread %)              base            new  new/base
+each                 320.0 (65)     316.0 (70)  0.99 overlap
+tap                  264.0 (55)    212.0 (219)  0.80 overlap
+inject               632.0 (58)      616.0 (3)  0.97 overlap
+min_by              1008.0 (73)    1172.0 (52)  1.16 overlap
+flat_map            1491.8 (66)    1328.0 (82)  0.89 overlap
+
+instr (spread %)           base            new  new/base
+each               2989.3 (0.1)   2993.7 (0.0)  1.001
+tap                2072.4 (0.2)   1915.1 (8.4)  0.924 overlap
+inject             4698.6 (0.0)   4694.6 (0.1)  0.999 overlap
+min_by             8333.1 (0.6)   8442.2 (0.1)  1.013
+flat_map          11553.2 (0.2)  11404.5 (0.0)  0.987
+```
+
+- **When:** first, for every attempt, and whenever a sweep, a build or another session's
+  measurement is running. It pins nothing (the idle CPUs are left to whoever is timing)
+  and two rounds are its default.
+- **What is noise:** one build against itself, two rounds, six shapes, gave 0.999 to
+  1.008, and the 1.008 came without `overlap`. So a ratio within 2% of 1 is nothing until
+  four rounds (`-r 4`) agree, and beyond that it is a difference in instructions.
+- **Two states show plainly.** `tap` counts 1,915 or 2,072 in either build, whichever the
+  process lands on (the row above: `base` got the higher one twice, `new` one of each). A
+  cell whose spread is several percent, when its neighbours' are tenths, is such a shape:
+  `overlap` marks it, and more rounds give both builds their lower state.
+- **Keep the file's count.** The sections must be long enough for the code to reach its
+  optimized state, as for time: at `-n 100000` `inject` counted 7,500 instead of 4,700 and
+  one build differed from itself by 6%; at `-n 300000` the counts were still not the ones
+  of a million.
+- **It is not time.** A cache miss, a mispredicted branch or a longer dependency chain cost
+  time and no instructions; an allocation saved shows only as the allocation's own
+  instructions, not as the collections it would have caused elsewhere. Read it as a
+  filter:
+  - the shape the change was meant to move counts the same: the change does nothing
+    there. Stop, without timing it;
+  - it counts fewer: time it (step 2, `-r 4`, the third arm) when the machine is quiet,
+    and report that number;
+  - a shape the change was not meant to move counts the same: it has not moved, and need
+    not be timed. One that counts more is looked at as a slower line is (`/perf-gate`,
+    step 4).
+- CRuby's column is its checksum and nothing more: one engine's instructions are not
+  another's. `VALUE DIFFERS` means what it means for time.
+- It needs the counter: Linux on x86-64 or arm64, as root or with
+  `kernel.perf_event_paranoid` at 2 or less, and not in most containers; `ab.rb` says so
+  when the shape file printed no counts. `Util/perf/micro.rb` and the AWFY harness do not
+  count.

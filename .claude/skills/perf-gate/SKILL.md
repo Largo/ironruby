@@ -13,6 +13,27 @@ checkout the skill runs in, at the commit the candidate branched from.
 
 Run the steps in order and stop at the first failure: the cheap ones catch most breakage.
 
+## When to run it: once per branch, after the quick check
+
+The gate needs the whole test suite, a sweep and, for step 4, a quiet machine, so it is not
+what each attempt is tried with. An attempt first passes the quick check, which takes
+minutes and can run beside a sweep, a build or another session:
+
+1. the candidate builds, and `git diff --stat` shows what was meant (step 1);
+2. the differential matrix for the code it touched prints CRuby's output, with the
+   change's switch on and off (step 2 lists them), and the IronRuby.Tests named for that
+   code pass;
+3. `ruby Util/perf/ab.rb -i` on the shapes the change is meant to move and on two or three
+   it is not (`/perf-ab`, step 7): instructions per call, which do not need an idle CPU.
+
+An attempt whose shapes count the same instructions as the baseline is rejected there,
+with no gate run for it. Attempts that pass may be committed one after another on one
+branch and gated together: the gate judges the branch against the commit it left. When
+such a branch fails a step, `git bisect` between that commit and the tip, with the failing
+step as the test, names the commit; fix or drop it and run the gate again. Nothing is
+merged on the quick check alone, and every pull request has had the whole gate on the
+commit it is opened at.
+
 ## 1. The diff is what it says it is
 
 ```sh
@@ -197,6 +218,11 @@ allocated nothing more anywhere, and made `a.each { |x| s += x }` over one or tw
 1.5 to 2 times slower. For a change to the method JIT's screen, compare the whole
 `[jit] specialized= rejected= screen-rejected=` line of every benchmark, not only what is
 newly specialized: a method that is newly wrapped and then declined is a cost.
+
+On a machine that will not be quiet, `ruby Util/perf/ab.rb -i` on the shape files
+(`/perf-ab`, step 7) says which small shapes changed their instruction count, and so which
+are worth waiting for a quiet minute to time; it does not replace the two timed runs, and
+the AWFY benchmarks are not counted.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.

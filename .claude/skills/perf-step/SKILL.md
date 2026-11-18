@@ -112,7 +112,8 @@ Keep the change only if all of these hold:
 - the targeted micro line improves by 15% or more, or the AWFY geomean by 3% or more, in
   both runs;
 - no micro line and no AWFY benchmark gets more than 5% slower in both runs;
-- `/perf-gate ../wt-NAME` passes.
+- `/perf-gate ../wt-NAME` passes (its quick check comes first and rejects an attempt that
+  changes no instruction count without a gate run).
 
 Otherwise it is rejected, however elegant. A change that is faster but fails the gate goes
 back to its author once with the failing test; if it fails again, reject it.
