@@ -4682,15 +4682,25 @@ class Array
   alias :__uniq_without_block__ :uniq
   alias :__uniq_in_place_without_block__ :uniq!
 
+  #
+  # With a block it is MRI's rb_ary_uniq: an Array of one element or none is copied without
+  # calling the block, and a longer one is walked by index (ary_make_hash_by) - not through
+  # #each, so a subclass's own #each is not called - keeping the first element of each key.
+  # It walked #each with block.call per element, 2.5x MRI. The index moves with #succ.
   def uniq(&block)
     return __uniq_without_block__ unless block
+    return self[0, size] if size <= 1
     seen = {}
     result = []
-    each do |element|
-      key = block.call(element)
-      next if seen.key?(key)
-      seen[key] = true
-      result << element
+    i = 0
+    while i < size
+      element = self[i]
+      i = i.succ
+      key = yield(element)
+      unless seen.key?(key)
+        seen[key] = true
+        result << element
+      end
     end
     result
   end
