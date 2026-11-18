@@ -307,18 +307,26 @@ rescue SystemCallError
   Process.clock_gettime(Process::CLOCK_MONOTONIC)
 end
 
+# INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
+# seven sections as the time is. See Util/perf/instructions.rb.
+INSTR = ENV['INSTR'] && (require_relative '../perf/instructions'; Instructions.open || warn('no instruction counter (perf_event_open)'))
+
 def t(name, n)
   return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
   best = 1e9
+  fewest = nil
   sum = nil
   7.times do
+    c0 = INSTR && INSTR.read
     t0 = cpu
     sum = yield n
     d = cpu - t0
+    c = INSTR && INSTR.read - c0
     best = d if d < best
+    fewest = c if c && (fewest.nil? || c < fewest)
   end
-  printf "%-12s %9.1f ns  %d\n", name, best * 1e9 / n, sum
+  printf "%-12s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, fewest ? format('  %.1f instr', fewest.to_f / n) : ''
 end
 
 h = H.new
