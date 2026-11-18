@@ -354,7 +354,8 @@ Profile (`Util/perf/profile.sh`, self time):
    with a plain read and write in its place (an upper bound, not a correct change),
    SOM's `Vector#each` over 4 elements ran at 0.98-1.05 of before and over 100 at
    1.00-1.15 (round nine). Closed. What DeltaBlue pays is in gap 14.
-9. **Light frames still exclude** an empty Hash literal `{}` (found on `Array#to_h`;
+9. **Light frames still exclude** a `while` with a `break` in it (`Array#take_while`),
+   an empty Hash literal `{}` (found on `Array#to_h`;
    `::Hash.new` is scope-free but calls a redefined Hash.new), `super` (6 hot `initialize`
    methods; also `Array#sum` without a block, 5.3x CRuby, whose rare path is `super`), `rescue`,
    keywords, `$~`, regex literals, and a call that passes the method's block on
@@ -446,7 +447,7 @@ Profile (`Util/perf/profile.sh`, self time):
     section 3). The cause is the entry, not the method: a rest parameter, a named block,
     one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
     `Array#sum` 5.3, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `Hash#sum { }` 3.6, `then` 3.2,
-    `take_while` 3.0, `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
+    `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
     `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
     and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0), and so is `Array#dig`
     (15.1 -> 6.1, see Landed), and `Array#sum` with a block (6.5 -> 3.3), and `String("a")`
@@ -456,7 +457,8 @@ Profile (`Util/perf/profile.sh`, self time):
     C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
     (`min_by(2)` 3.8 -> 1.9). Open beside speed: `min_by(n)`'s tie order is input order,
-    MRI's nmin selection orders ties its own way. One method per run of
+    MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
+    now Array's own as in MRI). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
     (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
@@ -471,6 +473,10 @@ Profile (`Util/perf/profile.sh`, self time):
     iterator compiled with its block, and at twice CRuby's time for the same source: the
     loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
     `yield <expr>`"). This is what keeps per-element loops in C#.
+19. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
+    does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
+    "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
+    speed gap.
 
 ## Landed
 
@@ -480,6 +486,9 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/tw (/perf-core) - `Array#take_while` and `#drop_while` are Array's own, as in MRI**:
+  620 -> 522 and 676 -> 522 ns (CRuby 236), and eight cases now match CRuby (owner,
+  backtrace frames, a subclass's own #each, an Array shrinking under the block).
 - **perf/minbyn (/perf-core) - `min_by(n)`, `max_by(n)` of an Array through the C#
   `sort_by`** (a stable merge sort, under a private alias): 2676 -> 1308 ns on the merged
   build (CRuby 698). Keys that do not compare now raise the key's error, as MRI. Learned:
