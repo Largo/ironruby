@@ -233,7 +233,13 @@ module Enumerable
     result = []
     # Like #map, the yielded values reach the block as they were yielded:
     # `yield 1, 2` is 1 to a one-parameter block, not [1, 2].
-    each { |*values| v = block.call(*values); result << v if v }
+    # An Array whose #each is the built-in one yields one value per element: the block
+    # takes it as it is, without the `|*values|` Array and the splat back (2.1x MRI).
+    if __plain_list__?
+      each { |item| v = yield(item); result << v if v }
+    else
+      each { |*values| v = block.call(*values); result << v if v }
+    end
     result
   end unless method_defined?(:filter_map)
 
@@ -464,17 +470,25 @@ module Enumerable
   end unless method_defined?(:each_with_object)
 
   # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
-  def min_by(*args, &block)
-    if args.size > 1
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+  #
+  # min_by and max_by take the count as an optional parameter, not as a rest Array (the rest
+  # only counts arguments past the first, for the error), and an Array whose #each is the
+  # built-in one is walked with a one-value block (__list_extreme_by__): the generic walk's
+  # `|*values|` block and __enum_item__ per element made [4 elements].min_by { } 3.1x MRI.
+  def min_by(n = (no_n = true; nil), *extra, &block)
+    __by_arity_error__(extra) unless extra.empty?
+    unless block
+      return no_n ? to_enum(:min_by) { size if respond_to?(:size) } : to_enum(:min_by, n) { size if respond_to?(:size) }
     end
-    return to_enum(:min_by, *args) { size if respond_to?(:size) } unless block
-    args = [] if args.size == 1 && args[0].nil?
-    if args.empty?
-      __extreme_by__(-1, &block)
-    else
-      __sort_by_key__(block).first(__count_arg__(args[0]))
+    if n.nil?
+      return __list_extreme_by__(-1, &block) if __plain_list__?
+      return __extreme_by__(-1, &block)
     end
+    # The count is checked before the block runs: MRI raises on a negative one, and answers
+    # [] for zero, without calling it.
+    count = __count_arg__(n)
+    return [] if count == 0
+    __sort_by_key__(block).first(count)
   end unless method_defined?(:min_by)
 
   # The first element whose key compares best: a later equal key does not replace it, a
@@ -502,17 +516,54 @@ module Enumerable
   end
   private :__extreme_by__
 
-  def max_by(*args, &block)
-    if args.size > 1
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+  # __extreme_by__ over an Array whose #each is the built-in one (__plain_list__?): that
+  # #each yields one value per element, so the block takes it as it is - no `|*values|`
+  # Array and no __enum_item__ per element. It still goes through #each, as MRI's
+  # Enumerable#min_by does: a backtrace from the block shows Array#each under min_by.
+  def __list_extreme_by__(direction)
+    best = nil
+    best_key = nil
+    found = false
+    each do |item|
+      key = yield(item)
+      if found
+        c = (key <=> best_key)
+        __extreme_by_error__(key, best_key) if c.nil?
+        better = (direction < 0) ? c < 0 : c > 0
+      else
+        better = found = true
+      end
+      if better
+        best_key = key
+        best = item
+      end
     end
-    return to_enum(:max_by, *args) { size if respond_to?(:size) } unless block
-    args = [] if args.size == 1 && args[0].nil?
-    if args.empty?
-      __extreme_by__(1, &block)
-    else
-      __sort_by_key__(block).reverse.first(__count_arg__(args[0]))
+    best
+  end
+  private :__list_extreme_by__
+
+  def __extreme_by_error__(key, best_key)
+    raise ArgumentError, "comparison of #{key.class} with #{::Comparable.__cmp_operand__(best_key)} failed"
+  end
+  private :__extreme_by_error__
+
+  def __by_arity_error__(extra)
+    raise ArgumentError, "wrong number of arguments (given #{extra.size + 1}, expected 0..1)"
+  end
+  private :__by_arity_error__
+
+  def max_by(n = (no_n = true; nil), *extra, &block)
+    __by_arity_error__(extra) unless extra.empty?
+    unless block
+      return no_n ? to_enum(:max_by) { size if respond_to?(:size) } : to_enum(:max_by, n) { size if respond_to?(:size) }
     end
+    if n.nil?
+      return __list_extreme_by__(1, &block) if __plain_list__?
+      return __extreme_by__(1, &block)
+    end
+    count = __count_arg__(n)
+    return [] if count == 0
+    __sort_by_key__(block).reverse.first(count)
   end unless method_defined?(:max_by)
 
   # nil is not a count: `max(nil)` is the plain no-argument form, not an error.
@@ -526,7 +577,13 @@ module Enumerable
 
   # Sorts by the block's key, keeping input order for equal keys so that
   # `min_by(n)` and `max_by(n)` agree with MRI on ties.
+  #
+  # An Array whose #each is the built-in one is sorted by the C# Array#sort_by, taken under a
+  # private name when the prelude loads (a program's own Array#sort_by does not change
+  # min_by): it is a stable merge sort, so equal keys keep their input order as here. The
+  # Ruby comparison block below cost more than everything else for a short Array.
   def __sort_by_key__(block)
+    return __list_sort_by_key__(&block) if __plain_list__?
     decorated = []
     index = 0
     each do |*values|
@@ -538,6 +595,23 @@ module Enumerable
   end
   private :__sort_by_key__
 
+  # The keys still come from a walk with #each, as in MRI's nmin_run: a backtrace from the
+  # block shows Array#each under min_by. Only the sort is the C# one: IListOps.SortBy asks
+  # its block for every key, in order and once each, before it sorts, so the block hands it
+  # the keys the walk made, one after the other. (Sorting [key, element] pairs and taking the
+  # elements out again cost twice as much.)
+  def __list_sort_by_key__
+    items = []
+    keys = []
+    each do |item|
+      items << item
+      keys << yield(item)
+    end
+    i = -1
+    items.__send__(:__list_sort_by__) { keys[i = i.succ] }
+  end
+  private :__list_sort_by_key__
+
   def minmax_by(&block)
     return to_enum(:minmax_by) { size if respond_to?(:size) } unless block
     [min_by(&block), max_by(&block)]
@@ -545,9 +619,22 @@ module Enumerable
 
   # flat_map and collect_concat are one C function in MRI, which a backtrace names by
   # the method called - so each is a method here, not an alias.
+  #
+  # An Array whose #each is the built-in one yields one value per element, so the block
+  # takes it as it is, and the block's answer goes through Array.try_convert, which is the
+  # rb_check_array_type MRI's flat_map_i calls: the `|*values|` block, the splat back into
+  # yield and the two type tests per element made [4 elements].flat_map { } 2.4x MRI.
   def __enum_flat_map__(name)
     return to_enum(name) { size if respond_to?(:size) } unless block_given?
     result = []
+    if __plain_list__?
+      each do |item|
+        mapped = yield(item)
+        array = ::Array === mapped ? mapped : ::Array.try_convert(mapped)
+        array ? result.concat(array) : result << mapped
+      end
+      return result
+    end
     each do |*values|
       # Like #map, #flat_map hands the yielded values straight to the block
       # rather than the packed item: `yield 1, 2` reaches `{ |a| }` as 1.
@@ -1140,13 +1227,15 @@ module Kernel
   private
 
   # shared tail of Array#dig / Hash#dig / Struct#dig: CRuby raises TypeError,
-  # not NoMethodError, when an intermediate element has no #dig
+  # not NoMethodError, when an intermediate element has no #dig. Like MRI's
+  # rb_check_funcall, it finds a private #dig and calls it, and asks a BasicObject, which
+  # has no #nil? or #respond_to?, nothing it cannot answer.
   def __dig_step__(value, rest)
-    return value if rest.empty? || value.nil?
-    unless value.respond_to?(:dig)
-      raise TypeError, "#{value.class} does not have #dig method"
+    return value if rest.empty? || nil.equal?(value)
+    unless __ir_responds_to__(value, :dig)
+      raise TypeError, "#{__ir_class_of__(value)} does not have #dig method"
     end
-    value.dig(*rest)
+    value.__send__(:dig, *rest)
   end
 
   # shared by Hash#to_h and Struct#to_h: validate the [key, value] pair a block
@@ -1168,11 +1257,63 @@ module Kernel
 end
 
 class Array
+  # The C# Array#length, #at and #[] under names of their own, for the Array methods below
+  # that walk their receiver by index as MRI's do: MRI reads the storage (RARRAY_LEN,
+  # RARRAY_AREF), so a subclass's own #size or #[] does not change what they visit or answer.
+  alias :__ary_size__ :length
+  alias :__ary_at__ :at
+  alias :__ary_slice__ :[]
+  private :__ary_size__, :__ary_at__, :__ary_slice__
+
+  # MRI's rb_ary_take_while and rb_ary_drop_while are Array's own: an index loop, not #each
+  # (Enumerable's went through the prelude's wrapper and a generic C# walk, 3x MRI; a
+  # subclass's own #each is not called, and a backtrace shows Array#take_while), and the
+  # answer is the plain Array slice the loop stopped at. The index moves with #succ.
+  def take_while
+    return to_enum(:take_while) { nil } unless block_given?
+    i = 0
+    while i < __ary_size__
+      break unless yield(__ary_at__(i))
+      i = i.succ
+    end
+    __ary_slice__(0, i)
+  end
+
+  def drop_while
+    return to_enum(:drop_while) { nil } unless block_given?
+    i = 0
+    while i < __ary_size__
+      break unless yield(__ary_at__(i))
+      i = i.succ
+    end
+    __ary_slice__(i, __ary_size__) || []
+  end
+
+  # The C# Array#sort_by (a stable merge sort) under a name of its own, for
+  # Enumerable#__sort_by_key__: min_by(n), max_by(n) and sort_by of an Array must not
+  # change when a program redefines Array#sort_by.
+  alias :__list_sort_by__ :sort_by
+  private :__list_sort_by__
   # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
   # Range or an arithmetic sequence, because there would be no way to keep
   # digging into the several elements that would answer.
+  #
+  # The step into the next level is written out rather than left to __dig_step__: that
+  # helper and __array_to_int__ are Ruby methods that make a scope on every call, and
+  # four of those calls were nine tenths of [[1, 2]].dig(0, 1). One more key - the
+  # common case - is passed as itself; more go through __dig_step__, whose splat would
+  # keep this method from running without a scope (IR_LIGHT_FRAMES=why). A BasicObject in
+  # the middle has no #nil? or #respond_to? to ask, and is the TypeError CRuby's
+  # rb_check_funcall makes of it. That function calls a private #dig too, hence __send__.
   def dig(key, *rest)
-    __dig_step__(self[__array_to_int__(key)], rest)
+    value = __ary_at__(::Integer === key ? key : __array_to_int__(key))
+    return value if rest.empty? || nil.equal?(value)
+    unless __ir_responds_to__(value, :dig)
+      # not "#{...}": an interpolated call would make this method need its scope
+      raise TypeError, __ir_class_of__(value).to_s + " does not have #dig method"
+    end
+    return value.__send__(:dig, rest[0]) if rest.size == 1
+    __dig_step__(value, rest)
   end unless method_defined?(:dig)
 
   # No Array#sum here on purpose: Enumerable#sum already does the compensated
@@ -1257,13 +1398,84 @@ class Array
   # An Array of Integers and Floats is summed in C# (ArrayOps.NumericSum), the same way.
   # The initial value is a parameter with MRI's default, not one of a rest Array: the method
   # takes at most one argument, as MRI's does, and a call makes no Array to count them in.
-  def sum(init = 0)
-    unless block_given?
-      result = __numeric_sum__(init)
-      return result unless result.nil?
-    end
+  #
+  # With a block, the values are added here, element by element, as MRI's ary_sum does:
+  # going to Enumerable#sum cost a Proc, a splat and five type tests per element, 1.4 us for
+  # four. Integers first; at the first Float (with Integers, Floats or Rationals so far) the
+  # Float loop, with the compensated summation Enumerable#sum does - its rules, copied
+  # branch for branch. At the first value that is none of those, the elements left go to
+  # Enumerable#sum's fold itself, starting from the sum so far (__sum_rest__), so that each
+  # block call is still followed by its addition before the next one, as in MRI. Like MRI's,
+  # this does not go through #each. The index moves with #succ, not with +, as MRI's own Ruby
+  # builtins count (numeric.rb): a redefined Integer#+ is for the sum, not for which elements
+  # it visits.
+  def sum(init = 0, &block)
+    return __array_sum__(init, &block) if block
+    result = __numeric_sum__(init)
+    return result unless result.nil?
     super
   end
+
+  # Array#sum with a block (see there). A method of its own so that #sum without one stays
+  # the small method it was: with this body in it, that call was 5% slower.
+  def __array_sum__(init, &block)
+    acc = init
+    i = 0
+    while i < __ary_size__
+      x = yield(__ary_at__(i))
+      i = i.succ
+      if ::Integer === x && ::Integer === acc
+        acc = acc + x
+        next
+      end
+      unless ::Float === x && (::Integer === acc || ::Float === acc || ::Rational === acc)
+        return __sum_rest__(acc, x, i, &block)
+      end
+      acc = acc.to_f
+      compensation = 0.0
+      while true
+        # x is an Integer, a Float or a Rational
+        x = x.to_f
+        if acc.nan?
+          # a NaN stays
+        elsif x.nan?
+          acc = x
+          compensation = 0.0
+        elsif x.infinite?
+          acc = (acc.infinite? == -x.infinite?) ? (0.0 / 0.0) : x
+          compensation = 0.0
+        elsif !acc.infinite?
+          t = acc + x
+          compensation += acc.abs >= x.abs ? (acc - t) + x : (x - t) + acc
+          acc = t
+        end
+        return acc + compensation unless i < __ary_size__
+        x = yield(__ary_at__(i))
+        i = i.succ
+        unless ::Integer === x || ::Float === x || ::Rational === x
+          return __sum_rest__(acc + compensation, x, i, &block)
+        end
+      end
+    end
+    acc
+  end
+  private :__array_sum__
+
+  # (The block is named and passed on, not wrapped in `{ |e| yield e }`: a block literal
+  # made the call without a block 6% slower.)
+  # Enumerable#sum's fold over the value x and the elements from index i on, through the
+  # block, from acc: what Array#sum hands on at a value it does not add itself.
+  def __sum_rest__(acc, x, i)
+    rest = ::Enumerator.new do |y|
+      y.yield(x)
+      while i < __ary_size__
+        y.yield(yield(__ary_at__(i)))
+        i = i.succ
+      end
+    end
+    rest.sum(acc)
+  end
+  private :__sum_rest__
 
   def intersect?(other)
     !(self & other).empty?
@@ -4475,21 +4687,33 @@ class Array
     nil
   end
 
+  # MRI's rb_ary_to_h: an index loop, not #each_with_index (the prelude's wrapper, and a
+  # block_given? per element made it 4.7x MRI), and each pair through rb_check_array_type,
+  # which is Array.try_convert - an Array is taken as it is, without asking its #to_ary; a
+  # #to_ary that answers something else is that method's TypeError. The index moves with
+  # #succ (see Array#sum).
   def to_h
     result = {}
-    each_with_index do |pair, index|
-      pair = yield(pair) if block_given?
-      array = pair.respond_to?(:to_ary) ? pair.to_ary : nil
-      unless array.is_a?(Array)
-        raise TypeError, "wrong element type #{pair.class} at #{index} (expected array)"
-      end
-      unless array.size == 2
-        raise ArgumentError, "wrong array length at #{index} (expected 2, was #{array.size})"
-      end
-      result[array[0]] = array[1]
+    given = block_given?
+    i = 0
+    while i < __ary_size__
+      element = __ary_at__(i)
+      element = yield(element) if given
+      pair = ::Array === element ? element : ::Array.try_convert(element)
+      __to_h_pair_error__(element, pair, i) unless pair && pair.size == 2
+      result[pair[0]] = pair[1]
+      i = i.succ
     end
     result
   end
+
+  def __to_h_pair_error__(element, pair, index)
+    unless pair
+      raise TypeError, "wrong element type #{__ir_class_of__(element)} at #{index} (expected array)"
+    end
+    raise ArgumentError, "wrong array length at #{index} (expected 2, was #{pair.size})"
+  end
+  private :__to_h_pair_error__
 
   # #uniq and #uniq! compare the block's result, not the element itself; the
   # core versions ignore the block entirely, so they are kept for the no-block
@@ -4497,15 +4721,25 @@ class Array
   alias :__uniq_without_block__ :uniq
   alias :__uniq_in_place_without_block__ :uniq!
 
+  #
+  # With a block it is MRI's rb_ary_uniq: an Array of one element or none is copied without
+  # calling the block, and a longer one is walked by index (ary_make_hash_by) - not through
+  # #each, so a subclass's own #each is not called - keeping the first element of each key.
+  # It walked #each with block.call per element, 2.5x MRI. The index moves with #succ.
   def uniq(&block)
     return __uniq_without_block__ unless block
+    return __ary_slice__(0, __ary_size__) if __ary_size__ <= 1
     seen = {}
     result = []
-    each do |element|
-      key = block.call(element)
-      next if seen.key?(key)
-      seen[key] = true
-      result << element
+    i = 0
+    while i < __ary_size__
+      element = __ary_at__(i)
+      i = i.succ
+      key = yield(element)
+      unless seen.key?(key)
+        seen[key] = true
+        result << element
+      end
     end
     result
   end
@@ -12283,8 +12517,17 @@ module Kernel
   # rb_String: #to_str if there is one, otherwise #to_s - and #to_s not existing, or
   # answering something that is not a String, is a TypeError rather than a NoMethodError
   # or a silently wrong result.
+  #
+  # A String is answered here and everything else in __ir_string__: with that body in it -
+  # a rescue, a singleton class, a dozen locals - this method made a scope on every call,
+  # 220 ns for String("a") where CRuby takes 40.
   def String(object)
     return object if ::String === object
+    __ir_string__(object)
+  end
+  module_function :String
+
+  def __ir_string__(object)
     # a BasicObject has neither respond_to? nor to_s: only its #to_s (through method_missing) can help
     basic = !(::Kernel === object)
     if !basic && object.respond_to?(:to_str)
@@ -12318,7 +12561,7 @@ module Kernel
     end
     converted
   end
-  module_function :String
+  private :__ir_string__
 
   # rb_f_puts forwards to $stdout.puts, so a redefined or mocked #puts on $stdout is what
   # runs (Kernel#print and #p write to it directly instead). It forwards with rb_funcallv,

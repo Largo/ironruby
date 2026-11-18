@@ -354,7 +354,10 @@ Profile (`Util/perf/profile.sh`, self time):
    with a plain read and write in its place (an upper bound, not a correct change),
    SOM's `Vector#each` over 4 elements ran at 0.98-1.05 of before and over 100 at
    1.00-1.15 (round nine). Closed. What DeltaBlue pays is in gap 14.
-9. **Light frames still exclude** `super` (6 hot `initialize` methods), `rescue`,
+9. **Light frames still exclude** a `while` with a `break` in it (`Array#take_while`),
+   an empty Hash literal `{}` (found on `Array#to_h`;
+   `::Hash.new` is scope-free but calls a redefined Hash.new), `super` (6 hot `initialize`
+   methods; also `Array#sum` without a block, 5.3x CRuby, whose rare path is `super`), `rescue`,
    keywords, `$~`, regex literals, and a call that passes the method's block on
    (`inner(&block)`: 94 to 275 ns per wrapper layer, Util/bench/truffleruby-lessons.md).
    `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
@@ -443,11 +446,23 @@ Profile (`Util/perf/profile.sh`, self time):
     (`Util/bench/core-small.rb`, 67 calls on four elements; `Util/bench/truffleruby-lessons.md`
     section 3). The cause is the entry, not the method: a rest parameter, a named block,
     one layer of `inner(*args, &block)`. Worst prelude rows on 2026-11-15, master / CRuby:
-    `Array#dig(0, 1)` 15.1, `sum { }` 6.5, `Kernel#String` 6.2, `Array#sum` 5.3, `to_h { }`
-    4.5, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `min_by` 3.6, `Hash#sum { }` 3.6, `then` 3.2,
-    `take_while` 3.0, `uniq` 2.9, `flat_map` 2.7, `filter_map` 2.4, `tally` 2.1; and
+    `Array#sum` 5.3, `(1..4).sum` 4.0, `Kernel#tap` 3.9, `Hash#sum { }` 3.6, `then` 3.2,
+    `uniq` 2.9, `tally` 2.1; and
     `String#strip`/`lstrip`/`rstrip` cost 145 ns over the C# method they wrap. `inject`
-    and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0). One method per run of
+    and `reduce` are done (2.0 -> 1.3, `inject(:+)` 6.7 -> 4.0), and so is `Array#dig`
+    (15.1 -> 6.1, see Landed), and `Array#sum` with a block (6.5 -> 3.3), and `String("a")`
+    (5.2 -> 2.4). Next: `String(5)`, `String(nil)` - about 1.6 us each against CRuby's 180,
+    in `Kernel#__ir_string__`, which asks whether #respond_to? is Kernel's
+    (`method(:respond_to?).owner`) and calls #to_s through `bind_call`; CRuby decides that in
+    C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
+    `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
+    (`min_by(2)` 3.8 -> 2.9 after the review fix below). Open beside speed: `min_by(n)`'s tie order is input order,
+    MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
+    now Array's own as in MRI), and `flat_map` (2.2 -> 1.7), `filter_map` (2.1 -> 1.6).
+    /perf-core loop stopped 2026-11-18: what is left above 2x (`Array#sum` and `Range#sum`
+    without a block, `Hash#sum { }`, `Array#dig` at 6x) is blocked on frame shapes -
+    `super`, `{}`, a `while` with `break`, a block passed on - which is /perf-frame's. `uniq` is not this skill's:
+    its C# method alone costs what the call does (500 ns against CRuby's 230). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
     (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
@@ -462,6 +477,10 @@ Profile (`Util/perf/profile.sh`, self time):
     iterator compiled with its block, and at twice CRuby's time for the same source: the
     loop compiler gives up on `yield` (see the Rejected entry "A block whose body is
     `yield <expr>`"). This is what keeps per-element loops in C#.
+19. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
+    does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
+    "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
+    speed gap.
 
 ## Landed
 
@@ -471,6 +490,56 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/fmap (/perf-core) - `filter_map` of an Array with a one-value block**: 959 -> 775
+  ns (CRuby 472).
+- **perf/uniq (/perf-core, correctness with a small gain) - `Array#uniq { }` as MRI's
+  `rb_ary_uniq`**: no block call for one element or none, an index walk, five probes now
+  CRuby's; 885 -> 763 ns (CRuby 350), short of the 15% a speed change needs - the Hash of
+  keys is most of what is left.
+- **perf/fm (/perf-core) - `flat_map` of an Array**: one value per element and
+  `Array.try_convert` for the block's answer, as MRI's `flat_map_i`: 1820 -> 1406 ns
+  (CRuby 835), scalar answers 1348 -> 1043 (777).
+- **perf/tw (/perf-core) - `Array#take_while` and `#drop_while` are Array's own, as in MRI**:
+  620 -> 522 and 676 -> 522 ns (CRuby 236), and eight cases now match CRuby (owner,
+  backtrace frames, a subclass's own #each, an Array shrinking under the block).
+- **perf/minbyn (/perf-core) - `min_by(n)`, `max_by(n)` of an Array through the C#
+  `sort_by`** (a stable merge sort, under a private alias): 2676 -> 1308 ns on the merged
+  build (CRuby 698). Keys that do not compare now raise the key's error, as MRI. Learned:
+  sorting four Arrays by `Array#<=>` cost 950 ns - prefer a C# method the prelude already
+  has, taken under an alias at load so a redefinition cannot reach it.
+  Review fix (PR 228): the C# sort_by called the block itself, so a backtrace from it showed
+  Array#sort_by where MRI's shows Array#each, and a count of 0 or a negative one ran the
+  block before answering [] or raising. The keys now come from a walk with #each and are
+  handed to the C# sort by position, and the count is checked first: 1266 -> 2040 ns
+  (`max_by(2)` 1295 -> 2116), still under the 2676 before. Next lever: a C# helper that
+  sorts the elements by keys it is given, leaving out the second block call per element.
+- **perf/minby (/perf-core) - `min_by` and `max_by` without a rest Array or a `|*values|`
+  block**: `[1, 2, 3, 4].min_by { }` 1339 -> 1032 ns on the merged build (CRuby 448),
+  `max_by` 1300 -> 969. Still #each underneath, because CRuby's backtraces show Array#each
+  under an Enumerable method; an index loop that dropped that frame was caught by
+  Backtrace_LibraryFrames1.
+- **perf/toh (/perf-core) - `Array#to_h` as MRI's `rb_ary_to_h`**: an index loop,
+  `block_given?` once, each pair through `Array.try_convert`. `[1, 2, 3, 4].to_h { |x| [x, x] }` 2120 ->
+  1276 ns on the merged build (CRuby 548), `[[1, 2]].to_h` 796 -> 376 (114); three cases now
+  give CRuby's answer (an Array subclass with its own #to_ary, a bad #to_ary, a BasicObject).
+- **perf/string, a52c7501 (/perf-core) - `Kernel#String` answers a String without a
+  scope**: `String("a")` 238 -> 118 ns on the merged build (CRuby 50). Learned: a method
+  that answers the common case on its first line still pays for the scope the rest of its
+  body needs (a `rescue`, a singleton class): split the rest into a private method.
+- **perf/sum, ccc3608d + its follow-up (/perf-core) - `Array#sum` with a block adds its
+  values itself**, as MRI's `ary_sum` does: Integers, then Floats with the compensated
+  sum, and anything else handed to Enumerable#sum's fold from where it got to.
+  `a.sum { |x| x + 1 }` 1421 -> 868 ns (CRuby 236), over Floats 2175 -> 1539 (312); the
+  call without a block unchanged. Learned: a prelude loop must count with `i = i.succ`, not
+  `i += 1` (a redefined Integer#+ made it skip elements); an Enumerator is too dear for a
+  hot fallback; and a body grown by a rarely used path made the common call 5% slower until
+  the path became a method of its own. `Hash#sum { }` (3.5) is still Enumerable#sum's.
+- **perf/dig, b0bbefed (/perf-core) - `Array#dig` steps into the next level without two
+  Ruby helpers that make a scope**: `[[1, 2]].dig(0, 1)` 682 -> 356 ns on the merged build
+  against the commit before (CRuby 60), `dig(0)` 328 -> 158, three keys into a Hash 784 ->
+  652; four rounds, no overlap. What is left (about 6x CRuby): the call into a method with
+  a rest parameter, `__ir_responds_to__`, and the second `dig` call. Learned: an
+  interpolated call, even on an error path, keeps a method out of light frames.
 - **perf/t1, c9a17e2 - methods that make calls run without a scope until a call needs one.**
   Every call site took the caller's RubyMethodScope, so only call-free bodies were "light";
   any other allocated a 160-byte scope per call. Now a call in a light frame goes through a
@@ -853,6 +922,11 @@ matrix's `each_index` blocks specialized.
 
 ## Rejected
 
+- **`Enumerable#sum` asking `block_given?` once instead of per element** (/perf-core,
+  2026-11-18, for `Hash#sum { }` at 3.5x CRuby): 1532 -> 1524 ns, overlapping. The block
+  writes the method's locals (`acc`, `compensation`), so it makes its scope whatever it asks.
+  What `Hash#sum { }` pays is the generic fold's per-element block; a Hash path of its own
+  would need Hash#each's one-or-two-value yield semantics checked first.
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
   chains, 6% of Json). Its share fell to 4.7%, which no timing could show. Reverted.
 - **`[AggressiveInlining]` on `RubyOps.IsTrue`** removed its 0.9% from the profile with no
