@@ -6,172 +6,145 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-16, f37be3b1 (master after #216 to #227: round ten, the perf areas, the
-source-generated initializers, `-X:JITCalls`, `each_index`), Release net10.0, 4 cores (Xeon,
-2.10 GHz), `git status` clean. Load average 2.96 when the AWFY run began (the build had
-just ended), 1.05 when it ended, 1.0 through the micro table. The container was restarted
-again before this measurement and is a different machine from round ten's: CRuby's NBody
-1.93 s then, 1.56 s now, and CRuby's short calls gained more than IronRuby's did (below).
-CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM Native). The machine's speed
-differs between sessions by tens of percent, so compare ratios, not microseconds, and
-ratios across sessions only with a build of the older tree beside them.
+2026-11-18, a7060a27 (round sixteen merged: `perf/extend` and `perf/unboxed`), Release
+net10.0, 4 cores (Xeon, 2.10 GHz), `git status` clean. Load average 0.64 when the AWFY
+run began, 1.0-1.1 through the rest. The container had been restarted two hours before
+and is once more another host: CRuby's NBody 1.59 s here, 1.56 s for the table of
+f37be3b1 and 2.11 s in round fourteen. CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle
+GraalVM Native). The machine's speed differs between sessions by tens of percent, so
+compare ratios, not microseconds, and ratios across sessions only with a build of the
+older tree beside them.
 
-Are-We-Fast-Yet, all thirteen, steady state, µs per iteration (lower is better), one run;
-the last column is the ratio recorded for round ten (a6b1c629, another machine):
+Are-We-Fast-Yet, all fourteen, steady state, us per iteration (lower is better), one run
+of the three (`awfy.rb 12`); "second run" is IronRuby/CRuby in a run of those two with
+IronRuby first; the last column is the ratio recorded at f37be3b1 (2026-11-16, before
+rounds thirteen to sixteen, another host):
 
-| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | round ten |
-|---|---:|---:|---:|---:|---:|
-| DeltaBlue | 40257 | 49579 | 1821 | 1.23 | 1.18 |
-| Permute | 113028 | 130404 | 6289 | 1.15 | 1.16 |
-| Richards | 334877 | 340521 | 14810 | 1.02 | 1.20 |
-| Json | 80796 | 76531 | 7334 | 0.95 | 0.90 |
-| Queens | 91887 | 82354 | 6239 | 0.90 | 0.90 |
-| Bounce | 93258 | 82912 | 2214 | 0.89 | 0.92 |
-| Towers | 111587 | 97759 | 4746 | 0.88 | 0.96 |
-| Sieve | 148448 | 122726 | 7002 | 0.83 | 0.84 |
-| NBody | 1556841 | 1260939 | 15645 | 0.81 | 0.80 |
-| CD | 719615 | 501951 | 38816 | 0.70 | 0.70 |
-| Storage | 139119 | 85812 | 16751 | 0.62 | 0.59 |
-| List | 98972 | 38077 | 6749 | 0.38 | 0.37 |
-| Mandelbrot | 803319 | 48764 | 41664 | 0.06 | 0.14 |
+| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | second run | f37be3b1 |
+|---|---:|---:|---:|---:|---:|---:|
+| Havlak | 2145160 | 3687274 | 164324 | 1.72 | 1.59 | - |
+| DeltaBlue | 40051 | 49476 | 1545 | 1.24 | 1.23 | 1.23 |
+| Permute | 113422 | 134133 | 6196 | 1.18 | 1.25 | 1.15 |
+| Richards | 306479 | 340273 | 14846 | 1.11 | 1.16 | 1.02 |
+| Towers | 107519 | 106677 | 4751 | 0.99 | 1.04 | 0.88 |
+| Queens | 87317 | 84886 | 6333 | 0.97 | 0.92 | 0.90 |
+| Bounce | 86904 | 81954 | 2197 | 0.94 | 0.90 | 0.89 |
+| Json | 79742 | 74010 | 7130 | 0.93 | 0.94 | 0.95 |
+| Sieve | 149437 | 123064 | 7023 | 0.82 | 0.88 | 0.83 |
+| Storage | 124641 | 89527 | 16404 | 0.72 | 0.69 | 0.62 |
+| CD | 714447 | 472073 | 37876 | 0.66 | 0.68 | 0.70 |
+| NBody | 1590167 | 551176 | 15544 | 0.35 | 0.36 | 0.81 |
+| List | 118363 | 27884 | 6727 | 0.24 | 0.28 | 0.38 |
+| Mandelbrot | 799081 | 49203 | 41559 | 0.06 | 0.06 | 0.06 |
 
-Geomean of the thirteen: IronRuby/CRuby 0.678 (0.730, 0.750 and 0.779 in round ten's three
-runs); TruffleRuby/CRuby 0.048. What moved is Mandelbrot: with a build of a6b1c629 beside
-master on this machine it is 122.8 -> 48.8 ms (DeltaBlue 51.6 -> 49.8, Richards 332.8 ->
-330.0 in the same invocation), from something merged since round ten that was not looked
-for; `Integer#<<` and `#>>` specialized in the JIT (9997c5bc) is the likely one, since its
-inner loop shifts. Without Mandelbrot the other twelve have a geomean of 0.829 against
-round ten's 0.839: level. TruffleRuby's DeltaBlue was 1.8 ms in this run, 12.7-12.9 since
-round nine and 3.6 in round seven's. On the tree of round nine the geomean was 0.785,
-0.800 and 0.768; on the tree of round seven 0.804 and 0.787 (NBody
-1.21 and 1.08, CD 0.70 and 0.66), and on the
-tree of round five, at the start of the session, it was 0.872 (Permute 1.49, Richards
-1.33, CD, Json and DeltaBlue 1.17, NBody 1.07): the first time the eight benchmarks
-beyond the original five were run at all.
+Geomean of the fourteen: IronRuby/CRuby 0.681 and 0.693; TruffleRuby/CRuby 0.050;
+IronRuby is 13.7 times TruffleRuby's time (Mandelbrot 1.2, List 4, Storage 5, Json 10,
+CD 12, Queens 13, Sieve 18, Havlak, Permute and Towers 22, Richards 23, DeltaBlue 32,
+NBody 35, Bounce 37). Of the thirteen without Havlak, to compare with earlier tables:
+0.634 and 0.650 (0.678 at f37be3b1, 0.672 in round thirteen, 0.629 in round fourteen on
+a slower host). TruffleRuby's DeltaBlue was 1161 ms in the table's run and 1.54 ms in
+two runs alone right after (1.8, 12.7 and 3.6 in earlier rounds); the table and the
+geomeans have the 1.54.
 
-The five measured from the start, IronRuby/CRuby; "now" is the run above, the other
+What moved since f37be3b1, each by a direct comparison of two trees recorded under
+"Landed", not by these ratios: List 0.38 -> 0.24-0.28 (round thirteen, direct calls
+between compiled methods); NBody 0.81 -> 0.39 (round fourteen, nested block loops) ->
+0.35 (round sixteen, raw Float instance variables: 0.76-0.80 of the tree before).
+Havlak is measured since round fourteen and since bb52e71d on CRuby too (awfy.rb
+renames som.rb's `Set`, which CRuby 4.0 cannot reopen): 1.72 and 1.59 of CRuby, the
+worst of the fourteen, with gap 25's breakdown of where it goes. Storage (0.62 ->
+0.72, 0.69) and Towers (0.88 -> 0.99, 1.04) are CRuby's on this host as much as
+IronRuby's: CRuby's Storage 139 -> 125 ms with IronRuby's 86 -> 90, CRuby's Towers 112
+-> 108 with IronRuby's 98 -> 107, and Towers read 99 to 111 ms on the tree before
+round sixteen's merge in the eight runs of that acceptance. Richards (1.02 -> 1.11,
+1.16) is IronRuby's 340 ms in both tables against CRuby's 335 then and 306 and 292
+now.
+
+The five measured from the start, IronRuby/CRuby; "now" is the two runs above, the other
 columns are what was recorded when each round landed, in other sessions:
 
-| benchmark | now | r10 | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DeltaBlue | 1.23 | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
-| Richards | 1.02 | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
-| Json | 0.95 | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
-| Bounce | 0.89 | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
-| Towers | 0.88 | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
-| geomean | 0.99 | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
+| benchmark | now | f37be3b1 | r10 | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DeltaBlue | 1.24, 1.23 | 1.23 | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
+| Richards | 1.11, 1.16 | 1.02 | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
+| Json | 0.93, 0.94 | 0.95 | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
+| Bounce | 0.94, 0.90 | 0.89 | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
+| Towers | 0.99, 1.04 | 0.88 | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
+| geomean | 1.04, 1.05 | 0.99 | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
 
-Rounds seven to ten changed none of these five on purpose (Json's allocation fell in
+Rounds seven to sixteen changed none of these five on purpose (Json's allocation fell in
 round nine); what they did is in the direct comparisons of the trees under "Landed" (CD
-and Permute in round seven, NBody, CD and Json in round nine, List in round ten).
-
-Round thirteen (2026-11-16, fd13114a, after a restart of the container; load 0.9-1.1):
-direct calls between compiled methods are on by default, and of the thirteen only List
-moves. One run of all thirteen, CRuby / IronRuby / IronRuby with `-X:NoJITCalls`, us:
-DeltaBlue 41713 / 52406 / 54565, Richards 312449 / 367417 / 339484 (the same in ten
-alternating processes of each, see Landed), Json 87081 / 77069 / 74644, CD 729060 /
-465810 / 491252, Bounce 88910 / 81601 / 82789, List 98116 / 27677 / 38776, Mandelbrot
-801788 / 49336 / 50309, NBody 1581301 / 1249594 / 1260251, Permute 109624 / 143146 /
-137417, Queens 95590 / 85373 / 81990, Sieve 157016 / 124852 / 122915, Storage 139218 /
-86894 / 89555, Towers 107800 / 101096 / 99371. Geomean IronRuby/CRuby 0.672, with
-`-X:NoJITCalls` 0.687; List 0.28 of CRuby, from 0.38-0.40.
-
-Round fourteen (2026-11-17, 80813950; another host again, slower: CRuby's NBody 2.11 s;
-load 1.2-1.9): nested block loops and three core operations in typed bodies. One run of
-all fourteen (`awfy.rb 12 --whole`), CRuby / IronRuby / TruffleRuby, us, and
-IronRuby/CRuby: DeltaBlue 46689 / 54633 / 9425, 1.17; Richards 337929 / 411619 / 17035,
-1.22; Json 93255 / 85816 / 7648, 0.92; CD 807667 / 544757 / 35712, 0.67; Bounce 98770 /
-94401 / 2482, 0.96; List 114517 / 30928 / 7647, 0.27; Mandelbrot 1110815 / 59279 / 53393,
-0.05; NBody 2109390 / 828860 / 17734, 0.39; Permute 128164 / 157725 / 6831, 1.23; Queens
-105279 / 97781 / 7119, 0.93; Sieve 175409 / 149600 / 8061, 0.85; Storage 175170 / 100244
-/ 17728, 0.57; Towers 127484 / 115948 / 5321, 0.91; Havlak FAIL (CRuby 4.0 cannot run
-it) / 3741379 / 151728. Geomean of the thirteen CRuby runs: IronRuby/CRuby 0.629 (0.672
-in round thirteen), TruffleRuby/CRuby 0.051. NBody is at 0.39 of CRuby, from 0.79.
-Havlak, measured for the first time, is 25 times TruffleRuby's time, in the same band
-as the others (5 for DeltaBlue's cold run to 47 for NBody); nobody has looked at where
-its time goes.
-
-Round fifteen (2026-11-17, ea86fa35; load 1.0-1.2): a constant whose value is nil in the
-method JIT, and loops that see a redefinition while they run. Neither is aimed at a benchmark and none moved: all fourteen
-(`awfy.rb 12 --whole`, the tree before / after, both column orders) 0.994 and 1.007, so
-the table above stands. IronRuby alone, us, before / after in the first run: DeltaBlue
-48841 / 49797, Richards 346862 / 352748, Json 74782 / 72318, CD 472757 / 503289 (1.021
-in eight alternating processes), Bounce 81700 / 85563 (0.997 in eight), List 27535 /
-27094, Mandelbrot 48955 / 49113, NBody 688502 / 679864, Permute 135807 / 133501, Queens
-82300 / 83109, Sieve 136331 / 129789, Storage 92000 / 88190, Towers 98740 / 91177, Havlak
-3878371 / 3902921.
+and Permute in round seven, NBody, CD and Json in round nine, List in rounds ten and
+thirteen, NBody in rounds fourteen and sixteen).
 
 Bytes allocated per iteration (`Util/perf/alloc.rb`; it moves by about 0.3% between
-invocations, unlike the timings), MB, round six -> round seven -> now: DeltaBlue 24.9 ->
-24.2 -> 24.6, Richards 19.6 -> 19.3 -> 13.9, Json 35.8 -> 35.9 -> 30.7, CD 516.2 -> 226.2 ->
-226.1, Bounce 11.0 -> 11.0 -> 11.0, List 8.2 -> 8.2 -> 8.2, Mandelbrot 94.7 -> 94.5 -> 94.5,
-NBody 2892 -> 2892 -> 1364, Permute 124.6 -> 124.5 -> 124.6, Queens 41.2 -> 41.3 -> 41.3,
-Sieve 98.8 -> 98.8 -> 98.8, Storage 112.6 -> 112.6 -> 112.6, Towers 0.13 -> 0.13 -> 0.13
-(Towers reads anything from 0.07 to 0.26 from one invocation to the next, on every tree).
-Round seven's change is CD's; round nine's are NBody's and Richards' (short runs in the
-compiled copy, where Floats and the block's frame are not allocated) and Json's (a Range
-literal of two Integers without the `<=>` call and its boxes). Since then: Richards 13.9
--> 3.2 with #215's `!=` binding merged in (measured on the tree before round ten and on
-this one; the tree before that merge gave 13.9), and List 8.2 -> 0.6 in round ten
-(`is_shorter_than` compiled: its two cursors are no longer read through call sites).
-The other eleven are where round nine left them.
+invocations, unlike the timings), MB, at a7060a27: DeltaBlue 24.6, Richards 14.0, Json
+30.6, CD 225.9, Bounce 11.0, List 0.6, Mandelbrot 3.2, NBody 152.1, Permute 124.6, Queens
+41.3, Sieve 98.8, Storage 112.6, Towers 0.18 (Towers reads anything from 0.07 to 0.26
+from one invocation to the next, on every tree), Havlak 2727. Where they came from, round
+six -> now: CD 516 -> 226 (round seven); NBody 2892 -> 1364 (round nine) -> 602 (round
+fourteen) -> 152 (round sixteen: the boxes of its Float instance variables); Json 35.8 ->
+30.6 (round nine); List 8.2 -> 0.6 (round ten); Mandelbrot 94.5 -> 3.2 (not recorded
+when it happened; `Integer#<<` and `#>>` in the JIT, 9997c5bc, is the likely one, as for
+its time); DeltaBlue, Bounce, Permute, Queens, Sieve and Storage where they were.
+Richards is under "Regressions": 14.0 now, and this file said 3.2.
 
-Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on f37be3b1; a line
-moves by 15-20% from run to run on this machine, so a ratio is good to about that. Against
-round ten's table IronRuby's nanoseconds fell on every line and several ratios still rose
-by 10-19% (`ivar_rw` 1.47 -> 1.63, `getter` 1.20 -> 1.37, `each4` 1.04 -> 1.22, `short4`
-1.06 -> 1.26, in a second run too): that is this machine, not the tree. A build of
-a6b1c629 beside master (`ab.rb`, four rounds, twelve lines) has the same ratios to CRuby
-(`ivar_rw` 1.43, `getter` 1.25, `each4` 1.25) and master at 0.95-1.07 of it, every row
-marked `overlap`; seven of the twelve lean 5-7% slower on master, which four rounds do
-not show to be a difference and which the next measurement should look at again:
+Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on a7060a27; a line
+moves by 15-20% from run to run on this machine, so a ratio is good to about that.
+"f37be3b1" is the ratio of the last table, on another host. What moved for a known
+reason: `abs` 1.77 -> 1.06 (round fourteen, `Integer#abs` in typed bodies), `blkattr`
+0.80 -> 0.54 (rounds fourteen and sixteen: a Float attribute updated in a block; 0.89 of
+the tree before round sixteen's merge), `rangeeach` 0.04 -> 0.01. `yield` (1.22 -> 1.43)
+is CRuby's 44.7 -> 39.7 ns with IronRuby's 54.5 -> 56.9. `treefind` and `short4` are
+each about 4% dearer than before round sixteen's merge (see Landed), which these
+ratios do not show:
 
-| op | CRuby | IronRuby | ratio | start |
-|---|---:|---:|---:|---:|
-| empty | 19.9 | 22.3 | 1.12 | 1.23 |
-| ivar_rw | 33.0 | 53.8 | 1.63 | 2.72 |
-| getter | 23.7 | 32.4 | 1.37 | 3.17 |
-| attr | 17.1 | 3.9 | 0.23 | 0.80 |
-| cmp | 24.6 | 30.3 | 1.23 | 3.58 |
-| abs | 29.8 | 52.6 | 1.77 | 3.07 |
-| arr | 35.0 | 42.0 | 1.20 | 1.82 |
-| nil? | 23.5 | 34.0 | 1.45 | 3.48 |
-| == | 24.6 | 27.8 | 1.13 | 3.35 |
-| yield | 44.7 | 54.5 | 1.22 | 2.57 |
-| each4 | 189.6 | 231.8 | 1.22 | 1.87 |
-| while10 | 187.7 | 40.7 | 0.22 | 0.23 |
-| new2 | 91.7 | 74.1 | 0.81 | 1.47 |
-| symcase | 29.5 | 28.9 | 0.98 | 1.03 |
-| str== | 100.0 | 49.4 | 0.49 | 1.44 |
-| poly2 | 54.5 | 36.1 | 0.66 | 2.11 |
-| blockeach | 57.8 | 50.6 | 0.88 | 2.33 |
-| lit== | 201.3 | 59.1 | 0.29 | 0.94 |
-| swap | 62.2 | 58.4 | 0.94 | 1.35 |
-| locattr | 61.0 | 42.7 | 0.70 | 1.38 |
-| sqrtw | 44.7 | 2.5 | 0.06 | 1.34 |
-| rangeeach | 46.3 | 1.8 | 0.04 | 0.87 |
-| blkattr | 77.2 | 61.9 | 0.80 | 1.12 |
-| selfcall | 89.4 | 31.7 | 0.35 | 0.99 |
-| veach1 | 181.3 | 317.9 | 1.75 | 1.59 |
-| veach2 | 229.7 | 362.5 | 1.58 | 1.37 |
-| veach4 | 367.7 | 509.3 | 1.39 | 1.38 |
-| veach100 | 5135.0 | 5609.6 | 1.09 | 1.04 |
-| rangelit | 158.4 | 88.4 | 0.56 | 0.87 |
-| short4 | 285.4 | 359.4 | 1.26 | 1.41 |
-| s_each1 | 76.6 | 169.0 | 2.21 | 2.11 |
-| s_times1 | 91.7 | 194.5 | 2.12 | 2.07 |
-| s_map1 | 107.4 | 180.5 | 1.68 | 1.93 |
-| s_any1 | 69.0 | 164.3 | 2.38 | 6.15 |
-| s_each2 | 112.7 | 194.7 | 1.73 | 1.70 |
-| s_times2 | 125.9 | 204.6 | 1.63 | 1.57 |
-| s_map2 | 140.8 | 211.1 | 1.50 | 1.29 |
-| s_any2 | 98.5 | 180.4 | 1.83 | 4.54 |
-| s_each4 | 186.5 | 234.0 | 1.25 | 1.25 |
-| s_times4 | 187.7 | 244.2 | 1.30 | 1.27 |
-| s_map4 | 242.5 | 245.1 | 1.01 | 1.05 |
-| s_any4 | 160.7 | 216.1 | 1.34 | 3.09 |
-| listwalk | 141.6 | 67.7 | 0.48 | 0.71 |
-| treefind | 1244.7 | 501.1 | 0.40 | 0.60 |
+| op | CRuby | IronRuby | ratio | f37be3b1 | start |
+|---|---:|---:|---:|---:|---:|
+| empty | 22.1 | 22.3 | 1.01 | 1.12 | 1.23 |
+| ivar_rw | 35.2 | 51.1 | 1.45 | 1.63 | 2.72 |
+| getter | 24.6 | 31.9 | 1.30 | 1.37 | 3.17 |
+| attr | 18.2 | 4.1 | 0.23 | 0.23 | 0.80 |
+| cmp | 25.5 | 29.8 | 1.17 | 1.23 | 3.58 |
+| abs | 32.7 | 34.7 | 1.06 | 1.77 | 3.07 |
+| arr | 38.4 | 42.3 | 1.10 | 1.20 | 1.82 |
+| nil? | 25.3 | 34.5 | 1.36 | 1.45 | 3.48 |
+| == | 26.8 | 28.8 | 1.07 | 1.13 | 3.35 |
+| yield | 39.7 | 56.9 | 1.43 | 1.22 | 2.57 |
+| each4 | 179.4 | 212.2 | 1.18 | 1.22 | 1.87 |
+| while10 | 187.1 | 29.4 | 0.16 | 0.22 | 0.23 |
+| new2 | 91.4 | 76.8 | 0.84 | 0.81 | 1.47 |
+| symcase | 29.7 | 28.4 | 0.96 | 0.98 | 1.03 |
+| str== | 100.9 | 50.1 | 0.50 | 0.49 | 1.44 |
+| poly2 | 54.3 | 35.7 | 0.66 | 0.66 | 2.11 |
+| blockeach | 58.8 | 49.4 | 0.84 | 0.88 | 2.33 |
+| lit== | 218.5 | 58.4 | 0.27 | 0.29 | 0.94 |
+| swap | 76.2 | 57.8 | 0.76 | 0.94 | 1.35 |
+| locattr | 60.1 | 43.1 | 0.72 | 0.70 | 1.38 |
+| sqrtw | 45.2 | 2.5 | 0.06 | 0.06 | 1.34 |
+| rangeeach | 47.4 | 0.7 | 0.01 | 0.04 | 0.87 |
+| blkattr | 77.7 | 41.6 | 0.54 | 0.80 | 1.12 |
+| selfcall | 93.4 | 31.5 | 0.34 | 0.35 | 0.99 |
+| veach1 | 191.3 | 318.9 | 1.67 | 1.75 | 1.59 |
+| veach2 | 242.8 | 370.7 | 1.53 | 1.58 | 1.37 |
+| veach4 | 383.1 | 508.3 | 1.33 | 1.39 | 1.38 |
+| veach100 | 4952.0 | 5770.0 | 1.17 | 1.09 | 1.04 |
+| rangelit | 147.0 | 88.3 | 0.60 | 0.56 | 0.87 |
+| short4 | 280.7 | 358.1 | 1.28 | 1.26 | 1.41 |
+| s_each1 | 78.9 | 162.5 | 2.06 | 2.21 | 2.11 |
+| s_times1 | 94.7 | 168.1 | 1.78 | 2.12 | 2.07 |
+| s_map1 | 104.3 | 184.3 | 1.77 | 1.68 | 1.93 |
+| s_any1 | 66.1 | 166.3 | 2.52 | 2.38 | 6.15 |
+| s_each2 | 107.1 | 185.9 | 1.74 | 1.73 | 1.70 |
+| s_times2 | 120.0 | 189.5 | 1.58 | 1.63 | 1.57 |
+| s_map2 | 149.0 | 209.6 | 1.41 | 1.50 | 1.29 |
+| s_any2 | 96.2 | 178.0 | 1.85 | 1.83 | 4.54 |
+| s_each4 | 176.0 | 218.8 | 1.24 | 1.25 | 1.25 |
+| s_times4 | 190.4 | 230.8 | 1.21 | 1.30 | 1.27 |
+| s_map4 | 238.5 | 249.9 | 1.05 | 1.01 | 1.05 |
+| s_any4 | 160.4 | 216.8 | 1.35 | 1.34 | 3.09 |
+| listwalk | 138.6 | 58.2 | 0.42 | 0.48 | 0.71 |
+| treefind | 1257.2 | 485.9 | 0.39 | 0.40 | 0.60 |
 
 `lit==`, `swap` and `locattr` are round seven's shapes, and their "start" is round six: a
 literal as the receiver of `==`, two element stores in one method, Float attr reads on
@@ -361,13 +334,18 @@ Profile (`Util/perf/profile.sh`, self time):
    iterator is refused (a Thread#raise at the inner safe point restarts the outer
    iteration, which takes locals back and cannot take a global back); and TruffleRuby is
    still 47 times faster on it.
-   Untried, and the largest thing left here (`Util/bench/daloze-lessons.md`, idea 1): an
-   instance variable that holds a Float kept unboxed. Every Float written to `@x` is a
-   box today (`RubyInstanceData._ivars` is one `object[]`), and NBody's remaining 602 MB
-   per iteration is mostly those. The paper on thread-safe objects gives the rule that
-   makes it safe without locking reads - a storage location belongs to one pair of
-   variable and type and is never reused, a type change takes a new location - which
-   fits the lock-free move protocol the instance variables already have.
+   Round sixteen built the largest thing that was left here (`Util/bench/daloze-lessons.md`,
+   idea 1; see Landed, perf/unboxed): a Float instance variable that typed code updates
+   is stored raw, in a location of its own in a slot array whose shape says so. NBody
+   0.76-0.80 of its time, 602 -> 152 MB per iteration, 0.35 of CRuby; TruffleRuby is
+   still 35 times faster on it. What the 152 MB are has not been looked at. Not done,
+   and each a way on: Integer instance variables are boxed as before (`@x += 1` on a
+   value past the small-integer cache allocates 24 bytes; `ivar-float-shapes.rb` has
+   the rows); a Float variable is only raw once typed code has overwritten it, so one
+   that is written once in `initialize` and read from typed code stays a box; and the
+   generic read of a raw object is a call (about 3 ns) because putting it into the
+   inlined read cost every program 2-4% (see "Caught by the measurement (round
+   sixteen)").
 3. **CD's red-black tree** (`put`, `tree_insert`, `find_node`, `Vector2D#compare_to`:
    18.5% of self time now that `is_in_voxel` is compiled). `compare_to` is
    screen-rejected over its self call of `compare_numbers`, a three-line Float-only
@@ -1345,6 +1323,57 @@ first were taken while the third was still running). `havlak` ended as a breakdo
   and what was slower in both orders level in alternating processes: Queens 1.014,
   Towers 1.002, Richards 0.915, micro `getter` 1.03 and `==` 1.01 overlapping;
   start-up 1510 against 1520 ms, best of fifteen.
+- **perf/unboxed 1d918afe .. 0a8c380d (merged in a7060a27) - a Float instance variable
+  that typed code updates is stored raw** (gap 2; `Util/bench/daloze-lessons.md`, idea 1).
+  Every Float written to `@x` was a box, and 450 of NBody's 602 MB per iteration were
+  those (75 stores per `advance`, 24 bytes each; measured by its author with the stores
+  taken out). A variable that the method JIT or a loop tier overwrites with a double is
+  now a `FloatLocation` in the object's slot array, and the update writes into it.
+  Rawness belongs to the shape: every shape has a raw twin, a location is only ever in
+  an array whose element 0 is a raw shape, and an object becomes raw by a Move under
+  the lock (`RubyInstanceData.TryPromote`), so nothing that loaded a plain shape sees a
+  location and no read takes a lock. A typed store promotes only when it overwrites a
+  slot that already holds a Float; the first promotion marks the class
+  (`RubyClass.FloatsRaw`), whose later instances are born raw. A generic read of a raw
+  object is a call out of line, where a Float is boxed (the same box again while the
+  value is unchanged, so `@x.equal?(@x)` and `object_id` say what they said); the
+  inlined cached read is the unchanged build's. Beside it: a Float's `object_id` is
+  CRuby's flonum id where CRuby has a flonum (`1.5.object_id == 1.5.object_id` was
+  false).
+  Against c791ce6e, all fourteen in both column orders, load 1.0-1.5: NBody 709.8 ->
+  542.6 and 724.3 -> 559.3 ms (0.764, 0.772), 0.804 in six alternating processes
+  (718.7 -> 578.1), 602 -> 152 MB per iteration; geomean of the fourteen 0.980 and
+  0.986; nothing else allocates differently. CD was 1.075 and 1.072 in the two tables
+  and 1.004 in alternating processes (478.5 against 480.5 ms, ranges 462-487 and
+  459-500); there Richards 0.945, Sieve 0.983, DeltaBlue 0.998, Json 1.001, Bounce
+  1.005. micro.rb: `blkattr` (a Float and an Integer attribute updated in a block)
+  0.89; `treefind` 1.05 and 1.10 in the tables and 1.04 with overlapping ranges in
+  eight alternating rounds, `short4` 1.05 and 1.06 and 1.05 overlapping: both are
+  probably 4% dearer and neither is shown to be more. `ivar-float-shapes.rb` (new):
+  `attr_f` (`b.vx -= d * c.m` on Floats) 44.2 -> 32.9 ns, 0.74 and 0.78; `read_o`, an
+  object attribute of a born-raw object read generically, 1.17 and 1.18. Start-up 1416
+  against 1418 ms, best of twelve.
+  What it costs, and where: a generic read of an object whose class has raw Floats is
+  about 3 ns dearer, its Integer and object variables included (`read_i` after
+  `attr_f`: 8.6 -> 14.3 ns for two reads in a typed loop); a class once marked stays
+  marked; raw twins count against the process-wide limit on shapes; a location is 32
+  bytes where a box was 24, and a raw variable that is also read generically keeps its
+  box beside it (56 bytes); a generic `@x` site that sees plain and raw objects of one
+  class in turn swaps its entry.
+  The gate, on 0a8c380d: IronRuby.Tests with the baseline's one failure; ivar (267
+  lines), jit (1224), block-loop, osr-array, hot-shapes, jit-calls and hash-struct as
+  CRuby's with the tiers on, off and with `-X:NoJITCalls` (int differs in the
+  baseline's 16 lines); `Util/ivar-stress.rb`, which now flips Floats between raw and
+  boxed and moves them between threads, five times; all five ruby/spec suites, 32,285
+  examples, nothing new; no FAIL in two runs of the fourteen. Two reviews by
+  subagents that had not seen the code (eleven probe files, threads among them) found
+  no wrong result in the final design; one difference from CRuby in the first
+  (`o.set(3.0).object_id == o.x.object_id`) is gone, and two rows the baseline gets
+  wrong are right. Not probed, read only: a rollback after a promotion in the same loop
+  iteration (the loop was not specialized in the probe written for it), and several
+  runtimes in one process (the shape trees are static and shared, as before;
+  `FloatsRaw` is per class).
+  It took four acceptance runs; see "Caught by the measurement (round sixteen)".
 
 ## Rejected
 
@@ -1625,6 +1654,14 @@ Round ten:
 
 None in speed.
 
+To check, not bisected: Richards allocates 14.0 MB per iteration at a7060a27, and 13.9
+at c791ce6e in every run of round sixteen's acceptance (so not from that round's
+merges), where this file recorded "13.9 -> 3.2 with #215's `!=` binding merged in" at
+f37be3b1. Either something between f37be3b1 and c791ce6e took that back
+(`git log --oneline f37be3b1..c791ce6e`), or the 3.2 was never Richards' (Mandelbrot
+reads 3.2 today). `ruby Util/perf/alloc.rb "ir=..." -- Richards` on a build of f37be3b1
+says which. Its time has not moved (340 ms in both tables).
+
 ## Faults the gate missed
 
 Found by review of #215 (Greptile), all three real, all fixed with cases added to the
@@ -1892,3 +1929,46 @@ invalidated is measured with the invalidating events that do NOT concern the cod
 another thread and from another runtime, and with the verbose counters (`stale=`,
 `invalidations=`) beside the baseline's. And a candidate's build is checked against its
 last commit before anything is measured on it (see perf/core2 under Landed).
+
+### Caught by the measurement (round sixteen)
+
+perf/unboxed computed the right thing from its first version on (two reviews, the
+matrices, the sweep). What it got wrong, five times, was what it cost code that has no
+Float in an instance variable, and each time the tests had nothing to say:
+
+- **The first version put a location in any slot array** and had every generic read
+  test the slot's type. All fourteen: 1.037 of the baseline (CD 1.27, Richards 1.12,
+  Json 1.07) for NBody's 0.81. Sent back; the redesign ties rawness to the shape, so
+  that a plain object's read is the compare it was.
+- **The redesign made the site's entry eight bytes larger and gave the typed reads a
+  flag to load.** `treefind` (five shapes at a two-entry site, an entry allocated on
+  every miss) was 8% slower in alternating processes, ranges apart, and level once
+  every node had one shape. Fixed in 128306e7.
+- **That fix removed a check it took for a duplicate**, and every generic read of a
+  raw object went one call further: `blkattr` from 0.94 to 1.06-1.08, `short4` to
+  1.07-1.12, Integer attributes of a born-raw class from 1.20 to 1.43-1.51. Only the
+  experiment's own shape file and a second acceptance run showed it. Fixed in 36c58562.
+- **Reading the raw object inside the inlined cached read** (63f19fc7; its author had
+  tried the same in 676de2d6 and taken it back in 6304f815) was the cheapest read of a
+  raw object - `read_i` 1.12 where it had been 1.67, `treefind` 1.01 - and passed the
+  rule as written: no benchmark more than 5% slower in both orders. But that read is
+  compiled into every `@x` and every attribute read, and six alternating processes of
+  four benchmarks without a Float had Bounce 1.040, DeltaBlue 1.027, Sieve 1.024 and
+  Richards 1.022; the fourteen together were level (1.001, 0.995). Taken back in
+  0a8c380d: the cost stays with the classes that have the gain.
+- **One row of the shape file measured nothing**: `attr_i` printed 31 ns on one build
+  and 48 on the next, and its six repetitions range from 28 to 105 ns on the baseline
+  itself (it allocates an Integer per iteration, and the least of six is whichever
+  repetition the collector left alone).
+
+What to take from it:
+
+- A change to a helper that is inlined into every compiled body (`RubyOps.TryReadCached`,
+  `GetInstanceVariable`, the typed code's `GetIVar` and `ReadSelfAttr`) is judged on
+  benchmarks that do not use the feature, in alternating processes, before anything
+  else: 2-4% on each of them is under the table's noise and under the 5% rule, and is
+  the whole geomean.
+- A fix found by one slow line is measured again on the lines the experiment was
+  about, not only on that line.
+- Before believing a row that prints the least of a few repetitions, print the
+  repetitions.
