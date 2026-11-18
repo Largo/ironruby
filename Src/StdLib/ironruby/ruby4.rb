@@ -4561,21 +4561,33 @@ class Array
     nil
   end
 
+  # MRI's rb_ary_to_h: an index loop, not #each_with_index (the prelude's wrapper, and a
+  # block_given? per element made it 4.7x MRI), and each pair through rb_check_array_type,
+  # which is Array.try_convert - an Array is taken as it is, without asking its #to_ary; a
+  # #to_ary that answers something else is that method's TypeError. The index moves with
+  # #succ (see Array#sum).
   def to_h
     result = {}
-    each_with_index do |pair, index|
-      pair = yield(pair) if block_given?
-      array = pair.respond_to?(:to_ary) ? pair.to_ary : nil
-      unless array.is_a?(Array)
-        raise TypeError, "wrong element type #{pair.class} at #{index} (expected array)"
-      end
-      unless array.size == 2
-        raise ArgumentError, "wrong array length at #{index} (expected 2, was #{array.size})"
-      end
-      result[array[0]] = array[1]
+    given = block_given?
+    i = 0
+    while i < size
+      element = self[i]
+      element = yield(element) if given
+      pair = ::Array === element ? element : ::Array.try_convert(element)
+      __to_h_pair_error__(element, pair, i) unless pair && pair.size == 2
+      result[pair[0]] = pair[1]
+      i = i.succ
     end
     result
   end
+
+  def __to_h_pair_error__(element, pair, index)
+    unless pair
+      raise TypeError, "wrong element type #{__ir_class_of__(element)} at #{index} (expected array)"
+    end
+    raise ArgumentError, "wrong array length at #{index} (expected 2, was #{pair.size})"
+  end
+  private :__to_h_pair_error__
 
   # #uniq and #uniq! compare the block's result, not the element itself; the
   # core versions ignore the block entirely, so they are kept for the no-block
