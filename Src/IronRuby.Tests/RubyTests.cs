@@ -392,6 +392,7 @@ namespace IronRuby.Tests {
                 JitMethods1,
                 JitCore_StringLength1,
                 JitCore_SunkStores1,
+                JitCore_SunkStores2,
                 JitCore_Abs1,
                 JitCore_CollectionEqualsNil1,
                 JitCore_Review1,

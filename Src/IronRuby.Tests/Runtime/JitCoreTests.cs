@@ -101,6 +101,72 @@ FrozenError
             Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
         }
 
+        /// <summary>
+        /// Bounce's Ball#bounce: @x is written as an Int64 (`@x += @xv') and as an Int32 (`@x = lim'), held in one long
+        /// and stored through NarrowLong (JitCompiler.Sink.cs); values at the Int32 and Int64 edges, a Bignum sum (a
+        /// deopt before any store), a Float velocity and a frozen ball.
+        /// </summary>
+        public void JitCore_SunkStores2() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class SsBall
+  attr_accessor :x, :y, :xv, :yv
+  def initialize(x, y, xv, yv) = (@x = x; @y = y; @xv = xv; @yv = yv)
+  def bounce
+    lim = 500
+    b = false
+    @x += @xv
+    @y += @yv
+    if @x > lim
+      @x = lim
+      @xv = 0 - @xv.abs
+      b = true
+    end
+    if @x < 0
+      @x = 0
+      @xv = @xv.abs
+      b = true
+    end
+    if @y > lim
+      @y = lim
+      @yv = 0 - @yv.abs
+      b = true
+    end
+    b
+  end
+  def last(d) = (@x = 7; @x += d)
+end
+s = SsBall.new(250, 10, 37, -45)
+r = (1..200).map { s.bounce }
+p [r.count(true), s.x, s.y, s.xv, s.yv]
+60.times { |i| s.last(i) }
+w = []
+[2**31 - 2, 2**62 - 1, 2**63 - 2].each do |e|
+  s.x = e; s.xv = 1
+  s.bounce
+  w << [s.x, s.x.class, s.x.equal?(500), s.x.hash == 500.hash]
+  s.x = 7
+  v = s.last(e)
+  w << [v, v.equal?(s.x), s.x.eql?(e + 7)]
+end
+p w
+s.x = 2**63 - 1; s.xv = 1; s.y = 3
+p [s.bounce, s.x, s.y]
+s.xv = 2.5; s.x = 499
+p [s.bounce, s.x, s.xv]
+s.freeze
+p [(s.bounce rescue $!.class), s.x]
+", @"
+[14, 407, -8990, 37, -45]
+[[500, Integer, true, true], [2147483653, true, true], [500, Integer, true, true], [4611686018427387910, true, true], [500, Integer, true, true], [9223372036854775813, true, true]]
+[true, 500, -42]
+[true, 500, -2.5]
+[FrozenError, 500]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
+        }
+
         /// <summary>Integer#abs (an Int32's is an Int64, -2**63's a Bignum) and Float#abs (-0.0 is 0.0, NaN stays NaN).</summary>
         public void JitCore_Abs1() {
             int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
