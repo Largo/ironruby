@@ -219,6 +219,20 @@ passed, and a loop beside a thread calling `extend` was 15 times slower.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.
+The command-line tools are what start-up is for, and they run more Ruby before they answer
+than `-e 1` does (RubyGems, irb and its dependencies), so a change to when or what the tiers
+compile is timed on them as well, the same way, each within 5%:
+
+```sh
+$TREE/ir.sh -S gem --version
+$TREE/ir.sh -S gem list
+$TREE/ir.sh -e 'require "irb"'
+```
+
+The tiers are on by default and are meant to stay on; these three and `-e 1` are the price
+that is watched for it. At a7060a27 they took 1.6, 1.9, 3.5 and 3.2 s, of which the tiers
+were 0-10% (`-X:NoJIT -X:NoOSR`: 1.6, 1.8, 3.1, 3.2): start-up is the runtime, the prelude
+and RubyGems, not the JIT, and making it shorter is its own work.
 
 ## 5. Verdict
 
