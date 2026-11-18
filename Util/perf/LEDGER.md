@@ -299,7 +299,7 @@ Profile (`Util/perf/profile.sh`, self time):
      Int", and with one type (`@x = @x - 500`) "a call of JitRuntime.NarrowLong", a
      helper the allow-list does not have. Held values of one variable in two numeric
      types need one local wide enough for both, and the narrowing admitted if it only
-     deopts. The next experiment.
+     deopts. In progress (round eighteen, perf/bounce).
    - DeltaBlue's and Havlak's `Vector#remove_first` ("an invoked body": an inlined or
      bound callee inside a body with held writes; the allow-list cannot see into it),
      Havlak's `set_nesting_level` (a call of `set_is_root`), DeltaBlue's `choose_method`
