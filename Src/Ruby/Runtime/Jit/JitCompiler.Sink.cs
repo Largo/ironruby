@@ -161,8 +161,9 @@ namespace IronRuby.Runtime.Jit {
                     ? Ast.Call(JitRuntime.M("SetIVarDouble"), Ast.Constant(_context), _self, s.Value, site)
                     : Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(s.Value, s.Type, JT.Obj), site)));
             }
-            // SetIVar deopts on a frozen self: before every store, so the restart finds nothing done
-            _canDeopt = true;
+            // SetIVar deopts on a frozen self, at the first store, before anything observable: as for a body's first
+            // write where the source makes it, _ivarWrite (set by TrySinkIVarWrite) is what says so, not _canDeopt,
+            // which would make a caller binding this body count a deopt after its own effects.
             _pure = false;
 
             // No try: the body calls nothing but the helpers IsSinkSafe lets through, which throw nothing but a deopt,
