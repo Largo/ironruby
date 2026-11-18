@@ -27,6 +27,7 @@
  *     safe point (no call, no loop) for a Thread#raise to land at.
  * Not with a loop, a self-call, an explicit return, fallbacks, or any effect other than these
  * writes (_pure at the end of the body): those are what IsSinkSafe's retry leaves to the old rule.
+ * Not tried at all for a body with a `while' or with keyword or optional parameters (TryCompile).
  *
  * ***************************************************************************/
 

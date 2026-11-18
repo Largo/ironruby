@@ -567,8 +567,11 @@ namespace IronRuby.Runtime.Jit {
             bool arrayParameters = true;
             bool unloggedWrites = true;
             bool unloggedEarlyWrites = true;
-            // a loop has a safe point, which a body holding writes back cannot have (JitCompiler.Sink.cs): not tried
-            bool sinkStores = !HasWhileLoop(ast);
+            // a loop has a safe point, which a body holding writes back cannot have (JitCompiler.Sink.cs): not tried.
+            // Nor with keyword or optional parameters: their prologue and their defaults are emitted outside the
+            // block that declares the held values (EmitBody), and a default may write (`def m(x = (@a = 5))'), so
+            // such a body failed to compile and was declined where it used to be specialized.
+            bool sinkStores = !HasWhileLoop(ast) && keywords == null && ast.Parameters.Optional.Length == 0;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._compileEpoch = epoch;

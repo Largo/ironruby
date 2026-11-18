@@ -505,8 +505,32 @@ Kernel.p r
 o = JdT.new
 200.times { |i| o.k = i % 3 - 1; o.arms }
 Kernel.p [o.n, o.m]
-o.k = 5; o.arms; p [o.n, o.m]
-o.k = -1; o.arms; p [o.n, o.m]
+o.k = 5; o.arms; Kernel.p [o.n, o.m]
+o.k = -1; o.arms; Kernel.p [o.n, o.m]
+
+# 4. keyword and optional parameters: no writes are held back there (their prologue and defaults are
+# emitted outside the held values' block), and the methods are specialized as they were before
+class JdK
+  def kw(k: 1); @a = k; @b = k + 1; nil; end
+  def kw2(x, k: 2); @b = x; @a = x + k; @b; end
+  def opt(x = (@a = 5)); @b = x; nil; end
+  def opt2(x, y = x + 1); @b = y; @a = x; @c = @a + @b; nil; end
+end
+r = []
+300.times do |i|
+  o = JdK.new
+  o.kw(k: i); a = [o.instance_variables, o.instance_variable_get(:@a), o.instance_variable_get(:@b)]
+  o = JdK.new
+  v = o.kw2(i, k: 3); b = [o.instance_variables, v, o.instance_variable_get(:@a)]
+  o = JdK.new
+  (i.odd? ? o.opt : o.opt(i)); c = [o.instance_variables, o.instance_variable_get(:@a), o.instance_variable_get(:@b)]
+  o = JdK.new
+  (i % 3 == 0 ? o.opt2(i) : o.opt2(i, 0.5)); d = [o.instance_variables, o.instance_variable_get(:@c)]
+  r << [a, b, c, d] if i % 60 == 7 || i % 60 == 12
+end
+Kernel.p r
+o = JdK.new.freeze
+Kernel.p [(o.kw(k: 1) rescue $!.class), (o.kw2(1) rescue $!.class), (o.opt rescue $!.class), (o.opt2(1) rescue $!.class), o.instance_variables]
 
 # last: once any String has had a singleton length, no body compiles String#length
 jd_row('@input a singleton length') { |p| s = JD_TEXT.dup; def s.length = 2; p.input = s }
