@@ -97,6 +97,19 @@ class H
   def m82; @a.flat_map { |x| x }.size; end
   def m83; @a.uniq { |x| x & 1 }.size; end
 end
+# Richards' Scheduler#hold_self: an instance variable write, then an attribute write and an attribute read
+# on another object (Docs/jit-resume-deopt.md, stage 1). The checksum is the sum of the reads and the count.
+class Tk; attr_accessor :task_holding, :link; end
+class Sch
+  attr_reader :hold_count
+  def initialize; @hold_count = 0; @current_task = Tk.new; @current_task.link = 3; end
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+end
+def hold_loop(sch, n); i = 0; s = 0; while i < n; s += sch.hold_self; i += 1; end; s + sch.hold_count; end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 # INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
 # seven sections as the time is. See Util/perf/instructions.rb.
@@ -197,3 +210,4 @@ t("max_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m80; i += 1; end; s }
 t("drop_while", N) { |n| i = 0; s = 0; while i < n; s += h.m81; i += 1; end; s }
 t("flat_map_scalar", N) { |n| i = 0; s = 0; while i < n; s += h.m82; i += 1; end; s }
 t("uniq_blk", N) { |n| i = 0; s = 0; while i < n; s += h.m83; i += 1; end; s }
+t("hold_self", N) { |n| hold_loop(Sch.new, n) }
