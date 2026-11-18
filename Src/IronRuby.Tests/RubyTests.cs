@@ -1091,6 +1091,7 @@ namespace IronRuby.Tests {
                 Method_LightFrameBlockGiven1,
                 Method_LightFrameRest1,
                 Method_LightFrameBlockPass1,
+                Method_LightFrameSplat1,
                 BigDecimal_Ruby4_1,
                 BigDecimal_Engine1,
                 BigDecimal_ExponentLimits1,
