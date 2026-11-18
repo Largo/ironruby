@@ -157,6 +157,12 @@ In the order they usually pay:
    (`Backtrace_LibraryFrames1` checks this): keep #each, and give it a one-value block when
    `__plain_list__?` says the built-in Array#each yields exactly one value per element.
 
+9. **A C# method the core already has, under a private alias taken when the prelude
+   loads** (`alias :__list_sort_by__ :sort_by`), is often the cheapest helper: it is not a
+   port to C#, and the alias keeps a program's redefinition of the public name from
+   reaching the core method that uses it. Check that its semantics (stability, how it
+   re-reads the receiver's size, `break`) are the ones needed.
+
 What this skill does not do: move the method to C#, change what it returns or raises, or
 write a per-element loop in Ruby (a `while ... yield` runs at 100 ns per element against 9
 for a C# iterator; that needs the loop compiler to learn `yield`).

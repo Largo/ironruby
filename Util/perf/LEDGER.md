@@ -454,7 +454,9 @@ Profile (`Util/perf/profile.sh`, self time):
     in `Kernel#__ir_string__`, which asks whether #respond_to? is Kernel's
     (`method(:respond_to?).owner`) and calls #to_s through `bind_call`; CRuby decides that in
     C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
-    `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2). One method per run of
+    `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
+    (`min_by(2)` 3.8 -> 1.9). Open beside speed: `min_by(n)`'s tie order is input order,
+    MRI's nmin selection orders ties its own way. One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
     (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
@@ -478,6 +480,11 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/minbyn (/perf-core) - `min_by(n)`, `max_by(n)` of an Array through the C#
+  `sort_by`** (a stable merge sort, under a private alias): 2676 -> 1308 ns on the merged
+  build (CRuby 698). Keys that do not compare now raise the key's error, as MRI. Learned:
+  sorting four Arrays by `Array#<=>` cost 950 ns - prefer a C# method the prelude already
+  has, taken under an alias at load so a redefinition cannot reach it.
 - **perf/minby (/perf-core) - `min_by` and `max_by` without a rest Array or a `|*values|`
   block**: `[1, 2, 3, 4].min_by { }` 1339 -> 1032 ns on the merged build (CRuby 448),
   `max_by` 1300 -> 969. Still #each underneath, because CRuby's backtraces show Array#each
