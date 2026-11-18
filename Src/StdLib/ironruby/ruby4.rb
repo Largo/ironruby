@@ -590,9 +590,22 @@ module Enumerable
 
   # flat_map and collect_concat are one C function in MRI, which a backtrace names by
   # the method called - so each is a method here, not an alias.
+  #
+  # An Array whose #each is the built-in one yields one value per element, so the block
+  # takes it as it is, and the block's answer goes through Array.try_convert, which is the
+  # rb_check_array_type MRI's flat_map_i calls: the `|*values|` block, the splat back into
+  # yield and the two type tests per element made [4 elements].flat_map { } 2.4x MRI.
   def __enum_flat_map__(name)
     return to_enum(name) { size if respond_to?(:size) } unless block_given?
     result = []
+    if __plain_list__?
+      each do |item|
+        mapped = yield(item)
+        array = ::Array === mapped ? mapped : ::Array.try_convert(mapped)
+        array ? result.concat(array) : result << mapped
+      end
+      return result
+    end
     each do |*values|
       # Like #map, #flat_map hands the yielded values straight to the block
       # rather than the packed item: `yield 1, 2` reaches `{ |a| }` as 1.
