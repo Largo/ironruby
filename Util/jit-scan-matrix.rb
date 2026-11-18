@@ -703,13 +703,10 @@ started = false
 reader = Thread.new do
   started = true
   bad = []
-  seen = 0
   until done
     x = b.x; y = b.y; xv = b.x_vel
-    seen += 1
     bad << [x, y, xv] unless x.is_a?(Integer) && y.is_a?(Integer) && x >= -47 && x <= 547 && y >= -53 && y <= 553 && (xv == 47 || xv == -47)
   end
-  $stderr.puts "jw_thread: #{seen} reads"
   bad.first(3)
 end
 Thread.pass until started

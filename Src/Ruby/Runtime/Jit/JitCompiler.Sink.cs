@@ -69,8 +69,11 @@ namespace IronRuby.Runtime.Jit {
         private HashSet<MSA.Expression> _sinkOrderings;
         private int _sinkSites;
         // Variables held as a long because the body writes them both as an Int and as a Lng (TryCompile carries the
-        // set from round to round), and those whose two integer types this round met (they ask for a round that
-        // holds them so: all of them at once, so that a body takes one round more, not one per variable).
+        // set from round to round), and those whose two integer types this round met: they ask for a round that
+        // holds them so. In practice that is one round per variable, not one in all: the first conflicting write
+        // is stored where it stands, the body is no longer pure, and every later write leaves TrySinkIVarWrite
+        // before its own conflict is looked at (Ball#bounce: a round for @x, then one for @y). The rounds end,
+        // since each adds a name; a body that can never hold its writes may still spend one on a name first.
         internal HashSet<string> _sinkWide;
         internal List<string> _sinkWiden;
 
