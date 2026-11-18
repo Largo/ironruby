@@ -205,7 +205,38 @@ Profile (`Util/perf/profile.sh`, self time):
    operation re-checking the method version itself, and a resumable generic body for
    what that cannot take (typed results, loops); the state a materialized scope needs;
    the gate's rows mapped to the faults below; and a staged plan whose first stage
-   compiles `hold_self`. Not implemented.
+   compiles `hold_self`.
+   **Stage 1 is built and not decided** (2026-11-18, branch `perf/resume1`, `-X:JITResume`,
+   off by default; "Stage 1 as built" in the document). An attribute or Struct member
+   operation on self after an effect no longer declines the method: the site checks the
+   method version and the receiver's class itself and, where the check fails, makes the
+   source's call through a site that has the method's scope, made once per activation.
+   `hold_self` was declined for exactly this ("a deopt after an effect
+   (EmitMethodAttrWrite, EmitMethodAttrRead)") and is compiled with the switch.
+   Instructions per call (`ab.rb -i`, four rounds, `core-small.rb`), CRuby / master / the
+   branch without the switch / with it: `hold_self` 805 / 1138 / 1139 / 911 (0.80);
+   `hold_self_2cls`, the attribute's receiver alternating between two classes, 1509 / 1795
+   / 1827 / 1299 (0.71); `hold_self_odd`, where one of the two has methods of those names
+   in place of attributes, 1599 / 1856 / 1886 / 1976 (1.05, slower); `each`, `inject` and
+   `each_with_index` the same on all three. Time, taken by the experiment on a busy
+   machine: `hold_self` 96 -> 84 ns (CRuby 60); `hold_self_odd` 1.13 for the first seconds
+   and the same as generic code at 4,000,000 calls (the body is retired and tried again).
+   Gate so far: IronRuby.Tests in Release fail the same one test on both trees
+   (`Exception_CauseRaisedInClause1`; 1269 and 1268 run); `jit-matrix.rb` (section 11
+   added) and `jit-calls-matrix.rb` print CRuby's output with the JIT off, on, with the
+   switch, with `-X:JITCalls` and with both, and the verbose line counts the fallbacks
+   taken (11,864 with the switch, none without). Not run: the sweep with the switch on and
+   off, AWFY (Richards is what this is for, and `hold_self` is a small part of it), the
+   two timed runs, start-up, net11.0, Windows. Open before it can be on by default: the
+   `hold_self_odd` line. Reported by the experiment about master and not checked since:
+   the typed entry never takes a pending alias name (`__callee__`); generic code fires no
+   `:c_call` for an `attr_reader`; `Struct.new(:a, :b).new` raises TypeError once
+   `Integer#-` is redefined; `JitRuntime.GetIVar` can deopt without being counted; a site
+   holds one binding, so a third receiver class goes to the fallback; and a shape's
+   instruction count depends on what ran before it in the process. What stage 2 meets
+   first: `:line` parity restricts bodies to flat statements, the trampoline frame, an
+   inlinable pure callee in the tail is still declined, and Richards' other methods are
+   rejected by the screen for their general calls, not by this rule.
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
