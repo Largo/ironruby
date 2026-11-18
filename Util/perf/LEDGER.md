@@ -458,7 +458,10 @@ Profile (`Util/perf/profile.sh`, self time):
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
     (`min_by(2)` 3.8 -> 1.9). Open beside speed: `min_by(n)`'s tie order is input order,
     MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
-    now Array's own as in MRI), and `flat_map` (2.2 -> 1.7). `uniq` is not this skill's:
+    now Array's own as in MRI), and `flat_map` (2.2 -> 1.7), `filter_map` (2.1 -> 1.6).
+    /perf-core loop stopped 2026-11-18: what is left above 2x (`Array#sum` and `Range#sum`
+    without a block, `Hash#sum { }`, `Array#dig` at 6x) is blocked on frame shapes -
+    `super`, `{}`, a `while` with `break`, a block passed on - which is /perf-frame's. `uniq` is not this skill's:
     its C# method alone costs what the call does (500 ns against CRuby's 230). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
 16. **Wrappers stay out of light frames** because they pass a block or a splat on
@@ -913,6 +916,11 @@ matrix's `each_index` blocks specialized.
 
 ## Rejected
 
+- **`Enumerable#sum` asking `block_given?` once instead of per element** (/perf-core,
+  2026-11-18, for `Hash#sum { }` at 3.5x CRuby): 1532 -> 1524 ns, overlapping. The block
+  writes the method's locals (`acc`, `compensation`), so it makes its scope whatever it asks.
+  What `Hash#sum { }` pays is the generic fold's per-element block; a Hash path of its own
+  would need Hash#each's one-or-two-value yield semantics checked first.
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
   chains, 6% of Json). Its share fell to 4.7%, which no timing could show. Reverted.
 - **`[AggressiveInlining]` on `RubyOps.IsTrue`** removed its 0.9% from the profile with no
