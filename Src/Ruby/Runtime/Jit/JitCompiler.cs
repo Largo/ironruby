@@ -572,6 +572,7 @@ namespace IronRuby.Runtime.Jit {
             // block that declares the held values (EmitBody), and a default may write (`def m(x = (@a = 5))'), so
             // such a body failed to compile and was declined where it used to be specialized.
             bool sinkStores = !HasWhileLoop(ast) && keywords == null && ast.Parameters.Optional.Length == 0;
+            HashSet<string> sinkWide = null;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._compileEpoch = epoch;
@@ -584,6 +585,7 @@ namespace IronRuby.Runtime.Jit {
                 c._noUnloggedWrites = !unloggedWrites;
                 c._noUnloggedEarlyWrites = !unloggedEarlyWrites;
                 c._sinkStores = sinkStores;
+                c._sinkWide = sinkWide;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -611,6 +613,14 @@ namespace IronRuby.Runtime.Jit {
 
                 // Writes held back that the body cannot keep (JitCompiler.Sink.cs): compile it storing them where they are.
                 if (c._sunk != null && c._sinkObstacle != null) {
+                    // an Integer variable written in both representations: another round holding it as a long
+                    if (c._sinkWiden != null) {
+                        if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] held as a long in {0}: {1}, written as an Int and as a Lng", ast.Name, String.Join(" ", c._sinkWiden)); }
+                        if (sinkWide == null) { sinkWide = new HashSet<string>(); }
+                        sinkWide.UnionWith(c._sinkWiden);
+                        round--;
+                        continue;
+                    }
                     if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] stores not held back in {0}: {1}", ast.Name, c._sinkObstacle); }
                     sinkStores = false;
                     round--;

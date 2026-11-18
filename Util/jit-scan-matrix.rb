@@ -532,5 +532,190 @@ Kernel.p r
 o = JdK.new.freeze
 Kernel.p [(o.kw(k: 1) rescue $!.class), (o.kw2(1) rescue $!.class), (o.opt rescue $!.class), (o.opt2(1) rescue $!.class), o.instance_variables]
 
+# 5. one variable held back while it is written as an Int32 and as an Int64 (a long local, stored through
+# NarrowLong): Ball#bounce of Bounce and the shapes around it. Each method is hot at call 40 and has its
+# event at call 60 and later; what the variable holds afterwards is shown by its class, equal? and
+# object_id against the same Integer made again, eql?, hash and Marshal.dump.
+def jw_box(v)
+  w = Integer(v.to_s)
+  # (identity only where IronRuby's Integer is an Int32 box: a larger one is a CRuby Fixnum to 2**62, which
+  # IronRuby's equal? and object_id do not follow, with the JIT on or off)
+  same = (v >= -2**31 && v < 2**31) ? [v.equal?(w), v.object_id == w.object_id] : :wide
+  [v, v.class, same, v.eql?(w), v.hash == w.hash, Marshal.dump(v) == Marshal.dump(w)]
+end
+JW_EDGES = [2**30, 2**31 - 1, 2**31, 2**62 - 1, 2**62, 2**63 - 1].flat_map { |e| [e, -e] }.flat_map { |e| [e - 1, e, e + 1] }
+class JwA
+  attr_accessor :x, :y
+  def initialize = (@x = 0; @y = 0)
+  # Lng (the sum) then Int (the limit)
+  def jw_clamp(d); @x += d; if @x > 500; @x = 500; end; nil; end
+  # Int then Lng, the method's value the held write
+  def jw_last(d); @x = 7; @x += d; end
+  # in different arms
+  def jw_arms(c, d); if c; @x = 5; else; @x = @y + d; end; nil; end
+  # conditionally, both orders
+  def jw_cond(d); @x = d + d if d > 3; @x = 1 if d == 0; nil; end
+  # a variable the body may create, beside the widened one, in both arms
+  def jw_fresh(c, d); if c; @b = 1; @a = d + d; else; @a = 2; @b = d + 1; end; @a = 0 if d == 0; nil; end
+  # a deopt (a Bignum sum) after another held write
+  def jw_over(d); @y = @y + 1; @x += d; if @x < 0; @x = 0; end; nil; end
+end
+o = JwA.new
+r = []
+120.times { |i| o.x = (i < 60 ? i : JW_EDGES[i % JW_EDGES.size]); o.jw_clamp(i < 60 ? 3 : 0); r << jw_box(o.x) if i >= 60 && i < 60 + JW_EDGES.size }
+Kernel.p [:jw_clamp, r]
+r = []
+120.times { |i| v = o.jw_last(i < 60 ? i : JW_EDGES[i % JW_EDGES.size] - 7); r << [jw_box(v), v.equal?(o.x)] if i >= 60 && i < 60 + JW_EDGES.size }
+Kernel.p [:jw_last, r]
+r = []
+120.times { |i| o.y = (i < 60 ? i : JW_EDGES[i % JW_EDGES.size]); o.jw_arms(i.odd?, i < 60 ? 2 : 1); r << jw_box(o.x) if i >= 60 }
+Kernel.p [:jw_arms, r]
+r = []
+120.times { |i| o.x = :none; o.jw_cond(i < 60 ? i % 6 : JW_EDGES[i % JW_EDGES.size]); r << (o.x == :none ? :none : jw_box(o.x)) if i >= 58 }
+Kernel.p [:jw_cond, r]
+r = []
+120.times { |i| f = JwA.new; f.jw_fresh(i.odd?, i < 60 ? i : JW_EDGES[i % JW_EDGES.size]); r << [f.instance_variables, f.instance_variable_get(:@a)] if i >= 58 || i % 13 == 0 }
+Kernel.p [:jw_fresh, r]
+r = []
+120.times do |i|
+  o.y = 0; o.x = (i < 60 ? i : 2**63 - 3)
+  v = (o.jw_over(i < 60 ? 1 : i - 58) rescue $!.class)
+  r << [v, jw_box(o.x), o.y] if i >= 58
+end
+Kernel.p [:jw_over, r]
+o.freeze
+Kernel.p [:jw_frozen, (o.jw_clamp(1) rescue $!.class), (o.jw_last(1) rescue $!.class), o.x]
+
+# the same variable with a Float, nil or a String in one arm: not widened (CRuby's answer either way)
+JW_WIDE = 2**40
+JW_S = "s"
+class JwB
+  attr_accessor :x
+  def initialize = (@x = 0)
+  def jw_float(c, d); if c; @x = d + 1; else; @x = 1.5; end; @x = d + JW_WIDE if d > 100; nil; end
+  def jw_nil(c, d); if c; @x = d + d; else; @x = nil; end; @x = JW_WIDE if d > 100; nil; end
+  def jw_str(c, d); if c; @x = d + 1; else; @x = JW_S; end; @x = JW_WIDE if d > 100; nil; end
+end
+%i[jw_float jw_nil jw_str].each do |m|
+  o = JwB.new; r = []
+  120.times { |i| o.send(m, i % 3 != 0, i < 60 ? i : 200); r << [o.x, o.x.class] if i >= 58 && i % 5 == 0 }
+  Kernel.p [m, r]
+end
+
+# Bounce's Ball#bounce, as the benchmark has it
+class JwBall
+  attr_accessor :x, :y, :x_vel, :y_vel
+  def initialize(x, y, xv, yv) = (@x = x; @y = y; @x_vel = xv; @y_vel = yv)
+  def bounce
+    x_limit = y_limit = 500
+    bounced = false
+    @x += @x_vel
+    @y += @y_vel
+    if @x > x_limit
+      @x = x_limit
+      @x_vel = 0 - @x_vel.abs
+      bounced = true
+    end
+    if @x < 0
+      @x = 0
+      @x_vel = @x_vel.abs
+      bounced = true
+    end
+    if @y > y_limit
+      @y = y_limit
+      @y_vel = 0 - @y_vel.abs
+      bounced = true
+    end
+    if @y < 0
+      @y = 0
+      @y_vel = @y_vel.abs
+      bounced = true
+    end
+    bounced
+  end
+  def state = [@x, @y, @x_vel, @y_vel].map { |v| [v, v.class] }
+end
+def jw_balls(label, n = 200, &mid)
+  b = JwBall.new(250, 10, 37, -45)
+  out = []
+  n.times do |i|
+    mid.call(b, i) if mid && (i == 60 || i == 150)
+    out << (b.bounce rescue $!.class)
+  end
+  Kernel.p [label, out.count(true), out.count(false), out.reject { |v| v == true || v == false }.uniq, b.state, jw_box(b.x), jw_box(b.y)]
+end
+jw_balls('ball')
+jw_balls('ball at the Int32 edge') { |b, i| b.x = 2**31 - 2; b.x_vel = i == 60 ? 1 : -(2**31) }
+jw_balls('ball at the Int64 edge') { |b, i| b.y = i == 60 ? -(2**63) + 2 : 2**63 - 1; b.y_vel = i == 60 ? -1 : 1 }
+jw_balls('x_vel a Float') { |b, i| b.x_vel = i == 60 ? 12.5 : -3 }
+jw_balls('x_vel a Bignum') { |b, i| b.x_vel = i == 60 ? 2**70 : 4 }
+jw_balls('y_vel nil') { |b, i| b.y_vel = i == 60 ? nil : 5 }
+b = JwBall.new(1, 1, 3, 4); 100.times { b.bounce }; b.freeze
+Kernel.p [:jw_ball_frozen, (b.bounce rescue $!.class), b.state]
+b = JwBall.new(495, 3, 7, -9); 100.times { b.bounce }; b.instance_variable_set(:@x, 498); b.x_vel = 4
+Kernel.p [:jw_ball_value, b.bounce, jw_box(b.x), b.x_vel, b.bounce]
+
+# Integer's methods redefined part way through, and restored
+JW_MAGIC = 13
+%i[abs + - > <].each do |op|
+  saved = :"__jw_#{op.object_id}"
+  Integer.alias_method saved, op
+  body = case op
+         when :abs then proc { self == -JW_MAGIC || self == JW_MAGIC ? 1000 : __send__(saved) }
+         else proc { |o| o == JW_MAGIC ? (op == :+ || op == :- ? 999 : true) : __send__(saved, o) } end
+  jw_balls("Integer##{op} redefined") do |b, i|
+    if i == 60
+      Integer.define_method(op, &body)
+      b.x_vel = JW_MAGIC; b.x = 400
+    else
+      Integer.alias_method op, saved
+    end
+  end
+end
+
+# Integer#abs refined where bounce is defined
+module JwRefine
+  refine(Integer) { def abs = 3 }
+end
+class JwRBall < JwBall
+  using JwRefine
+  def bounce
+    @x += @x_vel
+    if @x > 500
+      @x = 500
+      @x_vel = 0 - @x_vel.abs
+    end
+    if @x < 0
+      @x = 0
+      @x_vel = @x_vel.abs
+    end
+    nil
+  end
+end
+b = JwRBall.new(250, 0, 41, 0); r = []
+200.times { |i| b.bounce; r << b.x_vel if i > 150 }
+Kernel.p [:jw_refined, b.state, r.uniq.sort]
+
+# a second thread reading x and y while the hot loop runs: every value is one the source could store
+b = JwBall.new(250, 250, 47, -53)
+done = false
+started = false
+reader = Thread.new do
+  started = true
+  bad = []
+  seen = 0
+  until done
+    x = b.x; y = b.y; xv = b.x_vel
+    seen += 1
+    bad << [x, y, xv] unless x.is_a?(Integer) && y.is_a?(Integer) && x >= -47 && x <= 547 && y >= -53 && y <= 553 && (xv == 47 || xv == -47)
+  end
+  $stderr.puts "jw_thread: #{seen} reads"
+  bad.first(3)
+end
+Thread.pass until started
+300_000.times { b.bounce }
+done = true
+Kernel.p [:jw_thread, reader.value, b.state]
+
 # last: once any String has had a singleton length, no body compiles String#length
 jd_row('@input a singleton length') { |p| s = JD_TEXT.dup; def s.length = 2; p.input = s }
