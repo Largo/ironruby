@@ -567,7 +567,8 @@ namespace IronRuby.Runtime.Jit {
             bool arrayParameters = true;
             bool unloggedWrites = true;
             bool unloggedEarlyWrites = true;
-            bool sinkStores = true;
+            // a loop has a safe point, which a body holding writes back cannot have (JitCompiler.Sink.cs): not tried
+            bool sinkStores = !HasWhileLoop(ast);
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._compileEpoch = epoch;
@@ -591,7 +592,10 @@ namespace IronRuby.Runtime.Jit {
                     body = c.EmitBody(out actual);
                 } catch (JitBailout) {
                     // a body that held writes back and bailed is tried again storing them where they are
-                    if (c._sunk != null && sinkStores) { sinkStores = false; round--; continue; }
+                    if (c._sunk != null && sinkStores) {
+                        if (JitRuntime.Verbose) { Console.Error.WriteLine("[jit] stores not held back in {0}: it bailed out ({1})", ast.Name, c._bailReason ?? "unsupported construct"); }
+                        sinkStores = false; round--; continue;
+                    }
                     // A `return' whose value does not fit the type this round assumed is not a
                     // rejection, it is a re-run against the type that does fit.
                     if (c._retype != JT.None && c._retype != c._selfReturn) { guess = c._retype; continue; }

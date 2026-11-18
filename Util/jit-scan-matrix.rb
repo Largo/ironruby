@@ -391,5 +391,122 @@ t('jd: order, main') do
   r.uniq
 end
 
+# ---- review of round seventeen: what the allow-list cannot see, types, a caller with an effect
+# 1. a caller bound to a body with held writes, the caller having an effect first
+class JdRd
+  attr_accessor :input, :index, :current, :log, :other, :arr
+  def initialize(s) = (@input = s; @index = -1; @line = 1; @column = 0; @current = nil; @log = 0; @other = JdBox.new; @arr = [0]; read)
+  def read
+    if "\n" == @current
+      @line  += 1
+      @column = 0
+    end
+    @index += 1
+    if @index < @input.length
+      @current = @input[@index]
+    else
+      @current = nil
+    end
+  end
+  def c_ivar
+    @log += 1
+    read
+  end
+  def c_attr
+    @other.n = @other.n + 1
+    read
+  end
+  def c_arr
+    @arr[0] = @arr[0] + 1
+    read
+  end
+  def state = [@index, @log, @other.n, @arr[0], @current]
+end
+class JdBox; attr_accessor :n; def initialize = (@n = 0); end
+%i[c_arr].each do |m|
+  r = JdRd.new("ab\ncd" * 4)
+  200.times { |i| r.index = -1 if r.current.nil?; r.input = nil if i == 150; (r.send(m) rescue nil) }
+  Kernel.p [m, r.state]
+  r = JdRd.new("ab\ncd" * 4)
+  100.times { r.index = -1 if r.current.nil?; r.send(m) }
+  r.freeze
+  Kernel.p [m, :frozen, (r.send(m) rescue $!.class), r.state]
+end
+
+# 2. reads and writes of held variables in forms the allow-list does not see directly
+class JdF
+  attr_reader :x, :y
+  def initialize(v) = (@v = v; @x = 0; @y = 0)
+  def f_defined = (@x = @v + 1; defined?(@x))
+  def f_interp = (@x = @v + 1; "#{@x}")
+  def f_oror = (@x = nil if @v > 5; @x ||= @v; @x)
+  def f_andand = (@x = @v; @x &&= @v + 1; @x)
+  def f_masgn = (@x, @y = @v, @v + 1; @x)
+  def f_chain = (@x = @y = @v + 1; @x)
+  def f_twice = (@x = @v; @x += 1; @x += 1; @x)
+  def f_case
+    case @v
+    when 1 then @x = 10
+    else @x = 20
+    end
+    @x
+  end
+  def f_ternary = (@v > 2 ? (@x = 1) : (@y = 2); [@x, @y].size)
+  def f_operand = (1 + (@x = @v + 2))
+  def f_float = (@x = @v * 1.5)
+  def f_big = (@x = @v * 4_000_000_000)
+  def f_before = (t = @x; @x = @v; t)
+  def f_self_attr = (@x = @v + 3; self.x)
+  def f_ivget = (@x = @v + 4; instance_variable_get(:@x))
+end
+o = JdF.new(1)
+ms = %i[f_defined f_interp f_oror f_andand f_masgn f_chain f_twice f_case f_ternary f_operand f_float f_big f_before f_self_attr f_ivget]
+ms.each do |m|
+  r = nil
+  200.times { |i| o.instance_variable_set(:@v, i % 7); r = o.send(m) }
+  v = o.send(m)
+  Kernel.p [m, r, v, o.x, o.y]
+end
+# a Float and a large Integer the method returned: the object the variable holds
+[:f_float, :f_big].each do |m|
+  200.times { |i| o.instance_variable_set(:@v, i + 1); o.send(m) }
+  v = o.send(m)
+  Kernel.p [m, v.equal?(o.x), v == o.x]
+end
+
+# 3. a held variable whose type changes between calls
+class JdT
+  attr_accessor :n, :m, :k
+  def initialize = (@n = 0; @m = 0; @k = 1)
+  def bump
+    @m = @k + 1
+    @n += 1
+    nil
+  end
+  def arms
+    if @k > 0
+      @m = @k + 1
+    else
+      @m = 0.5
+    end
+    @n = @m
+    nil
+  end
+end
+o = JdT.new
+200.times { o.bump }
+r = []
+[1.5, nil, 4_611_686_018_427_387_903, 9_223_372_036_854_775_807, 2**70, "s"].each do |v|
+  o.n = v
+  o.m = :before
+  r << [(o.bump rescue $!.class), o.n, o.m]
+end
+Kernel.p r
+o = JdT.new
+200.times { |i| o.k = i % 3 - 1; o.arms }
+Kernel.p [o.n, o.m]
+o.k = 5; o.arms; p [o.n, o.m]
+o.k = -1; o.arms; p [o.n, o.m]
+
 # last: once any String has had a singleton length, no body compiles String#length
 jd_row('@input a singleton length') { |p| s = JD_TEXT.dup; def s.length = 2; p.input = s }

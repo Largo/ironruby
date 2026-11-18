@@ -39,6 +39,7 @@ namespace IronRuby.Runtime.Jit {
     using MSA = System.Linq.Expressions;
     using Ast = System.Linq.Expressions.Expression;
     using RExpr = IronRuby.Compiler.Ast.Expression;
+    using MethodDeclaration = IronRuby.Compiler.Ast.MethodDefinition;
 
     internal sealed partial class JitCompiler {
         private sealed class SunkIVar {
@@ -249,6 +250,21 @@ namespace IronRuby.Runtime.Jit {
         // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)
         private static readonly MethodInfo/*!*/ _absLong = typeof(Math).GetMethod("Abs", new[] { typeof(long) });
         private static readonly MethodInfo/*!*/ _absDouble = typeof(Math).GetMethod("Abs", new[] { typeof(double) });
+
+        private static bool HasWhileLoop(MethodDeclaration/*!*/ ast) {
+            var finder = new LoopFinder();
+            finder.Walk(ast.Body);
+            return finder.Found;
+        }
+
+        private sealed class LoopFinder : Walker {
+            internal bool Found;
+
+            public override bool Enter(WhileLoopExpression/*!*/ node) {
+                Found = true;
+                return false;
+            }
+        }
 
         private sealed class OrderingRemover : MSA.ExpressionVisitor {
             private readonly HashSet<MSA.Expression> _orderings;
