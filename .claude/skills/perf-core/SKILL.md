@@ -150,6 +150,13 @@ In the order they usually pay:
    that grew by a fallback made the common call 5% slower on `Array#sum`; an Enumerator
    made on a hot fallback cost 2 us. Measure the form that did not change, too.
 
+8. **Walk the receiver the way CRuby's method does.** Where CRuby's method is the class's own
+   (`Array#sum` is `ary_sum`, `Array#to_h` is `rb_ary_to_h`), an index loop is right, and
+   it stops calling a subclass's #each as CRuby does. Where it is Enumerable's (`min_by`,
+   `inject`), CRuby calls #each, and a backtrace from the block shows `Array#each` under it
+   (`Backtrace_LibraryFrames1` checks this): keep #each, and give it a one-value block when
+   `__plain_list__?` says the built-in Array#each yields exactly one value per element.
+
 What this skill does not do: move the method to C#, change what it returns or raises, or
 write a per-element loop in Ruby (a `while ... yield` runs at 100 ns per element against 9
 for a C# iterator; that needs the loop compiler to learn `yield`).
