@@ -487,6 +487,10 @@ which fails in Release on 22e3f91 too), ruby/spec language (2935 examples) and c
 the classes touched (12419 examples), and matches CRuby on `Util/perf/hot-shapes-matrix.rb`
 with the JIT on and off. Start-up is unchanged (1.44 s for `-e 1`, best of 12, both).
 
+- **perf/uniq (/perf-core, correctness with a small gain) - `Array#uniq { }` as MRI's
+  `rb_ary_uniq`**: no block call for one element or none, an index walk, five probes now
+  CRuby's; 885 -> 763 ns (CRuby 350), short of the 15% a speed change needs - the Hash of
+  keys is most of what is left.
 - **perf/fm (/perf-core) - `flat_map` of an Array**: one value per element and
   `Array.try_convert` for the block's answer, as MRI's `flat_map_i`: 1820 -> 1406 ns
   (CRuby 835), scalar answers 1348 -> 1043 (777).
