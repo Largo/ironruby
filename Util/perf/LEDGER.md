@@ -358,14 +358,16 @@ Profile (`Util/perf/profile.sh`, self time):
    an empty Hash literal `{}` (found on `Array#to_h`;
    `::Hash.new` is scope-free but calls a redefined Hash.new), `super` (6 hot `initialize`
    methods; also `Array#sum` without a block, 5.3x CRuby, whose rare path is `super`), `rescue`,
-   keywords, `$~`, regex literals, and a call that passes the method's block on
-   (`inner(&block)`: 94 to 275 ns per wrapper layer, Util/bench/truffleruby-lessons.md).
+   keywords, `$~`, regex literals, and a call with a splatted argument (`inner(*args)`, gap 16).
    `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
    RubyInstanceData + RubyObject as two objects per Ruby object.
    `block_given?` no longer forces the scope (it is answered from the frame's block
    parameter, `IR_LIGHT_BLOCK_GIVEN=0` for the old call) and a rest parameter no longer
-   keeps a method out (`IR_LIGHT_REST=0`); Util/block-given-matrix.rb and
-   Util/light-rest-matrix.rb are their matrices.
+   keeps a method out (`IR_LIGHT_REST=0`), nor does a call that passes a block on
+   (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass);
+   Util/block-given-matrix.rb, Util/light-rest-matrix.rb and Util/block-pass-matrix.rb are
+   their matrices. A method with both a literal block and a passed one still makes its scope
+   for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
     through a site shared by every `!=` in the runtime, so that site is polymorphic. 2.9%
@@ -464,10 +466,13 @@ Profile (`Util/perf/profile.sh`, self time):
     `super`, `{}`, a `while` with `break`, a block passed on - which is /perf-frame's. `uniq` is not this skill's:
     its C# method alone costs what the call does (500 ns against CRuby's 230). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
-16. **Wrappers stay out of light frames** because they pass a block or a splat on
-    (`inner(&block)`, `inner(*args)`): 36 prelude methods are `(*args, &block)` wrappers, and
-    a layer costs 94 to 275 ns. Until that shape is let in, `/perf-core` can only route
-    around it. `/perf-frame`; see gap 9 for the other shapes.
+16. **Wrappers that splat stay out of light frames** (`inner(*args)`, `inner(*args, &block)`):
+    passing the block on is let in (perf/blockpass, 2026-11-18), the splatted argument is not.
+    Counted over spec/core of ten classes with `IR_LIGHT_FRAMES=why`, the statement that kept
+    a prelude method out held a passed block in 41 methods, a splat in 25 and both in 4; the
+    passed block was taken first for that reason. A splat is an `ExplicitSplatAction` site
+    (no scope) and a call signature with `HasSplattedArgument`: probably the same kind of
+    change. `String#strip`, `lstrip`, `rstrip` and `Array#zip` are among them. `/perf-frame`.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -481,8 +486,45 @@ Profile (`Util/perf/profile.sh`, self time):
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
     speed gap.
+20. **`-w` warns of an unused block where CRuby does not**: `def given; block_given?; end`
+    called as `given(&b)` from a method that received `b` prints "the block passed to
+    'Object#given' ... may be ignored" under `ir -w` on master too; CRuby 4.0 `-w` printed it
+    for a three-line file but not inside a longer one. Found while writing
+    `Method_LightFrameBlockPass1`, not a speed gap; not looked into.
 
 ## Landed
+
+- **perf/blockpass (/perf-frame) - a method that passes its block on runs without a scope**
+  (`def w(&b) = inner(&b)`, `map(&:to_s)`, `&nil`, `&@ivar`, a local Proc, Method or Symbol;
+  `IR_LIGHT_BLOCK_PASS=0` turns it off). `IsScopeFree` takes a call whose block is a
+  `BlockReference` to a scope-free expression; the rewriter lets its `ConvertToProcAction`
+  site through (it takes no scope), drops `TryConvertBlockWithRefinements` (a light frame
+  has no definition refinements, so its scope would answer none and the helper null), gives
+  `MethodRetry`/`MethodPropagateReturn` the scope made on demand (only after a callee answered
+  a BlockReturnResult), and binds the call with a light scope as any other, the Proc as its
+  block argument. One thing the matrix caught: a light frame that names its block stands for
+  itself by that Proc, which `BlockParam.IsLiteralBlock` took for a library call's literal
+  block, so `def w(&b) = lambda(&b)` made a lambda where CRuby raises; such a Proc is now
+  marked (`Proc.IsMethodConverted`). `prelude-cost.rb`, ten alternating rounds against
+  master at load 2.5: `w_pass` (one layer) 362 -> 288 ns (0.80 of the switch-off build),
+  `w_pass2` (two layers) 374 -> 268 (0.72), the bare call `w_raw` unchanged (CRuby 72, 112,
+  152). Over spec/core of ten classes, 266 prelude methods are light frames against 238
+  (`min_by`, `max_by`, `minmax_by`, `flat_map`, `each_cons`, `each_slice`, `each_with_index`,
+  `reverse_each`, `sort_by!`, `bsearch`, Enumerable's `take_while`/`drop_while`...); in them the
+  entry is small beside the loop, 2-4% fewer instructions per call (`ab.rb -i`). Checked:
+  Util/block-pass-matrix.rb (86 probes, every answer CRuby's), block-given, light-rest, jit and
+  jit-calls matrices, each with the change on, off, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`,
+  `-X:JITCalls` and R2R; block-scope-reuse (both), hot-shapes and raise matrices with the JIT on
+  and off; a million-deep recursion through `&b` is SystemStackError; IronRuby.Tests in Release
+  on both trees (the same one failure, `Exception_CauseRaisedInClause1`); `Util/ci-sweep.sh` of
+  all five suites, 32,675 examples, no new failure (`core/dir/chroot_spec.rb` loops under root
+  through the `spec` symlink, and passes on both builds from the main checkout). AWFY at load
+  6: geomean 0.955 and 0.972 in the two orders; Json, NBody and Storage slower in both, but
+  their light-frame decisions are identical on the two builds (as are the micro table's), so
+  the change does not reach them. Learned: `IR_LIGHT_FRAMES=why` over a spec run, with the refused
+  statement classified by what it holds, is the census that picks the shape; and a light frame that names its
+  block hands that Proc to everything it calls - anything that asks a Proc where it came
+  from has to know.
 
 All four measured alone against 22e3f91 on a quiet machine, then together; the merged tree
 gives the same results as 22e3f91 on IronRuby.Tests (one failure, `Exception_CauseRaisedInClause1`,

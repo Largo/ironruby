@@ -62,12 +62,14 @@ and 16, has the current list):
 
 | shape | today | who has it |
 |---|---|---|
-| a call that passes the method's block on, `inner(&block)` | +94 to +275 ns per layer | 36 prelude wrappers, every delegator |
-| a call with a splatted argument, `inner(*args)` | keeps the method out | `String#strip`, `lstrip`, `rstrip` (+145 ns over the C# method) |
+| a call with a splatted argument, `inner(*args)` | keeps the method out | `String#strip`, `lstrip`, `rstrip` (+145 ns over the C# method); 25 prelude methods in a spec/core census |
 | `defined?(yield)` outside the opening guard | +75 to +180 ns | |
 | `__method__`, `__callee__` | force the scope | logging, delegation |
 | `super` | keeps the method out | hot `initialize` methods |
 | keywords, `rescue`, `$~`, regex literals | keep the method out | |
+
+Let in so far: `block_given?` (`IR_LIGHT_BLOCK_GIVEN`), a rest parameter (`IR_LIGHT_REST`), a call that
+passes the block on (`IR_LIGHT_BLOCK_PASS`), each with its matrix in `Util/`.
 
 Take one. State what it costs with a pair of shapes in `Util/bench/prelude-cost.rb` (the
 method with the construct and the same method without it), measured with `/perf-ab`. No
