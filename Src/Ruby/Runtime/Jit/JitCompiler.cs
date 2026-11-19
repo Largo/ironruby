@@ -182,11 +182,11 @@ namespace IronRuby.Runtime.Jit {
         private JT _retype = JT.None;
         private bool _firstRound;
 
-        /// <summary>The reason the last bailout gave, for IR_JIT_VERBOSE=1. Not on a fast path.</summary>
+        /// <summary>The reason the last bailout gave, for IR_JIT_VERBOSE=1 and the census (JitCensus). Not on a fast path.</summary>
         private string _bailReason;
 
         private JitBailout/*!*/ Bail(string/*!*/ reason) {
-            if ((JitRuntime.Verbose || Osr.OsrLoopSite.Verbose) && _bailReason == null) { _bailReason = reason; }
+            if ((JitRuntime.Verbose || Osr.OsrLoopSite.Verbose || JitCensus.Current != null) && _bailReason == null) { _bailReason = reason; }
             return JitBailout.Instance;
         }
 
@@ -576,6 +576,8 @@ namespace IronRuby.Runtime.Jit {
                         Console.Error.WriteLine("[jit] rejected {0} arity {1}: {2}", ast.Name, paramTypes.Length,
                             c._bailReason ?? "unsupported construct");
                     }
+                    var census = JitCensus.Current;
+                    if (census != null) { census.BailReason = c._bailReason ?? "unsupported construct"; }
                     return null;
                 }
 
@@ -2507,7 +2509,7 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
-        // IR_JIT_VERBOSE: what the last rejection was, with the method or variable name.
+        // IR_JIT_VERBOSE and the census (JitCensus): what the last rejection was, with the method or variable name.
         [ThreadStatic] internal static string LastRejectionDetail;
 
         // Locals read anywhere other than straight into an instance variable (`@a = a') or an
@@ -2580,7 +2582,7 @@ namespace IronRuby.Runtime.Jit {
         private bool No(object/*!*/ node) {
             if (_rejectedBy == null) {
                 _rejectedBy = node.GetType().Name;
-                if (JitRuntime.Verbose) {
+                if (JitRuntime.Verbose || JitCensus.Current != null) {
                     var call = node as MethodCall;
                     var ivar = node as InstanceVariable;
                     LastRejectionDetail = (call != null) ? _rejectedBy + " " + call.MethodName + (call.Target == null ? " (self)" : "")

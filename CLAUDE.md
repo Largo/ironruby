@@ -214,9 +214,13 @@ invalid definition is a build error (`IRGEN001`). To read what was generated, bu
   for one more.
 - `.claude/skills/review` is a project skill for reviewing a change the same way, before
   opening or merging a PR.
-- `.claude/skills/perf-measure`, `perf-step` and `perf-gate` are the loop for speed work:
-  measure against CRuby and TruffleRuby (`Util/perf/`), try one optimization in a worktree of
-  its own, and merge it only if it is measurably faster and computes the same thing.
+- `.claude/skills/perf-measure`, `perf-step` and `perf-gate` are the loop for speed work.
+  `perf-step` tries one optimization in a worktree of its own and keeps it if the census shows
+  the method JIT or the light frames covering more methods (`Util/perf/census.rb`: the verdict
+  each `def` of a set of files would get at its first call, found without running them, in
+  seconds); it runs no test suite. `perf-gate` (the change computes the same thing and makes
+  nothing slower) and `perf-measure` (against CRuby and TruffleRuby, `Util/perf/`) are owed
+  once to the branch, before it is pushed.
   `Util/perf/LEDGER.md` holds the numbers and what was tried; `/loop /perf-step` runs it.
   `perf-core` speeds up one core method written in Ruby without moving it to C#,
   `perf-frame` lets one more kind of method run without a scope, and `perf-ab` says whether

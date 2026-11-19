@@ -284,12 +284,17 @@ namespace IronRuby.Compiler.Ast {
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
                     visiblePrameterCountAndSignatureFlags, ref statements);
             }
-            if (LightFramesWhy && light == null) {
-                Console.Error.WriteLine("[light] why not: {0} ({1}:{2}): {3}", _name, gen.SourcePath, Location.Start.Line,
-                    !(allowLightFrame && LightFramesEnabled) ? "not allowed" :
+            if ((LightFramesWhy || gen.Census != null) && light == null) {
+                string why = !(allowLightFrame && LightFramesEnabled) ? "not allowed" :
                     definitionRefinements != null ? "refinements" : gen.Profiler != null ? "profiler" : gen.TraceEnabled ? "trace" :
                     gen.CompilerOptions.IsEval ? "eval" : scope.HasClosures ? "defines a closure (block literal)" :
-                    WhyNotLightFrameCandidate() ?? "body needs its scope after the rewrite");
+                    WhyNotLightFrameCandidate() ?? "body needs its scope after the rewrite";
+                if (LightFramesWhy) {
+                    Console.Error.WriteLine("[light] why not: {0} ({1}:{2}): {3}", _name, gen.SourcePath, Location.Start.Line, why);
+                }
+                if (gen.Census != null) {
+                    gen.Census.NotLightFrame = why;
+                }
             }
 
             // The handler only takes the MethodUnwinder of a `return' from a block of this method. It
