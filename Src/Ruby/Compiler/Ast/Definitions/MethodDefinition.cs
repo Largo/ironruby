@@ -415,6 +415,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightBlockPassEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCK_PASS") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_SPLAT=0 keeps every method that splats a value (`inner(*args)', `[*a]', `yield(*a)') out of light frames
+        /// (see IsScopeFree and LightFrameRewriter.VisitExtension).
+        /// </summary>
+        internal static readonly bool LightSplatEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_SPLAT") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -498,7 +504,7 @@ namespace IronRuby.Compiler.Ast {
         /// and `while' loops made of them (a loop's OSR site gets the scope made on demand). Global variables need the scope.
         /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
         /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
-        /// and keywords are not taken.
+        /// and keywords are not taken. A splatted argument (`inner(*args)') is converted by a site that takes no scope.
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
@@ -693,6 +699,13 @@ namespace IronRuby.Compiler.Ast {
                         }
                     }
                     return true;
+                }
+                // `inner(*args)', `[*a]': the value goes through an ExplicitSplatAction site, which takes no scope (#to_a is
+                // called through a conversion site), and the call binds the Array as its splatted argument whatever scope it
+                // is given (LightFrameRewriter.LightScopeCall)
+                var splat = node as SplattedArgument;
+                if (splat != null) {
+                    return LightSplatEnabled && IsScopeFree(splat.Argument, blockLiterals);
                 }
                 // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
@@ -1030,6 +1043,10 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (LightBlockPassEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ConvertToProcAction) {
                     // `&x' of something that is not a Proc: #to_proc through a conversion site, which is given no scope
+                    return base.VisitExtension(node);
+                }
+                if (LightSplatEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ExplicitSplatAction) {
+                    // `*x': #to_a through a conversion site, which is given no scope
                     return base.VisitExtension(node);
                 }
                 NeedsScope = true;

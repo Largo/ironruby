@@ -13,7 +13,7 @@ $stdout.sync = true
 P = Struct.new(:x, :y)
 class V; include Comparable; attr_reader :v; def initialize(v); @v = v; end; def <=>(o); @v <=> o.v; end; end
 class H
-  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @v = V.new(1); @i = 5; @n = [[1, 2]]; @nh = [{k: [3]}]; @ki = 0; @f = [1.5, 2.5, 0.5, 1.0]; end
+  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @sp = " ab "; @v = V.new(1); @i = 5; @n = [[1, 2]]; @nh = [{k: [3]}]; @ki = 0; @f = [1.5, 2.5, 0.5, 1.0]; end
   def m0; s = 0; @a.each { |x| s += x }; s; end
   def m1; s = 0; @a.each_with_index { |x, i| s += x + i }; s; end
   def m3; @a.inject(0) { |s, x| s + x }; end
@@ -96,6 +96,9 @@ class H
   def m81; @a.drop_while { |x| x < 3 }.size; end
   def m82; @a.flat_map { |x| x }.size; end
   def m83; @a.uniq { |x| x & 1 }.size; end
+  def m84; @sp.strip.size; end
+  def m85; @sp.lstrip.size; end
+  def m86; @sp.rstrip.size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 # INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
@@ -197,3 +200,6 @@ t("max_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m80; i += 1; end; s }
 t("drop_while", N) { |n| i = 0; s = 0; while i < n; s += h.m81; i += 1; end; s }
 t("flat_map_scalar", N) { |n| i = 0; s = 0; while i < n; s += h.m82; i += 1; end; s }
 t("uniq_blk", N) { |n| i = 0; s = 0; while i < n; s += h.m83; i += 1; end; s }
+t("strip", N) { |n| i = 0; s = 0; while i < n; s += h.m84; i += 1; end; s }
+t("lstrip", N) { |n| i = 0; s = 0; while i < n; s += h.m85; i += 1; end; s }
+t("rstrip", N) { |n| i = 0; s = 0; while i < n; s += h.m86; i += 1; end; s }
