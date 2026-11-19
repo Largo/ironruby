@@ -388,10 +388,12 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression previousProc = reusesProc ? gen.CurrentScope.DefineHiddenVariable("#proc", typeof(Proc)) : null;
 
             // A literal written in the body of a method with a parking slot takes the Proc parked with the method's scope
-            // (RubyOps.InstantiateParkedBlock); its hidden variable is what the method parks (MethodDefinition).
+            // (RubyOps.InstantiateParkedBlock); its hidden variable is what the method parks (MethodDefinition). Only a
+            // literal of the method's own body: one in a `class << self' body inside the method has no block around it
+            // either, but its hidden variable is the module body's, which the method's staging code cannot reach.
             var parkSlot = gen.CurrentMethod.ParkSlot;
             MSA.Expression instantiateReusable = null;
-            if (reusesProc && parkSlot != null && gen.CurrentBlock == null) {
+            if (reusesProc && parkSlot != null && gen.CurrentBlock == null && gen.CurrentScope == gen.CurrentMethod.Builder) {
                 instantiateReusable = Methods.InstantiateParkedBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable,
                     dispatcher, gen.CurrentMethod.ParkedVariable, AstUtils.Constant(gen.CurrentMethod.ParkProcVariables.Count));
                 gen.CurrentMethod.ParkProcVariables.Add(previousProc);

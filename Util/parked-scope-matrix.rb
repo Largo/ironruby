@@ -124,6 +124,22 @@ def ps_short_sum(a); t = 0.0; a.each { |x| t += x * 1.5 }; t; end
 t('four threads taking and parking one slot') { |i| next :skip if i > 2; 4.times.map { |k| Thread.new { s = 0.0; 20000.times { s += ps_short_sum([1.0, 2.0, k.to_f]) }; s } }.map(&:value) }
 t('ObjectSpace untouched') { |i| s = 0; v1.each { |x| s += x }; ObjectSpace.respond_to?(:each_object) && s }
 
+# A literal in a `class << self' body inside the method has no block around it either, but it belongs to the module
+# body's scope, not the method's: it is not parked with the method (the method used not to compile at all).
+class PsSingleton
+  def run(n)
+    s = 0
+    class << self
+      [1, 2].each { |x| (@acc ||= []) << x }
+    end
+    [n, n].each { |y| s += y }
+    s
+  end
+  def acc = singleton_class.instance_variable_get(:@acc).size
+end
+pss = PsSingleton.new
+t('a literal in a class << self body inside the method') { |i| [pss.run(i % 3), pss.acc > 0] }
+
 # ---------------------------------------------------------------- 6. the method's own block handed on (super: not parked)
 
 class P1; def run(&b); $kb = b; yield 1; end; end
