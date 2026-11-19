@@ -6,6 +6,64 @@ old ones; the history is in git.
 
 ## Current numbers
 
+2026-11-19 evening, c99c2ef6 (rounds twenty-two, twenty-four and twenty-five merged: `Array.new`
+in typed bodies, `@x ||= v`, constants looked up again), Release net10.0, the same host as
+below, load 0.6-1.1 throughout, `git status` clean. This is the timing half those three
+rounds owed; the tables further down are 2baa0099's and were not taken again.
+
+Are-We-Fast-Yet, all fourteen, us per iteration, one run of the three (`awfy.rb 12`);
+"second run" is IronRuby/CRuby in a run of those two with IronRuby first. The last two
+columns compare this build with 2baa0099, the build before the three merges: the time in
+alternating processes (six rounds, medians), and the bytes per iteration (`alloc.rb`):
+
+| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | second run | new/2baa0099 (alternating) | bytes new/2baa0099 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Havlak | 2111468 | 3283095 | 168618 | 1.55 | 1.61 | 0.919 | 0.980 |
+| Permute | 89031 | 125597 | 6430 | 1.41 | 1.27 | 0.965 | 1.000 |
+| Towers | 83662 | 98698 | 4672 | 1.18 | 0.95 | 1.086 | 0.741 |
+| DeltaBlue | 39405 | 45621 | 1522 | 1.16 | 1.05 | 1.045 | 0.971 |
+| Sieve | 116917 | 127634 | 7021 | 1.09 | 0.82 | 0.972 | 1.000 |
+| Richards | 295190 | 321413 | 14595 | 1.09 | 1.16 | 0.956 | 1.005 |
+| Queens | 93916 | 85915 | 6200 | 0.91 | 1.02 | 0.916 | 1.001 |
+| Json | 72268 | 60015 | 7329 | 0.83 | 0.74 | 0.989 | 0.993 |
+| Storage | 105853 | 80876 | 16976 | 0.76 | 0.63 | 0.931 | 1.000 |
+| CD | 699294 | 454064 | 36253 | 0.65 | 0.64 | 0.994 | 0.994 |
+| Bounce | 86719 | 44327 | 2148 | 0.51 | 0.53 | 0.992 | 1.000 |
+| NBody | 1587580 | 530033 | 15643 | 0.33 | 0.34 | 0.955 | 1.000 |
+| List | 100265 | 26069 | 6689 | 0.26 | 0.25 | 0.935 | 1.003 |
+| Mandelbrot | 791486 | 48924 | 41198 | 0.06 | 0.06 | 1.001 | 0.994 |
+
+Geomean IronRuby/CRuby 0.670 and 0.631 (0.635 and 0.643 at 2baa0099), IronRuby/TruffleRuby
+12.4. CRuby's own column moves by a fifth between the two runs here as it did before
+(Sieve 117 and 148 ms, Towers 84 and 107), so the ratio to CRuby does not say what the
+three merges did; the comparison with 2baa0099 does:
+
+- **Time: no difference that this host can show.** Alternating processes: geomean 0.974,
+  from 0.916 (Queens) and 0.919 (Havlak) to 1.045 (DeltaBlue) and 1.086 (Towers), with
+  ranges that overlap in every row. `awfy.rb 12` of the two builds: 1.012 with the old
+  build first, 0.985 with the new one first. Towers was the one row slower all three
+  times (1.09, 1.18, 1.04), and in ten more alternating rounds it was 1.037 with the
+  ranges inside each other (76-106 ms and 88-103), DeltaBlue 0.972, Storage 1.008. Its
+  JIT decisions are the same on both builds and it allocates a quarter less.
+- **Bytes: geomean 0.975.** Towers 167 -> 124 KB, DeltaBlue 16.2 -> 15.7 MB, Havlak 1.91 ->
+  1.87 GB; the rest within 0.7%.
+- **The micro table** (both orders): faster in both `abs`, `new2`, `swap`, `s_map2`,
+  `s_each4` (7-20%); slower in both `yield`, `lit==`, `veach4`, `treefind` (9-26%). Each
+  of the four in a process of its own, eight alternating rounds in each order: `yield`
+  0.87 and 0.98, `veach4` 0.93 and 0.92, `treefind` 0.99 and 0.94; `lit==` 1.15 and 1.18,
+  and in twelve more rounds 0.95 and 0.96 - the same minimum on both builds, so a fast
+  and a slow state and not a cost. The JIT's decisions for it are the same.
+- **Start-up on the ReadyToRun host**, least of ten, 2baa0099 -> now: `-e 1` 475 -> 480 ms,
+  `gem --version` 637 -> 619, `require "irb"` 1235 -> 1248, `irb` 1864 -> 1829, `gem
+  list` 1316 -> 1426 - and `gem list` again, twenty alternating runs: least 1362 -> 1330,
+  median 1442 -> 1425.
+
+So the three rounds cover more (the census), allocate a little less, and are not
+measurably faster or slower on the benchmarks - which have neither a `||=` nor a constant
+set while they run, and whose `Array.new` sites are in constructors. What they are for is
+ordinary Ruby, which this table does not have; a benchmark of that kind (rubygems loading
+and resolving, a parser, an ERB render) is the gap in the measuring.
+
 2026-11-19, 2baa0099 (master's #228 to #233 merged in, then round twenty-one's
 `perf/park`), Release net10.0, 4 cores (Xeon, 2.10 GHz), `git status` clean. Load average
 0.47 when the AWFY run began, 1.0-1.1 through the rest. The same host as the table before
@@ -871,8 +929,11 @@ Profile (`Util/perf/profile.sh`, self time):
   `raise-matrix` (2 lines: an anonymous class's address) in every mode alike, and
   `block-loop-matrix` on the ReadyToRun host only (4 lines, see Regressions).
   `ivar-stress.rb` three times OK; the fourteen benchmarks verify (no FAIL).
-  Still owed to these three: the timing half (`/perf-measure`, and step 4 of the gate) -
-  no number has been taken since 2baa0099 - and what the entries list "for the gate".
+  The timing half followed the same evening (see "Current numbers", c99c2ef6): nothing
+  slower on the fourteen benchmarks, the micro table or start-up once each suspect line
+  had its own process; no gain in time that the host can show; bytes 0.975. What the
+  entries list "for the gate" beyond that (no `:c_call` from the `Array.new` helpers,
+  per-count bodies with constants) is still open.
 
 - **perf/constrev (/perf-step, round twenty-five, 2026-11-19, 093c7e19) - a typed body
   looks its constants up again when the constant version moves** (gap 29) - not gated.
@@ -932,7 +993,7 @@ Profile (`Util/perf/profile.sh`, self time):
   element, class variable, attribute, global or constant target stays refused.
   JIT compiles 10.4% -> 10.5% (2,949 -> 2,979), maybe 9.7% -> 9.8% (2,756 -> 2,771), never
   79.9% -> 79.7% (22,630 -> 22,585), light frames unchanged (Src/StdLib + AWFY, 28,335
-  methods; 45 methods moved up, none down) - census only, not gated.
+  methods; 45 methods moved up, none down) - census only; gated and measured together with the rounds after it (see the entry above).
   The 30 that compile whatever the receiver is are getters of rubygems
   (`Gem::Specification#authors`, `#dependencies`, `#executables`, `#extensions`,
   `#licenses`, `#requirements`, `Gem::Dependency#type`, `Gem::Command.build_args`), Thor,
@@ -998,7 +1059,7 @@ Profile (`Util/perf/profile.sh`, self time):
   unchanged build too (`@a = 0; @b = 0; @k = @s.size`).
   JIT compiles 10.4% -> 10.4% (2,947 -> 2,949), maybe 9.7% -> 9.7% (2,747 -> 2,756), never
   79.9% -> 79.9% (22,641 -> 22,630), light frames unchanged (Src/StdLib + AWFY, 28,335
-  methods; 13 methods moved up, none down) - census only, not gated.
+  methods; 13 methods moved up, none down) - census only; gated and measured together with the rounds after it (see the entry above).
   Seven of the eleven that left `never` are the benchmarks': `Vector#initialize` and
   `#remove_all`, `Dictionary#initialize` and `#remove_all`, `HashIndexTable#initialize`,
   richards' `Packet#initialize` and `Scheduler#initialize`. Traces of eleven benchmarks
