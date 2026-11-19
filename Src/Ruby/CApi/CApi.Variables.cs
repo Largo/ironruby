@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using VALUE = System.UInt64;
@@ -162,10 +163,13 @@ namespace IronRuby.Runtime.CApi {
             public VALUE* Var;
             public IntPtr Getter, Setter;
             public bool ReadOnly;
+            public bool Virtual;
 
             public override object GetValue(RubyContext/*!*/ context, RubyScope scope) {
                 if (Getter == IntPtr.Zero) {
-                    return Var != null ? FromValue(*Var) : null;
+                    // CRuby's default getter of a virtual variable (rb_gvar_val_getter) answers its data
+                    // pointer, NULL - Qfalse; a hooked one's (rb_gvar_var_getter) nil for a NULL variable
+                    return Var != null ? FromValue(*Var) : Virtual ? (object)false : null;
                 }
                 int raised;
                 var depth = EnterNative();
@@ -204,7 +208,7 @@ namespace IronRuby.Runtime.CApi {
             }
         }
 
-        private static void DefineGlobal(byte* name, VALUE* var, IntPtr getter, IntPtr setter, bool readOnly) {
+        private static void DefineGlobal(byte* name, VALUE* var, IntPtr getter, IntPtr setter, bool readOnly, bool isVirtual = false) {
             if (_callGvarGet == null) {
                 _callGvarGet = (delegate* unmanaged[Cdecl]<void*, VALUE, VALUE*, int*, VALUE>)ShimExport("rb_ir_call_gvar_get");
                 _callGvarSet = (delegate* unmanaged[Cdecl]<void*, VALUE, VALUE, VALUE*, int*, void>)ShimExport("rb_ir_call_gvar_set");
@@ -213,7 +217,7 @@ namespace IronRuby.Runtime.CApi {
             if (n.StartsWith("$", StringComparison.Ordinal)) {
                 n = n.Substring(1);
             }
-            _context.DefineGlobalVariable(n, new CGlobalVariable { Name = n, Var = var, Getter = getter, Setter = setter, ReadOnly = readOnly });
+            _context.DefineGlobalVariable(n, new CGlobalVariable { Name = n, Var = var, Getter = getter, Setter = setter, ReadOnly = readOnly, Virtual = isVirtual });
         }
 
         internal static void rb_define_variable(byte* name, VALUE* var) {
@@ -230,7 +234,7 @@ namespace IronRuby.Runtime.CApi {
 
         // no setter: read-only
         internal static void rb_define_virtual_variable(byte* name, void* getter, void* setter) {
-            DefineGlobal(name, null, (IntPtr)getter, (IntPtr)setter, setter == null);
+            DefineGlobal(name, null, (IntPtr)getter, (IntPtr)setter, setter == null, true);
         }
 
         #endregion
@@ -255,8 +259,25 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(Send(HashClass(), "new", null), "compare_by_identity"));
         }
 
-        internal static VALUE rb_hash_new_capa(long capa) { return rb_hash_new(); }
-        internal static VALUE rb_hash(VALUE obj) { return CallV(obj, "hash"); }
+        internal static VALUE rb_hash_new_capa(long capa) {
+            if (capa < 0) {
+                throw RubyExceptions.CreateRuntimeError("st_table too big");
+            }
+            return rb_hash_new();
+        }
+
+        // hash.c's: #hash, through #to_int if need be, folded into a Fixnum
+        internal static VALUE rb_hash(VALUE obj) {
+            object h = Send(FromValue(obj), "hash", null);
+            if (!(h is int || h is long || h is BigInteger)) {
+                h = ConvertType(h, T_FIXNUM, "Integer", "to_int", true);
+            }
+            if (h is BigInteger big) {
+                h = (long)(ulong)(big & ulong.MaxValue);
+            }
+            long n = Convert.ToInt64(h);
+            return ToValue(Math.Clamp(n, FixnumMin, FixnumMax) == n ? n : n >> 1);
+        }
         internal static VALUE rb_hash_freeze(VALUE obj) { return rb_obj_freeze(obj); }
 
         internal static VALUE rb_hash_delete_if(VALUE hash) {

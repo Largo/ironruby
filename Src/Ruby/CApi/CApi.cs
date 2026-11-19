@@ -268,11 +268,26 @@ namespace IronRuby.Runtime.CApi {
         private static void InitializeGlobals(RubyContext/*!*/ context) {
             int count;
             byte* table = (byte*)((delegate* unmanaged[Cdecl]<int*, void*>)ShimExport("rb_ir_global_table"))(&count);
+            var variables = new List<KeyValuePair<string, IntPtr>>();
             for (int i = 0; i < count; i++) {
                 byte* path = *(byte**)(table + i * 2 * sizeof(IntPtr));
                 VALUE* address = *(VALUE**)(table + (i * 2 + 1) * sizeof(IntPtr));
-                *address = ToValue(ResolveGlobal(context, Marshal.PtrToStringUTF8((IntPtr)path)));
+                string name = Marshal.PtrToStringUTF8((IntPtr)path);
+                *address = ToValue(ResolveGlobal(context, name));
+                if (name.StartsWith("$", StringComparison.Ordinal)) {
+                    variables.Add(new KeyValuePair<string, IntPtr>(name, (IntPtr)address));
+                }
             }
+            // rb_stdout, rb_rs and the like are copies: what Ruby code assigns to $stdout or $/
+            // is copied over, as in CRuby, where the C global is the variable's own storage
+            RubyContext.StandardGlobalsChanged = changed => {
+                if (changed != context) {
+                    return;
+                }
+                foreach (var variable in variables) {
+                    *(VALUE*)variable.Value = ToValue(ResolveGlobal(context, variable.Key));
+                }
+            };
         }
 
         private static object ResolveGlobal(RubyContext/*!*/ context, string/*!*/ path) {

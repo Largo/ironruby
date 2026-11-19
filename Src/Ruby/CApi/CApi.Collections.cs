@@ -138,8 +138,13 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(_context.KernelModule, "Array", null, FromValue(val)));
         }
 
+        // object.c's: nil and [] are {}, anything else has to convert with #to_hash
         internal static VALUE rb_Hash(VALUE val) {
-            return ToValue(Send(_context.KernelModule, "Hash", null, FromValue(val)));
+            object o = FromValue(val);
+            if (o == null || o is RubyArray array && array.Count == 0) {
+                return rb_hash_new();
+            }
+            return ToValue(ConvertType(o, T_HASH, "Hash", "to_hash", true));
         }
 
         #endregion

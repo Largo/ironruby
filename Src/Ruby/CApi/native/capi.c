@@ -227,12 +227,18 @@ VALUE
 rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2)
 {
     struct rb_ir_frame frame;
-    VALUE result = Qnil, errinfo = rb_errinfo();
+    VALUE result = Qnil, errinfo = rb_errinfo(), current = rb_ir_current_exception();
     int tag = 0;
     RB_IR_PROTECT(frame, result = b_proc(data1), tag = rb_ir_caught());
-    /* $! is the exception while the ensure function runs, and what it was before afterwards */
-    e_proc(data2);
-    rb_set_errinfo(errinfo);
+    /* $! is the exception while the ensure function runs, and what it was before afterwards,
+       whether the ensure function returns or raises */
+    {
+        int tag2 = 0;
+        RB_IR_PROTECT(frame, e_proc(data2), tag2 = rb_ir_caught());
+        rb_set_errinfo(errinfo);
+        rb_ir_set_current_exception(current);
+        if (tag2) rb_jump_tag(tag2);
+    }
     if (tag) rb_jump_tag(tag);
     return result;
 }
@@ -241,14 +247,20 @@ static VALUE
 rb_ir_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, int count, const VALUE *classes)
 {
     struct rb_ir_frame frame;
-    VALUE result = Qnil, errinfo = rb_errinfo();
+    VALUE result = Qnil, errinfo = rb_errinfo(), current = rb_ir_current_exception();
     int tag = 0;
     RB_IR_PROTECT(frame, result = b_proc(data1), tag = rb_ir_caught());
     if (!tag) return result;
     if (!rb_ir_rescue_match(count, classes)) rb_jump_tag(tag);
-    /* $! is the exception while the rescue function runs, and what it was before afterwards */
-    result = r_proc ? r_proc(data2, rb_errinfo()) : Qnil;
-    rb_set_errinfo(errinfo);
+    /* $! is the exception while the rescue function runs, and what it was before afterwards,
+       whether the rescue function returns or raises */
+    {
+        int tag2 = 0;
+        RB_IR_PROTECT(frame, result = r_proc ? r_proc(data2, rb_errinfo()) : Qnil, tag2 = rb_ir_caught());
+        rb_set_errinfo(errinfo);
+        rb_ir_set_current_exception(current);
+        if (tag2) rb_jump_tag(tag2);
+    }
     return result;
 }
 
@@ -1033,6 +1045,28 @@ rb_struct_define(const char *name, ...)
     }
     va_end(ap);
     return rb_funcallv(rb_cStruct, rb_intern("new"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
+}
+
+/* struct.c's: a Data class with the NULL-terminated member names, under Data or super */
+VALUE
+rb_data_define(VALUE super, ...)
+{
+    VALUE args = rb_ary_new();
+    va_list ap;
+    va_start(ap, super);
+    for (;;) {
+        const char *member = va_arg(ap, const char *);
+        if (!member) break;
+        rb_ary_push(args, rb_id2sym(rb_intern(member)));
+    }
+    va_end(ap);
+    if (!super || NIL_P(super)) {
+        super = rb_path2class("Data");
+    }
+    else {
+        Check_Type(super, T_CLASS);
+    }
+    return rb_funcallv(super, rb_intern("define"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
 }
 
 VALUE

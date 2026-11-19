@@ -15,6 +15,8 @@
 #undef rb_ir_rarray_aset
 #undef rb_ir_caught
 #undef rb_ir_rescue_match
+#undef rb_ir_current_exception
+#undef rb_ir_set_current_exception
 #undef rb_ir_warn
 #undef rb_ir_str_new_buffer
 #undef rb_ir_raise_notimp
@@ -33,6 +35,10 @@
 #undef rb_intern2
 #undef rb_intern
 #undef rb_intern_str
+#undef rb_check_id
+#undef rb_check_symbol
+#undef rb_check_id_cstr
+#undef rb_check_symbol_cstr
 #undef rb_sym2id
 #undef rb_to_id
 #undef rb_ascii8bit_encindex
@@ -540,6 +546,7 @@
 #undef rb_undefine_finalizer
 #undef rb_arithmetic_sequence_extract
 #undef rb_arithmetic_sequence_beg_len_step
+#undef rb_gc_latest_gc_info
 
 struct rb_ir_function_table {
     VALUE (*rb_ir_builtin_type)(VALUE obj);
@@ -556,6 +563,8 @@ struct rb_ir_function_table {
     void (*rb_ir_rarray_aset)(VALUE ary, long i, VALUE v);
     int (*rb_ir_caught)(void);
     int (*rb_ir_rescue_match)(int count, const VALUE *classes);
+    VALUE (*rb_ir_current_exception)(void);
+    void (*rb_ir_set_current_exception)(VALUE exc);
     void (*rb_ir_warn)(VALUE message, int verbose_only);
     VALUE (*rb_ir_str_new_buffer)(const char *ptr, long len, int encindex);
     void (*rb_ir_raise_notimp)(const char *name);
@@ -574,6 +583,10 @@ struct rb_ir_function_table {
     ID (*rb_intern2)(const char *name, long len);
     ID (*rb_intern)(const char *name);
     ID (*rb_intern_str)(VALUE str);
+    ID (*rb_check_id)(volatile VALUE *namep);
+    VALUE (*rb_check_symbol)(volatile VALUE *namep);
+    ID (*rb_check_id_cstr)(const char *ptr, long len, rb_encoding *enc);
+    VALUE (*rb_check_symbol_cstr)(const char *ptr, long len, rb_encoding *enc);
     ID (*rb_sym2id)(VALUE obj);
     ID (*rb_to_id)(VALUE str);
     int (*rb_ascii8bit_encindex)(void);
@@ -1081,10 +1094,11 @@ struct rb_ir_function_table {
     VALUE (*rb_undefine_finalizer)(VALUE obj);
     int (*rb_arithmetic_sequence_extract)(VALUE as, rb_arithmetic_sequence_components_t *buf);
     VALUE (*rb_arithmetic_sequence_beg_len_step)(VALUE as, long *begp, long *lenp, long *stepp, long len, int err);
+    VALUE (*rb_gc_latest_gc_info)(VALUE key);
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 539;
+const int rb_ir_function_count = 546;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -1196,6 +1210,21 @@ int
     int rb_ir_result = rb_ir_fns.rb_ir_rescue_match(count, classes);
     RB_IR_CHECK();
     return rb_ir_result;
+}
+
+VALUE
+(rb_ir_current_exception)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_ir_current_exception();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_ir_set_current_exception)(VALUE exc)
+{
+    rb_ir_fns.rb_ir_set_current_exception(exc);
+    RB_IR_CHECK();
 }
 
 void
@@ -1335,6 +1364,38 @@ ID
 (rb_intern_str)(VALUE str)
 {
     ID rb_ir_result = rb_ir_fns.rb_intern_str(str);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+ID
+(rb_check_id)(volatile VALUE *namep)
+{
+    ID rb_ir_result = rb_ir_fns.rb_check_id(namep);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_check_symbol)(volatile VALUE *namep)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_check_symbol(namep);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+ID
+(rb_check_id_cstr)(const char *ptr, long len, rb_encoding *enc)
+{
+    ID rb_ir_result = rb_ir_fns.rb_check_id_cstr(ptr, len, enc);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_check_symbol_cstr)(const char *ptr, long len, rb_encoding *enc)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_check_symbol_cstr(ptr, len, enc);
     RB_IR_CHECK();
     return rb_ir_result;
 }
@@ -5302,6 +5363,14 @@ VALUE
 (rb_arithmetic_sequence_beg_len_step)(VALUE as, long *begp, long *lenp, long *stepp, long len, int err)
 {
     VALUE rb_ir_result = rb_ir_fns.rb_arithmetic_sequence_beg_len_step(as, begp, lenp, stepp, len, err);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_gc_latest_gc_info)(VALUE key)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_gc_latest_gc_info(key);
     RB_IR_CHECK();
     return rb_ir_result;
 }
