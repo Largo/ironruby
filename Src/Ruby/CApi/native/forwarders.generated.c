@@ -390,6 +390,18 @@
 #undef rb_io_close
 #undef rb_io_path
 #undef rb_io_taint_check
+#undef rb_io_check_initialized
+#undef rb_io_check_closed
+#undef rb_io_check_readable
+#undef rb_io_check_char_readable
+#undef rb_io_check_byte_readable
+#undef rb_io_check_writable
+#undef rb_io_mode
+#undef rb_io_set_nonblock
+#undef rb_io_wait
+#undef rb_thread_check_ints
+#undef rb_thread_sleep_forever
+#undef rb_thread_wait_for
 #undef rb_class_public_instance_methods
 #undef rb_class_instance_methods
 #undef rb_class_private_instance_methods
@@ -919,6 +931,18 @@ struct rb_ir_function_table {
     VALUE (*rb_io_close)(VALUE io);
     VALUE (*rb_io_path)(VALUE io);
     VALUE (*rb_io_taint_check)(VALUE obj);
+    void (*rb_io_check_initialized)(rb_io_t *fptr);
+    void (*rb_io_check_closed)(rb_io_t *fptr);
+    void (*rb_io_check_readable)(rb_io_t *fptr);
+    void (*rb_io_check_char_readable)(rb_io_t *fptr);
+    void (*rb_io_check_byte_readable)(rb_io_t *fptr);
+    void (*rb_io_check_writable)(rb_io_t *fptr);
+    int (*rb_io_mode)(VALUE io);
+    void (*rb_io_set_nonblock)(rb_io_t *fptr);
+    VALUE (*rb_io_wait)(VALUE io, VALUE events, VALUE timeout);
+    void (*rb_thread_check_ints)(void);
+    void (*rb_thread_sleep_forever)(void);
+    void (*rb_thread_wait_for)(struct timeval time);
     VALUE (*rb_class_public_instance_methods)(int argc, const VALUE *argv, VALUE mod);
     VALUE (*rb_class_instance_methods)(int argc, const VALUE *argv, VALUE mod);
     VALUE (*rb_class_private_instance_methods)(int argc, const VALUE *argv, VALUE mod);
@@ -1060,7 +1084,7 @@ struct rb_ir_function_table {
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 527;
+const int rb_ir_function_count = 539;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -4114,6 +4138,92 @@ VALUE
     VALUE rb_ir_result = rb_ir_fns.rb_io_taint_check(obj);
     RB_IR_CHECK();
     return rb_ir_result;
+}
+
+void
+(rb_io_check_initialized)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_check_initialized(fptr);
+    RB_IR_CHECK();
+}
+
+void
+(rb_io_check_closed)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_check_closed(fptr);
+    RB_IR_CHECK();
+}
+
+void
+(rb_io_check_readable)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_check_readable(fptr);
+    RB_IR_CHECK();
+}
+
+void
+(rb_io_check_char_readable)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_check_char_readable(fptr);
+    RB_IR_CHECK();
+}
+
+void
+(rb_io_check_byte_readable)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_check_byte_readable(fptr);
+    RB_IR_CHECK();
+}
+
+void
+(rb_io_check_writable)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_check_writable(fptr);
+    RB_IR_CHECK();
+}
+
+int
+(rb_io_mode)(VALUE io)
+{
+    int rb_ir_result = rb_ir_fns.rb_io_mode(io);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_io_set_nonblock)(rb_io_t *fptr)
+{
+    rb_ir_fns.rb_io_set_nonblock(fptr);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_io_wait)(VALUE io, VALUE events, VALUE timeout)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_io_wait(io, events, timeout);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_thread_check_ints)(void)
+{
+    rb_ir_fns.rb_thread_check_ints();
+    RB_IR_CHECK();
+}
+
+void
+(rb_thread_sleep_forever)(void)
+{
+    rb_ir_fns.rb_thread_sleep_forever();
+    RB_IR_CHECK();
+}
+
+void
+(rb_thread_wait_for)(struct timeval time)
+{
+    rb_ir_fns.rb_thread_wait_for(time);
+    RB_IR_CHECK();
 }
 
 VALUE
