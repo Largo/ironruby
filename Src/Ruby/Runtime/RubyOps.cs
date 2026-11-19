@@ -230,6 +230,202 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        #region Parked method scopes
+
+        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda or nested block in them)
+        // and which calls no super makes a scope and a Proc per literal on every call, the Proc's parent (`def each; (a..b).each
+        // { |i| yield @s[i] }; end'). Once such a call has returned normally, if nothing captured the scope (RubyScope.IsCaptured:
+        // binding, eval, a method or Symbol proc made in it, a TracePoint, a Proc of a literal replaced) and the last Proc of
+        // each literal is one only the frame holds (Proc.IsReusableAndInactive: given to light frames and [BlockNotKept]
+        // iterators only, and no scope it ran in captured), nothing can reach the scope or its Procs: they are parked in the
+        // body's ParkedScopeSlot, cleared of everything of the call that ended, and the next call takes them with an atomic
+        // exchange into a variable of its frame. A call that does not get them - a recursive call, one on another thread, or one
+        // after a call that could not park - makes a plain scope and Procs exactly as before. IR_PARKED_SCOPES=0 turns it off.
+
+        /// <summary>
+        /// The parked scope and Procs of the slot, now this call's, if they were parked by a call of the same definition.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ParkedProcs TakeParkedScope(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule) {
+            var parked = slot.Parked;
+            if (parked == null) {
+                return null;
+            }
+            return TakeParkedScopeSlow(slot, parked, parentScope, declaringModule);
+        }
+
+        private static ParkedProcs TakeParkedScopeSlow(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked, RubyScope/*!*/ parentScope,
+            RubyModule/*!*/ declaringModule) {
+            // Taken first, looked at after: until the exchange succeeds another call may take it, fail to park it and empty it.
+            if (Interlocked.CompareExchange(ref slot.Parked, null, parked) != parked) {
+                return null;
+            }
+            // the same body may be defined in more than one module or runtime: a scope is only reused for the definition it was
+            // made for (one parked for another goes back, or is dropped if a call parked meanwhile)
+            var scope = parked.Scope;
+            if (scope._parent != parentScope || scope.DeclaringModule != declaringModule) {
+                Interlocked.CompareExchange(ref slot.Parked, parked, null);
+                return null;
+            }
+            return parked;
+        }
+
+        /// <summary>
+        /// CreateMethodScope with the parked scope TakeParkedScope took: that scope, made the scope of this call.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ ReuseParkedScope(ParkedProcs/*!*/ parked, MutableTuple locals, object selfObject, Proc blockParameter,
+            InterpretedFrame interpretedFrame) {
+
+            RubyUtils.SafePoint();
+            RequireSufficientStack();
+
+            var scope = parked.Scope;
+            scope.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, null, null);
+            if (_aliasCallSeen) {
+                string callee = _pendingCallee;
+                if (callee != null) {
+                    _pendingCallee = null;
+                    if (_pendingCalleeDefinition == scope.DefinitionName) {
+                        scope.CalleeName = callee;
+                    }
+                }
+            }
+
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
+                TracePoint.OnMethodCall(scope);
+            }
+            return scope;
+        }
+
+        /// <summary>
+        /// CreateMethodScopeLazy of a light-frame body with the parked scope TakeParkedScope took.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ ReuseParkedScopeLazy(ParkedProcs/*!*/ parked, MutableTuple locals, object selfObject,
+            Proc blockParameter, InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+
+            // (as CreateMethodScopeLazy: the scope holds the block, and whatever asked for the scope may keep it)
+            if (blockParameter != null) {
+                blockParameter.ClearReusable();
+            }
+            var scope = parked.Scope;
+            scope.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, rfc, calleeName);
+            return scope;
+        }
+
+        /// <summary>
+        /// InstantiateReusableBlock of a literal (the index-th) of a body with a parking slot: the Proc parked with the scope, if
+        /// this call took that scope, and a previous Proc that cannot be made again marks the scope captured - it may be held
+        /// somewhere, and it reaches the scope.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Proc InstantiateParkedBlock(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            ParkedProcs parked, int index) {
+            // the first evaluation of the literal in a call that took nothing: InstantiateReusableBlock's own
+            if (previous == null && parked == null) {
+                return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            }
+            return InstantiateParkedBlockSlow(previous, scope, self, dispatcher, parked, index);
+        }
+
+        private static Proc InstantiateParkedBlockSlow(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            ParkedProcs parked, int index) {
+            if (previous != null) {
+                if (previous.TryReuse()) {
+                    return previous;
+                }
+                scope.IsCaptured = true;
+            } else if (parked != null && parked.Scope == scope) {
+                var procs = parked.Procs;
+                var proc = procs[index];
+                if (proc != null) {
+                    procs[index] = null;
+                    proc.ReuseParked(self, parked.ThreadId != Environment.CurrentManagedThreadId);
+                    if (proc.TryReuse()) {
+                        return proc;
+                    }
+                }
+            }
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        /// <summary>
+        /// The normal end of a call of a body with a parking slot (an exception, a throw, Thread#kill skip it): if its scope may
+        /// be parked, where to stage its Procs (StageParkedProc, then EndPark) - what the call took, or an emptied one.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ParkedProcs BeginPark(ParkedScopeSlot/*!*/ slot, RubyScope scope, ParkedProcs taken) {
+            // a call that made no scope, or a slot that gave up: nothing to do, inlined into the body
+            if (scope == null || slot.Failures > ParkedScopeSlot.MaxFailures) {
+                return null;
+            }
+            return BeginParkSlow(slot, scope, taken);
+        }
+
+        private static ParkedProcs BeginParkSlow(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ scope, ParkedProcs taken) {
+            var methodScope = scope as RubyMethodScope;
+            if (methodScope == null || slot.IsOff || TracePoint.ActiveEvents != 0) {
+                return null;
+            }
+            if (methodScope.IsCaptured || methodScope.HasRareState || methodScope._activeFlowControlScope == methodScope) {
+                slot.Failures++;
+                return null;
+            }
+            if (taken != null) {
+                return taken;
+            }
+            var spare = slot.Spare;
+            if (spare != null && Interlocked.CompareExchange(ref slot.Spare, null, spare) == spare) {
+                return spare;
+            }
+            return new ParkedProcs(slot.ProcCount);
+        }
+
+        /// <summary>
+        /// The last Proc of the index-th literal, staged for parking; false if something else may hold it.
+        /// </summary>
+        [Emitted]
+        public static bool StageParkedProc(ParkedProcs/*!*/ parked, int index, Proc proc) {
+            if (proc != null && !proc.IsReusableAndInactive) {
+                return false;
+            }
+            parked.Procs[index] = proc;
+            return true;
+        }
+
+        /// <summary>
+        /// Parks the scope with the staged Procs, cleared of the call that ended; or, if a Proc may be held or another call
+        /// parked first, keeps the emptied ParkedProcs for the next.
+        /// </summary>
+        [Emitted]
+        public static void EndPark(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked, RubyScope/*!*/ scope, bool procsParkable) {
+            if (procsParkable) {
+                if (slot.Failures != 0) {
+                    slot.Failures = 0;
+                }
+                foreach (var proc in parked.Procs) {
+                    proc?.ClearForPark();
+                }
+                var methodScope = (RubyMethodScope)scope;
+                methodScope.ClearCallState();
+                parked.Scope = methodScope;
+                parked.ThreadId = Environment.CurrentManagedThreadId;
+                if (Interlocked.CompareExchange(ref slot.Parked, parked, null) == null) {
+                    return;
+                }
+            } else {
+                slot.Failures++;
+            }
+            parked.Clear();
+            Volatile.Write(ref slot.Spare, parked);
+        }
+
+        #endregion
+
         #region Light method frames
 
         // A method whose body never needs its scope - yield and return over self, its parameters, its

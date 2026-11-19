@@ -149,6 +149,10 @@ namespace IronRuby.Runtime {
 
         private RareState _rare;
 
+        internal bool HasRareState {
+            get { return _rare != null; }
+        }
+
         internal RareState/*!*/ Rare {
             get { return _rare ?? Interlocked.CompareExchange(ref _rare, new RareState(), null) ?? _rare; }
         }
@@ -241,6 +245,10 @@ namespace IronRuby.Runtime {
 
         internal RubyScope() {
             // Perf note: Initialization is performed completely in the most derived scope classes to improve perf.
+        }
+
+        internal void ClearSelfImmediateClass() {
+            _selfImmediateClass = null;
         }
 
         // The per-call state of a scope reused for another call of its block, as a new scope has it.
@@ -1246,6 +1254,59 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// Where a compiled method body parks the scope of its last call, with the last Procs of its block literals, for the next
+    /// call (RubyOps.TakeParkedScope). Nothing here is part of a scope or a Proc: a method body without a slot, and a call that
+    /// does not get the parked scope, allocate exactly what they did before.
+    /// </summary>
+    public sealed class ParkedScopeSlot {
+        // The parked scope and Procs; taken whole with an atomic exchange, so the call that took it is their only user, and a
+        // recursive call or one on another thread finds none. Spare is an emptied one, for the next call that parks.
+        internal ParkedProcs Parked;
+        internal ParkedProcs Spare;
+
+        // The number of block literals of the body, the name it is defined under.
+        internal int ProcCount;
+        internal readonly string/*!*/ DefinitionName;
+
+        // Set when the body is compiled, if it cannot park at all (a literal that does not reuse its Proc, super, &block...):
+        // the literals' code refers to the slot before the body knows that.
+        internal bool Disabled;
+
+        // Calls in a row whose scope could not be parked (a Proc of it went to an iterator that may keep it, as
+        // `n.upto(m) { }', or the scope was captured): past MaxFailures the body stops trying, for good. Not exact under
+        // threads, and need not be: it only gives up sooner or later.
+        internal int Failures;
+        internal const int MaxFailures = 64;
+
+        public ParkedScopeSlot(string/*!*/ definitionName) {
+            DefinitionName = definitionName;
+        }
+
+        internal bool IsOff {
+            get { return Disabled || Failures > MaxFailures; }
+        }
+    }
+
+    /// <summary>
+    /// A parked method scope with the last Proc of each block literal of its body (by the literal's index), and the thread of
+    /// the call that parked them. Owned by one call at a time (see ParkedScopeSlot).
+    /// </summary>
+    public sealed class ParkedProcs {
+        internal RubyMethodScope Scope;
+        internal readonly Proc[]/*!*/ Procs;
+        internal int ThreadId;
+
+        internal ParkedProcs(int count) {
+            Procs = new Proc[count];
+        }
+
+        internal void Clear() {
+            Scope = null;
+            Array.Clear(Procs, 0, Procs.Length);
+        }
+    }
+
+    /// <summary>
     /// What a light-frame method's scope is made of that is the same on every call of one compilation:
     /// its locals' names, its parameter count and signature flags, and the name it was defined under.
     /// </summary>
@@ -1264,7 +1325,8 @@ namespace IronRuby.Runtime {
     public sealed class RubyMethodScope : RubyClosureScope {
         private readonly RubyModule/*!*/ _declaringModule;
         private readonly string/*!*/ _definitionName;
-        private readonly Proc _blockParameter;
+        // (not readonly: a parked scope is the scope of another call, see Reinitialize)
+        private Proc _blockParameter;
 
         // Lowest 2 bits are flags:
         internal const int HasBlockFlag = 1;
@@ -1397,6 +1459,41 @@ namespace IronRuby.Runtime {
 
             InitializeRfc(blockParameter);
         }
+
+        #region Parked scopes (RubyOps.CreateMethodScopeParked)
+
+        // The state of the call a parked scope belonged to, dropped (RubyOps.ParkMethodScope).
+        internal void ClearCallState() {
+            _locals = null;
+            _selfObject = null;
+            _blockParameter = null;
+            _calleeName = null;
+            CurrentMatch = null;
+            LastInputLine = null;
+            InterpretedFrame = null;
+            _activeFlowControlScope = null;
+            // (a singleton class holds its object)
+            ClearSelfImmediateClass();
+        }
+
+        /// <summary>
+        /// A parked scope made the scope of another call of its method, as a new one would be: the light frame's constructor
+        /// (rfc non-null) or the other one.
+        /// </summary>
+        internal void Reinitialize(MutableTuple locals, object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame,
+            RuntimeFlowControl rfc, string calleeName) {
+            ResetForReuse(locals, selfObject, interpretedFrame);
+            _blockParameter = blockParameter;
+            _calleeName = calleeName;
+            if (rfc != null) {
+                _activeFlowControlScope = rfc.IsActiveMethod ? rfc : this;
+            } else {
+                _activeFlowControlScope = this;
+                InitializeRfc(blockParameter);
+            }
+        }
+
+        #endregion
 
 #if DEBUG
         // The debug name is built on demand: composing it in the constructor put a string
