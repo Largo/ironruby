@@ -358,15 +358,17 @@ Profile (`Util/perf/profile.sh`, self time):
    an empty Hash literal `{}` (found on `Array#to_h`;
    `::Hash.new` is scope-free but calls a redefined Hash.new), `super` (6 hot `initialize`
    methods; also `Array#sum` without a block, 5.3x CRuby, whose rare path is `super`), `rescue`,
-   keywords, `$~`, regex literals, and a call with a splatted argument (`inner(*args)`, gap 16).
+   keywords, `$~` and regex literals.
    `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
    RubyInstanceData + RubyObject as two objects per Ruby object.
    `block_given?` no longer forces the scope (it is answered from the frame's block
    parameter, `IR_LIGHT_BLOCK_GIVEN=0` for the old call) and a rest parameter no longer
    keeps a method out (`IR_LIGHT_REST=0`), nor does a call that passes a block on
-   (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass);
-   Util/block-given-matrix.rb, Util/light-rest-matrix.rb and Util/block-pass-matrix.rb are
-   their matrices. A method with both a literal block and a passed one still makes its scope
+   (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass), nor
+   one that splats a value (`inner(*args)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`, see
+   Landed, perf/splat);
+   Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb and
+   Util/splat-pass-matrix.rb are their matrices. A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
@@ -466,13 +468,29 @@ Profile (`Util/perf/profile.sh`, self time):
     `super`, `{}`, a `while` with `break`, a block passed on - which is /perf-frame's. `uniq` is not this skill's:
     its C# method alone costs what the call does (500 ns against CRuby's 230). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
-16. **Wrappers that splat stay out of light frames** (`inner(*args)`, `inner(*args, &block)`):
-    passing the block on is let in (perf/blockpass, 2026-11-18), the splatted argument is not.
-    Counted over spec/core of ten classes with `IR_LIGHT_FRAMES=why`, the statement that kept
-    a prelude method out held a passed block in 41 methods, a splat in 25 and both in 4; the
-    passed block was taken first for that reason. A splat is an `ExplicitSplatAction` site
-    (no scope) and a call signature with `HasSplattedArgument`: probably the same kind of
-    change. `String#strip`, `lstrip`, `rstrip` and `Array#zip` are among them. `/perf-frame`.
+16. **A light frame whose usual callee wants the caller's scope costs more than a frame
+    with a scope**, and **the splat itself is what a forwarding wrapper still pays**. Both
+    are what is left of "wrappers that splat stay out of light frames", which is done (see
+    Landed, perf/splat, 2026-11-19).
+    The first: `inject(:+)` and `Array#zip` became light frames with the splat and gained
+    nothing. They allocate what they did (408 and 1314 B a call, switch on and off) and
+    count 4.9% and 2.9% more instructions (`ab.rb -i`, four rounds, against the same binary
+    with `IR_LIGHT_SPLAT=0`). Inferred from the unchanged bytes, not traced: the call they
+    make answers `LightScopeRequired`, the scope is made late and the call is made again,
+    which costs about 150-200 instructions more than a scope made at entry. `inject` with a
+    block, in the same method, lost its scope (658 -> 498 B, 3% fewer instructions). A
+    C#-only shape the change cannot reach (`minmax`) read 4.6% more in that table, so 5% is
+    about the floor for one shape there. Untried: a site that has answered
+    `LightScopeRequired` remembers it, and the frame makes its scope before that call the
+    next time without asking; or the prelude gives such a method's rare path a method of its
+    own, so that the common path stays without a splat or a scope-reading callee
+    (`/perf-core`).
+    The second: `w_splat` is 366 ns against 188 for the bare call (CRuby 194 and 71), and
+    still about 185 B a call more than the block-passing wrapper: the rest Array the
+    caller's rule builds and its unpacking into the callee. Untried: a rule for a splat
+    site whose Array is the caller's own rest parameter, passing the elements on without
+    the copy (TruffleRuby's splat of a rest Array is the same Array when it does not
+    escape).
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -493,6 +511,46 @@ Profile (`Util/perf/profile.sh`, self time):
     `Method_LightFrameBlockPass1`, not a speed gap; not looked into.
 
 ## Landed
+
+- **perf/splat (/perf-frame, 2026-11-19) - a method that passes a splat on runs without a
+  scope** (`inner(*args)`, `inner(*args, &block)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`
+  turns it off). `IsScopeFree` takes a `SplattedArgument` of a scope-free expression, and
+  the rewriter lets the `ExplicitSplatAction` site through: it is given the value only and
+  calls `#to_a` through a conversion site, the helpers that join several splats take no
+  scope, and `LightScopeCall` already bound a signature with a splatted argument. When the
+  rule answers `LightScopeRequired` the call is made again with the same temporaries, so
+  `#to_a` runs once (a probe of the matrix). `when *a`, interpolation and `**h` still keep
+  a method out.
+  Census (Src/StdLib + AWFY, 28,335 methods), on the tree with #232 merged in: light frames
+  18,318 -> 18,790 (64.6% -> 66.3%), light blocks 7,317 -> 7,389, the JIT's verdicts
+  unchanged; 472 methods moved up, none down. 38 are the prelude's (`strip`, `lstrip`,
+  `rstrip`, `inject`, `reduce`, `zip`, `each_with_index`, `reverse_each`, `each_entry`,
+  `to_set`, `raise`, `curry`...), none AWFY's.
+  Against the same binary with the switch off, `ab.rb`: `w_splat` (`*args, &block` passed
+  on) 429 -> 366 ns (0.85; eight rounds at load 1, spreads 3-7%, the bare call `w_raw`
+  0.99), `strip` 0.84 and 0.85 in two runs, `lstrip` 0.70, `rstrip` 0.86. Instructions per
+  call on the merged build: `w_splat` 0.911, `w_splat0` 0.911, `strip` 0.896, `lstrip`
+  0.833, `rstrip` 0.890, `w_raw` 1.000. Bytes per call: `w_splat` 666 -> 474, `strip` 562
+  -> 378, `inject { }` 658 -> 498. Slower: `inject(:+)` and `zip`, see gap 16.
+  Gated on the tree before #232 was merged in (6eb8fa69 and 32698c1d against 80699c25):
+  Util/splat-pass-matrix.rb (154 probes, every answer CRuby's) and the block-given,
+  light-rest, block-pass, jit and jit-calls matrices, each with the change on, off,
+  `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:JITCalls` and R2R; IronRuby.Tests in Release
+  on both trees (the same one failure, `Exception_CauseRaisedInClause1`) and in Debug
+  (passes, new test `Method_LightFrameSplat1`); a million-deep recursion through a splat
+  wrapper is SystemStackError with the JIT on and off; `Util/ci-sweep.sh` of all five
+  suites, 32,680 examples, no new failure; AWFY, no FAIL, geomean 0.997 and 1.002 in the
+  two orders (Bounce 2.6% and 4.5% slower; over a run of it the two builds' light-frame
+  decisions differ in four prelude methods and in none of its own); the micro table, no line more than 5% slower in both orders; start-up 1.20 s on
+  both. After merging #232: the census, the splat and block-pass matrices against CRuby
+  and the unchanged build, `census.rb -c` on a run of core-small (59 methods called, 0
+  differ) and the instruction counts above - IronRuby.Tests, the sweep and AWFY were not
+  run again on the merged tree.
+  Learned: the time fell twice as far as the instructions (8% of `w_splat`'s), because
+  what went is an allocation; a method becoming a light frame is a gain only if the call
+  it usually makes does not want the scope (gap 16); and `ab.rb -i` of one binary with a
+  switch on and off moves shapes the switch cannot reach by up to 5%, even with four
+  rounds - different methods compiled at start-up, different code for what they share.
 
 - **perf/blockpass (/perf-frame) - a method that passes its block on runs without a scope**
   (`def w(&b) = inner(&b)`, `map(&:to_s)`, `&nil`, `&@ivar`, a local Proc, Method or Symbol;
