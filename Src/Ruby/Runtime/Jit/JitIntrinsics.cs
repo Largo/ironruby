@@ -969,9 +969,20 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- constants -------------------------------------------------------------------
 
-        /// <summary>The guard of code that folded constants: nothing has changed any constant since.</summary>
+        /// <summary>The guard of an outlined loop that folded constants: nothing has changed any constant since.</summary>
         public static bool ConstantsOk(RubyContext/*!*/ context, int snapshot) {
             return context.ConstantAccessVersion == snapshot;
+        }
+
+        /// <summary>
+        /// The guard of a method entry whose typed bodies folded constants: nothing has changed any constant
+        /// since the specialization's snapshot, or the constants they folded are still what they were
+        /// (JitStub.RevalidateConstants, which then moves the snapshot up).
+        /// </summary>
+        public static bool ConstantsCurrent(RubyContext/*!*/ context, object/*!*/ specialization) {
+            var spec = (JitStub.Specialization)specialization;
+            return System.Threading.Volatile.Read(ref context.ConstantAccessVersion) == System.Threading.Volatile.Read(ref spec.ConstantVersion) ||
+                spec.Stub.RevalidateConstants(spec);
         }
 
         // ---- Class#new (JitCompiler.EmitConstruction) -------------------------------------

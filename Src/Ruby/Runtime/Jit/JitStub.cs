@@ -292,8 +292,14 @@ namespace IronRuby.Runtime.Jit {
             // The least a deopt of the open window cost, throw to catch, in Stopwatch ticks; 0 if
             // none was timed (OnDeopt).
             internal long DeoptCost;
-            // The constant version the typed bodies were compiled under (JitCode.UsesConstants).
+            // The constant version the typed bodies were compiled under (JitCode.UsesConstants), or the one under
+            // which the constants they folded were last found to be what they were (RevalidateConstants). The
+            // entry reads it (JitRuntime.ConstantsCurrent), and so does a caller binding the body (BindCallee).
             internal int ConstantVersion;
+            // What the typed bodies folded (JitCode.FoldedConstants), and the bodies whose loops guard on the
+            // constant version too (JitLoopGuard); both null if they folded none. Never changed once installed.
+            internal JitFoldedConstant[] FoldedConstants;
+            internal JitCode[] FoldingCodes;
             // The one typed body (not per-count ones), the method version its entry checks and the class it
             // pins self to, if any: what a caller that inlines it (JitStub.InlinableBody) has to check too.
             internal JitCode Code;
@@ -440,10 +446,11 @@ namespace IronRuby.Runtime.Jit {
         private int _respecializations;
 
         /// <summary>
-        /// Called by the entry when the global method version no longer matches its snapshot. That
-        /// guard can never pass again, so leaving the entry installed would send every later call
-        /// through the failed guard into the generic body: profile again and specialize under the
-        /// new version instead, or settle on the generic body once that has happened too often.
+        /// Called by the entry when the global method version no longer matches its snapshot, or a
+        /// constant its typed bodies folded has changed (RevalidateConstants). That guard can never
+        /// pass again, so leaving the entry installed would send every later call through the failed
+        /// guard into the generic body: profile again and specialize under the new version instead,
+        /// or settle on the generic body once that has happened too often.
         /// </summary>
         internal void VersionChanged(Specialization/*!*/ spec) {
             bool settled = false;
@@ -451,6 +458,62 @@ namespace IronRuby.Runtime.Jit {
                 settled = Respecialize(spec);
             }
             if (settled) { NotifyOwner(); }
+        }
+
+        /// <summary>
+        /// Called by the entry when the constant version no longer matches the specialization's snapshot and the
+        /// method version still does: what moved the constant version may be nothing the typed bodies folded (a
+        /// constant set anywhere, an object extended, a module mixed in, an autoload started), as the generic
+        /// constant sites find out by looking their constant up again. So does this: each constant the bodies
+        /// folded is resolved again, the way the compiler resolved it (JitFoldedConstant.Resolve), and if every
+        /// one is the same object found in the same module, the version read before the lookups becomes the
+        /// snapshot and the typed body runs. False if one is not (or cannot be folded now: an autoload in
+        /// flight, a deprecated constant), and the entry then goes stale as for a method change (EntryStale).
+        ///
+        /// No lock but the class hierarchy's, which each lookup takes as the compiler's did. The version is read
+        /// before the first lookup and stored after the last: a constant changed in between has moved the
+        /// version past the one stored, and the next entry looks again. Two threads may do this at once - the
+        /// list never changes once installed - and one may store an older version than the other did, which only
+        /// costs another look. A version is never stored that was read after a lookup.
+        /// </summary>
+        internal bool RevalidateConstants(Specialization/*!*/ spec) {
+            var folded = spec.FoldedConstants;
+            if (folded == null) { return false; }
+            int version = System.Threading.Volatile.Read(ref _context.ConstantAccessVersion);
+            foreach (var constant in folded) {
+                if (!constant.StillHolds(_context)) { return false; }
+            }
+            // While an autoload runs, what a constant resolves to depends on the thread asking
+            // (RubyContext._autoloadsInProgress): no version is recorded then. (One that started after the
+            // version was read has moved it past what is stored here.)
+            if (_context.IsAutoloadInProgress) { return false; }
+            System.Threading.Volatile.Write(ref spec.ConstantVersion, version);
+            // The bodies' loops check the constant version at their safe points too (JitLoopGuard.Stale): the
+            // constants they folded are current at this version as well.
+            foreach (var code in spec.FoldingCodes) {
+                if (code.LoopGuard.ConstantsOf != null) {
+                    System.Threading.Volatile.Write(ref code.LoopGuard.ConstantVersion, version);
+                }
+            }
+            return true;
+        }
+
+        /// <summary>What the per-count bodies folded, all of them: they share one entry and one snapshot.</summary>
+        private static void FoldedBy(Specialization/*!*/ spec, JitCode[]/*!*/ codes) {
+            List<JitFoldedConstant> folded = null;
+            List<JitCode> folding = null;
+            foreach (var code in codes) {
+                if (code == null || !code.UsesConstants) { continue; }
+                (folding ?? (folding = new List<JitCode>())).Add(code);
+                if (code.FoldedConstants == null) {
+                    // (a body that folded constants it did not record cannot be looked up again)
+                    return;
+                }
+                (folded ?? (folded = new List<JitFoldedConstant>())).AddRange(code.FoldedConstants);
+            }
+            if (folding == null) { return; }
+            spec.FoldedConstants = folded.ToArray();
+            spec.FoldingCodes = folding.ToArray();
         }
 
         // Under _sync: true if the method settled on its generic body.
@@ -800,6 +863,10 @@ namespace IronRuby.Runtime.Jit {
 
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
+            if (code.UsesConstants) {
+                spec.FoldedConstants = code.FoldedConstants;
+                spec.FoldingCodes = new[] { code };
+            }
             spec.Code = code;
             spec.Version = version;
             spec.PinnedClass = needsClassGuard ? _receiverClass : null;
@@ -901,7 +968,14 @@ namespace IronRuby.Runtime.Jit {
             }
             var code = spec.Code;
             if (code == null) { return null; }
-            if (spec.Version != version || (code.UsesConstants && spec.ConstantVersion != constantVersion)) {
+            // The caller's entry guards on constantVersion, and looks up again what this body folded (the caller
+            // takes it over: JitCompiler.EmitDirectCall), so the body must be current at that version: if its own
+            // snapshot is older, the constants it folded are looked up now, which records the version they were
+            // found current at. A newer one (constants changed since the caller read constantVersion), or a
+            // constant that changed, and the caller does not bind it.
+            if (spec.Version != version ||
+                (code.UsesConstants && System.Threading.Volatile.Read(ref spec.ConstantVersion) != constantVersion &&
+                 !(RevalidateConstants(spec) && System.Threading.Volatile.Read(ref spec.ConstantVersion) == constantVersion))) {
                 retry = true;
                 return null;
             }
@@ -1053,6 +1127,7 @@ namespace IronRuby.Runtime.Jit {
             // one Specialization for all the bodies: they retire, cool down and go stale together
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
+            FoldedBy(spec, codes);
             spec.Entry = CompileEntry(BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec));
 
             lock (_sync) {
@@ -1483,11 +1558,15 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Constant(0));
         }
 
-        /// <summary>The entry guard: the method version, and the constant version if the body folded constants.</summary>
+        /// <summary>
+        /// The entry guard: the method version, and if the body folded constants, the constant version or, when
+        /// only that has moved, the constants looked up again (RevalidateConstants).
+        /// </summary>
         private MSA.Expression/*!*/ VersionTest(int version, Specialization/*!*/ spec, bool usesConstants) {
             MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
             if (usesConstants) {
-                test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("ConstantsOk"), Ast.Constant(_context), Ast.Constant(spec.ConstantVersion)));
+                // the snapshot is read from the specialization: looking the constants up again moves it
+                test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("ConstantsCurrent"), Ast.Constant(_context), Ast.Constant(spec, typeof(object))));
             }
             return test;
         }

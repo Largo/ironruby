@@ -376,7 +376,7 @@ namespace IronRuby.Runtime.Jit {
             return RubyModule.GlobalMethodVersion == snapshot;
         }
 
-        /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
+        /// <summary>A method entry's VersionOk failed, or its ConstantsCurrent: it is stale for good (see JitStub.VersionChanged).</summary>
         public static void EntryStale(object/*!*/ specialization) {
             var spec = (JitStub.Specialization)specialization;
             spec.Stub.VersionChanged(spec);
