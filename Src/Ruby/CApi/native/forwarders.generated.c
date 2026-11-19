@@ -518,6 +518,16 @@
 #undef rb_apply
 #undef rb_utf8_str_new
 #undef rb_utf8_str_new_cstr
+#undef rb_Hash
+#undef rb_Rational
+#undef rb_Complex
+#undef rb_backref_set
+#undef rb_lastline_get
+#undef rb_lastline_set
+#undef rb_define_finalizer
+#undef rb_undefine_finalizer
+#undef rb_arithmetic_sequence_extract
+#undef rb_arithmetic_sequence_beg_len_step
 
 struct rb_ir_function_table {
     VALUE (*rb_ir_builtin_type)(VALUE obj);
@@ -1037,10 +1047,20 @@ struct rb_ir_function_table {
     VALUE (*rb_apply)(VALUE recv, ID mid, VALUE args);
     VALUE (*rb_utf8_str_new)(const char *ptr, long len);
     VALUE (*rb_utf8_str_new_cstr)(const char *ptr);
+    VALUE (*rb_Hash)(VALUE val);
+    VALUE (*rb_Rational)(VALUE num, VALUE den);
+    VALUE (*rb_Complex)(VALUE real, VALUE imag);
+    void (*rb_backref_set)(VALUE md);
+    VALUE (*rb_lastline_get)(void);
+    void (*rb_lastline_set)(VALUE str);
+    VALUE (*rb_define_finalizer)(VALUE obj, VALUE block);
+    VALUE (*rb_undefine_finalizer)(VALUE obj);
+    int (*rb_arithmetic_sequence_extract)(VALUE as, rb_arithmetic_sequence_components_t *buf);
+    VALUE (*rb_arithmetic_sequence_beg_len_step)(VALUE as, long *begp, long *lenp, long *stepp, long len, int err);
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 517;
+const int rb_ir_function_count = 527;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -5094,6 +5114,84 @@ VALUE
 (rb_utf8_str_new_cstr)(const char *ptr)
 {
     VALUE rb_ir_result = rb_ir_fns.rb_utf8_str_new_cstr(ptr);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_Hash)(VALUE val)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_Hash(val);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_Rational)(VALUE num, VALUE den)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_Rational(num, den);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_Complex)(VALUE real, VALUE imag)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_Complex(real, imag);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_backref_set)(VALUE md)
+{
+    rb_ir_fns.rb_backref_set(md);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_lastline_get)(void)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_lastline_get();
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+void
+(rb_lastline_set)(VALUE str)
+{
+    rb_ir_fns.rb_lastline_set(str);
+    RB_IR_CHECK();
+}
+
+VALUE
+(rb_define_finalizer)(VALUE obj, VALUE block)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_define_finalizer(obj, block);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_undefine_finalizer)(VALUE obj)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_undefine_finalizer(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_arithmetic_sequence_extract)(VALUE as, rb_arithmetic_sequence_components_t *buf)
+{
+    int rb_ir_result = rb_ir_fns.rb_arithmetic_sequence_extract(as, buf);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+VALUE
+(rb_arithmetic_sequence_beg_len_step)(VALUE as, long *begp, long *lenp, long *stepp, long len, int err)
+{
+    VALUE rb_ir_result = rb_ir_fns.rb_arithmetic_sequence_beg_len_step(as, begp, lenp, stepp, len, err);
     RB_IR_CHECK();
     return rb_ir_result;
 }

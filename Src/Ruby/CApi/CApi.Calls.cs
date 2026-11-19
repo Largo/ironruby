@@ -36,10 +36,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         /// <summary>
-        /// Called by the rule CApi.MakeRule builds.
+        /// Called by the rule CApi.MakeRule builds. <paramref name="scope"/> is the caller's, whose
+        /// $~ and $_ rb_backref_get and rb_lastline_get read, as CRuby's read the caller's frame.
         /// </summary>
-        public static object Invoke(CMethod/*!*/ method, object self, object[]/*!*/ args, Proc block) {
-            return CApi.InvokeMethod(method, self, args, block);
+        public static object Invoke(CMethod/*!*/ method, RubyScope/*!*/ scope, object self, object[]/*!*/ args, Proc block) {
+            return CApi.InvokeMethod(method, scope, self, args, block);
         }
 
         internal static readonly MethodInfo InvokeMethod = typeof(CMethod).GetMethod("Invoke");
@@ -53,6 +54,8 @@ namespace IronRuby.Runtime.CApi {
         private sealed class CFrame {
             public CFrame Parent;
             public CMethod Method;
+            // the caller's: its $~ and $_ are the C method's (rb_backref_get, rb_lastline_get)
+            public RubyScope Scope;
             public object Self;
             public object[] Args;
             public Proc Block;
@@ -89,6 +92,7 @@ namespace IronRuby.Runtime.CApi {
                 metaBuilder.Result = Expression.Call(
                     CMethod.InvokeMethod,
                     AstUtils.Constant(method),
+                    AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                     AstUtils.Box(args.TargetExpression),
                     Expression.NewArrayInit(typeof(object), actualArgs.Select(a => AstUtils.Box(a.Expression))),
                     block
@@ -96,8 +100,8 @@ namespace IronRuby.Runtime.CApi {
             };
         }
 
-        internal static object InvokeMethod(CMethod/*!*/ method, object self, object[]/*!*/ args, Proc block) {
-            var frame = new CFrame { Parent = _frame, Method = method, Self = self, Args = args, Block = block };
+        internal static object InvokeMethod(CMethod/*!*/ method, RubyScope/*!*/ scope, object self, object[]/*!*/ args, Proc block) {
+            var frame = new CFrame { Parent = _frame, Method = method, Scope = scope, Self = self, Args = args, Block = block };
             if (block != null) {
                 frame.Bfc = RubyOps.CreateBfcForLibraryMethod(block);
             }
@@ -267,8 +271,8 @@ namespace IronRuby.Runtime.CApi {
 
         #region Calling Ruby
 
-        private static readonly ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, object, Proc, object, object>>> _sites =
-            new ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, object, Proc, object, object>>>();
+        private static readonly ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>> _sites =
+            new ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>>();
 
         /// <summary>
         /// Calls a method the way rb_funcall does: private methods too, unless publicOnly.
@@ -278,10 +282,15 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static object SendWith(bool publicOnly, object target, string/*!*/ name, Proc block, object[]/*!*/ args) {
-            var site = _sites.GetOrAdd((name, publicOnly), key => CallSite<Func<CallSite, object, Proc, object, object>>.Create(
+            var site = _sites.GetOrAdd((name, publicOnly), key => CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(_context, key.Item1, new RubyCallSignature(0,
-                    (key.Item2 ? RubyCallFlags.None : RubyCallFlags.HasImplicitSelf) | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock))));
-            return site.Target(site, target, block, new RubyArray(args));
+                    (key.Item2 ? RubyCallFlags.None : RubyCallFlags.HasImplicitSelf) | RubyCallFlags.HasScope |
+                    RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock))));
+            // A C method has no Ruby frame of its own: what the method called reads or sets in its
+            // caller's frame - $~ by Regexp#match, $_ by gets - is the Ruby frame that called the C
+            // method, as in CRuby (the svar of the nearest Ruby-level frame).
+            RubyScope scope = (_frame != null ? _frame.Scope : null) ?? _context.EmptyScope;
+            return site.Target(site, scope, target, block, new RubyArray(args));
         }
 
         private static Proc TakePassedBlock() {
