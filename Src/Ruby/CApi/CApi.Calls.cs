@@ -60,6 +60,8 @@ namespace IronRuby.Runtime.CApi {
             public object[] Args;
             public Proc Block;
             public BlockParam Bfc;
+            // called with keywords (rb_keyword_given_p): the last argument was the call's keyword hash
+            public bool KeywordGiven;
         }
 
         [ThreadStatic] private static CFrame _frame;
@@ -104,6 +106,11 @@ namespace IronRuby.Runtime.CApi {
             var frame = new CFrame { Parent = _frame, Method = method, Scope = scope, Self = self, Args = args, Block = block };
             if (block != null) {
                 frame.Bfc = RubyOps.CreateBfcForLibraryMethod(block);
+            }
+            if (args.Length > 0 && RubyOps.IsKeywordArgumentsHash(args[args.Length - 1])) {
+                // the C method sees a plain Hash: passed on positionally it is not keywords again
+                frame.KeywordGiven = true;
+                RubyOps.ClearKeywordArguments(args[args.Length - 1]);
             }
             _frame = frame;
             try {
@@ -308,7 +315,48 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_funcallv_kw(VALUE recv, VALUE mid, int argc, VALUE* argv, int kw_splat) {
-            return rb_funcallv(recv, mid, argc, argv);
+            return ToValue(Send(FromValue(recv), IdToString(mid), TakePassedBlock(), KeywordArgs(argc, argv, kw_splat)));
+        }
+
+        private const int RB_PASS_KEYWORDS = 1, RB_PASS_CALLED_KEYWORDS = 3;
+
+        /// <summary>
+        /// The arguments of a *_kw call: with RB_PASS_KEYWORDS the last one is the keywords, a
+        /// Hash (or #to_hash of one) the callee receives as such - IronRuby's keyword call passes
+        /// a copy marked Hash.IsKeywordArguments - and none at all when it is empty.
+        /// RB_PASS_CALLED_KEYWORDS does whatever the calling C method was given.
+        /// </summary>
+        private static object[]/*!*/ KeywordArgs(int argc, VALUE* argv, int kw_splat) {
+            return KeywordArgs(FromValues(argc, argv), kw_splat);
+        }
+
+        private static object[]/*!*/ KeywordArgs(object[]/*!*/ args, int kw_splat) {
+            if (kw_splat == RB_PASS_CALLED_KEYWORDS) {
+                kw_splat = rb_keyword_given_p();
+            }
+            if (kw_splat != RB_PASS_KEYWORDS || args.Length == 0) {
+                return args;
+            }
+            object last = args[args.Length - 1];
+            var hash = last as IDictionary<object, object>;
+            if (hash == null && RespondTo(last, "to_hash")) {
+                object converted = Send(last, "to_hash", null);
+                hash = converted as IDictionary<object, object>;
+                if (hash == null) {
+                    throw RubyExceptions.CreateTypeError(String.Format("can't convert {0} into Hash ({0}#to_hash gives {1})",
+                        _context.GetClassDisplayName(last), _context.GetClassDisplayName(converted)));
+                }
+            } else if (hash == null) {
+                throw RubyExceptions.CreateTypeError(String.Format("no implicit conversion of {0} into Hash", _context.GetClassDisplayName(last)));
+            }
+            if (hash.Count == 0) {
+                Array.Resize(ref args, args.Length - 1);
+                return args;
+            }
+            var keywords = new Hash(hash, _context.EqualityComparer);
+            keywords.IsKeywordArguments = true;
+            args[args.Length - 1] = keywords;
+            return args;
         }
 
         internal static VALUE rb_funcallv_public(VALUE recv, VALUE mid, int argc, VALUE* argv) {
@@ -325,6 +373,14 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_call_super(int argc, VALUE* argv) {
+            return CallSuper(FromValues(argc, argv));
+        }
+
+        internal static VALUE rb_call_super_kw(int argc, VALUE* argv, int kw_splat) {
+            return CallSuper(KeywordArgs(argc, argv, kw_splat));
+        }
+
+        private static VALUE CallSuper(object[]/*!*/ args) {
             var frame = _frame;
             if (frame == null) {
                 throw RubyExceptions.CreateRuntimeError("super called outside of method");
@@ -332,11 +388,14 @@ namespace IronRuby.Runtime.CApi {
             object unbound = Send(frame.Method.Owner, "instance_method", null, _context.EncodeIdentifier(frame.Method.Name));
             object super = Send(unbound, "super_method", null);
             if (super == null) {
-                throw RubyExceptions.CreateNameError(String.Format("super: no superclass method '{0}'", frame.Method.Name));
+                // as a super with nothing above it: #method_missing, whose default raises NoMethodError
+                var missing = new List<object> { _context.EncodeIdentifier(frame.Method.Name) };
+                missing.AddRange(args);
+                return ToValue(Send(frame.Self, "method_missing", frame.Block, missing.ToArray()));
             }
-            var args = new List<object> { frame.Self };
-            args.AddRange(FromValues(argc, argv));
-            return ToValue(Send(super, "bind_call", frame.Block, args.ToArray()));
+            var call = new List<object> { frame.Self };
+            call.AddRange(args);
+            return ToValue(Send(super, "bind_call", frame.Block, call.ToArray()));
         }
 
         internal static void rb_obj_call_init(VALUE obj, int argc, VALUE* argv) {
@@ -376,7 +435,7 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static int rb_keyword_given_p() {
-            return 0;
+            return _frame != null && _frame.KeywordGiven ? 1 : 0;
         }
 
         internal static void rb_need_block() {
@@ -414,9 +473,16 @@ namespace IronRuby.Runtime.CApi {
         }
 
         // A C function as a block (rb_block_call): VALUE f(yielded_arg, data2, argc, argv, blockarg).
+        /// <summary>
+        /// A block whose body is a rb_block_call_func: |*args, &amp;blockarg|, arity -1, as CRuby's
+        /// ifunc blocks are.
+        /// </summary>
         private static Proc/*!*/ MakeBlock(IntPtr fn, VALUE data2) {
-            return Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>(
-                (selfBlock, self, unused, args) => {
+            var dispatcher = new BlockDispatcherUnsplatProcN(0,
+                BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1),
+                null, 0);
+            dispatcher.SetMethod(new Func<BlockParam, object, object[], RubyArray, Proc, object>(
+                (selfBlock, self, unused, args, blockArg) => {
                     int argc = args.Count;
                     VALUE* argv = stackalloc VALUE[Math.Max(argc, 1)];
                     for (int i = 0; i < argc; i++) {
@@ -425,13 +491,14 @@ namespace IronRuby.Runtime.CApi {
                     VALUE yielded = argc > 0 ? argv[0] : Qnil;
                     _cBlockDepth++;
                     try {
-                        return FromValue(CallBlock(fn, yielded, data2, argc, argv, Qnil));
+                        return FromValue(CallBlock(fn, yielded, data2, argc, argv, ToValue(blockArg)));
                     } catch (CIterBreak b) {
                         return selfBlock.Break(b.ReturnValue);
                     } finally {
                         _cBlockDepth--;
                     }
                 }));
+            return new Proc(ProcKind.Block, null, _context.EmptyScope, dispatcher);
         }
 
         // blocks written in C running on this thread: what rb_iter_break can break out of

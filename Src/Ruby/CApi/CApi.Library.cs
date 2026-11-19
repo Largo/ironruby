@@ -275,9 +275,9 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static byte* rb_class2name(VALUE klass) {
+            // rb_class_name's: an anonymous class is its inspect, "#<Class:0x...>"
             var real = FromValue(rb_class_real(klass)) as RubyModule;
-            object name = real != null ? Call(real, "name") : null;
-            return name != null ? PermanentCString(name.ToString()) : null;
+            return real != null ? PermanentCString(FromValue(rb_class_path(ToValue(real))).ToString()) : null;
         }
 
         internal static VALUE rb_class_real(VALUE klass) {
@@ -296,7 +296,9 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_class_new(VALUE super) {
-            return ToValue(Call(_context.ClassClass, "new", FromValue(super)));
+            // unlike Class.new, without the superclass's #inherited
+            RubyClass superClass = RubyClass.CheckInheritable(_context, FromValue(super));
+            return ToValue(_context.DefineClass(_context.ObjectClass, null, superClass, null, false));
         }
 
         internal static void rb_prepend_module(VALUE klass, VALUE module) {
@@ -360,16 +362,12 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(o, name, null, FromValues(argc, argv)));
         }
 
-        internal static VALUE rb_call_super_kw(int argc, VALUE* argv, int kw_splat) {
-            return rb_call_super(argc, argv);
-        }
-
         internal static VALUE rb_class_new_instance_kw(int argc, VALUE* argv, VALUE klass, int kw_splat) {
-            return rb_class_new_instance(argc, argv, klass);
+            return ToValue(Send(FromValue(klass), "new", null, KeywordArgs(argc, argv, kw_splat)));
         }
 
         internal static VALUE rb_funcall_with_block_kw(VALUE recv, VALUE mid, int argc, VALUE* argv, VALUE procval, int kw_splat) {
-            return rb_funcall_with_block(recv, mid, argc, argv, procval);
+            return ToValue(SendWith(true, FromValue(recv), IdToString(mid), FromValue(procval) as Proc, KeywordArgs(argc, argv, kw_splat)));
         }
 
         internal static int rb_frame_method_id_and_class(VALUE* idp, VALUE* klassp) {
@@ -490,7 +488,11 @@ namespace IronRuby.Runtime.CApi {
             if (block == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return ToValue(Send(_context.KernelModule, "lambda", block));
+            if (block.Kind == ProcKind.Lambda || _frame.Bfc != null && !_frame.Bfc.IsLiteralBlock) {
+                // a Proc passed with &: CRuby hands it back as it is, lambda or not
+                return ToValue(block);
+            }
+            return ToValue(block.ToLambda(null));
         }
 
         internal static VALUE rb_yield_splat(VALUE ary) {
@@ -1071,7 +1073,8 @@ namespace IronRuby.Runtime.CApi {
 
         /// <summary>
         /// CRuby's rb_get_kwargs: takes the required and optional keywords out of the hash into
-        /// values (Qundef for an optional one not given); optional &lt; 0 means other keys are allowed.
+        /// values (Qundef for an optional one not given) - with values NULL it only looks; optional
+        /// &lt; 0 means other keys are allowed and stay in the hash.
         /// </summary>
         internal static int rb_get_kwargs(VALUE keyword_hash, VALUE* table, int required, int optional, VALUE* values) {
             bool rest = optional < 0;
@@ -1086,6 +1089,8 @@ namespace IronRuby.Runtime.CApi {
                 object value;
                 if (hash != null && hash.TryGetValue(key, out value)) {
                     if (values != null) {
+                        // taken out, as CRuby's extract_kwarg does: what is left over is the rest
+                        hash.Remove(key);
                         values[i] = ToValue(value);
                     }
                     found++;
@@ -1102,7 +1107,7 @@ namespace IronRuby.Runtime.CApi {
                 throw RubyExceptions.CreateArgumentError(String.Format("missing keyword{0}: {1}", missing.Count > 1 ? "s" : "",
                     String.Join(", ", missing.ConvertAll(k => ":" + k))));
             }
-            if (!rest && hash != null && hash.Count > found) {
+            if (!rest && hash != null && hash.Count > (values != null ? 0 : found)) {
                 var known = new HashSet<object>();
                 for (int i = 0; i < required + optional; i++) {
                     known.Add(IdToSymbol(table[i]));
