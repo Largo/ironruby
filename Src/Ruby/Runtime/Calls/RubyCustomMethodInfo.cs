@@ -82,7 +82,14 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity, _structMember);
+            return new RubyCustomMethodInfo(_ruleGenerator, flags, module, _arity, _structMember) { NotImplemented = NotImplemented };
+        }
+
+        // a C extension's method of rb_f_notimplement
+        internal bool NotImplemented { get; set; }
+
+        public override bool IsNotImplemented {
+            get { return NotImplemented; }
         }
 
         /// <summary>

@@ -224,6 +224,14 @@ namespace IronRuby.Runtime.Calls {
             throw Assert.Unreachable;
         }
 
+        /// <summary>
+        /// MRI's rb_f_notimplement methods (fork on a platform without it): the method exists but
+        /// can only raise NotImplementedError, so #respond_to? denies it.
+        /// </summary>
+        public virtual bool IsNotImplemented {
+            get { return false; }
+        }
+
         public override string/*!*/ ToString() {
             return
                 IsHidden ? "<hidden>" :
