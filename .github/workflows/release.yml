@@ -25,6 +25,7 @@ on:
       # the startup library every archive carries: its compiler, and the prelude it compiles most of
       - Util/aot/**
       - Util/process-smoke.rb
+      - Util/build-capi.sh
       - Src/StdLib/ironruby/ruby4.rb
   workflow_dispatch:
     inputs:
@@ -177,6 +178,20 @@ jobs:
           Util/build-librbs.sh
           ls -l Src/Libraries/Rbs/native/build
 
+      # The C API's native shim (Src/Ruby/CApi/README.md), built as Util/build-capi.sh documents
+      # and shipped beside IronRuby.dll by Ruby.csproj. Without this step the archive has the
+      # headers but no libironruby-capi, and requiring a C extension raises a LoadError.
+      # build-capi.sh supports Linux and Windows (MinGW) only.
+      - name: Build libironruby-capi
+        if: runner.os != 'macOS'
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          fi
+          bash Util/build-capi.sh
+          ls -l Src/Ruby/CApi/native/build
+
       # package-release.sh rebuilds libe_sqlite3.so for the Linux archive (gcc, unzip) and
       # checks it with the system's libsqlite3 preloaded, the case SQLitePCL.raw#682 is about.
       - name: SQLite for the Linux archive
@@ -248,6 +263,28 @@ jobs:
         run: |
           cd "$RUNNER_TEMP"/startup-check/ironruby-*
           ./ir.sh "$GITHUB_WORKSPACE/ironruby/Util/process-smoke.rb"
+
+      # A C extension, from the archive unpacked above: mkmf builds it against the shipped headers
+      # and libironruby-capi, and the archive's ir loads and calls it.
+      - name: C extension, from the archive
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          ext="$RUNNER_TEMP/capi-smoke"
+          rm -rf "$ext" && mkdir -p "$ext"
+          printf 'require "mkmf"\ncreate_makefile("capi_smoke")\n' > "$ext/extconf.rb"
+          cat > "$ext/capi_smoke.c" <<'EOF'
+          #include <ruby.h>
+          static VALUE twice(VALUE self, VALUE x) { return rb_funcall(x, '*', 1, INT2FIX(2)); }
+          void Init_capi_smoke(void) {
+            rb_define_module_function(rb_define_module("CApiSmoke"), "twice", twice, 1);
+          }
+          EOF
+          ir=$(echo "$RUNNER_TEMP"/startup-check/ironruby-*/ir.sh)
+          (cd "$ext" && "$ir" extconf.rb && make)
+          out=$("$ir" -I"$ext" -e 'require "capi_smoke"; p CApiSmoke.twice(21), CApiSmoke.twice("ab")')
+          echo "$out"
+          [ "$out" = $'42\n"abab"' ]
 
       # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
       # the Release build the archive ships. package-release.sh leaves the tree in dist/.
