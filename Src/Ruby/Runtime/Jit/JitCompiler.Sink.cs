@@ -91,7 +91,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>`@x = v' held back (see the top of this file), or null for the ordinary store.</summary>
-        private MSA.Expression TrySinkIVarWrite(SimpleAssignmentExpression/*!*/ node, string/*!*/ name, MSA.Expression/*!*/ v, JT vt, out JT type) {
+        private MSA.Expression TrySinkIVarWrite(SimpleAssignmentExpression/*!*/ node, string/*!*/ name, MSA.Expression/*!*/ v, JT vt, bool conditional, out JT type) {
             type = vt;
             if (!_sinkStores || _loop != null || vt == JT.None || vt == JT.Never) { return null; }
             if (!_pure || _effectNotOnSelf) {
@@ -137,7 +137,8 @@ namespace IronRuby.Runtime.Jit {
             }
             _ivarWrite = true;
             sunk.LastSite = _sinkSites++;
-            if (IsTopStatement(node)) { _sunkDefinite.Add(name); }
+            // the store of `@x ||= v' is made on some paths only, even as a top-level statement
+            if (!conditional && IsTopStatement(node)) { _sunkDefinite.Add(name); }
             var temp = Ast.Variable(ClrType(vt), "#value");
             var ordering = Ast.IfThen(Ast.Equal(sunk.Order, Ast.Constant(0)),
                 Ast.Assign(sunk.Order, Ast.PreIncrementAssign(_sinkCounter)));

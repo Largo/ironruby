@@ -1335,7 +1335,32 @@ namespace IronRuby.Runtime.Jit {
 
         private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, out JT type) {
             string op = node.Operation;
-            if (op == "&&" || op == "||") { throw JitBailout.Instance; }
+            if (op == "&&" || op == "||") { return EmitOrAssignment(node, out type); }
+            return EmitAssignment(node, op, false, out type);
+        }
+
+        /// <summary>
+        /// `@x ||= v', `x ||= v' (and `&&='): `@x || (@x = v)', built from EmitAndOr's parts. The variable is read
+        /// once, v is evaluated only when the store is made, and the value is the variable's or v's, joined as
+        /// `a || b' joins them. The store happens on some paths only, so a held-back write of it is not a definite one
+        /// (TrySinkIVarWrite). Kept to method bodies: an outlined loop does not see these (the screen walks them, but
+        /// an instance variable write there bails anyway, and a local one is left to the generic body).
+        /// </summary>
+        private MSA.Expression/*!*/ EmitOrAssignment(SimpleAssignmentExpression/*!*/ node, out JT type) {
+            if (_loop != null) { throw Bail(node.Operation + "= in an outlined loop"); }
+            if (!(node.Left is InstanceVariable || node.Left is LocalVariable)) { throw Bail(node.Operation + "= of " + node.Left.GetType().Name); }
+            var local = node.Left as LocalVariable;
+            MSA.ParameterExpression p;
+            JT lt;
+            if (local != null && !TryLookup(Key(local), out p, out lt)) {
+                // a local no path has assigned yet reads as nil: `x ||= v' is `x = v', and `x &&= v' leaves it nil
+                if (node.Operation == "&&") { throw Bail("&&= of an unassigned local: " + local.Name); }
+                return EmitAssignment(node, null, false, out type);
+            }
+            return EmitAndOr(node.Left, node, node.Operation == "&&", out type);
+        }
+
+        private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, string op, bool conditional, out JT type) {
 
             var element = node.Left as ArrayItemAccess;
             if (element != null) { return EmitIndexWrite(element, op, node.Right, IsLastStatement(node), IsEarlyTopStatement(node), out type); }
@@ -1364,7 +1389,7 @@ namespace IronRuby.Runtime.Jit {
                 } else {
                     v = Emit(node.Right, out vt);
                 }
-                var sunk = TrySinkIVarWrite(node, ivarTarget.Name, v, vt, out type);
+                var sunk = TrySinkIVarWrite(node, ivarTarget.Name, v, vt, conditional, out type);
                 if (sunk != null) { return sunk; }
                 if (_effectNotOnSelf) { _canDeopt = true; }     // SetIVar deopts on a frozen self, here after an effect elsewhere
                 _pure = false;      // an ivar write is observable: nothing emitted after it may deopt (_deoptAfterEffect)
@@ -1829,6 +1854,15 @@ namespace IronRuby.Runtime.Jit {
         /// truthy); the value's type is what the two outcomes merge to.
         /// </summary>
         private MSA.Expression/*!*/ EmitAndOr(RExpr/*!*/ left, RExpr/*!*/ right, bool isAnd, out JT type) {
+            return EmitAndOr(left, right, null, isAnd, out type);
+        }
+
+        /// <summary>`left || right', or with `store' (EmitOrAssignment) `left || (left = store's value)'.</summary>
+        private MSA.Expression/*!*/ EmitAndOr(RExpr/*!*/ left, SimpleAssignmentExpression/*!*/ store, bool isAnd, out JT type) {
+            return EmitAndOr(left, null, store, isAnd, out type);
+        }
+
+        private MSA.Expression/*!*/ EmitAndOr(RExpr/*!*/ left, RExpr right, SimpleAssignmentExpression store, bool isAnd, out JT type) {
             JT lt;
             var l = Emit(left, out lt);
             var value = Ast.Variable(ClrType(lt), "#andor");
@@ -1847,7 +1881,7 @@ namespace IronRuby.Runtime.Jit {
             MSA.Expression r;
             int guard = isAnd ? PushTruthGuard(left) : -1;
             try {
-                r = Emit(right, out rt);
+                r = (store != null) ? EmitAssignment(store, null, true, out rt) : Emit(right, out rt);
             } finally {
                 if (guard >= 0) { PopTruthGuard(guard); }
             }
@@ -3109,7 +3143,26 @@ namespace IronRuby.Runtime.Jit {
             var assign = node as SimpleAssignmentExpression;
             if (assign != null) {
                 string op = assign.Operation;
-                if (op == "&&" || op == "||") { return No(node); }
+                if (op == "&&" || op == "||") {
+                    // `@x ||= v', `x ||= v' (and `&&=') are `@x || (@x = v)' (JitCompiler.EmitOrAssignment);
+                    // every other target stays out. So does a value that is a call (`@x ||= compute_x',
+                    // `@x ||= @o.find'): a memo's work is the callee's, which in the census and in traced runs is
+                    // rarely a body the JIT has compiled, and this one is then declined (it pays for the stub on every
+                    // call). An operator (`a &&= a + 1') is not such a call. Nor is a memo of nil or false worth one:
+                    // `@x ||= nil' stores only to turn false into nil or to define the variable, an effect that keeps
+                    // what follows it from deopting. The memos it takes are of other literals, `[]', constants,
+                    // operators and the method's own variables.
+                    var valueCall = assign.Right as MethodCall;
+                    if (valueCall != null && !(valueCall.Target != null && valueCall.Block == null && IsBinaryOperator(valueCall.MethodName))) { return No(node); }
+                    var valueLiteral = assign.Right as Literal;
+                    if (valueLiteral != null && (valueLiteral.Value == null || false.Equals(valueLiteral.Value))) { return No(node); }
+                    var orTarget = assign.Left;
+                    if (orTarget is InstanceVariable) { return Walk(assign.Right); }
+                    var orLocal = orTarget as LocalVariable;
+                    if (orLocal == null || orLocal.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
+                    _otherUses.Add(orLocal.Name);
+                    return Walk(assign.Right);
+                }
                 // `x op= v' becomes `x = x op v', so an operator EmitBinary does not know is out.
                 if (op != null && !IsBinaryOperator(op)) { return No(node); }
 

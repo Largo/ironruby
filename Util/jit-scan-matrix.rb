@@ -788,6 +788,96 @@ jz_run_row('a String', 'four')
 jz_run_row('nil', nil)
 jz_run_row('an object with size', JzSized.new)
 
+# `@x ||= v', `@x &&= v' and the same on a local (JitCompiler.EmitOrAssignment): the variable read once, v
+# evaluated only when the store is made, the store held back like a write inside an `if'. The counter @n is
+# v's visible effect: it must move exactly when CRuby evaluates v, and once only across a deopt.
+class JoMemo
+  attr_reader :n
+  def initialize(*x)
+    @n = 0
+    @x = x[0] unless x.empty?
+  end
+  def sp_or = (@x ||= (@n += 1))
+  def sp_and = (@x &&= (@n += 1))
+  def sp_or_v(v) = (@x ||= v)
+  def sp_and_v(v) = (@x &&= v)
+  def sp_or_twice(a, b)
+    @x ||= a
+    @x ||= b
+    @x
+  end
+  def sp_or_then(k)
+    @x ||= (@n += 1)
+    k + 1
+  end
+  def sp_and_then(k)
+    @x &&= (@n += 1)
+    k + 1
+  end
+  def sp_ab
+    @a ||= 1
+    @b ||= 2
+  end
+  def sp_memo = (@memo ||= [@n, :memo])
+  def x = @x
+end
+def jo_state(o) = [o.x, o.n, o.instance_variables]
+warm { |i| JoMemo.new.sp_or; JoMemo.new(i).sp_or; JoMemo.new.sp_and; JoMemo.new(i).sp_and
+           JoMemo.new.sp_or_v(i); JoMemo.new(i).sp_and_v(i); JoMemo.new.sp_or_twice(i, 2)
+           JoMemo.new.sp_or_then(i); JoMemo.new(1).sp_and_then(i); JoMemo.new.sp_ab; JoMemo.new.sp_memo }
+[[], [nil], [false], [0], [""], [Object]].each do |init|
+  t("||= on #{init.empty? ? 'unset' : init[0].inspect}") { o = JoMemo.new(*init); [o.sp_or, jo_state(o)] }
+  t("&&= on #{init.empty? ? 'unset' : init[0].inspect}") { o = JoMemo.new(*init); [o.sp_and, jo_state(o)] }
+  t("||= v on #{init.empty? ? 'unset' : init[0].inspect}") { o = JoMemo.new(*init); [o.sp_or_v(:v), jo_state(o)] }
+  t("&&= v on #{init.empty? ? 'unset' : init[0].inspect}") { o = JoMemo.new(*init); [o.sp_and_v(2.5), jo_state(o)] }
+  t("||= frozen on #{init.empty? ? 'unset' : init[0].inspect}") { o = JoMemo.new(*init).freeze; [(o.sp_or rescue $!.class), jo_state(o)] }
+  t("&&= frozen on #{init.empty? ? 'unset' : init[0].inspect}") { o = JoMemo.new(*init).freeze; [(o.sp_and rescue $!.class), jo_state(o)] }
+end
+t('||= twice') { o = JoMemo.new; [o.sp_or_twice(nil, 3), o.sp_or_twice(4, 5), jo_state(o)] }
+t('||= twice, false then a String') { o = JoMemo.new; [o.sp_or_twice(false, "s"), jo_state(o)] }
+[2**62, 2**63 - 1, 1.5, "s"].each do |k|
+  t("||= then k + 1, k = #{k.inspect}") { o = JoMemo.new; [(o.sp_or_then(k) rescue $!.class), jo_state(o)] }
+  t("&&= then k + 1, k = #{k.inspect}") { o = JoMemo.new(1); [(o.sp_and_then(k) rescue $!.class), jo_state(o)] }
+end
+t('@a ||= 1; @b ||= 2 on a fresh object') { o = JoMemo.new; [o.sp_ab, o.instance_variables] }
+t('@a ||= 1; @b ||= 2 with @b first') { o = JoMemo.new; o.instance_variable_set(:@b, 7); [o.sp_ab, o.instance_variables, o.instance_variable_get(:@b)] }
+t('memo 5000 times on one object') { o = JoMemo.new; s = 0; 5000.times { s += o.sp_memo[0] }; [s, o.sp_memo.equal?(o.sp_memo)] }
+t('memo once on each of 5000 objects') { s = 0; 5000.times { |i| o = JoMemo.new(i); s += o.sp_memo.size }; s }
+
+class JoLocal
+  def sp_l0 = (x ||= 5; x)
+  def sp_lx(k)
+    x = (k == 0 ? nil : k == 1 ? false : k == 2 ? 0 : :s)
+    x ||= 5
+    x
+  end
+  def sp_lx_and(k)
+    x = (k == 0 ? nil : k == 1 ? false : k == 2 ? 0 : :s)
+    x &&= 6
+    x
+  end
+  def sp_lp(a = nil)
+    a ||= 3
+    a
+  end
+  def sp_land(a)
+    a &&= a + 1
+    a
+  end
+  def sp_li(a)
+    a ||= 3
+    a + 1
+  end
+end
+jl = JoLocal.new
+warm { |i| jl.sp_l0; jl.sp_lx(i % 4); jl.sp_lx_and(i % 4); jl.sp_lp; jl.sp_lp(i); jl.sp_land(nil); jl.sp_land(i); jl.sp_li(i) }
+t('local ||= before any assignment') { jl.sp_l0 }
+t('local ||= after nil, false, 0, :s') { (0..3).map { |k| jl.sp_lx(k) } }
+t('local &&= after nil, false, 0, :s') { (0..3).map { |k| jl.sp_lx_and(k) } }
+t('parameter ||= 3') { [jl.sp_lp, jl.sp_lp(nil), jl.sp_lp(false), jl.sp_lp(7), jl.sp_lp(2**64), jl.sp_lp("s")] }
+t('parameter &&= a + 1') { [jl.sp_land(nil), jl.sp_land(false), jl.sp_land(1), jl.sp_land(2**63 - 1), jl.sp_land(1.5), (jl.sp_land("s") rescue $!.class)] }
+t('Integer parameter ||= then + 1') { [jl.sp_li(1), jl.sp_li(2**63 - 1), (jl.sp_li(nil) rescue $!.class), (jl.sp_li(false) rescue $!.class), jl.sp_li(1.5)] }
+
 sa = [1, 2]
 def sa.size = 9
 jz_row('held writes, an Array with a singleton size', [1, 2, 3], sa)
