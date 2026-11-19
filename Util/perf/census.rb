@@ -60,8 +60,11 @@ where = ->(m) { "#{rel.(m[:file])}:#{m[:line]}" }
 pct = ->(n, of) { of.zero? ? '-' : format('%5.1f%%', 100.0 * n / of) }
 jit_text = ->(m) { m[:jit] == 'compiles' ? "compiles#{m[:jit_types].to_s.empty? ? '' : " (#{m[:jit_types]})"}" : "#{m[:jit]} (#{m[:jit_why]})" }
 light_text = ->(m) { m[:light] ? 'light' : "scope (#{m[:light_why]})" }
-# "MethodCall at line 12" and "MethodCall each (self)" count as one reason; the rest is the detail
-light_kind = ->(m) { m[:light_why].to_s.sub(/ at line \d+\z/, '') }
+# "MethodCall at line 12: GlobalVariable" is the statement (MethodCall), where it is, and the construct inside it that
+# IsScopeFree refused (GlobalVariable): the first table counts statements, the second constructs, whatever statement
+# holds them - the statement alone did not say what to teach the frames next
+light_kind = ->(m) { m[:light_why].to_s.sub(/ at line \d+(: .*)?\z/m, '') }
+light_construct = ->(m) { m[:light_why].to_s[/ at line \d+: (.*)\z/m, 1] }
 jit_detail = lambda do |m|
   why, kind = m[:jit_why].to_s, m[:jit_kind].to_s
   why.start_with?(kind) ? why[kind.size..].sub(/\A[: ]+/, '') : why
@@ -98,6 +101,7 @@ puts format('JIT never      %6d  %s  (parameters %d, screen %d)', never.size, pc
 table.('JIT never: what refused the method', never, ->(m) { "#{m[:jit_kind]} (#{m[:jit_stage]})" }, jit_detail)
 table.('JIT maybe: where the typed body stopped without a profile', by_jit.fetch('maybe', []), ->(m) { m[:jit_kind].to_s }, jit_detail)
 table.('not a light frame: why', methods.reject { |m| m[:light] }, light_kind)
+table.('not a light frame: the construct', methods.reject { |m| m[:light] || light_construct.(m).nil? }, light_construct, light_kind)
 
 if list
   puts '', 'methods'
