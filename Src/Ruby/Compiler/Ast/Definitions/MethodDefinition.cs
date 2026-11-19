@@ -677,7 +677,8 @@ namespace IronRuby.Compiler.Ast {
                 }
                 var item = assignment.Left as ArrayItemAccess;
                 if (item == null || !LightCallsEnabled || item.Block != null) {
-                    return Refuse(why, item == null ? "assignment to " + assignment.Left.GetType().Name :
+                    // the reason is built only when it was asked for: this path runs for every method definition
+                    return why != null && Refuse(why, item == null ? "assignment to " + assignment.Left.GetType().Name :
                         LightCallsEnabled ? "assignment to an element with a block" : "assignment to an element (IR_LIGHT_CALLS=0)");
                 }
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
@@ -739,7 +740,7 @@ namespace IronRuby.Compiler.Ast {
                 // is given (LightFrameRewriter.LightScopeCall)
                 var splat = node as SplattedArgument;
                 if (splat != null) {
-                    return (LightSplatEnabled || Refuse(why, node.GetType().Name + " (IR_LIGHT_SPLAT=0)")) && IsScopeFree(splat.Argument, blockLiterals, why);
+                    return (LightSplatEnabled || why != null && Refuse(why, node.GetType().Name + " (IR_LIGHT_SPLAT=0)")) && IsScopeFree(splat.Argument, blockLiterals, why);
                 }
                 // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
@@ -812,6 +813,9 @@ namespace IronRuby.Compiler.Ast {
                 return AreScopeFree(jump.Arguments, blockLiterals, why);
             }
             // a node of a kind not taken at all: its type says what it is, and a Hash says whether it is a call's keywords
+            if (why == null) {
+                return false;
+            }
             var hash = node as HashConstructor;
             return Refuse(why, node.GetType().Name + (hash != null && hash.IsKeywordArguments ? " (keyword arguments)" : "") +
                 (LightCallsEnabled ? "" : " (IR_LIGHT_CALLS=0)"));
