@@ -721,6 +721,14 @@ namespace IronRuby.Runtime {
         /// module, which follows the module as it grows.
         /// </param>
         public void ActivateRefinements(RubyModule/*!*/ module, bool snapshot) {
+            // A binding's own scope (a Binding#dup's, TOPLEVEL_BINDING's) holds only the locals defined through it:
+            // its lexical position is its parent's, so `using' in an eval through it activates there, as MRI's shared
+            // cref does (`eval("using M", TOPLEVEL_BINDING)' refines the main script's code after it).
+            if (Kind == ScopeKind.BindingCopy) {
+                _parent.ActivateRefinements(module, snapshot);
+                return;
+            }
+
             HashSet<RubyModule> refinements = null;
             if (snapshot) {
                 var list = new List<RubyModule>();
