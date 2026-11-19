@@ -47,10 +47,11 @@ trap 'rm -rf "$tmp"' EXIT
 CFLAGS="-O2 -g $PLATFORM_CFLAGS -Wall -Wno-unused-function -I$INC -I$ARCH_INC"
 
 "$CC" $CFLAGS -c "$SRC/capi.c" -o "$tmp/capi.o"
+"$CC" $CFLAGS -c "$SRC/st.c" -o "$tmp/st.o"
 "$CC" $CFLAGS -c "$SRC/forwarders.generated.c" -o "$tmp/forwarders.o"
 
 # Stubs for everything declared and not defined above.
-nm --defined-only -g "$tmp/capi.o" "$tmp/forwarders.o" | awk 'NF == 3 { print $3 }' | sort -u > "$tmp/defined.txt"
+nm --defined-only -g "$tmp/capi.o" "$tmp/st.o" "$tmp/forwarders.o" | awk 'NF == 3 { print $3 }' | sort -u > "$tmp/defined.txt"
 if command -v ruby >/dev/null 2>&1; then
   ruby "$IR_ROOT/Util/capi/prototypes.rb" --names > "$tmp/declared.txt"
   # the platform's own declarations (rb_w32_* on Windows) are added to the committed list
@@ -70,5 +71,5 @@ cat "$SRC/declared.txt" "$SRC/cruby-exports.txt" | grep -E '^(rb_|ruby_|onig|st_
 "$CC" -O1 $PLATFORM_CFLAGS -w -c "$tmp/stubs.c" -o "$tmp/stubs.o"
 
 mkdir -p "$OUT"
-"$CC" -shared -o "$OUT/$LIB" "$tmp/capi.o" "$tmp/forwarders.o" "$tmp/stubs.o" ${LINKFLAGS//OUTDIR/$OUT}
+"$CC" -shared -o "$OUT/$LIB" "$tmp/capi.o" "$tmp/st.o" "$tmp/forwarders.o" "$tmp/stubs.o" ${LINKFLAGS//OUTDIR/$OUT}
 echo "$OUT/$LIB: $(wc -l < "$tmp/defined.txt") functions defined, $(wc -l < "$tmp/stubs.txt") stubs"
