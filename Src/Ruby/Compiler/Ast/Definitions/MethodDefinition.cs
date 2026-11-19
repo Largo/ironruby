@@ -427,6 +427,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightInterpolationEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_INTERPOLATION") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_HASH=0 keeps every method with a Hash literal (`{a: x}', `{}') out of light frames (see IsScopeFree and
+        /// LightFrameRewriter.ScopeOperandIndex).
+        /// </summary>
+        internal static readonly bool LightHashEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_HASH") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -692,6 +698,22 @@ namespace IronRuby.Compiler.Ast {
                 if (array != null) {
                     return AreScopeFree(array.Arguments, blockLiterals, why);
                 }
+                // `{a: x}', `{"k" => v}', `{}': the helper a literal is made by takes the scope only for its runtime
+                // (LightFrameRewriter.ScopeOperandIndex), and a String key's frozen copy and the keys' #hash and #eql? are
+                // the runtime's too. `**h' in a literal is a call of Hash#merge on it. The hash a call site builds for its
+                // keywords (`f(a: x)') is not taken.
+                var hash = node as HashConstructor;
+                if (hash != null && !hash.IsKeywordArguments) {
+                    if (!LightHashEnabled) {
+                        return Refuse(why, "HashConstructor (IR_LIGHT_HASH=0)");
+                    }
+                    foreach (var maplet in hash.Maplets) {
+                        if (!IsScopeFree(maplet.Key, blockLiterals, why) || !IsScopeFree(maplet.Value, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
                 // `(a..b)': the Range is made from its bounds and the literal's comparison storage (RubyOps.CreateInclusiveRange);
                 // Range#initialize checks the stack before the <=> it calls for bounds that are not two Integers. Not in a body
                 // with literal blocks: its light frame makes the scope before the Proc all the same, and SOM's
@@ -816,8 +838,8 @@ namespace IronRuby.Compiler.Ast {
             if (why == null) {
                 return false;
             }
-            var hash = node as HashConstructor;
-            return Refuse(why, node.GetType().Name + (hash != null && hash.IsKeywordArguments ? " (keyword arguments)" : "") +
+            var keywords = node as HashConstructor;
+            return Refuse(why, node.GetType().Name + (keywords != null && keywords.IsKeywordArguments ? " (keyword arguments)" : "") +
                 (LightCallsEnabled ? "" : " (IR_LIGHT_CALLS=0)"));
         }
 
@@ -950,7 +972,8 @@ namespace IronRuby.Compiler.Ast {
             /// The operand of a helper that takes the scope only for what a method scope shares with the scope the method
             /// was defined in, so the declaring scope can be passed instead: the runtime (instance variables), and the
             /// lexical chain a constant is looked up in - a method scope has no module of its own, so the lookup of one
-            /// starts at its parent, which is the declaring scope. -1 for any other helper.
+            /// starts at its parent, which is the declaring scope. And the helpers that make a Hash literal (HashConstructor),
+            /// which read only the runtime's equality comparer from it. -1 for any other helper.
             /// </summary>
             private static int ScopeOperandIndex(MethodInfo/*!*/ method) {
                 if (method == Methods.GetInstanceVariable || method == Methods.IsDefinedInstanceVariable ||
@@ -962,6 +985,10 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (method == Methods.SetInstanceVariable) {
                     return 2;
+                }
+                if (LightHashEnabled && (method == Methods.MakeHash || method == Methods.MakeSymbolHash1 ||
+                    method == Methods.MakeSymbolHash2 || method == Methods.MakeSymbolHash3)) {
+                    return 0;
                 }
                 return -1;
             }
