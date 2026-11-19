@@ -465,4 +465,184 @@ n = 0
 3000.times { |k| n += (e9b.r_int(k.even? ? '1' : 'x') rescue 0) }
 puts "9. rescue modifier: #{n}"
 
+# ---------------------------------------------------------------- 10. `Kernel.raise' and `::Kernel.raise', as the prelude writes them
+# (The screen refuses a call of raise with a receiver, so on the current build the r_k_* methods are never wrapped:
+# the rows pin the answers for the day `Kernel.raise' becomes the same deopt as a bare `raise'.)
+
+class K10
+  attr_reader :a, :b
+  def initialize; @t = { 1 => 10 }; @a = 0; @b = 0; end
+  def r_k_cls_msg(i)
+    t = @t[i]
+    Kernel.raise(TypeError, 'k cls msg') unless t
+    t
+  end
+  def r_k_top(i)
+    t = @t[i]
+    ::Kernel.raise(TypeError, 'top') unless t
+    t
+  end
+  def r_k_fail(i)
+    t = @t[i]
+    Kernel.fail('k failed') unless t
+    t
+  end
+  def r_k_top_fail(i)
+    t = @t[i]
+    ::Kernel.fail ArgumentError, 'top failed' unless t
+    t
+  end
+  def r_k_bare(i)
+    t = @t[i]
+    ::Kernel.raise unless t
+    t
+  end
+  def r_k_cls(i)
+    t = @t[i]
+    Kernel.raise ArgumentError unless t
+    t
+  end
+  def r_k_inst(i)
+    t = @t[i]
+    ::Kernel.raise(KeyError.new('no key')) unless t
+    t
+  end
+  def r_k_cause(i)
+    t = @t[i]
+    ::Kernel.raise(TypeError, 'with cause', cause: IndexError.new('the cause')) unless t
+    t
+  end
+  def r_k_if(i)
+    ::Kernel.raise(RangeError, 'if') if i < 0
+    i + 1
+  end
+  def r_k_ternary(i)
+    i < 0 ? ::Kernel.raise(RangeError, 'ternary') : i + 2
+  end
+  def r_k_or(i)
+    i >= 0 or ::Kernel.raise(RangeError, 'or')
+    i + 3
+  end
+  def r_k_last(i)
+    x = i + 5
+    ::Kernel.raise(RangeError, 'last ' + x.to_s)
+  end
+  def r_k_held(i)
+    @a = @a + 1
+    @b = i
+    ::Kernel.raise(ArgumentError, 'held ' + @a.to_s + ' ' + @b.to_s) if i < 0
+    @a + @b
+  end
+end
+k10 = K10.new
+%i[r_k_cls_msg r_k_top r_k_fail r_k_top_fail r_k_bare r_k_cls r_k_inst r_k_cause].each do |m|
+  drive("10. #{m}") { |k, miss| k10.__send__(m, miss ? 2 : 1) }
+end
+drive('10. r_k_bare inside a rescue') do |k, miss|
+  begin
+    raise ZeroDivisionError, 'outer'
+  rescue ZeroDivisionError
+    k10.r_k_bare(miss ? 2 : 1)
+  end
+end
+%i[r_k_if r_k_ternary r_k_or].each do |m|
+  drive("10. #{m}") { |k, miss| k10.__send__(m, miss ? -1 : k) }
+end
+drive('10. r_k_last', (0...200).to_a) { |k, _| k10.r_k_last(k) }
+drive('10. r_k_held') { |k, miss| [k10.r_k_held(miss ? -k - 1 : k), k10.a, k10.b] }
+puts "10. variables after: #{[k10.a, k10.b].inspect}"
+
+# a class with a `raise' of its own: `::Kernel.raise' is not it
+class K10Own
+  def raise(*a) = :own_raise
+  def r_k_own(i)
+    ::Kernel.raise(TypeError, 'not own') if i < 0
+    Kernel.raise(TypeError, 'not own either') if i > 1000
+    i
+  end
+end
+ko = K10Own.new
+drive('10. r_k_own') { |k, miss| [ko.r_k_own(miss ? -1 : k)] }
+drive('10. r_k_own unqualified', [3, 80]) { |k, miss| [ko.r_k_own(miss ? 2000 : k)] }
+
+# a lexically scoped constant Kernel that is not the module
+class K10Lex
+  Kernel = Object.new
+  def no_lex(i)
+    Kernel.raise('lexical') if i < 0
+    i
+  end
+  def r_lex_top(i)
+    ::Kernel.raise(TypeError, 'top past the lexical one') if i < 0
+    i
+  end
+end
+kl = K10Lex.new
+drive('10. no_lex') { |k, miss| [kl.no_lex(miss ? -1 : k)] }
+drive('10. r_lex_top') { |k, miss| [kl.r_lex_top(miss ? -1 : k)] }
+
+# Kernel.raise (the module's singleton method) redefined after warm-up, and put back
+class K10Sing
+  def r_k_sing(i)
+    ::Kernel.raise(TypeError, 'sing') if i < 0
+    [:after, i]
+  end
+  def r_k_sing_fail(i)
+    Kernel.fail(TypeError, 'sing fail') if i < 0
+    [:after, i]
+  end
+end
+ks = K10Sing.new
+Kernel.singleton_class.alias_method :__matrix_sraise, :raise
+Kernel.singleton_class.alias_method :__matrix_sfail, :fail
+[[:r_k_sing, :raise], [:r_k_sing_fail, :fail]].each do |m, name|
+  out = []
+  200.times do |k|
+    if k == 100
+      Kernel.singleton_class.define_method(name) { |*a| 42 }
+    elsif k == 130
+      Kernel.singleton_class.define_method(name) { |*a| Integer('not a number') }
+    elsif k == 160
+      Kernel.singleton_class.alias_method name, :"__matrix_s#{name}"
+    end
+    begin
+      v = ks.__send__(m, k % 10 == 0 ? -1 : k)
+      out << [k, v] if k % 10 == 0
+    rescue => e
+      out << [k, e.class, e.message]
+    end
+  end
+  puts "10. Kernel.#{name} redefined at 100, raising another class at 130, back at 160: #{out.inspect}"
+end
+
+# Kernel#raise (the instance method) redefined part way through: Kernel.raise is the singleton's, not it
+class K10Kernel
+  def r_kk(i)
+    ::Kernel.raise('kernel') if i < 0
+    i
+  end
+  def r_kf(i)
+    Kernel.fail('kernel fail') if i < 0
+    i
+  end
+end
+kk = K10Kernel.new
+[[:r_kk, :raise], [:r_kf, :fail]].each do |m, name|
+  out = []
+  200.times do |k|
+    if k == 100
+      Kernel.module_eval { define_method(name) { |*a| :redefined }; private name }
+    elsif k == 140
+      Kernel.module_eval { alias_method name, :"__matrix_#{name}"; private name }
+    end
+    begin
+      v = kk.__send__(m, k % 20 == 0 ? -1 : k)
+      out << [k, v] if v == :redefined || v == nil
+    rescue => e
+      out << [k, e.class, e.message]
+    end
+  end
+  puts "10. Kernel##{name} redefined at 100, back at 140, Kernel.#{name} called: #{out.inspect}"
+end
+
 puts 'end'

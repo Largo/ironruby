@@ -2015,6 +2015,47 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **`Kernel.raise(...)` and `::Kernel.raise(...)` as the deopt a bare `raise` is**
+  (/perf-step, round twenty-four, 2026-11-19, perf/kraise, not merged; census only). The
+  prelude writes its 322 raises with the receiver, the screen refuses that in 120 of its
+  methods and in 26 as the only thing. Built in 27 lines (`IsRaiseCall` takes a
+  `ConstantVariable` named `Kernel` without a qualifier; `EmitRaise` bails unless it is
+  the Kernel module and its singleton `raise` the built-in one - for speed, the deopt
+  being right either way). All six JIT matrices printed CRuby's output, the 18 probe
+  methods compiled. Census: 54 methods `never` -> `maybe`, none to `compiles`, none down.
+  A driver of the prelude methods that moved, called hot on the path that does not raise:
+  specialized 11 -> 19, declined after the screen 6 -> 16. Eight gained (five of them
+  `Prism::DSL` flag helpers), ten lost: `String#__ir_require_unfrozen__` and
+  `Enumerator::Product#__check_frozen__` at `call: frozen?/0`, `IO#autoclose=` and
+  `IO::PopenChild#pid` at `closed?/0`, `IO::Buffer#__check__` at `valid?/0`, `#free` at
+  `locked?/0`, `StringIO#readchar` at `getc/0`, `IO::Buffer#__check_writable__` at
+  `__check__/0`, two more at an operator. Not kept.
+  It is round twenty-three's wall again, and it is one thing: **a call without arguments
+  on self (or on a local) passes the screen on the hope of an attribute reader or a leaf,
+  and where it is a method written in C# - `frozen?`, `closed?`, `valid?`, `nan?` - or a
+  Ruby method that is neither, the compiler has no call to make and declines the body**.
+  Whatever else is taught to the screen, the methods it then lets through meet that call.
+  About twelve of the 54 also raise on every path (`allocate`, `marshal_dump`, the
+  `Ruby::Box` stubs), which the compiler declines as "every path raises" - a bare `raise`
+  has the same hole in the screen today. And `census.rb -c` differed from the run in four
+  `Process` methods made with `module_function` (the census says `maybe`, the run's screen
+  refuses their call on self of `__check__`): the census does not know the copy on the
+  singleton class resolves the callee differently.
+  What a decline costs was measured for this entry (`ab.rb`, eight alternating rounds, the
+  method JIT on against `-X:NoJIT`, minima; another build was running, spreads 21-42%, so
+  the sizes are rough): a method that passes the screen and is declined 1.07, 1.08 and
+  1.00 of the same method never wrapped (40 -> 43 ns, 52 -> 56, 40 -> 40), a method that
+  compiles 0.82 (46 -> 38), one the screen refuses 0.98. So a decline is three or four
+  nanoseconds a call and a trivial body's typed version gains eight: ten declines for
+  eight gains is a loss, and the rule that rejected rounds twenty-three and twenty-four
+  is the right size.
+  Two ways on, neither a census step: the typed body makes the call (a library method on
+  self whose answer runs no Ruby code needs only the check that the name resolves to it,
+  as `IdentityCallSite` does for `nil?`; `frozen?` is the one that came up four times), or
+  a decline costs nothing (the stub taken out of the call sites' rules when it settles),
+  after which a hopeful screen is free. The probes are kept (`Util/jit-raise-matrix.rb`,
+  section 10; CRuby's output on the unchanged build, JIT on and off).
+
 - **`v.is_a?(C)`, `kind_of?`, `instance_of?` and `C === v` as tests of a typed body**
   (/perf-step, round twenty-three, 2026-11-19, perf/isa, not merged; census only). The
   screen refuses 674 methods at `is_a?` (76 in the prelude), 166 at `===`, 91 at `kind_of?`
