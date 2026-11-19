@@ -366,9 +366,15 @@ Profile (`Util/perf/profile.sh`, self time):
    keeps a method out (`IR_LIGHT_REST=0`), nor does a call that passes a block on
    (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass), nor
    one that splats a value (`inner(*args)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`, see
-   Landed, perf/splat);
-   Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb and
-   Util/splat-pass-matrix.rb are their matrices. A method with both a literal block and a passed one still makes its scope
+   Landed, perf/splat), nor an interpolation (`"a#{x}"`; `IR_LIGHT_INTERPOLATION=0`, see
+   Landed, perf/interp; a block that interpolates still makes its scope);
+   Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
+   Util/splat-pass-matrix.rb and Util/interpolation-matrix.rb are their matrices.
+   What the census names next (2026-11-19, 28,335 methods): "optional, splat or post
+   parameters" 1,525, `super` 755, `rescue`/`ensure` 475, and 167 candidates that still
+   need their scope after the rewrite (in the prelude `Enumerable#zip`,
+   `Enumerator::Lazy#zip`, `Enumerator#__size_from_target__`, `Process#detach`,
+   `Process.waitall`; nobody has looked at what refuses them). A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
@@ -510,8 +516,59 @@ Profile (`Util/perf/profile.sh`, self time):
     for a three-line file but not inside a longer one. Found while writing
     `Method_LightFrameBlockPass1`, not a speed gap; not looked into.
 
+21. **Three differences from CRuby in interpolation**, found by the probes of
+    `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
+    (the matrix avoids them); not speed gaps. When a part's `to_s` raises, the backtrace
+    names the method's first line for that frame where CRuby names the interpolation's own
+    (`def m(x)`, `y = 1`, `"a#{x}"` on lines 10-12: IronRuby 10, CRuby 12), with and
+    without a scope. A TracePoint `:line` event is reported for the body of an endless
+    `def`, CRuby reports none. And with a refinement of `Symbol#to_s` in use, `"#{:s}"` asks
+    the refined `to_s`; CRuby answers `"s"` without asking it.
+
 ## Landed
 
+- **perf/interp (/perf-step, 2026-11-19) - a method that interpolates runs without a
+  scope** (`"a#{x}"`, `raise ArgumentError, "negative size (#{n})"`;
+  `IR_LIGHT_INTERPOLATION=0` turns it off). The filter (`IsScopeFree`) has taken an
+  interpolation since perf/lf, but since the refinements work of 2026-09-19 each part is
+  converted by `TryConvertToSWithRefinements(scope, value)` before the `ConvertToSAction`
+  site, and the rewriter refused both: the raw scope operand, and a dynamic site that is
+  not a call. So every such method was a candidate that "needs its scope after the
+  rewrite", the largest line of the census's light-frame table. In a method's light frame
+  the helper would answer null (a method defined where a refinement is active is never a
+  light frame, and a method scope without that record answers no refinements), so the
+  rewriter puts null in its place, as it does for `&x`, and lets the conversion site
+  through. A block's frame keeps the helper: a block can be written where a refinement is
+  active.
+
+      light frames 66.3% -> 71.7% (18,790 -> 20,318), light blocks 7,389 and the JIT's
+      verdicts unchanged; "body needs its scope after the rewrite" 1,695 -> 167
+      (Src/StdLib + AWFY, 28,335 methods; 1,528 methods moved up, none down) - census only, not gated
+
+  103 of them are the prelude's, mostly helpers that raise with an interpolated message
+  (`__count_arg__`, `__to_count__`, `__dig_step__`, `__affix__`, `__array_to_int__`,
+  `__slice_args__`, `__zip_source__`, `Range#__size__`, `Random#rand`, `Kernel#rand`,
+  `MatchData#[]`, `Enumerator#initialize`...), and four are AWFY's, all in `run.rb`'s
+  reporting. The census of the merged build is the worktree's, byte for byte.
+  Util/interpolation-matrix.rb (new, 95 lines: `to_s` refined in twelve places, answering a
+  non-String, raising, private, missing, redefined; parts that read the frame, yield,
+  splat; encodings; TracePoint; threads; a million-deep recursion) prints the same under
+  CRuby 4.0, the build before, and this one with the switch on and off; with
+  `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR` and `-X:JITCalls` by the experiment's own runs,
+  which also had the splat-pass, block-pass, block-given, light-rest, refinement,
+  refinement-binding, raise and error-message matrices agree. `census.rb -c` on a run of
+  Json: 58 methods called, 0 differ.
+  What the census cannot see here: a `using` that has run before a `def`. On a traced run
+  of the matrix it calls four such methods light that the run keeps a scope for
+  ("refinements"), which is the rule the change rests on. Five files of the standard
+  library have a `using`, with 7 of the 1,528 methods in them, so the count is at most
+  that much too high. (A fifth disagreement there is `-c` taking a `def` nested on its
+  parent's line for the parent.)
+  Not known, and owed to the gate and to `/perf-measure`: whether any of it is faster. No
+  time and no instruction count was taken. Gap 16's cost applies to a method whose usual
+  callee wants the caller's scope; most of these reach such a callee (`raise`) only on
+  their error path. Not run: IronRuby.Tests beyond the new test
+  `Method_LightFrameInterpolation1`, a sweep, AWFY, R2R, the jit matrices.
 - **perf/splat (/perf-frame, 2026-11-19) - a method that passes a splat on runs without a
   scope** (`inner(*args)`, `inner(*args, &block)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`
   turns it off). `IsScopeFree` takes a `SplattedArgument` of a scope-free expression, and
@@ -544,8 +601,8 @@ Profile (`Util/perf/profile.sh`, self time):
   decisions differ in four prelude methods and in none of its own); the micro table, no line more than 5% slower in both orders; start-up 1.20 s on
   both. After merging #232: the census, the splat and block-pass matrices against CRuby
   and the unchanged build, `census.rb -c` on a run of core-small (59 methods called, 0
-  differ) and the instruction counts above - IronRuby.Tests, the sweep and AWFY were not
-  run again on the merged tree.
+  differ), the instruction counts above, and IronRuby.Tests in Release (the same one
+  failure) - the sweep and AWFY were not run again on the merged tree.
   Learned: the time fell twice as far as the instructions (8% of `w_splat`'s), because
   what went is an allocation; a method becoming a light frame is a gain only if the call
   it usually makes does not want the scope (gap 16); and `ab.rb -i` of one binary with a
