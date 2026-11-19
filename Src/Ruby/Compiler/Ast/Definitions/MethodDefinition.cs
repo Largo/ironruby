@@ -274,6 +274,15 @@ namespace IronRuby.Compiler.Ast {
 
             // A body that never needs its scope makes none (see TransformLightFrame). The optional parameters' defaults are
             // rewritten with it (AreLightOptionals); they run first either way.
+            // A body whose block literals all reuse their Procs parks its scope with them for its next call (RubyOps.CreateMethodScopeParked).
+            var currentMethod = gen.CurrentMethod;
+            ParkedScopeSlot parkSlot = null;
+            if (ParkedScopesEnabled && allowLightFrame && currentMethod.BlockLiteralCount > 0 && !currentMethod.HasUnreusableBlock &&
+                !currentMethod.HasSuperCall && _parameters.Block == null && definitionRefinements == null && gen.Profiler == null &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval) {
+                parkSlot = new ParkedScopeSlot(_name);
+            }
+
             LightFrame light = null;
             if (_parameters.Optional.Length > 0) {
                 statements = Ast.Block(optionalsInitialization, statements);
@@ -282,7 +291,7 @@ namespace IronRuby.Compiler.Ast {
             if (allowLightFrame && LightFramesEnabled && definitionRefinements == null && gen.Profiler == null && !gen.TraceEnabled &&
                 !gen.CompilerOptions.IsEval && !scope.HasClosures && IsLightFrameCandidate()) {
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
-                    visiblePrameterCountAndSignatureFlags, ref statements);
+                    visiblePrameterCountAndSignatureFlags, parkSlot, ref statements);
             }
             if (LightFramesWhy && light == null) {
                 Console.Error.WriteLine("[light] why not: {0} ({1}:{2}): {3}", _name, gen.SourcePath, Location.Start.Line,
@@ -327,6 +336,21 @@ namespace IronRuby.Compiler.Ast {
                 body = gen.AddReturnTarget(body);
             }
 
+            // past the return target: only a call that returns normally parks its scope
+            if (parkSlot != null) {
+                if (ParkedScopesVerbose) {
+                    Console.Error.WriteLine("[park] {0} {1} ({2}:{3})", light != null ? "light:" : "scope:", _name, gen.SourcePath, Location.Start.Line);
+                }
+                // (a block variable, not a hidden local: that would take a light frame's locals out of CLR variables)
+                var parkResult = Ast.Variable(body.Type, "#park-result");
+                body = Ast.Block(
+                    new[] { parkResult },
+                    Ast.Assign(parkResult, body),
+                    Methods.ParkMethodScope.OpCall(Ast.Constant(parkSlot), scopeVariable),
+                    parkResult
+                );
+            }
+
             // A body with keyword parameters is never a light frame (IsLightFrameCandidate).
             MSA.Expression variableNames = null;
             if (light == null) {
@@ -351,7 +375,16 @@ namespace IronRuby.Compiler.Ast {
 
             body = scope.CreateScope(
                 scopeVariable,
-                enter ?? Methods.CreateMethodScope.OpCall(new AstExpressions {
+                enter ?? (parkSlot != null ? Methods.CreateMethodScopeParked.OpCall(new AstExpressions {
+                    Ast.Constant(parkSlot),
+                    scope.MakeLocalsStorage(),
+                    variableNames,
+                    Ast.Constant(visiblePrameterCountAndSignatureFlags),
+                    declaringScope,
+                    declaringModule,
+                    selfParameter, blockParameter,
+                    EnterInterpretedFrameExpression.Instance
+                }) : null) ?? Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     variableNames,
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
@@ -392,6 +425,13 @@ namespace IronRuby.Compiler.Ast {
         /// IR_LIGHT_BLOCKS=0 keeps every method with a literal block out of light frames (see TransformLightFrame).
         /// </summary>
         internal static readonly bool LightBlocksEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCKS") != "0";
+
+        /// <summary>
+        /// IR_PARKED_SCOPES=0 makes a new scope on every call of a method whose literal blocks reuse their Procs (see
+        /// RubyOps.CreateMethodScopeParked); IR_PARKED_SCOPES=verbose names each method compiled with a parking slot.
+        /// </summary>
+        internal static readonly bool ParkedScopesEnabled = Environment.GetEnvironmentVariable("IR_PARKED_SCOPES") != "0";
+        private static readonly bool ParkedScopesVerbose = Environment.GetEnvironmentVariable("IR_PARKED_SCOPES") == "verbose";
 
         /// <summary>
         /// IR_LIGHT_BLOCK_GIVEN=0 makes `block_given?' in a light-frame method the call it was before: the frame makes its
@@ -783,7 +823,7 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         private LightFrame TransformLightFrame(AstGenerator/*!*/ gen, ScopeBuilder/*!*/ scope, MSA.ParameterExpression/*!*/ scopeVariable,
             MSA.Expression/*!*/ selfParameter, MSA.Expression/*!*/ blockParameter, MSA.Expression/*!*/ declaringScope,
-            MSA.Expression/*!*/ declaringModule, int visibleParameterCountAndSignatureFlags, ref MSA.Expression/*!*/ statements) {
+            MSA.Expression/*!*/ declaringModule, int visibleParameterCountAndSignatureFlags, ParkedScopeSlot parkSlot, ref MSA.Expression/*!*/ statements) {
 
             var names = scope.GetVariableNamesExpression() as MSA.ConstantExpression;
             if (names == null) {
@@ -802,7 +842,15 @@ namespace IronRuby.Compiler.Ast {
                 shape, declaringScope, declaringModule, locals, selfParameter, blockParameter,
                 EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
             });
-            light.MakeScope = () => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
+            if (parkSlot != null) {
+                parkSlot.Shape = (MethodFrameShape)shape.Value;
+            }
+            light.MakeScope = (parkSlot != null)
+                ? () => Methods.CreateMethodScopeLazyParked.OpCall(new AstExpressions {
+                    Ast.Constant(parkSlot), declaringScope, declaringModule, scope.LocalsTupleVariable, selfParameter, blockParameter,
+                    EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
+                })
+                : (Func<MSA.Expression>)(() => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable));
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
             light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope(), inLoop)));

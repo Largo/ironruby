@@ -414,6 +414,13 @@ namespace IronRuby.Compiler.Ast {
             // the hook that reports the implicit return at `end'. Null until a `return' needs it.
             internal MSA.LabelTarget ExplicitReturnLabel { get; set; }
 
+            // What decides whether the method may park its scope for its next call (MethodDefinition.ParkedScopesEnabled):
+            // the number of block literals in it, whether one of them does not reuse its Proc (BlockDispatcher.ReusesProc),
+            // and whether it calls super, which hands the method's block - converted by this scope - to a method that may keep it.
+            internal int BlockLiteralCount;
+            internal bool HasUnreusableBlock;
+            internal bool HasSuperCall;
+
             public MethodScope(
                 ScopeBuilder/*!*/ builder,
                 MSA.Expression/*!*/ selfVariable,

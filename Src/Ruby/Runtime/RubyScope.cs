@@ -149,6 +149,10 @@ namespace IronRuby.Runtime {
 
         private RareState _rare;
 
+        internal bool HasRareState {
+            get { return _rare != null; }
+        }
+
         internal RareState/*!*/ Rare {
             get { return _rare ?? Interlocked.CompareExchange(ref _rare, new RareState(), null) ?? _rare; }
         }
@@ -1246,6 +1250,31 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// Where a compiled method body parks the scope of its last call for the next one (RubyOps.CreateMethodScopeParked).
+    /// </summary>
+    public sealed class ParkedScopeSlot {
+        internal ParkableMethodScope Scope;
+
+        // The name the method is defined under, and for a light frame what its scope is made of (MethodFrameShape).
+        internal readonly string/*!*/ DefinitionName;
+        internal MethodFrameShape Shape;
+
+        public ParkedScopeSlot(string/*!*/ definitionName) {
+            DefinitionName = definitionName;
+        }
+
+        // Calls in a row whose scope could not be parked because a Proc made over it may be kept (its literal went to an
+        // iterator that is neither a light frame nor [BlockNotKept], as `n.upto(m) { }'): past MaxFailures the body makes
+        // plain scopes, which are smaller, for good. Not exact under threads, and need not be: it only gives up sooner or later.
+        internal int Failures;
+        internal const int MaxFailures = 64;
+
+        internal bool IsDisabled {
+            get { return Failures > MaxFailures; }
+        }
+    }
+
+    /// <summary>
     /// What a light-frame method's scope is made of that is the same on every call of one compilation:
     /// its locals' names, its parameter count and signature flags, and the name it was defined under.
     /// </summary>
@@ -1261,10 +1290,11 @@ namespace IronRuby.Runtime {
         }
     }
 
-    public sealed class RubyMethodScope : RubyClosureScope {
+    public class RubyMethodScope : RubyClosureScope {
         private readonly RubyModule/*!*/ _declaringModule;
         private readonly string/*!*/ _definitionName;
-        private readonly Proc _blockParameter;
+        // (not readonly: a parked scope is the scope of another call, see Reinitialize)
+        private Proc _blockParameter;
 
         // Lowest 2 bits are flags:
         internal const int HasBlockFlag = 1;
@@ -1398,6 +1428,39 @@ namespace IronRuby.Runtime {
             InitializeRfc(blockParameter);
         }
 
+        #region Parked scopes (ParkableMethodScope)
+
+        // The state of the call a parked scope belonged to, dropped (RubyOps.ParkMethodScope).
+        internal void ClearCallState() {
+            _locals = null;
+            _selfObject = null;
+            _blockParameter = null;
+            _calleeName = null;
+            CurrentMatch = null;
+            LastInputLine = null;
+            InterpretedFrame = null;
+            _activeFlowControlScope = null;
+        }
+
+        /// <summary>
+        /// A parked scope made the scope of another call of its method, as a new one would be: the light frame's constructor
+        /// (rfc non-null) or the other one.
+        /// </summary>
+        internal void Reinitialize(MutableTuple locals, object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame,
+            RuntimeFlowControl rfc, string calleeName) {
+            ResetForReuse(locals, selfObject, interpretedFrame);
+            _blockParameter = blockParameter;
+            _calleeName = calleeName;
+            if (rfc != null) {
+                _activeFlowControlScope = rfc.IsActiveMethod ? rfc : this;
+            } else {
+                _activeFlowControlScope = this;
+                InitializeRfc(blockParameter);
+            }
+        }
+
+        #endregion
+
 #if DEBUG
         // The debug name is built on demand: composing it in the constructor put a string
         // concatenation and an allocation on every single method call.
@@ -1416,6 +1479,119 @@ namespace IronRuby.Runtime {
             }
 
             return result;
+        }
+    }
+
+    /// <summary>
+    /// The scope of a method that may be parked for its next call (RubyOps.CreateMethodScopeParked): the Procs of the method's
+    /// literals made over it are recorded, so that it can be parked with them when the call returns (RubyOps.ParkMethodScope).
+    /// A class of its own so that no other method scope is the larger for it.
+    /// </summary>
+    public sealed class ParkableMethodScope : RubyMethodScope {
+        internal ParkableMethodScope(MethodFrameShape/*!*/ shape, RubyScope/*!*/ parent, RubyModule/*!*/ declaringModule, MutableTuple locals,
+            object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName)
+            : base(shape, parent, declaringModule, locals, selfObject, blockParameter, interpretedFrame, rfc, calleeName) {
+        }
+
+        internal ParkableMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,
+            RubyScope/*!*/ parent, RubyModule/*!*/ declaringModule, string/*!*/ definitionName,
+            object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame)
+            : base(locals, variableNames, visibleParameterCountAndSignatureFlags, parent, declaringModule, definitionName,
+                selfObject, blockParameter, interpretedFrame) {
+        }
+
+        // The Procs made over this scope in the current call, and the ones it was parked with (for the call that took it
+        // to make again, RubyOps.InstantiateReusableBlock); a slot taken is null. The first of each is a field of its own: most
+        // methods have one literal, and a scope that is never parked (its Proc went to an iterator that may keep it) should
+        // allocate nothing more. The thread of the call that parked it.
+        private Proc _madeProc;
+        private Proc[] _madeProcs;
+        private int _madeCount;
+        private Proc _parkedProc;
+        private Proc[] _parkedProcs;
+        private int _parkedThreadId;
+
+        internal void RecordMadeProc(Proc/*!*/ proc) {
+            if (_madeProc == null) {
+                _madeProc = proc;
+                return;
+            }
+            if (_madeProc == proc) {
+                return;
+            }
+            var made = _madeProcs;
+            for (int i = 0; i < _madeCount; i++) {
+                if (made[i] == proc) {
+                    return;
+                }
+            }
+            if (made == null || _madeCount == made.Length) {
+                Array.Resize(ref _madeProcs, (made == null) ? 2 : made.Length * 2);
+                made = _madeProcs;
+            }
+            made[_madeCount++] = proc;
+        }
+
+        /// <summary>
+        /// The Proc of the literal with this dispatcher the scope was parked with, now of this call's self, or null.
+        /// </summary>
+        internal Proc TakeParkedProc(BlockDispatcher/*!*/ dispatcher) {
+            var proc = _parkedProc;
+            if (proc != null && proc.Dispatcher == dispatcher) {
+                _parkedProc = null;
+            } else {
+                proc = null;
+                var parked = _parkedProcs;
+                if (parked != null) {
+                    for (int i = 0; i < parked.Length; i++) {
+                        if (parked[i] != null && parked[i].Dispatcher == dispatcher) {
+                            proc = parked[i];
+                            parked[i] = null;
+                            break;
+                        }
+                    }
+                }
+                if (proc == null) {
+                    return null;
+                }
+            }
+            proc.ReuseParked(_selfObject, _parkedThreadId != Environment.CurrentManagedThreadId);
+            return proc;
+        }
+
+        /// <summary>
+        /// Whether nothing but this scope can reach the Procs made over it in this call: each is one only the frame holds
+        /// (Proc.IsReusableAndInactive - given to light frames and [BlockNotKept] iterators only, and no scope it ran in
+        /// was captured).
+        /// </summary>
+        internal bool MadeProcsAreParkable() {
+            if (_madeProc != null && !_madeProc.IsReusableAndInactive) {
+                return false;
+            }
+            var made = _madeProcs;
+            for (int i = 0; i < _madeCount; i++) {
+                if (!made[i].IsReusableAndInactive) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The end of a call whose scope is parked: its Procs become the parked ones, and the state of the call is dropped.
+        /// </summary>
+        internal void ClearForPark() {
+            var parked = _parkedProcs;
+            if (parked != null) {
+                Array.Clear(parked, 0, parked.Length);
+            }
+            _parkedProc = _madeProc;
+            _madeProc = null;
+            _parkedProcs = _madeProcs;
+            _madeProcs = parked;
+            _madeCount = 0;
+            _parkedThreadId = Environment.CurrentManagedThreadId;
+            ClearCallState();
         }
     }
 

@@ -289,6 +289,12 @@ namespace IronRuby.Compiler.Ast {
             bool reusesProc = !isLambda && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
                 !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
+            // (a method all of whose literals reuse their Procs may park its scope with them: MethodDefinition.ParkedScopesEnabled)
+            gen.CurrentMethod.BlockLiteralCount++;
+            if (!reusesProc) {
+                gen.CurrentMethod.HasUnreusableBlock = true;
+            }
+
             body = gen.Traceable
                 ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
                 : gen.AddReturnTarget(body);

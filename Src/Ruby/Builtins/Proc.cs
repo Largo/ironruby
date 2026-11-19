@@ -49,7 +49,8 @@ namespace IronRuby.Builtins {
     public partial class Proc : RuntimeFlowControl, IDuplicable {
         // Self object captured by the block definition, if any.
         // Although we could load self from scope in Ruby defined blocks, we cannot do so when we don't have a scope.
-        private readonly object _self;
+        // (not readonly: a Proc parked with its method scope is made again for the next call's self, RubyOps.InstantiateReusableBlock)
+        private object _self;
 
         // The scope that defines this block.
         private readonly RubyScope/*!*/ _scope;
@@ -134,6 +135,24 @@ namespace IronRuby.Builtins {
 
         internal bool IsReusable {
             get { return (_kind & ReusableFlag) != 0; }
+        }
+
+        /// <summary>
+        /// TryReuse would succeed: nothing but the frame that made the proc holds it (see RubyOps.ParkMethodScope).
+        /// </summary>
+        internal bool IsReusableAndInactive {
+            get { return (_kind & ReusableFlag) != 0 && _activeFlowControlScope == null; }
+        }
+
+        /// <summary>
+        /// A Proc parked with its method scope (RubyOps.ParkMethodScope), made again for another call of the method: the self
+        /// of that call, and no BlockParam of the last one if that ran on another thread (a BlockParam carries its thread).
+        /// </summary>
+        internal void ReuseParked(object self, bool otherThread) {
+            _self = self;
+            if (otherThread) {
+                YieldBlockParam = null;
+            }
         }
 
         // The BlockParam the light-frame method yields to a reusable proc through (RubyOps.ReuseBfcForYield), or the one a

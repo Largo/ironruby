@@ -230,6 +230,124 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        #region Parked method scopes
+
+        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda, nested block or
+        // return in them) and which calls no super makes a scope and a Proc per literal on every call, the Proc's parent
+        // (`def each; (a..b).each { |i| yield @s[i] }; end'). Once such a call has returned normally, if nothing captured
+        // the scope (RubyScope.IsCaptured: binding, eval, a method or Symbol proc made in it, a TracePoint) and every Proc
+        // made over it is one only the frame holds (Proc.IsReusableAndInactive: given to light frames and [BlockNotKept]
+        // iterators only, and no scope it ran in captured), nothing can reach the scope or its Procs: the compiled body
+        // parks the scope, with the Procs, in a slot of its own, and the next call takes it with an atomic exchange,
+        // makes it the scope of that call and its literals take their Procs back. A call that finds the slot empty - a
+        // recursive call, one on another thread - makes a scope as before. IR_PARKED_SCOPES=0 turns it off.
+
+        /// <summary>
+        /// CreateMethodScope of a body with a parking slot.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ CreateMethodScopeParked(ParkedScopeSlot/*!*/ slot, MutableTuple locals, string[] variableNames,
+            int visibleParameterCount, RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule,
+            object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame) {
+
+            string definitionName = slot.DefinitionName;
+
+            RubyUtils.SafePoint();
+            RequireSufficientStack();
+
+            if (slot.IsDisabled) {
+                return CreateMethodScope(locals, variableNames, visibleParameterCount, parentScope, declaringModule, definitionName,
+                    selfObject, blockParameter, interpretedFrame);
+            }
+            var parked = TakeParkedScope(slot, parentScope, declaringModule);
+            if (parked == null) {
+                parked = new ParkableMethodScope(locals, variableNames ?? ArrayUtils.EmptyStrings, visibleParameterCount,
+                    parentScope, declaringModule, definitionName, selfObject, blockParameter, interpretedFrame);
+            } else {
+                parked.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, null, null);
+            }
+
+            string callee = null;
+            if (_aliasCallSeen) {
+                callee = _pendingCallee;
+                if (callee != null) {
+                    _pendingCallee = null;
+                    if (_pendingCalleeDefinition != definitionName) {
+                        callee = null;
+                    }
+                }
+            }
+            if (callee != null) {
+                parked.CalleeName = callee;
+            }
+
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
+                TracePoint.OnMethodCall(parked);
+            }
+            return parked;
+        }
+
+        /// <summary>
+        /// CreateMethodScopeLazy of a light-frame body with a parking slot.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ CreateMethodScopeLazyParked(ParkedScopeSlot/*!*/ slot,
+            RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule, MutableTuple locals, object selfObject, Proc blockParameter,
+            InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+
+            var shape = slot.Shape;
+
+            if (slot.IsDisabled) {
+                return CreateMethodScopeLazy(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
+                    interpretedFrame, rfc, calleeName);
+            }
+            // (as CreateMethodScopeLazy: the scope holds the block, and whatever asked for the scope may keep it)
+            if (blockParameter != null) {
+                blockParameter.ClearReusable();
+            }
+            var parked = TakeParkedScope(slot, parentScope, declaringModule);
+            if (parked == null) {
+                return new ParkableMethodScope(shape, parentScope, declaringModule, locals, selfObject, blockParameter,
+                    interpretedFrame, rfc, calleeName);
+            }
+            parked.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, rfc, calleeName);
+            return parked;
+        }
+
+        private static ParkableMethodScope TakeParkedScope(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule) {
+            var parked = Volatile.Read(ref slot.Scope);
+            // the same body may be defined in more than one module or runtime: a scope is only reused for the definition it was made for
+            if (parked == null || parked._parent != parentScope || parked.DeclaringModule != declaringModule ||
+                Interlocked.CompareExchange(ref slot.Scope, null, parked) != parked) {
+                return null;
+            }
+            return parked;
+        }
+
+        /// <summary>
+        /// The normal end of a call of a body with a parking slot (an exception, a throw, Thread#kill skip it): parks the call's
+        /// scope there with its Procs if nothing but the frame holds them.
+        /// </summary>
+        [Emitted]
+        public static void ParkMethodScope(ParkedScopeSlot/*!*/ slot, RubyScope scope) {
+            var methodScope = scope as ParkableMethodScope;
+            if (methodScope == null || TracePoint.ActiveEvents != 0) {
+                return;
+            }
+            if (methodScope.IsCaptured || methodScope.HasRareState || methodScope._activeFlowControlScope == methodScope ||
+                !methodScope.MadeProcsAreParkable()) {
+                slot.Failures++;
+                return;
+            }
+            if (slot.Failures != 0) {
+                slot.Failures = 0;
+            }
+            methodScope.ClearForPark();
+            Volatile.Write(ref slot.Scope, methodScope);
+        }
+
+        #endregion
+
         #region Light method frames
 
         // A method whose body never needs its scope - yield and return over self, its parameters, its
@@ -754,12 +872,38 @@ namespace IronRuby.Runtime {
             if (previous != null && previous.TryReuse()) {
                 return previous;
             }
+            if (scope is ParkableMethodScope methodScope) {
+                return InstantiateParkableBlock(previous, methodScope, self, dispatcher);
+            }
             return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        // InstantiateReusableBlock over a scope that may be parked (CreateMethodScopeParked): the first evaluation of the literal
+        // in a call takes the Proc the scope was parked with, and every Proc made is recorded for ParkMethodScope to look at.
+        private static Proc InstantiateParkableBlock(Proc previous, ParkableMethodScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
+            if (previous == null) {
+                var parked = scope.TakeParkedProc(dispatcher);
+                if (parked != null && parked.TryReuse()) {
+                    scope.RecordMadeProc(parked);
+                    return parked;
+                }
+            }
+            if (!dispatcher.HasMethod) {
+                return null;
+            }
+            var proc = new Proc(ProcKind.Block, self, scope, dispatcher);
+            scope.RecordMadeProc(proc);
+            // (a previous Proc that was not reusable is still recorded: it keeps the scope from being parked)
+            return proc;
         }
 
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-            return new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
+            var proc = new Proc(ProcKind.Block, self, scope, dispatcher.SetMethod(clrMethod));
+            if (scope is ParkableMethodScope methodScope) {
+                methodScope.RecordMadeProc(proc);
+            }
+            return proc;
         }
 
         [Emitted]
