@@ -382,4 +382,222 @@ ct_link(tf.root, :left, 500).freeze
 $inits = 0
 after(CtTree, :no_insert, 'tree: a frozen node to link under') { [(tf.no_insert(CtKey.new(400), 0) rescue $!.class), $inits, tf.size] }
 
+# ---- Array.new(n), Array.new(n, v) mid-body (JitCompiler.IsArrayConstruction) ----------
+# With the built-in Array.new and Array#initialize and an Integer size, the construction
+# runs no Ruby code, so the JIT takes it anywhere in a body: these pin that a deopt after it
+# returns what the generic body returns, that each call makes Arrays of its own, and that
+# whatever makes it run Ruby code again (a size that is not an Integer, a redefined
+# initialize or new, a refinement, another constant named Array) gets the generic answer.
+class ArPt
+  attr_reader :key
+  def initialize(key) = (@key = key)
+end
+
+class ArMaker
+  attr_reader :st
+
+  def an_empty(n)
+    a = Array.new
+    @st = a
+    n + 1
+  end
+
+  def an_sized(n)
+    a = Array.new(n)
+    k = n + 1
+    @st = a
+    k
+  end
+
+  def an_filled(n, v)
+    a = Array.new(n, v)
+    @st = Array.new(2)
+    a
+  end
+
+  def an_lit(v)
+    @st = Array.new(3, v)
+    x = v + 1
+    @st2 = ::Array.new(2, x)
+    x
+  end
+  def st2 = @st2
+
+  def an_size(n)
+    a = Array.new(n, 0)
+    b = a.size
+    b + n
+  end
+
+  def an_first(n, v)
+    a = Array.new(n, v)
+    w = v + 1
+    a[0]
+  end
+
+  def an_overflow(n, b)
+    a = Array.new(n, b)
+    @st = a
+    b + b
+  end
+
+  def an_compare(n, k, o)
+    a = Array.new(n, k)
+    return [1, a] if k < o.key
+    [0, a]
+  end
+
+  def an_block(n)
+    a = Array.new(n) { |i| i }
+    @st = a
+    n
+  end
+
+  def an_splat(*args)
+    a = Array.new(*args)
+    @st = a
+    1
+  end
+
+  def an_sub(n)
+    a = ArSubArray.new(n)
+    @st = a
+    n
+  end
+end
+class ArSubArray < Array; end
+
+class ArLexical
+  Array = Struct.new(:n)
+  def an_lex(k)
+    a = Array.new(k)
+    x = k + 1
+    [a.n, x]
+  end
+end
+
+am = ArMaker.new
+AR_KEY = ArPt.new(BIG + 5)
+AR_O = Object.new
+def ar_warm(am)
+  warm_up { |i| am.an_empty(i) }
+  warm_up { |i| am.an_sized(i % 5) }
+  warm_up { |i| am.an_filled(i % 4, AR_O) }
+  warm_up { |i| am.an_lit(i) }
+  warm_up { |i| am.an_size(i % 6) }
+  warm_up { |i| am.an_first(1 + i % 3, i) }
+  warm_up { |i| am.an_overflow(2, BIG + i) }
+  warm_up { |i| am.an_compare(2, BIG + i, AR_KEY) }
+  warm_up { |i| am.an_block(i % 4) }
+  warm_up { |i| am.an_splat(i % 3, i) }
+  warm_up { |i| am.an_sub(i % 3) }
+end
+ar_warm(am)
+lx = ArLexical.new
+warm_up { |i| lx.an_lex(i) }
+
+t('arr: empty, stored') { [am.an_empty(4), am.st] }
+t('arr: sized, stored') { [am.an_sized(3), am.st] }
+t('arr: filled, returned') { [am.an_filled(3, :x), am.st] }
+t('arr: literal size, ::Array') { [am.an_lit(7), am.st, am.st2] }
+t('arr: size used after') { am.an_size(4) }
+t('arr: a[0] after') { am.an_first(2, 9) }
+t('arr: two calls, two arrays') { r1 = am.an_filled(2, 1); r2 = am.an_filled(2, 1); r1 << 5; [r1.equal?(r2), r1, r2] }
+t('arr: one object in each slot') { a = am.an_filled(2, AR_O); [a[0].equal?(AR_O), a[1].equal?(AR_O), a.size] }
+t('arr: zero size') { am.an_filled(0, 1) }
+after(ArMaker, :an_overflow, 'arr: overflow after the construction') { [am.an_overflow(2, 2**62), am.st] }
+ar_warm(am)
+after(ArMaker, :an_compare, 'arr: a Float key after the construction') { am.an_compare(2, BIG, ArPt.new(BIG + 0.5)) }
+ar_warm(am)
+t('arr: a String key after the construction') { (am.an_compare(2, BIG, ArPt.new('s')) rescue $!.class) }
+ar_warm(am)
+t('arr: negative size') { [(am.an_sized(-1) rescue [$!.class, $!.message])] }
+ar_warm(am)
+t('arr: negative size, filled') { [(am.an_filled(-3, 1) rescue [$!.class, $!.message])] }
+ar_warm(am)
+t('arr: nil size') { (am.an_sized(nil) rescue $!.class) }
+ar_warm(am)
+t('arr: Float size') { [am.an_filled(2.5, 1), (am.an_sized(2.5) rescue $!.class), am.st] }
+ar_warm(am)
+t('arr: String size') { (am.an_sized('3') rescue $!.class) }
+ar_warm(am)
+t('arr: 2**62 size') { (am.an_filled(2**62, 1) rescue $!.class) }
+ar_warm(am)
+# CRuby raises RangeError (bignum too big to convert into 'long'), IronRuby ArgumentError
+t('arr: 2**64 size') { (am.an_filled(2**64, 1) rescue $!.is_a?(StandardError)) }
+ar_warm(am)
+t('arr: to_int size') { o = Object.new; def o.to_int = 2; [am.an_filled(o, :t), am.st, (am.an_sized(o) rescue $!.class), am.st] }
+ar_warm(am)
+t('arr: block, not the construction') { [am.an_block(3), am.st] }
+t('arr: splat, not the construction') { [am.an_splat(2, :s), am.st, am.an_splat, am.st] }
+t('arr: subclass') { [am.an_sub(2), am.st, am.st.class] }
+t('arr: lexical Array constant') { lx.an_lex(3) }
+
+# Array#initialize redefined after warm-up, to one that counts: CRuby's new calls it. (It
+# does not call the original through an alias: on IronRuby that raises a CLR
+# NullReferenceException from Array.new(n, v).)
+$ar_inits = 0
+class Array
+  alias_method :ar_matrix_init, :initialize
+  def initialize(n = 0, v = nil)
+    $ar_inits += 1
+    concat([v] * n)
+  end
+end
+ar_warm(am)
+$ar_inits = 0
+t('arr: counting initialize') { [am.an_sized(2), am.st, am.an_filled(2, 1), am.an_lit(1), am.st, am.st2, $ar_inits] }
+class Array
+  alias_method :initialize, :ar_matrix_init
+  private :initialize
+  remove_method :ar_matrix_init
+end
+ar_warm(am)
+t('arr: initialize restored') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
+
+# a singleton new on Array, then removed
+def Array.new(*a) = [:singleton, a]
+ar_warm(am)
+t('arr: singleton new') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
+class << Array
+  remove_method :new
+end
+ar_warm(am)
+t('arr: singleton new removed') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
+
+# a module prepended to Array's singleton class: it cannot be taken away again, so it does
+# nothing until switched on. (Two arguments are not passed to super: on IronRuby that raises
+# a CLR NullReferenceException from Array#initialize.)
+module ArNewPrepend
+  def new(*a)
+    return [:prepended, a] if $ar_prepended
+    a.size == 2 ? [a[1]] * a[0] : super
+  end
+end
+Array.singleton_class.prepend(ArNewPrepend)
+ar_warm(am)
+$ar_prepended = true
+t('arr: prepended new') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
+$ar_prepended = false
+
+# a refinement of Array.new active where the method was written
+module ArNewRefinement
+  refine Array.singleton_class do
+    def new(*a) = [:refined, a]
+  end
+end
+using ArNewRefinement
+class ArRefined
+  def an_ref(n)
+    a = Array.new(n)
+    x = n + 1
+    [a, x]
+  end
+end
+ar = ArRefined.new
+warm_up { |i| ar.an_ref(i % 3) }
+# CRuby's an_ref answers the refined new's [:refined, [2]]; IronRuby's ignores the refinement
+# here (it does not in a file of its own), so only what the two agree on is printed
+t('arr: refined new') { r = ar.an_ref(2); [r.class, r[0].class, r[1]] }
+
 exit 1 if $check_failed
