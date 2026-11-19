@@ -841,7 +841,9 @@ Profile (`Util/perf/profile.sh`, self time):
     class moves, where a program does both all the time while it loads (every `require`
     after warm-up, every `extend`). The benchmarks do neither once they run, so no number
     here shows it; a program that keeps loading loses every typed body with a constant in
-    it, 4,000 of the census's methods being stopped at "constant without a scope" alone.
+    it (how many of the census's methods that is has not been counted: its `maybe` table
+    has 399 that stop at "constant without a scope", which are methods of that kind, and
+    the ones that compile with their constant are not told apart).
     Untried: when the version has moved, look the constant up again and keep the body if
     it holds what it held (a revalidation, no compile, nothing to cap), or a version per
     constant as the generic sites' `ConstantSiteCache` has. Judge it by a traced run of a
