@@ -384,8 +384,20 @@ namespace IronRuby.Compiler.Ast {
             // method's or block's call): only that frame, on its own thread, ever makes the Proc again (Proc.TryReuse).
             MSA.Expression previousProc = reusesProc ? gen.CurrentScope.DefineHiddenVariable("#proc", typeof(Proc)) : null;
 
+            // A literal written in the body of a method with a parking slot takes the Proc parked with the method's scope
+            // (RubyOps.InstantiateParkedBlock); its hidden variable is what the method parks (MethodDefinition).
+            var parkSlot = gen.CurrentMethod.ParkSlot;
+            MSA.Expression instantiateReusable = null;
+            if (reusesProc && parkSlot != null && gen.CurrentBlock == null) {
+                instantiateReusable = Methods.InstantiateParkedBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable,
+                    dispatcher, gen.CurrentMethod.ParkedVariable, AstUtils.Constant(gen.CurrentMethod.ParkProcVariables.Count));
+                gen.CurrentMethod.ParkProcVariables.Add(previousProc);
+            } else if (reusesProc) {
+                instantiateReusable = Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher);
+            }
+
             MSA.Expression instance = Ast.Coalesce(
-                reusesProc ? Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher) :
+                reusesProc ? instantiateReusable :
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(

@@ -237,6 +237,13 @@ namespace IronRuby.Compiler.Ast {
             gen.CurrentMethod.FrameLabel = frameLabel;
             gen.CurrentMethod.HasOwnCompiledFrame = true;
 
+            // The literals of the body take their Procs from this slot if the body turns out to park its scope (below).
+            if (ParkedScopesEnabled && allowLightFrame && _parameters.Block == null && definitionRefinements == null && gen.Profiler == null &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval) {
+                gen.CurrentMethod.ParkSlot = new ParkedScopeSlot(_name);
+                gen.CurrentMethod.ParkedVariable = scope.DefineHiddenVariable("#parked", typeof(ParkedProcs));
+            }
+
             // profiling:
             MSA.Expression profileStart = AstUtils.Empty();
             MSA.Expression profileEnd = AstUtils.Empty();
@@ -275,12 +282,19 @@ namespace IronRuby.Compiler.Ast {
             // A body that never needs its scope makes none (see TransformLightFrame). The optional parameters' defaults are
             // rewritten with it (AreLightOptionals); they run first either way.
             // A body whose block literals all reuse their Procs parks its scope with them for its next call (RubyOps.CreateMethodScopeParked).
+            // Every literal of it is one of the body's own (none nested in a block), and none hands a scope of it on: no super,
+            // which passes the method's block - converted by this scope - to a method that may keep it.
             var currentMethod = gen.CurrentMethod;
-            ParkedScopeSlot parkSlot = null;
-            if (ParkedScopesEnabled && allowLightFrame && currentMethod.BlockLiteralCount > 0 && !currentMethod.HasUnreusableBlock &&
-                !currentMethod.HasSuperCall && _parameters.Block == null && definitionRefinements == null && gen.Profiler == null &&
-                !gen.TraceEnabled && !gen.CompilerOptions.IsEval) {
-                parkSlot = new ParkedScopeSlot(_name);
+            ParkedScopeSlot parkSlot = currentMethod.ParkSlot;
+            var procVariables = currentMethod.ParkProcVariables;
+            if (parkSlot != null) {
+                if (procVariables.Count > 0 && procVariables.Count == currentMethod.BlockLiteralCount && !currentMethod.HasUnreusableBlock &&
+                    !currentMethod.HasSuperCall) {
+                    parkSlot.ProcCount = procVariables.Count;
+                } else {
+                    parkSlot.Disabled = true;
+                    parkSlot = null;
+                }
             }
 
             LightFrame light = null;
@@ -341,12 +355,22 @@ namespace IronRuby.Compiler.Ast {
                 if (ParkedScopesVerbose) {
                     Console.Error.WriteLine("[park] {0} {1} ({2}:{3})", light != null ? "light:" : "scope:", _name, gen.SourcePath, Location.Start.Line);
                 }
-                // (a block variable, not a hidden local: that would take a light frame's locals out of CLR variables)
+                // #p = BeginPark(slot, scope, #parked); if (#p != null) EndPark(slot, #p, scope, StageParkedProc(#p, 0, #proc0) & ...);
+                // (block variables, not hidden locals: those would take a light frame's locals out of CLR variables)
+                var slotConstant = Ast.Constant(parkSlot);
                 var parkResult = Ast.Variable(body.Type, "#park-result");
+                var parking = Ast.Variable(typeof(ParkedProcs), "#parking");
+                MSA.Expression staged = AstUtils.Constant(true);
+                for (int i = 0; i < procVariables.Count; i++) {
+                    staged = Ast.And(staged, Methods.StageParkedProc.OpCall(parking, AstUtils.Constant(i), procVariables[i]));
+                }
                 body = Ast.Block(
-                    new[] { parkResult },
+                    new[] { parkResult, parking },
                     Ast.Assign(parkResult, body),
-                    Methods.ParkMethodScope.OpCall(Ast.Constant(parkSlot), scopeVariable),
+                    Ast.Assign(parking, Methods.BeginPark.OpCall(slotConstant, scopeVariable, currentMethod.ParkedVariable)),
+                    Ast.IfThen(Ast.NotEqual(parking, AstUtils.Constant(null, typeof(ParkedProcs))),
+                        Methods.EndPark.OpCall(slotConstant, parking, scopeVariable, staged)
+                    ),
                     parkResult
                 );
             }
@@ -373,18 +397,32 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
+            if (enter == null && parkSlot != null) {
+                // #parked = TakeParkedScope(...); #parked != null ? ReuseParkedScope(#parked, ...) : CreateMethodScope(...)
+                var locals = scope.LocalsTupleVariable;
+                var parked = currentMethod.ParkedVariable;
+                enter = Ast.Block(
+                    scope.MakeLocalsStorage(),
+                    Ast.Assign(parked, Methods.TakeParkedScope.OpCall(Ast.Constant(parkSlot), declaringScope, declaringModule)),
+                    Ast.Condition(Ast.NotEqual(parked, AstUtils.Constant(null, typeof(ParkedProcs))),
+                        Methods.ReuseParkedScope.OpCall(parked, locals, selfParameter, blockParameter, EnterInterpretedFrameExpression.Instance),
+                        Methods.CreateMethodScope.OpCall(new AstExpressions {
+                            locals,
+                            variableNames,
+                            Ast.Constant(visiblePrameterCountAndSignatureFlags),
+                            declaringScope,
+                            declaringModule,
+                            Ast.Constant(_name),
+                            selfParameter, blockParameter,
+                            EnterInterpretedFrameExpression.Instance
+                        })
+                    )
+                );
+            }
+
             body = scope.CreateScope(
                 scopeVariable,
-                enter ?? (parkSlot != null ? Methods.CreateMethodScopeParked.OpCall(new AstExpressions {
-                    Ast.Constant(parkSlot),
-                    scope.MakeLocalsStorage(),
-                    variableNames,
-                    Ast.Constant(visiblePrameterCountAndSignatureFlags),
-                    declaringScope,
-                    declaringModule,
-                    selfParameter, blockParameter,
-                    EnterInterpretedFrameExpression.Instance
-                }) : null) ?? Methods.CreateMethodScope.OpCall(new AstExpressions {
+                enter ?? Methods.CreateMethodScope.OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     variableNames,
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
@@ -842,14 +880,19 @@ namespace IronRuby.Compiler.Ast {
                 shape, declaringScope, declaringModule, locals, selfParameter, blockParameter,
                 EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
             });
-            if (parkSlot != null) {
-                parkSlot.Shape = (MethodFrameShape)shape.Value;
-            }
+            // with a parking slot: #parked = TakeParkedScope(...); #parked != null ? ReuseParkedScopeLazy(#parked, ...) : CreateMethodScopeLazy(...)
+            var parkedVariable = gen.CurrentMethod.ParkedVariable;
             light.MakeScope = (parkSlot != null)
-                ? () => Methods.CreateMethodScopeLazyParked.OpCall(new AstExpressions {
-                    Ast.Constant(parkSlot), declaringScope, declaringModule, scope.LocalsTupleVariable, selfParameter, blockParameter,
-                    EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
-                })
+                ? () => Ast.Block(
+                    Ast.Assign(parkedVariable, Methods.TakeParkedScope.OpCall(Ast.Constant(parkSlot), declaringScope, declaringModule)),
+                    Ast.Condition(Ast.NotEqual(parkedVariable, AstUtils.Constant(null, typeof(ParkedProcs))),
+                        Methods.ReuseParkedScopeLazy.OpCall(new AstExpressions {
+                            parkedVariable, scope.LocalsTupleVariable, selfParameter, blockParameter,
+                            EnterInterpretedFrameExpression.Instance, light.Rfc, light.Callee
+                        }),
+                        make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable)
+                    )
+                )
                 : (Func<MSA.Expression>)(() => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable));
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));

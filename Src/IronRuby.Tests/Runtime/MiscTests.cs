@@ -7205,6 +7205,41 @@ true
         }
 
         /// <summary>
+        /// A parked method scope (RubyOps.EndPark) and the Procs parked with it hold nothing of the call that ended: its
+        /// receiver, an argument, a method local, and the self of the caller whose block it was all become garbage.
+        /// </summary>
+        public void Method_ParkedScopeLeak1() {
+            TestOutput(@"
+require 'ruby4'
+require 'weakref'
+class Big; end
+class C
+  def initialize(k) @k = k end
+  def it; yield 1; yield 2; end
+  def m(o); s = 0; v = nil; it { |x| v = o; s += x + @k }; v && s; end
+  def r(o); l = Big.new; (0..1).each { |i| yield [o, l, i] }; l; end
+end
+class Caller
+  def go(c, o); a = nil; c.r(o) { |x| a = x }; a; end
+end
+c = C.new(1); 3000.times { c.m(1); c.r(1) { } }
+def make
+  r = C.new(5); o = Big.new; o2 = Big.new; cl = Caller.new
+  r.m(o)
+  l = r.r(o2) { }
+  cl.go(r, Big.new)
+  [WeakRef.new(r), WeakRef.new(o), WeakRef.new(o2), WeakRef.new(l), WeakRef.new(cl)]
+end
+ws = make
+3.times { GC.start }
+if defined?(System::GC); 3.times { System::GC.collect; System::GC.wait_for_pending_finalizers }; end
+p ws.map { |w| !w.weakref_alive? }
+", @"
+[true, true, true, true, true]
+");
+        }
+
+        /// <summary>
         /// A method whose literal blocks all reuse their Procs parks its scope with them for its next call
         /// (RubyOps.CreateMethodScopeParked): another self each call, a binding kept from one call, break, raise,
         /// recursion through the same body, and four threads in it at once.

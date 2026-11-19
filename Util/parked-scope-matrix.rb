@@ -120,6 +120,8 @@ t('shared receiver from four threads') { |i| next :skip if i > 20; ts = 4.times.
 t('thread killed inside each, then a call') { |i| next :skip if i > 20; q = Queue.new; th = Thread.new { v1.each { |x| q << 1; sleep } }; q.pop; th.kill; th.join; s = 0; v1.each { |x| s += x }; s }
 t('Thread#raise inside each, then a call') { |i| next :skip if i > 20; q = Queue.new; th = Thread.new { begin; v1.each { |x| q << 1; sleep }; rescue => e; e.message; end }; q.pop; th.raise('tr'); r = th.value; s = 0; v1.each { |x| s += x }; [r, s] }
 t('TracePoint :call keeps binding') { |i| next :skip if i > 20; bs = []; tp = TracePoint.new(:call) { |x| bs << x.binding if x.method_id == :each_local }; tp.enable { v1.each_local(i) { } }; v1.each_local(99) { }; bs.map { |b| b.local_variable_get(:x) } }
+def ps_short_sum(a); t = 0.0; a.each { |x| t += x * 1.5 }; t; end
+t('four threads taking and parking one slot') { |i| next :skip if i > 2; 4.times.map { |k| Thread.new { s = 0.0; 20000.times { s += ps_short_sum([1.0, 2.0, k.to_f]) }; s } }.map(&:value) }
 t('ObjectSpace untouched') { |i| s = 0; v1.each { |x| s += x }; ObjectSpace.respond_to?(:each_object) && s }
 
 # ---------------------------------------------------------------- 6. the method's own block handed on (super: not parked)

@@ -155,6 +155,16 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The end of the call a parked Proc belonged to: nothing it keeps for the next call may hold that call's objects -
+        /// its self, and the block scope (with self and locals) or break target a BlockParam of it keeps.
+        /// </summary>
+        internal void ClearForPark() {
+            _self = null;
+            YieldBlockParam?.ClearForPark();
+            CallBlockParam = null;
+        }
+
         // The BlockParam the light-frame method yields to a reusable proc through (RubyOps.ReuseBfcForYield), or the one a
         // [BlockNotKept] library method was given it with (RubyOps.CreateBfcForBlockNotKept).
         internal BlockParam YieldBlockParam;

@@ -421,6 +421,13 @@ namespace IronRuby.Compiler.Ast {
             internal bool HasUnreusableBlock;
             internal bool HasSuperCall;
 
+            // The slot the method's literals take their parked Procs from (BlockDefinition), set by MethodDefinition before the
+            // body is transformed if the method may have one at all; it is disabled afterwards if the body turns out not to qualify.
+            internal ParkedScopeSlot ParkSlot;
+            internal readonly List<MSA.Expression> ParkProcVariables = new List<MSA.Expression>();
+            // the ParkedProcs the call took (RubyOps.TakeParkedScope), or null
+            internal MSA.ParameterExpression ParkedVariable;
+
             public MethodScope(
                 ScopeBuilder/*!*/ builder,
                 MSA.Expression/*!*/ selfVariable,

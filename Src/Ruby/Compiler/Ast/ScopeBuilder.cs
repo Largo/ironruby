@@ -405,7 +405,7 @@ namespace IronRuby.Compiler.Ast {
 
         /// <summary>
         /// Turns each access to a slot of the locals tuple into an access to its variable while there is no tuple, and passes the
-        /// tuple a scope is made with (CreateBlockScopeLazy, CreateMethodScopeLazy) as made on demand. Any other use of the tuple,
+        /// tuple a scope is made with (CreateBlockScopeLazy, CreateMethodScopeLazy, ReuseParkedScopeLazy) as made on demand. Any other use of the tuple,
         /// or a node it cannot look into, fails the rewrite.
         /// </summary>
         private sealed class RegisterLocalsRewriter : MSA.ExpressionVisitor {
@@ -504,7 +504,8 @@ namespace IronRuby.Compiler.Ast {
             }
 
             protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
-                if (node.Object == null && (node.Method == Methods.CreateBlockScopeLazy || node.Method == Methods.CreateMethodScopeLazy)) {
+                if (node.Object == null && (node.Method == Methods.CreateBlockScopeLazy || node.Method == Methods.CreateMethodScopeLazy ||
+                    node.Method == Methods.ReuseParkedScopeLazy)) {
                     var arguments = new MSA.Expression[node.Arguments.Count];
                     for (int i = 0; i < arguments.Length; i++) {
                         arguments[i] = (node.Arguments[i] == _tuple) ? _scope.MaterializeLocals() : Visit(node.Arguments[i]);
