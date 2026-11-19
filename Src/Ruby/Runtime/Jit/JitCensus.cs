@@ -254,20 +254,29 @@ namespace IronRuby.Runtime.Jit {
             Set(hash, "light_blocks", _lightBlocks);
 
             string verdict, stage, kind, why, types = null;
+            _allRefusals = null;
             try {
                 Decide(entry, out verdict, out stage, out kind, out why, out types);
             } catch (Exception e) {
                 verdict = "never";
                 stage = "screen";
                 kind = why = "census failed: " + e.GetType().Name;
+            } finally {
+                JitScreen.CollectAll = null;
             }
             Set(hash, "jit", Str(verdict));
             Set(hash, "jit_stage", (stage != null) ? Str(stage) : null);
             Set(hash, "jit_kind", (kind != null) ? Str(kind) : null);
             Set(hash, "jit_why", (why != null) ? Str(why) : null);
             Set(hash, "jit_types", (types != null) ? Str(types) : null);
+            // everything in the body the screen refuses, the first first ("MethodCall is_a?; MethodCall new"): a method
+            // with one entry is one that taking that one thing lets through the screen
+            Set(hash, "jit_all", (stage == "screen" && _allRefusals != null && _allRefusals.Count > 0) ? Str(String.Join("; ", _allRefusals)) : null);
             return hash;
         }
+
+        // Everything the screen refused in the method being examined (Decide).
+        private List<string> _allRefusals;
 
         private void Set(Hash/*!*/ hash, string/*!*/ key, object value) {
             hash[_context.CreateAsciiSymbol(key)] = value;
@@ -292,7 +301,13 @@ namespace IronRuby.Runtime.Jit {
             int typedCount, perCountMandatory;
             string rejectedBy;
             JitScreen.LastRejectionDetail = null;
-            if (!JitStub.CensusScreen(ast, _context, Callee(entry), out keywords, out typedCount, out perCountMandatory, out rejectedBy)) {
+            // the screen goes on after its first refusal and names every one (JitScreen.CollectAll)
+            var all = new List<string>();
+            JitScreen.CollectAll = all;
+            bool screened = JitStub.CensusScreen(ast, _context, Callee(entry), out keywords, out typedCount, out perCountMandatory, out rejectedBy);
+            JitScreen.CollectAll = null;
+            _allRefusals = all;
+            if (!screened) {
                 verdict = "never";
                 if (rejectedBy != null) {
                     stage = "screen";

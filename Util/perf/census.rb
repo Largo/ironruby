@@ -14,7 +14,8 @@
 #     -c LOG    check the census against a real run of the same files, LOG being the stderr of
 #               IR_JIT_VERBOSE=1 IR_LIGHT_FRAMES=why ./ir.sh ...: only the methods that run called
 #     -n N      rows per table (default 12)
-#     -l        list every method
+#     -l        list every method (with -a: and everything the screen refuses in it)
+#     -a        with -l, every refusal of the screen, not only the first
 #
 # A method is, to the JIT: `never' (its parameters or the static screen refuse it, whatever it
 # is called with), `compiles' (a typed body exists for parameters that are all Integers, all
@@ -27,10 +28,11 @@
 # far that is from a run.
 abort 'census.rb runs on IronRuby: ./ir.sh Util/perf/census.rb ...' unless defined?(IronRuby) && IronRuby.respond_to?(:jit_census)
 
-FIELDS = %i[file line lines module name singleton light light_why blocks light_blocks jit jit_stage jit_kind jit_why jit_types]
+FIELDS = %i[file line lines module name singleton light light_why blocks light_blocks jit jit_stage jit_kind jit_why jit_types jit_all]
 save = diff = check = nil
 rows = 12
 list = false
+all_refusals = false
 paths = []
 args = ARGV.dup
 until args.empty?
@@ -40,6 +42,7 @@ until args.empty?
   when '-c' then check = args.shift
   when '-n' then rows = Integer(args.shift)
   when '-l' then list = true
+  when '-a' then all_refusals = true
   when /\A-/ then abort "census.rb: unknown option #{a}"
   else paths << a
   end
@@ -96,12 +99,39 @@ puts format('JIT never      %6d  %s  (parameters %d, screen %d)', never.size, pc
             never.count { |m| m[:jit_stage] == 'parameters' }, never.count { |m| m[:jit_stage] == 'screen' })
 
 table.('JIT never: what refused the method', never, ->(m) { "#{m[:jit_kind]} (#{m[:jit_stage]})" }, jit_detail)
+# The screen stops at the first thing it refuses, and the table above counts that one. A method with five such
+# things gains nothing from the JIT learning the first: what a step can win is the methods one thing keeps out
+# (two things, for a step that takes both). jit_all has every refusal of the body, each once.
+all_of = ->(m) { m[:jit_all].to_s.split('; ') }
+screened = never.select { |m| m[:jit_stage] == 'screen' && !all_of.(m).empty? }
+unless screened.empty?
+  by_count = screened.group_by { |m| [all_of.(m).size, 4].min }
+  puts '', 'JIT never at the screen: how many different things in the body it refuses'
+  puts '  ' + (1..4).map { |n| format('%s: %d', n == 4 ? '4 or more' : n.to_s, by_count.fetch(n, []).size) }.join('   ')
+  sole_kind = ->(m) { all_of.(m).first.split(' ', 2).first }
+  sole_detail = ->(m) { all_of.(m).first.split(' ', 2)[1].to_s }
+  table.('JIT never, one thing only: taking it lets the method through the screen', by_count.fetch(1, []), sole_kind, sole_detail)
+  pairs = by_count.fetch(2, []).group_by { |m| all_of.(m).sort.join(' + ') }.sort_by { |k, ms| [-ms.size, k] }.first(rows)
+  unless pairs.empty?
+    puts '', 'JIT never, two things: the pairs'
+    pairs.each { |k, ms| puts format('  %5d  %s', ms.size, k) }
+  end
+  # how often a thing is among a method's refusals at all, whatever else is: the ceiling of teaching it
+  among = screened.flat_map { |m| all_of.(m) }.tally.sort_by { |k, n| [-n, k] }.first(rows)
+  puts '', 'JIT never: in how many methods a thing is refused at all (alone / with others)'
+  alone = by_count.fetch(1, []).map { |m| all_of.(m).first }.tally
+  among.each { |k, n| puts format('  %5d  %-40s alone %d', n, k, alone.fetch(k, 0)) }
+end
+
 table.('JIT maybe: where the typed body stopped without a profile', by_jit.fetch('maybe', []), ->(m) { m[:jit_kind].to_s }, jit_detail)
 table.('not a light frame: why', methods.reject { |m| m[:light] }, light_kind)
 
 if list
   puts '', 'methods'
-  methods.each { |m| puts format('  %-40s %-28s %-30s %s', label.(m), where.(m), light_text.(m), jit_text.(m)) }
+  methods.each do |m|
+    more = all_refusals && m[:jit_all].to_s.include?('; ') ? "  [#{m[:jit_all]}]" : ''
+    puts format('  %-40s %-28s %-30s %s%s', label.(m), where.(m), light_text.(m), jit_text.(m), more)
+  end
 end
 
 # A method is known across two censuses by its file, class and name, not its line, which moves; the second

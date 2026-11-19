@@ -2910,6 +2910,13 @@ namespace IronRuby.Runtime.Jit {
         // IR_JIT_VERBOSE and the census (JitCensus): what the last rejection was, with the method or variable name.
         [ThreadStatic] internal static string LastRejectionDetail;
 
+        // The census (JitCensus) asks for more than the first refusal: with a list here, the screen of the next
+        // method goes on after each one and names them all in it, each once, so that the census can tell a method
+        // one thing keeps out from a method that five do. The answer and the first refusal stay what they are
+        // without it. A screen of a callee, made while the list is being filled, does not see it.
+        [ThreadStatic] internal static List<string> CollectAll;
+        private List<string> _all;
+
         // Locals read anywhere other than straight into an instance variable (`@a = a') or an
         // element (`a[i] = v'), or assigned. A parameter not in here is only ever stored, so it is
         // best carried boxed: unboxing it on entry would only mean boxing it again for each store.
@@ -2951,6 +2958,8 @@ namespace IronRuby.Runtime.Jit {
             var s = new JitScreen(ast, keywords);
             s._isLeafCallee = isLeafCallee;
             otherUses = s._otherUses;
+            s._all = CollectAll;
+            CollectAll = null;
             bool ok;
             try {
                 ok = (keywords != null) ? s.WalkMethodBody(ast.Body, keywords.PrologueLength) : s.WalkBody(ast.Body);
@@ -2969,23 +2978,42 @@ namespace IronRuby.Runtime.Jit {
                 }
             } catch (Exception) {
                 // A screen that throws must not take the process down with it; it just means the
-                // method is not wrapped.
+                // method is not wrapped. (One that went on after a refusal keeps that refusal: what it
+                // walked into afterwards, it would not have reached.)
                 ok = false;
-                s._rejectedBy = "screen-error";
+                if (s._all == null || s._rejectedBy == null) { s._rejectedBy = "screen-error"; }
+            }
+            if (s._all != null) {
+                // going on after a refusal answered yes to it: the answer is the first one's
+                if (s._rejectedBy != null) { ok = false; }
+                CollectAll = s._all;
             }
             rejectedBy = s._rejectedBy;
             return ok;
         }
 
         private bool No(object/*!*/ node) {
-            if (_rejectedBy == null) {
-                _rejectedBy = node.GetType().Name;
+            string detail = null;
+            if (_rejectedBy == null || _all != null) {
+                string kind = node.GetType().Name;
                 if (JitRuntime.Verbose || JitCensus.Current != null) {
                     var call = node as MethodCall;
                     var ivar = node as InstanceVariable;
-                    LastRejectionDetail = (call != null) ? _rejectedBy + " " + call.MethodName + (call.Target == null ? " (self)" : "")
-                        : (ivar != null) ? _rejectedBy + " " + ivar.Name : _rejectedBy;
+                    var assign = node as SimpleAssignmentExpression;
+                    // "MethodCall each (self)", "InstanceVariable @x", "SimpleAssignmentExpression ||= InstanceVariable"
+                    detail = (call != null) ? kind + " " + call.MethodName + (call.Target == null ? " (self)" : "")
+                        : (ivar != null) ? kind + " " + ivar.Name
+                        : (assign != null) ? kind + " " + assign.Operation + "= " + assign.Left.GetType().Name : kind;
                 }
+                if (_rejectedBy == null) {
+                    _rejectedBy = kind;
+                    if (detail != null) { LastRejectionDetail = detail; }
+                }
+            }
+            if (_all != null) {
+                // the census's screen: note it and go on as if it had been taken (CollectAll)
+                if (detail != null && !_all.Contains(detail)) { _all.Add(detail); }
+                return true;
             }
             return false;
         }

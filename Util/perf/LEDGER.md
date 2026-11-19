@@ -831,6 +831,27 @@ Profile (`Util/perf/profile.sh`, self time):
 
 ## Landed
 
+- **The census names everything the screen refuses in a method, not only the first thing**
+  (round twenty-four, 2026-11-19; a tool, no change to what runs). After round
+  twenty-three, which took the second line of `JIT never` and moved nothing to `compiles`:
+  the screen stops at its first refusal, so "674 methods at `is_a?`" said nothing of what
+  stands behind it. For the census the screen now goes on after each refusal
+  (`JitScreen.CollectAll`; the verdicts and the first refusal are unchanged: `-d` against
+  the census before, 0 methods changed) and `census.rb` prints three more tables. Of the
+  18,456 methods the screen refuses, 10,676 have one thing in the way, 3,312 two, 1,770
+  three, 2,698 four or more. One thing only, over Src/StdLib + AWFY: `new` 557, `each`
+  498, a String literal 492, `@x ||= v` 443, a `rescue`/`ensure` body 442, an interpolated
+  String 389, `map` 293, `enter` 233, `is_a?` 144 (of 926 methods it is refused in at
+  all), a Hash literal 128, `join` 123. In the prelude: `raise` 26 alone and in 120
+  methods at all - written `::Kernel.raise(...)`, which `IsRaiseCall` does not take
+  (it takes a bare `raise`) -, `__check__` on self 13, `is_a?` 8 alone of 109, and
+  `respond_to?` never alone (76). In the benchmarks: `new` 16, `each` 8, a String literal
+  8, `times` 6, `append` 5.
+  What the walk does not enter, it does not count: a call with a block is one refusal,
+  whatever its block holds, so "alone" is an upper bound for `each` and `map`.
+  An assignment's refusal now says which (`||= InstanceVariable`), in the census and in
+  `IR_JIT_VERBOSE`'s "screen rejected" lines.
+
 - **perf/arrnew (/perf-step, round twenty-two, 2026-11-19, c5b5b96f) - `Array.new` anywhere
   in a body the method JIT compiles** - census only, not gated. The screen refused every
   `new` that is not a method's last statement (`TailConstruction`), the census's most
