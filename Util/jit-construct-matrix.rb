@@ -533,6 +533,98 @@ t('arr: splat, not the construction') { [am.an_splat(2, :s), am.st, am.an_splat,
 t('arr: subclass') { [am.an_sub(2), am.st, am.st.class] }
 t('arr: lexical Array constant') { lx.an_lex(3) }
 
+# Sizes that reach a compiled body as something other than an Int32 local: an instance variable
+# (an object to the body, warmed with Integers, then each other kind) and an Int64 expression.
+class ArSizes
+  attr_accessor :n
+  def initialize = (@n = 3)
+  def sz_ivar(v)
+    a = Array.new(@n, v)
+    x = v + 1
+    [a, x]
+  end
+  def sz_lng(n)
+    a = Array.new(n - BIG, 0)
+    x = n + 1
+    [a.size, x]
+  end
+end
+def sz_warm(z)
+  warm_up { |i| z.n = i % 5; z.sz_ivar(i) }
+  warm_up { |i| z.sz_lng(BIG + i % 7) }
+  z.n = 3
+end
+zs = ArSizes.new
+sz_warm(zs)
+after_ivar = lambda do |label, v|
+  sz_warm(zs)
+  zs.n = v
+  t('size from @n: ' + label) { (zs.sz_ivar(1) rescue [$!.class, $!.message]) }
+end
+after_ivar.('an Integer', 4)
+after_ivar.('negative', -2)
+# the class only: CRuby says `from nil to integer', IronRuby `of nil into Integer'
+sz_warm(zs)
+zs.n = nil
+t('size from @n: nil') { (zs.sz_ivar(1) rescue $!.class) }
+after_ivar.('a Float', 2.5)
+after_ivar.('a String', '3')
+after_ivar.('2**62', 2**62)
+sz_warm(zs)
+zs.n = 2**64
+t('size from @n: 2**64') { (zs.sz_ivar(1) rescue $!.is_a?(StandardError)) }
+o = Object.new
+def o.to_int = 2
+after_ivar.('an object with to_int', o)
+sz_warm(zs)
+t('Int64 size: in range') { zs.sz_lng(BIG + 4) }
+t('Int64 size: negative') { (zs.sz_lng(BIG - 1) rescue [$!.class, $!.message]) }
+sz_warm(zs)
+t('Int64 size: 2**62') { (zs.sz_lng(BIG + 2**62) rescue [$!.class, $!.message]) }
+
+# A receiver the profile saw only nil, read inside the branch its own truth selects (som.rb's
+# Vector#remove_all on a fresh Vector, whose @storage is nil): the nil says the branch was not
+# taken, not what the receiver is there. Warmed with nil, then called with what the branch sees;
+# and the reverse, warmed with an Array, then nil.
+class ArGuard
+  attr_accessor :s
+  def initialize(s) = (@s = s)
+  def gd_if
+    @f = 1
+    if @s
+      @s = Array.new(@s.size)
+    end
+  end
+  def gd_tern = @s ? @s.size : -1
+  def gd_unless
+    unless @s
+      -1
+    else
+      @s.size + 1
+    end
+  end
+  def gd_and = @s && @s.size
+  def gd_local(x)
+    if x
+      x.size + 2
+    else
+      0
+    end
+  end
+end
+def gd_warm(g, v)
+  warm_up { g.s = v; g.gd_if; g.s = v; g.gd_tern; g.gd_unless; g.gd_and; g.gd_local(v) }
+end
+[[nil, [1, 2, 3]], [nil, { a: 1 }], [nil, 'four'], [nil, false], [[1, 2], nil], [[1, 2], false], [[1, 2], 'xy']].each do |w, v|
+  g = ArGuard.new(w)
+  gd_warm(g, w)
+  g.s = v
+  r1 = g.gd_if
+  s1 = g.s
+  g.s = v
+  t("guarded receiver: warmed #{w.inspect}, then #{v.inspect}") { [r1, s1, g.gd_tern, g.gd_unless, g.gd_and, g.gd_local(v)] }
+end
+
 # Array#initialize redefined after warm-up, to one that counts: CRuby's new calls it. (It
 # does not call the original through an alias: on IronRuby that raises a CLR
 # NullReferenceException from Array.new(n, v).)

@@ -714,5 +714,49 @@ Thread.pass until started
 done = true
 Kernel.p [:jw_thread, reader.value, b.state]
 
+# `@a.size' in a body whose writes are held back (JitRuntime.SizeOf): an Array's or a Hash's count,
+# anything else a deopt before any store, so @n is bumped once whatever @a holds; and the shape of
+# som.rb's Vector#remove_all, `@a = Array.new(@a.size)', which reads @a before it writes it.
+class JzSize
+  attr_accessor :a
+  attr_reader :n, :k
+  def initialize(a) = (@a = a; @n = 0; @k = nil)
+  def sp_size
+    @n += 1
+    @k = @a.size + 1
+  end
+  def sp_resize
+    @n += 1
+    @a = Array.new(@a.size)
+  end
+end
+class JzSized
+  def size = 7
+end
+def jz_warm(z, v)
+  warm { z.a = v.dup; z.sp_size; z.a = v.dup; z.sp_resize }
+end
+def jz_row(label, warm_with, v)
+  z = JzSize.new(warm_with)
+  jz_warm(z, warm_with)
+  z.a = v
+  n = z.n
+  r = (z.sp_size rescue $!.class)
+  t(label + ': @a.size') { [r, z.n - n, z.k] }
+  jz_warm(z, warm_with)
+  z.a = v
+  n = z.n
+  r = (z.sp_resize rescue $!.class)
+  t(label + ': @a = Array.new(@a.size)') { [r, z.n - n, z.a] }
+end
+jz_row('held writes, an Array', [1, 2, 3], [4, 5])
+jz_row('held writes, a Hash', { a: 1 }, { b: 2, c: 3 })
+jz_row('held writes, a String after an Array', [1, 2, 3], 'four')
+jz_row('held writes, nil after an Array', [1, 2, 3], nil)
+jz_row('held writes, an object with size after an Array', [1, 2, 3], JzSized.new)
+sa = [1, 2]
+def sa.size = 9
+jz_row('held writes, an Array with a singleton size', [1, 2, 3], sa)
+
 # last: once any String has had a singleton length, no body compiles String#length
 jd_row('@input a singleton length') { |p| s = JD_TEXT.dup; def s.length = 2; p.input = s }
