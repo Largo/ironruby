@@ -46,7 +46,9 @@ run side by side (`/perf-step 3`). Default: the worst open gap, one experiment.
 4. The census counts methods, not calls: a refusal in a method nothing calls costs nothing.
    Before taking a line, see that methods which matter have it - the benchmarks' own
    (`census.rb -l "$AWFY" | grep 'MethodCall each'`), or the prelude's
-   (`Src/StdLib/ironruby/ruby4.rb`), which every program calls.
+   (`Src/StdLib/ironruby/ruby4.rb`), which every program calls; or the methods ordinary Ruby
+   really calls: `census.rb -u LOG` on a trace of `Util/bench/app-shapes.rb` keeps only those,
+   and says which of them the run specialized and declined.
 5. State the hypothesis in one sentence, with the count that supports it:
    *"577 methods of the standard library and 10 of the benchmarks' are `never` because
    they call `each` with a block: the screen refuses any call with a block."* If you
