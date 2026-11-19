@@ -1994,6 +1994,39 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **`v.is_a?(C)`, `kind_of?`, `instance_of?` and `C === v` as tests of a typed body**
+  (/perf-step, round twenty-three, 2026-11-19, perf/isa, not merged; census only). The
+  screen refuses 674 methods at `is_a?` (76 in the prelude), 166 at `===`, 91 at `kind_of?`
+  and 14 at `instance_of?`, the second line of the census after `new`, and the parts were
+  there: `EmitModuleTest` (`when C`) and `IdentityCallSite` (the run-time check that a name
+  is the library's, as for `v.nil?`). Built in 141 lines: one shared predicate
+  (`IsKindTest`), the fold for a typed receiver, the site for an object, a run-time module
+  test with a deopt for `v.is_a?(klass)`. Every probe shape compiled and the five JIT
+  matrices printed CRuby's output.
+  Census: maybe 2,756 -> 2,962, never 22,630 -> 22,424, compiles unchanged - 206 methods
+  from `never` to `maybe` (8 of the prelude's), none to `compiles`, none down; the screen
+  alone gives the same numbers as the screen with the emitter. A driver that calls the
+  moved prelude and library methods hot (same checksum on CRuby and both builds):
+  specialized 6 -> 7 (`Kernel#Pathname`), declined after the screen 1 -> 5. That is the
+  case the rule is for - a method wrapped, profiled and declined pays for its stub on
+  every call - so it was not kept. AWFY's traces were unchanged (no benchmark calls these).
+  What refuses the methods is not the test. Of the 945, 705 stay `never` at what comes
+  next in the body: `new` 194, `===` on a receiver that is no constant 121 (`pattern ===
+  v`), `respond_to?` 68, `all?` 20, `raise` in a form `IsRaiseCall` does not take 16; the
+  prelude's argument checks are all among them (`__array_to_int__` and `rassoc` at
+  `respond_to?`, `__flt__` and `__int__` at `raise`, `match?` at `new`, `Range#%` at
+  `__send__`). The 206 that pass stop at a call on another object: the four new declines
+  were `other.begin`, `value.call`, `other.path` (a call without arguments on a local,
+  which the screen takes on the hope of an attribute reader) and `@data.equal?(source)` on
+  a String. So a next attempt takes the kind test together with what stands behind it, in
+  this order of count: `respond_to?` with a Symbol literal (the same site idea: the
+  library `respond_to?` and no `respond_to_missing?`), the `raise` forms left, and calls
+  on another receiver (gap 1) - or it is not worth a screen entry. The probes are kept
+  (`Util/jit-matrix.rb`, section 7a, 40 rows that agree with CRuby on the unchanged
+  build): receivers of every kind, an extended object, `BasicObject`, a class with its own
+  `is_a?`, a private one, `Kernel#is_a?` redefined and put back, `Integer.include` after
+  warm-up, `Const === v` for constants that hold no module, refinements.
+
 - **`Enumerable#sum` asking `block_given?` once instead of per element** (/perf-core,
   2026-11-18, for `Hash#sum { }` at 3.5x CRuby): 1532 -> 1524 ns, overlapping. The block
   writes the method's locals (`acc`, `compensation`), so it makes its scope whatever it asks.
@@ -2351,6 +2384,12 @@ with that on every build alike (see "Caught by the review (round seventeen)").
   late in a long file after `using` (it is in a small file); and the built-in
   `Array#initialize` called with two arguments through an alias or through `super` from a
   module prepended to Array's singleton class raises a CLR `System::NullReferenceException`.
+- Seen by round twenty-three's probes, not touched: `1.is_a?(nil)`, `kind_of?(nil)` and
+  `instance_of?(nil)` raise a CLR `System::ArgumentNullException` ("Value cannot be null.
+  (Parameter 'other')") where CRuby raises TypeError "class or module required"; and with
+  an argument that is no module (`1.is_a?(3)`, `"s".is_a?("String")`) the TypeError says
+  "no implicit conversion of Integer into Module" where CRuby says "class or module
+  required".
 
 ## Faults the gate missed
 

@@ -1201,6 +1201,201 @@ def sp_opt_plus(a, b = 1 + a)
 end
 warm { |i| sp_opt_plus(i) }
 
+# ---------------------------------------------------------------- 7a. is_a?, kind_of?, instance_of?, C === v
+
+# `v.is_a?(C)', `v.kind_of?(C)', `v.instance_of?(C)' and `C === v' are tests of v's class when the
+# methods are the built-in ones. The method JIT does not compile them: its screen refuses a method
+# that calls one (Util/perf/LEDGER.md, round twenty-three, has why a version that did was not kept).
+# These probes are what such a version has to pass, so the sp_ and no_ names say what it compiled and
+# declined, not what happens today. Each method is warmed with one kind of receiver and then given
+# all of them; the redefinitions come after, each undone where it can be.
+
+module IsaM; end
+module IsaN; end
+class IsaC; end
+class IsaSub < IsaC; end
+IsaS = Struct.new(:a)
+ISA_N = 2000
+
+def isa_receivers
+  [1, 2**40, 2**70, 1.5, nil, true, false, :s, "s", [1], {a: 1}, (1..2), proc { 1 }, IsaC.new, IsaSub.new,
+   IsaC.new.extend(IsaM), IsaS.new(1), Integer, Comparable]
+end
+
+ISA_BODY = <<~'RUBY'
+  def %s(v)
+    m = 0
+    if v.is_a?(Integer) then m += 1 end
+    if v.kind_of?(Numeric) then m += 2 end
+    if v.is_a?(Comparable) then m += 4 end
+    if v.is_a?(Kernel) then m += 8 end
+    if v.kind_of?(Object) then m += 16 end
+    if v.is_a?(BasicObject) then m += 32 end
+    if v.is_a?(Enumerable) then m += 64 end
+    if v.is_a?(IsaC) then m += 128 end
+    if v.kind_of?(IsaM) then m += 256 end
+    if v.is_a?(String) then m += 512 end
+    if v.instance_of?(IsaC) then m += 1024 end
+    if v.instance_of?(Integer) then m += 2048 end
+    if v.instance_of?(Comparable) then m += 4096 end
+    if v.instance_of?(Float) then m += 8192 end
+    if v.instance_of?(TrueClass) then m += 16384 end
+    if v.instance_of?(Class) then m += 32768 end
+    m
+  end
+RUBY
+ISA_CASE_BODY = <<~'RUBY'
+  def %s(v)
+    m = 0
+    if Integer === v then m += 1 end
+    if Numeric === v then m += 2 end
+    if Comparable === v then m += 4 end
+    if Kernel === v then m += 8 end
+    if BasicObject === v then m += 16 end
+    if Enumerable === v then m += 32 end
+    if IsaC === v then m += 64 end
+    if IsaM === v then m += 128 end
+    if NilClass === v then m += 256 end
+    if Module === v then m += 512 end
+    m
+  end
+RUBY
+%w[sp_isa_int sp_isa_flo sp_isa_bool sp_isa_obj sp_isa_any].each { |n| eval(format(ISA_BODY, n)) }
+%w[sp_isa_eqq_int sp_isa_eqq_obj].each { |n| eval(format(ISA_CASE_BODY, n)) }
+
+ISA_N.times { |i| sp_isa_int(i); sp_isa_eqq_int(i) }
+ISA_N.times { |i| sp_isa_flo(i + 0.5) }
+ISA_N.times { |i| sp_isa_bool(i.even?) }
+ISA_N.times { sp_isa_obj(IsaC.new); sp_isa_eqq_obj(IsaC.new) }
+ISA_N.times { |i| r = isa_receivers; sp_isa_any(r[i % r.size]) }
+isa_receivers.each_with_index do |r, i|
+  t("is_a? masks of receiver #{i}") do
+    [sp_isa_int(r), sp_isa_flo(r), sp_isa_bool(r), sp_isa_obj(r), sp_isa_any(r), sp_isa_eqq_int(r), sp_isa_eqq_obj(r)]
+  end
+end
+t('is_a? of a BasicObject') { sp_isa_obj(BasicObject.new) }
+t('=== of a BasicObject') { sp_isa_eqq_obj(BasicObject.new) }
+t('Integer.is_a?(Class), Comparable.is_a?(Module)') { [sp_isa_obj(Integer), sp_isa_obj(Comparable)] }
+
+# the module in a local: whatever it holds when the call is made
+def sp_isa_local(v, k)
+  if v.is_a?(k) then 1 else 0 end
+end
+def sp_isa_local_inst(v, k)
+  if v.instance_of?(k) then 1 else 0 end
+end
+ISA_N.times { |i| sp_isa_local(i, Integer); sp_isa_local(IsaC.new, IsaC); sp_isa_local_inst(IsaSub.new, IsaC) }
+t('is_a?(local) over the receivers') { isa_receivers.map { |r| [sp_isa_local(r, Comparable), sp_isa_local(r, IsaC), sp_isa_local_inst(r, IsaC), sp_isa_local_inst(r, IsaM)] } }
+# (nil, and the message of the TypeError, are left out: IronRuby raises ArgumentNullException for nil and
+# says "no implicit conversion of String into Module" where CRuby says "class or module required", with or
+# without the JIT)
+t('is_a?(3)') { sp_isa_local(1, 3) }
+t('is_a?("String")') { sp_isa_local("s", "String") }
+t('instance_of?(3)') { sp_isa_local_inst(1, 3) }
+t('instance_of? of a singleton class') { o = IsaC.new; [sp_isa_local_inst(o, o.singleton_class), sp_isa_local(o, o.singleton_class)] }
+
+# a class of its own is_a?, a singleton one, a private one, a module's, Kernel#is_a? itself
+class IsaOwn
+  def is_a?(m) = 42
+end
+def sp_isa_own(v)
+  v.is_a?(IsaC)
+end
+ISA_N.times { sp_isa_own(IsaC.new) }
+t('a class with its own is_a?') { [sp_isa_own(IsaOwn.new), sp_isa_own(IsaSub.new)] }
+t('a singleton is_a?') { o = IsaC.new; def o.is_a?(m) = :single; [sp_isa_own(o), sp_isa_own(IsaC.new)] }
+class IsaPriv; private :is_a?; end
+t('is_a? private in one class') { [sp_isa_own(IsaPriv.new), sp_isa_own(IsaC.new)] }
+module IsaMod; def is_a?(m) = :from_module; end
+class IsaIncl; end
+ISA_N.times { sp_isa_own(IsaIncl.new) }
+class IsaIncl; include IsaMod; end
+t('a module with is_a? included') { [sp_isa_own(IsaIncl.new), sp_isa_own(IsaC.new)] }
+
+def sp_isa_kernel(v)
+  v.is_a?(Comparable)
+end
+ISA_N.times { sp_isa_kernel(IsaC.new) }
+$isa_saved = Kernel.instance_method(:is_a?)
+module Kernel; def is_a?(m) = :redefined; end
+t('Kernel#is_a? redefined') { [sp_isa_kernel(IsaC.new), sp_isa_kernel(1)] }
+Kernel.send(:define_method, :is_a?, $isa_saved)
+ISA_N.times { sp_isa_kernel(IsaC.new) }
+t('Kernel#is_a? put back') { [sp_isa_kernel(IsaC.new), sp_isa_kernel(1), sp_isa_kernel("s")] }
+
+module IsaNew; end
+def sp_isa_new_int(v)
+  m = 0
+  if v.is_a?(IsaNew) then m += 1 end
+  if IsaNew === v then m += 2 end
+  m
+end
+ISA_N.times { |i| sp_isa_new_int(i) }
+t('before Integer.include') { sp_isa_new_int(1) }
+Integer.include(IsaNew)
+t('Integer.include(IsaNew)') { [sp_isa_new_int(1), sp_isa_new_int(2**70)] }
+def sp_isa_reopen(v)
+  v.is_a?(IsaN)
+end
+class IsaLater; end
+ISA_N.times { sp_isa_reopen(IsaLater.new) }
+t('before the reopen') { sp_isa_reopen(IsaLater.new) }
+class IsaLater; include IsaN; end
+t('a class reopened to include a module') { sp_isa_reopen(IsaLater.new) }
+
+# `C === v' where C holds what is no module
+class IsaCounter
+  attr_reader :n
+  def initialize = @n = 0
+  def ===(v)
+    @n += 1
+    v == 1
+  end
+end
+class IsaSelfEqq
+  def self.===(v) = :own
+end
+ISA_RE = /s/
+ISA_RANGE = (1..3)
+ISA_STR = "s"
+ISA_PROC = proc { |v| v == 2 }
+ISA_INT = 1
+ISA_COUNT = IsaCounter.new
+def no_isa_eqq_re(v) = ISA_RE === v
+def no_isa_eqq_range(v) = ISA_RANGE === v
+def no_isa_eqq_str(v) = ISA_STR === v
+def no_isa_eqq_proc(v) = ISA_PROC === v
+def no_isa_eqq_intc(v) = ISA_INT === v
+def no_isa_eqq_count(v) = ISA_COUNT === v
+def no_isa_eqq_self(v) = IsaSelfEqq === v
+ISA_N.times do |i|
+  no_isa_eqq_re("s"); no_isa_eqq_range(i); no_isa_eqq_str("s"); no_isa_eqq_proc(i); no_isa_eqq_intc(i)
+  no_isa_eqq_count(i); no_isa_eqq_self(i)
+end
+t('=== of what is no module') do
+  [1, 2, "s", :s, nil].map do |v|
+    [no_isa_eqq_re(v), no_isa_eqq_range(v), no_isa_eqq_str(v), no_isa_eqq_proc(v), no_isa_eqq_intc(v), no_isa_eqq_count(v), no_isa_eqq_self(v)]
+  end
+end
+t('=== called once per evaluation') { ISA_COUNT.n }
+
+# a refinement of is_a? and of Module#=== active where the methods are written
+module IsaRefine
+  refine(IsaC) { def is_a?(m) = :refined }
+  refine(IsaC.singleton_class) { def ===(v) = :refined_eqq }
+end
+class IsaRefined
+  using IsaRefine
+  def self.no_isa_refined(v)
+    m = 0
+    if v.is_a?(IsaM) == :refined then m += 1 end
+    if (IsaC === v) == :refined_eqq then m += 2 end
+    m
+  end
+end
+ISA_N.times { IsaRefined.no_isa_refined(IsaC.new) }
+t('refined is_a? and ===') { [IsaRefined.no_isa_refined(IsaC.new), IsaRefined.no_isa_refined(IsaSub.new)] }
+
 # ---------------------------------------------------------------- 7b. case/when, Array/Hash elements, constants
 
 class JitStr < String; end
