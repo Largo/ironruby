@@ -254,6 +254,60 @@ Profile (`Util/perf/profile.sh`, self time):
   rebuilt: the NBody experiment counted compiled methods per iteration falling to about
   a dozen).
 
+### Ordinary Ruby: `Util/bench/app-shapes.rb` (2026-11-19, 550d838f)
+
+The fourteen benchmarks above are kernels; this is the first table of the other kind: 26
+self-checking units of work (the standard library's pure Ruby, and four small programs
+written the way applications are; every checksum the same on CRuby 4.0 and IronRuby with
+the JIT on, off and on the ReadyToRun host). us per unit, the least of five alternating
+rounds on a quiet machine (`ab.rb -r 5`; spreads 10-60%, so two digits at most):
+
+| shape | CRuby | IronRuby | IronRuby/CRuby | JIT and OSR off |
+|---|---:|---:|---:|---:|
+| ostruct | 102 | 5272 | 51.51 | 5229 |
+| erb_result | 149 | 6940 | 46.56 | 6082 |
+| uri | 91 | 500 | 5.49 | 500 |
+| invoice_build | 141 | 727 | 5.16 | 718 |
+| time | 120 | 573 | 4.76 | 537 |
+| invoice_render | 136 | 572 | 4.22 | 591 |
+| set | 50 | 178 | 3.53 | 192 |
+| forwardable | 66 | 158 | 2.38 | 158 |
+| prism_walk | 155 | 363 | 2.34 | 388 |
+| erb_compile | 178 | 363 | 2.04 | 442 |
+| csv_generate | 220 | 430 | 1.95 | 442 |
+| delegate | 243 | 469 | 1.93 | 444 |
+| optparse | 198 | 371 | 1.87 | 376 |
+| rules | 194 | 338 | 1.74 | 352 |
+| csv_parse | 331 | 575 | 1.74 | 815 |
+| gem_requirement | 120 | 198 | 1.65 | 196 |
+| pp | 232 | 374 | 1.61 | 374 |
+| json_generate | 93 | 145 | 1.56 | 143 |
+| gem_version | 170 | 257 | 1.51 | 261 |
+| json_parse | 83 | 111 | 1.34 | 109 |
+| gem_spec | 133 | 176 | 1.32 | 179 |
+| query_aggregate | 145 | 181 | 1.24 | 185 |
+| strscan | 432 | 508 | 1.18 | 515 |
+| query_lazy | 285 | 325 | 1.14 | 343 |
+| shellwords | 111 | 103 | 0.93 | 111 |
+| render | 156 | 143 | 0.92 | 147 |
+
+Geomean IronRuby/CRuby 2.48 (1.94 without the two at the top; median 1.87): on ordinary
+Ruby IronRuby is about twice CRuby's time, where on the kernels it is 0.65. And the tiers
+do nothing for it: the geomean of the JIT and OSR on against off is 0.97, every row but
+one overlapping (`csv_parse` 0.71). The census of the 961 methods this run called
+(`census.rb -u`): 11.4% `compiles`, 5.7% `maybe`, 82.8% `never` (229 at their parameters:
+a block parameter 87, a rest parameter 61, a block used 52; 567 at the screen); the run
+specialized 90 of them and declined 30. Refused in most methods: `new` 53, `is_a?` 49, a
+String literal 49, `each_child_node` 34 (Prism's visitor, each alone), `respond_to?` 31,
+`each` 30, a Hash literal 26, `@x ||= v` 24 (23 alone: those the screen still refuses for
+their right-hand side).
+What the two at the top are made of, us per call, CRuby -> IronRuby (a probe, each line a
+loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_hash(a: 1)`
+26 -> 6,158, `erb.result(binding)` 12 -> 609, `eval('1 + 1')` 4.4 -> 219,
+`instance_eval('1')` 4.2 -> 177, `OpenStruct.new(h)` of three keys 15 -> 2,615,
+`define_singleton_method` 1.2 -> 46, `Object.new.singleton_class` 0.3 -> 17, `def o.x`
+0.6 -> 18, `Class.new` 0.5 -> 12, `Class.new { def a; end }` 0.9 -> 37. Gaps 30 to 32.
+
 ## Gaps, worst first
 
 1. **Calls of other methods from hot bodies** (`CallSite.Target` 24-32% of every
@@ -911,6 +965,27 @@ Profile (`Util/perf/profile.sh`, self time):
     the version on every iteration (`Object.new.extend(M)` in a loop, gap 19) has not
     been timed - each call of each such method then takes the class hierarchy lock once
     per lookup, as each generic constant site does.
+30. **`Binding#local_variable_get`, `_set`, `_defined?` and `local_variables` are an
+    `eval` of source text each** (the prelude, `class Binding`): 436 us for a set against
+    0.1 on CRuby. `ERB#result_with_hash` sets one per key (237 times CRuby), irb sets `_`
+    on every line, rdoc's generator sets its page's locals. The scope has the access in
+    C# (`RubyScope.ResolveLocalVariable`, `ResolveAndSetLocalVariable`). In progress:
+    round twenty-eight, perf/bindlv.
+31. **`eval` of a String costs fifty times CRuby's** (219 us for `eval('1 + 1')`, 177 for
+    `instance_eval('1')`, 741 for a three-line ERB source): each call parses, bridges,
+    transforms and compiles its text anew. Untried: where the 219 us go (the native
+    parse and the bridge, the transformation, the light compiler's first run), and a
+    cache of the compiled code by source text, file, line and the scope's layout, which
+    is what a template evaluated per request needs.
+32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
+    (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
+    `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
+    defines a reader and a writer on each object, 2.6 ms - far more than six definitions
+    add up to, so most of it is what a definition invalidates (the method version every
+    call site and typed body is keyed on) and not the definition. Gap 19
+    (`Object.new.extend(M)` at 200 to 300 times) is the same family. Untried: what one
+    `def o.x` invalidates, counted (rules rebuilt, typed bodies respecialized), on
+    `ostruct` of `app-shapes.rb`.
 
 ## Landed
 
