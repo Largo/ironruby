@@ -575,6 +575,7 @@ namespace IronRuby.Runtime.Jit {
             // such a body failed to compile and was declined where it used to be specialized.
             bool sinkStores = !HasWhileLoop(ast) && keywords == null && ast.Parameters.Optional.Length == 0;
             HashSet<string> sinkWide = null;
+            bool initialIVarsOff = false;
             for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes, keywords, supplied, constantScope);
                 c._compileEpoch = epoch;
@@ -588,6 +589,7 @@ namespace IronRuby.Runtime.Jit {
                 c._noUnloggedEarlyWrites = !unloggedEarlyWrites;
                 c._sinkStores = sinkStores;
                 c._sinkWide = sinkWide;
+                c._noInitialIVars = initialIVarsOff;
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(LambdaParameterTypes(paramTypes, keywords, ast), c._selfReturn);
@@ -680,6 +682,12 @@ namespace IronRuby.Runtime.Jit {
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
                 // already done is observable (see _deoptAfterEffect).
                 if (c._canDeopt && !c._pure && (c._deoptAfterEffect || c._hasLoop || c._selfCall)) {
+                    // the opening run of writes made at once is an effect the deopt comes after: try holding them back
+                    if (c._initialIVars && sinkStores && !initialIVarsOff) {
+                        initialIVarsOff = true;
+                        round--;
+                        continue;
+                    }
                     return Declined(c._deoptAfterEffect ? "a deopt after an effect (" + c._firstDeoptAfterEffect + ")" :
                         c._hasLoop ? "a loop in a body that can deopt and has an effect" : "a self-call in a body that can deopt and has an effect");
                 }
@@ -924,9 +932,14 @@ namespace IronRuby.Runtime.Jit {
 
         private const int MinInitialIVars = 2;
 
+        // The run was written at once (_initialIVars); a round without it (_noInitialIVars) holds the writes back
+        // instead, when sinking is tried: som.rb's Vector#remove_all, `@first_idx = 0; @last_idx = 0' and then a
+        // `@storage.size' that may deopt, was declined as a deopt after an effect, since the run is an effect.
+        private bool _initialIVars, _noInitialIVars;
+
         private MSA.Expression EmitInitialIVars(Statements statements, out JT type) {
             type = JT.None;
-            if (_loop != null || statements == null) { return null; }
+            if (_loop != null || statements == null || _noInitialIVars) { return null; }
 
             var run = new List<SimpleAssignmentExpression>();
             var names = new List<string>();
@@ -941,6 +954,7 @@ namespace IronRuby.Runtime.Jit {
 
             var site = JitRuntime.InitialIVarsSite.TryCreate(names.ToArray());
             if (site == null) { return null; }
+            _initialIVars = true;
 
             var temps = new MSA.ParameterExpression[run.Count];
             var parts = new List<MSA.Expression>();
@@ -1465,9 +1479,15 @@ namespace IronRuby.Runtime.Jit {
             bool pureAfterArms = true;
             for (int i = 0; i < tests; i++) {
                 if (i > 0 && clauses[i - 1].Condition == null) { throw JitBailout.Instance; }
-                conds[i] = EmitCondition(i == 0 ? node.Condition : clauses[i - 1].Condition);
+                var condition = (i == 0) ? node.Condition : clauses[i - 1].Condition;
+                conds[i] = EmitCondition(condition);
                 bool pureAfterTest = _pure;
-                arms[i] = EmitRegion(i == 0 ? node.Body : clauses[i - 1].Statements, out armTypes[i]);
+                int guard = PushTruthGuard(condition);
+                try {
+                    arms[i] = EmitRegion(i == 0 ? node.Body : clauses[i - 1].Statements, out armTypes[i]);
+                } finally {
+                    PopTruthGuard(guard);
+                }
                 pureAfterArms &= _pure;
                 _pure = pureAfterTest;
             }
@@ -1495,7 +1515,13 @@ namespace IronRuby.Runtime.Jit {
             JT elseType = JT.Obj;
             if (node.ElseClause != null) {
                 if (node.ElseClause.Condition != null) { throw JitBailout.Instance; }
-                elseExpr = EmitRegion(node.ElseClause.Statements, out elseType);
+                // the branch `unless x' leaves to x being true (ObservedType)
+                int guard = PushTruthGuard(node.Condition);
+                try {
+                    elseExpr = EmitRegion(node.ElseClause.Statements, out elseType);
+                } finally {
+                    PopTruthGuard(guard);
+                }
             }
             _pure &= pureAfterThen;
             return Join(test, thenExpr, thenType, elseExpr, elseType, out type);
@@ -1676,7 +1702,13 @@ namespace IronRuby.Runtime.Jit {
             var test = EmitCondition(c);
             bool pureAfterTest = _pure;
             JT tt, ft;
-            var te = EmitRegion(t, out tt);
+            MSA.Expression te;
+            int guard = PushTruthGuard(c);
+            try {
+                te = EmitRegion(t, out tt);
+            } finally {
+                PopTruthGuard(guard);
+            }
             bool pureAfterThen = _pure;
             _pure = pureAfterTest;
             var fe = EmitRegion(f, out ft);
@@ -1767,7 +1799,13 @@ namespace IronRuby.Runtime.Jit {
                 t = JT.Bool;
                 var l = EmitCondition((and != null) ? and.Left : or.Left);
                 PushScope();
-                var r = EmitCondition((and != null) ? and.Right : or.Right);
+                int guard = (and != null) ? PushTruthGuard(and.Left) : -1;
+                MSA.Expression r;
+                try {
+                    r = EmitCondition((and != null) ? and.Right : or.Right);
+                } finally {
+                    if (guard >= 0) { PopTruthGuard(guard); }
+                }
                 if (PopScope().Count > 0) { throw JitBailout.Instance; }
                 return (and != null) ? Ast.AndAlso(l, r) : Ast.OrElse(l, r);
             }
@@ -1806,7 +1844,13 @@ namespace IronRuby.Runtime.Jit {
 
             PushScope();
             JT rt;
-            var r = Emit(right, out rt);
+            MSA.Expression r;
+            int guard = isAnd ? PushTruthGuard(left) : -1;
+            try {
+                r = Emit(right, out rt);
+            } finally {
+                if (guard >= 0) { PopTruthGuard(guard); }
+            }
             if (PopScope().Count > 0) { throw JitBailout.Instance; }
 
             var result = isAnd ? Join(truth, r, rt, value, lt, out type) : Join(truth, value, lt, r, rt, out type);

@@ -754,6 +754,40 @@ jz_row('held writes, a Hash', { a: 1 }, { b: 2, c: 3 })
 jz_row('held writes, a String after an Array', [1, 2, 3], 'four')
 jz_row('held writes, nil after an Array', [1, 2, 3], nil)
 jz_row('held writes, an object with size after an Array', [1, 2, 3], JzSized.new)
+# An opening run of writes (`@x = 0; @y = 0', written at once on a fresh object) and then an operation
+# that may deopt: the writes held back instead, so the deopt comes before them. The variables a fresh
+# object gets must come out in the source's order, once.
+class JzRun
+  attr_accessor :a
+  def initialize(a) = (@a = a)
+  def sp_run
+    @x = 0
+    @y = 1
+    @k = @a.size
+  end
+  def sp_run_if
+    @y = 2
+    @x = 3
+    if @a
+      @a = Array.new(@a.size)
+    end
+  end
+end
+def jz_run_row(label, v)
+  warm { JzRun.new([1, 2]).sp_run; JzRun.new([1, 2]).sp_run_if; JzRun.new(nil).sp_run_if }
+  z = JzRun.new(v)
+  r1 = (z.sp_run rescue $!.class)
+  z2 = JzRun.new(v)
+  r2 = (z2.sp_run_if rescue $!.class)
+  t('opening run then a deopt: ' + label) { [r1, z.instance_variables, z.k = nil, r2, z2.instance_variables, z2.a] }
+end
+class JzRun; attr_accessor :k; end
+jz_run_row('an Array', [1, 2, 3])
+jz_run_row('a Hash', { a: 1 })
+jz_run_row('a String', 'four')
+jz_run_row('nil', nil)
+jz_run_row('an object with size', JzSized.new)
+
 sa = [1, 2]
 def sa.size = 9
 jz_row('held writes, an Array with a singleton size', [1, 2, 3], sa)
