@@ -1357,9 +1357,10 @@ namespace IronRuby.Runtime.Jit {
             MSA.ParameterExpression p;
             JT lt;
             if (local != null && !TryLookup(Key(local), out p, out lt)) {
-                // a local no path has assigned yet reads as nil: `x ||= v' is `x = v', and `x &&= v' leaves it nil
-                if (node.Operation == "&&") { throw Bail("&&= of an unassigned local: " + local.Name); }
-                return EmitAssignment(node, null, false, out type);
+                // No binding does not mean no assignment: a branch that assigned the local has dropped its binding when
+                // it ended (EmitRegion), so in `if c; x = 1; end; x ||= 2' the local may hold 1 here. Taking it for nil
+                // made that `x = 2' on every path; a flow property the screen says yes to, so it is the compiler's no.
+                throw Bail(node.Operation + "= of a local with no binding here: " + local.Name);
             }
             return EmitAndOr(node.Left, node, node.Operation == "&&", out type);
         }

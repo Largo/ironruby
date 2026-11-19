@@ -868,6 +868,16 @@ class JoLocal
     a ||= 3
     a + 1
   end
+  # a branch that assigned the local has no binding left after it ends: the local may hold its value
+  def no_lb(c)
+    if c; x = 1; end
+    x ||= 2
+  end
+  def no_lb_and(c)
+    x = 5 if c
+    x &&= x + 1
+    x
+  end
 end
 jl = JoLocal.new
 warm { |i| jl.sp_l0; jl.sp_lx(i % 4); jl.sp_lx_and(i % 4); jl.sp_lp; jl.sp_lp(i); jl.sp_land(nil); jl.sp_land(i); jl.sp_li(i) }
@@ -876,6 +886,9 @@ t('local ||= after nil, false, 0, :s') { (0..3).map { |k| jl.sp_lx(k) } }
 t('local &&= after nil, false, 0, :s') { (0..3).map { |k| jl.sp_lx_and(k) } }
 t('parameter ||= 3') { [jl.sp_lp, jl.sp_lp(nil), jl.sp_lp(false), jl.sp_lp(7), jl.sp_lp(2**64), jl.sp_lp("s")] }
 t('parameter &&= a + 1') { [jl.sp_land(nil), jl.sp_land(false), jl.sp_land(1), jl.sp_land(2**63 - 1), jl.sp_land(1.5), (jl.sp_land("s") rescue $!.class)] }
+warm { |i| jl.no_lb(i.even?); jl.no_lb_and(i.even?) }
+t('local ||= after a branch that may have assigned it') { [jl.no_lb(true), jl.no_lb(false), jl.no_lb(1), jl.no_lb(nil)] }
+t('local &&= after a branch that may have assigned it') { [jl.no_lb_and(true), jl.no_lb_and(false)] }
 t('Integer parameter ||= then + 1') { [jl.sp_li(1), jl.sp_li(2**63 - 1), (jl.sp_li(nil) rescue $!.class), (jl.sp_li(false) rescue $!.class), jl.sp_li(1.5)] }
 
 sa = [1, 2]
