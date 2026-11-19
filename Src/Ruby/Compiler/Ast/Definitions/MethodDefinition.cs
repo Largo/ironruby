@@ -540,7 +540,7 @@ namespace IronRuby.Compiler.Ast {
             if (statements != null) {
                 bool first = true;
                 foreach (var statement in statements) {
-                    if (!IsScopeFree(statement, blockLiterals) && !(first && IsBlockGuard(statement))) {
+                    if (!IsScopeFree(statement, blockLiterals, null) && !(first && IsBlockGuard(statement))) {
                         return statement;
                     }
                     first = false;
@@ -551,7 +551,9 @@ namespace IronRuby.Compiler.Ast {
 
         /// <summary>
         /// IR_LIGHT_FRAMES=why: what IsLightFrameCandidate refused - the parameters, a rescue/ensure, or the first statement
-        /// that is not scope-free (its node type and line). Null if it is a candidate.
+        /// that is not scope-free: its node type and line, then the construct inside it that IsScopeFree refused
+        /// (`IfExpression at line 12: GlobalVariable'), since the statement alone does not say what to teach the frames next.
+        /// Null if it is a candidate.
         /// </summary>
         private string WhyNotLightFrameCandidate() {
             if (!AreLightOptionals() || _parameters.Unsplat != null && !LightRestEnabled || _parameters.SuperSplat != null ||
@@ -569,7 +571,8 @@ namespace IronRuby.Compiler.Ast {
             if (FirstNotScopeFree(false) != null) {
                 var statement = FirstNotScopeFree(LightBlocksEnabled);
                 if (statement != null) {
-                    return String.Format("{0} at line {1}", statement.GetType().Name, statement.Location.Start.Line);
+                    return String.Format("{0} at line {1}: {2}", statement.GetType().Name, statement.Location.Start.Line,
+                        WhyNotScopeFree(statement, LightBlocksEnabled));
                 }
             }
             return IsLightFrameCandidate() ? null : "parameters";
@@ -608,7 +611,7 @@ namespace IronRuby.Compiler.Ast {
                 return false;
             }
             foreach (var parameter in optional) {
-                if (!(parameter.Left is LocalVariable) || !IsScopeFree(parameter.Right, false)) {
+                if (!(parameter.Left is LocalVariable) || !IsScopeFree(parameter.Right, false, null)) {
                     return false;
                 }
             }
@@ -623,39 +626,61 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal static bool IsScopeFree(Expression/*!*/ node) {
-            return IsScopeFree(node, false);
+            return IsScopeFree(node, false, null);
+        }
+
+        // IR_LIGHT_FRAMES=why: names what IsScopeFree refused in the node. Every refusal of a sub-node is its parent's too and
+        // ends the walk, so the reason it records is the innermost one: the decision IsScopeFree took, not a guess from the node.
+        private static string WhyNotScopeFree(Expression/*!*/ node, bool blockLiterals) {
+            var why = new StrongBox<string>();
+            return IsScopeFree(node, blockLiterals, why) ? null : why.Value;
+        }
+
+        // Records the reason of a refusal for WhyNotScopeFree, if it asked (why is null otherwise), and refuses.
+        private static bool Refuse(StrongBox<string> why, string/*!*/ reason) {
+            if (why != null) {
+                why.Value = reason;
+            }
+            return false;
         }
 
         // blockLiterals: a call with a literal block is scope-free too (see TransformLightFrame); the block's own body is compiled
         // with a scope of its own, made with this frame's scope as its parent, which is then made on demand for it
-        private static bool IsScopeFree(Expression/*!*/ node, bool blockLiterals) {
+        private static bool IsScopeFree(Expression/*!*/ node, bool blockLiterals, StrongBox<string> why) {
             // `def f = [[[...]]]' a thousand deep: such a body is not worth a light frame, nor a stack overflow to find out
             if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
-                return false;
+                return Refuse(why, "nested too deep");
             }
             if (node is LocalVariable || node is Literal || node is SelfReference || node is InstanceVariable) {
                 return true;
             }
             var constant = node as ConstantVariable;
             if (constant != null) {
-                return IsCachedConstant(constant);
+                return IsCachedConstant(constant) || Refuse(why, "ConstantVariable with an expression qualifier");
             }
             var assignment = node as SimpleAssignmentExpression;
             if (assignment != null) {
                 // `@x += @v' is a call of + between a read and a write
-                if (!IsScopeFree(assignment.Right, blockLiterals)) {
+                if (!IsScopeFree(assignment.Right, blockLiterals, why)) {
                     return false;
                 }
                 if (assignment.Left is LocalVariable || assignment.Left is InstanceVariable) {
-                    return assignment.Operation == null || LightCallsEnabled;
+                    return assignment.Operation == null || LightCallsEnabled || Refuse(why, "operator assignment (IR_LIGHT_CALLS=0)");
                 }
                 // `o.x = v', `a[i] = v' (and their op-assigns): calls of x= and []=
                 var attribute = assignment.Left as AttributeAccess;
                 if (attribute != null) {
-                    return LightCallsEnabled && !attribute.IsSafeNavigation && IsScopeFree(attribute.Qualifier, blockLiterals);
+                    if (!LightCallsEnabled || attribute.IsSafeNavigation) {
+                        return Refuse(why, LightCallsEnabled ? "assignment to a safe-navigation attribute" : "assignment to an attribute (IR_LIGHT_CALLS=0)");
+                    }
+                    return IsScopeFree(attribute.Qualifier, blockLiterals, why);
                 }
                 var item = assignment.Left as ArrayItemAccess;
-                return item != null && LightCallsEnabled && item.Block == null && IsScopeFree(item.Array, blockLiterals) && AreScopeFree(item.Arguments, blockLiterals);
+                if (item == null || !LightCallsEnabled || item.Block != null) {
+                    return Refuse(why, item == null ? "assignment to " + assignment.Left.GetType().Name :
+                        LightCallsEnabled ? "assignment to an element with a block" : "assignment to an element (IR_LIGHT_CALLS=0)");
+                }
+                return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
             }
             // a String literal is a constant, or a copy of one; a Symbol literal is a constant
             if (node is StringLiteral) {
@@ -664,7 +689,7 @@ namespace IronRuby.Compiler.Ast {
             if (LightCallsEnabled) {
                 var array = node as ArrayConstructor;
                 if (array != null) {
-                    return AreScopeFree(array.Arguments, blockLiterals);
+                    return AreScopeFree(array.Arguments, blockLiterals, why);
                 }
                 // `(a..b)': the Range is made from its bounds and the literal's comparison storage (RubyOps.CreateInclusiveRange);
                 // Range#initialize checks the stack before the <=> it calls for bounds that are not two Integers. Not in a body
@@ -673,13 +698,16 @@ namespace IronRuby.Compiler.Ast {
                 // the scope made on entry (`(a..b)' kept such a body out of light frames until then).
                 var range = node as RangeExpression;
                 if (range != null) {
-                    return !blockLiterals && IsScopeFree(range.Begin, false) && IsScopeFree(range.End, false);
+                    if (blockLiterals) {
+                        return Refuse(why, "RangeExpression in a body with literal blocks");
+                    }
+                    return IsScopeFree(range.Begin, false, why) && IsScopeFree(range.End, false, why);
                 }
                 // "#{x}" converts each part through a to_s site
                 var interpolation = node as StringConstructor;
                 if (interpolation != null && interpolation.Kind == StringKind.Mutable) {
                     foreach (var part in interpolation.Parts) {
-                        if (!IsScopeFree(part, blockLiterals)) {
+                        if (!IsScopeFree(part, blockLiterals, why)) {
                             return false;
                         }
                     }
@@ -687,20 +715,20 @@ namespace IronRuby.Compiler.Ast {
                 }
                 var loop = node as WhileLoopExpression;
                 if (loop != null) {
-                    return IsScopeFree(loop.Condition, blockLiterals) && AreScopeFree(loop.Statements, blockLiterals);
+                    return IsScopeFree(loop.Condition, blockLiterals, why) && AreScopeFree(loop.Statements, blockLiterals, why);
                 }
                 var caseExpression = node as CaseExpression;
                 if (caseExpression != null) {
-                    if (caseExpression.Value != null && !IsScopeFree(caseExpression.Value, blockLiterals) || !AreScopeFree(caseExpression.ElseStatements, blockLiterals)) {
+                    if (caseExpression.Value != null && !IsScopeFree(caseExpression.Value, blockLiterals, why) || !AreScopeFree(caseExpression.ElseStatements, blockLiterals, why)) {
                         return false;
                     }
                     foreach (var clause in caseExpression.WhenClauses) {
                         foreach (var comparison in clause.Comparisons) {
-                            if (!IsScopeFree(comparison, blockLiterals)) {
+                            if (!IsScopeFree(comparison, blockLiterals, why)) {
                                 return false;
                             }
                         }
-                        if (!AreScopeFree(clause.Statements, blockLiterals)) {
+                        if (!AreScopeFree(clause.Statements, blockLiterals, why)) {
                             return false;
                         }
                     }
@@ -711,30 +739,36 @@ namespace IronRuby.Compiler.Ast {
                 // is given (LightFrameRewriter.LightScopeCall)
                 var splat = node as SplattedArgument;
                 if (splat != null) {
-                    return LightSplatEnabled && IsScopeFree(splat.Argument, blockLiterals);
+                    return (LightSplatEnabled || Refuse(why, node.GetType().Name + " (IR_LIGHT_SPLAT=0)")) && IsScopeFree(splat.Argument, blockLiterals, why);
                 }
                 // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
                 if (call != null) {
                     var blockReference = call.Block as BlockReference;
-                    return (call.Block == null || blockLiterals && call.Block is BlockDefinition ||
-                            LightBlockPassEnabled && blockReference != null && IsScopeFree(blockReference.Expression, blockLiterals)) &&
-                        (call.Target == null || IsScopeFree(call.Target, blockLiterals)) && AreScopeFree(call.Arguments, blockLiterals);
+                    if (call.Block != null && !(blockLiterals && call.Block is BlockDefinition)) {
+                        if (blockReference == null || !LightBlockPassEnabled) {
+                            return Refuse(why, blockReference == null ? "call with a literal block" : "call passing a block (IR_LIGHT_BLOCK_PASS=0)");
+                        }
+                        if (!IsScopeFree(blockReference.Expression, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    return (call.Target == null || IsScopeFree(call.Target, blockLiterals, why)) && AreScopeFree(call.Arguments, blockLiterals, why);
                 }
                 var conditional = node as ConditionalExpression;
                 if (conditional != null) {
-                    return IsScopeFree(conditional.Condition, blockLiterals) && IsScopeFree(conditional.TrueExpression, blockLiterals) &&
-                        IsScopeFree(conditional.FalseExpression, blockLiterals);
+                    return IsScopeFree(conditional.Condition, blockLiterals, why) && IsScopeFree(conditional.TrueExpression, blockLiterals, why) &&
+                        IsScopeFree(conditional.FalseExpression, blockLiterals, why);
                 }
                 var ifExpression = node as IfExpression;
                 if (ifExpression != null) {
-                    if (!IsScopeFree(ifExpression.Condition, blockLiterals) || !AreScopeFree(ifExpression.Body, blockLiterals)) {
+                    if (!IsScopeFree(ifExpression.Condition, blockLiterals, why) || !AreScopeFree(ifExpression.Body, blockLiterals, why)) {
                         return false;
                     }
                     if (ifExpression.ElseIfClauses != null) {
                         foreach (var clause in ifExpression.ElseIfClauses) {
-                            if (clause.Condition != null && !IsScopeFree(clause.Condition, blockLiterals) || !AreScopeFree(clause.Statements, blockLiterals)) {
+                            if (clause.Condition != null && !IsScopeFree(clause.Condition, blockLiterals, why) || !AreScopeFree(clause.Statements, blockLiterals, why)) {
                                 return false;
                             }
                         }
@@ -743,31 +777,31 @@ namespace IronRuby.Compiler.Ast {
                 }
                 var unlessExpression = node as UnlessExpression;
                 if (unlessExpression != null) {
-                    return IsScopeFree(unlessExpression.Condition, blockLiterals) && AreScopeFree(unlessExpression.Statements, blockLiterals) &&
-                        (unlessExpression.ElseClause == null || AreScopeFree(unlessExpression.ElseClause.Statements, blockLiterals));
+                    return IsScopeFree(unlessExpression.Condition, blockLiterals, why) && AreScopeFree(unlessExpression.Statements, blockLiterals, why) &&
+                        (unlessExpression.ElseClause == null || AreScopeFree(unlessExpression.ElseClause.Statements, blockLiterals, why));
                 }
                 var and = node as AndExpression;
                 if (and != null) {
-                    return IsScopeFree(and.Left, blockLiterals) && IsScopeFree(and.Right, blockLiterals);
+                    return IsScopeFree(and.Left, blockLiterals, why) && IsScopeFree(and.Right, blockLiterals, why);
                 }
                 var or = node as OrExpression;
                 if (or != null) {
-                    return IsScopeFree(or.Left, blockLiterals) && IsScopeFree(or.Right, blockLiterals);
+                    return IsScopeFree(or.Left, blockLiterals, why) && IsScopeFree(or.Right, blockLiterals, why);
                 }
                 var not = node as NotExpression;
                 if (not != null) {
-                    return IsScopeFree(not.Expression, blockLiterals);
+                    return IsScopeFree(not.Expression, blockLiterals, why);
                 }
             }
             var yieldCall = node as YieldCall;
             if (yieldCall != null) {
-                return yieldCall.Block == null && AreScopeFree(yieldCall.Arguments, blockLiterals);
+                return (yieldCall.Block == null || Refuse(why, "yield with a block")) && AreScopeFree(yieldCall.Arguments, blockLiterals, why);
             }
             // `(yield self; self)', the body of an endless def written with several statements
             var block = node as BlockExpression;
             if (block != null) {
                 foreach (var statement in block.Statements) {
-                    if (!IsScopeFree(statement, blockLiterals)) {
+                    if (!IsScopeFree(statement, blockLiterals, why)) {
                         return false;
                     }
                 }
@@ -775,9 +809,12 @@ namespace IronRuby.Compiler.Ast {
             }
             var jump = node as ReturnStatement;
             if (jump != null) {
-                return AreScopeFree(jump.Arguments, blockLiterals);
+                return AreScopeFree(jump.Arguments, blockLiterals, why);
             }
-            return false;
+            // a node of a kind not taken at all: its type says what it is, and a Hash says whether it is a call's keywords
+            var hash = node as HashConstructor;
+            return Refuse(why, node.GetType().Name + (hash != null && hash.IsKeywordArguments ? " (keyword arguments)" : "") +
+                (LightCallsEnabled ? "" : " (IR_LIGHT_CALLS=0)"));
         }
 
         // A, ::A, A::B::C - the reads ConstantVariable.MakeCachedRead makes - not {expr}::A
@@ -786,10 +823,10 @@ namespace IronRuby.Compiler.Ast {
             return qualifier == null || (qualifier is ConstantVariable && IsCachedConstant((ConstantVariable)qualifier));
         }
 
-        private static bool AreScopeFree(Statements statements, bool blockLiterals) {
+        private static bool AreScopeFree(Statements statements, bool blockLiterals, StrongBox<string> why) {
             if (statements != null) {
                 foreach (var statement in statements) {
-                    if (!IsScopeFree(statement, blockLiterals)) {
+                    if (!IsScopeFree(statement, blockLiterals, why)) {
                         return false;
                     }
                 }
@@ -797,10 +834,10 @@ namespace IronRuby.Compiler.Ast {
             return true;
         }
 
-        private static bool AreScopeFree(Arguments arguments, bool blockLiterals) {
+        private static bool AreScopeFree(Arguments arguments, bool blockLiterals, StrongBox<string> why) {
             if (arguments != null) {
                 foreach (var argument in arguments.Expressions) {
-                    if (!IsScopeFree(argument, blockLiterals)) {
+                    if (!IsScopeFree(argument, blockLiterals, why)) {
                         return false;
                     }
                 }
