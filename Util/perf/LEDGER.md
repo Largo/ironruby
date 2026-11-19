@@ -1109,8 +1109,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `eval` of source text each** (the prelude, `class Binding`): 436 us for a set against
     0.1 on CRuby. `ERB#result_with_hash` sets one per key (237 times CRuby), irb sets `_`
     on every line, rdoc's generator sets its page's locals. The scope has the access in
-    C# (`RubyScope.ResolveLocalVariable`, `ResolveAndSetLocalVariable`). In progress:
-    round twenty-eight, perf/bindlv.
+    C# (`RubyScope.ResolveLocalVariable`, `ResolveAndSetLocalVariable`). Done in round
+    twenty-eight (see Landed, perf/bindlv): 469 -> 5.5 us, `erb_result` 3-4 times faster;
+    what is left of ERB's time is the `eval` of its source (gap 31).
 31. **`eval` of a String costs fifty times CRuby's** (219 us for `eval('1 + 1')`, 177 for
     `instance_eval('1')`, 741 for a three-line ERB source): each call parses, bridges,
     transforms and compiles its text anew. Untried: where the 219 us go (the native
@@ -1137,6 +1138,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the refined `to_s`; CRuby answers `"s"` without asking it.
 
 ## Landed
+
+- **perf/bindlv (round twenty-eight, 2026-11-19, 3820abf2, merged in 508f543d) - `Binding#local_variable_get`,
+  `_set`, `_defined?` and `local_variables` without `eval`** (gap 30). The prelude's four
+  methods were each one or two `eval`s of source text; the slot access is now
+  `BindingOps`' private `__ir_local_defined__`, `__ir_local_get__`, `__ir_local_set__`
+  (on `RubyScope.TryResolveBindingLocal` / `SetBindingLocal`, the walk the eval's compiled
+  assignment made, stopping at an isolated Proc's block) and a C# `local_variables`; the
+  name check stays in Ruby. On the way it fixed what the eval versions got wrong against
+  CRuby: a capitalized name is a NameError, `self`/`nil`/keyword-named locals can be set,
+  `local_variables` lists newest first and one eval's names in source order,
+  `TOPLEVEL_BINDING`'s new variables stay out of the main script's binding, an isolated
+  Proc's binding does not see the outer local, and the thread-local the old `_set` left
+  behind is gone. `Binding#dup` of a binding whose own scope is still empty makes a
+  sibling instead of nesting one level deeper (every `ERB#result_with_hash` dups
+  `TOPLEVEL_BINDING`).
+  us per call, CRuby / before / after: `local_variable_set` 0.1 / 469 / 5.5,
+  `local_variable_get` - / 397 / 4-5.5, `local_variables` - / 246 / 2.3,
+  `erb.result_with_hash` 25.6 / 5,795 / 1,954. `app-shapes.rb` in five alternating rounds,
+  both orders: `erb_result` 0.26 and 0.33 of its time; `erb_compile`, `ostruct`,
+  `gem_spec`, `invoice_build`, `optparse` overlapping in both orders (0.81-1.17, no
+  direction). Start-up on the ReadyToRun host: `-e 1` median 499 -> 498 ms over fifty
+  alternating runs, `gem --version`, `require "irb"`, `irb` within 0.5%.
+  Gated (on its branch, 3820abf2 on 550d838f): IronRuby.Tests with only
+  `Exception_CauseRaisedInClause1`; the sweep of all five suites, nothing unlisted;
+  `Util/binding-lvar-matrix.rb` (new, 162 rows; the unchanged build differed from CRuby
+  in 22) and eighteen other matrices in five modes, CRuby's output but for the two known
+  differences (`raise-matrix`'s anonymous class address, `block-loop-matrix` on the
+  ReadyToRun host); the benchmarks verify; irb answers.
+  What is left of `erb_result` (13 times CRuby) is the `eval` of the template's source,
+  gap 31. Not done: the name check's two regular expressions are most of the 5 us left;
+  a Proc made by `b.eval("proc { binding }")` sees variables `b` defines afterwards, where
+  CRuby's does not (old build too, left out of the matrix).
 
 - **The gate's correctness half for rounds twenty-two, twenty-four and twenty-five**
   (2026-11-19, on d1a738cf, the three census-only merges together; run because the third
