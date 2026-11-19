@@ -6,35 +6,54 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-14, the code of a6b1c629 (round ten on top of round nine and of #215 through
-9b2936fa), Release net10.0, 4 cores, load 1.0. The container was restarted between rounds
-nine and ten and has been slower since (CRuby's NBody 1.61 s before, 1.93 s now), so
-this table's microseconds do not compare with round nine's; the ratios do. CRuby 4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM
-Native). The machine's speed differs between sessions by tens of percent (CRuby's own
-numbers move with it), so compare ratios, not microseconds; and in this session one
-tree's figure for one benchmark moved by 10%, sometimes 20%, from one run to the next
-(the last column of ratios below is two more runs of the same binaries an hour before).
+2026-11-19, the code of 434e3dcc (perf/interp on top of master at 0e78b9fd, #233),
+Release net10.0, 8 cores, load 1.1 to 1.4 (other sessions' work). CRuby 4.0.9 (no YJIT).
+"master" is 0e78b9fd built beside it and run in the same invocation. TruffleRuby is not
+installed on this machine and was not measured: its last figures are 2026-11-14's
+(TruffleRuby/CRuby 0.053 over the thirteen, 40.0.0, Oracle GraalVM Native).
 
-Are-We-Fast-Yet, all thirteen, steady state, µs per iteration (lower is better); the
-microseconds are the last run's:
+**These ratios do not compare with the tables before them.** The table of 2026-11-14
+(a6b1c629, a container of 4 cores) had IronRuby/CRuby at 0.730 over the thirteen, with
+DeltaBlue 1.18 and Richards 1.20. On this machine the Release build of 2026-11-14 itself
+(b6cd208a, the tree before round ten) reads DeltaBlue 1.50, Richards 1.51, Json 1.23,
+Bounce 1.13, Storage 0.92 today, in one invocation with CRuby and with master, and
+master is under it or within 1% of it on each of them (1.44, 1.45, 1.21, 1.14, 0.91;
+List 0.86 -> 0.50 is round ten). So the higher ratios are this machine's, not a
+regression of the code: against the table of 2026-11-14 CRuby's microseconds are the
+same or up to 23% lower here, and IronRuby's are 11-28% higher on nine of the thirteen
+(master; the old build was run on six, and is as high on those). Why IronRuby loses
+where CRuby gains (eight cores shared with other sessions) is not known. The machine's speed
+differs between sessions by tens of percent, so compare ratios within one table, not
+microseconds, and not across tables.
 
-| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | two runs before |
+Are-We-Fast-Yet, all thirteen, steady state, µs per iteration (lower is better), one
+run of `awfy.rb 12`:
+
+| benchmark | CRuby | master | IronRuby | IronRuby/CRuby | master/CRuby |
 |---|---:|---:|---:|---:|---:|
-| Richards | 341414 | 409318 | 17496 | 1.20 | 1.08, 1.29 |
-| DeltaBlue | 47759 | 56291 | 12896 | 1.18 | 1.22, 1.16 |
-| Permute | 133041 | 154267 | 7039 | 1.16 | 1.07, 1.22 |
-| Towers | 128759 | 123816 | 5352 | 0.96 | 1.04, 0.94 |
-| Bounce | 102599 | 93906 | 2528 | 0.92 | 1.06, 1.73 |
-| Json | 95510 | 86375 | 7709 | 0.90 | 1.04, 0.97 |
-| Queens | 107845 | 97480 | 7330 | 0.90 | 0.92, 0.86 |
-| Sieve | 170274 | 142517 | 8240 | 0.84 | 0.82, 0.86 |
-| NBody | 1928277 | 1551819 | 18804 | 0.80 | 0.68, 0.81 |
-| CD | 852830 | 601192 | 36126 | 0.70 | 0.65, 0.71 |
-| Storage | 179481 | 105347 | 18668 | 0.59 | 0.86, 0.58 |
-| List | 119618 | 44220 | 7720 | 0.37 | 0.40, 0.39 |
-| Mandelbrot | 1124512 | 154915 | 54940 | 0.14 | 0.13, 0.14 |
+| Richards | 334983 | 498135 | 541272 | 1.62 | 1.49 |
+| DeltaBlue | 49355 | 71984 | 71890 | 1.46 | 1.46 |
+| Permute | 134603 | 176916 | 170787 | 1.27 | 1.31 |
+| Towers | 108721 | 138013 | 135836 | 1.25 | 1.27 |
+| Json | 87430 | 105719 | 106933 | 1.22 | 1.21 |
+| Bounce | 100006 | 115384 | 113929 | 1.14 | 1.15 |
+| Queens | 92249 | 101608 | 103837 | 1.13 | 1.10 |
+| Sieve | 158689 | 166912 | 163819 | 1.03 | 1.05 |
+| Storage | 140626 | 128215 | 129070 | 0.92 | 0.91 |
+| CD | 814398 | 667110 | 666172 | 0.82 | 0.82 |
+| NBody | 1966248 | 1529525 | 1485338 | 0.76 | 0.78 |
+| List | 100347 | 50419 | 51735 | 0.52 | 0.50 |
+| Mandelbrot | 862111 | 62981 | 62134 | 0.07 | 0.07 |
 
-Geomean of the thirteen: IronRuby/CRuby 0.730, and 0.750 and 0.779 in the two runs
+Geomean of the thirteen: IronRuby/CRuby 0.853, master/CRuby 0.852; IronRuby over master
+1.002, and 1.010 in a second run with the columns the other way round (Landed,
+perf/interp, has both). Richards' 1.62 against master's 1.49 is one run's: in six more
+alternating runs of the two it was 1.08, 0.95, 1.07, 1.01, 1.00 and 1.00 of master, and
+its JIT decisions are master's and its light frames differ in seven methods outside the
+benchmark's loop (four of `run.rb`'s reporting, three at start-up).
+
+What follows is the history up to 2026-11-14, in that table's ratios. Geomean of the
+thirteen then: IronRuby/CRuby 0.730, and 0.750 and 0.779 in the two runs
 before (the second has Bounce at 1.73, a cell that was 1.00 of the tree before in six
 alternating processes); TruffleRuby/CRuby 0.053. On the tree of round nine it was 0.785,
 0.800 and 0.768, and 0.785 again with #215's `!=` binding merged in (Permute 1.28 ->
@@ -46,10 +65,12 @@ tree of round five, at the start of the session, it was 0.872 (Permute 1.49, Ric
 1.33, CD, Json and DeltaBlue 1.17, NBody 1.07): the first time the eight benchmarks
 beyond the original five were run at all.
 
-The five measured from the start, IronRuby/CRuby; "now" is the three runs above, the
-other columns are what was recorded when each round landed, in other sessions:
+The five measured from the start, IronRuby/CRuby; "r10" is the three runs of 2026-11-14,
+the other columns are what was recorded when each round landed, in other sessions. On
+this machine on 2026-11-19 they read 1.46, 1.62, 1.22, 1.14 and 1.25 (geomean 1.33),
+which is the machine (above) and no row of this table:
 
-| benchmark | now | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
+| benchmark | r10 | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | DeltaBlue | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
 | Richards | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
@@ -77,56 +98,60 @@ this one; the tree before that merge gave 13.9), and List 8.2 -> 0.6 in round te
 (`is_shorter_than` compiled: its two cursors are no longer read through call sites).
 The other eleven are where round nine left them.
 
-Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on the tree of
-round ten; a line moves by 15-20% from run to run on this machine, so a ratio is good to
-about that:
+Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on 434e3dcc on
+2026-11-19 (the "start" column is history, in the ratios of the machines of the time); a
+line moves by 15-20% from run to run, so a ratio is good to about that. Above 1.3, worst
+first: s_times1 2.04, s_each1 1.98, s_any1 1.97, s_map1 1.87, s_times2 1.63, veach1 1.60,
+s_any2 1.58, yield 1.57, ivar_rw 1.55, s_each2 1.53, abs 1.51, veach2 1.46, veach4 1.39,
+nil? 1.38, s_times4 1.33, s_map2 1.32 - gap 13 (calling an iterator at all) and gap 1
+(calls from hot bodies), as before:
 
 | op | CRuby | IronRuby | ratio | start |
 |---|---:|---:|---:|---:|
-| empty | 24.5 | 25.2 | 1.03 | 1.23 |
-| ivar_rw | 39.7 | 58.3 | 1.47 | 2.72 |
-| getter | 28.7 | 34.4 | 1.20 | 3.17 |
-| attr | 20.3 | 4.3 | 0.21 | 0.80 |
-| cmp | 29.5 | 34.4 | 1.17 | 3.58 |
-| abs | 35.7 | 58.4 | 1.64 | 3.07 |
-| arr | 43.9 | 46.6 | 1.06 | 1.82 |
-| nil? | 26.7 | 38.4 | 1.44 | 3.48 |
-| == | 29.6 | 32.6 | 1.10 | 3.35 |
-| yield | 42.4 | 65.3 | 1.54 | 2.57 |
-| each4 | 264.5 | 275.5 | 1.04 | 1.87 |
-| while10 | 212.8 | 43.6 | 0.20 | 0.23 |
-| new2 | 104.5 | 86.3 | 0.83 | 1.47 |
-| symcase | 36.3 | 34.3 | 0.94 | 1.03 |
-| str== | 121.2 | 59.1 | 0.49 | 1.44 |
-| poly2 | 62.1 | 43.7 | 0.70 | 2.11 |
-| blockeach | 78.2 | 59.4 | 0.76 | 2.33 |
-| lit== | 244.8 | 67.7 | 0.28 | 0.94 |
-| swap | 70.3 | 67.5 | 0.96 | 1.35 |
-| locattr | 73.8 | 47.6 | 0.64 | 1.38 |
-| sqrtw | 52.1 | 2.8 | 0.05 | 1.34 |
-| rangeeach | 72.9 | 2.1 | 0.03 | 0.87 |
-| blkattr | 88.7 | 76.8 | 0.87 | 1.12 |
-| selfcall | 114.6 | 35.1 | 0.31 | 0.99 |
-| veach1 | 235.2 | 379.6 | 1.61 | 1.59 |
-| veach2 | 327.0 | 448.6 | 1.37 | 1.37 |
-| veach4 | 504.7 | 592.2 | 1.17 | 1.38 |
-| veach100 | 8026.1 | 7087.8 | 0.88 | 1.04 |
-| rangelit | 190.2 | 103.0 | 0.54 | 0.87 |
-| short4 | 376.1 | 400.3 | 1.06 | 1.41 |
-| s_each1 | 87.8 | 193.8 | 2.21 | 2.11 |
-| s_times1 | 107.8 | 197.3 | 1.83 | 2.07 |
-| s_map1 | 124.1 | 207.3 | 1.67 | 1.93 |
-| s_any1 | 79.1 | 187.4 | 2.37 | 6.15 |
-| s_each2 | 127.1 | 222.2 | 1.75 | 1.70 |
-| s_times2 | 145.7 | 222.0 | 1.52 | 1.57 |
-| s_map2 | 169.3 | 239.6 | 1.42 | 1.29 |
-| s_any2 | 113.8 | 214.9 | 1.89 | 4.54 |
-| s_each4 | 209.5 | 265.1 | 1.27 | 1.25 |
-| s_times4 | 216.8 | 272.0 | 1.25 | 1.27 |
-| s_map4 | 269.7 | 291.2 | 1.08 | 1.05 |
-| s_any4 | 183.2 | 259.9 | 1.42 | 3.09 |
-| listwalk | 155.2 | 69.5 | 0.45 | 0.71 |
-| treefind | 1501.0 | 571.3 | 0.38 | 0.60 |
+| empty | 24.6 | 27.0 | 1.10 | 1.23 |
+| ivar_rw | 43.2 | 66.9 | 1.55 | 2.72 |
+| getter | 34.1 | 38.1 | 1.12 | 3.17 |
+| attr | 22.2 | 5.2 | 0.23 | 0.80 |
+| cmp | 31.4 | 36.7 | 1.17 | 3.58 |
+| abs | 41.7 | 62.9 | 1.51 | 3.07 |
+| arr | 43.6 | 50.4 | 1.16 | 1.82 |
+| nil? | 29.6 | 40.7 | 1.38 | 3.48 |
+| == | 34.2 | 38.1 | 1.11 | 3.35 |
+| yield | 46.9 | 73.5 | 1.57 | 2.57 |
+| each4 | 228.0 | 296.1 | 1.30 | 1.87 |
+| while10 | 179.6 | 57.1 | 0.32 | 0.23 |
+| new2 | 104.8 | 85.1 | 0.81 | 1.47 |
+| symcase | 38.9 | 37.6 | 0.97 | 1.03 |
+| str== | 117.8 | 57.6 | 0.49 | 1.44 |
+| poly2 | 76.4 | 46.4 | 0.61 | 2.11 |
+| blockeach | 70.3 | 66.2 | 0.94 | 2.33 |
+| lit== | 249.7 | 77.3 | 0.31 | 0.94 |
+| swap | 66.5 | 78.5 | 1.18 | 1.35 |
+| locattr | 78.0 | 49.4 | 0.63 | 1.38 |
+| sqrtw | 56.0 | 3.6 | 0.06 | 1.34 |
+| rangeeach | 64.6 | 2.6 | 0.04 | 0.87 |
+| blkattr | 95.4 | 75.3 | 0.79 | 1.12 |
+| selfcall | 119.1 | 39.6 | 0.33 | 0.99 |
+| veach1 | 224.4 | 358.4 | 1.60 | 1.59 |
+| veach2 | 297.2 | 434.1 | 1.46 | 1.37 |
+| veach4 | 440.0 | 611.3 | 1.39 | 1.38 |
+| veach100 | 6665.0 | 7686.0 | 1.15 | 1.04 |
+| rangelit | 169.3 | 113.3 | 0.67 | 0.87 |
+| short4 | 348.5 | 420.3 | 1.21 | 1.41 |
+| s_each1 | 94.2 | 186.2 | 1.98 | 2.11 |
+| s_times1 | 100.9 | 205.4 | 2.04 | 2.07 |
+| s_map1 | 127.5 | 238.0 | 1.87 | 1.93 |
+| s_any1 | 89.4 | 176.3 | 1.97 | 6.15 |
+| s_each2 | 136.6 | 208.5 | 1.53 | 1.70 |
+| s_times2 | 136.1 | 221.8 | 1.63 | 1.57 |
+| s_map2 | 171.6 | 226.0 | 1.32 | 1.29 |
+| s_any2 | 127.9 | 201.6 | 1.58 | 4.54 |
+| s_each4 | 229.7 | 283.4 | 1.23 | 1.25 |
+| s_times4 | 222.7 | 297.2 | 1.33 | 1.27 |
+| s_map4 | 276.7 | 301.0 | 1.09 | 1.05 |
+| s_any4 | 216.8 | 262.7 | 1.21 | 3.09 |
+| listwalk | 144.3 | 74.3 | 0.51 | 0.71 |
+| treefind | 1470.4 | 619.9 | 0.42 | 0.60 |
 
 `lit==`, `swap` and `locattr` are round seven's shapes, and their "start" is round six: a
 literal as the receiver of `==`, two element stores in one method, Float attr reads on
@@ -366,9 +391,15 @@ Profile (`Util/perf/profile.sh`, self time):
    keeps a method out (`IR_LIGHT_REST=0`), nor does a call that passes a block on
    (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass), nor
    one that splats a value (`inner(*args)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`, see
-   Landed, perf/splat);
-   Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb and
-   Util/splat-pass-matrix.rb are their matrices. A method with both a literal block and a passed one still makes its scope
+   Landed, perf/splat), nor an interpolation (`"a#{x}"`; `IR_LIGHT_INTERPOLATION=0`, see
+   Landed, perf/interp; a block that interpolates still makes its scope);
+   Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
+   Util/splat-pass-matrix.rb and Util/interpolation-matrix.rb are their matrices.
+   What the census names next (2026-11-19, 28,335 methods): "optional, splat or post
+   parameters" 1,525, `super` 755, `rescue`/`ensure` 475, and 167 candidates that still
+   need their scope after the rewrite (in the prelude `Enumerable#zip`,
+   `Enumerator::Lazy#zip`, `Enumerator#__size_from_target__`, `Process#detach`,
+   `Process.waitall`; nobody has looked at what refuses them). A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
@@ -510,8 +541,92 @@ Profile (`Util/perf/profile.sh`, self time):
     for a three-line file but not inside a longer one. Found while writing
     `Method_LightFrameBlockPass1`, not a speed gap; not looked into.
 
+21. **Three differences from CRuby in interpolation**, found by the probes of
+    `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
+    (the matrix avoids them); not speed gaps. When a part's `to_s` raises, the backtrace
+    names the method's first line for that frame where CRuby names the interpolation's own
+    (`def m(x)`, `y = 1`, `"a#{x}"` on lines 10-12: IronRuby 10, CRuby 12), with and
+    without a scope. A TracePoint `:line` event is reported for the body of an endless
+    `def`, CRuby reports none. And with a refinement of `Symbol#to_s` in use, `"#{:s}"` asks
+    the refined `to_s`; CRuby answers `"s"` without asking it.
+
 ## Landed
 
+- **perf/interp (/perf-step, 2026-11-19) - a method that interpolates runs without a
+  scope** (`"a#{x}"`, `raise ArgumentError, "negative size (#{n})"`;
+  `IR_LIGHT_INTERPOLATION=0` turns it off). The filter (`IsScopeFree`) has taken an
+  interpolation since perf/lf, but since the refinements work of 2026-09-19 each part is
+  converted by `TryConvertToSWithRefinements(scope, value)` before the `ConvertToSAction`
+  site, and the rewriter refused both: the raw scope operand, and a dynamic site that is
+  not a call. So every such method was a candidate that "needs its scope after the
+  rewrite", the largest line of the census's light-frame table. In a method's light frame
+  the helper would answer null (a method defined where a refinement is active is never a
+  light frame, and a method scope without that record answers no refinements), so the
+  rewriter puts null in its place, as it does for `&x`, and lets the conversion site
+  through. A block's frame keeps the helper: a block can be written where a refinement is
+  active.
+
+      light frames 66.3% -> 71.7% (18,790 -> 20,318), light blocks 7,389 and the JIT's
+      verdicts unchanged; "body needs its scope after the rewrite" 1,695 -> 167
+      (Src/StdLib + AWFY, 28,335 methods; 1,528 methods moved up, none down)
+
+  Gated and measured on 2026-11-19, 434e3dcc against master at 0e78b9fd, both Release
+  net10.0 (below).
+
+  103 of them are the prelude's, mostly helpers that raise with an interpolated message
+  (`__count_arg__`, `__to_count__`, `__dig_step__`, `__affix__`, `__array_to_int__`,
+  `__slice_args__`, `__zip_source__`, `Range#__size__`, `Random#rand`, `Kernel#rand`,
+  `MatchData#[]`, `Enumerator#initialize`...), and four are AWFY's, all in `run.rb`'s
+  reporting. The census of the merged build is the worktree's, byte for byte.
+  Util/interpolation-matrix.rb (new, 95 lines: `to_s` refined in twelve places, answering a
+  non-String, raising, private, missing, redefined; parts that read the frame, yield,
+  splat; encodings; TracePoint; threads; a million-deep recursion) prints the same under
+  CRuby 4.0, the build before, and this one with the switch on and off; with
+  `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR` and `-X:JITCalls` by the experiment's own runs,
+  which also had the splat-pass, block-pass, block-given, light-rest, refinement,
+  refinement-binding, raise and error-message matrices agree. `census.rb -c` on a run of
+  Json: 58 methods called, 0 differ.
+  What the census cannot see here: a `using` that has run before a `def`. On a traced run
+  of the matrix it calls four such methods light that the run keeps a scope for
+  ("refinements"), which is the rule the change rests on. Five files of the standard
+  library have a `using`, with 7 of the 1,528 methods in them, so the count is at most
+  that much too high. (A fifth disagreement there is `-c` taking a `def` nested on its
+  parent's line for the parent.)
+  The gate (`/perf-gate`): IronRuby.Tests in Release fails `Exception_CauseRaisedInClause1`
+  on both trees and nothing else, and the new `Method_LightFrameInterpolation1` passes;
+  thirteen matrices (interpolation, block-given, light-rest, block-pass, splat-pass,
+  hot-shapes, raise, full-message, refinement, refinement-binding, jit, jit-calls,
+  set-backtrace), each as built, with `IR_LIGHT_INTERPOLATION=0`, with `IR_LIGHT_FRAMES=0`
+  and with `-X:NoJIT -X:NoOSR`, print on this tree what they print on master in all 52
+  runs, and CRuby's output in 40 of them (hot-shapes, raise and refinement differ from
+  CRuby by 6, 2 and 4 lines on both trees); a million-deep recursion through an
+  interpolating method, through its block, through an interpolated part and through
+  `to_s` raises SystemStackError on CRuby and on both trees; AWFY has no FAIL with the JIT
+  on and off; ruby/spec, all five suites on this tree (32,680 examples), has no failure
+  that `Util/spec-known-failures.txt` does not list.
+  Instructions per call (`ab.rb -i`, three rounds; the switch off on this build against
+  the switch on): a method that interpolates an Integer 2190 -> 1879 (0.86), two parts
+  2838 -> 2298 (0.81), an instance variable 2224 -> 1993 (0.90), an object with `to_s`
+  2348 -> 2136 (0.91), a method that only raises with an interpolated message and does
+  not raise 1530 -> 1197 (0.78), one that interpolates on one branch 3073 -> 2538 (0.83).
+  Timed (`ab.rb -r 5`, ns): 208 -> 167 (0.81), 307 -> 215 (0.70), 205 -> 174 (0.85),
+  224 -> 196 (0.87), 144 -> 92 (0.64), 308 -> 216 (0.70); CRuby has 151, 189, 165, 182,
+  50 and 201 on them. Three shapes that do not interpolate (a one-line method, a `+` of
+  two Strings, an `each` with a block) have rounds that overlap on the two trees once each
+  has a process of its own (650.8 and 650.7; 1756, with rounds 2.8% apart, and 1800,
+  which is also this build's count with the switch off; 2984 and 2989), and overlap when
+  timed. In one process with the other shapes the first two read 1.6% and 5% up: the
+  state the earlier shapes leave, as the gate's step 4 says.
+  Nothing slower: AWFY, geomean of the thirteen 1.002 with master first and 1.010 with
+  this tree first, no line over 5% in both (Richards 1.09 and 1.03, then six more
+  alternating runs around 1.01; Sieve 0.98 and 1.06); the micro table in both orders has
+  `blockeach` and `sqrtw` 5% and 6% up in both, and in eight alternating processes of its
+  own each reaches master's minimum (61.7 against 61.9 ns; 2.8 ns in all sixteen);
+  start-up 1198 against 1194 ms, best of ten.
+  So what the step bought is the cost of entering a method that interpolates, 13-36% on
+  such a call, and no AWFY benchmark has one on its path. Gap 16's cost applies to a
+  method whose usual callee wants the caller's scope; most of these reach such a callee
+  (`raise`) only on their error path, which was not timed. Not run: net11.0, Windows, R2R.
 - **perf/splat (/perf-frame, 2026-11-19) - a method that passes a splat on runs without a
   scope** (`inner(*args)`, `inner(*args, &block)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`
   turns it off). `IsScopeFree` takes a `SplattedArgument` of a scope-free expression, and
@@ -519,9 +634,10 @@ Profile (`Util/perf/profile.sh`, self time):
   calls `#to_a` through a conversion site, the helpers that join several splats take no
   scope, and `LightScopeCall` already bound a signature with a splatted argument. When the
   rule answers `LightScopeRequired` the call is made again with the same temporaries, so
-  `#to_a` runs once (a probe of the matrix). `when *a`, interpolation and `**h` still keep
-  a method out.
-  Census (Src/StdLib + AWFY, 28,335 methods), on the tree with #232 merged in: light frames
+  `#to_a` runs once (a probe of the matrix). `when *a` and `**h` still keep a method out
+  (interpolation did until perf/interp, above).
+  Census (Src/StdLib + AWFY, 28,335 methods), on the tree with #232 merged in (273d6299,
+  as are the instruction counts below): light frames
   18,318 -> 18,790 (64.6% -> 66.3%), light blocks 7,317 -> 7,389, the JIT's verdicts
   unchanged; 472 methods moved up, none down. 38 are the prelude's (`strip`, `lstrip`,
   `rstrip`, `inject`, `reduce`, `zip`, `each_with_index`, `reverse_each`, `each_entry`,
@@ -544,8 +660,8 @@ Profile (`Util/perf/profile.sh`, self time):
   decisions differ in four prelude methods and in none of its own); the micro table, no line more than 5% slower in both orders; start-up 1.20 s on
   both. After merging #232: the census, the splat and block-pass matrices against CRuby
   and the unchanged build, `census.rb -c` on a run of core-small (59 methods called, 0
-  differ) and the instruction counts above - IronRuby.Tests, the sweep and AWFY were not
-  run again on the merged tree.
+  differ), the instruction counts above, and IronRuby.Tests in Release (the same one
+  failure) - the sweep and AWFY were not run again on the merged tree.
   Learned: the time fell twice as far as the instructions (8% of `w_splat`'s), because
   what went is an allocation; a method becoming a light frame is a gain only if the call
   it usually makes does not want the scope (gap 16); and `ab.rb -i` of one binary with a

@@ -68,8 +68,8 @@ and 16, has the current list):
 | keywords, `rescue`, `$~`, regex literals | keep the method out | |
 
 Let in so far: `block_given?` (`IR_LIGHT_BLOCK_GIVEN`), a rest parameter (`IR_LIGHT_REST`), a call that
-passes the block on (`IR_LIGHT_BLOCK_PASS`), a call that splats a value (`IR_LIGHT_SPLAT`), each with its
-matrix in `Util/`.
+passes the block on (`IR_LIGHT_BLOCK_PASS`), a call that splats a value (`IR_LIGHT_SPLAT`), an
+interpolation (`IR_LIGHT_INTERPOLATION`), each with its matrix in `Util/`.
 
 Take one. State what it costs with a pair of shapes in `Util/bench/prelude-cost.rb` (the
 method with the construct and the same method without it), measured with `/perf-ab`. No
