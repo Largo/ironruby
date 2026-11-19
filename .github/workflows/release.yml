@@ -425,7 +425,12 @@ jobs:
   release:
     name: GitHub release
     # A pushed tag only: a run by hand keeps its archives as artifacts, even on a tag.
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    # always(): a job that needs a cancelled job is skipped, and continue-on-error does not
+    # change that as it does for a failed one. 4.0.6's macOS net10.0 package was cancelled
+    # three times because no runner took it within fifteen minutes, and nothing was published.
+    # So what this job needs is said here and below: the tests passed, and "Required
+    # archives" finds every Linux and Windows file.
+    if: always() && github.event_name == 'push' && github.ref_type == 'tag' && needs.tests.result == 'success'
     needs: [tests, package]
     runs-on: ubuntu-latest
     permissions:
@@ -446,6 +451,23 @@ jobs:
           path: dist
           pattern: ironruby-*-net*
           merge-multiple: true
+
+      # The macOS archives may be missing (package: continue-on-error); these may not. Their
+      # names carry the tag's version (package: IR_VERSION).
+      - name: Required archives
+        working-directory: dist
+        run: |
+          ls -l
+          v="${GITHUB_REF_NAME#v}"
+          missing=0
+          for f in "ironruby-$v-linux-x64.tar.gz" "ironruby-$v-win-x64.zip" "ironruby-$v-win-x64-setup.exe" \
+                   "ironruby-$v-net11-linux-x64.tar.gz" "ironruby-$v-net11-win-x64.zip"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing"
+              missing=1
+            fi
+          done
+          exit $missing
 
       - name: Checksums
         working-directory: dist
