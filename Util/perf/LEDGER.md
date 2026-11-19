@@ -594,6 +594,15 @@ Profile (`Util/perf/profile.sh`, self time):
     "parked scopes" idea of the Rejected list in a narrower form, in the area where five
     of the ten faults were, so every escape route of the Proc is a case before it is a
     change.
+    Round twenty-one takes this up for a reason round six did not have (perf/lfb, the
+    parked scopes, was rejected because none of the five benchmarks measured then moved):
+    Havlak, measured since round fourteen, has 30% of its samples in the runtime and
+    makes about 3.4 million calls per iteration of som.rb's `Vector#each` and `has_some`
+    (`(a..b).each { |i| yield @storage[i] }`). On 3081699d that shape over one element is
+    336 ns and 685 B a call against CRuby's 175 ns, and the same loop written as a
+    `while` 232 ns and 357 B against 104: the inner layer (the method's scope, the Proc,
+    the BlockParam, the Range) is 328 B and 105 ns, the layer around it - the caller's
+    literal block that writes a local - the rest. In progress (perf/park).
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
