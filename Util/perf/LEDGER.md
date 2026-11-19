@@ -380,8 +380,7 @@ Profile (`Util/perf/profile.sh`, self time):
    SOM's `Vector#each` over 4 elements ran at 0.98-1.05 of before and over 100 at
    1.00-1.15 (round nine). Closed. What DeltaBlue pays is in gap 14.
 9. **Light frames still exclude** a `while` with a `break` in it (`Array#take_while`),
-   an empty Hash literal `{}` (found on `Array#to_h`;
-   `::Hash.new` is scope-free but calls a redefined Hash.new), `super` (6 hot `initialize`
+   `super` (6 hot `initialize`
    methods; also `Array#sum` without a block, 5.3x CRuby, whose rare path is `super`), `rescue`,
    keywords, `$~` and regex literals.
    `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
@@ -392,35 +391,35 @@ Profile (`Util/perf/profile.sh`, self time):
    (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass), nor
    one that splats a value (`inner(*args)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`, see
    Landed, perf/splat), nor an interpolation (`"a#{x}"`; `IR_LIGHT_INTERPOLATION=0`, see
-   Landed, perf/interp; a block that interpolates still makes its scope);
+   Landed, perf/interp; a block that interpolates still makes its scope), nor a Hash
+   literal or the keywords of a call (`{a: x}`, `{}`, `f(a: x)`; `IR_LIGHT_HASH=0`,
+   `IR_LIGHT_KEYWORD_HASH=0`, see Landed, perf/hashlit; `f(**h)` is still out);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
-   Util/splat-pass-matrix.rb and Util/interpolation-matrix.rb are their matrices.
-   What the census names next (2026-11-19, 28,335 methods, 8,017 of them not light).
-   By its first table: "optional, splat or post parameters" 1,525, `rescue`/`ensure` 475,
-   and 167 candidates that still need their scope after the rewrite (in the prelude
-   `Enumerable#zip`, `Enumerator::Lazy#zip`, `Enumerator#__size_from_target__`,
-   `Process#detach`, `Process.waitall`; nobody has looked at what refuses them). The
-   parameter line is keywords: 1,243 of the 1,525 have keyword parameters (20 of them the
-   prelude's, none AWFY's), 248 an optional parameter defaulting to `{}`, 2 a post
-   parameter (counted by parsing the 1,525 with Prism).
-   The other 5,704 are refused by a statement of the body, and since perf/why (Landed)
-   the census's second table says for which construct inside it: `super` 1,013, a regex
-   literal 851, a Hash of keyword arguments (`f(a: 1)`) 805, a Hash literal 789, a
-   parallel assignment 617, a `begin ... end` block 492, `break` 261 (255 of them
-   in a `while`), `defined?` 184, a global variable 147, a Range literal in a body with
-   literal blocks 132, a class variable 81, a qualified constant 75. Before that these
-   were spread over "MethodCall" 1,106, "IfExpression" 1,022, "SimpleAssignmentExpression"
-   993 and five more statement names, which said nothing.
-   Where it matters: the prelude's 233 are a Hash literal 33 (`tally`, `group_by`,
-   `uniq`), a `begin` block 25, keyword parameters 24 (and 20 more under the parameter
-   line), a parallel assignment 23, `defined?`
-   22, a Hash of keyword arguments 17, `super` 16, a regex 11; AWFY's 21 are a Range
+   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb and Util/hash-literal-matrix.rb
+   are their matrices.
+   What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
+   them not light). By its first table: keyword parameters 1,257 (37 of them the
+   prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
+   scope after the rewrite (in the prelude `Enumerable#zip`, `Enumerator::Lazy#zip`,
+   `Enumerator#__size_from_target__`, `Process#detach`, `Process.waitall`,
+   `__errno_class__`; nine of them were looked at in perf/hashlit and are a `rescue`
+   inside a literal block, `a.map { |x| begin; x; rescue; end }`, by the subagent's probe), and other optional,
+   splat or post parameters 176.
+   The rest are refused by a statement of the body, and the census's second table says
+   for which construct inside it: `super` 1,054, a regex literal 1,008, a parallel
+   assignment 661, a `begin ... end` block 523 (the table calls it Body), `break` 268
+   (258 of them in a `while`), `defined?` 190, a global variable 158, a Range literal in a
+   body with literal blocks 138, a class variable 86, a qualified constant 76, a lambda
+   literal 47, a `rescue` modifier 43. (The lines grew when Hash literals left: a method
+   is counted under the first construct that refuses it.)
+   Where it matters: the prelude's 191 are keyword parameters 37, a `begin` block 27, a
+   parallel assignment 24, `defined?` 23, `super` 16, a regex 12, a `rescue` modifier 10;
+   AWFY's 21 are a Range
    literal that receives `each` with a block 12 (`Vector#each`, `Sieve#sieve`; the scope
    is made for the block anyway, so letting the Range in buys nothing by itself), `super`
    6 (five DeltaBlue constraints' `initialize`, Richards' TaskControlBlock), a
    `begin ... end while` 2 (Json's `read_object`, `read_array`) and a regex 1. Not looked into, from reading
-   `IsScopeFree`: a Hash literal is refused outright where an Array literal is taken
-   element by element, with no comment saying why; a regex literal is refused by itself
+   `IsScopeFree`: a regex literal is refused by itself
    although `$~` is written by the call that matches; `defined?(@x)` is refused.
    A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
@@ -572,8 +571,48 @@ Profile (`Util/perf/profile.sh`, self time):
     without a scope. A TracePoint `:line` event is reported for the body of an endless
     `def`, CRuby reports none. And with a refinement of `Symbol#to_s` in use, `"#{:s}"` asks
     the refined `to_s`; CRuby answers `"s"` without asking it.
+22. **Two differences from CRuby in Hash literals**, found by the probes of
+    `Util/hash-literal-matrix.rb` on the build before perf/hashlit and left as they were
+    (the matrix leaves them out, with a comment); not speed gaps. A key that is an
+    instance of a String subclass is copied and frozen (`k = MyS.new("k"); h = {k => 1}`:
+    `h.keys[0].frozen?` is true and it is not `k`); CRuby 4.0 keeps `k` itself, unfrozen,
+    and copies only a plain String. The same with `h[k] = 1`. And `defined?({a: 1.nope})`
+    is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **perf/hashlit (/perf-step, 2026-11-19) - a method with a Hash literal, or one that
+  passes keywords, runs without a scope** (`{a: x}`, `{"k" => v}`, `{}`, `f(a: x)`;
+  `IR_LIGHT_HASH=0` and `IR_LIGHT_KEYWORD_HASH=0` turn each off). `IsScopeFree` had no
+  case for a HashConstructor, so one anywhere in a body sent the method to the final
+  refusal, while an Array literal was taken element by element. The helpers a literal
+  and a call's keyword hash compile to (`RubyOps.MakeHash`, `MakeSymbolHash1..3`,
+  `MakeKeywordArgumentsHash`, `MakeKeywordArgumentsHash0..3`) take the scope only for
+  the runtime's equality comparer, so the rewriter now passes them the declaring scope,
+  as it does for instance variables and constants (`ScopeOperandIndex`), and the filter
+  takes a Hash whose keys and values are scope-free. `**h` in a literal already was a
+  call of `Hash#merge`; `f(**h)` (KeywordSplatMerge) and the defaults of keyword
+  parameters are not taken. Two commits, the keywords second, so either reverts alone.
+  light frames 71.7% -> 76.9% (20,318 -> 21,793), light blocks 7,389 -> 7,724, JIT
+  compiles, maybe and never unchanged (Src/StdLib + AWFY, 28,335 methods; 1,475 methods
+  moved up, none down: 807 for the literal, 148 of those a `h = {}` default, and 668 for
+  the keywords) - **census only, not gated**. 42 of them are the prelude's, among them
+  `group_by`, `uniq`, `tally`, `uniq!`, six `to_h`, `transform_keys`, `slice`, `fetch`,
+  `to_set`, `transform_values!`, `__check_frozen__`; none is AWFY's, whose methods
+  write no Hash literal, so the AWFY table is not expected to move.
+  131 of the 789 the literal kept out did not move with the first commit: another
+  construct keeps them (parallel assignment, a regex, `super`, a global variable).
+  Checked, by the subagent and again by me on its build: `Util/hash-literal-matrix.rb`
+  (new, 111 probes) prints CRuby 4.0's output on the build before, the new one, with
+  each switch off and both, with `-X:NoAdaptiveCompilation` and with `IR_LIGHT_FRAMES=0`;
+  the interpolation, splat-pass, block-pass, light-rest and block-given matrices print
+  CRuby's on both builds; `census.rb -c` against traced runs of Richards and Json says
+  0 differ; the merged build's census is the worktree's row for row.
+  Instructions per call (`ab.rb -i`, the subagent's run, not repeated): `{a: x}` 1,663
+  -> 1,360, `{a: x, b: x}` 1,761 -> 1,449, `{}` filled with two keys 2,220 -> 1,964,
+  `{"k" => x}` 2,010 -> 1,797, `f(a: x)` to a keyword 1,161 -> 893, two keywords to
+  `**o` 2,692 -> 2,466, a control without a Hash 910 -> 872 (within its spread).
+  Not run: IronRuby.Tests, a sweep, any timing. Found on the way: gap 22.
 
 - **perf/why (/perf-step, 2026-11-19) - a find-out step: the census names the construct
   that keeps a method out of light frames.** `IR_LIGHT_FRAMES=why` and the census said
