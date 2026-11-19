@@ -32,6 +32,12 @@ void rb_ir_rarray_aset(VALUE ary, long i, VALUE v);
  * lacks it, which is what a CRuby-built extension, reading object memory directly, would.
  * On Windows the loader checks that the DLL imports libironruby-capi instead. */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+/* C++ gives a namespace-scope const internal linkage, which a weak symbol cannot have
+ * ("weak declaration must be public"), even inside an extern "C" block: it needs extern
+ * there. C warns about an initialized extern, and needs none. */
+#ifdef __cplusplus
+extern
+#endif
 __attribute__((weak, visibility("default"))) const int rb_ir_abi_version = 1;
 #endif
 /* CRuby's own, declared here too because encoding.h's inline functions now call them */
