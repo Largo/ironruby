@@ -856,6 +856,24 @@ Profile (`Util/perf/profile.sh`, self time):
 
 ## Landed
 
+- **The gate's correctness half for rounds twenty-two, twenty-four and twenty-five**
+  (2026-11-19, on d1a738cf, the three census-only merges together; run because the third
+  one changes the entry of every typed body that reads a constant). IronRuby.Tests in
+  Release: the one failure the tree had before (`Exception_CauseRaisedInClause1`), and no
+  other. `Util/ci-sweep.sh` of all five suites, 32,285 examples: no failing example that
+  `Util/spec-known-failures.txt` does not list, none listed that now passes, no file
+  without a summary. Twenty matrices (hot-shapes, block-loop, osr-array,
+  block-scope-reuse, block-given, light-rest, block-pass, splat-pass, parked-scope, int,
+  raise, full-message, hash-struct, jit, jit-const, jit-scan, jit-construct, jit-calls,
+  jit-raise, ivar), each under CRuby, the Release build, `-X:NoJIT -X:NoOSR`,
+  `IR_LIGHT_FRAMES=0` and the ReadyToRun host: CRuby's output everywhere but in three,
+  none of them this branch's - `int-matrix` (16 lines: `Integer#hash` values) and
+  `raise-matrix` (2 lines: an anonymous class's address) in every mode alike, and
+  `block-loop-matrix` on the ReadyToRun host only (4 lines, see Regressions).
+  `ivar-stress.rb` three times OK; the fourteen benchmarks verify (no FAIL).
+  Still owed to these three: the timing half (`/perf-measure`, and step 4 of the gate) -
+  no number has been taken since 2baa0099 - and what the entries list "for the gate".
+
 - **perf/constrev (/perf-step, round twenty-five, 2026-11-19, 093c7e19) - a typed body
   looks its constants up again when the constant version moves** (gap 29) - not gated.
   The census does not see this gap (0 methods changed, as it must be); it was judged by a
@@ -2560,6 +2578,17 @@ with that on every build alike (see "Caught by the review (round seventeen)").
   an argument that is no module (`1.is_a?(3)`, `"s".is_a?("String")`) the TypeError says
   "no implicit conversion of Integer into Module" where CRuby says "class or module
   required".
+
+- **On the ReadyToRun host a backtrace through a block nested in a block lacks the
+  `Range#each` frame** (found by the gate of round twenty-five; on master 0e78b9fd too,
+  so not this branch's). `Util/block-loop-matrix.rb`, rows "nested: raise in the inner
+  block" and "nested: caller from the inner block": CRuby and the Release (IL) build
+  print `block (2 levels) in ...`, `Range#each`, `block in ...`, `Array#each_index`; with
+  `IR_CONFIG=R2R` - what `ir.sh` runs by default and what a release ships - the
+  `Range#each` line is missing, four runs of four, with `-X:NoJIT`, `-X:NoOSR`, both, and
+  `IR_PARKED_SCOPES=0` alike. So it is no tier's doing: the precompiled image loses (or
+  does not name) the library method's frame. An earlier round saw the same line missing
+  once with the tiers off and could not repeat it; it was probably run on that host.
 
 ## Faults the gate missed
 
