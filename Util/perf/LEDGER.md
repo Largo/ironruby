@@ -1955,6 +1955,34 @@ Round ten:
   machine: what `loop` pays is what every method with a `rescue` pays (gap 22: about 80
   ns per call when nothing is raised), so the step to take is that one, in the compiler,
   and `loop` stays in Ruby.
+- **Garbage collector settings** (round twenty; measured, nothing built). Havlak, the
+  benchmark furthest behind CRuby, has 30.1% of its samples in libcoreclr itself
+  (`Util/perf/profile.sh`, 3081699d; then `CallSite.Target` 13.3%, `JIT_WriteBarrier`
+  3.0%, and no Ruby frame above 2.3%) and allocates 2.73 GB per iteration, so the
+  collector looked like a lever that needs no code. All fourteen with
+  `DOTNET_GCgen0size` at 64, 128 and 256 MB and with `DOTNET_gcServer=1`, both column
+  orders, on a host whose cells move by a tenth (Mandelbrot, which allocates nothing,
+  read 38 to 49 ms across the columns): geomean against the default 0.989 / 0.969 for
+  64 MB, 0.946 / 0.934 for 128, 1.000 / 0.941 for 256, 1.024 / 0.995 for the server
+  collector. Then six alternating processes each, default against 128 MB: Mandelbrot
+  0.932 (the control), Storage 0.891, Sieve 0.892, Permute 0.900, Havlak 0.962, Json
+  0.983, CD 1.040, every pair of ranges overlapping widely (CD 367-449 against 361-471
+  ms) - it leans the way the control leans, and shows nothing. Default against the
+  server collector: Havlak 0.863 with the ranges apart (3.49-3.65 s against 2.93-3.19),
+  and Storage 1.174, Mandelbrot 1.106, Json 1.083, CD 1.040; `gem list` starts in 1351
+  ms against 1195. Peak memory, Havlak / Json / Bounce, MB: default 290 / 266 / 243, 64
+  MB 225 / 195 / 179, 128 MB 298 / 264 / 240, 256 MB 425 / 396 / 348, server 350 / 204
+  / 179; `-e 1` 117 everywhere.
+  What it says: no setting is better for the suite; the server collector is better
+  for Havlak alone and worse for the rest and for start-up, so it is not a default.
+  That Havlak answers to the collector that marks on four cores and not to a larger
+  youngest generation says its time in the runtime is the marking of what survives
+  (the graph it builds), not the number of collections: it falls with fewer bytes that
+  live long enough to be marked, which is gap 13's allocation per iterator call (about
+  half of Havlak's bytes), not with a knob. And the default youngest generation follows
+  the L3 cache the host reports (260 MiB on this one: the default's peak memory is the
+  128 MB setting's), which is one way a change of host changes IronRuby's numbers and
+  not CRuby's.
 
 ## Regressions
 
