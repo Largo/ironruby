@@ -12,6 +12,9 @@
 #
 # Linux x64 for now (the headers' config.h is x86_64-linux); set CC to use another compiler.
 set -euo pipefail
+# sort and comm below must agree on the order: in en_GB.UTF-8, say, sort puts `_Exit` where
+# comm does not expect it, comm stops with "not in sorted order" and the build with it.
+export LC_ALL=C
 
 IR_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SRC="$IR_ROOT/Src/Ruby/CApi/native"

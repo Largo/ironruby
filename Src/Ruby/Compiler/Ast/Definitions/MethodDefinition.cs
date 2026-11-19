@@ -515,6 +515,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightSplatEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_SPLAT") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_INTERPOLATION=0 keeps every method that interpolates (`"a#{x}"') out of light frames (see
+        /// LightFrameRewriter.VisitMethodCall and VisitExtension).
+        /// </summary>
+        internal static readonly bool LightInterpolationEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_INTERPOLATION") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -1069,6 +1075,14 @@ namespace IronRuby.Compiler.Ast {
                         _inTraceHook--;
                     }
                 }
+                if (LightInterpolationEnabled && _rfc != null && node.Method == Methods.TryConvertToSWithRefinements &&
+                    node.Arguments.Count == 2 && IsScope(node.Arguments[0])) {
+                    // "#{x}" in a light frame, as `&x' below: no refinement is active in it, and its scope would answer
+                    // none, so the helper would answer null and #to_s goes through the conversion site. A block's frame
+                    // (_rfc is null) keeps the helper: a block may be written where a refinement is active, or be the
+                    // body of a `refine', whose Proc carries the refinements it activates.
+                    return Ast.Block(Visit(node.Arguments[1]), AstUtils.Constant(null, typeof(MutableString)));
+                }
                 if (LightBlockPassEnabled && _rfc != null && node.Arguments.Count >= 1 && IsScope(node.Arguments[0])) {
                     if (node.Method == Methods.TryConvertBlockWithRefinements && node.Arguments.Count == 2) {
                         // `&x' in a light frame: no refinement is active in it (a method defined where one is never is a light
@@ -1154,6 +1168,10 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (LightSplatEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ExplicitSplatAction) {
                     // `*x': #to_a through a conversion site, which is given no scope
+                    return base.VisitExtension(node);
+                }
+                if (LightInterpolationEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ConvertToSAction) {
+                    // "#{x}": #to_s through a conversion site, which is given no scope
                     return base.VisitExtension(node);
                 }
                 NeedsScope = true;

@@ -7398,6 +7398,58 @@ p ""xxaxx"".strip(""x"")
         }
 
         /// <summary>
+        /// A method that interpolates (`"a#{x}"') runs without a scope (MethodDefinition.LightInterpolationEnabled): #to_s is
+        /// called through a conversion site, a refinement in use where the method was defined - which keeps it out of light
+        /// frames - is still honoured, one in use only after it is not, a scope made on demand (binding, __method__) sees the
+        /// frame, and recursion through #to_s is a SystemStackError. Util/interpolation-matrix.rb has the full matrix.
+        /// Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameInterpolation1() {
+            TestOutput(@"
+require 'ruby4'
+class Shown; def to_s = ""shown""; end
+class NonString; def to_s = 42; end
+class Raises; def to_s = raise(IndexError, ""to_s raised""); end
+class Deep; def to_s = deep_s(self); end
+def s_one(x) = ""a#{x}""
+def s_two(x, y) = ""<#{x}|#{y}>""
+def w_raise(x) = raise(ArgumentError, ""bad #{x}"")
+def f_binding(x) = ""#{binding.local_variable_get(:x)}""
+def f_method(x) = ""#{__method__} #{x}""
+def f_given(x) = ""#{block_given?} #{x}""
+def deep_s(o) = ""<#{o}>""
+def r_before(x) = ""#{x}""
+module RefToS; refine(Integer) { def to_s = ""refined"" }; end
+using RefToS
+def r_after(x) = ""#{x}""
+p s_one(1), s_one(nil), s_one(Shown.new), s_two(:a, 1.5), s_one(NonString.new)[/#<NonString/]
+begin; s_one(Raises.new); rescue IndexError => e; p e.message, e.backtrace[1][/in .*/]; end
+begin; w_raise(1); rescue ArgumentError => e; p e.message, e.backtrace[0][/in .*/]; end
+p f_binding(3), f_method(4), f_given(5)
+begin; deep_s(Deep.new); rescue SystemStackError => e; p e.class; end
+p r_before(1), r_after(1)
+p 40.times.map { |i| s_one(i) }.last
+", @"
+""a1""
+""a""
+""ashown""
+""<a|1.5>""
+""#<NonString""
+""to_s raised""
+""in 'Object#s_one'""
+""bad 1""
+""in 'Object#w_raise'""
+""3""
+""f_method 4""
+""false 5""
+SystemStackError
+""1""
+""refined""
+""a39""
+");
+        }
+
+        /// <summary>
         /// A method with a rest parameter is a light frame too (MethodDefinition.IsLightFrameCandidate): the Array is the
         /// call's own, and a scope made on demand - for binding, local_variables, a block - has it as a scope made at entry
         /// does. Util/light-rest-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
