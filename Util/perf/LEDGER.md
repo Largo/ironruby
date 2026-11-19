@@ -6,59 +6,65 @@ old ones; the history is in git.
 
 ## Current numbers
 
-2026-11-18, 981d2704 (round eighteen merged: `perf/bounce`), Release net10.0, 4 cores
-(Xeon, 2.10 GHz), `git status` clean. Load average 0.47 when the AWFY run began, 1.0-1.4
-through the rest. The same host as the table before (d064caf6, three hours earlier; the
-one the container was restarted onto at midday, slower than the morning's: CRuby's NBody
-1.80 s here, 1.90 s then, 1.59 s on the morning's). CRuby 4.0.9 (no YJIT), TruffleRuby
-40.0.0 (Oracle GraalVM Native). The machine's speed differs between sessions by tens of
-percent, so compare ratios, not microseconds, and ratios across sessions only with a
-build of the older tree beside them.
+2026-11-19, 3081699d (round nineteen merged: `perf/raise`), Release net10.0, 4 cores
+(Xeon, 2.10 GHz), `git status` clean. Load average 0.54 when the AWFY run began, 1.0-1.3
+through the rest. The container was restarted during the first attempt at this table and
+is on a third host since yesterday morning, and on this one CRuby's own numbers move by a
+fifth between two runs ten minutes apart (Richards 235 and 279 ms, Mandelbrot 627 and 788
+ms, NBody 1.46 and 1.57 s; 1.80 s on the host of the table before), so the two columns
+of ratios below disagree by more than any change of the last rounds is worth. CRuby
+4.0.9 (no YJIT), TruffleRuby 40.0.0 (Oracle GraalVM Native). The machine's speed differs
+between sessions by tens of percent, so compare ratios, not microseconds, and ratios
+across sessions only with a build of the older tree beside them.
 
 Are-We-Fast-Yet, all fourteen, steady state, us per iteration (lower is better), one run
 of the three (`awfy.rb 12`); "second run" is IronRuby/CRuby in a run of those two with
-IronRuby first; the last column is the ratio of the table before (d064caf6):
+IronRuby first; the last column is the ratio of the table before (981d2704, another
+host):
 
-| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | second run | d064caf6 |
+| benchmark | CRuby | IronRuby | TruffleRuby | IronRuby/CRuby | second run | 981d2704 |
 |---|---:|---:|---:|---:|---:|---:|
-| Havlak | 2298665 | 3529236 | 150497 | 1.54 | 1.61 | 1.57 |
-| DeltaBlue | 41120 | 53574 | 1679 | 1.30 | 1.19 | 1.17 |
-| Permute | 115071 | 139910 | 6519 | 1.22 | 1.21 | 1.22 |
-| Richards | 318836 | 384612 | 16054 | 1.21 | 1.16 | 1.18 |
-| Queens | 97561 | 93282 | 7011 | 0.96 | 0.92 | 0.97 |
-| Towers | 118110 | 112066 | 4992 | 0.95 | 1.00 | 0.92 |
-| Sieve | 165406 | 142854 | 7964 | 0.86 | 0.84 | 0.88 |
-| Json | 86961 | 64459 | 7657 | 0.74 | 0.81 | 0.73 |
-| CD | 752088 | 517752 | 35177 | 0.69 | 0.68 | 0.66 |
-| Storage | 153917 | 93437 | 17866 | 0.61 | 0.64 | 0.64 |
-| Bounce | 93236 | 49557 | 2369 | 0.53 | 0.54 | 0.99 |
-| NBody | 1795223 | 599883 | 17019 | 0.33 | 0.33 | 0.30 |
-| List | 103031 | 29030 | 7398 | 0.28 | 0.26 | 0.27 |
-| Mandelbrot | 1000909 | 55775 | 48961 | 0.06 | 0.06 | 0.05 |
+| Havlak | 1934349 | 3548116 | 160791 | 1.83 | 1.66 | 1.54 |
+| Richards | 234844 | 330112 | 12533 | 1.41 | 1.17 | 1.21 |
+| DeltaBlue | 39096 | 47920 | 1475 | 1.23 | 1.01 | 1.30 |
+| Towers | 96840 | 104510 | 3634 | 1.08 | 0.95 | 0.95 |
+| Permute | 104933 | 108013 | 5983 | 1.03 | 1.29 | 1.22 |
+| Queens | 85451 | 84083 | 6212 | 0.98 | 1.00 | 0.96 |
+| Sieve | 146963 | 123846 | 6697 | 0.84 | 0.86 | 0.86 |
+| Storage | 121582 | 87769 | 15338 | 0.72 | 0.68 | 0.61 |
+| Json | 81285 | 58059 | 6220 | 0.71 | 0.89 | 0.74 |
+| CD | 689496 | 488427 | 35675 | 0.71 | 0.69 | 0.69 |
+| Bounce | 89248 | 43737 | 1939 | 0.49 | 0.49 | 0.53 |
+| NBody | 1455188 | 496306 | 13641 | 0.34 | 0.35 | 0.33 |
+| List | 95767 | 23920 | 5528 | 0.25 | 0.25 | 0.28 |
+| Mandelbrot | 626590 | 48397 | 41204 | 0.08 | 0.06 | 0.06 |
 
-Geomean of the fourteen: IronRuby/CRuby 0.641 and 0.639 (0.656 and 0.660 at d064caf6,
-0.681 and 0.693 at a7060a27 in the morning); TruffleRuby/CRuby 0.049; IronRuby is 13.1
-times TruffleRuby's time (Mandelbrot 1.1, List 4, Storage 5, Json 8, Queens 13, CD 15,
-Sieve 18, Bounce and Permute 21, Towers 22, Havlak 23, Richards 24, DeltaBlue 32, NBody
-35). Of the thirteen without Havlak, to compare with earlier tables: 0.600 and 0.595
-(0.614 and 0.617 at d064caf6, 0.634 and 0.650 at a7060a27, 0.678 at f37be3b1).
+Geomean of the fourteen: IronRuby/CRuby 0.667 and 0.646 (0.641 and 0.639 at 981d2704,
+0.656 and 0.660 at d064caf6, 0.681 and 0.693 at a7060a27); TruffleRuby/CRuby 0.049;
+IronRuby is 13.6 times TruffleRuby's time (Mandelbrot 1.2, List 4, Storage 6, Json 9,
+CD and Queens 14, Permute and Sieve 18, Havlak 22, Bounce 23, Richards 26, Towers 29,
+DeltaBlue 32, NBody 36). Of the thirteen without Havlak: 0.617 and 0.601 (0.600 and
+0.595 at 981d2704). TruffleRuby's DeltaBlue was 22 ms in the table's run and 1.51 and
+1.44 ms in two runs alone right after; the table and the geomeans have 1.48.
 
-What moved since d064caf6, by the direct comparison of the two trees under "Landed":
-Bounce 0.99 -> 0.53, 0.54 (round eighteen, a held variable in two integer types: 0.56-0.57
-of the tree before). Since a7060a27: Json 0.93 -> 0.74, 0.81 (round seventeen). Four
-benchmarks are still slower than CRuby: Havlak, DeltaBlue, Permute and Richards.
+Nothing moved since 981d2704 by the direct comparison of the two trees: round nineteen
+(a `raise` as a deopt) changed no benchmark (0.97-1.02 in alternating processes on the
+host before this one); what it changed is under "Landed". Where the two columns above
+differ from the last table, it is this host. By the last pair of tables taken on one
+host (981d2704), four benchmarks are slower than CRuby: Havlak, DeltaBlue, Permute and
+Richards.
 
 The five measured from the start, IronRuby/CRuby; "now" is the two runs above, the other
 columns are what was recorded when each round landed, in other sessions:
 
-| benchmark | now | d064caf6 | a7060a27 | f37be3b1 | r10 | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| DeltaBlue | 1.30, 1.19 | 1.17, 1.15 | 1.24, 1.23 | 1.23 | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
-| Richards | 1.21, 1.16 | 1.18, 1.20 | 1.11, 1.16 | 1.02 | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
-| Json | 0.74, 0.81 | 0.73, 0.80 | 0.93, 0.94 | 0.95 | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
-| Bounce | 0.53, 0.54 | 0.99, 0.97 | 0.94, 0.90 | 0.89 | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
-| Towers | 0.95, 1.00 | 0.92, 0.96 | 0.99, 1.04 | 0.88 | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
-| geomean | 0.90, 0.90 | 0.98, 1.01 | 1.04, 1.05 | 0.99 | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
+| benchmark | now | 981d2704 | d064caf6 | a7060a27 | f37be3b1 | r10 | r9 | r7 | r6 | r5 | r4 | r3 | r2 | r1 | start |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DeltaBlue | 1.23, 1.01 | 1.30, 1.19 | 1.17, 1.15 | 1.24, 1.23 | 1.23 | 1.18, 1.22, 1.16 | 1.18, 1.22, 1.25 | 1.33, 1.26 | 1.28 | 1.23 | 1.41 | 1.56 | 1.64 | 1.95 | 2.23 |
+| Richards | 1.41, 1.17 | 1.21, 1.16 | 1.18, 1.20 | 1.11, 1.16 | 1.02 | 1.20, 1.08, 1.29 | 1.11, 1.29, 1.21 | 1.18, 1.19 | 1.15 | 1.16 | 1.19 | 1.42 | 1.48 | 1.61 | 1.94 |
+| Json | 0.71, 0.89 | 0.74, 0.81 | 0.73, 0.80 | 0.93, 0.94 | 0.95 | 0.90, 1.04, 0.97 | 1.02, 0.87, 0.74 | 0.94, 0.87 | 1.02 | 1.13 | 1.19 | 1.20 | 1.28 | 1.56 | 1.64 |
+| Bounce | 0.49, 0.49 | 0.53, 0.54 | 0.99, 0.97 | 0.94, 0.90 | 0.89 | 0.92, 1.06, 1.73 | 0.91, 0.90, 0.92 | 0.73, 0.90 | 0.92 | 0.91 | 0.89 | 1.17 | 1.18 | 1.40 | 1.65 |
+| Towers | 1.08, 0.95 | 0.95, 1.00 | 0.92, 0.96 | 0.99, 1.04 | 0.88 | 0.96, 1.04, 0.94 | 0.99, 0.97, 0.95 | 1.00, 0.93 | 0.94 | 0.99 | 1.02 | 1.27 | 1.28 | 1.57 | 1.90 |
+| geomean | 0.92, 0.87 | 0.90, 0.90 | 0.98, 1.01 | 1.04, 1.05 | 0.99 | 1.02, 1.09, 1.19 | 1.04, 1.04, 1.00 | 1.02, 1.02 | 1.05 | 1.08 | 1.13 | 1.32 | 1.36 | 1.61 | 1.86 |
 
 Rounds seven to sixteen changed none of these five on purpose (Json's allocation fell in
 round nine); round seventeen changed Json and round eighteen Bounce. What the rounds did
@@ -67,75 +73,73 @@ NBody, CD and Json in round nine, List in rounds ten and thirteen, NBody in roun
 fourteen and sixteen, Json in round seventeen, Bounce in round eighteen).
 
 Bytes allocated per iteration (`Util/perf/alloc.rb`; it moves by about 0.3% between
-invocations, unlike the timings), MB, at 981d2704: DeltaBlue 24.9, Richards 14.0, Json
-28.5, CD 226.1, Bounce 7.3, List 0.6, Mandelbrot 3.2, NBody 152.1, Permute 124.6, Queens
-41.2, Sieve 98.7, Storage 112.6, Towers 0.16 (Towers reads anything from 0.07 to 0.26
-from one invocation to the next, on every tree), Havlak 2728. Where they came from, round
+invocations, unlike the timings), MB, at 3081699d: DeltaBlue 24.7, Richards 14.1, Json
+28.5, CD 225.9, Bounce 7.3, List 0.6, Mandelbrot 3.2, NBody 152.0, Permute 124.6, Queens
+41.3, Sieve 98.8, Storage 112.6, Towers 0.13 (Towers reads anything from 0.07 to 0.26
+from one invocation to the next, on every tree), Havlak 2726. Where they came from, round
 six -> now: CD 516 -> 226 (round seven); NBody 2892 -> 1364 (round nine) -> 602 (round
 fourteen) -> 152 (round sixteen: the boxes of its Float instance variables); Json 35.8 ->
 30.6 (round nine) -> 28.5 (round seventeen: the scanner's Integers stay unboxed inside
 `read`); Bounce 11.0 -> 7.3 (round eighteen: the ball's sums inside `bounce`); List 8.2 ->
 0.6 (round ten); Mandelbrot 94.5 -> 3.2 (not recorded when it happened; `Integer#<<` and
 `#>>` in the JIT, 9997c5bc, is the likely one, as for its time); DeltaBlue, Permute,
-Queens, Sieve and Storage where they were. Richards is under "Regressions": 14.0 now,
+Queens, Sieve and Storage where they were. Richards is under "Regressions": 14.1 now,
 and this file said 3.2.
 
-Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on 981d2704; a line
+Per operation (`Util/perf/micro.rb`), ns, one run of `micro-table.rb` on 3081699d; a line
 moves by 15-20% from run to run on this machine, so a ratio is good to about that.
-"d064caf6" is the ratio of the last table, on the same host. `ivar_rw` (1.65 -> 1.05) is
-round eighteen's: the method writes `@x` as a sum and as 0, and is compiled now (58 -> 40
-ns against the tree before, in both orders). The other ratios that are better than in
-the last table by more than this table's noise (`each4`, `swap`, `s_each2`, `s_map2`)
-are not from a change: the tree before read the same beside the candidate. The small
-call shapes are still 10-25% worse against CRuby on this host than on the morning's
-(see the table of a7060a27 in git), which nobody has looked at:
+"981d2704" is the ratio of the last table, on the host before this one. No line of this
+table is round nineteen's (its shapes are `Util/bench/jit-raise-shapes.rb`); where a
+ratio differs from the last table (`swap`, `cmp` better; `veach1`, the `s_map` and
+`s_*4` lines worse) the unchanged tree read the same nanoseconds beside the candidate
+in that round's acceptance run, and CRuby's side of the ratio is what this host moved:
 
-| op | CRuby | IronRuby | ratio | d064caf6 | start |
+| op | CRuby | IronRuby | ratio | 981d2704 | start |
 |---|---:|---:|---:|---:|---:|
-| empty | 22.9 | 22.2 | 0.97 | 1.08 | 1.23 |
-| ivar_rw | 38.0 | 39.8 | 1.05 | 1.65 | 2.72 |
-| getter | 26.8 | 33.1 | 1.24 | 1.22 | 3.17 |
-| attr | 19.1 | 3.8 | 0.20 | 0.21 | 0.80 |
-| cmp | 28.9 | 30.6 | 1.06 | 1.16 | 3.58 |
-| abs | 34.0 | 33.7 | 0.99 | 1.06 | 3.07 |
-| arr | 43.2 | 42.4 | 0.98 | 1.05 | 1.82 |
-| nil? | 26.1 | 33.6 | 1.29 | 1.42 | 3.48 |
-| == | 30.1 | 29.2 | 0.97 | 1.07 | 3.35 |
-| yield | 39.4 | 61.5 | 1.56 | 1.70 | 2.57 |
-| each4 | 195.6 | 226.4 | 1.16 | 1.36 | 1.87 |
-| while10 | 201.5 | 33.8 | 0.17 | 0.20 | 0.23 |
-| new2 | 95.8 | 71.7 | 0.75 | 0.88 | 1.47 |
-| symcase | 32.1 | 30.1 | 0.94 | 1.05 | 1.03 |
-| str== | 107.8 | 51.2 | 0.47 | 0.54 | 1.44 |
-| poly2 | 56.5 | 37.8 | 0.67 | 0.72 | 2.11 |
-| blockeach | 61.3 | 52.2 | 0.85 | 0.94 | 2.33 |
-| lit== | 223.3 | 61.7 | 0.28 | 0.32 | 0.94 |
-| swap | 71.5 | 67.6 | 0.95 | 1.16 | 1.35 |
-| locattr | 70.6 | 45.9 | 0.65 | 0.70 | 1.38 |
-| sqrtw | 48.9 | 2.7 | 0.06 | 0.06 | 1.34 |
-| rangeeach | 51.2 | 0.8 | 0.02 | 0.01 | 0.87 |
-| blkattr | 76.9 | 51.5 | 0.67 | 0.63 | 1.12 |
-| selfcall | 105.8 | 32.8 | 0.31 | 0.34 | 0.99 |
-| veach1 | 206.5 | 334.2 | 1.62 | 1.71 | 1.59 |
-| veach2 | 277.6 | 406.9 | 1.47 | 1.58 | 1.37 |
-| veach4 | 400.9 | 548.2 | 1.37 | 1.28 | 1.38 |
-| veach100 | 5472.7 | 6738.2 | 1.23 | 1.28 | 1.04 |
-| rangelit | 171.9 | 95.8 | 0.56 | 0.64 | 0.87 |
-| short4 | 321.4 | 386.9 | 1.20 | 1.22 | 1.41 |
-| s_each1 | 81.0 | 178.3 | 2.20 | 2.02 | 2.11 |
-| s_times1 | 97.0 | 174.3 | 1.80 | 1.67 | 2.07 |
-| s_map1 | 118.1 | 180.2 | 1.53 | 1.66 | 1.93 |
-| s_any1 | 74.0 | 176.6 | 2.39 | 2.30 | 6.15 |
-| s_each2 | 119.2 | 182.5 | 1.53 | 1.79 | 1.70 |
-| s_times2 | 132.0 | 186.8 | 1.42 | 1.59 | 1.57 |
-| s_map2 | 157.1 | 192.3 | 1.22 | 1.48 | 1.29 |
-| s_any2 | 104.7 | 192.4 | 1.84 | 1.98 | 4.54 |
-| s_each4 | 188.1 | 244.1 | 1.30 | 1.36 | 1.25 |
-| s_times4 | 203.1 | 232.1 | 1.14 | 1.24 | 1.27 |
-| s_map4 | 241.3 | 243.6 | 1.01 | 1.12 | 1.05 |
-| s_any4 | 155.8 | 239.1 | 1.53 | 1.55 | 3.09 |
-| listwalk | 137.3 | 59.1 | 0.43 | 0.44 | 0.71 |
-| treefind | 1239.8 | 544.8 | 0.44 | 0.39 | 0.60 |
+| empty | 19.9 | 21.1 | 1.06 | 0.97 | 1.23 |
+| ivar_rw | 27.4 | 29.8 | 1.09 | 1.05 | 2.72 |
+| getter | 19.5 | 24.7 | 1.27 | 1.24 | 3.17 |
+| attr | 14.6 | 3.3 | 0.23 | 0.20 | 0.80 |
+| cmp | 26.9 | 23.9 | 0.89 | 1.06 | 3.58 |
+| abs | 32.0 | 27.2 | 0.85 | 0.99 | 3.07 |
+| arr | 38.2 | 32.8 | 0.86 | 0.98 | 1.82 |
+| nil? | 24.5 | 34.5 | 1.41 | 1.29 | 3.48 |
+| == | 26.3 | 28.6 | 1.09 | 0.97 | 3.35 |
+| yield | 31.8 | 45.2 | 1.42 | 1.56 | 2.57 |
+| each4 | 149.8 | 188.3 | 1.26 | 1.16 | 1.87 |
+| while10 | 184.0 | 31.6 | 0.17 | 0.17 | 0.23 |
+| new2 | 71.6 | 67.8 | 0.95 | 0.75 | 1.47 |
+| symcase | 23.0 | 24.3 | 1.06 | 0.94 | 1.03 |
+| str== | 98.4 | 50.1 | 0.51 | 0.47 | 1.44 |
+| poly2 | 47.7 | 35.5 | 0.74 | 0.67 | 2.11 |
+| blockeach | 45.4 | 42.0 | 0.93 | 0.85 | 2.33 |
+| lit== | 162.0 | 60.6 | 0.37 | 0.28 | 0.94 |
+| swap | 61.8 | 46.6 | 0.75 | 0.95 | 1.35 |
+| locattr | 60.1 | 42.1 | 0.70 | 0.65 | 1.38 |
+| sqrtw | 45.2 | 2.5 | 0.06 | 0.06 | 1.34 |
+| rangeeach | 37.5 | 0.7 | 0.02 | 0.02 | 0.87 |
+| blkattr | 66.8 | 41.9 | 0.63 | 0.67 | 1.12 |
+| selfcall | 73.4 | 31.9 | 0.43 | 0.31 | 0.99 |
+| veach1 | 154.2 | 283.1 | 1.84 | 1.62 | 1.59 |
+| veach2 | 196.1 | 316.2 | 1.61 | 1.47 | 1.37 |
+| veach4 | 313.4 | 401.6 | 1.28 | 1.37 | 1.38 |
+| veach100 | 4299.6 | 4330.5 | 1.01 | 1.23 | 1.04 |
+| rangelit | 124.7 | 88.0 | 0.71 | 0.56 | 0.87 |
+| short4 | 245.9 | 316.2 | 1.29 | 1.20 | 1.41 |
+| s_each1 | 67.7 | 149.8 | 2.21 | 2.20 | 2.11 |
+| s_times1 | 81.9 | 157.6 | 1.92 | 1.80 | 2.07 |
+| s_map1 | 85.3 | 163.5 | 1.92 | 1.53 | 1.93 |
+| s_any1 | 56.3 | 139.6 | 2.48 | 2.39 | 6.15 |
+| s_each2 | 101.2 | 166.8 | 1.65 | 1.53 | 1.70 |
+| s_times2 | 120.6 | 165.4 | 1.37 | 1.42 | 1.57 |
+| s_map2 | 126.6 | 180.0 | 1.42 | 1.22 | 1.29 |
+| s_any2 | 84.2 | 166.6 | 1.98 | 1.84 | 4.54 |
+| s_each4 | 146.7 | 225.7 | 1.54 | 1.30 | 1.25 |
+| s_times4 | 155.6 | 230.7 | 1.48 | 1.14 | 1.27 |
+| s_map4 | 186.3 | 225.4 | 1.21 | 1.01 | 1.05 |
+| s_any4 | 131.8 | 177.4 | 1.35 | 1.53 | 3.09 |
+| listwalk | 111.6 | 58.9 | 0.53 | 0.43 | 0.71 |
+| treefind | 1080.5 | 501.8 | 0.46 | 0.44 | 0.60 |
 
 `lit==`, `swap` and `locattr` are round seven's shapes, and their "start" is round six: a
 literal as the receiver of `==`, two element stores in one method, Float attr reads on
@@ -338,9 +342,22 @@ Profile (`Util/perf/profile.sh`, self time):
    `read_required_char`, `read_value`, `read_name`, `parse` and the three `read_true`,
    `read_false`, `read_null` behind them). A `raise` can be a deopt where a deopt is
    allowed: the generic body runs again from the top and raises, with its own frame for
-   the backtrace. In progress (round nineteen, perf/raise). After it, by the same data:
-   a statement guarded by a constant that is false (`... if TRACING`) dropped under the
-   constant's version, for `schedule`.
+   the backtrace. Done in round nineteen (see Landed, perf/raise): the methods compile,
+   shapes like them are a third faster, and no benchmark moves, because each caller
+   stops at its next reason - `queue_packet` at a call on another receiver
+   (`add_input_and_check_priority`), `release` at an attribute write on an unprofiled
+   receiver, Json's `read_required_char` at "a deopt after an effect (call raise)"
+   since the `read_char` it binds writes through a direct call, which is not held back,
+   DeltaBlue's `satisfy` at `inputs_do` on self.
+   Next by the same data: a statement guarded by a constant that is false
+   (`trace(...) if TRACING`) dropped under the constant's version, for Richards'
+   `schedule` (7.5% self, the largest generic body of the benchmark); behind it the loop
+   tier still refuses `schedule`'s `while` for its calls on another receiver, so find
+   out first what compiles once the screen lets it through. And two that the rounds
+   above keep running into: held-back writes that reach through a bound callee (a
+   caller whose only effects are its callee's writes to the same self: `read_required_char`
+   -> `read_char` -> `read`, `set_nesting_level` -> `set_is_root`), and attribute writes
+   on a receiver the profile has not seen (`release`, Havlak's `split_bucket`).
 2. **NBody: 2.9 GB allocated per iteration**, about 80% of it Float boxes (some 35 per
    pair of bodies; the same loops with an empty inner body allocate a fifth - this and the
    figures below are the NBody experiment's, taken on a loaded machine). Mandelbrot,
@@ -1594,6 +1611,76 @@ the machine; one independent review; one acceptance run.
   had the frame, and the run with the tiers off does not use the compiler this change
   is in. Under "Regressions", to check.
 
+Round nineteen: one experiment on d9fd2817, by a subagent in its own worktree, alone on
+the machine; one independent review; one acceptance run. Chosen from profiles and not
+from the gap's list (see gap 1).
+
+- **perf/raise 0f4f0cfd 51646893 (merged in 3081699d) - a `raise` in a typed body is a
+  deopt** (gap 1). The screen took `raise 'x'` for a call of a method on self that is no
+  inlinable leaf and refused the whole method ("MethodCall raise (self)"), and every
+  caller that would have bound it with it. Now a call of `raise` or `fail` with no
+  receiver and no literal block passes the screen with its arguments unwalked and is
+  emitted as `JitRuntime.RaiseDeopt()`: the typed body throws its deopt, the generic
+  body runs again from the top and raises - class, message, backtrace, `cause`, `$!` and
+  the TracePoint events are the generic body's, because it does all of it. The existing
+  rule says where: after held-back writes of self's instance variables it is allowed
+  (the generic body makes the stores and then raises), after any other effect the method
+  is declined as before. Declined too: a body in which every path raises, a `raise` in
+  an outlined loop, and a self whose `raise`/`fail` resolves (singleton class and the
+  definition site's refinements included) to anything but Kernel's - which is about
+  cost, not soundness, since a deopt runs the source whatever `raise` is.
+  The second commit is what makes it safe to take: a body that deopted on every call
+  was never retired, because the retire rule compares the typed body with the cost of
+  generic calls that returned, and none did (a lookup that always raises: 12.2 us per
+  call against the baseline's 7.6). A generic call that raises is timed now, by an
+  exception filter that never catches, and those times count while no call has ever
+  returned; the body retires after one window and backs off as any other.
+  Against d9fd2817, `Util/bench/jit-raise-shapes.rb` (new) in both orders, ns, CRuby /
+  before / after: a caller that binds a lookup with a raise 60 / 86 / 58 (0.67, 0.67),
+  an argument check before arithmetic 42 / 74 / 49 (0.66, 0.68), the lookup itself 38 /
+  62 / 55 (0.89, 0.85). Raising on every call 6.9 us, on every second call 3.5 us and in
+  bursts: 0.99, 1.01 and 1.02 one way and 1.01, 0.99 and 0.97 the other, ten alternating
+  rounds each, every range overlapping; one in a thousand 1.05 and 0.97, overlapping.
+  (The reviewer's own script read the raising shapes 1-8% slower at the median in five
+  runs with overlapping spreads; ten rounds each way do not show it.) CRuby raises in
+  0.7 us: an exception here costs ten times CRuby's, before and after.
+  No benchmark moves: the fourteen 0.991 and 0.980; in six alternating processes
+  Richards 0.996, Json 1.017, DeltaBlue 1.020, Towers 1.007, Bounce 0.972, CD 0.990.
+  What compiles now and where the callers stop: Richards' `find_task` is specialized,
+  `release` binds it and declines at "attribute assignment task_holding= on an
+  unprofiled receiver", `queue_packet` is refused for its call of
+  `add_input_and_check_priority` on another receiver; Json's `read_required_char`
+  declines at "a deopt after an effect (call raise)" because the `read_char` it binds
+  writes through a direct call, which cannot be held back, and `read_true`,
+  `read_false`, `read_null` are refused for a String literal; DeltaBlue's `satisfy` is
+  refused for `inputs_do` on self; Towers' `pop_disk_from`, `push_disk`, `move_top_disk`
+  and `move_disks` pass the screen now and are declined behind it. Start-up on the
+  ReadyToRun host, five commands, ten runs each: `-e 1` 469 / 466, `gem --version` 579 /
+  604 (623 / 635 at the median), `gem list` 1244 / 1207, `require "irb"` 1173 / 1151, an
+  irb session 1759 / 1743 ms; the reviewer counted what the JIT does there on both
+  builds and it is the same (`gem list` 10 specialized, 5 rejected; irb 6 and 5).
+  The gate, on 51646893: IronRuby.Tests with the baseline's one failure;
+  `Util/jit-raise-matrix.rb` (new: what is raised, in eleven forms; arguments with
+  effects; the raise under every kind of condition; after held-back writes and after an
+  effect; `ensure`, `rescue`, `retry` and `catch` in the caller; five kinds of a `raise`
+  that is not Kernel's; TracePoint; a raise in a thread; a bound caller's two frames)
+  and the raise, full-message, jit-scan, jit, jit-calls, hot-shapes, ivar, block-loop,
+  osr-array and hash-struct matrices the same on both builds with the tiers on, off and
+  with `-X:NoJITCalls`, CRuby's but for an address in raise-matrix and int's 16 lines;
+  ivar-stress three times; all five ruby/spec suites, nothing new; no FAIL in two runs
+  of the fourteen. One review by a subagent that had not seen the code, eleven probe
+  files: the exception through every way of calling the method (`send`, `Method#call`,
+  a Proc, `define_method`, `super`, an alias, a bound caller), no frame of the method
+  twice and no stub frame; effects the rerun could make twice (a redefined `==`,
+  `method_missing`, `coerce`, a write inside the raise's arguments) counted once;
+  TracePoint's `:call`, `:line`, `:raise` and `:c_call` counts as CRuby's whether the
+  trace was enabled before or after the method was hot; `throw`, `Thread#kill`,
+  `Thread#raise` and `exit` through the new filter. No wrong result, no method
+  specialized before and declined now. Not reached: `ObjectSpace` counts, a finalizer,
+  `Thread#backtrace` from another thread during the rerun.
+  A cost that is new and small: a method declined while `Kernel#raise` was wrapped stays
+  declined after it is put back.
+
 ## Rejected
 
 - **A same-encoding fast path in `MutableString.Equals`** (gap: Json's `'0' == @current`
@@ -1889,6 +1976,29 @@ whose change is in the method JIT, which that run does not use). Four reruns on 
 build and on the baseline had the frame, as CRuby has. A backtrace that depends on
 something that varies from run to run with the tiers off - whether the DLR has compiled
 a frame's rule or still interprets it would be one - has not been looked for.
+
+To fix, not performance: differences from CRuby 4.0 that the reviews of rounds seventeen
+to nineteen met on the way. Each is the same on the build before those rounds and with
+the tiers off, so none is the JIT's; each wants a test with CRuby's output.
+- `raise "x #{i}"` (an interpolated String as the argument) gets the previous
+  statement's line in its backtrace; with the message built by `+` the line is right.
+- `raise 42` (TypeError, "exception class/object expected") has no `'Kernel#raise'`
+  frame at the top of its backtrace; CRuby has one.
+- The frames of `Exception.exception`, `Exception#set_backtrace` and `Method#call` are
+  missing from backtraces where CRuby shows them.
+- A frozen exception instance that is raised gets a backtrace (CRuby leaves it nil), and
+  `backtrace_locations` on a frozen exception raises FrozenError (CRuby: nil).
+- TracePoint fires no `:return` when a method is left by an exception; CRuby fires it
+  after `:raise`.
+- An Integer between 2**31 and 2**62 is not identical to an equal one computed again
+  (`equal?` false, different `object_id`); in CRuby every Integer up to 2**62-1 is a
+  Fixnum. Inside the Int32 range IronRuby agrees.
+- `ObjectSpace._id2ref` cannot find the id of a Float that CRuby holds as a flonum
+  (RangeError), found in round sixteen.
+And in the tools: `Util/jit-matrix.rb` replaces `Integer#-` at about line 2510 and never
+restores it, and restores `String#length` and others through `alias_method`, after which
+the JIT no longer takes them for the built-in ones; the two thousand lines behind run
+with that on every build alike (see "Caught by the review (round seventeen)").
 
 ## Faults the gate missed
 
