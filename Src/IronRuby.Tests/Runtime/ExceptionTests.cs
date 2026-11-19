@@ -1706,6 +1706,12 @@ end
         /// clause has the exception being handled as its cause, as one Kernel#raise raises there has; it had none (the clause's
         /// finally block restored $! before the handler that caught the new exception set the cause). Also through a class
         /// with a #new of its own. Interpreted and compiled; expected output is CRuby 4.0's.
+        ///
+        /// Compiled, a Release build on .NET 10 lost the cause of the exceptions a call site raises (`1/0', `e.zork'): the JIT
+        /// emitted no store for the conditional that kept the handled exception in the clauses' finally block, once it had
+        /// inlined RubyOps.GetCurrentException there (a Debug build does not inline it). The exception is now kept as the
+        /// clauses are entered (Body.TransformExceptionHandling), and forgotten again by a retry: the else clause that then
+        /// raises has no cause. A rescue inside the clause that has come and gone leaves the clause's exception the cause.
         /// </summary>
         public void Exception_CauseRaisedInClause1() {
             const string script = @"def zero; begin; raise ""a""; rescue; 1/0; end; end
@@ -1716,10 +1722,13 @@ def ensure_clause; begin; raise ""d""; ensure; Integer(""x""); end; end
 def modifier; (raise ""e"" rescue 1/0); end
 class Wrapped < StandardError; def self.new(*) = super(""wrapped""); end
 def custom_new; begin; raise ""f""; rescue; raise Wrapped; end; end
+def retried; n = 0; begin; n += 1; raise ""g"" if n == 1; rescue; retry; else; [].fetch(1); end; end
+def nested; begin; raise ""h""; rescue; begin; raise ""i""; rescue; 1/0; end; end; end
+def after_nested; begin; raise ""j""; rescue; (raise ""k"" rescue nil); 1/0; end; end
 def g(m) = (begin; send(m); rescue => e; [e.class, e.cause&.message]; end)
-r = 4.times.map { [:zero, :bad_class, :no_method, :else_clause, :ensure_clause, :modifier, :custom_new].map { |m| g(m) } }
+r = 4.times.map { [:zero, :bad_class, :no_method, :else_clause, :ensure_clause, :modifier, :custom_new, :retried, :nested, :after_nested].map { |m| g(m) } }
 r.uniq.inspect";
-            const string expected = @"[[[ZeroDivisionError, ""a""], [TypeError, ""b""], [NoMethodError, ""c""], [IndexError, nil], [ArgumentError, ""d""], [ZeroDivisionError, ""e""], [Wrapped, ""f""]]]";
+            const string expected = @"[[[ZeroDivisionError, ""a""], [TypeError, ""b""], [NoMethodError, ""c""], [IndexError, nil], [ArgumentError, ""d""], [ZeroDivisionError, ""e""], [Wrapped, ""f""], [IndexError, nil], [ZeroDivisionError, ""i""], [ZeroDivisionError, ""j""]]]";
 
             var interpreting = Ruby.CreateEngine((setup) => { setup.Options["CompilationThreshold"] = Int32.MaxValue; });
             AreEqual(interpreting.CreateScriptSourceFromString(script, "cause_clause1.rb", SourceCodeKind.File).Execute().ToString(), expected);
