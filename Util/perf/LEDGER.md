@@ -576,9 +576,10 @@ Profile (`Util/perf/profile.sh`, self time):
   calls `#to_a` through a conversion site, the helpers that join several splats take no
   scope, and `LightScopeCall` already bound a signature with a splatted argument. When the
   rule answers `LightScopeRequired` the call is made again with the same temporaries, so
-  `#to_a` runs once (a probe of the matrix). `when *a`, interpolation and `**h` still keep
-  a method out.
-  Census (Src/StdLib + AWFY, 28,335 methods), on the tree with #232 merged in: light frames
+  `#to_a` runs once (a probe of the matrix). `when *a` and `**h` still keep a method out
+  (interpolation did until perf/interp, above).
+  Census (Src/StdLib + AWFY, 28,335 methods), on the tree with #232 merged in (273d6299,
+  as are the instruction counts below): light frames
   18,318 -> 18,790 (64.6% -> 66.3%), light blocks 7,317 -> 7,389, the JIT's verdicts
   unchanged; 472 methods moved up, none down. 38 are the prelude's (`strip`, `lstrip`,
   `rstrip`, `inject`, `reduce`, `zip`, `each_with_index`, `reverse_each`, `each_entry`,
