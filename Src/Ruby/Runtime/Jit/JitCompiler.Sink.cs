@@ -281,6 +281,12 @@ namespace IronRuby.Runtime.Jit {
             "NarrowLong",
             // `raise' (JitCompiler.EmitRaise): a deopt and nothing else
             "RaiseDeopt",
+            // `Array.new(n, v)' (JitCompiler.EmitArrayConstruction): an allocation nothing sees until it is
+            // stored, and a deopt on a size out of range; run twice, it only makes a second Array
+            "NewArray", "NewArrayOfSize", "NewArrayOfCheckedSize", "NewArrayOfLongSize", "NewArrayOfObjectSize",
+            // an Array's or a Hash's count, a deopt on anything else (JitRuntime.SizeOf): no Ruby code and no instance
+            // variable read; its receiver, read from self, is GetIVar's or a held write's
+            "SizeOf",
         };
 
         // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)

@@ -1013,6 +1013,47 @@ namespace IronRuby.Runtime.Jit {
 
         internal const int MaxConstructionArity = 3;
 
+        // ---- Array.new (JitCompiler.EmitArrayConstruction) --------------------------------
+
+        // The largest size Array.new makes (ArrayOps.CheckArraySize): above it, ArgumentError.
+        internal const int MaxArraySize = Int32.MaxValue / 8;
+
+        /// <summary>`Array.new': what the library constructor makes (ArrayOps.CreateArray).</summary>
+        public static object NewArray() {
+            return new RubyArray();
+        }
+
+        /// <summary>`Array.new(n, v)' of a size the compiler saw to be in range.</summary>
+        public static object NewArrayOfSize(int size, object value) {
+            return new RubyArray().AddMultiple(size, value);
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)': a negative size or one too big deopts, and the generic body raises the
+        /// ArgumentError (negative array size, array size too big) from its own frame.
+        /// </summary>
+        public static object NewArrayOfCheckedSize(int size, object value) {
+            if ((uint)size > (uint)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple(size, value);
+        }
+
+        /// <summary>`Array.new(n, v)' of an Int64 size: one outside [0, MaxArraySize] deopts.</summary>
+        public static object NewArrayOfLongSize(long size, object value) {
+            if ((ulong)size > (ulong)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple((int)size, value);
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)' of a size typed object: a boxed Int32 in range, or a deopt - for anything else the
+        /// generic body calls to_int, raises TypeError, or raises ArgumentError for an Integer out of range.
+        /// </summary>
+        public static object NewArrayOfObjectSize(object size, object value) {
+            if (!(size is int)) { throw Deopt(); }
+            int n = (int)size;
+            if ((uint)n > (uint)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple(n, value);
+        }
+
         public static object Construct0(ConstructionSite/*!*/ site, object cls) {
             if (site.IsDirect) { return site.Construction.Construct0(); }
             var s = (CallSite<Func<CallSite, object, object>>)site.Fallback;

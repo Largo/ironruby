@@ -624,6 +624,94 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
         }
 
+        // ---- Array.new(n, v) ----------------------------------------------------------------
+        // `@storage = Array.new(size)' in som.rb's Vector#initialize, `flags = Array.new(5000, true)' in
+        // Sieve: unlike any other construction, Array.new with the built-in new and Array#initialize and an
+        // Integer size runs no Ruby code - it allocates an Array that nothing can see until the body stores
+        // or returns it. So it is an ordinary operation of the typed body, anywhere in it: a deopt after it
+        // runs the generic body, which allocates another one, and the first is garbage. Method bodies only
+        // (EmitCall): an outlined loop takes no construction at all.
+
+        /// <summary>
+        /// `Array.new', `Array.new(n)', `Array.new(n, v)' or the same of `::Array': no block, no splat,
+        /// no keywords. Whether Array is the Array class and its new the built-in one is the emitter's
+        /// question (EmitArrayConstruction); the screen (JitScreen.WalkCall) takes the shape.
+        /// </summary>
+        internal static bool IsArrayConstruction(MethodCall/*!*/ node) {
+            if (node.MethodName != "new" || node.Block != null) { return false; }
+            var target = node.Target as ConstantVariable;
+            if (target == null || target.Name != "Array" || target.Qualifier != null) { return false; }
+            var args = node.Arguments;
+            if (args != null) {
+                if (args.Expressions.Length > 2) { return false; }
+                foreach (var arg in args.Expressions) {
+                    if (arg is SplattedArgument || arg is HashConstructor) { return false; }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)' where Array resolves to the Array class (under the constant guard), its new is
+        /// Class#new as EmitConstruction requires, and Array#initialize the library one (under the entry's
+        /// global method version guard): the Array made directly (JitRuntime.NewArray*). The size is an Int, a
+        /// Lng or an object that has to be a boxed Int32 at run time; a Float size is the generic code's (CRuby
+        /// converts a non-Integer with to_int, a call). A size the compiler cannot see to be in range deopts
+        /// when it is not, and the generic body raises ArgumentError, or converts, as CRuby does. The value is stored in every slot, boxed
+        /// as an element store boxes it. Not an effect: nothing can see the Array before the body uses it.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitArrayConstruction(MethodCall/*!*/ node, out JT type) {
+            var arrayClass = ArrayClass;
+            if (!ReferenceEquals(ResolveConstant((ConstantVariable)node.Target), arrayClass)) {
+                throw Bail("Array.new of a constant Array that is not the Array class");
+            }
+            var meta = JitRuntime.ClassOf(_context, arrayClass);
+            var refined = meta.ResolveMethod("new", VisibilityContext.AllVisible, _refinements);
+            MethodResolutionResult resolved;
+            using (_context.ClassHierarchyLocker()) {
+                resolved = meta.ResolveMethodForSiteNoLock("new", VisibilityContext.AllVisible);
+            }
+            var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
+            if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
+                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                throw Bail("Array.new is not Class#new");
+            }
+            // a Ruby initialize (or one from a module) is called by the generic new: Ruby code
+            if (!IsBuiltinMethod(arrayClass, "initialize")) { throw Bail("Array#initialize is not the built-in one"); }
+
+            type = JT.Obj;
+            var args = node.Arguments;
+            int argc = (args == null) ? 0 : args.Expressions.Length;
+            if (argc == 0) { return Ast.Call(JitRuntime.M("NewArray")); }
+
+            JT st;
+            var size = Emit(args.Expressions[0], out st);
+            if (st != JT.Int && st != JT.Lng && st != JT.Obj) { throw Bail("Array.new of a " + st + " size"); }
+            MSA.Expression value;
+            if (argc == 2) {
+                JT vt;
+                var v = Emit(args.Expressions[1], out vt);
+                value = BoxForStore(v, vt);
+            } else {
+                value = Ast.Constant(null, typeof(object));
+            }
+            var literal = size as MSA.ConstantExpression;
+            if (literal != null) {
+                // a literal (or folded constant) Lng is beyond an Int32, so beyond MaxArraySize: always a deopt
+                long n = (st == JT.Int) ? (int)literal.Value : (st == JT.Lng) ? (long)literal.Value : -1;
+                if (n < 0 || n > JitRuntime.MaxArraySize) { throw Bail("Array.new of a size out of range: " + literal.Value); }
+                return Ast.Call(JitRuntime.M("NewArrayOfSize"), Ast.Constant((int)n), value);
+            }
+            _canDeopt = true;
+            switch (st) {
+                case JT.Int: return Ast.Call(JitRuntime.M("NewArrayOfCheckedSize"), size, value);
+                case JT.Lng: return Ast.Call(JitRuntime.M("NewArrayOfLongSize"), size, value);
+                // An object size is taken only as a boxed Int32: an Integer that is an Int64 or a BigInteger, nil, a
+                // Float, a String or an object with to_int deopts, and the generic body converts or raises as CRuby does.
+                default: return Ast.Call(JitRuntime.M("NewArrayOfObjectSize"), size, value);
+            }
+        }
+
         /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
         internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
             if (node.MethodName != "==" && node.MethodName != "!=") { return false; }
@@ -1025,6 +1113,7 @@ namespace IronRuby.Runtime.Jit {
                 object sample = (_hints != null) ? _hints.SelfSample : null;
                 object value;
                 if (sample == null || !_context.TryGetInstanceVariable(sample, ivar.Name, out value)) { return null; }
+                if (IsFalsy(value) && IsTruthGuarded(ivar.Name)) { return null; }
                 return (value == null) ? typeof(void) : value.GetType();
             }
             var constant = receiver as ConstantVariable;
@@ -1040,11 +1129,58 @@ namespace IronRuby.Runtime.Jit {
                 var peek = _peekLocal(local);
                 if (!peek.HasValue) { return null; }
                 object value = peek.Value.Value;
+                if (IsFalsy(value) && IsTruthGuarded(TruthGuardKey(local))) { return null; }
                 return (value == null) ? typeof(void) : value.GetType();
             }
             if (_hints == null || _hints.Parameters == null || local.DefinitionLexicalDepth != _scopeDepth) { return null; }
             int i = Array.IndexOf(_paramNames, local.Name);
-            return (i >= 0 && i < _hints.Parameters.Length) ? _hints.Parameters[i] : null;
+            Type observed = (i >= 0 && i < _hints.Parameters.Length) ? _hints.Parameters[i] : null;
+            if (observed == typeof(void) && IsTruthGuarded(TruthGuardKey(local))) { return null; }
+            return observed;
+        }
+
+        // ---- the truth of a variable as a branch's whole condition ---------------------------
+        // `if @storage; @storage = Array.new(@storage.size); end' (som.rb's Vector#remove_all) on a fresh
+        // Vector, whose @storage is nil: the profile saw nil, and RequireCollectionReceiver refused `size on a
+        // nil' - but inside the branch the variable's own truth selects, a nil (or false) the profile saw says
+        // only that the branch was not taken then, nothing of what the variable holds there. So ObservedType
+        // answers "unknown" for it. That cannot change what a body computes: ObservedType is a hint, and a
+        // receiver that turns out to be anything else is the helper's business (it deopts). Only a plain
+        // instance variable or local read as the whole condition (if, elsif, ?:, unless ... else, &&).
+
+        // the keys (TruthGuardKey) of the variables whose truth selected the branch being emitted
+        private List<string> _truthGuards;
+
+        /// <summary>The key of a condition that is a plain variable read, or null.</summary>
+        private static string TruthGuardKey(RExpr/*!*/ condition) {
+            var ivar = condition as InstanceVariable;
+            if (ivar != null) { return ivar.Name; }
+            var local = condition as LocalVariable;
+            if (local != null) { return local.Name + "#" + local.DefinitionLexicalDepth; }
+            return null;
+        }
+
+        private static bool IsFalsy(object value) {
+            return value == null || value is bool && !(bool)value;
+        }
+
+        private bool IsTruthGuarded(string/*!*/ key) {
+            return _truthGuards != null && _truthGuards.Contains(key);
+        }
+
+        /// <summary>Enters the branch the truth of <paramref name="condition"/> selects; the count to pass to PopTruthGuard.</summary>
+        private int PushTruthGuard(RExpr/*!*/ condition) {
+            int mark = (_truthGuards == null) ? 0 : _truthGuards.Count;
+            string key = TruthGuardKey(condition);
+            if (key != null) {
+                if (_truthGuards == null) { _truthGuards = new List<string>(); }
+                _truthGuards.Add(key);
+            }
+            return mark;
+        }
+
+        private void PopTruthGuard(int mark) {
+            if (_truthGuards != null && _truthGuards.Count > mark) { _truthGuards.RemoveRange(mark, _truthGuards.Count - mark); }
         }
 
         /// <summary>
