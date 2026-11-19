@@ -844,13 +844,64 @@ Profile (`Util/perf/profile.sh`, self time):
     it (how many of the census's methods that is has not been counted: its `maybe` table
     has 399 that stop at "constant without a scope", which are methods of that kind, and
     the ones that compile with their constant are not told apart).
-    Untried: when the version has moved, look the constant up again and keep the body if
-    it holds what it held (a revalidation, no compile, nothing to cap), or a version per
-    constant as the generic sites' `ConstantSiteCache` has. Judge it by a traced run of a
-    program that loads while it runs (`specialized` once per method, `invalidations` 0),
-    not by the census, which does not see it.
+    Done for method bodies in round twenty-five (see Landed, perf/constrev): the entry
+    looks the folded constants up again and keeps the body. What is left: outlined loops
+    (`JitLoopCompiler`) still guard on a version baked into them, so a loop compiled in a
+    method that reads a constant hands itself back at its next entry after any constant
+    is set; a lookup made while an autoload is in flight still throws the body away, and
+    counts against the eight; and what one revalidation costs on a program that moves
+    the version on every iteration (`Object.new.extend(M)` in a loop, gap 19) has not
+    been timed - each call of each such method then takes the class hierarchy lock once
+    per lookup, as each generic constant site does.
 
 ## Landed
+
+- **perf/constrev (/perf-step, round twenty-five, 2026-11-19, 093c7e19) - a typed body
+  looks its constants up again when the constant version moves** (gap 29) - not gated.
+  The census does not see this gap (0 methods changed, as it must be); it was judged by a
+  probe and a matrix. A body that folded a constant was guarded by the runtime's one
+  constant version; when that had moved the stub threw the body away, profiled again, and
+  after eight times settled on the generic body. Now, when the method version is
+  unchanged, `JitStub.RevalidateConstants` resolves every constant the bodies folded
+  again by the code the compiler resolved it with (`JitFoldedConstant.Resolve`: the old
+  `ResolveConstant`, returning its bail reason) and, if each is the same object found in
+  the same module, stores the version it read before the lookups as the snapshot; the
+  entry reads the snapshot from the specialization (`JitRuntime.ConstantsCurrent`, two
+  volatile reads and a cast where there was one read against an immediate). A caller that
+  binds a body takes its folded constants over. Anything else - a constant that changed,
+  an autoload in flight, a deprecated constant - goes the old way.
+  The probe (three methods, 300 calls in each of 20 rounds, and per round an `extend` or
+  a `const_set` of something else): `qual` (`G::P::RUBY`) and `top` (`TOP`) specialized 9
+  times each before, once after, invalidations 8 -> 0; with a `def` or a singleton method
+  per round, or nothing, once before and after. The rubygems driver of round twenty-four:
+  `Gem::Specification#platform` specialized 9 times -> once, invalidations 13 -> 5, 31
+  methods specialized and 12 declined on both builds, CRuby's output. AWFY's traces are
+  the same, each with `invalidations=0`.
+  `Util/jit-const-matrix.rb` is new (52 rows, CRuby's output on the unchanged build with
+  the JIT on and off): events that must not change the answer (an unrelated constant, an
+  `extend`, an `include`, a `def`, a `require`), the constant removed and set again, set
+  to an equal object, removed for good, shadowed by a nearer lexical scope and through
+  the ancestors (`include`, a superclass, `prepend`), qualified reads with a module on
+  the path replaced, `private_constant`, `deprecate_constant`, an autoload registered in
+  a nearer scope, `const_missing`, `when C`, a lexical `Array` under `Array.new`, a bound
+  callee that reads the constant, and two threads (one setting 2,000 constants or
+  alternating the constant itself, one calling: no wrong answer). It and the jit,
+  jit-construct, jit-scan, jit-calls, jit-raise and ivar matrices print the same on
+  CRuby, the unchanged build and the new one with the JIT on, with `-X:NoJIT -X:NoOSR`
+  and with `-X:NoJITCalls`; the new one six times running.
+  The order that makes it safe without a lock of its own: every change to a constant moves
+  the version under the class hierarchy lock, which each lookup takes; the version is
+  read before the first lookup and stored after the last, so a change in between has
+  moved the version past what is stored and the next entry looks again; a version read
+  after a lookup is never stored; two threads may both look and both store. A successful
+  look also moves the constant version of the bodies' own loop guards (`JitLoopGuard`),
+  which the experiment's author added beyond the brief: without it a body with a `while`
+  would hand itself back at its next safe point after any reassignment anywhere.
+  For the gate: the entry of every constant-reading typed body is a few instructions
+  longer and has not been timed; `TrySpecializePerCount` with constants has no probe of
+  its own; and CRuby warns once for a deprecated constant read three times in one place
+  where IronRuby warns three times, with or without the JIT (the matrix prints only that
+  a warning came).
 
 - **perf/orasgn (/perf-step, round twenty-four, 2026-11-19, 92bb385c) - `@x ||= v` and
   `@x &&= v` in a body the method JIT compiles** - census only, not gated. The screen
