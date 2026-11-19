@@ -13,7 +13,7 @@ $stdout.sync = true
 P = Struct.new(:x, :y)
 class V; include Comparable; attr_reader :v; def initialize(v); @v = v; end; def <=>(o); @v <=> o.v; end; end
 class H
-  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @v = V.new(1); @i = 5; @n = [[1, 2]]; end
+  def initialize; @a = [1,2,3,4]; @b = [5,6,7,8]; @h = {a: 1, b: 2, c: 3, d: 4}; @s = "abcd"; @s4 = "1234"; @sp = " ab "; @v = V.new(1); @i = 5; @n = [[1, 2]]; @nh = [{k: [3]}]; @ki = 0; @f = [1.5, 2.5, 0.5, 1.0]; end
   def m0; s = 0; @a.each { |x| s += x }; s; end
   def m1; s = 0; @a.each_with_index { |x, i| s += x + i }; s; end
   def m3; @a.inject(0) { |s, x| s + x }; end
@@ -81,14 +81,40 @@ class H
   def m66; @s.start_with?("ab") ? 1 : 0; end
   def m67; @s.center(10).size; end
   def m68; @a.map(&:to_s).size; end
+  def m69; @n.dig(0).size; end
+  def m70; @n.dig(@ki, 0); end
+  def m71; @nh.dig(0, :k, 0); end
+  def m72; @f.sum { |x| x * 2 }.to_i; end
+  def m73; @a.sum(10) { |x| x * 3 }; end
+  def m74; String(@i).size; end
+  def m76; String(nil).size; end
+  def m75; @n.to_h.size; end
+  def m77; @a.max_by { |x| x & 1 }; end
+  def m78; @a.min_by(2) { |x| -x }.size; end
+  def m79; @h.sort_by { |k, v| -v }.size; end
+  def m80; @a.max_by(2) { |x| x }.size; end
+  def m81; @a.drop_while { |x| x < 3 }.size; end
+  def m82; @a.flat_map { |x| x }.size; end
+  def m83; @a.uniq { |x| x & 1 }.size; end
+  def m84; @sp.strip.size; end
+  def m85; @sp.lstrip.size; end
+  def m86; @sp.rstrip.size; end
 end
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
+# INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
+# seven sections as the time is. See Util/perf/instructions.rb.
+INSTR = ENV["INSTR"] && (require_relative "../perf/instructions"; Instructions.open || warn("no instruction counter (perf_event_open)"))
 def t(name, n)
   return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
-  best = 1e9; sum = nil
-  7.times { t0 = cpu; sum = yield n; d = cpu - t0; best = d if d < best }
-  printf "%-16s %9.1f ns  %d\n", name, best * 1e9 / n, sum
+  best = 1e9; fewest = nil; counted = !!INSTR; sum = nil
+  7.times do
+    c0 = INSTR && INSTR.read; t0 = cpu; sum = yield n; d = cpu - t0; c1 = INSTR && INSTR.read
+    best = d if d < best
+    # a read is nil once the counter is lost: then there is no count, rather than one of the sections that had it
+    if c0 && c1 then c = c1 - c0; fewest = c if fewest.nil? || c < fewest else counted = false end
+  end
+  printf "%-16s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, counted ? format("  %.1f instr", fewest.to_f / n) : ""
 end
 h = H.new
 N = (ENV["N"] || 1_000_000).to_i
@@ -159,3 +185,21 @@ t("dig_arr", N) { |n| i = 0; s = 0; while i < n; s += h.m65; i += 1; end; s }
 t("str_start", N) { |n| i = 0; s = 0; while i < n; s += h.m66; i += 1; end; s }
 t("str_center", N) { |n| i = 0; s = 0; while i < n; s += h.m67; i += 1; end; s }
 t("sym_to_proc", N) { |n| i = 0; s = 0; while i < n; s += h.m68; i += 1; end; s }
+t("dig_arr1", N) { |n| i = 0; s = 0; while i < n; s += h.m69; i += 1; end; s }
+t("dig_arr_var", N) { |n| i = 0; s = 0; while i < n; s += h.m70; i += 1; end; s }
+t("dig_arr_hash", N) { |n| i = 0; s = 0; while i < n; s += h.m71; i += 1; end; s }
+t("sum_blk_float", N) { |n| i = 0; s = 0; while i < n; s += h.m72; i += 1; end; s }
+t("sum_blk_init", N) { |n| i = 0; s = 0; while i < n; s += h.m73; i += 1; end; s }
+t("String(int)", N) { |n| i = 0; s = 0; while i < n; s += h.m74; i += 1; end; s }
+t("String(nil)", N) { |n| i = 0; s = 0; while i < n; s += h.m76; i += 1; end; s }
+t("to_h_pairs", N) { |n| i = 0; s = 0; while i < n; s += h.m75; i += 1; end; s }
+t("max_by", N) { |n| i = 0; s = 0; while i < n; s += h.m77; i += 1; end; s }
+t("min_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m78; i += 1; end; s }
+t("hash_sort_by", N) { |n| i = 0; s = 0; while i < n; s += h.m79; i += 1; end; s }
+t("max_by_n", N) { |n| i = 0; s = 0; while i < n; s += h.m80; i += 1; end; s }
+t("drop_while", N) { |n| i = 0; s = 0; while i < n; s += h.m81; i += 1; end; s }
+t("flat_map_scalar", N) { |n| i = 0; s = 0; while i < n; s += h.m82; i += 1; end; s }
+t("uniq_blk", N) { |n| i = 0; s = 0; while i < n; s += h.m83; i += 1; end; s }
+t("strip", N) { |n| i = 0; s = 0; while i < n; s += h.m84; i += 1; end; s }
+t("lstrip", N) { |n| i = 0; s = 0; while i < n; s += h.m85; i += 1; end; s }
+t("rstrip", N) { |n| i = 0; s = 0; while i < n; s += h.m86; i += 1; end; s }

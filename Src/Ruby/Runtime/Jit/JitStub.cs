@@ -1539,9 +1539,50 @@ namespace IronRuby.Runtime.Jit {
             return Screen(ast, context, null, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy);
         }
 
+        /// <summary>
+        /// <see cref="Wrap"/>'s static decision for the census (JitCensus), which asks it of a method that was parsed but
+        /// never defined: there is no declaring module to resolve the body's calls on, so the census says which of them
+        /// are of a method the typed body may inline (<paramref name="isLeafCallee"/>, as JitScreen takes it).
+        /// <paramref name="typedCount"/>: the typed body's parameters; <paramref name="perCountMandatory"/>: the mandatory
+        /// ones of a method with per-count bodies (TrySpecializePerCount), -1 for any other.
+        /// </summary>
+        internal static bool CensusScreen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, Func<string, bool, bool>/*!*/ isLeafCallee,
+            out JitKeywords keywords, out int typedCount, out int perCountMandatory, out string rejectedBy) {
+            bool[] hasDefault, storedOnly;
+            object[] defaults;
+            bool perCount;
+            int arity;
+            typedCount = 0;
+            perCountMandatory = -1;
+            if (!Screen(ast, context, null, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy, isLeafCallee)) {
+                return false;
+            }
+            // as the stub counts them (JitStub's constructor)
+            typedCount = (keywords != null) ? ast.Parameters.Mandatory.Length + keywords.OptionalPositionals + keywords.Count : arity;
+            if (perCount) { perCountMandatory = ast.Parameters.Mandatory.Length; }
+            return true;
+        }
+
+        /// <summary>
+        /// What about the parameter list keeps a method from ever being wrapped, whatever its body is; null if nothing does.
+        /// </summary>
+        internal static string ParameterShape(MethodDeclaration/*!*/ ast) {
+            var ps = ast.Parameters;
+            if (ps.Unsplat != null) { return "rest parameter"; }
+            if (ps.Block != null) { return "block parameter"; }
+            if (ast.UsesBlock) { return "uses its block"; }
+            if (ps.Mandatory.Length + ps.Optional.Length > MaxArity) { return "more than " + MaxArity + " parameters"; }
+            for (int i = 0; i < ps.Mandatory.Length; i++) {
+                if (!(ps.Mandatory[i] is LocalVariable)) { return "destructuring parameter"; }
+            }
+            return null;
+        }
+
         // The static part of Wrap's decision; rejectedBy is set when the screen (not the parameter list) refused the body.
+        // isLeafCallee: the census's answer in place of the declaring module's (CensusScreen).
         private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule declaringModule, out JitKeywords keywords, out bool[] hasDefault,
-            out object[] defaults, out bool perCount, out bool[] storedOnly, out int arity, out string rejectedBy) {
+            out object[] defaults, out bool perCount, out bool[] storedOnly, out int arity, out string rejectedBy,
+            Func<string, bool, bool> isLeafCallee = null) {
             keywords = null;
             hasDefault = null;
             defaults = null;
@@ -1551,13 +1592,9 @@ namespace IronRuby.Runtime.Jit {
             arity = 0;
 
             var ps = ast.Parameters;
-            if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return false; }
             int mandatoryCount = ps.Mandatory.Length;
             arity = mandatoryCount + ps.Optional.Length;
-            if (arity > MaxArity) { return false; }
-            for (int i = 0; i < mandatoryCount; i++) {
-                if (!(ps.Mandatory[i] is LocalVariable)) { return false; }
-            }
+            if (ParameterShape(ast) != null) { return false; }
 
             // An optional parameter is taken when its default is a literal the typed body could
             // have produced itself - nil, true, false, a Fixnum or a Float: evaluating it has no
@@ -1604,7 +1641,7 @@ namespace IronRuby.Runtime.Jit {
             HashSet<string> otherUses;
             if (!JitScreen.CanEverCompile(ast, keywords,
                 // (no module: IsCandidate, which only asks whether the body may ever be wrapped)
-                (declaringModule != null)
+                (isLeafCallee != null) ? isLeafCallee : (declaringModule != null)
                     ? (name, onSelf) => IsLeafMethod(declaringModule, name, onSelf) ||
                         (onSelf && context.RubyOptions.JitCalls && IsCallableMethod(declaringModule, name, 0))
                     : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses)) {
@@ -1683,20 +1720,30 @@ namespace IronRuby.Runtime.Jit {
         /// <paramref name="nest"/>: the method may itself call, on self, methods of the leaf shape, which its typed body
         /// inlines (JitInlineShape.IsInlinableShape) - one level, so `compare_to' calling `compare_numbers' is taken.
         /// </summary>
-        private static bool IsLeafMethod(RubyMethodInfo info, bool nest) {
+        internal static bool IsLeafMethod(RubyMethodInfo info, bool nest) {
             if (info == null) { return false; }
-            var ast = info.GetSyntaxTree();
-            var ps = ast.Parameters;
-            if (ps.Optional.Length > 0 || ps.Unsplat != null || ps.Block != null || ps.Mandatory.Length > MaxArity) { return false; }
             RubyModule owner = info.DeclaringModule;
             Func<string, bool> nested = null;
-            Func<string, bool, bool> nestedCallee = null;
             if (nest) {
                 // the nested callee as the owner resolves it now; one defined further down is not taken
                 nested = n => {
                     var r = owner.ResolveMethod(n, VisibilityContext.AllVisible);
                     return r.Found && IsLeafMethod(r.Info as RubyMethodInfo, false);
                 };
+            }
+            return IsLeafShape(info.GetSyntaxTree(), nested);
+        }
+
+        /// <summary>
+        /// The leaf test on the syntax tree alone, which is all the census (JitCensus) has of a method.
+        /// <paramref name="nested"/>: whether a call on self of a name is of a method that is a leaf itself; null if the
+        /// method may call none.
+        /// </summary>
+        internal static bool IsLeafShape(MethodDeclaration/*!*/ ast, Func<string, bool> nested) {
+            var ps = ast.Parameters;
+            if (ps.Optional.Length > 0 || ps.Unsplat != null || ps.Block != null || ps.Mandatory.Length > MaxArity) { return false; }
+            Func<string, bool, bool> nestedCallee = null;
+            if (nested != null) {
                 nestedCallee = (n, onSelf) => onSelf && nested(n);
             }
             if (!JitInlineShape.IsInlinableShape(ast, nested)) { return false; }
@@ -1706,7 +1753,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>A class that is a constant of Object defines a Ruby method of this name that may be inlined.</summary>
-        private static bool IsLeafMethodOfSomeClass(RubyContext/*!*/ context, string/*!*/ name) {
+        internal static bool IsLeafMethodOfSomeClass(RubyContext/*!*/ context, string/*!*/ name) {
             var candidates = new List<RubyMethodInfo>();
             using (context.ClassHierarchyLocker()) {
                 context.ObjectClass.EnumerateConstants((module, constantName, value) => {

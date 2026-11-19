@@ -99,6 +99,8 @@ CRuby; measured on four-element receivers, good to about 30%):
 | a call of a Ruby `__x__` helper that makes a scope | +124 to +128 | inline it, or make it light |
 | one call of a C# method or C# `__x__` helper on self | +8 to +12 | |
 | `super`, a block passed on, `rescue`, keywords | keep the method out of light frames | keep them off the common path |
+| a body that needs a scope anywhere, even when the common case returns on line 1 | the whole scope, +150 ns (`String("a")`) | answer the common case, call a private method with the rest |
+| a string interpolation that calls something, `"#{x.class} ..."` (even on an error path) | the method needs its scope after the rewrite | `x.class.to_s + " ..."` |
 | one `while` iteration with a `yield` | ~100 / 50 | leave loops over elements in C# |
 
 Add the parts up for the common path and compare with the row: if they do not come near
@@ -110,6 +112,14 @@ next to `a.inject(0) { }`), or, for a method with no C# behind it, the plain exp
 (`a[0][1]` next to `a.dig(0, 1)`). Time both in one scratch file with `Util/perf/ab.rb`
 (`/perf-ab`, step 5, says how to write one). What a perfect entry would win is the
 difference as a share of the method's time on IronRuby; under 15%, pick another method.
+
+`IR_LIGHT_FRAMES=why` names only the first statement it refused, and says nothing more
+specific than `body needs its scope after the rewrite`. To find the construct, copy the
+method's statements into one-line methods in a scratch file, *call each once* (a method
+is compiled, and reported, on its first call), and see which are not `light:`.
+Give each copy the parameters and the locals it reads (`def p1(rest); n = 0; ...`): a
+local left out is read as a method call, and the copy is not the statement any more. If a
+copy's answer differs from the method's, cut the method down instead.
 
 Worked example (2026-11-15): `[[1, 2]].dig(0, 1)` took 776 ns against `@n[0][1]`'s 68 and
 CRuby's 64. `dig` itself was light; its two helpers, `__array_to_int__` and `__dig_step__`,
@@ -135,6 +145,31 @@ In the order they usually pay:
    (`return __list_tally__ if __plain_list__?`), the generic `each` body after it. This is
    TruffleRuby's `Primitive.array_inject(...) if Primitive.is_a?(self, Array)`.
 5. `::Symbol === x` rather than `x.is_a?(Symbol)` for a value that may be a BasicObject.
+
+6. **A loop in the prelude counts with `i = i.succ`, not `i += 1`**, as CRuby's own Ruby
+   builtins do (`numeric.rb`): a program that redefines Integer#+ must not change which
+   elements are visited (`Array#sum`'s first loop skipped every other one).
+7. **A rare path that needs a lot of code goes into a private method of its own.** A body
+   that grew by a fallback made the common call 5% slower on `Array#sum`; an Enumerator
+   made on a hot fallback cost 2 us. Measure the form that did not change, too.
+
+8. **Walk the receiver the way CRuby's method does.** Where CRuby's method is the class's own
+   (`Array#sum` is `ary_sum`, `Array#to_h` is `rb_ary_to_h`), an index loop is right, and
+   it stops calling a subclass's #each as CRuby does. Where it is Enumerable's (`min_by`,
+   `inject`), CRuby calls #each, and a backtrace from the block shows `Array#each` under it
+   (`Backtrace_LibraryFrames1` checks this): keep #each, and give it a one-value block when
+   `__plain_list__?` says the built-in Array#each yields exactly one value per element.
+   An index loop reads the storage as CRuby's does, through the private aliases
+   `__ary_size__`, `__ary_at__` and `__ary_slice__`: `size` and `self[i]` would call a
+   subclass's own, and an Array subclass with its own #[] or #size then gave other answers.
+
+9. **A C# method the core already has, under a private alias taken when the prelude
+   loads** (`alias :__list_sort_by__ :sort_by`), is often the cheapest helper: it is not a
+   port to C#, and the alias keeps a program's redefinition of the public name from
+   reaching the core method that uses it. Check that its semantics (stability, how it
+   re-reads the receiver's size, `break`) are the ones needed, and that it does not take
+   over something rule 8 keeps: a C# method that calls the block itself drops the #each
+   frame, so hand it keys the #each walk made instead (`__list_sort_by_key__`).
 
 What this skill does not do: move the method to C#, change what it returns or raises, or
 write a per-element loop in Ruby (a `while ... yield` runs at 100 ns per element against 9
@@ -179,7 +214,8 @@ slower with a Symbol; only the table showed it.
 
 - `spec/core/<class>` for the receiver classes and for `enumerable`, against the unchanged
   build, failing example names compared (not counts).
-- `/perf-gate ../wt-NAME`. IronRuby.Tests load the prelude from `Src/StdLib` when a test
+- `/perf-gate ../wt-NAME`, or its quick check now and the gate once for several methods
+  on one branch ("When to run it" there). IronRuby.Tests load the prelude from `Src/StdLib` when a test
   says `require 'ruby4'`, so they see the change.
 - A Release build precompiles the prelude into the R2R host's startup library; run the
   probes once with `IR_CONFIG=R2R` after building.

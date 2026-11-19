@@ -207,6 +207,11 @@ namespace IronRuby.Builtins {
 
         // A Rational operand: the commonest case, as an overload of its own so that the binder can
         // pick it by the operand's type, without the storage the coercion of anything else needs.
+        // self + an Integer, whatever Rational#+ is now (Array#sum's exact part, see ArrayOps.ExactAdd)
+        internal RubyRational/*!*/ AddInteger(object integer) {
+            return AddSub(_numerator, _denominator, integer, 1, true);
+        }
+
         [RubyMethod("+")]
         public static object Add(RubyRational/*!*/ self, [NotNull]RubyRational/*!*/ other) {
             return self.AddSub(self._numerator, self._denominator, other._numerator, other._denominator, true);

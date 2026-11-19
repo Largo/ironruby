@@ -830,6 +830,54 @@ s = RSched.new(RTask.new(:plain))
             }
         }
 
+        /// <summary>
+        /// The census (IronRuby.jit_census, JitCensus; Util/perf/census.rb): what the light frames and the method JIT make
+        /// of each method of a file that is parsed and not run. The verdicts are the ones a method's first call gets
+        /// (MethodDefinition.TransformBody, JitStub.Wrap), so one that changes here has changed for programs as well:
+        /// `never' is the parameter list's or the screen's refusal, `compiles' a typed body that needs no profile,
+        /// `maybe' a body the screen passes and the profile decides.
+        /// </summary>
+        public void JitCensus1() {
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ir-census-" + System.Guid.NewGuid().ToString("N") + ".rb");
+            System.IO.File.WriteAllText(path, @"
+$census_ran = true
+class Point
+  def add(a, b) = a + b
+  def each; yield @x; end
+  def log(*messages) = messages
+  def safe
+    @x.fetch
+  rescue StandardError
+    nil
+  end
+  def dist(o) = @x - o.x
+  def self.zero = 0
+end
+def top = puts(1)
+");
+            try {
+                TestOutput(@"
+IronRuby.jit_census(['" + path.Replace('\\', '/') + @"']).each do |m|
+  p [""#{m[:module]}#{m[:singleton] ? '.' : '#'}#{m[:name]}"", m[:line], m[:light], m[:light_why], m[:jit], m[:jit_stage], m[:jit_why], m[:jit_types]]
+end
+p defined?($census_ran)
+p IronRuby.jit_census(['/no/such/census.rb']).map { |m| m.key?(:error) }
+", @"
+[""Point#add"", 4, true, nil, ""compiles"", nil, nil, ""Int""]
+[""Point#each"", 5, true, nil, ""never"", ""parameters"", ""uses its block"", nil]
+[""Point#log"", 6, true, nil, ""never"", ""parameters"", ""rest parameter"", nil]
+[""Point#safe"", 7, false, ""rescue, else or ensure"", ""never"", ""screen"", ""Body"", nil]
+[""Point#dist"", 12, true, nil, ""maybe"", ""emit"", ""call: x/0"", nil]
+[""Point.zero"", 13, true, nil, ""compiles"", nil, nil, """"]
+[""Object#top"", 15, true, nil, ""never"", ""screen"", ""MethodCall puts (self)"", nil]
+nil
+[true]
+");
+            } finally {
+                System.IO.File.Delete(path);
+            }
+        }
+
         // Callers and callees made hot, then probed where a direct call has to give way; the output is CRuby 4.0's.
         private const string JitCallsScript = @"
 def fib(k) = k < 2 ? k : fib(k - 1) + fib(k - 2)

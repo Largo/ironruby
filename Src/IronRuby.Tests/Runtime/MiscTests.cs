@@ -7205,6 +7205,120 @@ true
         }
 
         /// <summary>
+        /// A method that passes its block on (`inner(&amp;b)', `map(&amp;:to_s)') runs without a scope
+        /// (MethodDefinition.LightBlockPassEnabled): the callee gets the caller's Proc, a return or break in the block
+        /// leaves the methods between as it would, a scope made on demand has the block, and a block handed on through
+        /// a Ruby method is a Proc object to Kernel#lambda. Util/block-pass-matrix.rb has the full matrix. Expected
+        /// output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameBlockPass1() {
+            TestOutput(@"
+require 'ruby4'
+def take(&b); b; end
+def yield1; yield 1; end
+def given(&b); !b.nil?; end
+def w_take(&b); take(&b); end
+def w_yield(&b); yield1(&b); end
+def w_given(&b); given(&b); end
+def w_two(&b); w_yield(&b); end
+def w_sym; [1, 2].map(&:to_s); end
+def w_local(f); yield1(&f); end
+def w_lambda(&b); lambda(&b); end
+def w_lambda_dup(&b); lambda(&b.dup); end
+def w_names(&b); yield1(&b); local_variables; end
+def r_return; w_two { return :returned }; :after; end
+def r_break; w_yield { break :broke }; end
+pr = proc { }
+p w_yield { |x| x + 1 }, w_given, w_given { }, w_take(&pr).equal?(pr), w_take, w_two { |x| x * 5 }, w_sym
+p w_local(proc { |x| x + 100 }), w_local(:succ), w_names { }, r_return, r_break
+p 40.times.map { |i| w_yield { |x| x + i } }.sum, 40.times.map { |i| i.odd? ? w_given { } : w_given }.uniq
+begin; w_lambda { }; rescue ArgumentError => e; p e.message; end
+begin; w_lambda_dup { }; rescue ArgumentError => e; p e.message; end
+p w_lambda(&->(x) { x }).lambda?
+begin; w_local(1); rescue TypeError => e; p e.message; end
+def boom(&b); yield1(&b); raise ""boom""; end
+begin; boom { }; rescue => e; p e.message, e.backtrace[0][/in .*/]; end
+", @"
+2
+false
+true
+true
+nil
+5
+[""1"", ""2""]
+101
+2
+[:b]
+:returned
+:broke
+820
+[false, true]
+""the lambda method requires a literal block""
+""the lambda method requires a literal block""
+true
+""no implicit conversion of Integer into Proc""
+""boom""
+""in 'Object#boom'""
+");
+        }
+
+        /// <summary>
+        /// A method that passes a splatted value on (`inner(*args)', `[*a]', `yield(*a)') runs without a scope
+        /// (MethodDefinition.LightSplatEnabled): #to_a is called through a conversion site, the callee's rest Array is its own,
+        /// ruby2_keywords still marks the last Hash, and a scope made on demand (eval, local_variables) sees the frame's
+        /// locals. Util/splat-pass-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameSplat1() {
+            TestOutput(@"
+require 'ruby4'
+def take(*a) = a
+def two(x, y) = [x, y]
+def kw(*a, k: 0) = [a, k]
+def blk(*a, &b) = [a, b.call]
+def w_take(*a) = take(*a)
+def w_local(x) = take(*x)
+def w_mid(*a) = take(1, *a, 2)
+def w_two(*a) = two(*a)
+def w_pass(*a, &b) = blk(*a, &b)
+def w_mut(*a); r = take(*a) << :x; [a, r]; end
+def w_yield(*a) = yield(*a)
+def w_eval(*a); x = 5; x + eval(*a); end
+def w_names(*a); take(*a); local_variables; end
+def w_kw(*a) = kw(*a)
+ruby2_keywords def w_r2k(*a) = kw(*a)
+class ToA; def to_a = [7]; end
+class BadToA; def to_a = 1; end
+p w_take, w_take(1, 2), w_local(nil), w_local(5), w_local(ToA.new), w_mid(:a), w_mid
+p w_mut(1), w_yield(1, 2) { |x, y| x + y }, w_eval(""x + 1""), w_names(1), w_pass(3) { 4 }
+p w_kw(1, k: 2), w_r2k(1, k: 2)
+p 40.times.map { |i| w_take(*([i] * (i % 3))).size }.sum
+begin; w_two(1); rescue ArgumentError => e; p e.message, e.backtrace[0][/in .*/]; end
+begin; w_local(BadToA.new); rescue TypeError => e; p e.message; end
+p ""xxaxx"".strip(""x"")
+", @"
+[]
+[1, 2]
+[]
+[5]
+[7]
+[1, :a, 2]
+[1, 2]
+[[1], [1, :x]]
+3
+11
+[:a]
+[[3], 4]
+[[1, {k: 2}], 0]
+[[1], 2]
+39
+""wrong number of arguments (given 1, expected 2)""
+""in 'Object#two'""
+""can't convert BadToA to Array (BadToA#to_a gives Integer)""
+""a""
+");
+        }
+
+        /// <summary>
         /// A method with a rest parameter is a light frame too (MethodDefinition.IsLightFrameCandidate): the Array is the
         /// call's own, and a scope made on demand - for binding, local_variables, a block - has it as a scope made at entry
         /// does. Util/light-rest-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
