@@ -327,4 +327,16 @@ row "erb 3", erb.result_with_hash(a: "x", b: nil)
 erb2 = ERB.new("<%= local_variables.sort.inspect %>")
 row "erb locals", erb2.result_with_hash(k1: 1, k2: 2)
 
+# `using' in an eval through a binding activates where the binding was taken, for the binding, its copies and the
+# copies of those: a copy's scope of its own holds only the locals defined through it.
+module BlvR; refine(Integer) { def blv_twice = self * 2 }; end
+module BlvHost
+  B = binding
+end
+BlvHost::B.eval("using BlvR")
+blv_d = BlvHost::B.dup
+row "using through a binding, its dup", (blv_d.eval("3.blv_twice") rescue $!.class)
+row "using through a binding, itself", (BlvHost::B.eval("4.blv_twice") rescue $!.class)
+row "using through a binding, a dup of a dup", (BlvHost::B.dup.dup.eval("5.blv_twice") rescue $!.class)
+
 puts "end"
