@@ -338,5 +338,11 @@ blv_d = BlvHost::B.dup
 row "using through a binding, its dup", (blv_d.eval("3.blv_twice") rescue $!.class)
 row "using through a binding, itself", (BlvHost::B.eval("4.blv_twice") rescue $!.class)
 row "using through a binding, a dup of a dup", (BlvHost::B.dup.dup.eval("5.blv_twice") rescue $!.class)
+module BlvR2; refine(Integer) { def blv_thrice = self * 3 }; end
+blv_x = binding
+blv_y = blv_x.dup
+blv_y.eval("using BlvR2")
+row "using through a dup, the dup", (blv_y.eval("6.blv_thrice") rescue $!.class)
+row "using through a dup, the original", (blv_x.eval("7.blv_thrice") rescue $!.class)
 
 puts "end"
