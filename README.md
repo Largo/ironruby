@@ -310,8 +310,8 @@ on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the
 
 What is left is mostly what .NET cannot do: `fork`, a controlling TTY, `setproctitle`, and
 heap walking (`ObjectSpace.each_object` is opt-in behind `-X:ObjectSpace`, as JRuby's is
-behind `-X+O`). `mkmf` compiles a C extension only where the Ruby C API is: a build from
-source on Linux x64 or Windows x64 ([Bundled gems](#bundled-gems)); the downloads have no C API yet.
+behind `-X+O`). `mkmf` compiles a C extension only where the Ruby C API is: on Linux x64 and
+Windows x64 ([Bundled gems](#bundled-gems)).
 
 ### Default gems
 
@@ -341,9 +341,9 @@ so irb completes with its `TypeCompletor`, as on CRuby.  IronRuby never uses the
 installed on the same machine: a gem it needs is installed for IronRuby, with `igem install`
 or Bundler.
 
-On Linux x64 and Windows x64 (MinGW gcc, as RubyInstaller uses) a build from source has a Ruby
-C API (`Util/build-capi.sh` builds its native library, which the downloads do not carry yet): an
-extension compiled against IronRuby's `ruby.h` can be `require`d, and `gem install` builds a gem's
+On Linux x64 and Windows x64 (MinGW gcc, as RubyInstaller uses) there is a Ruby C API (its
+native library is in the downloads from 4.0.6 on; `Util/build-capi.sh` builds it for a build
+from source): an extension compiled against IronRuby's `ruby.h` can be `require`d, and `gem install` builds a gem's
 C extension as CRuby does - see [`Src/Ruby/CApi/README.md`](Src/Ruby/CApi/README.md) for what it
 covers and for `IRONRUBY_NATIVE_GEMS`, which swaps a built-in library such as sqlite3 for the real
 gem.  An extension that does not build is left alone - its `.rb` files load, a real `require` of
