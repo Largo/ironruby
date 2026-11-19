@@ -206,7 +206,7 @@ Profile (`Util/perf/profile.sh`, self time):
 ## Gaps, worst first
 
 1. **Calls of other methods from hot bodies** (`CallSite.Target` 24-32% of every
-   benchmark; `abs` 1.48, `ivar_rw` 1.42, `yield` 1.39, `nil?` 1.36). Richards' `run_task`
+   benchmark; `yield` 1.57, `ivar_rw` 1.55, `abs` 1.51, `nil?` 1.38). Richards' `run_task`
    and `schedule` (11.6%), Towers' `push_disk`/`move_top_disk`, DeltaBlue's `remove_first`
    and Bounce's `bounce` all fail one rule of the method JIT: nothing that can deopt may
    follow an effect, because a deopt re-runs the generic body from the start. A second
