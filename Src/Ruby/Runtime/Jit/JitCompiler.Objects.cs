@@ -624,6 +624,87 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
         }
 
+        // ---- Array.new(n, v) ----------------------------------------------------------------
+        // `@storage = Array.new(size)' in som.rb's Vector#initialize, `flags = Array.new(5000, true)' in
+        // Sieve: unlike any other construction, Array.new with the built-in new and Array#initialize and an
+        // Integer size runs no Ruby code - it allocates an Array that nothing can see until the body stores
+        // or returns it. So it is an ordinary operation of the typed body, anywhere in it: a deopt after it
+        // runs the generic body, which allocates another one, and the first is garbage. Method bodies only
+        // (EmitCall): an outlined loop takes no construction at all.
+
+        /// <summary>
+        /// `Array.new', `Array.new(n)', `Array.new(n, v)' or the same of `::Array': no block, no splat,
+        /// no keywords. Whether Array is the Array class and its new the built-in one is the emitter's
+        /// question (EmitArrayConstruction); the screen (JitScreen.WalkCall) takes the shape.
+        /// </summary>
+        internal static bool IsArrayConstruction(MethodCall/*!*/ node) {
+            if (node.MethodName != "new" || node.Block != null) { return false; }
+            var target = node.Target as ConstantVariable;
+            if (target == null || target.Name != "Array" || target.Qualifier != null) { return false; }
+            var args = node.Arguments;
+            if (args != null) {
+                if (args.Expressions.Length > 2) { return false; }
+                foreach (var arg in args.Expressions) {
+                    if (arg is SplattedArgument || arg is HashConstructor) { return false; }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)' where Array resolves to the Array class (under the constant guard), its new is
+        /// Class#new as EmitConstruction requires, and Array#initialize the library one (under the entry's
+        /// global method version guard): the Array made directly (JitRuntime.NewArray*). The size must be
+        /// typed Int; a Long, Float or object size is the generic code's (CRuby converts a non-Integer with
+        /// to_int, a call). A size the compiler cannot see to be in range deopts when it is not, and the
+        /// generic body raises ArgumentError with its own message. The value is stored in every slot, boxed
+        /// as an element store boxes it. Not an effect: nothing can see the Array before the body uses it.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitArrayConstruction(MethodCall/*!*/ node, out JT type) {
+            var arrayClass = ArrayClass;
+            if (!ReferenceEquals(ResolveConstant((ConstantVariable)node.Target), arrayClass)) {
+                throw Bail("Array.new of a constant Array that is not the Array class");
+            }
+            var meta = JitRuntime.ClassOf(_context, arrayClass);
+            var refined = meta.ResolveMethod("new", VisibilityContext.AllVisible, _refinements);
+            MethodResolutionResult resolved;
+            using (_context.ClassHierarchyLocker()) {
+                resolved = meta.ResolveMethodForSiteNoLock("new", VisibilityContext.AllVisible);
+            }
+            var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
+            if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
+                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                throw Bail("Array.new is not Class#new");
+            }
+            // a Ruby initialize (or one from a module) is called by the generic new: Ruby code
+            if (!IsBuiltinMethod(arrayClass, "initialize")) { throw Bail("Array#initialize is not the built-in one"); }
+
+            type = JT.Obj;
+            var args = node.Arguments;
+            int argc = (args == null) ? 0 : args.Expressions.Length;
+            if (argc == 0) { return Ast.Call(JitRuntime.M("NewArray")); }
+
+            JT st;
+            var size = Emit(args.Expressions[0], out st);
+            if (st != JT.Int) { throw Bail("Array.new of a " + st + " size"); }
+            MSA.Expression value;
+            if (argc == 2) {
+                JT vt;
+                var v = Emit(args.Expressions[1], out vt);
+                value = BoxForStore(v, vt);
+            } else {
+                value = Ast.Constant(null, typeof(object));
+            }
+            var literal = size as MSA.ConstantExpression;
+            if (literal != null) {
+                int n = (int)literal.Value;
+                if (n < 0 || n > JitRuntime.MaxArraySize) { throw Bail("Array.new of a size out of range: " + n); }
+                return Ast.Call(JitRuntime.M("NewArrayOfSize"), size, value);
+            }
+            _canDeopt = true;
+            return Ast.Call(JitRuntime.M("NewArrayOfCheckedSize"), size, value);
+        }
+
         /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
         internal static bool IsStringLiteralComparison(MethodCall/*!*/ node) {
             if (node.MethodName != "==" && node.MethodName != "!=") { return false; }

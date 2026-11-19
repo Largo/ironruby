@@ -1013,6 +1013,30 @@ namespace IronRuby.Runtime.Jit {
 
         internal const int MaxConstructionArity = 3;
 
+        // ---- Array.new (JitCompiler.EmitArrayConstruction) --------------------------------
+
+        // The largest size Array.new makes (ArrayOps.CheckArraySize): above it, ArgumentError.
+        internal const int MaxArraySize = Int32.MaxValue / 8;
+
+        /// <summary>`Array.new': what the library constructor makes (ArrayOps.CreateArray).</summary>
+        public static object NewArray() {
+            return new RubyArray();
+        }
+
+        /// <summary>`Array.new(n, v)' of a size the compiler saw to be in range.</summary>
+        public static object NewArrayOfSize(int size, object value) {
+            return new RubyArray().AddMultiple(size, value);
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)': a negative size or one too big deopts, and the generic body raises the
+        /// ArgumentError (negative array size, array size too big) from its own frame.
+        /// </summary>
+        public static object NewArrayOfCheckedSize(int size, object value) {
+            if ((uint)size > (uint)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple(size, value);
+        }
+
         public static object Construct0(ConstructionSite/*!*/ site, object cls) {
             if (site.IsDirect) { return site.Construction.Construct0(); }
             var s = (CallSite<Func<CallSite, object, object>>)site.Fallback;

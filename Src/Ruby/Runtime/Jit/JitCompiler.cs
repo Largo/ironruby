@@ -2079,6 +2079,12 @@ namespace IronRuby.Runtime.Jit {
                 throw Bail("abs on " + tt);
             }
 
+            // `Array.new(n, v)' anywhere in a method (JitCompiler.Objects.cs); before the construction that ends
+            // one, which it would otherwise be and which Array is not (no plain construction).
+            if (_ast != null && _loop == null && IsArrayConstruction(node)) {
+                return EmitArrayConstruction(node, out type);
+            }
+
             // `C.new(a, b)' ending the method (JitCompiler.Objects.cs).
             if (_ast != null && _loop == null && _keywords == null && node == TailConstruction(_ast)) {
                 return EmitConstruction(node, out type);
@@ -3227,8 +3233,9 @@ namespace IronRuby.Runtime.Jit {
                 return true;
             }
 
-            if (node == _tailConstruction) {
-                // `C.new(a, b)' ending the method (JitCompiler.EmitConstruction)
+            if (node == _tailConstruction || JitCompiler.IsArrayConstruction(node)) {
+                // `C.new(a, b)' ending the method (JitCompiler.EmitConstruction), or `Array.new(n, v)'
+                // anywhere in it (JitCompiler.EmitArrayConstruction)
                 if (args != null) {
                     foreach (var arg in args.Expressions) {
                         if (!Walk(arg)) { return false; }
