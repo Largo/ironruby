@@ -828,8 +828,63 @@ Profile (`Util/perf/profile.sh`, self time):
     'Object#given' ... may be ignored" under `ir -w` on master too; CRuby 4.0 `-w` printed it
     for a three-line file but not inside a longer one. Found while writing
     `Method_LightFrameBlockPass1`, not a speed gap; not looked into.
+29. **A typed body that reads a constant is thrown away by every `extend` and every new
+    constant, and after eight of them for good** (found in round twenty-four; on the
+    unchanged build too). `def top; TOP; end` and `def qual; G::P::RUBY; end`, called 300
+    times in each of 20 rounds: specialized once when nothing else happens, and nine
+    times when each round also does `Object.new.extend(Comparable)` or
+    `Object.const_set("K#{k}", k)` - after which the stub settles on the generic body
+    (`MaxRespecializations`) and pays its hop for the life of the process. A method
+    without a constant (`x + @a`) is specialized once in all four cases, and a `def` or a
+    singleton method in each round disturbs none of the three. So the guard is the
+    constant's: one global version that anything defining a constant or making a singleton
+    class moves, where a program does both all the time while it loads (every `require`
+    after warm-up, every `extend`). The benchmarks do neither once they run, so no number
+    here shows it; a program that keeps loading loses every typed body with a constant in
+    it, 4,000 of the census's methods being stopped at "constant without a scope" alone.
+    Untried: when the version has moved, look the constant up again and keep the body if
+    it holds what it held (a revalidation, no compile, nothing to cap), or a version per
+    constant as the generic sites' `ConstantSiteCache` has. Judge it by a traced run of a
+    program that loads while it runs (`specialized` once per method, `invalidations` 0),
+    not by the census, which does not see it.
 
 ## Landed
+
+- **perf/orasgn (/perf-step, round twenty-four, 2026-11-19, 92bb385c) - `@x ||= v` and
+  `@x &&= v` in a body the method JIT compiles** - census only, not gated. The screen
+  refused every `||=` and `&&=`; the memoizing getter is the only thing it refuses in 443
+  methods (an upper bound: it had not looked at the right-hand side). `EmitOrAssignment`
+  builds `@x || (@x = v)` from `EmitAndOr` and `EmitAssignment`, on an instance variable
+  and on a local of the method: the variable read once, `v` evaluated only when the store
+  is made, the store a write "made on some paths" for the held-back writes
+  (`TrySinkIVarWrite(conditional)`), never one of the opening run. Method bodies only; an
+  element, class variable, attribute, global or constant target stays refused.
+  JIT compiles 10.4% -> 10.5% (2,949 -> 2,979), maybe 9.7% -> 9.8% (2,756 -> 2,771), never
+  79.9% -> 79.7% (22,630 -> 22,585), light frames unchanged (Src/StdLib + AWFY, 28,335
+  methods; 45 methods moved up, none down) - census only, not gated.
+  The 30 that compile whatever the receiver is are getters of rubygems
+  (`Gem::Specification#authors`, `#dependencies`, `#executables`, `#extensions`,
+  `#licenses`, `#requirements`, `Gem::Dependency#type`, `Gem::Command.build_args`), Thor,
+  RDoc, Minitest, Racc, RBS, and `Process#maxgroups` of the prelude. A driver of twenty
+  memoizing methods of rubygems, rake, csv, rdoc and test-unit, each called once on a
+  fresh object and thousands of times on one (CRuby's checksum on both builds): 16 -> 31
+  methods specialized, 12 -> 12 declined after the screen, the same twelve. AWFY's traces
+  are unchanged (no benchmark has a `||=`). jit-scan (120 -> 176 rows: unset, nil, false,
+  0, "", a frozen receiver, a counted right-hand side, `instance_variables` order, a
+  deopt after the store, locals and parameters), ivar, jit, jit-construct, jit-calls and
+  jit-raise matrices: CRuby's and the unchanged build's output with the JIT on, with
+  `-X:NoJIT -X:NoOSR` and with `-X:NoJITCalls`.
+  The find-out build is why the screen is narrower than the idiom: with every `||=` let
+  through, 86 methods left `never` (37 to `compiles`) and the driver declined ten more -
+  eight at `call X/0`, the memo's work being a call on self (`@blocks ||= compute`), which
+  is round twenty-three's and `kraise`'s wall. So the screen takes the right-hand side
+  only if it is no call but a binary operator, and not a memo of nil or false (`@skip ||=
+  false` is an effect before whatever follows: `RDoc::Markup::Verbatim#ruby?` declined at
+  "a deopt after an effect"). That costs 36 `maybe` and 7 `compiles`; the 398 other
+  methods of the 443 wait for the call.
+  For the gate: no timing has been taken; and see gap 29, which the driver ran into
+  (`Gem::Specification#platform`, `@new_platform ||= Gem::Platform::RUBY`, specialized
+  nine times in one run and then settled on the generic body).
 
 - **The census names everything the screen refuses in a method, not only the first thing**
   (round twenty-four, 2026-11-19; a tool, no change to what runs). After round
