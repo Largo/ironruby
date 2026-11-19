@@ -144,6 +144,13 @@ namespace IronRuby.Compiler.Ast {
 
             if (block != null) {
                 blockArgVariable = gen.CurrentScope.DefineHiddenVariable("#block-def", typeof(Proc));
+                // A literal given to a core iterator that keeps or converts its block, or is written in Ruby without being a light
+                // frame, never has a reusable Proc: its method gets no parking slot (MethodDefinition.ParkedScopesEnabled), which would
+                // only cost it the bookkeeping until the slot gives up.
+                if (gen.CurrentBlock == null && block.IsDefinition && gen.CurrentMethod.ParkSlot != null &&
+                    MethodDefinition.IsNeverParkedIterator(methodName)) {
+                    gen.CurrentMethod.HasUnreusableBlock = true;
+                }
                 transformedBlock = block.Transform(gen);
             } else {
                 blockArgVariable = transformedBlock = null;

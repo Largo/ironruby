@@ -471,6 +471,22 @@ namespace IronRuby.Compiler.Ast {
         internal static readonly bool ParkedScopesEnabled = Environment.GetEnvironmentVariable("IR_PARKED_SCOPES") != "0";
         private static readonly bool ParkedScopesVerbose = Environment.GetEnvironmentVariable("IR_PARKED_SCOPES") == "verbose";
 
+        // Core iterators whose literal block's Proc is never reusable (measured: neither [BlockNotKept] nor a light frame, for
+        // any receiver of the core); `each', `map', `select', `times', `each_pair', `sum', `tap', `then', `loop' are. Only a
+        // cost: a method that calls one with a literal gets no parking slot, and a method of the same name of a program's own
+        // class is merely not parked.
+        private static readonly System.Collections.Generic.HashSet<string> NeverParkedIterators = new System.Collections.Generic.HashSet<string> {
+            "new", "upto", "downto", "step", "any?", "all?", "none?", "one?", "count", "delete_if", "keep_if", "each_cons", "each_slice",
+            "each_with_index", "each_with_object", "fill", "filter_map", "find", "detect", "find_index", "group_by", "index", "inject",
+            "reduce", "max_by", "min_by", "partition", "reject", "reverse_each", "sort", "sort_by", "take_while", "drop_while",
+            "uniq", "zip", "each_key", "each_value", "each_char", "each_byte", "each_line", "define_method", "lambda", "proc",
+            "instance_eval", "instance_exec", "class_eval", "module_eval", "class_exec", "module_exec", "fetch", "tally_by",
+        };
+
+        internal static bool IsNeverParkedIterator(string/*!*/ name) {
+            return NeverParkedIterators.Contains(name);
+        }
+
         /// <summary>
         /// IR_LIGHT_BLOCK_GIVEN=0 makes `block_given?' in a light-frame method the call it was before: the frame makes its
         /// scope and Kernel#block_given? reads the block from it (see LightFrameRewriter.LightScopeCall).

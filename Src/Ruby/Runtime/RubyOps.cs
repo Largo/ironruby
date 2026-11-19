@@ -321,7 +321,17 @@ namespace IronRuby.Runtime {
         /// somewhere, and it reaches the scope.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Proc InstantiateParkedBlock(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            ParkedProcs parked, int index) {
+            // the first evaluation of the literal in a call that took nothing: InstantiateReusableBlock's own
+            if (previous == null && parked == null) {
+                return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            }
+            return InstantiateParkedBlockSlow(previous, scope, self, dispatcher, parked, index);
+        }
+
+        private static Proc InstantiateParkedBlockSlow(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
             ParkedProcs parked, int index) {
             if (previous != null) {
                 if (previous.TryReuse()) {
@@ -347,7 +357,16 @@ namespace IronRuby.Runtime {
         /// be parked, where to stage its Procs (StageParkedProc, then EndPark) - what the call took, or an emptied one.
         /// </summary>
         [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ParkedProcs BeginPark(ParkedScopeSlot/*!*/ slot, RubyScope scope, ParkedProcs taken) {
+            // a call that made no scope, or a slot that gave up: nothing to do, inlined into the body
+            if (scope == null || slot.Failures > ParkedScopeSlot.MaxFailures) {
+                return null;
+            }
+            return BeginParkSlow(slot, scope, taken);
+        }
+
+        private static ParkedProcs BeginParkSlow(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ scope, ParkedProcs taken) {
             var methodScope = scope as RubyMethodScope;
             if (methodScope == null || slot.IsOff || TracePoint.ActiveEvents != 0) {
                 return null;
