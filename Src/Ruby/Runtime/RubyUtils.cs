@@ -56,7 +56,8 @@ namespace IronRuby.Runtime {
         #region Objects
 
         public static readonly int FalseObjectId = 0;
-        public static readonly int TrueObjectId = 2;
+        // MRI's Qtrue (0x14 since flonums): 2 was the old one, and is now the id of the flonum 2.0 (TryGetFlonumId).
+        public static readonly int TrueObjectId = 20;
         public static readonly int NilObjectId = 4;
 
         // MRI seeds the hash of immediate values with a random per-process key (CVE-2011-4815), so
