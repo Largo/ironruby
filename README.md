@@ -308,9 +308,10 @@ following CRuby 4.0's `rational.c` and `complex.c`. `Ripper` is implemented
 on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
 **irb** and **reline** run unmodified.
 
-What is left is mostly what .NET cannot do: `fork`, a controlling TTY, `setproctitle`,
-C-extension APIs (`fiddle`, `mkmf` compiling), and heap walking (`ObjectSpace.each_object`
-is opt-in behind `-X:ObjectSpace`, as JRuby's is behind `-X+O`).
+What is left is mostly what .NET cannot do: `fork`, a controlling TTY, `setproctitle`, and
+heap walking (`ObjectSpace.each_object` is opt-in behind `-X:ObjectSpace`, as JRuby's is
+behind `-X+O`). `mkmf` compiles a C extension only where the Ruby C API is: a build from
+source on Linux x64 or Windows x64 ([Bundled gems](#bundled-gems)); the downloads have no C API yet.
 
 ### Default gems
 
