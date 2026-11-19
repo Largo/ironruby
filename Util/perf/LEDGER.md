@@ -395,11 +395,34 @@ Profile (`Util/perf/profile.sh`, self time):
    Landed, perf/interp; a block that interpolates still makes its scope);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
    Util/splat-pass-matrix.rb and Util/interpolation-matrix.rb are their matrices.
-   What the census names next (2026-11-19, 28,335 methods): "optional, splat or post
-   parameters" 1,525, `super` 755, `rescue`/`ensure` 475, and 167 candidates that still
-   need their scope after the rewrite (in the prelude `Enumerable#zip`,
-   `Enumerator::Lazy#zip`, `Enumerator#__size_from_target__`, `Process#detach`,
-   `Process.waitall`; nobody has looked at what refuses them). A method with both a literal block and a passed one still makes its scope
+   What the census names next (2026-11-19, 28,335 methods, 8,017 of them not light).
+   By its first table: "optional, splat or post parameters" 1,525, `rescue`/`ensure` 475,
+   and 167 candidates that still need their scope after the rewrite (in the prelude
+   `Enumerable#zip`, `Enumerator::Lazy#zip`, `Enumerator#__size_from_target__`,
+   `Process#detach`, `Process.waitall`; nobody has looked at what refuses them). The
+   parameter line is keywords: 1,243 of the 1,525 have keyword parameters (20 of them the
+   prelude's, none AWFY's), 248 an optional parameter defaulting to `{}`, 2 a post
+   parameter (counted by parsing the 1,525 with Prism).
+   The other 5,704 are refused by a statement of the body, and since perf/why (Landed)
+   the census's second table says for which construct inside it: `super` 1,013, a regex
+   literal 851, a Hash of keyword arguments (`f(a: 1)`) 805, a Hash literal 789, a
+   parallel assignment 617, a `begin ... end` block 492, `break` 261 (255 of them
+   in a `while`), `defined?` 184, a global variable 147, a Range literal in a body with
+   literal blocks 132, a class variable 81, a qualified constant 75. Before that these
+   were spread over "MethodCall" 1,106, "IfExpression" 1,022, "SimpleAssignmentExpression"
+   993 and five more statement names, which said nothing.
+   Where it matters: the prelude's 233 are a Hash literal 33 (`tally`, `group_by`,
+   `uniq`), a `begin` block 25, keyword parameters 24 (and 20 more under the parameter
+   line), a parallel assignment 23, `defined?`
+   22, a Hash of keyword arguments 17, `super` 16, a regex 11; AWFY's 21 are a Range
+   literal that receives `each` with a block 12 (`Vector#each`, `Sieve#sieve`; the scope
+   is made for the block anyway, so letting the Range in buys nothing by itself), `super`
+   6 (five DeltaBlue constraints' `initialize`, Richards' TaskControlBlock), a
+   `begin ... end while` 2 (Json's `read_object`, `read_array`) and a regex 1. Not looked into, from reading
+   `IsScopeFree`: a Hash literal is refused outright where an Array literal is taken
+   element by element, with no comment saying why; a regex literal is refused by itself
+   although `$~` is written by the call that matches; `defined?(@x)` is refused.
+   A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
@@ -552,6 +575,20 @@ Profile (`Util/perf/profile.sh`, self time):
 
 ## Landed
 
+- **perf/why (/perf-step, 2026-11-19) - a find-out step: the census names the construct
+  that keeps a method out of light frames.** `IR_LIGHT_FRAMES=why` and the census said
+  only which statement of a body was not scope-free (`IfExpression at line 12`), so its
+  three largest lines after the parameters were statement names, and nobody could say
+  which decision of `IsScopeFree` kept 5,704 methods out. `IsScopeFree` now takes a box
+  for the reason, null on the normal path, and a refusal records what it refused
+  (`IfExpression at line 12: GlobalVariable`); the reason's text is built only when asked
+  for. `census.rb` has a second table, "not a light frame: the construct". Nothing was
+  meant to move and nothing did: of the 28,335 rows of the census 0 differ outside
+  `light_why`, and the 5,704 that had a line number are the old text plus the construct
+  (my own comparison of the two TSVs; the merged build's census is the worktree's byte
+  for byte). The interpolation, block-pass and splat-pass matrices print CRuby's output
+  on the merged build. Not run: IronRuby.Tests, a sweep, any timing; the texts that only
+  appear with a switch off. What it found is under gap 9.
 - **perf/interp (/perf-step, 2026-11-19) - a method that interpolates runs without a
   scope** (`"a#{x}"`, `raise ArgumentError, "negative size (#{n})"`;
   `IR_LIGHT_INTERPOLATION=0` turns it off). The filter (`IsScopeFree`) has taken an
