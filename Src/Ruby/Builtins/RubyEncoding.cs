@@ -316,12 +316,15 @@ namespace IronRuby.Builtins {
         // and Name needs these as soon as an encoding exists
 
         // name or alias (case-insensitively, as MRI looks them up) -> code page
-        private static readonly Dictionary<string, int>/*!*/ _codePagesByName = BuildCodePagesByName();
-        private static readonly Dictionary<int, NameEntry>/*!*/ _encodingsByCodePage = BuildEncodingsByCodePage();
+        // _nameTable followed by the names the C API defined (DefineAlias, DefineDummy). These and
+        // the two lookups below are replaced whole, never changed, so readers need no lock.
+        private static NameEntry[]/*!*/ _names = _nameTable;
+        private static Dictionary<string, int>/*!*/ _codePagesByName = BuildCodePagesByName(_nameTable);
+        private static Dictionary<int, NameEntry>/*!*/ _encodingsByCodePage = BuildEncodingsByCodePage(_nameTable);
 
-        private static Dictionary<int, NameEntry>/*!*/ BuildEncodingsByCodePage() {
+        private static Dictionary<int, NameEntry>/*!*/ BuildEncodingsByCodePage(NameEntry[]/*!*/ names) {
             var result = new Dictionary<int, NameEntry>();
-            foreach (var entry in _nameTable) {
+            foreach (var entry in names) {
                 if (entry.Target == null) {
                     result.Add(entry.CodePage, entry);
                 }
@@ -329,12 +332,70 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static Dictionary<string, int>/*!*/ BuildCodePagesByName() {
-            var result = new Dictionary<string, int>(_nameTable.Length, StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in _nameTable) {
+        private static Dictionary<string, int>/*!*/ BuildCodePagesByName(NameEntry[]/*!*/ names) {
+            var result = new Dictionary<string, int>(names.Length, StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in names) {
                 result.Add(entry.Name, entry.Target == null ? entry.CodePage : result[entry.Target]);
             }
             return result;
+        }
+
+        // MRI's ENCODING_LIST_CAPA: the most encodings (aliases aside) there can be
+        private const int MaxEncodings = 256;
+
+        // the code pages of the dummy encodings DefineDummy makes, one after another
+        private const int CodePageDefinedDummy = 1900000;
+
+        private static readonly object/*!*/ _defineLock = new object();
+        private static int _definedDummies;
+
+        private static void AddName(NameEntry entry) {
+            var names = new NameEntry[_names.Length + 1];
+            Array.Copy(_names, names, _names.Length);
+            names[_names.Length] = entry;
+            var byName = BuildCodePagesByName(names);
+            var byCodePage = BuildEncodingsByCodePage(names);
+            _codePagesByName = byName;
+            _encodingsByCodePage = byCodePage;
+            _names = names;
+        }
+
+        private static void CheckAddable(string/*!*/ name) {
+            if (_codePagesByName.ContainsKey(name)) {
+                throw RubyExceptions.CreateArgumentError(String.Format("encoding {0} is already registered", name));
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_enc_alias, for the C API: makes alias another name of the encoding called
+        /// target. Null when there is no such encoding. MRI keeps one table per process, as here.
+        /// </summary>
+        public static RubyEncoding DefineAlias(string/*!*/ alias, string/*!*/ target) {
+            lock (_defineLock) {
+                CheckAddable(alias);
+                var encoding = FindByName(target);
+                if (encoding == null) {
+                    return null;
+                }
+                AddName(A(alias, encoding.Name));
+                return encoding;
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_define_dummy_encoding, for the C API: a new dummy encoding that, like MRI's
+        /// replica of ASCII-8BIT, keeps its strings as bytes. Null once there are MaxEncodings.
+        /// </summary>
+        public static RubyEncoding DefineDummy(string/*!*/ name) {
+            lock (_defineLock) {
+                CheckAddable(name);
+                if (_encodingsByCodePage.Count >= MaxEncodings) {
+                    return null;
+                }
+                int codepage = CodePageDefinedDummy + _definedDummies++;
+                AddName(E(name, codepage, NameFlags.Dummy));
+                return GetRubyEncoding(codepage);
+            }
         }
 
         /// <summary>
@@ -349,7 +410,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>Every Ruby encoding, in MRI's order (Encoding.list).</summary>
         public static IEnumerable<RubyEncoding>/*!*/ GetAll() {
-            foreach (var entry in _nameTable) {
+            foreach (var entry in _names) {
                 if (entry.Target == null) {
                     yield return GetRubyEncoding(entry.CodePage);
                 }
@@ -358,14 +419,14 @@ namespace IronRuby.Builtins {
 
         /// <summary>Every name and alias, in MRI's order (Encoding.name_list).</summary>
         public static IEnumerable<string>/*!*/ GetAllNames() {
-            foreach (var entry in _nameTable) {
+            foreach (var entry in _names) {
                 yield return entry.Name;
             }
         }
 
         /// <summary>Every alias with the name of the encoding it stands for, in MRI's order (Encoding.aliases).</summary>
         public static IEnumerable<KeyValuePair<string, string>>/*!*/ GetAliases() {
-            foreach (var entry in _nameTable) {
+            foreach (var entry in _names) {
                 if (entry.Target != null) {
                     yield return new KeyValuePair<string, string>(entry.Name, entry.Target);
                 }
@@ -375,7 +436,7 @@ namespace IronRuby.Builtins {
         /// <summary>The aliases of this encoding, in MRI's order.</summary>
         public IEnumerable<string>/*!*/ GetAliasNames() {
             string name = Name;
-            foreach (var entry in _nameTable) {
+            foreach (var entry in _names) {
                 if (entry.Target == name) {
                     yield return entry.Name;
                 }
@@ -527,6 +588,9 @@ namespace IronRuby.Builtins {
         }
 
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
+            if (codepage >= CodePageDefinedDummy && codepage < CodePageDefinedDummy + MaxEncodings) {
+                return new BinaryEncoding(codepage);
+            }
             var rubyOnly = RubyOnlyEncodings.TryCreate(codepage, throwOnError);
             if (rubyOnly != null) {
                 return rubyOnly;

@@ -1038,21 +1038,17 @@ namespace IronRuby.Runtime.CApi {
             return rb_enc_str_coderange(str) == (int)CR_7BIT ? 1 : 0;
         }
 
-        internal static long rb_enc_strlen(byte* head, byte* tail, void* enc) {
-            var s = MutableString.CreateBinary(Bytes(head, tail - head), FromNativeEncoding(enc) ?? RubyEncoding.Binary);
-            return s.GetCharCount();
-        }
 
         internal static int rb_to_encoding_index(VALUE obj) {
             object o = FromValue(obj);
             if (o is RubyEncoding e) {
                 return EncodingIndex(e);
             }
-            var s = o as MutableString;
-            if (s == null) {
+            VALUE name = rb_check_string_type(obj);
+            if (name == Qnil) {
                 return -1;
             }
-            var found = FindEncoding(s.ToString());
+            var found = FindEncoding(FromValue(name).ToString());
             return found != null ? EncodingIndex(found) : -1;
         }
 
@@ -1093,7 +1089,50 @@ namespace IronRuby.Runtime.CApi {
         internal static int rb_filesystem_encindex() { return EncodingIndex(_context.GetPathEncoding()); }
 
         internal static int rb_enc_alias(byte* alias, byte* orig) {
-            return -1;
+            string name = FromCString(alias);
+            var encoding = RubyEncoding.DefineAlias(name, FromCString(orig));
+            if (encoding == null) {
+                return -1;
+            }
+            DefineEncodingConstants(name, encoding);
+            return EncodingIndex(encoding);
+        }
+
+        /// <summary>
+        /// The C half of rb_define_dummy_encoding (native/capi.c raises EncodingError on -1):
+        /// the new encoding's index, the last of Encoding.list.
+        /// </summary>
+        internal static int rb_ir_define_dummy_encoding(byte* name) {
+            string n = FromCString(name);
+            var encoding = RubyEncoding.DefineDummy(n);
+            if (encoding == null) {
+                return -1;
+            }
+            DefineEncodingConstants(n, encoding);
+            return EncodingIndex(encoding);
+        }
+
+        /// <summary>
+        /// encoding.c's set_encoding_const: the name as a constant of Encoding when it can be one
+        /// (characters that cannot be in a constant name become '_'), and its upper case form.
+        /// </summary>
+        private static void DefineEncodingConstants(string/*!*/ name, RubyEncoding/*!*/ encoding) {
+            if (name.Length == 0 || !Char.IsAsciiLetterUpper(name[0])) {
+                return;
+            }
+            var chars = name.ToCharArray();
+            for (int i = 0; i < chars.Length; i++) {
+                if (!Char.IsAsciiLetterOrDigit(chars[i])) {
+                    chars[i] = '_';
+                }
+            }
+            var constant = new string(chars);
+            var module = (RubyModule)Constant("Encoding");
+            foreach (var c in new[] { constant, constant.ToUpperInvariant() }) {
+                if (!module.TryGetConstant(null, c, out object _)) {
+                    module.SetConstant(c, encoding);
+                }
+            }
         }
 
         #endregion

@@ -9,6 +9,7 @@
 # The shim's own (capi.h, ruby/internal/ironruby.h).
 VALUE rb_ir_builtin_type(VALUE obj);
 VALUE rb_ir_rbasic_class(VALUE obj);
+int rb_ir_define_dummy_encoding(const char *name);
 VALUE rb_ir_fl_test(VALUE obj, VALUE flags);
 void rb_ir_fl_set(VALUE obj, VALUE flags);
 void rb_ir_fl_unset(VALUE obj, VALUE flags);
@@ -325,7 +326,6 @@ int rb_io_descriptor(VALUE io);
 VALUE rb_call_super_kw(int argc, const VALUE *argv, int kw_splat);
 int rb_enc_str_coderange(VALUE str);
 int rb_obj_method_arity(VALUE obj, ID mid);
-long rb_enc_strlen(const char *head, const char *tail, rb_encoding *enc);
 VALUE rb_check_to_integer(VALUE val, const char *mid);
 VALUE rb_check_array_type(VALUE obj);
 VALUE rb_make_exception(int argc, const VALUE *argv);

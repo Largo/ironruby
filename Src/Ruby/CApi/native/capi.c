@@ -796,6 +796,123 @@ utf8_left_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *en
 static OnigUChar *sb_left_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *end, const OnigEncodingType *enc) { return (OnigUChar *)p; }
 static int always_true(const OnigUChar *p, const OnigUChar *end, const OnigEncodingType *enc) { return 1; }
 
+/* UTF-16 and UTF-32, either byte order: be is 1 for big-endian */
+static OnigCodePoint u16_at(const OnigUChar *p, int be) { return be ? (p[0] << 8) | p[1] : (p[1] << 8) | p[0]; }
+static OnigCodePoint
+u32_at(const OnigUChar *p, int be)
+{
+    return be ? ((OnigCodePoint)p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]
+              : ((OnigCodePoint)p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
+}
+
+static int
+utf16_len(const OnigUChar *p, const OnigUChar *e, int be)
+{
+    if (e - p < 2) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(2 - (int)(e - p));
+    OnigCodePoint c = u16_at(p, be);
+    if (c >= 0xdc00 && c <= 0xdfff) return ONIGENC_CONSTRUCT_MBCLEN_INVALID();
+    if (c < 0xd800 || c > 0xdbff) return ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(2);
+    if (e - p < 4) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(4 - (int)(e - p));
+    c = u16_at(p + 2, be);
+    return c >= 0xdc00 && c <= 0xdfff ? ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(4) : ONIGENC_CONSTRUCT_MBCLEN_INVALID();
+}
+
+static int
+utf32_len(const OnigUChar *p, const OnigUChar *e, int be)
+{
+    if (e - p < 4) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(4 - (int)(e - p));
+    OnigCodePoint c = u32_at(p, be);
+    return c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff) ? ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(4) : ONIGENC_CONSTRUCT_MBCLEN_INVALID();
+}
+
+static OnigCodePoint
+utf16_to_code(const OnigUChar *p, const OnigUChar *e, int be)
+{
+    if (e - p < 2) return *p;
+    OnigCodePoint c = u16_at(p, be);
+    if (c >= 0xd800 && c <= 0xdbff && e - p >= 4) {
+        OnigCodePoint lo = u16_at(p + 2, be);
+        if (lo >= 0xdc00 && lo <= 0xdfff) return 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+    }
+    return c;
+}
+
+static int
+utf16_code_to_mbc(OnigCodePoint c, OnigUChar *buf, int be)
+{
+    if (c > 0xffff) {
+        OnigCodePoint hi = 0xd800 + ((c - 0x10000) >> 10), lo = 0xdc00 + ((c - 0x10000) & 0x3ff);
+        utf16_code_to_mbc(hi, buf, be);
+        utf16_code_to_mbc(lo, buf + 2, be);
+        return 4;
+    }
+    buf[be ? 0 : 1] = (OnigUChar)(c >> 8);
+    buf[be ? 1 : 0] = (OnigUChar)c;
+    return 2;
+}
+
+static int
+utf32_code_to_mbc(OnigCodePoint c, OnigUChar *buf, int be)
+{
+    for (int i = 0; i < 4; i++) buf[be ? 3 - i : i] = (OnigUChar)(c >> (8 * i));
+    return 4;
+}
+
+static OnigUChar *
+utf16_left_adjust(const OnigUChar *start, const OnigUChar *p, int be)
+{
+    if (p <= start) return (OnigUChar *)p;
+    p -= (p - start) % 2;
+    if (p - start >= 2) {
+        OnigCodePoint c = u16_at(p, be), prev = u16_at(p - 2, be);
+        if (c >= 0xdc00 && c <= 0xdfff && prev >= 0xd800 && prev <= 0xdbff) p -= 2;
+    }
+    return (OnigUChar *)p;
+}
+
+#define RB_IR_WIDE(name, be) \
+    static int name##_precise_len(const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_len_(p, e, be); } \
+    static int name##_newline(const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_len_(p, e, be) > 0 && name##_to_code_(p, e, be) == '\n'; } \
+    static OnigCodePoint name##_code(const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_to_code_(p, e, be); } \
+    static int name##_to_mbc(OnigCodePoint c, OnigUChar *buf, const OnigEncodingType *enc) { return name##_code_to_mbc_(c, buf, be); } \
+    static OnigUChar *name##_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_left_adjust_(start, p, be); }
+
+static int utf16_len_(const OnigUChar *p, const OnigUChar *e, int be) { return utf16_len(p, e, be); }
+static OnigCodePoint utf16_to_code_(const OnigUChar *p, const OnigUChar *e, int be) { return utf16_to_code(p, e, be); }
+static int utf16_code_to_mbc_(OnigCodePoint c, OnigUChar *buf, int be) { return utf16_code_to_mbc(c, buf, be); }
+static OnigUChar *utf16_left_adjust_(const OnigUChar *start, const OnigUChar *p, int be) { return utf16_left_adjust(start, p, be); }
+static int utf32_len_(const OnigUChar *p, const OnigUChar *e, int be) { return utf32_len(p, e, be); }
+static OnigCodePoint utf32_to_code_(const OnigUChar *p, const OnigUChar *e, int be) { return e - p < 4 ? *p : u32_at(p, be); }
+static int utf32_code_to_mbc_(OnigCodePoint c, OnigUChar *buf, int be) { return utf32_code_to_mbc(c, buf, be); }
+static OnigUChar *utf32_left_adjust_(const OnigUChar *start, const OnigUChar *p, int be) { return (OnigUChar *)(p - (p - start) % 4); }
+
+#define utf16be_len_ utf16_len_
+#define utf16be_to_code_ utf16_to_code_
+#define utf16be_code_to_mbc_ utf16_code_to_mbc_
+#define utf16be_left_adjust_ utf16_left_adjust_
+#define utf16le_len_ utf16_len_
+#define utf16le_to_code_ utf16_to_code_
+#define utf16le_code_to_mbc_ utf16_code_to_mbc_
+#define utf16le_left_adjust_ utf16_left_adjust_
+#define utf32be_len_ utf32_len_
+#define utf32be_to_code_ utf32_to_code_
+#define utf32be_code_to_mbc_ utf32_code_to_mbc_
+#define utf32be_left_adjust_ utf32_left_adjust_
+#define utf32le_len_ utf32_len_
+#define utf32le_to_code_ utf32_to_code_
+#define utf32le_code_to_mbc_ utf32_code_to_mbc_
+#define utf32le_left_adjust_ utf32_left_adjust_
+RB_IR_WIDE(utf16be, 1)
+RB_IR_WIDE(utf16le, 0)
+RB_IR_WIDE(utf32be, 1)
+RB_IR_WIDE(utf32le, 0)
+
+static int utf16_code_len(OnigCodePoint c, const OnigEncodingType *enc) { return c > 0x10ffff ? ONIGERR_TOO_BIG_WIDE_CHAR_VALUE : c > 0xffff ? 4 : 2; }
+static int utf32_code_len(OnigCodePoint c, const OnigEncodingType *enc) { return c > 0x10ffff ? ONIGERR_TOO_BIG_WIDE_CHAR_VALUE : 4; }
+
+/* the encodings whose bytes 0xA0..0xFF are Latin-1's letters (rb_ir_make_encoding's kind 6) */
+#define RB_IR_LATIN1 (1U << 30)
+
 /* Character classes: exact for ASCII; a non-ASCII code point is a letter (and so alnum, word,
  * graph, print) in a Unicode encoding and nothing in any other, which is close enough for what
  * extensions ask (rb_enc_isalnum, rb_enc_isspace...) until IronRuby answers these itself. */
@@ -823,6 +940,23 @@ is_code_ctype(OnigCodePoint code, OnigCtype ctype, const OnigEncodingType *enc)
         }
         return 0;
     }
+    if (code < 256 && (enc->flags & (ONIGENC_FLAG_UNICODE | RB_IR_LATIN1))) {
+        int c = (int)code;
+        int upper = c >= 0xc0 && c <= 0xde && c != 0xd7;
+        int lower = (c >= 0xdf && c <= 0xff && c != 0xf7) || c == 0xaa || c == 0xb5 || c == 0xba;
+        switch (ctype) {
+          case ONIGENC_CTYPE_ALPHA: case ONIGENC_CTYPE_ALNUM: case ONIGENC_CTYPE_WORD: return upper || lower;
+          case ONIGENC_CTYPE_UPPER: return upper;
+          case ONIGENC_CTYPE_LOWER: return lower;
+          case ONIGENC_CTYPE_SPACE: return c == 0x85 || c == 0xa0;
+          case ONIGENC_CTYPE_BLANK: return c == 0xa0;
+          case ONIGENC_CTYPE_CNTRL: return c < 0xa0;
+          case ONIGENC_CTYPE_PRINT: return c >= 0xa0;
+          case ONIGENC_CTYPE_GRAPH: return c > 0xa0;
+          case ONIGENC_CTYPE_PUNCT: return c > 0xa0 && !upper && !lower;
+        }
+        return 0;
+    }
     if (!(enc->flags & ONIGENC_FLAG_UNICODE)) return 0;
     switch (ctype) {
       case ONIGENC_CTYPE_ALPHA: case ONIGENC_CTYPE_GRAPH: case ONIGENC_CTYPE_PRINT:
@@ -832,13 +966,35 @@ is_code_ctype(OnigCodePoint code, OnigCtype ctype, const OnigEncodingType *enc)
     return 0;
 }
 
+/* lower case for ASCII, and for Latin-1's letters in a Unicode or Latin-1 encoding */
+static OnigCodePoint
+fold_code(OnigCodePoint c, const OnigEncodingType *enc)
+{
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    if (c >= 0xc0 && c <= 0xde && c != 0xd7 && (enc->flags & (ONIGENC_FLAG_UNICODE | RB_IR_LATIN1))) return c + 32;
+    return c;
+}
+
+static OnigCodePoint
+upcase_code(OnigCodePoint c, const OnigEncodingType *enc)
+{
+    if (c >= 'a' && c <= 'z') return c - 32;
+    if (c >= 0xe0 && c <= 0xfe && c != 0xf7 && (enc->flags & (ONIGENC_FLAG_UNICODE | RB_IR_LATIN1))) return c - 32;
+    return c;
+}
+
 static int
 mbc_case_fold(OnigCaseFoldType flag, const OnigUChar **pp, const OnigUChar *end, OnigUChar *to, const OnigEncodingType *enc)
 {
     const OnigUChar *p = *pp;
-    *to = (*p >= 'A' && *p <= 'Z') ? (OnigUChar)(*p + 32) : *p;
-    (*pp)++;
-    return 1;
+    int r = enc->precise_mbc_enc_len(p, end, enc);
+    if (!ONIGENC_MBCLEN_CHARFOUND_P(r)) {
+        *to = *p;
+        (*pp)++;
+        return 1;
+    }
+    *pp += ONIGENC_MBCLEN_CHARFOUND_LEN(r);
+    return enc->code_to_mbc(fold_code(enc->mbc_to_code(p, end, enc), enc), to, enc);
 }
 
 static int apply_all_case_fold(OnigCaseFoldType flag, OnigApplyAllCaseFoldFunc f, void *arg, const OnigEncodingType *enc) { return 0; }
@@ -850,18 +1006,31 @@ static int
 case_map(OnigCaseFoldType *flagP, const OnigUChar **pp, const OnigUChar *end, OnigUChar *to, OnigUChar *to_end, const OnigEncodingType *enc)
 {
     OnigUChar *start = to;
-    while (*pp < end && to < to_end) {
-        OnigUChar c = *(*pp)++;
-        if ((*flagP & ONIGENC_CASE_UPCASE) && c >= 'a' && c <= 'z') c -= 32;
-        else if ((*flagP & ONIGENC_CASE_DOWNCASE) && c >= 'A' && c <= 'Z') c += 32;
-        *to++ = c;
+    while (*pp < end && to_end - to >= enc->max_enc_len) {
+        const OnigUChar *p = *pp;
+        int r = enc->precise_mbc_enc_len(p, end, enc);
+        if (!ONIGENC_MBCLEN_CHARFOUND_P(r)) {
+            *to++ = *(*pp)++;
+            continue;
+        }
+        *pp += ONIGENC_MBCLEN_CHARFOUND_LEN(r);
+        OnigCodePoint c = enc->mbc_to_code(p, end, enc), m = c;
+        if (*flagP & ONIGENC_CASE_UPCASE) m = upcase_code(c, enc);
+        else if (*flagP & ONIGENC_CASE_DOWNCASE) m = fold_code(c, enc);
+        if (m != c) *flagP |= ONIGENC_CASE_MODIFIED;
+        to += enc->code_to_mbc(m, to, enc);
     }
     return (int)(to - start);
 }
 
+/*
+ * kind: 0 single-byte (or a multibyte encoding treated byte by byte), 1 UTF-8 and its variants,
+ * 2 UTF-16BE, 3 UTF-16LE, 4 UTF-32BE, 5 UTF-32LE, 6 single-byte with Latin-1's letters.
+ */
 RB_IR_EXPORT rb_encoding *
-rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int utf8)
+rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int kind)
 {
+    int utf8 = kind == 1;
     OnigEncodingType *enc = calloc(1, sizeof(OnigEncodingType));
     if (!enc) abort();
     enc->name = strdup(name);
@@ -876,6 +1045,18 @@ rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int u
     enc->code_to_mbc = utf8 ? utf8_code_to_mbc : sb_code_to_mbc;
     enc->left_adjust_char_head = utf8 ? utf8_left_adjust : sb_left_adjust;
     enc->is_allowed_reverse_match = always_true;
+    switch (kind) {
+#define RB_IR_SET_WIDE(n, len) \
+        enc->precise_mbc_enc_len = n##_precise_len; enc->is_mbc_newline = n##_newline; enc->mbc_to_code = n##_code; \
+        enc->code_to_mbclen = len; enc->code_to_mbc = n##_to_mbc; enc->left_adjust_char_head = n##_adjust; break;
+      case 2: RB_IR_SET_WIDE(utf16be, utf16_code_len)
+      case 3: RB_IR_SET_WIDE(utf16le, utf16_code_len)
+      case 4: RB_IR_SET_WIDE(utf32be, utf32_code_len)
+      case 5: RB_IR_SET_WIDE(utf32le, utf32_code_len)
+#undef RB_IR_SET_WIDE
+    }
+    if (kind >= 1 && kind <= 5) enc->flags = ONIGENC_FLAG_UNICODE;
+    if (kind == 6) enc->flags = RB_IR_LATIN1;
     enc->is_code_ctype = is_code_ctype;
     enc->mbc_case_fold = mbc_case_fold;
     enc->apply_all_case_fold = apply_all_case_fold;
@@ -1177,10 +1358,66 @@ rb_enc_nth(const char *p, const char *e, long nth, rb_encoding *enc)
     return (char *)(p > e ? e : p);
 }
 
+/* CRuby's: the original UTF-8 of up to 6 bytes, beyond U+10FFFF too */
 int
 rb_uv_to_utf8(char buf[6], unsigned long uv)
 {
-    return utf8_code_to_mbc((OnigCodePoint)uv, (OnigUChar *)buf, NULL);
+    if (uv < 0x200000) return utf8_code_to_mbc((OnigCodePoint)uv, (OnigUChar *)buf, NULL);
+    if (uv < 0x4000000) {
+        buf[0] = (char)(0xf8 | (uv >> 24));
+        buf[1] = (char)(0x80 | ((uv >> 18) & 0x3f));
+        buf[2] = (char)(0x80 | ((uv >> 12) & 0x3f));
+        buf[3] = (char)(0x80 | ((uv >> 6) & 0x3f));
+        buf[4] = (char)(0x80 | (uv & 0x3f));
+        return 5;
+    }
+    if (uv < 0x80000000UL) {
+        buf[0] = (char)(0xfc | (uv >> 30));
+        buf[1] = (char)(0x80 | ((uv >> 24) & 0x3f));
+        buf[2] = (char)(0x80 | ((uv >> 18) & 0x3f));
+        buf[3] = (char)(0x80 | ((uv >> 12) & 0x3f));
+        buf[4] = (char)(0x80 | ((uv >> 6) & 0x3f));
+        buf[5] = (char)(0x80 | (uv & 0x3f));
+        return 6;
+    }
+    rb_raise(rb_eRangeError, "pack(U): value out of range");
+    return 0;
+}
+
+/* string.c's: a fixed-width encoding counts whole and partial characters, any other walks them */
+long
+rb_enc_strlen(const char *p, const char *e, rb_encoding *enc)
+{
+    long c;
+    if (enc->min_enc_len == enc->max_enc_len) {
+        return (e - p + enc->min_enc_len - 1) / enc->min_enc_len;
+    }
+    for (c = 0; p < e; c++) p += rb_enc_mbclen(p, e, enc);
+    return c;
+}
+
+int
+rb_enc_codelen(int c, rb_encoding *enc)
+{
+    int n = enc->code_to_mbclen((OnigCodePoint)c, enc);
+    if (n <= 0) rb_raise(rb_eArgError, "invalid codepoint 0x%x in %s", (unsigned int)c, enc->name);
+    return n;
+}
+
+/* encoding.c's: a new dummy encoding, as many as fit in its 256 */
+int
+rb_define_dummy_encoding(const char *name)
+{
+    int index = rb_ir_define_dummy_encoding(name);
+    if (index < 0) rb_raise(rb_eEncodingError, "too many encoding (> 256)");
+    return index;
+}
+
+OnigUChar *
+onigenc_get_left_adjust_char_head(OnigEncoding enc, const OnigUChar *start, const OnigUChar *s, const OnigUChar *end)
+{
+    if (s <= start) return (OnigUChar *)s;
+    return enc->left_adjust_char_head(start, s, end, enc);
 }
 
 /* No GVL: IronRuby's threads run in parallel already, so these just call func. What they do
