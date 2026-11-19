@@ -145,8 +145,11 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static void InitializeEvalScope(RubyScope/*!*/ scope, string/*!*/[]/*!*/ declaredNames, InterpretedFrame interpretedFrame) {
             scope.InterpretedFrame = interpretedFrame;
-            foreach (var name in declaredNames) {
-                scope.DeclareLocalVariable(name);
+            // Declared last to first: a scope lists the variables it was given later first
+            // (RubyScope.GetDeclaredLocalSymbols), and MRI lists the ones of a single eval in
+            // the order the string has them.
+            for (int i = declaredNames.Length - 1; i >= 0; i--) {
+                scope.DeclareLocalVariable(declaredNames[i]);
             }
         }
 

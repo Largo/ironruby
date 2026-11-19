@@ -170,6 +170,11 @@ namespace IronRuby.Runtime {
             get { var r = _rare; return (r != null) ? r.DynamicLocals : null; }
         }
 
+        // Whether an eval or Binding#local_variable_set has defined a variable in this very scope.
+        internal bool HasDynamicLocals {
+            get { return DynamicLocals != null; }
+        }
+
         private List<RubyModule> UsedModules {
             get { var r = _rare; return (r != null) ? r.UsedModules : null; }
         }
@@ -466,12 +471,18 @@ namespace IronRuby.Runtime {
 
         private IEnumerable<string>/*!*/ GetDeclaredLocalSymbols() {
             // a variable an eval or Binding#local_variable_set introduced is newer than the ones
-            // the scope was compiled with, and MRI lists it first
+            // the scope was compiled with, and MRI lists it first; MRI lists the later of two
+            // such variables first too (each eval and each set extends the binding's env), so
+            // the dictionary, which keeps the order they were added in, is read backwards (see
+            // RubyOps.InitializeEvalScope for the order within one eval)
             if (DynamicLocals != null) {
+                string[] names;
                 lock (DynamicLocals) {
-                    foreach (string name in DynamicLocals.Keys) {
-                        yield return name;
-                    }
+                    names = new string[DynamicLocals.Count];
+                    DynamicLocals.Keys.CopyTo(names, 0);
+                }
+                for (int i = names.Length - 1; i >= 0; i--) {
+                    yield return names[i];
                 }
             }
 
@@ -592,6 +603,54 @@ namespace IronRuby.Runtime {
 
                 scope = scope.Parent;
             }
+        }
+
+        /// <summary>
+        /// Binding#local_variable_get and #local_variable_defined?: <see cref="ResolveLocalVariable"/>, except
+        /// that a binding taken in an isolated proc (Ractor.new's block, a shareable proc) does not see past
+        /// it, as MRI's does not: the locals around the proc are not defined for it.
+        /// </summary>
+        public bool TryResolveBindingLocal(string/*!*/ name, out object value) {
+            RubyScope scope = this;
+            while (true) {
+                if (scope.TryGetLocal(name, out value)) {
+                    return true;
+                }
+
+                if (!scope.InheritsLocalVariables || IsIsolatedProcScope(scope)) {
+                    return false;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
+        /// <summary>
+        /// Binding#local_variable_set: what `name = value` evaluated through the binding does
+        /// (<see cref="ResolveAndSetLocalVariable"/>) - a variable visible from here is assigned where it
+        /// lives, any other is defined in this scope, the binding's own - except that the locals around an
+        /// isolated proc are not visible from a binding taken in it, so a name of one of them is a new
+        /// variable of the binding's rather than a write to them.
+        /// </summary>
+        public void SetBindingLocal(string/*!*/ name, object value) {
+            RubyScope scope = this;
+            while (true) {
+                if (scope.TrySetLocal(name, value)) {
+                    return;
+                }
+
+                if (!scope.InheritsLocalVariables || IsIsolatedProcScope(scope)) {
+                    DefineDynamicVariable(name, value);
+                    return;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
+        private static bool IsIsolatedProcScope(RubyScope/*!*/ scope) {
+            var block = scope as RubyBlockScope;
+            return block != null && block.BlockFlowControl.Proc != null && block.BlockFlowControl.Proc.IsIsolated;
         }
 
         // Defines the variable as nil unless it is already visible from here.
@@ -1826,7 +1885,12 @@ namespace IronRuby.Runtime {
             if (isMain) {
                 context.MainGlobalScope = rubyGlobalScope;
                 scope.SetDebugName("top-main");
-                context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
+                // MRI's TOPLEVEL_BINDING keeps the locals an eval or a local_variable_set defines through
+                // it to itself, as any other binding does: the main script does not see them.
+                var toplevelBinding = Binding.Create(scope, scope.SelfObject);
+                toplevelBinding.SourcePath = "<main>";
+                toplevelBinding.SourceLine = 0;
+                context.ObjectClass.SetConstant("TOPLEVEL_BINDING", toplevelBinding);
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
                     // a warm-start worker loaded these into this very scope ahead of time
