@@ -452,26 +452,21 @@ jobs:
           pattern: ironruby-*-net*
           merge-multiple: true
 
-      # The macOS archives may be missing (package: continue-on-error); these may not. By
-      # the end of the name, as the version in it is CurrentVersion.cs's and not the tag.
+      # The macOS archives may be missing (package: continue-on-error); these may not. Their
+      # names carry the tag's version (package: IR_VERSION).
       - name: Required archives
         working-directory: dist
         run: |
           ls -l
-          net10=$(ls | grep -v -- '-net11-' || true)
-          net11=$(ls | grep -- '-net11-' || true)
+          v="${GITHUB_REF_NAME#v}"
           missing=0
-          check() {
-            if ! grep -q -- "$2" <<< "$3"; then
-              echo "::error::no $1"
+          for f in "ironruby-$v-linux-x64.tar.gz" "ironruby-$v-win-x64.zip" "ironruby-$v-win-x64-setup.exe" \
+                   "ironruby-$v-net11-linux-x64.tar.gz" "ironruby-$v-net11-win-x64.zip"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing"
               missing=1
             fi
-          }
-          check 'Linux x64 archive on .NET 10'   '-linux-x64\.tar\.gz$'    "$net10"
-          check 'Windows x64 archive on .NET 10' '-win-x64\.zip$'          "$net10"
-          check 'Windows x64 installer'          '-win-x64-setup\.exe$'    "$net10"
-          check 'Linux x64 archive on .NET 11'   '-linux-x64\.tar\.gz$'    "$net11"
-          check 'Windows x64 archive on .NET 11' '-win-x64\.zip$'          "$net11"
+          done
           exit $missing
 
       - name: Checksums
