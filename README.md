@@ -10,7 +10,7 @@ brought back to life: it **builds and runs on .NET 10 and 11**, and it parses Ru
 **[prism](https://github.com/ruby/prism), CRuby's own parser**, instead of the hand-ported
 Ruby 1.9 grammar it shipped with in 2011.
 
-**IronRuby 4.0 is the first stable release since 1.1.3 in 2011**, and 4.0.5 is its latest.
+**IronRuby 4.0 is the first stable release since 1.1.3 in 2011**, and 4.0.6 is its latest.
 The downloads are self-contained: unpack one and run it, there is no .NET to install.
 
 **The compatibility target is Ruby 4.0.** IronRuby aims to run what CRuby 4.0 runs, with
@@ -22,19 +22,19 @@ not kept.
 
 | | Download (.NET 10) | |
 |---|---|---|
-| **Windows** x64 | [ironruby-4.0.5-win-x64-setup.exe](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-win-x64-setup.exe) | the installer: the zip below, installed and put on the PATH |
-| **Windows** x64 | [ironruby-4.0.5-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
-| **Linux** x64 | [ironruby-4.0.5-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-linux-x64.tar.gz) | |
-| **macOS** arm64 | [ironruby-4.0.5-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-osx-arm64.tar.gz) | built in CI, not tested there |
+| **Windows** x64 | [ironruby-4.0.6-win-x64-setup.exe](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-win-x64-setup.exe) | the installer: the zip below, installed and put on the PATH |
+| **Windows** x64 | [ironruby-4.0.6-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
+| **Linux** x64 | [ironruby-4.0.6-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-linux-x64.tar.gz) | |
+| **macOS** arm64 | [ironruby-4.0.6-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-osx-arm64.tar.gz) | built in CI, not tested there |
 
 The same on .NET 11:
-[ironruby-4.0.5-net11-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-net11-win-x64.zip) ·
-[ironruby-4.0.5-net11-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-net11-linux-x64.tar.gz) ·
-[ironruby-4.0.5-net11-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.5/ironruby-4.0.5-net11-osx-arm64.tar.gz)
+[ironruby-4.0.6-net11-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-net11-win-x64.zip) ·
+[ironruby-4.0.6-net11-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-net11-linux-x64.tar.gz) ·
+[ironruby-4.0.6-net11-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.6/ironruby-4.0.6-net11-osx-arm64.tar.gz)
 (no installer).
 
-[SHA256SUMS](https://github.com/Largo/ironruby/releases/download/v4.0.5/SHA256SUMS) ·
-[release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.5) ·
+[SHA256SUMS](https://github.com/Largo/ironruby/releases/download/v4.0.6/SHA256SUMS) ·
+[release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.6) ·
 [all releases](https://github.com/Largo/ironruby/releases) · [getting started](#binary-releases)
 
 > **Each release is built for .NET 10 and for .NET 11.** The downloads in the table carry
@@ -80,7 +80,7 @@ drives it in CI with nobody at the keyboard.*
 ```console
 $ ./iirb.sh
 irb(main):001> RUBY_DESCRIPTION
-=> "IronRuby 4.0.5 (4.0.0) on .NET 10.0.12 [x86_64-linux]"
+=> "IronRuby 4.0.6 (4.0.0) on .NET 10.0.12 [x86_64-linux]"
 irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
 => :fib
 irb(main):003> (1..10).map { fib(_1) }
@@ -214,7 +214,7 @@ releases for that Ruby version (4.0.0, 4.0.1, ...) and is not CRuby's patch leve
 release notes say which CRuby release the specs were checked against. The last release of
 the original project was 1.1.3, for Ruby 1.9.2, in 2011.
 
-`IRONRUBY_VERSION` is the full version (`4.0.5`, or `4.0.0-preview1` for a pre-release),
+`IRONRUBY_VERSION` is the full version (`4.0.6`, or `4.0.0-preview1` for a pre-release),
 `RUBY_ENGINE_VERSION` the same without the pre-release suffix, and `RUBY_VERSION` the Ruby
 version (`4.0.0`).
 
@@ -340,7 +340,8 @@ so irb completes with its `TypeCompletor`, as on CRuby.  IronRuby never uses the
 installed on the same machine: a gem it needs is installed for IronRuby, with `igem install`
 or Bundler.
 
-On Linux x64 and Windows x64 (MinGW gcc, as RubyInstaller uses) there is a Ruby C API: an
+On Linux x64 and Windows x64 (MinGW gcc, as RubyInstaller uses) a build from source has a Ruby
+C API (`Util/build-capi.sh` builds its native library, which the downloads do not carry yet): an
 extension compiled against IronRuby's `ruby.h` can be `require`d, and `gem install` builds a gem's
 C extension as CRuby does - see [`Src/Ruby/CApi/README.md`](Src/Ruby/CApi/README.md) for what it
 covers and for `IRONRUBY_NATIVE_GEMS`, which swaps a built-in library such as sqlite3 for the real
@@ -637,13 +638,13 @@ processes, socket addresses and Puma were fixed there in 4.0.1 (#12, #13).
 
 [Releases](https://github.com/Largo/ironruby/releases) carry a ready-to-run IronRuby for
 Linux x64, Windows x64 and macOS arm64 (not tested in CI); the [table at the top](#ironruby-modernized)
-links the ones for 4.0.5. They are self-contained, so no .NET has to be installed: from
+links the ones for 4.0.6. They are self-contained, so no .NET has to be installed: from
 4.0.5 on, each is built twice, on .NET 10 (`ironruby-<version>-<rid>`, the default) and on
 .NET 11 (`ironruby-<version>-net11-<rid>`), and carries that runtime; 4.0.4 and earlier
 carry .NET 8's. Unpack one and run the launchers in it:
 
 ```console
-$ tar xzf ironruby-4.0.5-linux-x64.tar.gz && cd ironruby-4.0.5-linux-x64
+$ tar xzf ironruby-4.0.6-linux-x64.tar.gz && cd ironruby-4.0.6-linux-x64
 $ ./ironruby -e 'puts RUBY_DESCRIPTION'
 $ ./iirb.sh
 $ ./igem.sh install rack
@@ -765,7 +766,7 @@ Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries u
 ```
 C:\ir> set IR_CONFIG=Release
 C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
-IronRuby 4.0.5 (4.0.0) on .NET 10.0.12 [x64-mswin64]
+IronRuby 4.0.6 (4.0.0) on .NET 10.0.12 [x64-mswin64]
 C:\ir> iirb.cmd
 C:\ir> set RUBY_EXE=C:\ir\ir.cmd
 C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
