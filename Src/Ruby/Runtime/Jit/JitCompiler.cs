@@ -170,6 +170,8 @@ namespace IronRuby.Runtime.Jit {
         // The body ends in a construction (EmitConstruction), which runs an initialize: arbitrary Ruby code.
         private bool _construction;
         private bool _selfCall;
+        // The body has a `raise' (EmitRaise).
+        private bool _raises;
         // How many operands of conditions were values tested for truth rather than booleans (EmitCondition);
         // EmitNot compares it across an `&&'/`||' operand.
         private int _conditionValueLeaves;
@@ -656,6 +658,8 @@ namespace IronRuby.Runtime.Jit {
                 // The method's value is the value it falls off with, unified with every value an
                 // explicit `return' hands back.
                 JT result = (c._returnUnion == JT.None) ? actual : Merge(actual, c._returnUnion);
+                // Every path ends in a `raise' (EmitRaise): the typed body could only ever deopt.
+                if (result == JT.Never && c._raises) { return Declined("every path raises"); }
                 if (result != c._selfReturn) {
                     if (result == guess) { return Declined("the return type did not settle"); }
                     guess = result;
@@ -1837,6 +1841,43 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- calls -------------------------------------------------------------------------
 
+        /// <summary>
+        /// `raise', `raise "m"', `fail Foo, msg' and the like: a call of Kernel#raise (or of whatever self's
+        /// class answers to the name) with no receiver and no block. The arguments may be anything at all,
+        /// since EmitRaise never emits them.
+        /// </summary>
+        internal static bool IsRaiseCall(MethodCall/*!*/ node) {
+            return node.Target == null && node.Block == null && (node.MethodName == "raise" || node.MethodName == "fail");
+        }
+
+        /// <summary>
+        /// A `raise' is a deopt: the typed body throws its deopt there, and the generic body runs again from the
+        /// top, reaches the same `raise' and makes the call - evaluates its arguments once, builds the exception,
+        /// gives it the backtrace of its own frame, sets $!, fires TracePoint's raise event, runs the callers'
+        /// ensure and rescue clauses. The typed body constructs nothing and evaluates none of the arguments
+        /// (they may have effects: `raise Foo, build_message').
+        ///
+        /// That is sound whatever `raise' turns out to be when the call is made: the generic body does what the
+        /// source does, and a `raise' of self's own that returns is run there and the method goes on. It only
+        /// costs: a method whose `raise' is somebody's ordinary method would enter its typed body only to deopt
+        /// on that path, until the entry retires the body (JitStub). So the body is declined when the receiver
+        /// the profile saw does not answer `raise' with Kernel's, or a refinement of it is active where the
+        /// method is written; anything that changes that later moves the method version, which recompiles.
+        /// Like every deopt, it is allowed only before anything observable but held-back writes of self's
+        /// instance variables (_canDeopt, _deoptAfterEffect): those the generic body makes, and then raises.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitRaise(MethodCall/*!*/ node, out JT type) {
+            if (_loop != null) { throw Bail("raise in an outlined loop"); }
+            object sample = (_hints != null) ? _hints.SelfSample : null;
+            if (sample != null && !IsBuiltinMethod(JitRuntime.ClassOf(_context, sample), node.MethodName)) {
+                throw Bail(node.MethodName + " is not Kernel#" + node.MethodName);
+            }
+            _canDeopt = true;
+            _raises = true;
+            type = JT.Never;
+            return Ast.Call(JitRuntime.M("RaiseDeopt"));
+        }
+
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
             if (node.Block != null) {
                 // an iterator with a literal block inside a core iterator's outlined loop: run in place (JitCompiler.Nest.cs)
@@ -1850,6 +1891,9 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target != null && argc == 0 && node.MethodName == "!") {
                 return EmitNot(node.Target, out type);
             }
+
+            // `raise ...' or `fail ...' (EmitRaise): a deopt, and the generic body raises.
+            if (IsRaiseCall(node)) { return EmitRaise(node, out type); }
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
@@ -3166,6 +3210,8 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>Mirrors JitCompiler.EmitCall: a self-recursive call, a binary operator, an element read or a Hash query.</summary>
         private bool WalkCall(MethodCall/*!*/ node) {
             if (node.Block != null) { return No(node); }
+            // `raise ...': a deopt, whose arguments are never emitted (JitCompiler.EmitRaise)
+            if (JitCompiler.IsRaiseCall(node)) { return true; }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
 

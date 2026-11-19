@@ -527,6 +527,11 @@ namespace IronRuby.Runtime.Jit {
         // least median of them taken when the entry was put back; in Stopwatch ticks.
         private long[] _coolSamples;
         private int _coolSampleCount;
+        // The same of the timed generic calls that raised. Their cost stands for the generic body's only when no timed call
+        // returned and none ever has (CoolDownCheck): a method whose every call raises (a `raise' is a deopt, JitCompiler.EmitRaise)
+        // would otherwise never have a generic cost, and an entry is never retired without one.
+        private long[] _coolRaised;
+        private int _coolRaisedCount;
         private int _coolMask;
         private uint _coolRandom = 0x9E3779B9;
         private long _genericCost;
@@ -649,6 +654,7 @@ namespace IronRuby.Runtime.Jit {
             _coolMask = mask;
             _coolSamples ??= new long[MaxDeopts];
             _coolSampleCount = 0;
+            _coolRaisedCount = 0;
             _state = Cooling;
             Install(CoolingBody);
         }
@@ -687,6 +693,16 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        /// <summary>Called, as an exception filter, by the cooling stand-in when a generic call it timed raised; never catches.</summary>
+        protected bool CoolRaised(long start) {
+            long cost = Stopwatch.GetTimestamp() - start;
+            var samples = _coolRaised ??= new long[MaxDeopts];
+            int i = _coolRaisedCount;
+            samples[i & (MaxDeopts - 1)] = cost;
+            _coolRaisedCount = i + 1;
+            return false;
+        }
+
         /// <summary>
         /// Called by the cooling stand-in every CoolCheckCalls calls (ProbeCalls in a probe): puts
         /// the entry back once its cool-down is over.
@@ -700,6 +716,8 @@ namespace IronRuby.Runtime.Jit {
                 if (_coolSampleCount > 0) {
                     long median = Median(_coolSamples, Math.Min(_coolSampleCount, MaxDeopts));
                     if (_genericCost == 0 || median < _genericCost) { _genericCost = median; }
+                } else if (_coolRaisedCount > 0 && _genericCost == 0) {
+                    _genericCost = Median(_coolRaised, Math.Min(_coolRaisedCount, MaxDeopts));
                 }
                 var spec = _current;
                 spec.Countdown = 0;
@@ -1816,7 +1834,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1854,7 +1874,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1892,7 +1914,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1930,7 +1954,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1968,7 +1994,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2, a3);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2, a3); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -2006,7 +2034,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3, a4); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2, a3, a4);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2, a3, a4); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -2044,7 +2074,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3, a4, a5); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2, a3, a4, a5);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2, a3, a4, a5); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }

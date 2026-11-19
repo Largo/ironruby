@@ -279,6 +279,8 @@ namespace IronRuby.Runtime.Jit {
             "ShlLong", "ShrLong", "AbsLong", "MathSqrt",
             // a long boxed as an Integer (an Int32 from the small-integer cache when it fits): no Ruby code, no throw
             "NarrowLong",
+            // `raise' (JitCompiler.EmitRaise): a deopt and nothing else
+            "RaiseDeopt",
         };
 
         // Integer#abs of an Int32 (widened, so it cannot overflow) and Float#abs (JitCompiler.EmitCall)

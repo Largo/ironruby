@@ -1217,6 +1217,12 @@ namespace IronRuby.Runtime.Jit {
             return obj != null && ReferenceEquals(obj.ImmediateClass, cls);
         }
 
+        // `raise ...' in a typed body (JitCompiler.EmitRaise): the generic body runs again and raises.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object RaiseDeopt() {
+            throw Deopt();
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static T ThrowDeopt<T>() {
             throw Deopt();
