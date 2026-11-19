@@ -59,6 +59,9 @@ namespace IronRuby.Runtime.Jit {
         internal bool EmittedSelfCall;
         // The body folded constants (EmitConstant): the entry guards on the constant version as well.
         internal bool UsesConstants;
+        // What it folded, with what the bodies it calls directly folded: what its entry looks up again when the
+        // constant version has moved (JitStub.RevalidateConstants). Null if it folded none.
+        internal JitFoldedConstant[] FoldedConstants;
         // The body writes Hash elements (EmitIndexWrite): the entry brackets the call with the undo log.
         internal bool UsesUndoLog;
         // The body may become part of a caller's body (JitCompiler.TryInlineCall): it has no effect, no call
@@ -758,6 +761,7 @@ namespace IronRuby.Runtime.Jit {
                     CanDeopt = c._canDeopt || c._ivarWrite || c._fallbackSites > 0,
                     EmittedSelfCall = c._selfCall,
                     UsesConstants = c._usesConstants,
+                    FoldedConstants = (c._usesConstants && c._foldedConstants != null) ? c._foldedConstants.ToArray() : null,
                     UsesUndoLog = c._hashWrite,
                     Deopts = c._canDeopt,
                     IvarWrite = c._ivarWrite,
@@ -2305,7 +2309,7 @@ namespace IronRuby.Runtime.Jit {
             }
             if (!code.Pure) { _pure = false; }
             if (code.EffectNotOnSelf) { _effectNotOnSelf = true; }
-            if (code.UsesConstants) { _usesConstants = true; }
+            if (code.UsesConstants) { _usesConstants = true; TakeFoldedConstants(code); }
             if (code.HasLoop) { _calleeLoop = true; }
             // after the arguments, which may read a global themselves
             TakeGlobals(code, node.MethodName);

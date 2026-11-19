@@ -153,86 +153,33 @@ namespace IronRuby.Runtime.Jit {
         // the module the last constant ResolveConstant resolved was found in
         private RubyModule _resolvedConstantOwner;
 
+        // What the body folded, with what its inlined and directly called bodies folded (EmitDirectCall), in
+        // the order the compiler resolved them: what the entry looks up again when the constant version has
+        // moved (JitFoldedConstant.StillHolds).
+        private List<JitFoldedConstant> _foldedConstants;
+
         /// <summary>
-        /// What the constant resolves to right now, the way the generic code resolves it, or a bailout
-        /// wherever that would not be a value the constant version alone keeps valid: no scope to
-        /// resolve in, an autoload pending or running, a deprecated or private constant, a missing
-        /// one, or a scope lexically inside an object's singleton class (whose generic sites do not
-        /// cache either).
+        /// What the constant resolves to right now (JitFoldedConstant.Resolve), or a bailout wherever that would
+        /// not be a value the constant version alone keeps valid. Every constant it answers is recorded, for
+        /// the entry to look up again the same way.
         /// </summary>
         private object ResolveConstant(ConstantVariable/*!*/ node) {
             var scope = _constantScope;
             if (scope == null) { throw Bail("constant without a scope: " + node.Name); }
-            string name = node.Name;
             object value;
-            WeakReference storageWeakValue;
-            if (node.Qualifier != null) {
-                var qualifier = node.Qualifier as ConstantVariable;
-                if (qualifier == null) { throw Bail("constant qualified by an expression: " + name); }
-                var module = ResolveConstant(qualifier) as RubyModule;
-                if (module == null) { throw Bail("constant qualified by a non-module: " + name); }
-                using (_context.ClassHierarchyLocker()) {
-                    RequireCacheableConstants(scope);
-                    ConstantStorage storage;
-                    // `A::B' finds B in A and A's ancestors; the generic code goes on to Object's for a
-                    // module A, and raises for a private B: both are left to it
-                    if (!module.TryResolveConstantNoLock(null, name, out storage) || module.IsPrivateConstantInAncestors(name)) {
-                        throw Bail("qualified constant not found: " + name);
-                    }
-                    RequireNotDeprecated(module.GetConstantOwnerNoLock(name), name);
-                    _resolvedConstantOwner = module.GetConstantOwnerNoLock(name) ?? module;
-                    value = storage.Value;
-                    storageWeakValue = storage.WeakValue;
-                }
-            } else {
-                using (_context.ClassHierarchyLocker()) {
-                    RequireCacheableConstants(scope);
-                    ConstantStorage storage;
-                    if (node.IsGlobal) {
-                        var obj = _context.ObjectClass;
-                        if (!obj.TryResolveConstantNoLock(null, name, out storage) || obj.IsPrivateConstant(name)) {
-                            throw Bail("constant not found: ::" + name);
-                        }
-                        RequireNotDeprecated(obj.GetConstantOwnerNoLock(name), name);
-                        _resolvedConstantOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
-                    } else {
-                        RubyModule owner;
-                        if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
-                            throw Bail("constant not found: " + name);
-                        }
-                        // the owner is only reported once some constant has been deprecated
-                        RequireNotDeprecated(owner, name);
-                        _resolvedConstantOwner = owner;
-                    }
-                    value = storage.Value;
-                    storageWeakValue = storage.WeakValue;
-                }
-            }
-            // A constant whose value is nil (Richards' `NO_WORK = nil') has a storage that says so - its
-            // weak value is ConstantSiteCache.WeakNull, as the generic site's cache keeps it - while an
-            // autoload that has not run resolves to an empty storage or an AutoloadedConstant.
-            if (value == null && storageWeakValue != ConstantSiteCache.WeakNull || value is RubyModule.AutoloadedConstant) {
-                throw Bail("constant without a value: " + name);
-            }
+            RubyModule owner;
+            string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner);
+            if (failure != null) { throw Bail(failure); }
+            _resolvedConstantOwner = owner;
+            (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
             _usesConstants = true;
             return value;
         }
 
-        /// <summary>A deprecated constant warns on every read, which the generic code does.</summary>
-        private void RequireNotDeprecated(RubyModule owner, string/*!*/ name) {
-            if (_context.HasDeprecatedConstants && (owner == null || owner.GetDeprecatedConstantOwnerNoLock(name) != null)) {
-                throw Bail("deprecated constant " + name);
-            }
-        }
-
-        private void RequireCacheableConstants(RubyScope/*!*/ scope) {
-            if (_context.IsAutoloadInProgress) { throw Bail("autoload in progress"); }
-            for (RubyScope s = scope; s != null; s = s.Parent) {
-                var cls = s.Module as RubyClass;
-                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
-                    throw Bail("constant lexically in an object's singleton class");
-                }
-            }
+        /// <summary>Takes over what a body this one calls directly folded (EmitDirectCall).</summary>
+        private void TakeFoldedConstants(JitCode/*!*/ code) {
+            if (code.FoldedConstants == null) { return; }
+            (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).AddRange(code.FoldedConstants);
         }
 
         // ---- case/when -----------------------------------------------------------------------
@@ -2194,6 +2141,123 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Call(JitRuntime.M("ArrayStore"), array.Key, indexTemp, BoxForStore(valueTemp, valueType), _undoLog),
                 valueTemp
             );
+        }
+    }
+
+    /// <summary>
+    /// A constant a typed body folded: the node, the scope it was resolved in, and the value and owner it
+    /// resolved to. When the constant version has moved and nothing else has, the entry looks each one up
+    /// again (JitStub.RevalidateConstants) - with Resolve, which is what the compiler resolved it with - and
+    /// keeps the body if each is still the very same value found in the same module.
+    /// </summary>
+    internal sealed class JitFoldedConstant {
+        private readonly RubyScope/*!*/ _scope;
+        private readonly ConstantVariable/*!*/ _node;
+        private readonly object _value;
+        private readonly RubyModule _owner;
+
+        internal JitFoldedConstant(RubyScope/*!*/ scope, ConstantVariable/*!*/ node, object value, RubyModule owner) {
+            _scope = scope;
+            _node = node;
+            _value = value;
+            _owner = owner;
+        }
+
+        /// <summary>
+        /// The constant resolves now as it did when the body was compiled: to the same object (an equal one
+        /// assigned again is a change), found in the same module, and by a lookup the compiler would fold.
+        /// </summary>
+        internal bool StillHolds(RubyContext/*!*/ context) {
+            object value;
+            RubyModule owner;
+            return Resolve(context, _scope, _node, out value, out owner) == null && ReferenceEquals(value, _value) && owner == _owner;
+        }
+
+        /// <summary>
+        /// What the constant resolves to right now, the way the generic code resolves it, in <paramref name="value"/>
+        /// and the module it was found in; or why that would not be a value the constant version alone keeps valid:
+        /// an autoload pending or running, a deprecated or private constant, a missing one, or a scope lexically
+        /// inside an object's singleton class (whose generic sites do not cache either). Null when it is one.
+        /// </summary>
+        internal static string Resolve(RubyContext/*!*/ context, RubyScope/*!*/ scope, ConstantVariable/*!*/ node,
+            out object value, out RubyModule resolvedOwner) {
+            string name = node.Name;
+            value = null;
+            resolvedOwner = null;
+            WeakReference storageWeakValue;
+            string failure;
+            if (node.Qualifier != null) {
+                var qualifier = node.Qualifier as ConstantVariable;
+                if (qualifier == null) { return "constant qualified by an expression: " + name; }
+                object qualifierValue;
+                RubyModule qualifierOwner;
+                failure = Resolve(context, scope, qualifier, out qualifierValue, out qualifierOwner);
+                if (failure != null) { return failure; }
+                var module = qualifierValue as RubyModule;
+                if (module == null) { return "constant qualified by a non-module: " + name; }
+                using (context.ClassHierarchyLocker()) {
+                    if ((failure = CacheableConstants(context, scope)) != null) { return failure; }
+                    ConstantStorage storage;
+                    // `A::B' finds B in A and A's ancestors; the generic code goes on to Object's for a
+                    // module A, and raises for a private B: both are left to it
+                    if (!module.TryResolveConstantNoLock(null, name, out storage) || module.IsPrivateConstantInAncestors(name)) {
+                        return "qualified constant not found: " + name;
+                    }
+                    if ((failure = NotDeprecated(context, module.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
+                    resolvedOwner = module.GetConstantOwnerNoLock(name) ?? module;
+                    value = storage.Value;
+                    storageWeakValue = storage.WeakValue;
+                }
+            } else {
+                using (context.ClassHierarchyLocker()) {
+                    if ((failure = CacheableConstants(context, scope)) != null) { return failure; }
+                    ConstantStorage storage;
+                    if (node.IsGlobal) {
+                        var obj = context.ObjectClass;
+                        if (!obj.TryResolveConstantNoLock(null, name, out storage) || obj.IsPrivateConstant(name)) {
+                            return "constant not found: ::" + name;
+                        }
+                        if ((failure = NotDeprecated(context, obj.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
+                        resolvedOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
+                    } else {
+                        RubyModule owner;
+                        if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
+                            return "constant not found: " + name;
+                        }
+                        // the owner is only reported once some constant has been deprecated
+                        if ((failure = NotDeprecated(context, owner, name)) != null) { return failure; }
+                        resolvedOwner = owner;
+                    }
+                    value = storage.Value;
+                    storageWeakValue = storage.WeakValue;
+                }
+            }
+            // A constant whose value is nil (Richards' `NO_WORK = nil') has a storage that says so - its
+            // weak value is ConstantSiteCache.WeakNull, as the generic site's cache keeps it - while an
+            // autoload that has not run resolves to an empty storage or an AutoloadedConstant.
+            if (value == null && storageWeakValue != ConstantSiteCache.WeakNull || value is RubyModule.AutoloadedConstant) {
+                return "constant without a value: " + name;
+            }
+            return null;
+        }
+
+        /// <summary>A deprecated constant warns on every read, which the generic code does.</summary>
+        private static string NotDeprecated(RubyContext/*!*/ context, RubyModule owner, string/*!*/ name) {
+            if (context.HasDeprecatedConstants && (owner == null || owner.GetDeprecatedConstantOwnerNoLock(name) != null)) {
+                return "deprecated constant " + name;
+            }
+            return null;
+        }
+
+        private static string CacheableConstants(RubyContext/*!*/ context, RubyScope/*!*/ scope) {
+            if (context.IsAutoloadInProgress) { return "autoload in progress"; }
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                var cls = s.Module as RubyClass;
+                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
+                    return "constant lexically in an object's singleton class";
+                }
+            }
+            return null;
         }
     }
 }
