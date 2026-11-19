@@ -542,8 +542,26 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(FromValue(recv), "enum_for", args.ToArray()));
         }
 
+        /// <summary>
+        /// enumerator.c's: the enumerator's size comes from func(recv, args, enumerator), called
+        /// when Enumerator#size asks - a size block given to enum_for.
+        /// </summary>
         internal static VALUE rb_enumeratorize_with_size(VALUE recv, VALUE meth, int argc, VALUE* argv, void* func) {
-            return rb_enumeratorize(recv, meth, argc, argv);
+            if (func == null) {
+                return rb_enumeratorize(recv, meth, argc, argv);
+            }
+            var args = new List<object> { FromValue(meth) };
+            args.AddRange(FromValues(argc, argv));
+            var sizeArgs = new RubyArray(FromValues(argc, argv));
+            object enumerator = null;
+            var size = Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>((b, self, unused, rest) => {
+                VALUE* sizeArgv = stackalloc VALUE[2];
+                sizeArgv[0] = ToValue(sizeArgs);
+                sizeArgv[1] = ToValue(enumerator);
+                return FromValue(CallMethod((IntPtr)func, 2, recv, 2, sizeArgv));
+            }));
+            enumerator = Send(FromValue(recv), "enum_for", size, args.ToArray());
+            return ToValue(enumerator);
         }
 
         internal static void rb_set_end_proc(IntPtr func, VALUE arg) {

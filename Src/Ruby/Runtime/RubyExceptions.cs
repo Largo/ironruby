@@ -141,7 +141,8 @@ namespace IronRuby.Runtime {
         public static Exception/*!*/ CreateObjectFrozenError(RubyContext/*!*/ context, object obj) {
             string inspect;
             if (_frozenErrorInspectDepth > 0) {
-                inspect = "...";
+                // rb_error_frozen_object's rb_exec_recursive answer, space and all: "K:  ..."
+                inspect = " ...";
             } else {
                 _frozenErrorInspectDepth++;
                 try {

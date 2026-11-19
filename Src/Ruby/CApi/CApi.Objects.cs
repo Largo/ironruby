@@ -48,9 +48,10 @@ namespace IronRuby.Runtime.CApi {
 
         #region Classes and modules
 
+        // rb_const_defined_at's view: an autoload is loaded first, and the one being loaded is not there yet
         private static object GetOwnConstant(RubyModule/*!*/ owner, string/*!*/ name, out bool found) {
             object value;
-            found = owner.TryGetConstant(null, name, out value);
+            found = owner.TryGetConstant((_frame?.Scope ?? _context.EmptyScope).GlobalScope, name, out value);
             return value;
         }
 
@@ -369,9 +370,10 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(_context.GetClass(typeof(System.Threading.Thread)), "current", null));
         }
 
+        // error.c's: typed data is T_DATA but not the plain RData that T_DATA asks for
         internal static void rb_check_type(VALUE obj, int t) {
             int actual = BuiltinType(obj);
-            if (actual != t && !(t == T_DATA && actual == T_DATA)) {
+            if (actual != t || (actual == T_DATA && FromValue(obj) is DataObject data && data.Typed)) {
                 rb_unexpected_type(obj, t);
             }
         }
