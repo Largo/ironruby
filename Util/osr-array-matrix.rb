@@ -388,10 +388,15 @@ t('method: the parameter reassigned') { (0...300).sum { mj_rebind([1, 2, 3, 4, 5
 # Runs the block on a thread of its own after the loop has been running for a while, then sets the flag.
 def rd_after_a_while(flag)
   Thread.new { |; t0|
-    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
-    yield
-    flag[0] = 1
+    begin
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
+      yield
+    ensure
+      # set when the update fails too: the loop ends instead of waiting for ever, and the caller's join raises
+      # what the update raised, which the row prints in place of CRuby's value
+      flag[0] = 1
+    end
   }
 end
 
