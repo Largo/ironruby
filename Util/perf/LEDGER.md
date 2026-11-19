@@ -936,7 +936,7 @@ Profile (`Util/perf/profile.sh`, self time):
   per-count bodies with constants) is still open.
 
 - **perf/constrev (/perf-step, round twenty-five, 2026-11-19, 093c7e19) - a typed body
-  looks its constants up again when the constant version moves** (gap 29) - not gated.
+  looks its constants up again when the constant version moves** (gap 29) - not gated when merged; gated and measured since (see the first entry).
   The census does not see this gap (0 methods changed, as it must be); it was judged by a
   probe and a matrix. A body that folded a constant was guarded by the runtime's one
   constant version; when that had moved the stub threw the body away, profiled again, and
@@ -983,7 +983,7 @@ Profile (`Util/perf/profile.sh`, self time):
   a warning came).
 
 - **perf/orasgn (/perf-step, round twenty-four, 2026-11-19, 92bb385c) - `@x ||= v` and
-  `@x &&= v` in a body the method JIT compiles** - census only, not gated. The screen
+  `@x &&= v` in a body the method JIT compiles** - census only when merged; gated and measured since (see the first entry). The screen
   refused every `||=` and `&&=`; the memoizing getter is the only thing it refuses in 443
   methods (an upper bound: it had not looked at the right-hand side). `EmitOrAssignment`
   builds `@x || (@x = v)` from `EmitAndOr` and `EmitAssignment`, on an instance variable
@@ -1040,7 +1040,7 @@ Profile (`Util/perf/profile.sh`, self time):
   `IR_JIT_VERBOSE`'s "screen rejected" lines.
 
 - **perf/arrnew (/perf-step, round twenty-two, 2026-11-19, c5b5b96f) - `Array.new` anywhere
-  in a body the method JIT compiles** - census only, not gated. The screen refused every
+  in a body the method JIT compiles** - census only when merged; gated and measured since (see the first entry). The screen refused every
   `new` that is not a method's last statement (`TailConstruction`), the census's most
   frequent refusal: 1,025 methods of 28,335, 65 of the benchmarks' 391. `Array.new`,
   `Array.new(n)` and `Array.new(n, v)` (no block; `Array` or `::Array`, resolving to the
