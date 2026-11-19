@@ -7263,6 +7263,62 @@ true
         }
 
         /// <summary>
+        /// A method that passes a splatted value on (`inner(*args)', `[*a]', `yield(*a)') runs without a scope
+        /// (MethodDefinition.LightSplatEnabled): #to_a is called through a conversion site, the callee's rest Array is its own,
+        /// ruby2_keywords still marks the last Hash, and a scope made on demand (eval, local_variables) sees the frame's
+        /// locals. Util/splat-pass-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameSplat1() {
+            TestOutput(@"
+require 'ruby4'
+def take(*a) = a
+def two(x, y) = [x, y]
+def kw(*a, k: 0) = [a, k]
+def blk(*a, &b) = [a, b.call]
+def w_take(*a) = take(*a)
+def w_local(x) = take(*x)
+def w_mid(*a) = take(1, *a, 2)
+def w_two(*a) = two(*a)
+def w_pass(*a, &b) = blk(*a, &b)
+def w_mut(*a); r = take(*a) << :x; [a, r]; end
+def w_yield(*a) = yield(*a)
+def w_eval(*a); x = 5; x + eval(*a); end
+def w_names(*a); take(*a); local_variables; end
+def w_kw(*a) = kw(*a)
+ruby2_keywords def w_r2k(*a) = kw(*a)
+class ToA; def to_a = [7]; end
+class BadToA; def to_a = 1; end
+p w_take, w_take(1, 2), w_local(nil), w_local(5), w_local(ToA.new), w_mid(:a), w_mid
+p w_mut(1), w_yield(1, 2) { |x, y| x + y }, w_eval(""x + 1""), w_names(1), w_pass(3) { 4 }
+p w_kw(1, k: 2), w_r2k(1, k: 2)
+p 40.times.map { |i| w_take(*([i] * (i % 3))).size }.sum
+begin; w_two(1); rescue ArgumentError => e; p e.message, e.backtrace[0][/in .*/]; end
+begin; w_local(BadToA.new); rescue TypeError => e; p e.message; end
+p ""xxaxx"".strip(""x"")
+", @"
+[]
+[1, 2]
+[]
+[5]
+[7]
+[1, :a, 2]
+[1, 2]
+[[1], [1, :x]]
+3
+11
+[:a]
+[[3], 4]
+[[1, {k: 2}], 0]
+[[1], 2]
+39
+""wrong number of arguments (given 1, expected 2)""
+""in 'Object#two'""
+""can't convert BadToA to Array (BadToA#to_a gives Integer)""
+""a""
+");
+        }
+
+        /// <summary>
         /// A method with a rest parameter is a light frame too (MethodDefinition.IsLightFrameCandidate): the Array is the
         /// call's own, and a scope made on demand - for binding, local_variables, a block - has it as a scope made at entry
         /// does. Util/light-rest-matrix.rb has the full matrix. Expected output is CRuby 4.0's.
