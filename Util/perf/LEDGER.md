@@ -831,6 +831,63 @@ Profile (`Util/perf/profile.sh`, self time):
 
 ## Landed
 
+- **perf/arrnew (/perf-step, round twenty-two, 2026-11-19, c5b5b96f) - `Array.new` anywhere
+  in a body the method JIT compiles** - census only, not gated. The screen refused every
+  `new` that is not a method's last statement (`TailConstruction`), the census's most
+  frequent refusal: 1,025 methods of 28,335, 65 of the benchmarks' 391. `Array.new`,
+  `Array.new(n)` and `Array.new(n, v)` (no block; `Array` or `::Array`, resolving to the
+  Array class itself; `new` the built-in one, public and unrefined; `Array#initialize` the
+  built-in one) run no Ruby code, so `EmitArrayConstruction` makes them an operation that
+  may stand anywhere and run again after a deopt (`JitRuntime.NewArray*`; a size out of
+  [0, Int32.MaxValue / 8], an Int64 beyond it or an object that is not a boxed Int32 deopts
+  and the generic body raises or converts). Three more things came with it, because a
+  method let through the screen and then declined pays for its stub on every call:
+  `SizeOf` is among the helpers a body with held-back writes may call; a nil or false the
+  profile saw for a receiver is not believed inside the branch that receiver's own truth
+  selects (`if @storage ... @storage.size`, `?:`, `unless ... else`, `&&`: `_truthGuards`,
+  a hint only); and a body whose opening run of instance variable writes
+  (`EmitInitialIVars`, an effect that was never held back) is followed by a deopt is
+  compiled once more with the run held back, where it used to be declined - on the
+  unchanged build too (`@a = 0; @b = 0; @k = @s.size`).
+  JIT compiles 10.4% -> 10.4% (2,947 -> 2,949), maybe 9.7% -> 9.7% (2,747 -> 2,756), never
+  79.9% -> 79.9% (22,641 -> 22,630), light frames unchanged (Src/StdLib + AWFY, 28,335
+  methods; 13 methods moved up, none down) - census only, not gated.
+  Seven of the eleven that left `never` are the benchmarks': `Vector#initialize` and
+  `#remove_all`, `Dictionary#initialize` and `#remove_all`, `HashIndexTable#initialize`,
+  richards' `Packet#initialize` and `Scheduler#initialize`. Traces of eleven benchmarks
+  (three iterations each): 91 methods specialized against 84 (`Vector#initialize` in CD,
+  DeltaBlue, Json and Havlak; `HashIndexTable#initialize`; `Packet#initialize`; Havlak's
+  two `Dictionary` methods and `Vector#remove_all`; List's `Element#length`, declined
+  before, through the guarded nil), declines after the screen 27 -> 26 in total and in no
+  benchmark more than before; `census.rb -c`: light frame and screen 327 agree, 0 differ.
+  jit-construct (21 -> 69 rows), jit, jit-scan (103 -> 120 rows), jit-calls, jit-raise and
+  ivar matrices: CRuby's and the unchanged build's output with the JIT on, with
+  `-X:NoJIT -X:NoOSR` and with `-X:NoJITCalls`.
+  The hypothesis's count was wrong by a factor of four: about fifty methods have an
+  `Array.new` as the `new` that refused them, and eleven moved, because behind it stands a
+  second refusal - a call on self of a method that is neither a leaf nor bound
+  (`Queens#queens` at `place_queen`, `Permute#benchmark`, `Sieve#benchmark`,
+  `Towers#benchmark`, `Dictionary#resize`), a block (`Vector#at_put`, `#remove`,
+  `#append`), a block parameter. The `new` line is user classes: 993 methods are left.
+  And the first build was sent back once: AWFY's `Vector.new` has a nil `@storage`, so
+  `remove_all` passed the screen and was declined at "size on a nil" - right about the
+  profile, wrong about the branch.
+  For the gate, which this step has not had: the helpers do not report a `:c_call` to a
+  TracePoint, as `StringLength` and the other intrinsics do not (`Construct*` falls back
+  while tracing, the generic `Array.new` reports `new` and `initialize`); the retry round
+  is one more compile of a body that would otherwise be declined, its cost not measured;
+  no timing has been taken, and `Vector#initialize` is the one of these that is hot.
+- **The census answers for a call on self as `-X:JITCalls` does** (a169b274, with round
+  twenty-two): `census.rb -c` on the unchanged build said "JIT screen 315 agree, 12
+  differ" - twelve benchmark methods `never` that the run let through the screen, two of
+  them specialized (`HashIndexTable#add`, `List#tail`). The run's screen takes a call on
+  self whose callee may be inlined or, with bound calls, compiled (`IsCallableMethod`);
+  the census knew only the first. 101 methods of the corpus went from `never` to `maybe`
+  (100) or `compiles` (1) by the correction alone, so the census of 2baa0099 (never 80.3%)
+  and the ones after it (79.9%) are not the same measure. The traces need the real path
+  of the benchmarks (`/home/user/awfy/...`, not the link under `ironruby-perf`), or `-c`
+  finds none of the methods and reports nothing to differ.
+
 - **perf/splat (/perf-frame, 2026-11-19) - a method that passes a splat on runs without a
   scope** (`inner(*args)`, `inner(*args, &block)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`
   turns it off). `IsScopeFree` takes a `SplattedArgument` of a scope-free expression, and
@@ -2286,6 +2343,14 @@ And in the tools: `Util/jit-matrix.rb` replaces `Integer#-` at about line 2510 a
 restores it, and restores `String#length` and others through `alias_method`, after which
 the JIT no longer takes them for the built-in ones; the two thousand lines behind run
 with that on every build alike (see "Caught by the review (round seventeen)").
+
+- Seen on the unchanged build by round twenty-two's probes, not touched: `Array.new(2**64, 1)`
+  raises ArgumentError where CRuby raises RangeError; `Array.new(nil)` says "no implicit
+  conversion of nil into Integer" where CRuby 4.0 says "no implicit conversion from nil to
+  integer" (the `into` wording CLAUDE.md keeps; the rest of the sentence differs too); a refinement of `Array.singleton_class#new` is not applied in a method defined
+  late in a long file after `using` (it is in a small file); and the built-in
+  `Array#initialize` called with two arguments through an alias or through `super` from a
+  module prepended to Array's singleton class raises a CLR `System::NullReferenceException`.
 
 ## Faults the gate missed
 
