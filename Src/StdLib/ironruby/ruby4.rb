@@ -9570,49 +9570,27 @@ class Binding
     ::Kernel.eval(code, self, "(eval at #{at.path}:#{at.lineno})", line || 1)
   end unless method_defined?(:eval)
 
-  def local_variables
-    eval("local_variables")
-  end unless method_defined?(:local_variables)
-
-  # A keyword argument named after a reserved word (`alias:`, `if:`, `class:`) is a local
-  # that no source text can name, so neither `defined?(alias)` nor `alias` can be eval'd:
-  # those are looked up rather than evaluated.
-  KEYWORD_LOCAL_NAMES__ = %w[BEGIN END alias and begin break case class def defined? do else
-    elsif end ensure for if in module next not or redo rescue retry return super then undef
-    unless until when while yield].freeze # :nodoc:
-  __hide_constant__ :KEYWORD_LOCAL_NAMES__
-
+  # The slots are read and written by BindingOps (__ir_local_*__), not by evaluating source
+  # text: an eval compiles a string per call, hundreds of times what CRuby's slot access costs,
+  # and ERB#result_with_hash sets each of its locals this way. #local_variables is BindingOps'.
   def local_variable_defined?(name)
-    name = __check_lvar_name__(name)
-    if KEYWORD_LOCAL_NAMES__.include?(name)
-      return eval("local_variables").include?(name.to_sym)
-    end
-    eval("defined?(#{name}) == 'local-variable'")
+    __ir_local_defined__(__check_lvar_name__(name))
   end unless method_defined?(:local_variable_defined?)
 
   def local_variable_get(name)
-    name = __check_lvar_name__(name)
-    unless local_variable_defined?(name)
-      ::Kernel.raise(::NameError, "local variable '#{name}' is not defined for #{inspect}")
-    end
-    return __ir_resolve_local__(name) if KEYWORD_LOCAL_NAMES__.include?(name)
-    eval(name)
+    __ir_local_get__(__check_lvar_name__(name))
   end unless method_defined?(:local_variable_get)
 
-  # The value cannot be written into the eval'd source, so it is parked in a
-  # thread-local and read back out from inside the binding.
   def local_variable_set(name, value)
-    name = __check_lvar_name__(name)
-    ::Thread.current[:__ir_binding_value__] = value
-    eval("#{name} = ::Thread.current[:__ir_binding_value__]")
-    value
+    __ir_local_set__(__check_lvar_name__(name), value)
   end unless method_defined?(:local_variable_set)
 
-  # Only a plain identifier names a local; a global, an instance variable or a
-  # special variable such as $~ is a NameError rather than a way in.
+  # Only a plain identifier names a local; a global, an instance variable, a constant or a
+  # special variable such as $~ is a NameError rather than a way in. A keyword (`if`, `self`,
+  # `nil`) is a name like any other here, as in MRI.
   def __check_lvar_name__(name)
     name = __ir_variable_name__(name)
-    unless name =~ /\A[_\p{Alpha}][_\p{Alnum}]*\z/
+    unless name =~ /\A[_\p{Alpha}][_\p{Alnum}]*\z/ && name !~ /\A\p{Upper}/
       ::Kernel.raise(::NameError, "wrong local variable name '#{name}' for #{inspect}")
     end
     # Ruby 4.0: _1.._9 are never locals, whether or not the block uses them

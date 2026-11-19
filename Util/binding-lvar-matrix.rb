@@ -162,6 +162,25 @@ def dups
 end
 dups
 
+def dup_chains
+  a = 1
+  b = binding
+  d1 = b.dup
+  d2 = b.dup
+  b.local_variable_set(:after, 1)
+  d1.local_variable_set(:one, 1)
+  d3 = d1.dup
+  d1.local_variable_set(:later1, 1)
+  d3.local_variable_set(:a, 2)
+  row "dup chain", [b.local_variables, d1.local_variables, d2.local_variables, d3.local_variables, a]
+  b.local_variable_set(:before_dup, 1)
+  d4 = b.dup
+  b.local_variable_set(:after_dup, 1)
+  d4.local_variable_set(:before_dup, 2)
+  row "dup after set", [d4.local_variables, b.local_variables, b.local_variable_get(:before_dup)]
+end
+dup_chains
+
 # --- blocks and procs ---------------------------------------------------------------------------
 def blocks
   a = 1
@@ -263,6 +282,10 @@ row "TOPLEVEL_BINDING", [TOPLEVEL_BINDING.local_variable_defined?(:top_a), TOPLE
 TOPLEVEL_BINDING.local_variable_set(:tl_new, 1)
 row "TOPLEVEL_BINDING new", [TOPLEVEL_BINDING.local_variable_get(:tl_new), TOPLEVEL_BINDING.local_variable_defined?(:tl_new),
                              binding.local_variable_defined?(:tl_new)]
+tdup = TOPLEVEL_BINDING.dup
+tdup.local_variable_set(:tdup_new, 1)
+row "TOPLEVEL_BINDING dup", [TOPLEVEL_BINDING.local_variable_defined?(:tdup_new), TOPLEVEL_BINDING.dup.local_variable_defined?(:tdup_new),
+                             tdup.local_variable_defined?(:tl_new), TOPLEVEL_BINDING.local_variable_defined?(:tl_new)]
 
 # --- isolated procs -----------------------------------------------------------------------------
 def isolated
