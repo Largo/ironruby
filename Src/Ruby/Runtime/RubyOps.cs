@@ -455,7 +455,7 @@ namespace IronRuby.Runtime {
         public static RuntimeFlowControl/*!*/ EnterLightMethodNamingBlock(Proc blockParameter) {
             RubyUtils.SafePoint();
             if (blockParameter != null && blockParameter.Kind == ProcKind.Block) {
-                blockParameter.ConvertAsFrame();
+                blockParameter.ConvertAsMethodFrame();
                 return blockParameter;
             }
             return InactiveRfc;

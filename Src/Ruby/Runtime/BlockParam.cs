@@ -226,9 +226,11 @@ namespace IronRuby.Runtime {
                 if (IsLibProcConverter) {
                     return true;
                 }
-                // a call that converted a literal block stands for its frame by that Proc (see CreateRfcForMethod):
-                var converter = _proc.Converter;
-                return converter is Proc && converter.IsActiveMethod;
+                // a call that converted a literal block stands for its frame by that Proc (see CreateRfcForMethod); so does a
+                // light-frame Ruby method that names its block, whose block is a Proc object when handed on (Proc.IsMethodConverted).
+                // The converter is asked, not this Proc: a copy (dup, clone) has the original as its converter.
+                var converter = _proc.Converter as Proc;
+                return converter != null && converter.IsActiveMethod && !converter.IsMethodConverted;
             }
         }
         

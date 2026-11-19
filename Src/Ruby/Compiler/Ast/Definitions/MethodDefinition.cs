@@ -307,12 +307,17 @@ namespace IronRuby.Compiler.Ast {
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
                     visiblePrameterCountAndSignatureFlags, parkSlot, ref statements);
             }
-            if (LightFramesWhy && light == null) {
-                Console.Error.WriteLine("[light] why not: {0} ({1}:{2}): {3}", _name, gen.SourcePath, Location.Start.Line,
-                    !(allowLightFrame && LightFramesEnabled) ? "not allowed" :
+            if ((LightFramesWhy || gen.Census != null) && light == null) {
+                string why = !(allowLightFrame && LightFramesEnabled) ? "not allowed" :
                     definitionRefinements != null ? "refinements" : gen.Profiler != null ? "profiler" : gen.TraceEnabled ? "trace" :
                     gen.CompilerOptions.IsEval ? "eval" : scope.HasClosures ? "defines a closure (block literal)" :
-                    WhyNotLightFrameCandidate() ?? "body needs its scope after the rewrite");
+                    WhyNotLightFrameCandidate() ?? "body needs its scope after the rewrite";
+                if (LightFramesWhy) {
+                    Console.Error.WriteLine("[light] why not: {0} ({1}:{2}): {3}", _name, gen.SourcePath, Location.Start.Line, why);
+                }
+                if (gen.Census != null) {
+                    gen.Census.NotLightFrame = why;
+                }
             }
 
             // The handler only takes the MethodUnwinder of a `return' from a block of this method. It
@@ -498,6 +503,18 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightRestEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REST") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_BLOCK_PASS=0 keeps every method that passes a block on (`inner(&block)', `map(&:to_s)') out of light frames
+        /// (see IsScopeFree and LightFrameRewriter.LightScopeCall).
+        /// </summary>
+        internal static readonly bool LightBlockPassEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BLOCK_PASS") != "0";
+
+        /// <summary>
+        /// IR_LIGHT_SPLAT=0 keeps every method that splats a value (`inner(*args)', `[*a]', `yield(*a)') out of light frames
+        /// (see IsScopeFree and LightFrameRewriter.VisitExtension).
+        /// </summary>
+        internal static readonly bool LightSplatEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_SPLAT") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -581,7 +598,7 @@ namespace IronRuby.Compiler.Ast {
         /// and `while' loops made of them (a loop's OSR site gets the scope made on demand). Global variables need the scope.
         /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
         /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
-        /// and keywords are not taken.
+        /// and keywords are not taken. A splatted argument (`inner(*args)') is converted by a site that takes no scope.
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
@@ -777,9 +794,21 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return true;
                 }
+                // `inner(*args)', `[*a]': the value goes through an ExplicitSplatAction site, which takes no scope (#to_a is
+                // called through a conversion site), and the call binds the Array as its splatted argument whatever scope it
+                // is given (LightFrameRewriter.LightScopeCall)
+                var splat = node as SplattedArgument;
+                if (splat != null) {
+                    return LightSplatEnabled && IsScopeFree(splat.Argument, blockLiterals);
+                }
+                // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
+                // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
                 if (call != null) {
-                    return (call.Block == null || blockLiterals && call.Block is BlockDefinition) && (call.Target == null || IsScopeFree(call.Target, blockLiterals)) && AreScopeFree(call.Arguments, blockLiterals);
+                    var blockReference = call.Block as BlockReference;
+                    return (call.Block == null || blockLiterals && call.Block is BlockDefinition ||
+                            LightBlockPassEnabled && blockReference != null && IsScopeFree(blockReference.Expression, blockLiterals)) &&
+                        (call.Target == null || IsScopeFree(call.Target, blockLiterals)) && AreScopeFree(call.Arguments, blockLiterals);
                 }
                 var conditional = node as ConditionalExpression;
                 if (conditional != null) {
@@ -1040,6 +1069,26 @@ namespace IronRuby.Compiler.Ast {
                         _inTraceHook--;
                     }
                 }
+                if (LightBlockPassEnabled && _rfc != null && node.Arguments.Count >= 1 && IsScope(node.Arguments[0])) {
+                    if (node.Method == Methods.TryConvertBlockWithRefinements && node.Arguments.Count == 2) {
+                        // `&x' in a light frame: no refinement is active in it (a method defined where one is never is a light
+                        // frame), and its scope, made at entry or on demand, would answer RubyScope.GetLexicalRefinements from
+                        // its recorded definition refinements, which are none - so the helper would answer null, and #to_proc
+                        // goes through the conversion site as it always does then.
+                        return Ast.Block(Visit(node.Arguments[1]), AstUtils.Constant(null, typeof(Proc)));
+                    }
+                    if (node.Method == Methods.MethodPropagateReturn || node.Method == Methods.MethodRetry) {
+                        // After a call with a block that answered a BlockReturnResult (a return or a retry in the block): rare,
+                        // so the scope is made on demand there, as for a literal block's call. It has the frame's flow-control
+                        // frame, which is what MethodPropagateReturn compares the return's target with.
+                        _inTraceHook++;
+                        try {
+                            return base.VisitMethodCall(node);
+                        } finally {
+                            _inTraceHook--;
+                        }
+                    }
+                }
                 int index = ScopeOperandIndex(node.Method);
                 if (index < 0 && _rfc == null && (node.Method == Methods.GetMethodBlockParameter ||
                     node.Method == Methods.GetMethodBlockParameterSelf || node.Method == Methods.BlockYield)) {
@@ -1099,6 +1148,14 @@ namespace IronRuby.Compiler.Ast {
                 if (node is CompiledFrameExpression || ((_lazyUses || BlockLiterals) && node is Microsoft.Scripting.Ast.LightDynamicExpression)) {
                     return base.VisitExtension(node);
                 }
+                if (LightBlockPassEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ConvertToProcAction) {
+                    // `&x' of something that is not a Proc: #to_proc through a conversion site, which is given no scope
+                    return base.VisitExtension(node);
+                }
+                if (LightSplatEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ExplicitSplatAction) {
+                    // `*x': #to_a through a conversion site, which is given no scope
+                    return base.VisitExtension(node);
+                }
                 NeedsScope = true;
                 return node;
             }
@@ -1119,7 +1176,12 @@ namespace IronRuby.Compiler.Ast {
                     return null;
                 }
                 var signature = action.Signature;
-                if (!signature.HasScope || signature.HasBlock || signature.ResolveOnly || signature.IsSuperCall || signature.IsVirtualCall ||
+                // A call with a block is one that passes a Proc on (`inner(&block)', IsScopeFree) unless the body has literal
+                // blocks, whose calls use the scope made on demand (BlockLiterals). The Proc is an argument like the others: the
+                // rules bind it as a block parameter whatever scope they are given, and one that reads the caller's scope answers
+                // RubyOps.LightScopeRequired as for any call.
+                bool blockPass = signature.HasBlock && LightBlockPassEnabled && !BlockLiterals && _rfc != null;
+                if (!signature.HasScope || signature.HasBlock && !blockPass || signature.ResolveOnly || signature.IsSuperCall || signature.IsVirtualCall ||
                     signature.IsInteropCall || signature.HasLightScope) {
                     return null;
                 }

@@ -214,6 +214,8 @@ end
 # ---- wrappers
 class Array
   def raw(a = 0); yield a; end
+  def w_pass(&block); raw(1, &block); end
+  def w_pass2(&block); w_pass(&block); end
   def w_splat(*args, &block); raw(*args, &block); end
   def w_splat_sel(*args, &block); args.empty? ? raw(&block) : raw(args[0], &block); end
   def w_opt(a = (no_a = true; nil), &block); no_a ? raw(&block) : raw(a, &block); end
@@ -281,6 +283,8 @@ class H
   def g_defy; @a.g_defy { |x| x }.size; end
   def g_y; @a.g_y { |x| x }.size; end
   def w_raw; @a.raw(1) { |x| x }; end
+  def w_pass; @a.w_pass { |x| x }; end
+  def w_pass2; @a.w_pass2 { |x| x }; end
   def w_splat; @a.w_splat(1) { |x| x }; end
   def w_splat_sel; @a.w_splat_sel(1) { |x| x }; end
   def w_opt; @a.w_opt(1) { |x| x }; end
@@ -307,18 +311,33 @@ rescue SystemCallError
   Process.clock_gettime(Process::CLOCK_MONOTONIC)
 end
 
+# INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a call, from the least of the
+# seven sections as the time is. See Util/perf/instructions.rb.
+INSTR = ENV['INSTR'] && (require_relative '../perf/instructions'; Instructions.open || warn('no instruction counter (perf_event_open)'))
+
 def t(name, n)
   return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
   best = 1e9
+  fewest = nil
+  counted = !!INSTR
   sum = nil
   7.times do
+    c0 = INSTR && INSTR.read
     t0 = cpu
     sum = yield n
     d = cpu - t0
+    c1 = INSTR && INSTR.read
     best = d if d < best
+    # a read is nil once the counter is lost: then there is no count, rather than one of the sections that had it
+    if c0 && c1
+      c = c1 - c0
+      fewest = c if fewest.nil? || c < fewest
+    else
+      counted = false
+    end
   end
-  printf "%-12s %9.1f ns  %d\n", name, best * 1e9 / n, sum
+  printf "%-12s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, counted ? format('  %.1f instr', fewest.to_f / n) : ''
 end
 
 h = H.new
@@ -412,6 +431,8 @@ t("g_defy", N) { |n| i = 0; s = 0; while i < n; s += h.g_defy; i += 1; end; s }
 
 # wrappers
 t("w_raw", N) { |n| i = 0; s = 0; while i < n; s += h.w_raw; i += 1; end; s }
+t("w_pass", N) { |n| i = 0; s = 0; while i < n; s += h.w_pass; i += 1; end; s }
+t("w_pass2", N) { |n| i = 0; s = 0; while i < n; s += h.w_pass2; i += 1; end; s }
 t("w_splat", N) { |n| i = 0; s = 0; while i < n; s += h.w_splat; i += 1; end; s }
 t("w_splat_sel", N) { |n| i = 0; s = 0; while i < n; s += h.w_splat_sel; i += 1; end; s }
 t("w_opt", N) { |n| i = 0; s = 0; while i < n; s += h.w_opt; i += 1; end; s }

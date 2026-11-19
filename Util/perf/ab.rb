@@ -1,6 +1,6 @@
 # Times a file of shapes under several interpreters, taking turns, and prints one row per shape.
 #
-#   ruby Util/perf/ab.rb [-r ROUNDS] [-c CPUS] [-n ITERATIONS] FILE NAME=CMD... [-- SHAPE...]
+#   ruby Util/perf/ab.rb [-i] [-r ROUNDS] [-c CPUS] [-n ITERATIONS] FILE NAME=CMD... [-- SHAPE...]
 #
 #   ruby Util/perf/ab.rb Util/bench/prelude-cost.rb cruby=ruby \
 #        "master=env IR_CONFIG=Release ../wt-base/ir.sh" "new=env IR_CONFIG=Release ./ir.sh" -- g_bg n_splat
@@ -28,12 +28,24 @@
 #   - says VALUE DIFFERS when the interpreters' checksums for a shape are not all the same: that
 #     row is a wrong answer, not a time.
 # -n sets the N environment variable the shape files read their iteration count from.
+#
+# -i shows instructions per call instead of ns (the shape files count them when INSTR is set;
+# Util/perf/instructions.rb says how and why). It is for the first look at a change and for a
+# machine that is busy: a cell is the same to a few parts in a thousand whatever else runs, so
+#   - two rounds are the default, and the spread is shown to a tenth of a percent;
+#   - nothing is pinned unless -c names CPUs: the idle CPUs are left to whoever is timing;
+#   - a ratio of 0.99 without `overlap` is a difference. Whether it is a difference in time is
+#     another question: fewer instructions on the shape a change was meant to move is a reason
+#     to time it once (without -i), not a result; the same count on a shape it was not meant
+#     to move is a result. CRuby's column is there for its checksum: one engine's instructions
+#     are not another's.
 require 'shellwords'
 require 'optparse'
 
-rounds = 3
+rounds = nil
 cpus = 'auto'
 n = nil
+instr = false
 only = []
 argv = ARGV.dup
 if (i = argv.index('--'))
@@ -44,10 +56,13 @@ OptionParser.new do |o|
   o.on('-r N', Integer) { |v| rounds = v }
   o.on('-c CPUS') { |v| cpus = v }
   o.on('-n N') { |v| n = v }
+  o.on('-i') { instr = true }
 end.parse!(argv)
+rounds ||= instr ? 2 : 3
+cpus = 'none' if instr && cpus == 'auto'
 file = argv.shift
 interps = argv.map { |s| s.split('=', 2) }
-abort "usage: ruby #{$0} [-r ROUNDS] [-c CPUS] [-n ITERATIONS] FILE NAME=CMD... [-- SHAPE...]" if file.nil? || interps.empty? || interps.any? { |_, c| c.nil? }
+abort "usage: ruby #{$0} [-i] [-r ROUNDS] [-c CPUS] [-n ITERATIONS] FILE NAME=CMD... [-- SHAPE...]" if file.nil? || interps.empty? || interps.any? { |_, c| c.nil? }
 abort "#{file}: no such file" unless File.file?(file)
 dups = interps.map(&:first).tally.select { |_, c| c > 1 }.keys
 abort "each interpreter needs a name of its own: #{dups.join(', ')} given twice" unless dups.empty?
@@ -71,16 +86,21 @@ prefix =
     "taskset -c #{list} "
   end
 
-times = Hash.new { |h, k| h[k] = Hash.new { |g, j| g[j] = [] } }   # shape -> interpreter -> [ns]
+times = Hash.new { |h, k| h[k] = Hash.new { |g, j| g[j] = [] } }   # shape -> interpreter -> [ns], or with -i [instructions]
 sums = Hash.new { |h, k| h[k] = {} }
 rounds.times do |round|
   interps.each do |name, cmd|
-    out = IO.popen("LANG=C.UTF-8 #{"N=#{n.shellescape} " if n}#{prefix}#{cmd} #{file.shellescape} #{only.shelljoin} 2>&1", &:read)
+    out = IO.popen("LANG=C.UTF-8 #{'INSTR=1 ' if instr}#{"N=#{n.shellescape} " if n}#{prefix}#{cmd} #{file.shellescape} #{only.shelljoin} 2>&1", &:read)
     abort "#{name} (#{cmd}) failed with #{$?.exitstatus || $?.termsig}:\n#{out.lines.last(15).join}" unless $?.success?
-    rows = out.scan(/^(\S+)\s+([\d.]+) ns(?:\/op)?(?:[ \t]+(\S+))?/)
+    rows = out.scan(/^(\S+)\s+([\d.]+) ns(?:\/op)?(?:[ \t]+(\S+))?(?:[ \t]+([\d.]+) instr)?/)
     abort "#{name} (#{cmd}) printed no shape:\n#{out.lines.last(15).join}" if rows.empty?
-    rows.each do |shape, ns, sum|
-      times[shape][name] << ns.to_f
+    if instr && rows.any? { |row| row[3].nil? }
+      abort "#{name} (#{cmd}) printed no instruction counts. They need a shape file that counts them " \
+            "(core-small.rb, prelude-cost.rb) and perf_event_open: Linux on x86-64 or arm64, as root or " \
+            "with kernel.perf_event_paranoid at 2 or less, not in most containers.\n#{out.lines.last(5).join}"
+    end
+    rows.each do |shape, ns, sum, count|
+      times[shape][name] << (instr ? count : ns).to_f
       (sums[shape][name] ||= []) << sum if sum
     end
   end
@@ -91,7 +111,8 @@ $stderr.puts
 names = interps.map(&:first)
 last, prev = names[-1], names[-2]
 # with one round there is no spread to show, and a (0) would read as a steady cell
-printf "%-16s" + " %14s" * names.size + "  %s\n", rounds > 1 ? 'ns (spread %)' : 'ns', *names, prev ? "#{last}/#{prev}" : ''
+unit = instr ? 'instr' : 'ns'
+printf "%-16s" + " %14s" * names.size + "  %s\n", rounds > 1 ? "#{unit} (spread %)" : unit, *names, prev ? "#{last}/#{prev}" : ''
 order = times.keys
 order = only.select { |s| times.key?(s) } + (order - only) unless only.empty?
 order.each do |shape|
@@ -101,9 +122,11 @@ order.each do |shape|
     next '-' if v.empty?
     next format('%.1f', v.min) if rounds == 1
     # a cell of 0 ns is a count too short for the timer's grain (see -n): no spread to give
-    v.min > 0 ? format('%.1f (%d)', v.min, ((v.max / v.min - 1) * 100).round) : format('%.1f (-n?)', v.min)
+    next format('%.1f (-n?)', v.min) unless v.min > 0
+    # instructions are steady to parts in a thousand, so their spread gets a decimal
+    instr ? format('%.1f (%.1f)', v.min, (v.max / v.min - 1) * 100) : format('%.1f (%d)', v.min, ((v.max / v.min - 1) * 100).round)
   end
-  ratio = prev && !by[last].empty? && !by[prev].empty? && by[prev].min > 0 ? format('%.2f', by[last].min / by[prev].min) : ''
+  ratio = prev && !by[last].empty? && !by[prev].empty? && by[prev].min > 0 ? format(instr ? '%.3f' : '%.2f', by[last].min / by[prev].min) : ''
   # the two builds' ranges overlap: every round of one fits between the rounds of the other
   if rounds > 1 && ratio != ''
     a, b = by[prev], by[last]

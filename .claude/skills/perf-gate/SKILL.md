@@ -13,6 +13,30 @@ checkout the skill runs in, at the commit the candidate branched from.
 
 Run the steps in order and stop at the first failure: the cheap ones catch most breakage.
 
+## When to run it: once per branch, after the quick check
+
+The gate needs the whole test suite, a sweep and, for step 4, a quiet machine, so it is not
+what each attempt is tried with. An attempt first passes the quick check, which takes
+minutes and can run beside a sweep, a build or another session:
+
+1. the candidate builds, and `git diff --stat` shows what was meant (step 1);
+2. the differential matrix for the code it touched prints CRuby's output, with the
+   change's switch on and off (step 2 lists them), and the IronRuby.Tests named for that
+   code pass;
+3. `ruby Util/perf/ab.rb -i` on the shapes the change is meant to move and on two or three
+   it is not (`/perf-ab`, step 7): instructions per call, which do not need an idle CPU.
+
+An attempt that was meant to take work off a path (a scope not made, a helper not called)
+and whose shapes count the same instructions as the baseline is rejected there, with no
+gate run for it. One that was meant to save something that is not instructions - a cache
+miss, a mispredicted branch, a collection - is not judged by the count: it is timed
+(`/perf-ab`, steps 2 to 4) before it goes on. Attempts that pass may be committed one after another on one
+branch and gated together: the gate judges the branch against the commit it left. When
+such a branch fails a step, `git bisect` between that commit and the tip, with the failing
+step as the test, names the commit; fix or drop it and run the gate again. Nothing is
+merged on the quick check alone, and every pull request has had the whole gate on the
+commit it is opened at.
+
 ## 1. The diff is what it says it is
 
 ```sh
@@ -225,6 +249,11 @@ constants, singleton methods and classes, and autoloads, beside a hot loop, with
 `IR_OSR_VERBOSE=1`'s `stale=` and `IR_JIT_VERBOSE=1`'s `invalidations=` next to the
 baseline's. In round fifteen every check that changed something the loop was built on
 passed, and a loop beside a thread calling `extend` was 15 times slower.
+
+On a machine that will not be quiet, `ruby Util/perf/ab.rb -i` on the shape files
+(`/perf-ab`, step 7) says which small shapes changed their instruction count, and so which
+are worth waiting for a quiet minute to time; it does not replace the two timed runs, and
+the AWFY benchmarks are not counted.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
 these do not see, on the ReadyToRun host: it is what `ir.sh` runs when `IR_CONFIG` is not

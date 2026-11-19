@@ -1125,6 +1125,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal MethodCoverage MethodCoverage { get; set; }
 
+        /// <summary>
+        /// The census (JitCensus) this generator transforms one method body for: it is told why the body is not a light
+        /// frame, if it is not, and which of the body's blocks run without a scope. Null wherever code is compiled to run.
+        /// </summary>
+        internal IronRuby.Runtime.Jit.JitCensus Census { get; set; }
+
         private static MSA.Expression/*!*/ Traced(MSA.Expression trace, MSA.Expression/*!*/ transformed) {
             return trace != null ? Ast.Block(trace, transformed) : transformed;
         }

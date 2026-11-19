@@ -190,6 +190,38 @@ namespace IronRuby.Builtins {
             return site.Target(site, self);
         }
 
+        /// <summary>
+        /// Range#sum without a block of an Integer range from an Integer, MRI's int_range_sum: the closed form, so that
+        /// (1..2**70).sum does not walk 2**70 elements, with the built-in arithmetic whatever Integer#+ is, as MRI's.
+        /// Answers nil for anything else - another initial value (a Float one MRI sums element by element), another
+        /// range - which the prelude's Range#sum then does. Testing that in Ruby cost (1..4).sum a tenth of its time.
+        /// </summary>
+        [RubyMethod("__int_range_sum__", RubyMethodAttributes.PrivateInstance)]
+        public static object IntRangeSum([NotNull]Range/*!*/ self, object init) {
+            object begin = self.Begin, end = self.End;
+            if (begin is int first && end is int last && init is int start) {
+                long top = self.ExcludeEnd ? (long)last - 1 : last;
+                if (top < first) {
+                    return init;
+                }
+                // n elements whose first and last add up to s: one of the two is even, and its half times the other
+                // fits in a long while both are within an Int32
+                long n = top - first + 1, s = first + top;
+                long a = (n % 2 == 0) ? n / 2 : n, b = (n % 2 == 0) ? s : s / 2;
+                if (a <= Int32.MaxValue && b >= Int32.MinValue && b <= Int32.MaxValue) {
+                    return Protocols.Normalize(a * b + start);
+                }
+            }
+            if (!IsInteger(begin) || !IsInteger(end) || !IsInteger(init)) {
+                return null;
+            }
+            BigInteger from = ToBigInteger(begin), to = ToBigInteger(end) - (self.ExcludeEnd ? 1 : 0);
+            if (to < from) {
+                return init;
+            }
+            return Protocols.Normalize(ToBigInteger(init) + (from + to) * (to - from + 1) / 2);
+        }
+
         private static bool IsInteger(object value) {
             return value is int || value is long || value is BigInteger;
         }
