@@ -1695,15 +1695,14 @@ namespace IronRuby.Runtime.Jit {
         /// on self looked at the same way, three levels down. As IsLeafMethod, only a hint, and one defined further
         /// down is taken on trust.
         /// </summary>
-        private static bool IsCallableMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, int depth) {
+        internal static bool IsCallableMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, int depth) {
             try {
                 var resolved = declaringModule.ResolveMethod(name, VisibilityContext.AllVisible);
                 if (!resolved.Found) { return true; }
                 var info = resolved.Info as RubyMethodInfo;
                 if (info == null) { return false; }
                 var ast = info.GetSyntaxTree();
-                var ps = ast.Parameters;
-                if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock || ps.Mandatory.Length + ps.Optional.Length > MaxArity) { return false; }
+                if (!IsCallableParameterList(ast)) { return false; }
                 if (depth >= 3) { return true; }
                 RubyModule owner = info.DeclaringModule;
                 string rejectedBy;
@@ -1714,6 +1713,12 @@ namespace IronRuby.Runtime.Jit {
             } catch (Exception) {
                 return false;
             }
+        }
+
+        /// <summary>The parameters of a method a typed body may bind a call to (IsCallableMethod); the census asks it of a syntax tree.</summary>
+        internal static bool IsCallableParameterList(MethodDeclaration/*!*/ ast) {
+            var ps = ast.Parameters;
+            return ps.Unsplat == null && ps.Block == null && !ast.UsesBlock && ps.Mandatory.Length + ps.Optional.Length <= MaxArity;
         }
 
         /// <summary>
