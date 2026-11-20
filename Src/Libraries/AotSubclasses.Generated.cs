@@ -1296,6 +1296,11 @@ namespace IronRuby.Builtins {
             _immediateClass = rubyClass;
         }
 
+        public IronRuby_StandardLibrary_Digest_Digest_Base_Subclass(global::IronRuby.Builtins.RubyClass/*!*/ rubyClass)
+            : base(rubyClass) {
+            _immediateClass = rubyClass;
+        }
+
         public RubyClass/*!*/ ImmediateClass { get { return _immediateClass; } set { _immediateClass = value; } }
         public RubyInstanceData TryGetInstanceData() { return _instanceData; }
         public RubyInstanceData/*!*/ GetInstanceData() { return RubyOps.GetInstanceData(ref _instanceData); }

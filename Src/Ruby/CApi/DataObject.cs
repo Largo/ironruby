@@ -13,12 +13,17 @@ namespace IronRuby.Runtime.CApi {
     /// TypedData_Wrap_Struct. Its fields - dmark/dfree or the rb_data_type_t, and the data
     /// pointer - live in its handle's slot (CApi.Values.cs), where the C macros read them.
     /// </summary>
-    public sealed class DataObject : RubyObject {
+    public sealed class DataObject : RubyObject, IMemorySized {
         internal readonly bool Typed;
 
         internal DataObject(RubyClass/*!*/ cls, bool typed)
             : base(cls) {
             Typed = typed;
+        }
+
+        // what the type's dsize function says (rb_objspace_data_type_memsize); untyped data has none
+        long IMemorySized.ExtraMemorySize {
+            get { return Typed ? CApi.TypedDataMemsize(this) : 0; }
         }
 
         /// <summary>

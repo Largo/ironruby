@@ -36,25 +36,35 @@ namespace IronRuby.Runtime.CApi {
             public long tv_nsec { get { return (long)nsec.Value; } set { nsec = new CLong((nint)value); } }
         }
 
+        // The instant sec + frac / per_second, as a UTC Time. CRuby's rb_time_*_new make the
+        // Time directly, not through Time.at, which a program may have redefined: this goes
+        // through the epoch and Time#+ with an exact Rational instead.
+        private static object TimeFromParts(long sec, long frac, long perSecond) {
+            object epoch = Call(Constant("Time"), "utc", 1970);
+            object offset = frac == 0 ? Normalize(sec) :
+                Call(_context.KernelModule, "Rational", Normalize(new BigInteger(sec) * perSecond + frac), Normalize(perSecond));
+            return Call(epoch, "+", offset);
+        }
+
         internal static VALUE rb_time_new(long sec, long usec) {
-            return ToValue(Call(Constant("Time"), "at", Normalize(sec), Normalize(usec), Sym("usec")));
+            return ToValue(Call(TimeFromParts(sec, usec, 1000000), "localtime"));
         }
 
         internal static VALUE rb_time_nano_new(long sec, long nsec) {
-            return ToValue(Call(Constant("Time"), "at", Normalize(sec), Normalize(nsec), Sym("nsec")));
+            return ToValue(Call(TimeFromParts(sec, nsec, 1000000000), "localtime"));
         }
 
         // offset INT_MAX: local time; INT_MAX - 1: UTC; otherwise seconds east of UTC
         internal static VALUE rb_time_timespec_new(TimeSpec* ts, int offset) {
-            object t = Call(Constant("Time"), "at", Normalize(ts->tv_sec), Normalize(ts->tv_nsec), Sym("nsec"));
+            if (offset != Int32.MaxValue && offset != Int32.MaxValue - 1 && (offset <= -86400 || offset >= 86400)) {
+                throw RubyExceptions.CreateArgumentError("utc_offset out of range");
+            }
+            object t = TimeFromParts(ts->tv_sec, ts->tv_nsec, 1000000000);
             if (offset == Int32.MaxValue) {
-                return ToValue(t);
+                return ToValue(Call(t, "localtime"));
             }
             if (offset == Int32.MaxValue - 1) {
-                return ToValue(Call(t, "utc"));
-            }
-            if (offset <= -86400 || offset >= 86400) {
-                throw RubyExceptions.CreateArgumentError("utc_offset out of range");
+                return ToValue(t);
             }
             return ToValue(Call(t, "localtime", offset));
         }

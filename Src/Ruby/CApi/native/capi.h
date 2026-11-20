@@ -18,6 +18,7 @@
 
 #include "ruby.h"
 #include "ruby/encoding.h"
+#include "ruby/debug.h"
 #include "ruby/io.h"
 #include <setjmp.h>
 #include <string.h>
@@ -78,6 +79,7 @@ int rb_ir_caught(void);
 int rb_ir_rescue_match(int count, const VALUE *classes);
 VALUE rb_ir_current_exception(void);
 int rb_ir_define_dummy_encoding(const char *name);
+int rb_ir_native_fd(int fd);
 void rb_ir_set_current_exception(VALUE exc);
 void rb_ir_warn(VALUE message, int verbose_only);
 VALUE rb_ir_str_new_buffer(const char *ptr, long len, int encindex);

@@ -362,6 +362,23 @@ namespace IronRuby.Runtime.CApi {
             return flags;
         }
 
+        /// <summary>
+        /// Code that writes RBASIC(obj)->flags itself (RBASIC_SET_FLAGS) writes the handle's slot,
+        /// which IronRuby never reads. A FREEZE bit there on an object that is not frozen was put
+        /// there that way - the slot only ever starts with it when the object was frozen already,
+        /// and nothing unfreezes - so the object is frozen now. Checked for the receiver and
+        /// arguments of a C method when it returns: the objects it is likeliest to have written.
+        /// </summary>
+        private static void SyncRawFreeze(VALUE value) {
+            if (value == 0 || (value & 7) != 0 || HandleIndex(value) < 0 || (*(VALUE*)value & FL_FREEZE) == 0) {
+                return;
+            }
+            object obj = FromValue(value);
+            if (!_context.IsObjectFrozen(obj)) {
+                _context.FreezeObject(obj);
+            }
+        }
+
         private static void SetUserFlags(object obj, VALUE set, VALUE clear) {
             if ((set & FL_FREEZE) != 0) {
                 _context.FreezeObject(obj);

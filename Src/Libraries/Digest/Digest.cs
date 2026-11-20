@@ -17,6 +17,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
+using IronRuby.Runtime.CApi;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -96,11 +97,37 @@ namespace IronRuby.StandardLibrary.Digest {
 
             private IncrementalHash _incremental;
 
+            // A hash function a C extension brings (ruby/digest.h): everything goes to it instead.
+            private readonly NativeDigest _native;
+
             protected Base(HashAlgorithm/*!*/ algorithm, int blockLength) {
                 Assert.NotNull(algorithm);
                 _algorithm = algorithm;
                 _digestLength = algorithm.HashSize / 8;
                 _blockLength = blockLength;
+            }
+
+            /// <summary>
+            /// A subclass defined in Ruby, which only a C extension's digest plugin is: it sets the
+            /// class's "metadata" to its rb_digest_metadata_t, and the new object's context starts
+            /// initialized, as digest.so's allocator leaves it.
+            /// </summary>
+            protected Base(RubyClass/*!*/ cls) {
+                object metadata = null;
+                RubyClass owner = cls;
+                while (owner != null && !cls.Context.TryGetInstanceVariable(owner, "metadata", out metadata)) {
+                    owner = owner.SuperClass;
+                }
+                if (owner == null) {
+                    throw RubyExceptions.CreateRuntimeError("Digest::Base cannot be directly inherited in Ruby");
+                }
+                _native = NativeDigest.TryCreate(metadata);
+                if (_native == null) {
+                    throw RubyExceptions.CreateTypeError(String.Format("wrong argument type {0} (expected digest/metadata)",
+                        cls.Context.GetClassDisplayName(metadata)));
+                }
+                _digestLength = _native.DigestLength;
+                _blockLength = _native.BlockLength;
             }
 
             private protected Base(HashAlgorithmName algorithmName, Func<byte[], byte[]>/*!*/ hashData, int digestLength, int blockLength) {
@@ -131,6 +158,10 @@ namespace IronRuby.StandardLibrary.Digest {
             [RubyMethod("<<")]
             [RubyMethod("update")]
             public static Base/*!*/ Update(RubyContext/*!*/ context, Base/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
+                if (self._native != null) {
+                    self._native.Update(str.ToByteArray());
+                    return self;
+                }
                 self.Append(str.ToByteArray());
                 return self;
             }
@@ -176,6 +207,13 @@ namespace IronRuby.StandardLibrary.Digest {
             /// </summary>
             [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
             public static Base/*!*/ InitializeCopy(Base/*!*/ self, [NotNull]Base/*!*/ other) {
+                if (self._native != null || other._native != null) {
+                    if (self._native == null || other._native == null) {
+                        throw RubyExceptions.CreateTypeError("different algorithms");
+                    }
+                    self._native.CopyFrom(other._native);
+                    return self;
+                }
                 self.Clear();
                 self._buffer = other._buffer.AsSpan(0, other._count).ToArray();
                 self._count = other._count;
@@ -187,11 +225,18 @@ namespace IronRuby.StandardLibrary.Digest {
 
             [RubyMethod("finish", RubyMethodAttributes.PrivateInstance)]
             public static MutableString/*!*/ Finish(RubyContext/*!*/ context, Base/*!*/ self) {
+                if (self._native != null) {
+                    return MutableString.CreateBinary(self._native.Finish());
+                }
                 return MutableString.CreateBinary(self.GetCurrentHash());
             }
 
             [RubyMethod("reset")]
             public static Base/*!*/ Reset(RubyContext/*!*/ context, Base/*!*/ self) {
+                if (self._native != null) {
+                    self._native.Reset();
+                    return self;
+                }
                 self.Clear();
                 if (self._algorithm != null) {
                     self._algorithm.Initialize();
@@ -216,7 +261,7 @@ namespace IronRuby.StandardLibrary.Digest {
             /// </summary>
             internal static bool CanSnapshot(RubyContext/*!*/ context, object obj) {
                 var digest = obj as Base;
-                if (digest == null) {
+                if (digest == null || digest._native != null) {
                     return false;
                 }
                 RubyClass cls = context.GetImmediateClassOf(obj);

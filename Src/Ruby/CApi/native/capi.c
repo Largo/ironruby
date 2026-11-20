@@ -115,6 +115,40 @@ rb_ir_call_func1(void *fn, VALUE arg, int *raised)
     return result;
 }
 
+/* rb_tracepoint_new's hook: void (*)(VALUE tpval, void *data). */
+RB_IR_EXPORT void
+rb_ir_call_tracepoint(void *fn, VALUE tpval, void *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    *raised = 0;
+    RB_IR_PROTECT(frame, ((void (*)(VALUE, void *))fn)(tpval, data), *raised = 1);
+}
+
+/* rb_debug_inspector_open's callback: rb_debug_inspector_func_t. */
+RB_IR_EXPORT VALUE
+rb_ir_call_inspector(void *fn, const rb_debug_inspector_t *dc, void *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    VALUE result = Qnil;
+    *raised = 0;
+    RB_IR_PROTECT(frame, result = ((rb_debug_inspector_func_t)fn)(dc, data), *raised = 1);
+    return result;
+}
+
+/* What a typed object's dsize function says it holds outside its slot (ObjectSpace.memsize_of). */
+RB_IR_EXPORT size_t
+rb_ir_typed_data_memsize(VALUE obj, int *raised)
+{
+    struct rb_ir_frame frame;
+    size_t result = 0;
+    *raised = 0;
+    const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
+    void *data = RTYPEDDATA_GET_DATA(obj);
+    if (type == NULL || type->function.dsize == NULL || data == NULL) return 0;
+    RB_IR_PROTECT(frame, result = type->function.dsize(data), *raised = 1);
+    return result;
+}
+
 /* A block written in C: rb_block_call_func. */
 RB_IR_EXPORT VALUE
 rb_ir_call_block(void *fn, VALUE yielded_arg, VALUE callback_arg, int argc, const VALUE *argv, VALUE blockarg, int *raised)
@@ -1319,9 +1353,66 @@ ruby_scan_hex(const char *start, size_t len, size_t *retlen)
     return v;
 }
 
+/* ------------------------------------------------------------------------------------------
+ * Digest plugins: an extension that brings its own hash function hands digest.so an
+ * rb_digest_metadata_t, wrapped by rb_digest_wrap_metadata, which ruby/digest.h finds through
+ * rb_ext_resolve_symbol("digest.so", ...). IronRuby's digest is C#: the wrapper is here, and
+ * Digest::Base calls the plugin's functions through rb_ir_digest_call (NativeDigest.cs).
+ */
+typedef struct {
+    int api_version;
+    size_t digest_len;
+    size_t block_len;
+    size_t ctx_size;
+    int (*init_func)(void *);
+    void (*update_func)(void *, unsigned char *, size_t);
+    int (*finish_func)(void *, unsigned char *);
+} rb_ir_digest_metadata_t;   /* ruby/digest.h's rb_digest_metadata_t */
+
+static const rb_data_type_t rb_ir_digest_metadata_type = {
+    "digest/metadata",
+    { 0, 0, 0, },
+    0, 0,
+    RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+static VALUE
+rb_ir_digest_wrap_metadata(const rb_ir_digest_metadata_t *meta)
+{
+    return rb_obj_freeze(TypedData_Wrap_Struct(0, &rb_ir_digest_metadata_type, (void *)meta));
+}
+
+/* The metadata a Digest::Base subclass's "metadata" holds, or NULL for any other typed object. */
+RB_IR_EXPORT const rb_ir_digest_metadata_t *
+rb_ir_digest_metadata(VALUE obj)
+{
+    return RTYPEDDATA_TYPE(obj) == &rb_ir_digest_metadata_type ? RTYPEDDATA_GET_DATA(obj) : NULL;
+}
+
+/* op 0: init_func(ctx); 1: update_func(ctx, ptr, len); 2: finish_func(ctx, ptr) */
+RB_IR_EXPORT int
+rb_ir_digest_call(const rb_ir_digest_metadata_t *meta, int op, void *ctx, unsigned char *ptr, size_t len, int *raised)
+{
+    struct rb_ir_frame frame;
+    int result = 0;
+    *raised = 0;
+    switch (op) {
+      case 0: RB_IR_PROTECT(frame, result = meta->init_func(ctx), *raised = 1); break;
+      case 1: RB_IR_PROTECT(frame, meta->update_func(ctx, ptr, len), *raised = 1); break;
+      case 2: RB_IR_PROTECT(frame, result = meta->finish_func(ctx, ptr), *raised = 1); break;
+    }
+    return result;
+}
+
+/* Only digest.so's rb_digest_wrap_metadata, which is all CRuby's own extensions look up with it. */
 void *
 rb_ext_resolve_symbol(const char *feature, const char *symbol)
 {
+    if ((strcmp(feature, "digest.so") == 0 || strcmp(feature, "digest") == 0) &&
+        strcmp(symbol, "rb_digest_wrap_metadata") == 0) {
+        rb_require("digest");
+        return (void *)(uintptr_t)rb_ir_digest_wrap_metadata;
+    }
     return NULL;
 }
 
@@ -2044,7 +2135,9 @@ rb_update_max_fd(int fd)
 void
 rb_fd_fix_cloexec(int fd)
 {
-    rb_maygvl_fd_fix_cloexec(fd);
+    /* IO#fileno is IronRuby's own number for the stream, which rb_io_descriptor hands out */
+    int native = rb_ir_native_fd(fd);
+    if (native >= 0) rb_maygvl_fd_fix_cloexec(native);
     rb_update_max_fd(fd);
 }
 
