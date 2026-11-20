@@ -14,7 +14,9 @@
 # duplicate keys, the String key's frozen copy, the result being a new plain Hash on every call (no default,
 # no compare_by_identity, mutation not seen by the next call), literals in blocks, with yields, in defaults, in
 # loops, recursion, exceptions and their backtraces, defined?, tracing, threads, and the keyword hash a call
-# site builds (`f(a: x)') next to the literal it is not.
+# site builds (`f(a: x)') next to the literal it is not. Sections 7 to 11 are about the call a light frame makes
+# with keywords: the callee's visibility, a callee that reads the caller's scope, the callee or a key's #hash
+# changing half way through the N calls, and a refinement in use where the caller is defined.
 #
 #   IR_LIGHT_FRAMES=why ./ir.sh Util/hash-literal-matrix.rb 2>&1 >/dev/null | grep -a '^\[light\]'
 #
@@ -316,3 +318,150 @@ t('keywords to a library method') { k_lib("aé") }
 t('keyword_init Struct') { k_struct(1).a }
 t('**nil') { k_dsplat_nil(1) }
 t('keywords to method_missing') { k_mm(KMM.new, 1) }
+
+def guard
+  yield
+rescue Exception => e
+  "#{e.class}: #{e.message[0, 60]}"
+end
+
+# ---------------------------------------------------------------- 7. the callee's visibility
+# A call a light frame makes with the frame in place of its scope must still be the source's call: private
+# and protected methods, method_missing.
+class Vis
+  def pub(a:) = [:pub, a]
+  def call_priv(x) = priv(a: x)
+  def call_priv_self(x) = self.priv(a: x)
+  def call_prot(o, x) = o.prot(a: x)
+  private def priv(a:) = [:priv, a]
+  protected def prot(a:) = [:prot, a]
+end
+class Other
+  def call_prot(o, x) = o.prot(a: x)
+  def call_priv(o, x) = o.priv(a: x)
+end
+class Missing
+  def method_missing(name, *args, **kw) = [name, args, kw]
+  def respond_to_missing?(*) = true
+  def go(x) = nope(1, a: x)
+  def go_self(x) = self.nope(a: x)
+end
+
+t('private, implicit self') { |i| Vis.new.call_priv(i % 2) }
+t('private, self.') { |i| Vis.new.call_priv_self(i % 2) }
+t('protected, same class') { |i| Vis.new.call_prot(Vis.new, i % 2) }
+t('protected, other class') { |i| guard { Other.new.call_prot(Vis.new, i % 2) } }
+t('private, other class') { |i| guard { Other.new.call_priv(Vis.new, i % 2) } }
+t('method_missing') { |i| Missing.new.go(i % 2) }
+t('method_missing, self.') { |i| Missing.new.go_self(i % 2) }
+
+# ---------------------------------------------------------------- 8. a callee that reads the caller's scope
+def scope_reader(x) = eval("x + 1", binding, __FILE__, __LINE__).then { |v| { v: v } }
+def lvars(x, y = 2) = { names: local_variables, sum: x + y }
+def blk_kw(x) = { given: block_given?, v: Integer(x.to_s, exception: false) }
+def warn_kw(x) = (warn("w", uplevel: 0) if x < 0)
+def raise_kw(x) = raise(ArgumentError, "m#{x}", cause: nil)
+def send_kw(o, x) = o.send(:pub, a: x)
+def psend_kw(o, x) = o.public_send(:pub, a: x)
+def meth_kw(o, x) = o.method(:pub).call(a: x)
+def struct_kw(x) = KS2.new(a: x, b: { c: x })
+KS2 = Struct.new(:a, :b, keyword_init: true)
+t('eval with binding, then a literal') { |i| scope_reader(i % 2) }
+t('local_variables in a literal') { |i| lvars(i % 2) }
+t('block_given? and a keyword call') { |i| [blk_kw(i % 2), blk_kw(i % 2) { }] }
+t('warn with uplevel, not reached') { |i| warn_kw(i % 2) }
+t('raise with cause:') { |i| guard { raise_kw(i % 2) } }
+t('send with keywords') { |i| send_kw(Vis.new, i % 2) }
+t('public_send with keywords') { |i| psend_kw(Vis.new, i % 2) }
+t('Method#call with keywords') { |i| meth_kw(Vis.new, i % 2) }
+t('keyword_init Struct') { |i| struct_kw(i % 2).to_h }
+
+# ---------------------------------------------------------------- 9. the callee changes in the middle
+# The site's rule is bound by then: each change must be seen by the next call.
+class Chg
+  def f(a:) = [:v1, a]
+  def go(x) = f(a: x)
+  def go_lit(x) = f(**{ a: x })
+end
+c = Chg.new
+t('callee redefined half way') do |i|
+  Chg.class_eval { def f(a:, b: 9) = [:v2, a, b] } if i == N / 2
+  c.go(i % 2)
+end
+t('callee made private half way') do |i|
+  Chg.send(:private, :f) if i == N / 2
+  c.go(i % 2)
+end
+t('singleton method half way') do |i|
+  c.define_singleton_method(:f) { |a:| [:single, a] } if i == N / 2
+  c.go(i % 2)
+end
+t('callee takes a positional Hash half way') do |i|
+  Chg.class_eval { def f(h = nil, **k) = [:v3, h, k] } if i == N / 2
+  Chg.new.go(i % 2)
+end
+t('callee removed half way') do |i|
+  Chg.send(:remove_method, :f) if i == N / 2
+  guard { Chg.new.go(i % 2) }
+end
+class Chg2
+  def f(a:) = a
+  def go(x) = f(a: x)
+end
+t('callee replaced by one that reads the scope') do |i|
+  Chg2.class_eval { def f(a:) = block_given? ? [:blk, a] : [:none, a] } if i == N / 2
+  [Chg2.new.go(i % 2), Chg2.new.go(i % 2) { }]
+end
+t('unknown keyword after a redefinition') do |i|
+  Chg2.class_eval { def f(b:) = b } if i == N / 2
+  guard { Chg2.new.go(i % 2) }
+end
+
+
+# ---------------------------------------------------------------- 10. a literal whose pieces change under it
+class HK
+  attr_reader :v
+  def initialize(v) = @v = v
+  def hash = @v.hash
+  def eql?(o) = o.is_a?(HK) && @v == o.v
+end
+def two(a, b) = { a => 1, b => 2 }
+t('keys that are eql? or not') { |i| two(HK.new(1), HK.new(i % 2)).size }
+t('#hash redefined half way') do |i|
+  HK.class_eval { def hash = 7 } if i == N / 2
+  two(HK.new(1), HK.new(i % 2)).size
+end
+t('#eql? redefined half way') do |i|
+  HK.class_eval { def eql?(o) = false } if i == N / 2
+  two(HK.new(1), HK.new(1)).size
+end
+t('String#freeze redefined') do |i|
+  String.class_eval { alias_method :__f, :freeze; def freeze = __f } if i == N / 2
+  s = +"k"
+  h = { s => i % 2 }
+  [h.keys[0].frozen?, s.frozen?, h.keys[0].equal?(s)]
+end
+t('Hash.new redefined, a literal does not call it') do |i|
+  Hash.singleton_class.class_eval { alias_method :__n, :new; def new(*) = raise("called") } if i == N / 2
+  r = guard { { a: i % 2 } }
+  Hash.singleton_class.class_eval { alias_method :new, :__n } if i == N - 1
+  r
+end
+
+# ---------------------------------------------------------------- 11. a refinement where the caller is defined
+# Last in the file: a method defined where a refinement is in use is never a light frame, so every
+# method after `using' is one with a scope.
+module Loud
+  refine String do
+    def center(width, pad = " ", loud: false) = loud ? "LOUD" : super(width, pad)
+    def tag(a:) = "refined #{a}"
+  end
+end
+class String; def tag(a:) = "plain #{a}"; end
+def unrefined_tag(s, x) = s.tag(a: x)
+using Loud
+def refined_tag(s, x) = s.tag(a: x)
+def refined_center(s) = s.center(5, loud: true)
+t('unrefined caller') { |i| unrefined_tag("s", i % 2) }
+t('refined caller') { |i| refined_tag("s", i % 2) }
+t('refined, keyword only it knows') { |_| refined_center("s") }
