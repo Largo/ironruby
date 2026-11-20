@@ -596,7 +596,7 @@ Profile (`Util/perf/profile.sh`, self time):
   light frames 71.7% -> 76.9% (20,318 -> 21,793), light blocks 7,389 -> 7,724, JIT
   compiles, maybe and never unchanged (Src/StdLib + AWFY, 28,335 methods; 1,475 methods
   moved up, none down: 807 for the literal, 148 of those a `h = {}` default, and 668 for
-  the keywords) - **census only, not gated**. 42 of them are the prelude's, among them
+  the keywords). 42 of them are the prelude's, among them
   `group_by`, `uniq`, `tally`, `uniq!`, six `to_h`, `transform_keys`, `slice`, `fetch`,
   `to_set`, `transform_values!`, `__check_frozen__`; none is AWFY's, whose methods
   write no Hash literal, so the AWFY table is not expected to move.
@@ -612,7 +612,56 @@ Profile (`Util/perf/profile.sh`, self time):
   -> 1,360, `{a: x, b: x}` 1,761 -> 1,449, `{}` filled with two keys 2,220 -> 1,964,
   `{"k" => x}` 2,010 -> 1,797, `f(a: x)` to a keyword 1,161 -> 893, two keywords to
   `**o` 2,692 -> 2,466, a control without a Hash 910 -> 872 (within its spread).
-  Not run: IronRuby.Tests, a sweep, any timing. Found on the way: gap 22.
+  Found on the way: gap 22.
+
+  Gated on 2026-11-20 together with perf/why, the branch at 9f8bc1a7 against master at
+  084b09cf, both Release net10.0, 8 cores, load 1.1 to 1.7 (`/perf-gate`): **PASS**.
+  - IronRuby.Tests: the same one failure on both trees (`Exception_CauseRaisedInClause1`,
+    master's, Release only).
+  - Seventeen matrices (hash-literal, interpolation, block-given, light-rest, block-pass,
+    splat-pass, hot-shapes, hash-order, hash-struct, callable-parameters, raise,
+    full-message, refinement, refinement-binding, jit, jit-calls, set-backtrace), each as
+    built, with `IR_LIGHT_HASH=0 IR_LIGHT_KEYWORD_HASH=0`, with `IR_LIGHT_FRAMES=0` and
+    with `-X:NoJIT -X:NoOSR`: the branch prints what master prints in all 68 runs (the
+    one line of callable-parameters that differs is a `source_location` with the tree's
+    own path in it), and CRuby's output wherever master does.
+  - The four questions. A million deep through a literal's value, its String key, a key's
+    `#hash`, a keyword call to a required keyword, to `**o`, from a block and inside a
+    literal: SystemStackError each time and the process alive, as on master. Visibility,
+    a callee that reads the caller's scope, a callee and a key's `#hash` changing half
+    way, and a refinement in use where the caller is defined are sections 7 to 11 of
+    `Util/hash-literal-matrix.rb` (31 probes, 148 lines in all): CRuby's output on both
+    trees and in every mode above and with `-X:NoAdaptiveCompilation`; `IR_LIGHT_FRAMES=why`
+    names 113 of the file's methods as light frames on the branch and 21 on master, the
+    new callers among them. The first version of these probes tested less than it
+    said: a `using` in the middle of the file kept every later method out of light
+    frames, and the methods that recursed through a keyword call had keyword parameters
+    of their own. The refinement section is last for that reason.
+  - ruby/spec, all five suites (`Util/ci-sweep.sh`, then `sweep-check.rb`): 32,680
+    examples, 45 failing, every one listed, none new, no file without a summary.
+  - Time on the shapes it is about (`ab.rb -r 5`, on-CPU ns per call, the branch with
+    both switches off -> on; CRuby 4.0.9 in the same rounds): `{a: x}` 162 -> 118 (CRuby
+    92), `{a: x, b: x}` 213 -> 140 (108), `{}` filled with two keys 214 -> 172 (133),
+    `{"k" => x}` 244 -> 175 (97), `f(a: x)` to a keyword 104 -> 72 (60), two keywords to
+    `**o` 288 -> 242 (155), `to_h` with a block 528 -> 480 (123). `tally`, `group_by`,
+    `uniq` with a block and the two controls overlap: the prelude's methods that moved
+    spend their time elsewhere. Instructions per call agree (`ab.rb -i`: 0.82, 0.74,
+    0.92, 0.78, 0.79, 0.86 on the first six; master counts what the switches-off build
+    counts).
+  - AWFY, `awfy.rb 12` in both column orders, no FAIL: geomean branch/master 1.002 and
+    1.014; nothing is more than 5% slower in both orders (Richards and NBody are 5.5%
+    and 5.9% slower in the order where the branch ran first and 1.8% and 0.2% faster in
+    the other). As expected: none of AWFY's methods moved.
+  - `micro-table.rb` three times, once with the columns the other way round: `empty` was
+    6 to 8% slower on the branch in all three, `while10` and `selfcall` in two. Each in
+    a process of its own (`ab.rb ... -- NAME`): the same instructions per call on both
+    trees to two parts in a thousand (342.4 and 341.8, 791.2 and 790.9, 596.2 and 595.8)
+    and the same time over eight alternating rounds (27.5 and 26.7 ns, 68.0 and 68.0,
+    46.3 and 46.4). So it is the state the table's earlier shapes leave the process in,
+    as in round eight, and not a cost of the change, which decides only what is
+    compiled.
+  - Start-up, `-e 1`, best of ten: 1,148 ms on master, 1,177 on the branch (+2.5%).
+  Not measured: TruffleRuby (not installed here), net11.0, Debug.
 
 - **perf/why (/perf-step, 2026-11-19) - a find-out step: the census names the construct
   that keeps a method out of light frames.** `IR_LIGHT_FRAMES=why` and the census said
@@ -626,8 +675,8 @@ Profile (`Util/perf/profile.sh`, self time):
   `light_why`, and the 5,704 that had a line number are the old text plus the construct
   (my own comparison of the two TSVs; the merged build's census is the worktree's byte
   for byte). The interpolation, block-pass and splat-pass matrices print CRuby's output
-  on the merged build. Not run: IronRuby.Tests, a sweep, any timing; the texts that only
-  appear with a switch off. What it found is under gap 9.
+  on the merged build. Gated on 2026-11-20 with perf/hashlit (above). Not checked: the
+  texts that only appear with a switch off. What it found is under gap 9.
 - **perf/interp (/perf-step, 2026-11-19) - a method that interpolates runs without a
   scope** (`"a#{x}"`, `raise ArgumentError, "negative size (#{n})"`;
   `IR_LIGHT_INTERPOLATION=0` turns it off). The filter (`IsScopeFree`) has taken an
