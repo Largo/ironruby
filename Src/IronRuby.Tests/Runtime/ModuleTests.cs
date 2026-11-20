@@ -984,5 +984,43 @@ Set[1, 2]
 []
 ");
         }
+
+        /// <summary>
+        /// A module records every singleton class of an object extended with it (RubyModule.DependentClasses), and
+        /// looked each one up with a linear search over the list, which made extending quadratic (gap 19). After
+        /// many objects are extended and dropped, the ones still alive and classes that include the module still
+        /// see what is later added to, included into or undefined in it.
+        /// </summary>
+        public void ExtendMany1() {
+            TestOutput(@"
+m = Module.new { def foo; 1; end }
+keep = Array.new(5) { Object.new.extend(m) }
+i = 0
+while i < 20000
+  Object.new.extend(m)
+  i += 1
+end
+c = Class.new { include m }
+d = Class.new(c)
+m.send(:remove_method, :foo)
+m.module_eval { def foo; 2; end; def bar; 3; end }
+p keep.map { |o| o.foo + o.bar }.uniq, d.new.foo
+n = Module.new { def baz; 4; end }
+m.include(n)
+p keep[0].baz, d.new.baz
+m.send(:undef_method, :bar)
+p((keep[1].bar rescue $!.class))
+p m.instance_method(:foo).bind_call(Object.new), keep[2].clone.foo, (keep[2].dup.foo rescue $!.class)
+", @"
+[5]
+2
+4
+4
+NoMethodError
+2
+2
+NoMethodError
+");
+        }
     }
 }

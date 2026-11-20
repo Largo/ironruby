@@ -1,0 +1,451 @@
+/* ****************************************************************************
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution.
+ *
+ * ***************************************************************************/
+
+namespace IronRuby.Tests {
+    public partial class Tests {
+        // Core methods the method JIT's typed bodies compute themselves (Src/Ruby/Runtime/Jit):
+        // each shape is made hot on the kind of receiver it is compiled for, then given the others,
+        // and the core method is redefined in the middle of a run. Util/jit-matrix.rb has more.
+
+        /// <summary>String#length and #size: characters in the String's encoding, not bytes or UTF-16 units.</summary>
+        public void JitCore_StringLength1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class SlBox
+  def initialize(s) = (@input = s; @index = 0)
+  def more = @index < @input.length
+  def len(s) = s.length
+  def hash_of(s) = s.size * 1_402_589
+  def slot(s) = hash_of(s) & 15
+end
+class SlString < String
+  def length = 99
+end
+b = SlBox.new('abc')
+200.times { |i| b.len('abcd'); b.hash_of('ab' * (i % 4)); b.slot('xyz'); b.more }
+p [""héllo"", ""\xff\xfe"".dup.force_encoding('UTF-8'), ""\xff"".dup.force_encoding('BINARY'), ""abé"".encode('UTF-16LE'), ""\u{1F600}x"",
+   SlString.new('abc'), [1, 2]].map { |s| [b.len(s), b.slot(s)] }
+p((b.len(nil) rescue $!.class))
+seen = []
+200.times do |i|
+  class String; remove_method :length; def length = -1; end if i == 100
+  seen << b.len('abcd')
+end
+p seen.uniq
+", @"
+[[5, 1], [2, 10], [1, 13], [3, 7], [2, 10], [99, 7], [2, 10]]
+NoMethodError
+[4, -1]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
+
+        /// <summary>
+        /// Json's Parser#read: its instance variable writes are held back to the end of the typed body
+        /// (JitCompiler.Sink.cs), so that @input.length and @input[@index] may deopt after them; then
+        /// @input nil in the middle of a run, a frozen parser and a String with a broken byte.
+        /// </summary>
+        public void JitCore_SunkStores1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class JsP
+  attr_accessor :input, :index, :line, :current
+  def initialize(s) = (@input = s; @index = -1; @line = 1; @column = 0; @current = nil; read)
+  def read
+    if ""\n"" == @current
+      @line  += 1
+      @column = 0
+    end
+    @index += 1
+    if @index < @input.length
+      @current = @input[@index]
+    else
+      @current = nil
+    end
+  end
+  def read_char(ch)
+    return false if @current != ch
+    read
+    true
+  end
+  def state = [@index, @line, @column, @current]
+end
+q = JsP.new(""a\nb,é"" * 8)
+r = []
+200.times do |i|
+  q.input = nil if i == 150
+  q.index = -1 if q.current.nil? && i < 150
+  r << (q.read_char(',') ? :c : (q.read rescue $!.class))
+end
+p r.last(3), q.state
+q = JsP.new(""ab"")
+50.times { q.read; q.index = -1 if q.current.nil? }
+q.current = ""\n""
+q.freeze
+p((q.read rescue $!.class), q.state)
+q = JsP.new(""ab\xff"".dup.force_encoding('UTF-8'))
+p [q.read, q.read, q.read]
+", @"
+[NoMethodError, NoMethodError, NoMethodError]
+[77, 31, 0, ""b""]
+FrozenError
+[-1, 1, 0, ""\n""]
+[""b"", ""\xFF"", nil]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
+        }
+
+        /// <summary>
+        /// Bounce's Ball#bounce: @x is written as an Int64 (`@x += @xv') and as an Int32 (`@x = lim'), held in one long
+        /// and stored through NarrowLong (JitCompiler.Sink.cs); values at the Int32 and Int64 edges, a Bignum sum (a
+        /// deopt before any store), a Float velocity and a frozen ball.
+        /// </summary>
+        public void JitCore_SunkStores2() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class SsBall
+  attr_accessor :x, :y, :xv, :yv
+  def initialize(x, y, xv, yv) = (@x = x; @y = y; @xv = xv; @yv = yv)
+  def bounce
+    lim = 500
+    b = false
+    @x += @xv
+    @y += @yv
+    if @x > lim
+      @x = lim
+      @xv = 0 - @xv.abs
+      b = true
+    end
+    if @x < 0
+      @x = 0
+      @xv = @xv.abs
+      b = true
+    end
+    if @y > lim
+      @y = lim
+      @yv = 0 - @yv.abs
+      b = true
+    end
+    b
+  end
+  def last(d) = (@x = 7; @x += d)
+end
+s = SsBall.new(250, 10, 37, -45)
+r = (1..200).map { s.bounce }
+p [r.count(true), s.x, s.y, s.xv, s.yv]
+60.times { |i| s.last(i) }
+w = []
+[2**31 - 2, 2**62 - 1, 2**63 - 2].each do |e|
+  s.x = e; s.xv = 1
+  s.bounce
+  w << [s.x, s.x.class, s.x.equal?(500), s.x.hash == 500.hash]
+  s.x = 7
+  v = s.last(e)
+  w << [v, v.equal?(s.x), s.x.eql?(e + 7)]
+end
+p w
+s.x = 2**63 - 1; s.xv = 1; s.y = 3
+p [s.bounce, s.x, s.y]
+s.xv = 2.5; s.x = 499
+p [s.bounce, s.x, s.xv]
+s.freeze
+p [(s.bounce rescue $!.class), s.x]
+", @"
+[14, 407, -8990, 37, -45]
+[[500, Integer, true, true], [2147483653, true, true], [500, Integer, true, true], [4611686018427387910, true, true], [500, Integer, true, true], [9223372036854775813, true, true]]
+[true, 500, -42]
+[true, 500, -2.5]
+[FrozenError, 500]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
+        }
+
+        /// <summary>Integer#abs (an Int32's is an Int64, -2**63's a Bignum) and Float#abs (-0.0 is 0.0, NaN stays NaN).</summary>
+        public void JitCore_Abs1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class AbBall
+  def initialize(v) = (@v = v)
+  attr_accessor :v
+  def bounce = (@v = 0 - @v.abs)
+  def ab(x) = x.abs
+  def fab(x) = x.abs + 0.5
+end
+b = AbBall.new(3)
+200.times { |i| b.v = i - 100; b.bounce; b.ab(i - 100); b.fab(i * -0.25) }
+p [-2**31, -2**63, -2**64, 2**62, -5].map { |x| b.ab(x) }
+p [-0.0, 0.0 / 0.0, -1.0 / 0.0].map { |x| b.fab(x) }, 1.0 / b.ab(-0.0)
+b.v = -2**63
+p b.bounce
+p((b.ab(nil) rescue $!.class))
+seen = []
+200.times do |i|
+  class Integer; alias_method :ab_orig, :abs; def abs = 1000; end if i == 100
+  seen << b.ab(-3)
+end
+p seen.uniq
+", @"
+[2147483648, 9223372036854775808, 18446744073709551616, 4611686018427387904, 5]
+[0.5, NaN, Infinity]
+Infinity
+-9223372036854775808
+NoMethodError
+[3, 1000]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
+
+        /// <summary>`@storage == nil' on an Array: false, unless nil has to_ary, when Array#== asks nil == ary.</summary>
+        public void JitCore_CollectionEqualsNil1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class EnVec
+  def initialize(s) = (@storage = s)
+  attr_accessor :storage
+  def at(idx)
+    return nil if @storage == nil || idx >= @storage.length
+    @storage[idx]
+  end
+  def cap = @storage == nil ? 0 : @storage.size
+end
+class EnArray < Array
+  def ==(o) = :en_array_eq
+end
+v = EnVec.new([1, 2, 3])
+200.times { |i| v.at(i % 4); v.cap }
+p [[4, 5], nil, { 0 => :h }, EnArray[1, 2], 'str'].map { |s| v.storage = s; [v.at(0), v.cap] }
+v.storage = [1]
+seen = []
+200.times do |i|
+  class NilClass; def to_ary = []; def ==(o) = o.is_a?(Array) || equal?(o); end if i == 100
+  seen << v.cap
+end
+p seen.uniq
+", @"
+[[4, 2], [nil, 0], [:h, 1], [nil, 0], [""s"", 3]]
+[1, 0]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 2, System.String.Format("methods specialized: {0} (expected at least 2)", specializedHere));
+        }
+        /// <summary>
+        /// `a != nil' with `!=' made private or protected in Array or Hash, where the method is BasicObject's (the class
+        /// keeps a forwarder whose visibility is the call's); an Int64 abs and -2**63; an attr_reader named abs.
+        /// </summary>
+        public void JitCore_Review1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+def ne(a) = (a != nil)
+def neh(h) = (h != nil)
+def la(m, n)
+  x = m * n
+  x.abs
+end
+class V
+  attr_reader :abs
+  def initialize(a) = (@abs = a)
+end
+def va(v) = v.abs + 1
+a = [1]
+h = { 1 => 2 }
+v = V.new(3)
+200.times { |i| ne(a); neh(h); la(i + 1, -3_000_000_000); va(v) }
+seen = []
+200.times do |i|
+  class Array; private :!=; end if i == 100
+  seen << (ne(a) rescue $!.class)
+end
+p seen.uniq
+class Hash; protected :!=; end
+p((neh(h) rescue $!.message))
+p [la(7, -3_000_000_000), la(-2**62, 2), va(v), va(V.new(-1.5)), va(-4)]
+", @"
+[true, NoMethodError]
+""protected method '!=' called for an instance of Hash""
+[21000000000, 9223372036854775808, 4, -0.5, 5]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 4, System.String.Format("methods specialized: {0} (expected at least 4)", specializedHere));
+        }
+
+        /// <summary>
+        /// `NONE == x', `NONE != x' with NONE a constant whose value is nil (Richards' NO_WORK): its storage holds
+        /// ConstantSiteCache.WeakNull, unlike an autoload not yet run, and the comparison is `x is nil'; then
+        /// NilClass#== redefined and the constant removed in the middle of a run.
+        /// </summary>
+        public void JitCore_NilConstant1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+NONE = nil
+class Q
+  def initialize(h) = (@head = h)
+  attr_accessor :head
+  def eq = (NONE == @head)
+  def ne = (NONE != @head)
+end
+class Base
+  INH = nil
+end
+class Sub < Base
+  def inh(x) = (INH == x)
+end
+q = Q.new(:a)
+s = Sub.new
+200.times { |i| q.head = i.even? ? :a : [i]; q.eq; q.ne; s.inh(nil) }
+q.head = nil
+p [q.eq, q.ne, s.inh(nil), s.inh(0)]
+seen = []
+200.times do |i|
+  q.head = i.even? ? nil : :a
+  if i == 100
+    class NilClass
+      alias_method :orig_eq, :==
+      def ==(o) = :nil_eq
+    end
+  end
+  seen << q.eq << q.ne
+end
+p seen.uniq
+class NilClass
+  remove_method :==, :orig_eq
+end
+seen = []
+200.times do |i|
+  Base.send(:remove_const, :INH) if i == 100
+  seen << (s.inh(nil) rescue $!.class)
+end
+p seen.uniq
+", @"
+[true, false, true, false]
+[true, false, :nil_eq]
+[true, NameError]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
+
+        /// <summary>
+        /// Float instance variables the typed code stores raw (RubyInstanceData, "Float locations"): `@x op= f',
+        /// `@x = f' and `o.x = f' hot, then everything generic reads, copies, replaces or refuses the raw value.
+        /// </summary>
+        public void JitCore_FloatIVars1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class FiObj
+  attr_accessor :v
+  def initialize = (@x = 0.0; @v = 0.5)
+  def add(d) = (@x += d)
+  def put(d) = (@x = d * 1.0)
+  def get = @x + 0.0
+  def x = @x
+end
+def fi_attr(o, d) = (o.v = o.v * d)
+o = FiObj.new
+200.times { |i| o.put(i * 0.5); o.add(0.25); o.get; fi_attr(o, 1.0) }
+o.put(2.5); fi_attr(o, 2.0)
+p [o.x, o.v, o.instance_variable_get(:@x), o.instance_variables, o.x.equal?(o.x), o.x.object_id == o.x.object_id]
+d = o.dup; d.add(1.0); fi_attr(d, 2.0)
+p [o.x, o.v, d.x, d.v]
+p Marshal.load(Marshal.dump(o)).x
+o.put(-0.0); p [o.x, 1 / o.x]
+o.instance_variable_set(:@x, nil); p((o.add(1.0) rescue $!.class))
+o.instance_variable_set(:@x, 2); p [o.add(0.5), o.get]
+o.put(1.5); p o.remove_instance_variable(:@x), o.instance_variables
+o.put(3.5); o.freeze
+p [(o.put(1.0) rescue $!.class), (o.add(1.0) rescue $!.class), (fi_attr(o, 3.0) rescue $!.class), o.x, o.v]
+", @"
+[2.5, 1.0, 2.5, [:@x, :@v], true, true]
+[2.5, 1.0, 3.5, 2.0]
+2.5
+[-0.0, -Infinity]
+NoMethodError
+[2.5, 2.5]
+1.5
+[:@v]
+[FrozenError, FrozenError, FrozenError, 3.5, 1.0]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 4, System.String.Format("methods specialized: {0} (expected at least 4)", specializedHere));
+        }
+
+        // A Float CRuby holds as an immediate has the object_id its value gives (RubyUtils.TryGetFlonumId): the
+        // same for every Float of that value, where an id per box differed between two reads of one variable
+        // that typed code had stored raw. Outside the flonum range (-0.0, 1.0e308) it stays per object.
+        public void FloatObjectId1() {
+            TestOutput(@"
+p 1.5.object_id, 0.0.object_id, (-1.5).object_id
+a = 1.5; b = 0.5 * 3
+p a.object_id == b.object_id, (-0.0).object_id == (-0.0).object_id, 1.0e308.object_id == 1.0e308.object_id
+x = 1.0e308; p x.object_id == x.object_id
+", @"
+-18014398509481982
+-9223372036854775806
+-18014398509481978
+true
+false
+false
+true
+");
+        }
+
+        // A `raise' (or `fail') in a typed body is a deopt (JitCompiler.EmitRaise): the generic body runs again and
+        // raises, so the exception, its backtrace (with the frame of a caller that binds the method) and the held-back
+        // write before it are the generic body's; a class with a `raise' of its own that returns goes on. Expected
+        // output from CRuby 4.0.
+        public void JitCore_RaiseDeopt1() {
+            int specialized = IronRuby.Runtime.Jit.JitRuntime.Specialized;
+            TestOutput(@"
+class RdTable
+  attr_reader :n
+  def initialize = (@t = { 1 => 10 }; @n = 0)
+  def find(i)
+    t = @t[i]
+    raise IndexError, 'no ' + i.to_s unless t
+    t
+  end
+  def q(i) = find(i)
+  def bump(i)
+    @n = @n + 1
+    fail ArgumentError if i < 0
+    @n
+  end
+end
+class RdOwn < RdTable
+  def raise(*a) = nil
+end
+o = RdTable.new
+out = []
+200.times do |k|
+  miss = k == 0 || k == 60 || k == 130
+  begin
+    out << o.q(miss ? 2 : 1) unless miss
+    o.q(2) if miss
+  rescue IndexError => e
+    out << [k, e.message, e.backtrace.size > 2, e.backtrace[0][/:(\d+):/, 1].to_i, e.backtrace[1][/'(.*)'/, 1]]
+  end
+  begin
+    o.bump(miss ? -1 : 1)
+  rescue ArgumentError => e
+    out << [k, e.class, o.n]
+  end
+end
+p out.reject { |x| x == 10 }
+own = RdOwn.new
+p (1..100).map { |i| own.find(i % 50 == 0 ? 2 : 1) }.uniq
+", @"
+[[0, ""no 2"", true, 7, ""RdTable#q""], [0, ArgumentError, 1], [60, ""no 2"", true, 7, ""RdTable#q""], [60, ArgumentError, 61], [130, ""no 2"", true, 7, ""RdTable#q""], [130, ArgumentError, 131]]
+[10, nil]
+");
+            int specializedHere = IronRuby.Runtime.Jit.JitRuntime.Specialized - specialized;
+            Assert(specializedHere >= 3, System.String.Format("methods specialized: {0} (expected at least 3)", specializedHere));
+        }
+    }
+}

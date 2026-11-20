@@ -43,6 +43,7 @@ namespace IronRuby.Runtime.Jit {
             internal object Target;   // a Hash, a RubyArray or an object's RubyInstanceData
             internal object Key;      // a Hash's key, an instance variable's name
             internal object Old;
+            internal double OldFloat; // an instance variable's raw Float (Index 1)
             internal int Index;       // the replaced entry or element, or -1: the key was appended
         }
 
@@ -103,6 +104,16 @@ namespace IronRuby.Runtime.Jit {
             e.Index = 0;
         }
 
+        // a raw Float (JitRuntime.WriteSelfAttrDouble), kept unboxed: boxed only by a rollback
+        internal void ReplacedFloat(RubyInstanceData/*!*/ data, string/*!*/ name, double old) {
+            ref Entry e = ref Add();
+            e.Target = data;
+            e.Key = name;
+            e.Old = null;
+            e.OldFloat = old;
+            e.Index = 1;
+        }
+
         internal void Appended(Hash/*!*/ hash, object/*!*/ key) {
             ref Entry e = ref Add();
             e.Target = hash;
@@ -140,7 +151,7 @@ namespace IronRuby.Runtime.Jit {
                     array.JitRestoreElement(e.Index, e.Old);
                 } else if (data != null) {
                     // an attr_writer's store (JitRuntime.WriteSelfAttr): the variable gets its old value back
-                    data.SetInstanceVariable((string)e.Key, e.Old);
+                    data.SetInstanceVariable((string)e.Key, (e.Index == 1) ? (object)e.OldFloat : e.Old);
                 } else if (e.Index < 0) {
                     ((Hash)e.Target).JitUndoAppend(e.Key);
                 } else {
@@ -315,7 +326,7 @@ namespace IronRuby.Runtime.Jit {
 
             private bool Resolves(RubyClass/*!*/ cls) {
                 var resolved = cls.ResolveMethod(Name, Calls.VisibilityContext.AllVisible);
-                return resolved.Found && resolved.Info.IsPublic && Array.IndexOf(_expected, resolved.Info) >= 0
+                return resolved.Found && cls.GetMethodLookup(Name).Visibility == RubyMethodVisibility.Public && Array.IndexOf(_expected, resolved.Info) >= 0
                     && (_calls == null || _calls.Resolves(cls));
             }
 
@@ -409,6 +420,20 @@ namespace IronRuby.Runtime.Jit {
             }
             RequireIdentityMethod(context, value, site);
             return (value is bool) ? value.Equals(other) : ReferenceEquals(value, other);
+        }
+
+        /// <summary>
+        /// `v == nil' (JitCompiler.EmitCollectionEqualsNil): false for an Array or a Hash itself (not a
+        /// subclass; a singleton == is ruled out when compiling) when <paramref name="arrays"/> or
+        /// <paramref name="hashes"/> says its == is the library one and nil has no to_ary or to_hash;
+        /// any other v is IsIdentical's, which deopts for one whose == it cannot answer.
+        /// </summary>
+        public static bool CollectionEqualsNil(RubyContext/*!*/ context, object value, IdentityCallSite/*!*/ site, bool arrays, bool hashes) {
+            if (value != null) {
+                Type t = value.GetType();
+                if (t == typeof(RubyArray) && arrays || t == typeof(Hash) && hashes) { return false; }
+            }
+            return IsIdentical(context, value, null, site);
         }
 
         /// <summary>
@@ -615,6 +640,49 @@ namespace IronRuby.Runtime.Jit {
                 Type t = recv.GetType();
                 if (t == typeof(RubyArray) && arrays) { return ((RubyArray)recv).Count; }
                 if (t == typeof(Hash) && hashes) { return ((Hash)recv).Count; }
+            }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// String#length / #size of a String whose class is String itself (a subclass may override them,
+        /// and a singleton one is ruled out when compiling: JitCompiler.HasPlainInstances): the number
+        /// of characters in the String's encoding, a broken byte counting as one, as the library method
+        /// counts them. Anything else deopts.
+        /// </summary>
+        public static int StringLength(object recv) {
+            if (recv != null && recv.GetType() == typeof(MutableString)) { return ((MutableString)recv).GetCharacterCount(); }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// `a == b', `a != b' between two Strings whose class is String itself (a subclass may override ==, and
+        /// an instance with a singleton == is ruled out when compiling): String#== compares the contents, as
+        /// the library method does (MutableStringOps.StringEquals). Anything else deopts, to the generic call.
+        /// </summary>
+        public static bool StringEqualsString(object a, object b) {
+            if (a != null && b != null && a.GetType() == typeof(MutableString) && b.GetType() == typeof(MutableString)) {
+                return ((MutableString)a).Equals((MutableString)b);
+            }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// String#[](Integer) of a String whose class is String itself, as the library method
+        /// (MutableStringOps.GetChar) computes it: the character at a character index, counted from the
+        /// end when negative, nil past either end. An index that is not an int, which the library would
+        /// convert, and any other receiver deopt.
+        /// </summary>
+        public static object StringIndex(object recv, long index) {
+            if (recv != null && recv.GetType() == typeof(MutableString) && index == (int)index) {
+                var self = ((MutableString)recv).PrepareForCharacterRead();
+                int length = self.KnowsCharIndexIsClrIndex ? self.GetCharCount() : self.GetCharacterCount();
+                int i = (int)index;
+                if (i < 0) { i += length; }
+                if (i < 0 || i >= length) { return null; }
+                int count = 1;
+                self.ToClrRange(ref i, ref count);
+                return self.GetSlice(i, count);
             }
             throw Deopt();
         }
@@ -901,9 +969,20 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- constants -------------------------------------------------------------------
 
-        /// <summary>The guard of code that folded constants: nothing has changed any constant since.</summary>
+        /// <summary>The guard of an outlined loop that folded constants: nothing has changed any constant since.</summary>
         public static bool ConstantsOk(RubyContext/*!*/ context, int snapshot) {
             return context.ConstantAccessVersion == snapshot;
+        }
+
+        /// <summary>
+        /// The guard of a method entry whose typed bodies folded constants: nothing has changed any constant
+        /// since the specialization's snapshot, or the constants they folded are still what they were
+        /// (JitStub.RevalidateConstants, which then moves the snapshot up).
+        /// </summary>
+        public static bool ConstantsCurrent(RubyContext/*!*/ context, object/*!*/ specialization) {
+            var spec = (JitStub.Specialization)specialization;
+            return System.Threading.Volatile.Read(ref context.ConstantAccessVersion) == System.Threading.Volatile.Read(ref spec.ConstantVersion) ||
+                spec.Stub.RevalidateConstants(spec);
         }
 
         // ---- Class#new (JitCompiler.EmitConstruction) -------------------------------------
@@ -944,6 +1023,47 @@ namespace IronRuby.Runtime.Jit {
         }
 
         internal const int MaxConstructionArity = 3;
+
+        // ---- Array.new (JitCompiler.EmitArrayConstruction) --------------------------------
+
+        // The largest size Array.new makes (ArrayOps.CheckArraySize): above it, ArgumentError.
+        internal const int MaxArraySize = Int32.MaxValue / 8;
+
+        /// <summary>`Array.new': what the library constructor makes (ArrayOps.CreateArray).</summary>
+        public static object NewArray() {
+            return new RubyArray();
+        }
+
+        /// <summary>`Array.new(n, v)' of a size the compiler saw to be in range.</summary>
+        public static object NewArrayOfSize(int size, object value) {
+            return new RubyArray().AddMultiple(size, value);
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)': a negative size or one too big deopts, and the generic body raises the
+        /// ArgumentError (negative array size, array size too big) from its own frame.
+        /// </summary>
+        public static object NewArrayOfCheckedSize(int size, object value) {
+            if ((uint)size > (uint)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple(size, value);
+        }
+
+        /// <summary>`Array.new(n, v)' of an Int64 size: one outside [0, MaxArraySize] deopts.</summary>
+        public static object NewArrayOfLongSize(long size, object value) {
+            if ((ulong)size > (ulong)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple((int)size, value);
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)' of a size typed object: a boxed Int32 in range, or a deopt - for anything else the
+        /// generic body calls to_int, raises TypeError, or raises ArgumentError for an Integer out of range.
+        /// </summary>
+        public static object NewArrayOfObjectSize(object size, object value) {
+            if (!(size is int)) { throw Deopt(); }
+            int n = (int)size;
+            if ((uint)n > (uint)MaxArraySize) { throw Deopt(); }
+            return new RubyArray().AddMultiple(n, value);
+        }
 
         public static object Construct0(ConstructionSite/*!*/ site, object cls) {
             if (site.IsDirect) { return site.Construction.Construct0(); }

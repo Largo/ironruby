@@ -4,8 +4,9 @@
 #   ruby Util/perf/alloc.rb "base=env IR_CONFIG=Release /home/user/ironruby/ir.sh" \
 #        "new=env IR_CONFIG=Release ./ir.sh" -- DeltaBlue Json
 #
-# Each benchmark runs twice per tree, for LO and HI outer iterations (inner counts as in
-# Util/perf/awfy.rb), and prints System::GC.GetTotalAllocatedBytes(true) at exit; the figure
+# All fourteen benchmarks, from the copy Util/perf/awfy_dir.rb makes (awfy.rb runs the same one).
+# Each runs twice per tree, for LO and HI outer iterations (inner counts as in Util/perf/awfy.rb),
+# and prints System::GC.GetTotalAllocatedBytes(true) at exit; the figure
 # is (bytes(HI) - bytes(LO)) / (HI - LO), so start-up, loading and JIT warm-up cancel out.
 # Unlike time it does not depend on the machine's load: a difference of a few bytes per
 # iteration is real. The last lines give each column's geomean relative to the first.
@@ -13,11 +14,12 @@
 require 'shellwords'
 INNER = { 'DeltaBlue' => 1200, 'Richards' => 10, 'Json' => 10, 'CD' => 100, 'Bounce' => 150,
           'List' => 150, 'Mandelbrot' => 500, 'NBody' => 250_000, 'Permute' => 100,
-          'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60 }
-root = File.expand_path('../..', __dir__)
-home = ENV['PERF_HOME'] || File.join(File.dirname(root), 'ironruby-perf')
-dir = File.join(home, 'awfy/benchmarks/Ruby')
-abort "no #{dir}: run Util/perf/setup.sh" unless File.directory?(dir)
+          'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60, 'Havlak' => 15 }
+# Havlak takes seconds per iteration and allocates gigabytes in each: a tenth of the iterations
+# gives the same figure.
+FEWER = { 'Havlak' => 10 }
+require_relative 'awfy_dir'
+dir = awfy_dir(File.expand_path('../..', __dir__))
 lo = Integer(ENV['ALLOC_LO'] || 20)
 hi = Integer(ENV['ALLOC_HI'] || 60)
 
@@ -35,13 +37,14 @@ cols = Array.new(interps.size) { [] }
 INNER.each do |b, inner|
   next unless only.empty? || only.include?(b)
   row = interps.map do |_, cmd|
-    n = [lo, hi].map do |iters|
+    div = FEWER[b] || 1
+    n = [lo / div, hi / div].map do |iters|
       out = IO.popen("LANG=C.UTF-8 #{cmd} #{"-r#{probe}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} #{iters} #{inner} 2>&1", &:read)
       # The probe prints from at_exit, so a run that raised - a wrong answer does - prints a count too:
       # only a run that ended with status 0 is a sample.
       out[/ALLOCATED (\d+)/, 1]&.to_i if $?.success? && out =~ /#{b}: iterations=/
     end
-    n.all? ? (n[1] - n[0]) / (hi - lo) : nil
+    n.all? ? (n[1] - n[0]) / (hi / div - lo / div) : nil
   end
   row.each_with_index { |v, k| cols[k] << v }
   printf fmt, b, *row.map { |v| v || 'FAIL' }

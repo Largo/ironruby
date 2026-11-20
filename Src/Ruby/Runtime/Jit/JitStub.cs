@@ -22,7 +22,7 @@
  *     `using'd. A method added to an active refinement bumps the global method version too.
  *   - The receiver's immediate class is pinned whenever the specialized body contains a
  *     direct self-call, so that call cannot be a call to an override.
- *   - -X:JITCalls (a prototype, off by default): a call of another method on self is bound to
+ *   - Direct calls (on by default, -X:NoJITCalls turns them off): a call of another method on self is bound to
  *     that method's typed body (BindCallee), resolved from the same pinned class under the same
  *     method version; the guards the callee's own entry would make move to the caller's entry
  *     and the callee's deopts end there.
@@ -292,8 +292,14 @@ namespace IronRuby.Runtime.Jit {
             // The least a deopt of the open window cost, throw to catch, in Stopwatch ticks; 0 if
             // none was timed (OnDeopt).
             internal long DeoptCost;
-            // The constant version the typed bodies were compiled under (JitCode.UsesConstants).
+            // The constant version the typed bodies were compiled under (JitCode.UsesConstants), or the one under
+            // which the constants they folded were last found to be what they were (RevalidateConstants). The
+            // entry reads it (JitRuntime.ConstantsCurrent), and so does a caller binding the body (BindCallee).
             internal int ConstantVersion;
+            // What the typed bodies folded (JitCode.FoldedConstants), and the bodies whose loops guard on the
+            // constant version too (JitLoopGuard); both null if they folded none. Never changed once installed.
+            internal JitFoldedConstant[] FoldedConstants;
+            internal JitCode[] FoldingCodes;
             // The one typed body (not per-count ones), the method version its entry checks and the class it
             // pins self to, if any: what a caller that inlines it (JitStub.InlinableBody) has to check too.
             internal JitCode Code;
@@ -414,10 +420,13 @@ namespace IronRuby.Runtime.Jit {
             // Name it, so a count that creeps up can be traced to the construct responsible.
             JitRuntime.Rejected++;
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
-                    _declaringModule.Name ?? "main", _ast.Name, _arity);
+                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen): {3}",
+                    _declaringModule.Name ?? "main", _ast.Name, _arity, _declineReason ?? "no reason recorded");
             }
         }
+
+        // IR_JIT_VERBOSE=1: why TrySpecialize gave up, for the `declined' line (GiveUp).
+        private string _declineReason;
 
         // Under _sync: the generic body, for good.
         private void Settle() {
@@ -437,10 +446,11 @@ namespace IronRuby.Runtime.Jit {
         private int _respecializations;
 
         /// <summary>
-        /// Called by the entry when the global method version no longer matches its snapshot. That
-        /// guard can never pass again, so leaving the entry installed would send every later call
-        /// through the failed guard into the generic body: profile again and specialize under the
-        /// new version instead, or settle on the generic body once that has happened too often.
+        /// Called by the entry when the global method version no longer matches its snapshot, or a
+        /// constant its typed bodies folded has changed (RevalidateConstants). That guard can never
+        /// pass again, so leaving the entry installed would send every later call through the failed
+        /// guard into the generic body: profile again and specialize under the new version instead,
+        /// or settle on the generic body once that has happened too often.
         /// </summary>
         internal void VersionChanged(Specialization/*!*/ spec) {
             bool settled = false;
@@ -448,6 +458,62 @@ namespace IronRuby.Runtime.Jit {
                 settled = Respecialize(spec);
             }
             if (settled) { NotifyOwner(); }
+        }
+
+        /// <summary>
+        /// Called by the entry when the constant version no longer matches the specialization's snapshot and the
+        /// method version still does: what moved the constant version may be nothing the typed bodies folded (a
+        /// constant set anywhere, an object extended, a module mixed in, an autoload started), as the generic
+        /// constant sites find out by looking their constant up again. So does this: each constant the bodies
+        /// folded is resolved again, the way the compiler resolved it (JitFoldedConstant.Resolve), and if every
+        /// one is the same object found in the same module, the version read before the lookups becomes the
+        /// snapshot and the typed body runs. False if one is not (or cannot be folded now: an autoload in
+        /// flight, a deprecated constant), and the entry then goes stale as for a method change (EntryStale).
+        ///
+        /// No lock but the class hierarchy's, which each lookup takes as the compiler's did. The version is read
+        /// before the first lookup and stored after the last: a constant changed in between has moved the
+        /// version past the one stored, and the next entry looks again. Two threads may do this at once - the
+        /// list never changes once installed - and one may store an older version than the other did, which only
+        /// costs another look. A version is never stored that was read after a lookup.
+        /// </summary>
+        internal bool RevalidateConstants(Specialization/*!*/ spec) {
+            var folded = spec.FoldedConstants;
+            if (folded == null) { return false; }
+            int version = System.Threading.Volatile.Read(ref _context.ConstantAccessVersion);
+            foreach (var constant in folded) {
+                if (!constant.StillHolds(_context)) { return false; }
+            }
+            // While an autoload runs, what a constant resolves to depends on the thread asking
+            // (RubyContext._autoloadsInProgress): no version is recorded then. (One that started after the
+            // version was read has moved it past what is stored here.)
+            if (_context.IsAutoloadInProgress) { return false; }
+            System.Threading.Volatile.Write(ref spec.ConstantVersion, version);
+            // The bodies' loops check the constant version at their safe points too (JitLoopGuard.Stale): the
+            // constants they folded are current at this version as well.
+            foreach (var code in spec.FoldingCodes) {
+                if (code.LoopGuard.ConstantsOf != null) {
+                    System.Threading.Volatile.Write(ref code.LoopGuard.ConstantVersion, version);
+                }
+            }
+            return true;
+        }
+
+        /// <summary>What the per-count bodies folded, all of them: they share one entry and one snapshot.</summary>
+        private static void FoldedBy(Specialization/*!*/ spec, JitCode[]/*!*/ codes) {
+            List<JitFoldedConstant> folded = null;
+            List<JitCode> folding = null;
+            foreach (var code in codes) {
+                if (code == null || !code.UsesConstants) { continue; }
+                (folding ?? (folding = new List<JitCode>())).Add(code);
+                if (code.FoldedConstants == null) {
+                    // (a body that folded constants it did not record cannot be looked up again)
+                    return;
+                }
+                (folded ?? (folded = new List<JitFoldedConstant>())).AddRange(code.FoldedConstants);
+            }
+            if (folding == null) { return; }
+            spec.FoldedConstants = folded.ToArray();
+            spec.FoldingCodes = folding.ToArray();
         }
 
         // Under _sync: true if the method settled on its generic body.
@@ -524,6 +590,11 @@ namespace IronRuby.Runtime.Jit {
         // least median of them taken when the entry was put back; in Stopwatch ticks.
         private long[] _coolSamples;
         private int _coolSampleCount;
+        // The same of the timed generic calls that raised. Their cost stands for the generic body's only when no timed call
+        // returned and none ever has (CoolDownCheck): a method whose every call raises (a `raise' is a deopt, JitCompiler.EmitRaise)
+        // would otherwise never have a generic cost, and an entry is never retired without one.
+        private long[] _coolRaised;
+        private int _coolRaisedCount;
         private int _coolMask;
         private uint _coolRandom = 0x9E3779B9;
         private long _genericCost;
@@ -646,6 +717,7 @@ namespace IronRuby.Runtime.Jit {
             _coolMask = mask;
             _coolSamples ??= new long[MaxDeopts];
             _coolSampleCount = 0;
+            _coolRaisedCount = 0;
             _state = Cooling;
             Install(CoolingBody);
         }
@@ -684,6 +756,16 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        /// <summary>Called, as an exception filter, by the cooling stand-in when a generic call it timed raised; never catches.</summary>
+        protected bool CoolRaised(long start) {
+            long cost = Stopwatch.GetTimestamp() - start;
+            var samples = _coolRaised ??= new long[MaxDeopts];
+            int i = _coolRaisedCount;
+            samples[i & (MaxDeopts - 1)] = cost;
+            _coolRaisedCount = i + 1;
+            return false;
+        }
+
         /// <summary>
         /// Called by the cooling stand-in every CoolCheckCalls calls (ProbeCalls in a probe): puts
         /// the entry back once its cool-down is over.
@@ -697,6 +779,8 @@ namespace IronRuby.Runtime.Jit {
                 if (_coolSampleCount > 0) {
                     long median = Median(_coolSamples, Math.Min(_coolSampleCount, MaxDeopts));
                     if (_genericCost == 0 || median < _genericCost) { _genericCost = median; }
+                } else if (_coolRaisedCount > 0 && _genericCost == 0) {
+                    _genericCost = Median(_coolRaised, Math.Min(_coolRaisedCount, MaxDeopts));
                 }
                 var spec = _current;
                 spec.Countdown = 0;
@@ -728,14 +812,16 @@ namespace IronRuby.Runtime.Jit {
             // newer than what the compiler resolved against - each built-in operator it checks, and
             // the self-call check below. Read after, a method redefined (on another thread) while a
             // large body compiled would be inside the snapshot, and the entry would go on running
-            // the operator it replaced.
+            // the operator it replaced. The code epoch the body's loops start from is read before both
+            // (JitLoopGuard.Set).
+            long epoch = RubyUtils.CodeEpoch;
             int version = RubyModule.GlobalMethodVersion;
             int constantVersion = _context.ConstantAccessVersion;
 
             long start = Stopwatch.GetTimestamp();
             var hints = Hints();
             var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints,
-                Callees(refinements, version, constantVersion)));
+                Callees(refinements, version, constantVersion), epoch), epoch, version, constantVersion);
             if (code == null) {
                 // A call the body could inline - or, with -X:JITCalls, bind - is of a method that has not been
                 // specialized yet: a caller called once per call of its callee turns hot first. Profile on, a
@@ -746,16 +832,18 @@ namespace IronRuby.Runtime.Jit {
                     }
                     return true;
                 }
+                // (a bailout has printed its `rejected' line already)
+                _declineReason = JitCompiler.LastDecline ?? "the compiler bailed out (see the `rejected' line)";
                 return false;
             }
 
             // (a body with direct calls was only compiled for a receiver class the profile pinned: Callees)
             bool needsClassGuard = code.EmittedSelfCall || code.InlinedSelfClass != null || code.DirectCalls;
             if (needsClassGuard) {
-                if (_receiverClass == null || _polymorphicReceiver) { return false; }
-                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { return false; }
+                if (_receiverClass == null || _polymorphicReceiver) { _declineReason = "a class guard on a receiver of several classes"; return false; }
+                if (code.EmittedSelfCall && !SelfCallResolvesHere(_receiverClass, refinements)) { _declineReason = "the self-call resolves elsewhere"; return false; }
                 // the inlined self-calls were resolved on the class of the sampled receiver
-                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { return false; }
+                if (code.InlinedSelfClass != null && code.InlinedSelfClass != _receiverClass) { _declineReason = "an inlined self-call of another class"; return false; }
             }
 
             // The typed body only has to exist as a delegate of its own when it calls itself: the
@@ -775,10 +863,15 @@ namespace IronRuby.Runtime.Jit {
 
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
+            if (code.UsesConstants) {
+                spec.FoldedConstants = code.FoldedConstants;
+                spec.FoldingCodes = new[] { code };
+            }
             spec.Code = code;
             spec.Version = version;
             spec.PinnedClass = needsClassGuard ? _receiverClass : null;
             spec.Typed = typed;
+            if (code.Resume != null) { code.Resume.Specialization = spec; }
             spec.Entry = CompileEntry(BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null, spec));
             if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
                 _keywords.Count <= JitKeywordCall.MaxKeywords) {
@@ -798,10 +891,11 @@ namespace IronRuby.Runtime.Jit {
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
             if (code.DirectCalls) { JitRuntime.DirectCallBodies++; }
+            if (code.Resume != null) { JitRuntime.ResumeBodies++; }
             if (JitRuntime.Verbose) {
-                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}",
+                Console.Error.WriteLine("[jit] specialized {0}/{1} arity {2} -> {3}{4}{5}{6}",
                     _declaringModule.Name ?? "main", _ast.Name, _arity, code.ReturnType, code.EmittedSelfCall ? " (self-call)" : "",
-                    code.DirectCalls ? " (direct calls)" : "");
+                    code.DirectCalls ? " (direct calls)" : "", (code.Resume != null) ? " (fallbacks: " + code.FallbackSites + " sites)" : "");
             }
             return true;
         }
@@ -874,13 +968,21 @@ namespace IronRuby.Runtime.Jit {
             }
             var code = spec.Code;
             if (code == null) { return null; }
-            if (spec.Version != version || (code.UsesConstants && spec.ConstantVersion != constantVersion)) {
+            // The caller's entry guards on constantVersion, and looks up again what this body folded (the caller
+            // takes it over: JitCompiler.EmitDirectCall), so the body must be current at that version: if its own
+            // snapshot is older, the constants it folded are looked up now, which records the version they were
+            // found current at. A newer one (constants changed since the caller read constantVersion), or a
+            // constant that changed, and the caller does not bind it.
+            if (spec.Version != version ||
+                (code.UsesConstants && System.Threading.Volatile.Read(ref spec.ConstantVersion) != constantVersion &&
+                 !(RevalidateConstants(spec) && System.Threading.Volatile.Read(ref spec.ConstantVersion) == constantVersion))) {
                 retry = true;
                 return null;
             }
             // Element writes are undone by the entry's undo log, or are the last thing the body does; a
-            // construction runs an initialize, which may redefine what the caller has bound.
-            if (code.WritesElements || code.Construction) { return null; }
+            // construction runs an initialize, which may redefine what the caller has bound. A body with
+            // fallbacks (-X:JITResume) takes the block and makes its frame, which its entry is for.
+            if (code.WritesElements || code.Construction || code.Resume != null) { return null; }
             // The body's own inlined and direct calls were resolved from the class its entry pins.
             if (spec.PinnedClass != null && spec.PinnedClass != receiverClass) { return null; }
 
@@ -921,7 +1023,23 @@ namespace IronRuby.Runtime.Jit {
 
         private JitCompiler.ReceiverHints/*!*/ Hints() {
             return new JitCompiler.ReceiverHints { Parameters = (Type[])_argClrType.Clone(), Self = _selfClrType, SelfSample = _selfSample, ArgSamples = _argSample,
-                ArgClasses = ArgClasses() };
+                ArgClasses = ArgClasses(), Resume = ResumeInfo() };
+        }
+
+        /// <summary>
+        /// -X:JITResume: what the typed body needs to fall back to an operation's call after its first effect
+        /// (JitResume.cs), for a body stage 1 takes - no parameters, no locals (JitCompiler.IsResumeCandidate) - of a
+        /// method whose generic frame it can stand for: one compiled from its source, with a frame name (Named), a
+        /// declaring scope and no refinements recorded. Null otherwise, and the body is compiled as without the switch.
+        /// </summary>
+        private JitResumeInfo ResumeInfo() {
+            if (!_context.RubyOptions.JitResume || _frameName == null || _declaringScope == null || _definitionRefinements != null ||
+                _keywords != null || _arity != 0 || _hasDefault != null || !JitCompiler.IsResumeCandidate(_ast)) {
+                return null;
+            }
+            string path = JitResumeInfo.PathOf(_frameName);
+            if (path == null) { return null; }
+            return new JitResumeInfo(_frameName, path, _ast.Location.End.Line, _ast.Name, _declaringScope, _declaringModule);
         }
 
         private RubyClass[][]/*!*/ ArgClasses() {
@@ -969,6 +1087,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private bool TrySpecializePerCount(RefinementActivation/*!*/ refinements) {
             // read before compiling, as in TrySpecialize
+            long epoch = RubyUtils.CodeEpoch;
             int version = RubyModule.GlobalMethodVersion;
             int constantVersion = _context.ConstantAccessVersion;
 
@@ -981,7 +1100,7 @@ namespace IronRuby.Runtime.Jit {
             for (int k = 0; k <= optionalCount; k++) {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
                 var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints(),
-                    bind));
+                    bind, epoch), epoch, version, constantVersion);
                 if (code == null) { continue; }
                 if (code.EmittedSelfCall) {
                     if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
@@ -1008,6 +1127,7 @@ namespace IronRuby.Runtime.Jit {
             // one Specialization for all the bodies: they retire, cool down and go stale together
             var spec = new Specialization(this);
             spec.ConstantVersion = constantVersion;
+            FoldedBy(spec, codes);
             spec.Entry = CompileEntry(BuildPerCountEntry(codes, callees, version, pinned ? _receiverClass : null, spec));
 
             lock (_sync) {
@@ -1161,8 +1281,10 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            var typedArgs = new MSA.Expression[_typedCount + 1];
+            // -X:JITResume: a body with fallbacks takes the block last, for the frame it makes (JitFrame)
+            var typedArgs = new MSA.Expression[_typedCount + 1 + ((code.Resume != null) ? 1 : 0)];
             typedArgs[0] = self;
+            if (code.Resume != null) { typedArgs[_typedCount + 1] = blk; }
             for (int i = 0; i < _typedCount; i++) {
                 if (PassedBoxed(i)) { typedArgs[i + 1] = values[i]; continue; }
                 switch (code.ParameterTypes[i]) {
@@ -1436,11 +1558,15 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Constant(0));
         }
 
-        /// <summary>The entry guard: the method version, and the constant version if the body folded constants.</summary>
+        /// <summary>
+        /// The entry guard: the method version, and if the body folded constants, the constant version or, when
+        /// only that has moved, the constants looked up again (RevalidateConstants).
+        /// </summary>
         private MSA.Expression/*!*/ VersionTest(int version, Specialization/*!*/ spec, bool usesConstants) {
             MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
             if (usesConstants) {
-                test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("ConstantsOk"), Ast.Constant(_context), Ast.Constant(spec.ConstantVersion)));
+                // the snapshot is read from the specialization: looking the constants up again moves it
+                test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("ConstantsCurrent"), Ast.Constant(_context), Ast.Constant(spec, typeof(object))));
             }
             return test;
         }
@@ -1648,15 +1774,14 @@ namespace IronRuby.Runtime.Jit {
         /// on self looked at the same way, three levels down. As IsLeafMethod, only a hint, and one defined further
         /// down is taken on trust.
         /// </summary>
-        private static bool IsCallableMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, int depth) {
+        internal static bool IsCallableMethod(RubyModule/*!*/ declaringModule, string/*!*/ name, int depth) {
             try {
                 var resolved = declaringModule.ResolveMethod(name, VisibilityContext.AllVisible);
                 if (!resolved.Found) { return true; }
                 var info = resolved.Info as RubyMethodInfo;
                 if (info == null) { return false; }
                 var ast = info.GetSyntaxTree();
-                var ps = ast.Parameters;
-                if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock || ps.Mandatory.Length + ps.Optional.Length > MaxArity) { return false; }
+                if (!IsCallableParameterList(ast)) { return false; }
                 if (depth >= 3) { return true; }
                 RubyModule owner = info.DeclaringModule;
                 string rejectedBy;
@@ -1667,6 +1792,12 @@ namespace IronRuby.Runtime.Jit {
             } catch (Exception) {
                 return false;
             }
+        }
+
+        /// <summary>The parameters of a method a typed body may bind a call to (IsCallableMethod); the census asks it of a syntax tree.</summary>
+        internal static bool IsCallableParameterList(MethodDeclaration/*!*/ ast) {
+            var ps = ast.Parameters;
+            return ps.Unsplat == null && ps.Block == null && !ast.UsesBlock && ps.Mandatory.Length + ps.Optional.Length <= MaxArity;
         }
 
         /// <summary>
@@ -1735,7 +1866,14 @@ namespace IronRuby.Runtime.Jit {
         // An exception rarely leaves one - a raise deopts first - but the stack check at its entry (#128) does.
         private string _frameName;
 
-        private JitCode Named(JitCode code) {
+        /// <summary>
+        /// The compiled body, under the method's frame name, with the versions it was compiled under given to
+        /// its loops' safe points (JitCompiler.EmitLoopSafePoint).
+        /// </summary>
+        private JitCode Named(JitCode code, long epoch, int version, int constantVersion) {
+            if (code != null) {
+                code.LoopGuard.Set(epoch, version, code.UsesConstants ? _context : null, constantVersion);
+            }
             if (code != null && _frameName != null) {
                 code.Lambda = Ast.Lambda(code.Lambda.Type, code.Lambda.Body, _frameName, code.Lambda.Parameters);
             }
@@ -1827,7 +1965,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1865,7 +2005,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1903,7 +2045,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1941,7 +2085,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -1979,7 +2125,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2, a3);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2, a3); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -2017,7 +2165,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3, a4); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2, a3, a4);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2, a3, a4); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }
@@ -2055,7 +2205,9 @@ namespace IronRuby.Runtime.Jit {
             if (--_coolCalls <= 0) { CoolDownCheck(); }
             if (!CoolPick()) { return _gen(self, block, a0, a1, a2, a3, a4, a5); }
             long start = Stopwatch.GetTimestamp();
-            object result = _gen(self, block, a0, a1, a2, a3, a4, a5);
+            object result;
+            // a generic call that raises is timed too (CoolRaised, a filter: nothing is caught)
+            try { result = _gen(self, block, a0, a1, a2, a3, a4, a5); } catch (Exception) when (CoolRaised(start)) { throw; }
             CoolSample(start);
             return result;
         }

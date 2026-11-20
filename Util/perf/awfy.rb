@@ -12,36 +12,47 @@
 # as FAIL: a fast wrong answer never gets a number.
 #
 # The inner-iteration counts are Util/benchsuite/catalog.rb's (AWFY's rebench.conf / 10).
-# Havlak is left out: AWFY's som.rb reopens Set, which fails on Ruby 4.0 itself.
+#
+# All fourteen benchmarks of the suite run by default, on every interpreter, from a copy of the
+# checkout in which som.rb's Set has another name (Util/perf/awfy_dir.rb says why: without that
+# CRuby 4.0 fails Havlak). `--quick` anywhere before `--` leaves Havlak out while iterating; one
+# iteration of it takes seconds whatever the inner count, so it gets at least a minute per
+# interpreter: a run of two trees is about seven minutes, with `--quick` about five. A decision
+# is made on all fourteen. (`--whole`, which used to add Havlak, is accepted and means nothing.)
 INNER = { 'DeltaBlue' => 1200, 'Richards' => 10, 'Json' => 10, 'CD' => 100, 'Bounce' => 150,
           'List' => 150, 'Mandelbrot' => 500, 'NBody' => 250_000, 'Permute' => 100,
-          'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60 }
+          'Queens' => 100, 'Sieve' => 300, 'Storage' => 100, 'Towers' => 60, 'Havlak' => 15 }
+SLOW = ['Havlak']
+SLOW_SECS = 60
 require 'shellwords'
-root = File.expand_path('../..', __dir__)
-home = ENV['PERF_HOME'] || File.join(File.dirname(root), 'ironruby-perf')
-dir = File.join(home, 'awfy/benchmarks/Ruby')
-abort "no #{dir}: run Util/perf/setup.sh" unless File.directory?(dir)
+require_relative 'awfy_dir'
+dir = awfy_dir(File.expand_path('../..', __dir__))
 # CRuby buffers stdout on a pipe and the run ends with SIGKILL: without this it prints nothing.
 sync = File.join(__dir__, 'sync.rb')
 
 secs = Float(ARGV.shift)
 i = ARGV.index('--')
 only = i ? ARGV[i + 1..] : []
+flags = (i ? ARGV[0...i] : ARGV).select { |a| a == '--whole' || a == '--quick' }
+quick = flags.include?('--quick')
+flags.each { |f| ARGV.delete_at(ARGV.index(f)) }
+i = ARGV.index('--')
 interps = (i ? ARGV[0...i] : ARGV).map { |s| s.split('=', 2) }
 fmt = "%-11s" + " %12s" * interps.size + "\n"
 printf fmt, 'benchmark', *interps.map(&:first)
 cols = Array.new(interps.size) { [] }
 INNER.each do |b, inner|
-  next unless only.empty? || only.include?(b)
+  next unless only.empty? ? !(quick && SLOW.include?(b)) : only.include?(b)
+  limit = SLOW.include?(b) ? [secs, SLOW_SECS].max : secs
   row = interps.map do |name, cmd|
     # cmd is a command line, as documented; the paths this script adds are quoted (a checkout or PERF_HOME with a space)
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    out = IO.popen("LANG=C.UTF-8 timeout -s KILL #{secs} #{cmd} #{"-r#{sync}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} 100000 #{inner} 2>&1", &:read)
+    out = IO.popen("LANG=C.UTF-8 timeout -s KILL #{limit} #{cmd} #{"-r#{sync}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} 100000 #{inner} 2>&1", &:read)
     # The run is meant to end at the deadline, killed (137 from timeout). One that ended by itself with an
     # error - a wrong answer raises - is a failure however many iterations it printed first, and so is one
     # killed before the deadline (the OOM killer, a kill -9 from elsewhere), which is 137 or a signal too.
     st = $?
-    at_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started >= secs - 0.5
+    at_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started >= limit - 0.5
     ended_as_meant = st.exitstatus == 0 || at_deadline && (st.signaled? || st.exitstatus == 137)
     t = out.scan(/runtime: (\d+)us/).flatten.map(&:to_i)
     if t.empty? || !ended_as_meant

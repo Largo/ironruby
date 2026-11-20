@@ -93,14 +93,48 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The value of a local the binding can see, or nil. For a local no source text can
-        /// name - a keyword argument called `alias:` or `if:` is a local named alias or if,
-        /// which Binding#local_variable_get is the only way to read (fluentd's ConfigureProxy
-        /// reads its `alias:` that way). Whether it exists is #local_variables' answer.
+        /// The locals the binding can see, its own (an eval's or a #local_variable_set's) first, newest
+        /// first, then the frame's and the enclosing blocks' - what Kernel#local_variables evaluated
+        /// through the binding says, without compiling anything.
         /// </summary>
-        [RubyMethod("__ir_resolve_local__", RubyMethodAttributes.PrivateInstance)]
-        public static object ResolveLocal(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name) {
-            return self.LocalScope.ResolveLocalVariable(ToIdentifier(toStr, name));
+        [RubyMethod("local_variables")]
+        public static RubyArray/*!*/ GetLocalVariables(Binding/*!*/ self) {
+            return self.LocalScope.GetLocalVariableSymbols();
+        }
+
+        // The slot access of Binding#local_variable_defined?, _get and _set (Src/StdLib/ironruby/ruby4.rb),
+        // which have checked the name already. They read and write the scope rather than evaluating
+        // source text: a name no source text can say - a keyword argument called `alias:` or `if:` is a
+        // local named alias or if, which fluentd's ConfigureProxy reads this way - is a name like any other.
+
+        [RubyMethod("__ir_local_defined__", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsLocalDefined(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name) {
+            object value;
+            return self.LocalScope.TryResolveBindingLocal(ToIdentifier(toStr, name), out value);
+        }
+
+        [RubyMethod("__ir_local_get__", RubyMethodAttributes.PrivateInstance)]
+        public static object GetLocal(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name) {
+            string identifier = ToIdentifier(toStr, name);
+            object value;
+            if (!self.LocalScope.TryResolveBindingLocal(identifier, out value)) {
+                throw RubyExceptions.CreateNameError(
+                    String.Format("local variable '{0}' is not defined for {1}", identifier, toStr.Context.Inspect(self))
+                );
+            }
+            return value;
+        }
+
+        /// <summary>
+        /// A variable the binding can see is assigned where it lives; any other becomes the binding's own,
+        /// seen by later calls and evals through this binding but neither by the frame's compiled code nor
+        /// by another binding of the frame (RubyScope.SetBindingLocal). A second thread writing through the
+        /// same binding meets the scope's lock on its dynamic locals, as an eval through it does.
+        /// </summary>
+        [RubyMethod("__ir_local_set__", RubyMethodAttributes.PrivateInstance)]
+        public static object SetLocal(ConversionStorage<MutableString>/*!*/ toStr, Binding/*!*/ self, object name, object value) {
+            self.LocalScope.SetBindingLocal(ToIdentifier(toStr, name), value);
+            return value;
         }
 
         internal static string/*!*/ ToIdentifier(ConversionStorage<MutableString>/*!*/ toStr, object name) {

@@ -149,6 +149,10 @@ namespace IronRuby.Runtime {
 
         private RareState _rare;
 
+        internal bool HasRareState {
+            get { return _rare != null; }
+        }
+
         internal RareState/*!*/ Rare {
             get { return _rare ?? Interlocked.CompareExchange(ref _rare, new RareState(), null) ?? _rare; }
         }
@@ -164,6 +168,11 @@ namespace IronRuby.Runtime {
 
         private Dictionary<string, object> DynamicLocals {
             get { var r = _rare; return (r != null) ? r.DynamicLocals : null; }
+        }
+
+        // Whether an eval or Binding#local_variable_set has defined a variable in this very scope.
+        internal bool HasDynamicLocals {
+            get { return DynamicLocals != null; }
         }
 
         private List<RubyModule> UsedModules {
@@ -241,6 +250,10 @@ namespace IronRuby.Runtime {
 
         internal RubyScope() {
             // Perf note: Initialization is performed completely in the most derived scope classes to improve perf.
+        }
+
+        internal void ClearSelfImmediateClass() {
+            _selfImmediateClass = null;
         }
 
         // The per-call state of a scope reused for another call of its block, as a new scope has it.
@@ -458,12 +471,18 @@ namespace IronRuby.Runtime {
 
         private IEnumerable<string>/*!*/ GetDeclaredLocalSymbols() {
             // a variable an eval or Binding#local_variable_set introduced is newer than the ones
-            // the scope was compiled with, and MRI lists it first
+            // the scope was compiled with, and MRI lists it first; MRI lists the later of two
+            // such variables first too (each eval and each set extends the binding's env), so
+            // the dictionary, which keeps the order they were added in, is read backwards (see
+            // RubyOps.InitializeEvalScope for the order within one eval)
             if (DynamicLocals != null) {
+                string[] names;
                 lock (DynamicLocals) {
-                    foreach (string name in DynamicLocals.Keys) {
-                        yield return name;
-                    }
+                    names = new string[DynamicLocals.Count];
+                    DynamicLocals.Keys.CopyTo(names, 0);
+                }
+                for (int i = names.Length - 1; i >= 0; i--) {
+                    yield return names[i];
                 }
             }
 
@@ -586,6 +605,54 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Binding#local_variable_get and #local_variable_defined?: <see cref="ResolveLocalVariable"/>, except
+        /// that a binding taken in an isolated proc (Ractor.new's block, a shareable proc) does not see past
+        /// it, as MRI's does not: the locals around the proc are not defined for it.
+        /// </summary>
+        public bool TryResolveBindingLocal(string/*!*/ name, out object value) {
+            RubyScope scope = this;
+            while (true) {
+                if (scope.TryGetLocal(name, out value)) {
+                    return true;
+                }
+
+                if (!scope.InheritsLocalVariables || IsIsolatedProcScope(scope)) {
+                    return false;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
+        /// <summary>
+        /// Binding#local_variable_set: what `name = value` evaluated through the binding does
+        /// (<see cref="ResolveAndSetLocalVariable"/>) - a variable visible from here is assigned where it
+        /// lives, any other is defined in this scope, the binding's own - except that the locals around an
+        /// isolated proc are not visible from a binding taken in it, so a name of one of them is a new
+        /// variable of the binding's rather than a write to them.
+        /// </summary>
+        public void SetBindingLocal(string/*!*/ name, object value) {
+            RubyScope scope = this;
+            while (true) {
+                if (scope.TrySetLocal(name, value)) {
+                    return;
+                }
+
+                if (!scope.InheritsLocalVariables || IsIsolatedProcScope(scope)) {
+                    DefineDynamicVariable(name, value);
+                    return;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
+        private static bool IsIsolatedProcScope(RubyScope/*!*/ scope) {
+            var block = scope as RubyBlockScope;
+            return block != null && block.BlockFlowControl.Proc != null && block.BlockFlowControl.Proc.IsIsolated;
+        }
+
         // Defines the variable as nil unless it is already visible from here.
         internal void DeclareLocalVariable(string/*!*/ name) {
             RubyScope scope = this;
@@ -654,6 +721,14 @@ namespace IronRuby.Runtime {
         /// module, which follows the module as it grows.
         /// </param>
         public void ActivateRefinements(RubyModule/*!*/ module, bool snapshot) {
+            // A binding's own scope (a Binding#dup's, TOPLEVEL_BINDING's) holds only the locals defined through it:
+            // its lexical position is its parent's, so `using' in an eval through it activates there, as MRI's shared
+            // cref does (`eval("using M", TOPLEVEL_BINDING)' refines the main script's code after it).
+            if (Kind == ScopeKind.BindingCopy) {
+                _parent.ActivateRefinements(module, snapshot);
+                return;
+            }
+
             HashSet<RubyModule> refinements = null;
             if (snapshot) {
                 var list = new List<RubyModule>();
@@ -1246,6 +1321,59 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// Where a compiled method body parks the scope of its last call, with the last Procs of its block literals, for the next
+    /// call (RubyOps.TakeParkedScope). Nothing here is part of a scope or a Proc: a method body without a slot, and a call that
+    /// does not get the parked scope, allocate exactly what they did before.
+    /// </summary>
+    public sealed class ParkedScopeSlot {
+        // The parked scope and Procs; taken whole with an atomic exchange, so the call that took it is their only user, and a
+        // recursive call or one on another thread finds none. Spare is an emptied one, for the next call that parks.
+        internal ParkedProcs Parked;
+        internal ParkedProcs Spare;
+
+        // The number of block literals of the body, the name it is defined under.
+        internal int ProcCount;
+        internal readonly string/*!*/ DefinitionName;
+
+        // Set when the body is compiled, if it cannot park at all (a literal that does not reuse its Proc, super, &block...):
+        // the literals' code refers to the slot before the body knows that.
+        internal bool Disabled;
+
+        // Calls in a row whose scope could not be parked (a Proc of it went to an iterator that may keep it, as
+        // `n.upto(m) { }', or the scope was captured): past MaxFailures the body stops trying, for good. Not exact under
+        // threads, and need not be: it only gives up sooner or later.
+        internal int Failures;
+        internal const int MaxFailures = 64;
+
+        public ParkedScopeSlot(string/*!*/ definitionName) {
+            DefinitionName = definitionName;
+        }
+
+        internal bool IsOff {
+            get { return Disabled || Failures > MaxFailures; }
+        }
+    }
+
+    /// <summary>
+    /// A parked method scope with the last Proc of each block literal of its body (by the literal's index), and the thread of
+    /// the call that parked them. Owned by one call at a time (see ParkedScopeSlot).
+    /// </summary>
+    public sealed class ParkedProcs {
+        internal RubyMethodScope Scope;
+        internal readonly Proc[]/*!*/ Procs;
+        internal int ThreadId;
+
+        internal ParkedProcs(int count) {
+            Procs = new Proc[count];
+        }
+
+        internal void Clear() {
+            Scope = null;
+            Array.Clear(Procs, 0, Procs.Length);
+        }
+    }
+
+    /// <summary>
     /// What a light-frame method's scope is made of that is the same on every call of one compilation:
     /// its locals' names, its parameter count and signature flags, and the name it was defined under.
     /// </summary>
@@ -1264,7 +1392,8 @@ namespace IronRuby.Runtime {
     public sealed class RubyMethodScope : RubyClosureScope {
         private readonly RubyModule/*!*/ _declaringModule;
         private readonly string/*!*/ _definitionName;
-        private readonly Proc _blockParameter;
+        // (not readonly: a parked scope is the scope of another call, see Reinitialize)
+        private Proc _blockParameter;
 
         // Lowest 2 bits are flags:
         internal const int HasBlockFlag = 1;
@@ -1397,6 +1526,41 @@ namespace IronRuby.Runtime {
 
             InitializeRfc(blockParameter);
         }
+
+        #region Parked scopes (RubyOps.CreateMethodScopeParked)
+
+        // The state of the call a parked scope belonged to, dropped (RubyOps.ParkMethodScope).
+        internal void ClearCallState() {
+            _locals = null;
+            _selfObject = null;
+            _blockParameter = null;
+            _calleeName = null;
+            CurrentMatch = null;
+            LastInputLine = null;
+            InterpretedFrame = null;
+            _activeFlowControlScope = null;
+            // (a singleton class holds its object)
+            ClearSelfImmediateClass();
+        }
+
+        /// <summary>
+        /// A parked scope made the scope of another call of its method, as a new one would be: the light frame's constructor
+        /// (rfc non-null) or the other one.
+        /// </summary>
+        internal void Reinitialize(MutableTuple locals, object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame,
+            RuntimeFlowControl rfc, string calleeName) {
+            ResetForReuse(locals, selfObject, interpretedFrame);
+            _blockParameter = blockParameter;
+            _calleeName = calleeName;
+            if (rfc != null) {
+                _activeFlowControlScope = rfc.IsActiveMethod ? rfc : this;
+            } else {
+                _activeFlowControlScope = this;
+                InitializeRfc(blockParameter);
+            }
+        }
+
+        #endregion
 
 #if DEBUG
         // The debug name is built on demand: composing it in the constructor put a string
@@ -1729,7 +1893,12 @@ namespace IronRuby.Runtime {
             if (isMain) {
                 context.MainGlobalScope = rubyGlobalScope;
                 scope.SetDebugName("top-main");
-                context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
+                // MRI's TOPLEVEL_BINDING keeps the locals an eval or a local_variable_set defines through
+                // it to itself, as any other binding does: the main script does not see them.
+                var toplevelBinding = Binding.Create(scope, scope.SelfObject);
+                toplevelBinding.SourcePath = "<main>";
+                toplevelBinding.SourceLine = 0;
+                context.ObjectClass.SetConstant("TOPLEVEL_BINDING", toplevelBinding);
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
                     // a warm-start worker loaded these into this very scope ahead of time

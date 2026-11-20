@@ -52,6 +52,90 @@ end
 def tag_of(v) = v % TAG
 def seq_of(v) = v / TAG
 
+# Promotion (RubyInstanceData, "Float locations"): a typed Float store that overwrites a Float moves
+# the object to the raw twin of its shape, and its class's later instances are born raw. Each round
+# makes a fresh class (so its objects start plain) with a pool of objects; half the threads promote
+# them (`o.a = o.a + 1.0', `@b = d * 1.0' in specialized methods), store an Integer or nil now and
+# then, and add and remove variables of their own, while the other half read them every way there
+# is - `@a' in a method, the attr_reader, instance_variable_get, instance_variables with each value,
+# dup, Marshal - and check the class of every value: only what a thread stores (Float, Integer,
+# nil), never a FloatLocation or anything else. It runs first: the parts after it fill the shape
+# tree, and a full tree has no raw twins to promote to.
+class PBase
+  attr_accessor :a
+  def initialize = (@a = 0.5; @b = 1.5)
+  def ga = @a
+  def gb = @b
+  def setb(d) = (@b = d * 1.0)
+end
+def p_upd(o) = (o.a = o.a + 1.0)
+PKINDS = [Float, Integer, NilClass]
+pwarm = Class.new(PBase)
+300.times { o = pwarm.new; p_upd(o); p_upd(o); o.setb(2.5); o.setb(3.5); o.ga; o.gb }
+# IronRuby's count of promotions (0 elsewhere, and on a build without it)
+def promotions
+  return 0 unless defined?(System::Type)
+  prop = System::Type.get_type('IronRuby.Runtime.RubyInstanceData, IronRuby').get_property('Promotions')
+  prop ? prop.get_value(nil, nil) : 0
+end
+promoted_before = promotions
+prounds = [ITERS / 2000, 5].max
+prounds.times do |round|
+  cls = Object.const_set(:"PRound#{round}", Class.new(PBase))      # named: Marshal dumps them
+  pool = Array.new(64) { cls.new }
+  stop = false
+  writers = (0...THREADS / 2).map do |t|
+    Thread.new do
+      i = 0
+      until stop && i > 2000
+        o = pool[(i * 7 + t) % pool.size]
+        begin
+          case i % 53
+          when 0 then o.instance_variable_set(:@a, i)
+          when 1 then o.instance_variable_set(:@b, nil)
+          when 2 then o.a = 0.25
+          when 3 then o.setb(0.5)
+          else
+            p_upd(o) if o.a.is_a?(Float)
+            o.setb(i * 0.5)
+          end
+          if i % 11 == 0
+            name = :"@w#{t}_#{i % 3}"
+            o.instance_variable_set(name, i)
+            o.remove_instance_variable(name) if i.odd?
+          end
+        rescue NoMethodError, TypeError, NameError
+          # a racing Integer/nil store or a racing remove: only the values read are checked
+        end
+        i += 1
+      end
+    end
+  end
+  readers = (THREADS / 2...THREADS).map do |t|
+    Thread.new do
+      2000.times do |i|
+        o = pool[(i * 5 + t) % pool.size]
+        vals = case i % 6
+               when 0 then [o.ga, o.gb]
+               when 1 then [o.a]
+               when 2 then [o.instance_variable_get(:@a), o.instance_variable_get(:@b)]
+               when 3 then o.instance_variables.map { |n| o.instance_variable_get(n) }
+               when 4 then d = o.dup; [d.ga, d.gb, d.a]
+               else m = Marshal.load(Marshal.dump(o)); [m.ga, m.gb]
+               end
+        vals.each do |v|
+          record.("promotion round #{round}: read a #{v.class}: #{v.inspect}") unless PKINDS.any? { |k| k === v }
+        end
+      end
+    end
+  end
+  readers.each(&:join)
+  stop = true
+  writers.each(&:join)
+end
+$stderr.puts "promotions during the promotion part: #{promotions - promoted_before}" if ENV['IVAR_STRESS_VERBOSE']
+
+
 readers = objects.map do |obj|
   if obj.is_a?(Shared)
     [->(t) { obj.__send__(:"r#{t}") }, ->(t, v) { obj.__send__(:"w#{t}", v) }]
@@ -172,6 +256,92 @@ end
 writers.each(&:join)
 running = false
 movers.each(&:join)
+
+# Floats stored raw (RubyInstanceData, "Float locations"): thread t owns @f<t> of one shared
+# object and `x' of one shared body, and writes them through typed code that stores raw - a
+# hot method's `@f<t> = d * 1.0', an outlined Array#each's `b.x = b.x + 64.0' (attr_accessor) -
+# with values tagged t, flipping them now and then to an Integer of the same value (a generic
+# store that replaces the location) and back, while the other threads read all of them raw
+# (`@f<u> + 0.0', `b.x * 1.0' in typed code) and boxed (`@f<u>', instance_variable_get) and add
+# and remove variables of their own on the same objects (moves). Every value read must be
+# tagged with its variable's owner and never go backwards for one reader; at the end each
+# variable holds what its owner wrote last.
+class FShared
+end
+THREADS.times do |t|
+  FShared.class_eval <<-RUBY
+    def fw#{t}(d) = (@f#{t} = d * 1.0)
+    def fr#{t} = @f#{t} + 0.0
+    def fg#{t} = @f#{t}
+  RUBY
+end
+class FBody
+  attr_accessor :x
+  def initialize(x) = (@x = x)
+end
+def fbody_step(list) = list.each { |b| b.x = b.x + 64.0 }
+def fbody_read(list) = list.map { |b| b.x * 1.0 }
+
+fs = FShared.new
+fbodies = Array.new(THREADS) { |t| FBody.new(t.to_f) }
+THREADS.times { |t| 100.times { |i| fs.__send__(:"fw#{t}", (i * TAG + t).to_f); fs.__send__(:"fr#{t}"); fs.__send__(:"fg#{t}") } }
+# back to the first value its owner will write: a reader that saw a warm-up value would otherwise take
+# the owner's first writes for a variable going backwards
+THREADS.times { |t| fs.__send__(:"fw#{t}", t.to_f) }
+fwarm = Array.new(8) { FBody.new(0.0) }
+300.times { fbody_step(fwarm); fbody_read(fwarm) }
+flast = Array.new(THREADS)
+fthreads = THREADS.times.map do |t|
+  Thread.new do
+    w = :"fw#{t}"
+    mine = [fbodies[t]] * 8
+    seen = Array.new(THREADS, -1)
+    bseen = Array.new(THREADS, -1)
+    n = 0
+    ITERS.times do |i|
+      v = i * TAG + t
+      if i % 97 == 0
+        fs.instance_variable_set(:"@f#{t}", v)                       # an Integer: the location dies
+        fbodies[t].x = fbodies[t].x.to_i                             # same value, an Integer
+      else
+        fs.__send__(w, v.to_f)
+      end
+      fbody_step(mine) if i % 5 == 0
+      got = fs.__send__(:"fg#{t}")
+      record.("own @f#{t} read back #{got.inspect}, wrote #{v}") unless got == v
+      u = i % THREADS
+      x = (i.even? ? fs.__send__(:"fr#{u}") : fs.instance_variable_get(:"@f#{u}"))
+      if x
+        k = x.to_i
+        record.("@f#{u} read #{x.inspect}: not tagged #{u}") unless k % TAG == u && x == k
+        record.("@f#{u} went back from #{seen[u]} to #{k}") if k < seen[u]
+        seen[u] = k if k > seen[u]
+      end
+      fbody_read(fbodies).each_with_index do |bx, b|
+        k = bx.to_i
+        record.("body #{b} x #{bx.inspect}: not tagged #{b}") unless k % TAG == b && bx == k
+        record.("body #{b} x went back from #{bseen[b]} to #{k}") if k < bseen[b]
+        bseen[b] = k if k > bseen[b]
+      end
+      if i % 7 == 0
+        name = :"@g#{t}_#{n % 5}"
+        fs.instance_variable_set(name, i)
+        fbodies[(t + 1) % THREADS].instance_variable_set(name, i)
+        if n.odd?
+          fs.remove_instance_variable(name)
+          fbodies[(t + 1) % THREADS].remove_instance_variable(name)
+        end
+        n += 1
+      end
+    end
+    flast[t] = [fs.__send__(:"fg#{t}"), fbodies[t].x]
+  end
+end
+fthreads.each(&:join)
+THREADS.times do |t|
+  got = [fs.instance_variable_get(:"@f#{t}"), fbodies[t].x]
+  record.("final @f#{t}/x of body #{t} #{got.inspect}, owner last read #{flast[t].inspect}") unless got == flast[t]
+end
 
 if failures.empty?
   puts "OK (#{THREADS} threads x #{ITERS} iterations, #{objects.size} shared objects)"

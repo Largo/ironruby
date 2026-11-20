@@ -280,6 +280,26 @@ namespace IronRuby.Runtime {
         [Emitted]
         public int ConstantAccessVersion = 1;
 
+        /// <summary>
+        /// A constant was set, removed or may resolve differently: the constant caches, the typed bodies
+        /// and the outlined loops that folded one find out by ConstantAccessVersion, on their next entry.
+        /// </summary>
+        internal void ConstantsChanged() {
+            ConstantAccessVersion++;
+        }
+
+        /// <summary>
+        /// An existing constant was assigned again or removed: the one change to constants that a running
+        /// compiled loop which folded the constant must see at its next iteration, as CRuby's next read does.
+        /// A new constant, a mixin, an autoload starting or ending move ConstantAccessVersion only
+        /// (ConstantsChanged): no loop has folded what they change, and moving the code epoch for them made
+        /// every running loop in the process hand itself back.
+        /// </summary>
+        internal void ConstantReassigned() {
+            ConstantAccessVersion++;
+            RubyUtils.InvalidateCompiledCode();
+        }
+
         // Number of autoloads running anywhere in this runtime. While one is in flight the
         // answer a constant site gets depends on which thread is asking -- the thread running
         // the file sees the constant as undefined and every other thread does not -- so the
@@ -292,12 +312,12 @@ namespace IronRuby.Runtime {
 
         public void EnterAutoload() {
             System.Threading.Interlocked.Increment(ref _autoloadsInProgress);
-            ConstantAccessVersion++;
+            ConstantsChanged();
         }
 
         public void LeaveAutoload() {
             System.Threading.Interlocked.Decrement(ref _autoloadsInProgress);
-            ConstantAccessVersion++;
+            ConstantsChanged();
         }
 
         // Set when the runtime starts its first non-main Ractor, and never cleared: from then on
@@ -318,7 +338,7 @@ namespace IronRuby.Runtime {
             if (!_ractorsStarted) {
                 using (ClassHierarchyLocker()) {
                     _ractorsStarted = true;
-                    ConstantAccessVersion++;
+                    ConstantsChanged();
                 }
             }
         }
@@ -1170,7 +1190,7 @@ namespace IronRuby.Runtime {
                 // and constant sites keep their answer per constant version) - its namespaces are
                 // loaded even if its extension methods can't be read.
                 using (ClassHierarchyLocker()) {
-                    ConstantAccessVersion++;
+                    ConstantsChanged();
                 }
             }
         }

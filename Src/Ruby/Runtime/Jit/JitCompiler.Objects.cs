@@ -106,6 +106,15 @@ namespace IronRuby.Runtime.Jit {
                 _other.Add(Key(node));
                 return true;
             }
+
+            // An iterator's literal block, which an outlined loop may run in place (JitCompiler.Nest.cs):
+            // what its body reads is read in the loop.
+            public override void Exit(MethodCall/*!*/ node) {
+                var block = node.Block as BlockDefinition;
+                if (block != null) {
+                    foreach (var statement in block.Body) { statement.Walk(this); }
+                }
+            }
         }
 
         /// <summary>
@@ -144,79 +153,33 @@ namespace IronRuby.Runtime.Jit {
         // the module the last constant ResolveConstant resolved was found in
         private RubyModule _resolvedConstantOwner;
 
+        // What the body folded, with what its inlined and directly called bodies folded (EmitDirectCall), in
+        // the order the compiler resolved them: what the entry looks up again when the constant version has
+        // moved (JitFoldedConstant.StillHolds).
+        private List<JitFoldedConstant> _foldedConstants;
+
         /// <summary>
-        /// What the constant resolves to right now, the way the generic code resolves it, or a bailout
-        /// wherever that would not be a value the constant version alone keeps valid: no scope to
-        /// resolve in, an autoload pending or running, a deprecated or private constant, a missing
-        /// one, or a scope lexically inside an object's singleton class (whose generic sites do not
-        /// cache either).
+        /// What the constant resolves to right now (JitFoldedConstant.Resolve), or a bailout wherever that would
+        /// not be a value the constant version alone keeps valid. Every constant it answers is recorded, for
+        /// the entry to look up again the same way.
         /// </summary>
         private object ResolveConstant(ConstantVariable/*!*/ node) {
             var scope = _constantScope;
             if (scope == null) { throw Bail("constant without a scope: " + node.Name); }
-            string name = node.Name;
             object value;
-            if (node.Qualifier != null) {
-                var qualifier = node.Qualifier as ConstantVariable;
-                if (qualifier == null) { throw Bail("constant qualified by an expression: " + name); }
-                var module = ResolveConstant(qualifier) as RubyModule;
-                if (module == null) { throw Bail("constant qualified by a non-module: " + name); }
-                using (_context.ClassHierarchyLocker()) {
-                    RequireCacheableConstants(scope);
-                    ConstantStorage storage;
-                    // `A::B' finds B in A and A's ancestors; the generic code goes on to Object's for a
-                    // module A, and raises for a private B: both are left to it
-                    if (!module.TryResolveConstantNoLock(null, name, out storage) || module.IsPrivateConstantInAncestors(name)) {
-                        throw Bail("qualified constant not found: " + name);
-                    }
-                    RequireNotDeprecated(module.GetConstantOwnerNoLock(name), name);
-                    _resolvedConstantOwner = module.GetConstantOwnerNoLock(name) ?? module;
-                    value = storage.Value;
-                }
-            } else {
-                using (_context.ClassHierarchyLocker()) {
-                    RequireCacheableConstants(scope);
-                    ConstantStorage storage;
-                    if (node.IsGlobal) {
-                        var obj = _context.ObjectClass;
-                        if (!obj.TryResolveConstantNoLock(null, name, out storage) || obj.IsPrivateConstant(name)) {
-                            throw Bail("constant not found: ::" + name);
-                        }
-                        RequireNotDeprecated(obj.GetConstantOwnerNoLock(name), name);
-                        _resolvedConstantOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
-                    } else {
-                        RubyModule owner;
-                        if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
-                            throw Bail("constant not found: " + name);
-                        }
-                        // the owner is only reported once some constant has been deprecated
-                        RequireNotDeprecated(owner, name);
-                        _resolvedConstantOwner = owner;
-                    }
-                    value = storage.Value;
-                }
-            }
-            // an autoload not yet run resolves to no value here; nil is not worth telling apart from it
-            if (value == null || value is RubyModule.AutoloadedConstant) { throw Bail("constant without a value: " + name); }
+            RubyModule owner;
+            string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner);
+            if (failure != null) { throw Bail(failure); }
+            _resolvedConstantOwner = owner;
+            (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
             _usesConstants = true;
             return value;
         }
 
-        /// <summary>A deprecated constant warns on every read, which the generic code does.</summary>
-        private void RequireNotDeprecated(RubyModule owner, string/*!*/ name) {
-            if (_context.HasDeprecatedConstants && (owner == null || owner.GetDeprecatedConstantOwnerNoLock(name) != null)) {
-                throw Bail("deprecated constant " + name);
-            }
-        }
-
-        private void RequireCacheableConstants(RubyScope/*!*/ scope) {
-            if (_context.IsAutoloadInProgress) { throw Bail("autoload in progress"); }
-            for (RubyScope s = scope; s != null; s = s.Parent) {
-                var cls = s.Module as RubyClass;
-                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
-                    throw Bail("constant lexically in an object's singleton class");
-                }
-            }
+        /// <summary>Takes over what a body this one calls directly folded (EmitDirectCall).</summary>
+        private void TakeFoldedConstants(JitCode/*!*/ code) {
+            if (code.FoldedConstants == null) { return; }
+            (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).AddRange(code.FoldedConstants);
         }
 
         // ---- case/when -----------------------------------------------------------------------
@@ -322,7 +285,7 @@ namespace IronRuby.Runtime.Jit {
                 var module = value as RubyModule;
                 if (module != null) { return EmitModuleTest(module, subject); }
                 if (value is int) { return EmitFixnumTest((int)value, subject); }
-                throw Bail("when of a constant holding a " + value.GetType().Name);
+                throw Bail("when of a constant holding " + ((value == null) ? "nil" : "a " + value.GetType().Name));
             }
 
             var literal = expr as Literal;
@@ -606,6 +569,94 @@ namespace IronRuby.Runtime.Jit {
             _construction = true;
             type = JT.Obj;
             return Ast.Call(JitRuntime.M("Construct" + argc), callArgs);
+        }
+
+        // ---- Array.new(n, v) ----------------------------------------------------------------
+        // `@storage = Array.new(size)' in som.rb's Vector#initialize, `flags = Array.new(5000, true)' in
+        // Sieve: unlike any other construction, Array.new with the built-in new and Array#initialize and an
+        // Integer size runs no Ruby code - it allocates an Array that nothing can see until the body stores
+        // or returns it. So it is an ordinary operation of the typed body, anywhere in it: a deopt after it
+        // runs the generic body, which allocates another one, and the first is garbage. Method bodies only
+        // (EmitCall): an outlined loop takes no construction at all.
+
+        /// <summary>
+        /// `Array.new', `Array.new(n)', `Array.new(n, v)' or the same of `::Array': no block, no splat,
+        /// no keywords. Whether Array is the Array class and its new the built-in one is the emitter's
+        /// question (EmitArrayConstruction); the screen (JitScreen.WalkCall) takes the shape.
+        /// </summary>
+        internal static bool IsArrayConstruction(MethodCall/*!*/ node) {
+            if (node.MethodName != "new" || node.Block != null) { return false; }
+            var target = node.Target as ConstantVariable;
+            if (target == null || target.Name != "Array" || target.Qualifier != null) { return false; }
+            var args = node.Arguments;
+            if (args != null) {
+                if (args.Expressions.Length > 2) { return false; }
+                foreach (var arg in args.Expressions) {
+                    if (arg is SplattedArgument || arg is HashConstructor) { return false; }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// `Array.new(n, v)' where Array resolves to the Array class (under the constant guard), its new is
+        /// Class#new as EmitConstruction requires, and Array#initialize the library one (under the entry's
+        /// global method version guard): the Array made directly (JitRuntime.NewArray*). The size is an Int, a
+        /// Lng or an object that has to be a boxed Int32 at run time; a Float size is the generic code's (CRuby
+        /// converts a non-Integer with to_int, a call). A size the compiler cannot see to be in range deopts
+        /// when it is not, and the generic body raises ArgumentError, or converts, as CRuby does. The value is stored in every slot, boxed
+        /// as an element store boxes it. Not an effect: nothing can see the Array before the body uses it.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitArrayConstruction(MethodCall/*!*/ node, out JT type) {
+            var arrayClass = ArrayClass;
+            if (!ReferenceEquals(ResolveConstant((ConstantVariable)node.Target), arrayClass)) {
+                throw Bail("Array.new of a constant Array that is not the Array class");
+            }
+            var meta = JitRuntime.ClassOf(_context, arrayClass);
+            var refined = meta.ResolveMethod("new", VisibilityContext.AllVisible, _refinements);
+            MethodResolutionResult resolved;
+            using (_context.ClassHierarchyLocker()) {
+                resolved = meta.ResolveMethodForSiteNoLock("new", VisibilityContext.AllVisible);
+            }
+            var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
+            if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
+                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                throw Bail("Array.new is not Class#new");
+            }
+            // a Ruby initialize (or one from a module) is called by the generic new: Ruby code
+            if (!IsBuiltinMethod(arrayClass, "initialize")) { throw Bail("Array#initialize is not the built-in one"); }
+
+            type = JT.Obj;
+            var args = node.Arguments;
+            int argc = (args == null) ? 0 : args.Expressions.Length;
+            if (argc == 0) { return Ast.Call(JitRuntime.M("NewArray")); }
+
+            JT st;
+            var size = Emit(args.Expressions[0], out st);
+            if (st != JT.Int && st != JT.Lng && st != JT.Obj) { throw Bail("Array.new of a " + st + " size"); }
+            MSA.Expression value;
+            if (argc == 2) {
+                JT vt;
+                var v = Emit(args.Expressions[1], out vt);
+                value = BoxForStore(v, vt);
+            } else {
+                value = Ast.Constant(null, typeof(object));
+            }
+            var literal = size as MSA.ConstantExpression;
+            if (literal != null) {
+                // a literal (or folded constant) Lng is beyond an Int32, so beyond MaxArraySize: always a deopt
+                long n = (st == JT.Int) ? (int)literal.Value : (st == JT.Lng) ? (long)literal.Value : -1;
+                if (n < 0 || n > JitRuntime.MaxArraySize) { throw Bail("Array.new of a size out of range: " + literal.Value); }
+                return Ast.Call(JitRuntime.M("NewArrayOfSize"), Ast.Constant((int)n), value);
+            }
+            _canDeopt = true;
+            switch (st) {
+                case JT.Int: return Ast.Call(JitRuntime.M("NewArrayOfCheckedSize"), size, value);
+                case JT.Lng: return Ast.Call(JitRuntime.M("NewArrayOfLongSize"), size, value);
+                // An object size is taken only as a boxed Int32: an Integer that is an Int64 or a BigInteger, nil, a
+                // Float, a String or an object with to_int deopts, and the generic body converts or raises as CRuby does.
+                default: return Ast.Call(JitRuntime.M("NewArrayOfObjectSize"), size, value);
+            }
         }
 
         /// <summary>`v == "lit"' or `v != "lit"', the literal a plain (not interpolated) String literal.</summary>
@@ -905,7 +956,7 @@ namespace IronRuby.Runtime.Jit {
             if (other == JT.Dbl) {
                 // the receiver may be either: Integer#op(Float) and Float#op both have to be the library ones
                 if (leftObject) { RequireBuiltin(JT.Int, op); }
-                number = Ast.Call(JitRuntime.M("SpeculateDouble"), leftObject ? l : r);
+                number = GuardIVarRead("SpeculateDouble", leftObject ? l : r);
                 numberType = JT.Dbl;
             } else {
                 number = Ast.Call(JitRuntime.M("SpeculateLong"), leftObject ? l : r);
@@ -984,6 +1035,8 @@ namespace IronRuby.Runtime.Jit {
             internal object LoopSelf;
             // The loop is a core iterator's, whose entry allocates nothing (BlockLoopSite.Run), however short its run.
             internal bool LongRuns;
+            // -X:JITResume: the body may fall back to an attribute operation's call after its first effect (JitResume.cs).
+            internal JitResumeInfo Resume;
         }
 
         /// <summary>The CLR type a ReceiverHints entry has once two different ones were seen.</summary>
@@ -1007,6 +1060,13 @@ namespace IronRuby.Runtime.Jit {
                 object sample = (_hints != null) ? _hints.SelfSample : null;
                 object value;
                 if (sample == null || !_context.TryGetInstanceVariable(sample, ivar.Name, out value)) { return null; }
+                if (IsFalsy(value) && IsTruthGuarded(ivar.Name)) { return null; }
+                return (value == null) ? typeof(void) : value.GetType();
+            }
+            var constant = receiver as ConstantVariable;
+            if (constant != null) {
+                // the value the constant has now, which the constant version guard keeps (EmitConstant)
+                object value = ResolveConstant(constant);
                 return (value == null) ? typeof(void) : value.GetType();
             }
             var local = receiver as LocalVariable;
@@ -1016,11 +1076,58 @@ namespace IronRuby.Runtime.Jit {
                 var peek = _peekLocal(local);
                 if (!peek.HasValue) { return null; }
                 object value = peek.Value.Value;
+                if (IsFalsy(value) && IsTruthGuarded(TruthGuardKey(local))) { return null; }
                 return (value == null) ? typeof(void) : value.GetType();
             }
             if (_hints == null || _hints.Parameters == null || local.DefinitionLexicalDepth != _scopeDepth) { return null; }
             int i = Array.IndexOf(_paramNames, local.Name);
-            return (i >= 0 && i < _hints.Parameters.Length) ? _hints.Parameters[i] : null;
+            Type observed = (i >= 0 && i < _hints.Parameters.Length) ? _hints.Parameters[i] : null;
+            if (observed == typeof(void) && IsTruthGuarded(TruthGuardKey(local))) { return null; }
+            return observed;
+        }
+
+        // ---- the truth of a variable as a branch's whole condition ---------------------------
+        // `if @storage; @storage = Array.new(@storage.size); end' (som.rb's Vector#remove_all) on a fresh
+        // Vector, whose @storage is nil: the profile saw nil, and RequireCollectionReceiver refused `size on a
+        // nil' - but inside the branch the variable's own truth selects, a nil (or false) the profile saw says
+        // only that the branch was not taken then, nothing of what the variable holds there. So ObservedType
+        // answers "unknown" for it. That cannot change what a body computes: ObservedType is a hint, and a
+        // receiver that turns out to be anything else is the helper's business (it deopts). Only a plain
+        // instance variable or local read as the whole condition (if, elsif, ?:, unless ... else, &&).
+
+        // the keys (TruthGuardKey) of the variables whose truth selected the branch being emitted
+        private List<string> _truthGuards;
+
+        /// <summary>The key of a condition that is a plain variable read, or null.</summary>
+        private static string TruthGuardKey(RExpr/*!*/ condition) {
+            var ivar = condition as InstanceVariable;
+            if (ivar != null) { return ivar.Name; }
+            var local = condition as LocalVariable;
+            if (local != null) { return local.Name + "#" + local.DefinitionLexicalDepth; }
+            return null;
+        }
+
+        private static bool IsFalsy(object value) {
+            return value == null || value is bool && !(bool)value;
+        }
+
+        private bool IsTruthGuarded(string/*!*/ key) {
+            return _truthGuards != null && _truthGuards.Contains(key);
+        }
+
+        /// <summary>Enters the branch the truth of <paramref name="condition"/> selects; the count to pass to PopTruthGuard.</summary>
+        private int PushTruthGuard(RExpr/*!*/ condition) {
+            int mark = (_truthGuards == null) ? 0 : _truthGuards.Count;
+            string key = TruthGuardKey(condition);
+            if (key != null) {
+                if (_truthGuards == null) { _truthGuards = new List<string>(); }
+                _truthGuards.Add(key);
+            }
+            return mark;
+        }
+
+        private void PopTruthGuard(int mark) {
+            if (_truthGuards != null && _truthGuards.Count > mark) { _truthGuards.RemoveRange(mark, _truthGuards.Count - mark); }
         }
 
         /// <summary>
@@ -1077,6 +1184,17 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Lng: helper = "IndexLong"; break;
                 case JT.Obj: helper = "IndexObj"; break;
                 default: throw Bail("[] with a " + indexType + " index");
+            }
+            if (indexType != JT.Obj && ObservedType(receiver) == typeof(MutableString)) {
+                // `@input[@index]' on a receiver the profile saw hold a String (Json's `read'): String#[] with an
+                // Integer (JitRuntime.StringIndex); a receiver that is not a plain String deopts.
+                var stringClass = KindClass(JitRuntime.KindString);
+                if (!IsPlainLibraryMethod(stringClass, "[]") || !IsPublic(stringClass, "[]")) {
+                    throw Bail("String#[] is not the built-in one");
+                }
+                _canDeopt = true;
+                type = JT.Obj;
+                return Ast.Call(JitRuntime.M("StringIndex"), recv, Ast.Convert(index, typeof(long)));
             }
             bool arrays, hashes;
             RequireElementMethod("[]", "default", out arrays, out hashes);
@@ -1147,6 +1265,17 @@ namespace IronRuby.Runtime.Jit {
 
             string name = node.MethodName;
             if (args.Length == 0) {
+                if (name != "empty?" && ObservedType(node.Target) == typeof(MutableString)) {
+                    // `s.size', `s.length' on a parameter or instance variable the profile saw hold a String
+                    // (Json's `s.size', `@input.length'): String#length, the characters in the String's
+                    // encoding (JitRuntime.StringLength); a receiver that is not a plain String deopts.
+                    var stringClass = KindClass(JitRuntime.KindString);
+                    if (!IsPlainLibraryMethod(stringClass, name) || !IsPublic(stringClass, name)) {
+                        throw Bail("String#" + name + " is not the built-in one");
+                    }
+                    type = JT.Int;
+                    return Ast.Call(JitRuntime.M("StringLength"), recv);
+                }
                 bool arrays, hashes;
                 RequireElementMethod(name, null, out arrays, out hashes);
                 RequireCollectionReceiver(node.Target, arrays, hashes, name);
@@ -1413,8 +1542,9 @@ namespace IronRuby.Runtime.Jit {
         /// element store does, so the iteration stays restartable; one the writer would make by
         /// adding the variable or raising deopts before it is made. The value is v.
         /// </summary>
-        private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
-            if (_loop == null) { return EmitMethodAttrWrite(node, op, right, out type); }
+        private MSA.Expression/*!*/ EmitAttributeWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, SimpleAssignmentExpression assignment,
+            out JT type) {
+            if (_loop == null) { return EmitMethodAttrWrite(node, op, right, assignment, out type); }
             var receiverLocal = node.Qualifier as LocalVariable;
             if (op != null || node.IsSafeNavigation || receiverLocal == null) {
                 throw Bail("attribute assignment " + node.Name);
@@ -1460,8 +1590,12 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(ClrType(valueType), new[] { receiver, valueTemp },
                 Ast.Assign(receiver, Ast.Convert(written ? (MSA.Expression)bound : peek.Value.Key, typeof(object))),
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteSelfAttr"), receiver, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
+                (valueType == JT.Dbl)
+                    // a Float stored raw (RubyInstanceData, "Float locations")
+                    ? Ast.Call(JitRuntime.M("WriteSelfAttrDouble"), receiver, valueTemp,
+                        Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog)
+                    : Ast.Call(JitRuntime.M("WriteSelfAttr"), receiver, BoxForStore(valueTemp, valueType),
+                        Ast.Constant(new JitRuntime.SelfAttrSite(name, variableName, true, true)), _undoLog),
                 valueTemp
             );
         }
@@ -1625,6 +1759,13 @@ namespace IronRuby.Runtime.Jit {
                 JT rt;
                 receiver = Coerce(Emit(target, out rt), rt, JT.Obj);
             }
+            // -X:JITResume: after the first effect the read guards itself and falls back to the call, and its value is an
+            // object - the guarded unboxing below would be a deopt (JitCompiler.Resume.cs). (Kernel#block_given?'s light
+            // site answers for the frame, which the fallback has no answer for.)
+            if (CanFallBack(target) && node.MethodName != "block_given?") {
+                type = JT.Obj;
+                return EmitFallbackRead(node, receiver, variableName);
+            }
             _canDeopt = true;
             MSA.Expression read = Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), receiver,
                 Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, variableName, explicitReceiver)));
@@ -1633,7 +1774,7 @@ namespace IronRuby.Runtime.Jit {
             string guard = (value is int) ? "GuardInt" : (value is long) ? "GuardLong" : (value is double) ? "GuardDouble" : null;
             if (guard == null) { type = JT.Obj; return read; }
             type = (value is int) ? JT.Int : (value is long) ? JT.Lng : JT.Dbl;
-            return Ast.Call(JitRuntime.M(guard), read);
+            return GuardIVarRead(guard, read);
         }
 
         /// <summary>
@@ -1643,7 +1784,8 @@ namespace IronRuby.Runtime.Jit {
         /// from the real call. The store is observable, so nothing emitted after it may deopt
         /// (_deoptAfterEffect). `self.x = v' may call a private writer. The value is v.
         /// </summary>
-        private MSA.Expression/*!*/ EmitMethodAttrWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, out JT type) {
+        private MSA.Expression/*!*/ EmitMethodAttrWrite(AttributeAccess/*!*/ node, string op, RExpr/*!*/ right, SimpleAssignmentExpression assignment,
+            out JT type) {
             if (op != null || node.IsSafeNavigation || !_refinements.IsEmpty) { throw Bail("attribute assignment " + node.Name); }
             var target = node.Qualifier;
             object sample;
@@ -1663,6 +1805,21 @@ namespace IronRuby.Runtime.Jit {
             if (valueType == JT.Never || valueType == JT.None) { throw Bail("attribute assignment of a value that jumps away"); }
             var receiverTemp = Ast.Variable(typeof(object), "#receiver");
             var valueTemp = Ast.Variable(ClrType(valueType), "#value");
+            // -X:JITResume: after the first effect - which may be in the operands, emitted above - the store guards itself
+            // and falls back to the call, on the operands already evaluated (JitCompiler.Resume.cs). Its value is v.
+            if (CanFallBack(target) && assignment != null) {
+                var boxed = Ast.Variable(typeof(object), "#boxed");
+                _ivarWrite = true;
+                _effectNotOnSelf = true;
+                type = valueType;
+                return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp, boxed },
+                    Ast.Assign(receiverTemp, receiver),
+                    Ast.Assign(valueTemp, value),
+                    Ast.Assign(boxed, BoxForStore(valueTemp, valueType)),
+                    EmitFallbackWrite(assignment, node.Name, receiverTemp, boxed, variableName),
+                    valueTemp
+                );
+            }
             _canDeopt = true;
             _pure = false;
             _ivarWrite = true;
@@ -1671,8 +1828,12 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(ClrType(valueType), new[] { receiverTemp, valueTemp },
                 Ast.Assign(receiverTemp, receiver),
                 Ast.Assign(valueTemp, value),
-                Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
-                    Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
+                (valueType == JT.Dbl)
+                    // a Float stored raw (RubyInstanceData, "Float locations")
+                    ? Ast.Call(JitRuntime.M("WriteAttrDouble"), Ast.Constant(_context), receiverTemp, valueTemp,
+                        Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true)))
+                    : Ast.Call(JitRuntime.M("WriteAttr"), Ast.Constant(_context), receiverTemp, BoxForStore(valueTemp, valueType),
+                        Ast.Constant(new JitRuntime.SelfAttrSite(node.Name, variableName, explicitReceiver, true))),
                 valueTemp
             );
         }
@@ -1980,6 +2141,123 @@ namespace IronRuby.Runtime.Jit {
                 Ast.Call(JitRuntime.M("ArrayStore"), array.Key, indexTemp, BoxForStore(valueTemp, valueType), _undoLog),
                 valueTemp
             );
+        }
+    }
+
+    /// <summary>
+    /// A constant a typed body folded: the node, the scope it was resolved in, and the value and owner it
+    /// resolved to. When the constant version has moved and nothing else has, the entry looks each one up
+    /// again (JitStub.RevalidateConstants) - with Resolve, which is what the compiler resolved it with - and
+    /// keeps the body if each is still the very same value found in the same module.
+    /// </summary>
+    internal sealed class JitFoldedConstant {
+        private readonly RubyScope/*!*/ _scope;
+        private readonly ConstantVariable/*!*/ _node;
+        private readonly object _value;
+        private readonly RubyModule _owner;
+
+        internal JitFoldedConstant(RubyScope/*!*/ scope, ConstantVariable/*!*/ node, object value, RubyModule owner) {
+            _scope = scope;
+            _node = node;
+            _value = value;
+            _owner = owner;
+        }
+
+        /// <summary>
+        /// The constant resolves now as it did when the body was compiled: to the same object (an equal one
+        /// assigned again is a change), found in the same module, and by a lookup the compiler would fold.
+        /// </summary>
+        internal bool StillHolds(RubyContext/*!*/ context) {
+            object value;
+            RubyModule owner;
+            return Resolve(context, _scope, _node, out value, out owner) == null && ReferenceEquals(value, _value) && owner == _owner;
+        }
+
+        /// <summary>
+        /// What the constant resolves to right now, the way the generic code resolves it, in <paramref name="value"/>
+        /// and the module it was found in; or why that would not be a value the constant version alone keeps valid:
+        /// an autoload pending or running, a deprecated or private constant, a missing one, or a scope lexically
+        /// inside an object's singleton class (whose generic sites do not cache either). Null when it is one.
+        /// </summary>
+        internal static string Resolve(RubyContext/*!*/ context, RubyScope/*!*/ scope, ConstantVariable/*!*/ node,
+            out object value, out RubyModule resolvedOwner) {
+            string name = node.Name;
+            value = null;
+            resolvedOwner = null;
+            WeakReference storageWeakValue;
+            string failure;
+            if (node.Qualifier != null) {
+                var qualifier = node.Qualifier as ConstantVariable;
+                if (qualifier == null) { return "constant qualified by an expression: " + name; }
+                object qualifierValue;
+                RubyModule qualifierOwner;
+                failure = Resolve(context, scope, qualifier, out qualifierValue, out qualifierOwner);
+                if (failure != null) { return failure; }
+                var module = qualifierValue as RubyModule;
+                if (module == null) { return "constant qualified by a non-module: " + name; }
+                using (context.ClassHierarchyLocker()) {
+                    if ((failure = CacheableConstants(context, scope)) != null) { return failure; }
+                    ConstantStorage storage;
+                    // `A::B' finds B in A and A's ancestors; the generic code goes on to Object's for a
+                    // module A, and raises for a private B: both are left to it
+                    if (!module.TryResolveConstantNoLock(null, name, out storage) || module.IsPrivateConstantInAncestors(name)) {
+                        return "qualified constant not found: " + name;
+                    }
+                    if ((failure = NotDeprecated(context, module.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
+                    resolvedOwner = module.GetConstantOwnerNoLock(name) ?? module;
+                    value = storage.Value;
+                    storageWeakValue = storage.WeakValue;
+                }
+            } else {
+                using (context.ClassHierarchyLocker()) {
+                    if ((failure = CacheableConstants(context, scope)) != null) { return failure; }
+                    ConstantStorage storage;
+                    if (node.IsGlobal) {
+                        var obj = context.ObjectClass;
+                        if (!obj.TryResolveConstantNoLock(null, name, out storage) || obj.IsPrivateConstant(name)) {
+                            return "constant not found: ::" + name;
+                        }
+                        if ((failure = NotDeprecated(context, obj.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
+                        resolvedOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
+                    } else {
+                        RubyModule owner;
+                        if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
+                            return "constant not found: " + name;
+                        }
+                        // the owner is only reported once some constant has been deprecated
+                        if ((failure = NotDeprecated(context, owner, name)) != null) { return failure; }
+                        resolvedOwner = owner;
+                    }
+                    value = storage.Value;
+                    storageWeakValue = storage.WeakValue;
+                }
+            }
+            // A constant whose value is nil (Richards' `NO_WORK = nil') has a storage that says so - its
+            // weak value is ConstantSiteCache.WeakNull, as the generic site's cache keeps it - while an
+            // autoload that has not run resolves to an empty storage or an AutoloadedConstant.
+            if (value == null && storageWeakValue != ConstantSiteCache.WeakNull || value is RubyModule.AutoloadedConstant) {
+                return "constant without a value: " + name;
+            }
+            return null;
+        }
+
+        /// <summary>A deprecated constant warns on every read, which the generic code does.</summary>
+        private static string NotDeprecated(RubyContext/*!*/ context, RubyModule owner, string/*!*/ name) {
+            if (context.HasDeprecatedConstants && (owner == null || owner.GetDeprecatedConstantOwnerNoLock(name) != null)) {
+                return "deprecated constant " + name;
+            }
+            return null;
+        }
+
+        private static string CacheableConstants(RubyContext/*!*/ context, RubyScope/*!*/ scope) {
+            if (context.IsAutoloadInProgress) { return "autoload in progress"; }
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                var cls = s.Module as RubyClass;
+                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
+                    return "constant lexically in an object's singleton class";
+                }
+            }
+            return null;
         }
     }
 }
