@@ -1540,6 +1540,7 @@ namespace IronRuby.Runtime {
             if (!inMirror && !owner.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
                 throw RubyExceptions.CreateUndefinedMethodError(mirror ?? owner, name);
             }
+            owner.WarnIfUndefiningCoreMethod(name);
             if (inMirror) {
                 mirror.UndefineMethod(name);
             }

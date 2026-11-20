@@ -2350,10 +2350,6 @@ namespace IronRuby.Builtins {
                     IsClass ? "class" : "module", _name, _context.RuntimeId));
             }
 
-            if (method.IsUndefined && name == Symbols.Initialize) {
-                throw RubyExceptions.CreateTypeError("Cannot undefine 'initialize' method");
-            }
-
             PrepareMethodUpdate(name, method);
 
             InitializeMethodsNoLock();
@@ -2533,6 +2529,16 @@ namespace IronRuby.Builtins {
         public void UndefineMethod(string/*!*/ name) {
             UndefineMethodNoEvent(name);
             MethodUndefined(name);
+        }
+
+        /// <summary>
+        /// MRI's rb_undef, behind `undef` and Module#undef_method: these methods may go, with a
+        /// warning, since the runtime itself calls them. rb_undef_method (the C API) says nothing.
+        /// </summary>
+        public void WarnIfUndefiningCoreMethod(string/*!*/ name) {
+            if (name == Symbols.Initialize || name == "object_id" || name == "__send__") {
+                Context.ReportWarning(String.Format("undefining '{0}' may cause serious problems", name));
+            }
         }
 
         // thread-safe:

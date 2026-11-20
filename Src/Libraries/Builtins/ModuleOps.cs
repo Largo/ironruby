@@ -901,6 +901,7 @@ namespace IronRuby.Builtins {
                 if (!self.ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
                 }
+                self.WarnIfUndefiningCoreMethod(methodName);
                 self.UndefineMethod(methodName);
             }
             return self;
