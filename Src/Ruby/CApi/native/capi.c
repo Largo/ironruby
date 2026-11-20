@@ -227,10 +227,12 @@ VALUE
 rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2)
 {
     struct rb_ir_frame frame;
-    VALUE result = Qnil;
+    VALUE result = Qnil, errinfo = rb_errinfo();
     int tag = 0;
     RB_IR_PROTECT(frame, result = b_proc(data1), tag = rb_ir_caught());
+    /* $! is the exception while the ensure function runs, and what it was before afterwards */
     e_proc(data2);
+    rb_set_errinfo(errinfo);
     if (tag) rb_jump_tag(tag);
     return result;
 }
@@ -239,16 +241,14 @@ static VALUE
 rb_ir_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, int count, const VALUE *classes)
 {
     struct rb_ir_frame frame;
-    VALUE result = Qnil;
+    VALUE result = Qnil, errinfo = rb_errinfo();
     int tag = 0;
     RB_IR_PROTECT(frame, result = b_proc(data1), tag = rb_ir_caught());
     if (!tag) return result;
     if (!rb_ir_rescue_match(count, classes)) rb_jump_tag(tag);
-    {
-        VALUE exc = rb_errinfo();
-        result = r_proc ? r_proc(data2, exc) : Qnil;
-        rb_set_errinfo(Qnil);
-    }
+    /* $! is the exception while the rescue function runs, and what it was before afterwards */
+    result = r_proc ? r_proc(data2, rb_errinfo()) : Qnil;
+    rb_set_errinfo(errinfo);
     return result;
 }
 
@@ -975,10 +975,26 @@ rb_eval_string_protect(const char *str, int *state)
     return rb_protect(do_eval_string, (VALUE)str, state);
 }
 
+/* error.c's rb_warning_category_enabled_p, asking Warning[] */
+static int
+ir_warning_category_enabled(rb_warning_category_t category)
+{
+    const char *name;
+    switch (category) {
+      case RB_WARN_CATEGORY_DEPRECATED: name = "deprecated"; break;
+      case RB_WARN_CATEGORY_EXPERIMENTAL: name = "experimental"; break;
+      case RB_WARN_CATEGORY_PERFORMANCE: name = "performance"; break;
+      case RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK: name = "strict_unused_block"; break;
+      default: return 1;
+    }
+    return RTEST(rb_funcall(rb_path2class("Warning"), rb_intern("[]"), 1, ID2SYM(rb_intern(name))));
+}
+
 void
 rb_category_warn(rb_warning_category_t category, const char *fmt, ...)
 {
     va_list ap;
+    if (!ir_warning_category_enabled(category)) return;
     va_start(ap, fmt);
     VALUE msg = rb_vsprintf(fmt, ap);
     va_end(ap);
@@ -989,6 +1005,7 @@ void
 rb_category_warning(rb_warning_category_t category, const char *fmt, ...)
 {
     va_list ap;
+    if (!ir_warning_category_enabled(category)) return;
     va_start(ap, fmt);
     VALUE msg = rb_vsprintf(fmt, ap);
     va_end(ap);
@@ -1873,3 +1890,29 @@ rb_wait_for_single_fd(int fd, int events, struct timeval *tv)
     return result < 0 ? -1 : ready;
 }
 #endif /* !_WIN32 */
+
+/*
+ * vm.c's ruby_vm_at_exit: functions run, last registered first, once the runtime is gone -
+ * here, at the process's exit (atexit), which is after IronRuby has run its at_exit blocks.
+ */
+#include "ruby/vm.h"
+#define IR_VM_AT_EXIT_MAX 64
+static void (*ir_vm_at_exit_funcs[IR_VM_AT_EXIT_MAX])(ruby_vm_t *);
+static int ir_vm_at_exit_count;
+
+static void
+ir_run_vm_at_exit(void)
+{
+    while (ir_vm_at_exit_count > 0) {
+        ir_vm_at_exit_funcs[--ir_vm_at_exit_count](NULL);
+    }
+    fflush(stdout);
+}
+
+void
+ruby_vm_at_exit(void (*func)(ruby_vm_t *))
+{
+    if (ir_vm_at_exit_count == 0) atexit(ir_run_vm_at_exit);
+    if (ir_vm_at_exit_count == IR_VM_AT_EXIT_MAX) rb_raise(rb_eRuntimeError, "too many ruby_vm_at_exit functions");
+    ir_vm_at_exit_funcs[ir_vm_at_exit_count++] = func;
+}

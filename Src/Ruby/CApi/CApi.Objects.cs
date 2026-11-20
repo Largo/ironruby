@@ -55,6 +55,10 @@ namespace IronRuby.Runtime.CApi {
         }
 
         private static RubyClass/*!*/ DefineClassUnder(RubyModule/*!*/ owner, string/*!*/ name, VALUE super) {
+            if (super == 0) {
+                // NULL, as opposed to Qnil
+                throw RubyExceptions.CreateArgumentError(String.Format("no super class for '{0}'", name));
+            }
             object superObject = FromValue(super);
             RubyClass superClass = RubyClass.CheckInheritable(_context, superObject);
             bool found;
@@ -115,7 +119,8 @@ namespace IronRuby.Runtime.CApi {
 
         internal static VALUE rb_class_get_superclass(VALUE klass) {
             var cls = FromValue(klass) as RubyClass;
-            return cls != null ? ToValue(cls.SuperClass) : Qnil;
+            // CRuby's RCLASS_SUPER: 0 - Qfalse - above BasicObject and for a module
+            return cls != null && cls.SuperClass != null ? ToValue(cls.SuperClass) : Qfalse;
         }
 
         internal static VALUE rb_class_inherited_p(VALUE scion, VALUE ascendant) {
@@ -148,9 +153,11 @@ namespace IronRuby.Runtime.CApi {
             object current = _context.ObjectClass;
             foreach (var name in p.Split(new[] { "::" }, StringSplitOptions.None)) {
                 var module = current as RubyModule;
-                if (module == null || !module.TryGetConstant(null, name, out current)) {
+                // const_get loads an autoload, as CRuby's rb_path_to_class does
+                if (module == null || !Protocols.IsTrue(Send(module, "const_defined?", null, _context.EncodeIdentifier(name), false))) {
                     throw RubyExceptions.CreateArgumentError(String.Format("undefined class/module {0}", p));
                 }
+                current = Send(module, "const_get", null, _context.EncodeIdentifier(name), false);
             }
             if (!(current is RubyModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("{0} does not refer to class/module", p));
@@ -413,20 +420,32 @@ namespace IronRuby.Runtime.CApi {
             return frame != null ? Intern(frame.Method.Name) : 0;
         }
 
+        // the Ruby code running on this thread: the innermost frame Kernel#caller_locations reports
+        private static object CurrentLocation() {
+            var locations = Send(_context.KernelModule, "caller_locations", null, 0, 1) as RubyArray;
+            return locations != null && locations.Count > 0 ? locations[0] : null;
+        }
+
         internal static byte* rb_sourcefile() {
-            return null;
+            object location = CurrentLocation();
+            object path = location != null ? Send(location, "path", null) : null;
+            return path != null ? PermanentCString(path.ToString()) : null;
         }
 
         internal static int rb_sourceline() {
-            return 0;
+            object location = CurrentLocation();
+            return location != null ? Convert.ToInt32(Send(location, "lineno", null)) : 0;
         }
 
         #endregion
 
         #region Exceptions
 
-        // what rb_protect & co caught on this thread (CRuby's ec->errinfo)
-        [ThreadStatic] private static Exception _errinfo;
+        // what rb_protect & co caught on this thread, for rb_jump_tag to throw on. $! - CRuby's
+        // ec->errinfo, which rb_errinfo reads - is IronRuby's own (RubyContext.CurrentException):
+        // a catch sets it to the exception, as a rescue clause would, and rb_rescue and rb_ensure
+        // (native/capi.c) put the previous one back once their handler is done.
+        [ThreadStatic] private static Exception _caught;
 
         // CRuby's TAG_RAISE, TAG_THROW...
         private const int TAG_RETURN = 1, TAG_BREAK = 2, TAG_RAISE = 6, TAG_THROW = 7, TAG_FATAL = 8;
@@ -434,17 +453,18 @@ namespace IronRuby.Runtime.CApi {
         internal static int rb_ir_caught() {
             Exception e = _pending;
             _pending = null;
-            _errinfo = e;
+            _caught = e;
             if (e is StackUnwinder) {
                 // throw, break and the like: the tag only has to be non-zero to the extension
                 return TAG_THROW;
             }
+            _context.SetCurrentException(RubyUtils.GetVisibleException(e));
             return TAG_RAISE;
         }
 
         internal static void rb_jump_tag(int state) {
-            Exception e = _errinfo;
-            _errinfo = null;
+            Exception e = _caught;
+            _caught = null;
             if (e == null) {
                 throw RubyExceptions.CreateRuntimeError(String.Format("rb_jump_tag({0}) with nothing to rethrow", state));
             }
@@ -452,24 +472,26 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static int rb_ir_rescue_match(int count, VALUE* classes) {
-            Exception e = _errinfo;
+            Exception e = _caught;
             if (e == null || e is StackUnwinder) {
                 return 0;
             }
+            bool matched = false;
             for (int i = 0; i < count; i++) {
                 var module = FromValue(classes[i]) as RubyModule;
-                if (module != null && _context.IsKindOf(e, module)) {
-                    return 1;
+                if (module == null) {
+                    // as a rescue clause naming something else does: the exception is lost
+                    _caught = null;
+                    throw RubyExceptions.CreateTypeError("class or module required for rescue clause");
+                }
+                if (!matched && _context.IsKindOf(RubyUtils.GetVisibleException(e), module)) {
+                    matched = true;
                 }
             }
-            return 0;
+            return matched ? 1 : 0;
         }
 
         internal static VALUE rb_errinfo() {
-            Exception e = _errinfo;
-            if (e != null && !(e is StackUnwinder)) {
-                return ToValue(e);
-            }
             return ToValue(_context.CurrentException);
         }
 
@@ -478,7 +500,7 @@ namespace IronRuby.Runtime.CApi {
             if (e != null && !(e is Exception)) {
                 throw RubyExceptions.CreateTypeError("assigning non-exception to $!");
             }
-            _errinfo = (Exception)e;
+            _context.SetCurrentException(e);
         }
 
         internal static void rb_exc_raise(VALUE exc) {

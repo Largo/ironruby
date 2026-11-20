@@ -130,7 +130,11 @@ namespace IronRuby.Runtime.CApi {
 
         internal static VALUE rb_cvar_get(VALUE klass, VALUE name) { return CallV(klass, "class_variable_get", IdToSymbol(name)); }
         internal static void rb_cvar_set(VALUE klass, VALUE name, VALUE val) { Call(FromValue(klass), "class_variable_set", IdToSymbol(name), FromValue(val)); }
-        internal static VALUE rb_cvar_defined(VALUE klass, VALUE name) { return CallV(klass, "class_variable_defined?", IdToSymbol(name)); }
+        // CRuby looks the ID up in the class's variable tables whatever it is: an @ivar of the class too
+        internal static VALUE rb_cvar_defined(VALUE klass, VALUE name) {
+            var sym = IdToSymbol(name);
+            return CallV(klass, sym.ToString().StartsWith("@@", StringComparison.Ordinal) ? "class_variable_defined?" : "instance_variable_defined?", sym);
+        }
         internal static VALUE rb_cv_get(VALUE klass, byte* name) { return CallV(klass, "class_variable_get", ClassVariableName(FromCString(name))); }
         internal static void rb_cv_set(VALUE klass, byte* name, VALUE val) { Call(FromValue(klass), "class_variable_set", ClassVariableName(FromCString(name)), FromValue(val)); }
 
@@ -260,11 +264,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_proc_call_kw(VALUE recv, VALUE args, int kw_splat) {
-            return rb_proc_call(recv, args);
+            return ToValue(Send(FromValue(recv), "call", null, KeywordArgs(((RubyArray)FromValue(args)).ToArray(), kw_splat)));
         }
 
         internal static VALUE rb_proc_call_with_block_kw(VALUE recv, int argc, VALUE* argv, VALUE proc, int kw_splat) {
-            return rb_proc_call_with_block(recv, argc, argv, proc);
+            return ToValue(Send(FromValue(recv), "call", FromValue(proc) as Proc, KeywordArgs(argc, argv, kw_splat)));
         }
 
         internal static VALUE rb_catch(byte* tag, IntPtr func, VALUE data) {

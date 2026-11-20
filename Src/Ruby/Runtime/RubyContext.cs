@@ -1921,6 +1921,15 @@ namespace IronRuby.Runtime {
         /// Triggers "inherited" event.
         /// </summary>
         internal RubyClass/*!*/ DefineClass(RubyModule/*!*/ owner, string name, RubyClass/*!*/ superClass, RubyStruct.Info structInfo) {
+            return DefineClass(owner, name, superClass, structInfo, true);
+        }
+
+        /// <summary>
+        /// <paramref name="inheritedEvent"/> false: the C API's rb_class_new, which makes the class
+        /// without telling the superclass, as CRuby's does.
+        /// </summary>
+        internal RubyClass/*!*/ DefineClass(RubyModule/*!*/ owner, string name, RubyClass/*!*/ superClass, RubyStruct.Info structInfo,
+            bool inheritedEvent) {
             Assert.NotNull(owner, superClass);
 
             if (superClass.TypeTracker != null && superClass.TypeTracker.Type.ContainsGenericParameters) {
@@ -1935,7 +1944,9 @@ namespace IronRuby.Runtime {
                 qualifiedName, null, null, null, null, null, null, superClass, null, null, structInfo, true, false, ModuleRestrictions.None
             );
             PublishModule(name, owner, result);
-            superClass.ClassInheritedEvent(result);
+            if (inheritedEvent) {
+                superClass.ClassInheritedEvent(result);
+            }
 
             return result;
         }
