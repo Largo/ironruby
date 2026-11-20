@@ -52,6 +52,13 @@ namespace IronRuby.Builtins {
 
             /// <summary>Holds the content, waiting while another thread does. Returns whether its array is shared.</summary>
             internal static bool Enter(ref int state) {
+                // Nobody holds it, the usual case (a copy of a string whose array is already shared, or
+                // the first write to one): one read and one compare-exchange.
+                int s = Volatile.Read(ref state);
+                if ((s & Held) == 0 && Interlocked.CompareExchange(ref state, s | Held, s) == s) {
+                    return (s & Shared) != 0;
+                }
+
                 // A writer in a loop holds the content nearly all the time and is unheld only for the
                 // moment between its Exit and its next enter. So the wait tries the compare-exchange on
                 // both unheld values rather than first reading the state, which would almost always see
