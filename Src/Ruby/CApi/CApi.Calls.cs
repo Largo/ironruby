@@ -126,7 +126,11 @@ namespace IronRuby.Runtime.CApi {
                         argv[i] = ToValue(args[i]);
                     }
                     result = CallMethod(method.Function, method.Arity, selfValue, argc, argv);
+                    for (int i = 0; i < argc; i++) {
+                        SyncRawFreeze(argv[i]);
+                    }
                 }
+                SyncRawFreeze(selfValue);
                 return FromValue(result);
             } catch (CBlockBreak b) when (b.Bfc == frame.Bfc && frame.Bfc != null) {
                 return b.ReturnValue;
@@ -299,7 +303,16 @@ namespace IronRuby.Runtime.CApi {
             // caller's frame - $~ by Regexp#match, $_ by gets - is the Ruby frame that called the C
             // method, as in CRuby (the svar of the nearest Ruby-level frame).
             RubyScope scope = (_frame != null ? _frame.Scope : null) ?? _context.EmptyScope;
+            if (name == "binding" && _frame != null && IsKernelBinding(target)) {
+                // Kernel#binding would capture the frame of the C method's caller
+                throw RubyExceptions.CreateRuntimeError("Can't create Binding from C level function");
+            }
             return site.Target(site, scope, target, block, new RubyArray(args));
+        }
+
+        private static bool IsKernelBinding(object target) {
+            var method = _context.ResolveMethod(target, "binding", VisibilityContext.AllVisible).Info;
+            return method != null && method.DeclaringModule == _context.KernelModule;
         }
 
         private static Proc TakePassedBlock() {
@@ -531,9 +544,16 @@ namespace IronRuby.Runtime.CApi {
 
         internal static void rb_iter_break_value(VALUE val) {
             if (_cBlockDepth == 0) {
-                // a break out of a Ruby block from C called inside it: IronRuby's break needs the
-                // block's own frame, which a C function is not given
-                throw RubyExceptions.CreateNotImplementedError("rb_iter_break outside a block written in C is not implemented by IronRuby's C API yet");
+                // called from a Ruby block: break out of the innermost one around the call, as a
+                // break in eval'd code does (CRuby's rb_iter_break unwinds to the block's caller)
+                RubyBlockScope blockScope;
+                RubyMethodScope methodScope;
+                (_frame?.Scope ?? _context.EmptyScope).GetInnerMostBlockOrMethodScope(out blockScope, out methodScope);
+                if (blockScope == null) {
+                    throw new LocalJumpError("break from proc-closure", "break", FromValue(val));
+                }
+                var proc = blockScope.BlockFlowControl.Proc;
+                throw new EvalUnwinder(BlockReturnReason.Break, proc.Converter, proc.Kind, FromValue(val));
             }
             throw new CIterBreak(FromValue(val));
         }

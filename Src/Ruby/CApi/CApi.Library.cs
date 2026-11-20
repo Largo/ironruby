@@ -573,6 +573,17 @@ namespace IronRuby.Runtime.CApi {
 
         #region IO
 
+        // The descriptor the OS knows for one of IronRuby's (IO#fileno numbers a stream in IronRuby's
+        // own table), or fd itself when IronRuby has no stream under it: what an extension got
+        // from rb_cloexec_open or open(2) is native already. -1 for a stream with no descriptor.
+        internal static int rb_ir_native_fd(int fd) {
+            if (fd <= 2) {
+                return fd;
+            }
+            var stream = _context.GetStream(fd);
+            return stream != null ? RubyIO.DescriptorOf(stream) : fd;
+        }
+
         internal static int rb_io_descriptor(VALUE io) {
             return (int)Call(FromValue(io), "fileno");
         }

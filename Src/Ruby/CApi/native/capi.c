@@ -115,6 +115,40 @@ rb_ir_call_func1(void *fn, VALUE arg, int *raised)
     return result;
 }
 
+/* rb_tracepoint_new's hook: void (*)(VALUE tpval, void *data). */
+RB_IR_EXPORT void
+rb_ir_call_tracepoint(void *fn, VALUE tpval, void *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    *raised = 0;
+    RB_IR_PROTECT(frame, ((void (*)(VALUE, void *))fn)(tpval, data), *raised = 1);
+}
+
+/* rb_debug_inspector_open's callback: rb_debug_inspector_func_t. */
+RB_IR_EXPORT VALUE
+rb_ir_call_inspector(void *fn, const rb_debug_inspector_t *dc, void *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    VALUE result = Qnil;
+    *raised = 0;
+    RB_IR_PROTECT(frame, result = ((rb_debug_inspector_func_t)fn)(dc, data), *raised = 1);
+    return result;
+}
+
+/* What a typed object's dsize function says it holds outside its slot (ObjectSpace.memsize_of). */
+RB_IR_EXPORT size_t
+rb_ir_typed_data_memsize(VALUE obj, int *raised)
+{
+    struct rb_ir_frame frame;
+    size_t result = 0;
+    *raised = 0;
+    const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
+    void *data = RTYPEDDATA_GET_DATA(obj);
+    if (type == NULL || type->function.dsize == NULL || data == NULL) return 0;
+    RB_IR_PROTECT(frame, result = type->function.dsize(data), *raised = 1);
+    return result;
+}
+
 /* A block written in C: rb_block_call_func. */
 RB_IR_EXPORT VALUE
 rb_ir_call_block(void *fn, VALUE yielded_arg, VALUE callback_arg, int argc, const VALUE *argv, VALUE blockarg, int *raised)
@@ -2044,7 +2078,9 @@ rb_update_max_fd(int fd)
 void
 rb_fd_fix_cloexec(int fd)
 {
-    rb_maygvl_fd_fix_cloexec(fd);
+    /* IO#fileno is IronRuby's own number for the stream, which rb_io_descriptor hands out */
+    int native = rb_ir_native_fd(fd);
+    if (native >= 0) rb_maygvl_fd_fix_cloexec(native);
     rb_update_max_fd(fd);
 }
 
