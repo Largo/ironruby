@@ -189,17 +189,22 @@ bar
 ");
         }
 
+        // initialize is BasicObject's alone, as in MRI, and can be removed (with a warning each time)
         public void RubyInitializersCaching3() {
-            TestOutput(@"
+            AssertOutput(delegate() {
+                CompilerTest(@"
 class Object
-  remove_method :initialize
+  remove_method :initialize rescue p $!
 end
 
 class BasicObject
   remove_method :initialize rescue p $!
 end
-", @"
-#<NameError: Cannot remove BasicObject#initialize>
+Object.new rescue p $!.class
+", 0, 2);
+            }, @"
+#<NameError: method 'initialize' not defined in Object>
+NoMethodError
 ");
         }
 

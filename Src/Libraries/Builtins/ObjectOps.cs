@@ -21,13 +21,7 @@ namespace IronRuby.Builtins {
     [Includes(typeof(Kernel))]
     public static class ObjectOps {
         // RubyConstructor implemented by RubyObject ctors
-
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
-        public static object Reinitialize(object self) {
-            // takes no arguments: Object.new(1), and a `super` passing arguments up to here, are
-            // "wrong number of arguments (given 1, expected 0)" in MRI; answers nil, as MRI's does
-            return null;
-        }
+        // (initialize is BasicObject's, as in MRI: Object has none of its own)
 
         [RubyConstant]
         public readonly static bool TRUE = true;

@@ -2350,6 +2350,8 @@ namespace IronRuby.Builtins {
                     IsClass ? "class" : "module", _name, _context.RuntimeId));
             }
 
+            WarnIfRedefiningCoreMethodNoLock(name, method);
+
             PrepareMethodUpdate(name, method);
 
             InitializeMethodsNoLock();
@@ -2489,9 +2491,6 @@ namespace IronRuby.Builtins {
                 if (_methods.TryGetValue(name, out method)) {
                     if (method.IsHidden || method.IsUndefined) {
                         return false;
-                    } else if (IsBasicObjectClass && name == Symbols.Initialize) {
-                        // We prohibit removing Object#initialize to simplify object construction logic.
-                        return false;
                     } else if (method.IsRemovable) {
                         // Method is used in a dynamic site or group => update version of all dependencies of this module.
                         if (method.InvalidateSitesOnOverride || method.InvalidateGroupsOnRemoval) {
@@ -2534,10 +2533,40 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// MRI's rb_undef, behind `undef` and Module#undef_method: these methods may go, with a
         /// warning, since the runtime itself calls them. rb_undef_method (the C API) says nothing.
+        /// MRI warns before it looks for the method, so also when undefining it then fails.
         /// </summary>
         public void WarnIfUndefiningCoreMethod(string/*!*/ name) {
-            if (name == Symbols.Initialize || name == "object_id" || name == "__send__") {
-                Context.ReportWarning(String.Format("undefining '{0}' may cause serious problems", name));
+            WarnIfCoreMethod("undefining", name, true);
+        }
+
+        /// <summary>MRI's rb_remove_method_id: as <see cref="WarnIfUndefiningCoreMethod"/>, for remove_method.</summary>
+        public void WarnIfRemovingCoreMethod(string/*!*/ name) {
+            WarnIfCoreMethod("removing", name, true);
+        }
+
+        private void WarnIfCoreMethod(string/*!*/ what, string/*!*/ name, bool includeInitialize) {
+            if (name == "object_id" || name == "__send__" || includeInitialize && name == Symbols.Initialize) {
+                Context.ReportWarning(String.Format("{0} '{1}' may cause serious problems", what, name));
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_method_entry_make: a new entry for object_id or __send__ that is not a C function
+        /// (a def, define_method, alias, attr_reader, visibility change, undef) warns when the class
+        /// already has the method, defined or undefined, itself or from an ancestor. An alias is never
+        /// a C function there, though here it shares the aliased method's info.
+        /// </summary>
+        private void WarnIfRedefiningCoreMethodNoLock(string/*!*/ name, RubyMemberInfo/*!*/ method) {
+            if ((name != "object_id" && name != "__send__") || method.IsHidden
+                || method.AliasOwner == null && (method is RubyMethodGroupBase || method is RubyCustomMethodInfo)) {
+                return;
+            }
+            InitializeMethodsNoLock();
+            bool skipHidden = false, foundCallerSelf = false;
+            RubyMemberInfo existing;
+            RubyModule owner;
+            if (FindMethodInAncestorsNoLock(name, false, null, ref skipHidden, ref foundCallerSelf, out existing, out owner)) {
+                WarnIfCoreMethod("redefining", name, false);
             }
         }
 
