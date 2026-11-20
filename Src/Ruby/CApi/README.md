@@ -37,8 +37,12 @@ path would otherwise win over the gem's `.so`.
 
 Gems whose extensions build and give CRuby's results (Linux x64, checked against CRuby 4.0 with
 a script exercising each): fast_blank, redcarpet, jaro_winkler, escape_utils, racc (cparse),
-digest-murmurhash, unf_ext (C++), and with `IRONRUBY_NATIVE_GEMS` bigdecimal, msgpack, bcrypt
-and oj.
+digest-murmurhash, unf_ext (C++), ox, yajl-ruby, rinku, rdiscount, RedCloth, http_parser.rb,
+websocket-driver, cbor, xxhash, ed25519, rbtree, damerau-levenshtein, hiredis, murmurhash3, ffi
+(through libffi), byebug (loads and starts; its line tracing follows IronRuby's TracePoint), and with
+`IRONRUBY_NATIVE_GEMS` bigdecimal, msgpack, bcrypt, oj and nokogiri (its packaged libxml2,
+libxslt and gumbo, built by mini_portile). digest-crc builds no extension on an engine other than
+CRuby, by its own check, and uses its Ruby implementation.
 
 ## Adding a function
 
