@@ -29,6 +29,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime.Jit;
@@ -77,6 +78,15 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         private const int MaxRefinementRebuilds = 8;
 
+        /// <summary>
+        /// How much longer than its last compilation a loop whose copy went stale runs generically before
+        /// it is compiled again. A thread that loads a library beside a running loop changes the method
+        /// version hundreds of times, and a copy rebuilt at each change would spend the loop's time in the
+        /// compiler: at eight times, compiling takes at most a ninth of it, and once the changes stop the
+        /// loop is compiled again within that much of its time.
+        /// </summary>
+        private const int StaleRebuildSpacing = 8;
+
         /// <summary>IR_OSR_VERBOSE=1 traces which loops get specialized and what that cost.</summary>
         public static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_OSR_VERBOSE") == "1";
 
@@ -93,7 +103,7 @@ namespace IronRuby.Runtime.Osr {
             return (s != null && Int64.TryParse(s, out v) && v > 0) ? v : 2000;
         }
 
-        internal static int Specialized, Retired, Entered, Deopts;
+        internal static int Specialized, Retired, Entered, Deopts, StaleRebuilds;
         internal static long CompileTicks;
 
         /// <summary>
@@ -131,6 +141,13 @@ namespace IronRuby.Runtime.Osr {
         private readonly object/*!*/ _lock = new object();
         private readonly string/*!*/ _name;
         private volatile Func<object[], object> _typed;
+        // the versions _typed was compiled under; written before _typed
+        private JitLoopGuard _guard;
+        // Rebuilds after a method or a constant the copy was built on changed (StaleRebuild), and when the
+        // last compilation ended and what it took, in Stopwatch ticks: a rebuild waits until the loop has run
+        // generically for StaleRebuildSpacing times as long as that compilation took.
+        private int _staleRebuilds;
+        private long _compiledAt, _compileTicks;
         private bool _tried;
         private int _deopts;
         private int _retypes;
@@ -154,8 +171,16 @@ namespace IronRuby.Runtime.Osr {
                 return Retry;
             }
             var typed = _typed;
+            var guard = _guard;
             if (typed == null && !_tried) {
+                if (_staleRebuilds > 0 &&
+                    Stopwatch.GetTimestamp() - Volatile.Read(ref _compiledAt) < StaleRebuildSpacing * Volatile.Read(ref _compileTicks)) {
+                    // too soon after the last compilation (see StaleRebuildSpacing): ask again a little later
+                    ReArmCountdown();
+                    return Retry;
+                }
                 typed = Compile(tuples);
+                guard = _guard;
             }
 
             if (typed != null) {
@@ -180,9 +205,20 @@ namespace IronRuby.Runtime.Osr {
                 if (RubyUtils.IsSafePointRequested) {
                     // Not a failure: the copy stopped at an iteration boundary because a
                     // Thread#raise, Thread#kill, signal or finalizer is waiting
-                    // (JitRuntime.OsrSafePoint). The generic loop delivers it at its next back
+                    // (JitRuntime.OsrHandBack). The generic loop delivers it at its next back
                     // edge; if it was for another thread, the copy is asked again shortly.
                     ReArmCountdown();
+                    return Retry;
+                }
+
+                if (guard != null && (guard.Stale || RubyUtils.CodeEpoch != guard.Epoch)) {
+                    // Not a failure either: a method the copy was built on (an inlined Array#size, a bound
+                    // callee) or a constant it folded changed since it was compiled - found on entry, or
+                    // while it ran (JitRuntime.OsrHandBack), on this thread or another; or something else
+                    // moved the code epoch the copy's safe points compare with. The generic loop calls what
+                    // is defined now; a copy built for the new epoch takes over when StaleRebuildSpacing
+                    // allows. However often that happens, the loop is not retired.
+                    StaleRebuild();
                     return Retry;
                 }
 
@@ -214,6 +250,16 @@ namespace IronRuby.Runtime.Osr {
             ReArmCountdown();
         }
 
+        /// <summary>The copy is stale: drop it, and build one under the current versions (see Run).</summary>
+        private void StaleRebuild() {
+            lock (_lock) {
+                if (_staleRebuilds < Int32.MaxValue) { _staleRebuilds++; }
+                StaleRebuilds++;
+            }
+            if (Verbose) { Console.Error.WriteLine("[osr] {0}: stale, rebuilt under the current method version", _name); }
+            Rebuild();
+        }
+
         /// <summary>Stop counting, for good: this loop will not be replaced.</summary>
         private void Retire() {
             _typed = null;
@@ -230,15 +276,21 @@ namespace IronRuby.Runtime.Osr {
 
                 long start = Stopwatch.GetTimestamp();
                 try {
-                    _typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, LongRuns);
+                    JitLoopGuard guard;
+                    var typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, out guard, LongRuns);
+                    _guard = guard;
+                    _typed = typed;
                 } catch (Exception e) {
                     if (Verbose) {
                         Console.Error.WriteLine("[osr] {0}: specialization failed: {1}", _name, e.Message);
                     }
                     _typed = null;
                 }
-                long ticks = Stopwatch.GetTimestamp() - start;
+                long end = Stopwatch.GetTimestamp();
+                long ticks = end - start;
                 CompileTicks += ticks;
+                Volatile.Write(ref _compileTicks, ticks);
+                Volatile.Write(ref _compiledAt, end);
 
                 if (_typed != null) {
                     Specialized++;
@@ -262,8 +314,8 @@ namespace IronRuby.Runtime.Osr {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[osr] specialized={0} retired={1} entries={2} deopts={3} compile={4:F1}ms",
-                    Specialized, Retired, Entered, Deopts, CompileTicks * 1000.0 / Stopwatch.Frequency);
+                Console.Error.WriteLine("[osr] specialized={0} retired={1} entries={2} deopts={3} stale={4} compile={5:F1}ms",
+                    Specialized, Retired, Entered, Deopts, StaleRebuilds, CompileTicks * 1000.0 / Stopwatch.Frequency);
             };
         }
     }

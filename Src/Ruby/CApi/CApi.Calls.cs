@@ -36,10 +36,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         /// <summary>
-        /// Called by the rule CApi.MakeRule builds.
+        /// Called by the rule CApi.MakeRule builds. <paramref name="scope"/> is the caller's, whose
+        /// $~ and $_ rb_backref_get and rb_lastline_get read, as CRuby's read the caller's frame.
         /// </summary>
-        public static object Invoke(CMethod/*!*/ method, object self, object[]/*!*/ args, Proc block) {
-            return CApi.InvokeMethod(method, self, args, block);
+        public static object Invoke(CMethod/*!*/ method, RubyScope/*!*/ scope, object self, object[]/*!*/ args, Proc block) {
+            return CApi.InvokeMethod(method, scope, self, args, block);
         }
 
         internal static readonly MethodInfo InvokeMethod = typeof(CMethod).GetMethod("Invoke");
@@ -53,10 +54,14 @@ namespace IronRuby.Runtime.CApi {
         private sealed class CFrame {
             public CFrame Parent;
             public CMethod Method;
+            // the caller's: its $~ and $_ are the C method's (rb_backref_get, rb_lastline_get)
+            public RubyScope Scope;
             public object Self;
             public object[] Args;
             public Proc Block;
             public BlockParam Bfc;
+            // called with keywords (rb_keyword_given_p): the last argument was the call's keyword hash
+            public bool KeywordGiven;
         }
 
         [ThreadStatic] private static CFrame _frame;
@@ -89,6 +94,7 @@ namespace IronRuby.Runtime.CApi {
                 metaBuilder.Result = Expression.Call(
                     CMethod.InvokeMethod,
                     AstUtils.Constant(method),
+                    AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                     AstUtils.Box(args.TargetExpression),
                     Expression.NewArrayInit(typeof(object), actualArgs.Select(a => AstUtils.Box(a.Expression))),
                     block
@@ -96,10 +102,15 @@ namespace IronRuby.Runtime.CApi {
             };
         }
 
-        internal static object InvokeMethod(CMethod/*!*/ method, object self, object[]/*!*/ args, Proc block) {
-            var frame = new CFrame { Parent = _frame, Method = method, Self = self, Args = args, Block = block };
+        internal static object InvokeMethod(CMethod/*!*/ method, RubyScope/*!*/ scope, object self, object[]/*!*/ args, Proc block) {
+            var frame = new CFrame { Parent = _frame, Method = method, Scope = scope, Self = self, Args = args, Block = block };
             if (block != null) {
                 frame.Bfc = RubyOps.CreateBfcForLibraryMethod(block);
+            }
+            if (args.Length > 0 && RubyOps.IsKeywordArgumentsHash(args[args.Length - 1])) {
+                // the C method sees a plain Hash: passed on positionally it is not keywords again
+                frame.KeywordGiven = true;
+                RubyOps.ClearKeywordArguments(args[args.Length - 1]);
             }
             _frame = frame;
             try {
@@ -115,7 +126,11 @@ namespace IronRuby.Runtime.CApi {
                         argv[i] = ToValue(args[i]);
                     }
                     result = CallMethod(method.Function, method.Arity, selfValue, argc, argv);
+                    for (int i = 0; i < argc; i++) {
+                        SyncRawFreeze(argv[i]);
+                    }
                 }
+                SyncRawFreeze(selfValue);
                 return FromValue(result);
             } catch (CBlockBreak b) when (b.Bfc == frame.Bfc && frame.Bfc != null) {
                 return b.ReturnValue;
@@ -139,7 +154,9 @@ namespace IronRuby.Runtime.CApi {
                 visibility = RubyMemberFlags.Private;
             }
             var method = new CMethod(func, arity, name) { Owner = module };
-            module.AddMethod(_context, name, new RubyCustomMethodInfo(MakeRule(method), visibility, module, arity >= 0 ? arity : -1));
+            module.AddMethod(_context, name, new RubyCustomMethodInfo(MakeRule(method), visibility, module, arity >= 0 ? arity : -1) {
+                NotImplemented = func == ShimExport("rb_f_notimplement")
+            });
         }
 
         private static RubyModule/*!*/ ToModule(VALUE value) {
@@ -267,8 +284,8 @@ namespace IronRuby.Runtime.CApi {
 
         #region Calling Ruby
 
-        private static readonly ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, object, Proc, object, object>>> _sites =
-            new ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, object, Proc, object, object>>>();
+        private static readonly ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>> _sites =
+            new ConcurrentDictionary<(string, bool), CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>>();
 
         /// <summary>
         /// Calls a method the way rb_funcall does: private methods too, unless publicOnly.
@@ -278,10 +295,24 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static object SendWith(bool publicOnly, object target, string/*!*/ name, Proc block, object[]/*!*/ args) {
-            var site = _sites.GetOrAdd((name, publicOnly), key => CallSite<Func<CallSite, object, Proc, object, object>>.Create(
+            var site = _sites.GetOrAdd((name, publicOnly), key => CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(_context, key.Item1, new RubyCallSignature(0,
-                    (key.Item2 ? RubyCallFlags.None : RubyCallFlags.HasImplicitSelf) | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock))));
-            return site.Target(site, target, block, new RubyArray(args));
+                    (key.Item2 ? RubyCallFlags.None : RubyCallFlags.HasImplicitSelf) | RubyCallFlags.HasScope |
+                    RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock))));
+            // A C method has no Ruby frame of its own: what the method called reads or sets in its
+            // caller's frame - $~ by Regexp#match, $_ by gets - is the Ruby frame that called the C
+            // method, as in CRuby (the svar of the nearest Ruby-level frame).
+            RubyScope scope = (_frame != null ? _frame.Scope : null) ?? _context.EmptyScope;
+            if (name == "binding" && _frame != null && IsKernelBinding(target)) {
+                // Kernel#binding would capture the frame of the C method's caller
+                throw RubyExceptions.CreateRuntimeError("Can't create Binding from C level function");
+            }
+            return site.Target(site, scope, target, block, new RubyArray(args));
+        }
+
+        private static bool IsKernelBinding(object target) {
+            var method = _context.ResolveMethod(target, "binding", VisibilityContext.AllVisible).Info;
+            return method != null && method.DeclaringModule == _context.KernelModule;
         }
 
         private static Proc TakePassedBlock() {
@@ -299,7 +330,48 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_funcallv_kw(VALUE recv, VALUE mid, int argc, VALUE* argv, int kw_splat) {
-            return rb_funcallv(recv, mid, argc, argv);
+            return ToValue(Send(FromValue(recv), IdToString(mid), TakePassedBlock(), KeywordArgs(argc, argv, kw_splat)));
+        }
+
+        private const int RB_PASS_KEYWORDS = 1, RB_PASS_CALLED_KEYWORDS = 3;
+
+        /// <summary>
+        /// The arguments of a *_kw call: with RB_PASS_KEYWORDS the last one is the keywords, a
+        /// Hash (or #to_hash of one) the callee receives as such - IronRuby's keyword call passes
+        /// a copy marked Hash.IsKeywordArguments - and none at all when it is empty.
+        /// RB_PASS_CALLED_KEYWORDS does whatever the calling C method was given.
+        /// </summary>
+        private static object[]/*!*/ KeywordArgs(int argc, VALUE* argv, int kw_splat) {
+            return KeywordArgs(FromValues(argc, argv), kw_splat);
+        }
+
+        private static object[]/*!*/ KeywordArgs(object[]/*!*/ args, int kw_splat) {
+            if (kw_splat == RB_PASS_CALLED_KEYWORDS) {
+                kw_splat = rb_keyword_given_p();
+            }
+            if (kw_splat != RB_PASS_KEYWORDS || args.Length == 0) {
+                return args;
+            }
+            object last = args[args.Length - 1];
+            var hash = last as IDictionary<object, object>;
+            if (hash == null && RespondTo(last, "to_hash")) {
+                object converted = Send(last, "to_hash", null);
+                hash = converted as IDictionary<object, object>;
+                if (hash == null) {
+                    throw RubyExceptions.CreateTypeError(String.Format("can't convert {0} into Hash ({0}#to_hash gives {1})",
+                        _context.GetClassDisplayName(last), _context.GetClassDisplayName(converted)));
+                }
+            } else if (hash == null) {
+                throw RubyExceptions.CreateTypeError(String.Format("no implicit conversion of {0} into Hash", _context.GetClassDisplayName(last)));
+            }
+            if (hash.Count == 0) {
+                Array.Resize(ref args, args.Length - 1);
+                return args;
+            }
+            var keywords = new Hash(hash, _context.EqualityComparer);
+            keywords.IsKeywordArguments = true;
+            args[args.Length - 1] = keywords;
+            return args;
         }
 
         internal static VALUE rb_funcallv_public(VALUE recv, VALUE mid, int argc, VALUE* argv) {
@@ -316,6 +388,14 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_call_super(int argc, VALUE* argv) {
+            return CallSuper(FromValues(argc, argv));
+        }
+
+        internal static VALUE rb_call_super_kw(int argc, VALUE* argv, int kw_splat) {
+            return CallSuper(KeywordArgs(argc, argv, kw_splat));
+        }
+
+        private static VALUE CallSuper(object[]/*!*/ args) {
             var frame = _frame;
             if (frame == null) {
                 throw RubyExceptions.CreateRuntimeError("super called outside of method");
@@ -323,11 +403,14 @@ namespace IronRuby.Runtime.CApi {
             object unbound = Send(frame.Method.Owner, "instance_method", null, _context.EncodeIdentifier(frame.Method.Name));
             object super = Send(unbound, "super_method", null);
             if (super == null) {
-                throw RubyExceptions.CreateNameError(String.Format("super: no superclass method '{0}'", frame.Method.Name));
+                // as a super with nothing above it: #method_missing, whose default raises NoMethodError
+                var missing = new List<object> { _context.EncodeIdentifier(frame.Method.Name) };
+                missing.AddRange(args);
+                return ToValue(Send(frame.Self, "method_missing", frame.Block, missing.ToArray()));
             }
-            var args = new List<object> { frame.Self };
-            args.AddRange(FromValues(argc, argv));
-            return ToValue(Send(super, "bind_call", frame.Block, args.ToArray()));
+            var call = new List<object> { frame.Self };
+            call.AddRange(args);
+            return ToValue(Send(super, "bind_call", frame.Block, call.ToArray()));
         }
 
         internal static void rb_obj_call_init(VALUE obj, int argc, VALUE* argv) {
@@ -367,7 +450,7 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static int rb_keyword_given_p() {
-            return 0;
+            return _frame != null && _frame.KeywordGiven ? 1 : 0;
         }
 
         internal static void rb_need_block() {
@@ -405,9 +488,16 @@ namespace IronRuby.Runtime.CApi {
         }
 
         // A C function as a block (rb_block_call): VALUE f(yielded_arg, data2, argc, argv, blockarg).
+        /// <summary>
+        /// A block whose body is a rb_block_call_func: |*args, &amp;blockarg|, arity -1, as CRuby's
+        /// ifunc blocks are.
+        /// </summary>
         private static Proc/*!*/ MakeBlock(IntPtr fn, VALUE data2) {
-            return Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>(
-                (selfBlock, self, unused, args) => {
+            var dispatcher = new BlockDispatcherUnsplatProcN(0,
+                BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1),
+                null, 0);
+            dispatcher.SetMethod(new Func<BlockParam, object, object[], RubyArray, Proc, object>(
+                (selfBlock, self, unused, args, blockArg) => {
                     int argc = args.Count;
                     VALUE* argv = stackalloc VALUE[Math.Max(argc, 1)];
                     for (int i = 0; i < argc; i++) {
@@ -416,13 +506,14 @@ namespace IronRuby.Runtime.CApi {
                     VALUE yielded = argc > 0 ? argv[0] : Qnil;
                     _cBlockDepth++;
                     try {
-                        return FromValue(CallBlock(fn, yielded, data2, argc, argv, Qnil));
+                        return FromValue(CallBlock(fn, yielded, data2, argc, argv, ToValue(blockArg)));
                     } catch (CIterBreak b) {
                         return selfBlock.Break(b.ReturnValue);
                     } finally {
                         _cBlockDepth--;
                     }
                 }));
+            return new Proc(ProcKind.Block, null, _context.EmptyScope, dispatcher);
         }
 
         // blocks written in C running on this thread: what rb_iter_break can break out of
@@ -453,9 +544,16 @@ namespace IronRuby.Runtime.CApi {
 
         internal static void rb_iter_break_value(VALUE val) {
             if (_cBlockDepth == 0) {
-                // a break out of a Ruby block from C called inside it: IronRuby's break needs the
-                // block's own frame, which a C function is not given
-                throw RubyExceptions.CreateNotImplementedError("rb_iter_break outside a block written in C is not implemented by IronRuby's C API yet");
+                // called from a Ruby block: break out of the innermost one around the call, as a
+                // break in eval'd code does (CRuby's rb_iter_break unwinds to the block's caller)
+                RubyBlockScope blockScope;
+                RubyMethodScope methodScope;
+                (_frame?.Scope ?? _context.EmptyScope).GetInnerMostBlockOrMethodScope(out blockScope, out methodScope);
+                if (blockScope == null) {
+                    throw new LocalJumpError("break from proc-closure", "break", FromValue(val));
+                }
+                var proc = blockScope.BlockFlowControl.Proc;
+                throw new EvalUnwinder(BlockReturnReason.Break, proc.Converter, proc.Kind, FromValue(val));
             }
             throw new CIterBreak(FromValue(val));
         }

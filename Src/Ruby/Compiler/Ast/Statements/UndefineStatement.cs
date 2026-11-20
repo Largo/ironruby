@@ -42,7 +42,9 @@ namespace IronRuby.Compiler.Ast {
                 result[i] = Methods.UndefineMethod.OpCall(gen.CurrentScopeVariable, _items[i].Transform(gen));
             }
             result[_items.Count] = AstUtils.Empty();
-            return Ast.Block(result);
+            // its own line, as any statement's: the warning undefining object_id gives, and the
+            // NameError's backtrace, would otherwise report the line run before it
+            return gen.AddDebugInfo(Ast.Block(result), Location);
         }
 
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {

@@ -48,13 +48,18 @@ namespace IronRuby.Runtime.CApi {
 
         #region Classes and modules
 
+        // rb_const_defined_at's view: an autoload is loaded first, and the one being loaded is not there yet
         private static object GetOwnConstant(RubyModule/*!*/ owner, string/*!*/ name, out bool found) {
             object value;
-            found = owner.TryGetConstant(null, name, out value);
+            found = owner.TryGetConstant((_frame?.Scope ?? _context.EmptyScope).GlobalScope, name, out value);
             return value;
         }
 
         private static RubyClass/*!*/ DefineClassUnder(RubyModule/*!*/ owner, string/*!*/ name, VALUE super) {
+            if (super == 0) {
+                // NULL, as opposed to Qnil
+                throw RubyExceptions.CreateArgumentError(String.Format("no super class for '{0}'", name));
+            }
             object superObject = FromValue(super);
             RubyClass superClass = RubyClass.CheckInheritable(_context, superObject);
             bool found;
@@ -115,10 +120,14 @@ namespace IronRuby.Runtime.CApi {
 
         internal static VALUE rb_class_get_superclass(VALUE klass) {
             var cls = FromValue(klass) as RubyClass;
-            return cls != null ? ToValue(cls.SuperClass) : Qnil;
+            // CRuby's RCLASS_SUPER: 0 - Qfalse - above BasicObject and for a module
+            return cls != null && cls.SuperClass != null ? ToValue(cls.SuperClass) : Qfalse;
         }
 
         internal static VALUE rb_class_inherited_p(VALUE scion, VALUE ascendant) {
+            if (!(FromValue(ascendant) is RubyModule)) {
+                throw RubyExceptions.CreateTypeError("compared with non class/module");
+            }
             return ToValue(Send(FromValue(scion), "<=", null, FromValue(ascendant)));
         }
 
@@ -140,7 +149,7 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static byte* rb_obj_classname(VALUE obj) {
-            return PermanentCString(ClassName(FromValue(obj)));
+            return rb_class2name(rb_obj_class(obj));
         }
 
         internal static VALUE rb_path2class(byte* path) {
@@ -148,9 +157,11 @@ namespace IronRuby.Runtime.CApi {
             object current = _context.ObjectClass;
             foreach (var name in p.Split(new[] { "::" }, StringSplitOptions.None)) {
                 var module = current as RubyModule;
-                if (module == null || !module.TryGetConstant(null, name, out current)) {
+                // const_get loads an autoload, as CRuby's rb_path_to_class does
+                if (module == null || !Protocols.IsTrue(Send(module, "const_defined?", null, _context.EncodeIdentifier(name), false))) {
                     throw RubyExceptions.CreateArgumentError(String.Format("undefined class/module {0}", p));
                 }
+                current = Send(module, "const_get", null, _context.EncodeIdentifier(name), false);
             }
             if (!(current is RubyModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("{0} does not refer to class/module", p));
@@ -178,20 +189,43 @@ namespace IronRuby.Runtime.CApi {
 
         #region Constants and variables
 
+        /// <summary>
+        /// variable.c's rb_const_get family, looking the name up directly - C code may use names
+        /// Module#const_get refuses - and loading autoloads: in the module only (at), in its
+        /// ancestors too (from), and for a module also in Object (get). #const_missing answers
+        /// a name not found.
+        /// </summary>
+        private static VALUE ConstGet(VALUE space, VALUE name, bool inherit, bool orObject) {
+            RubyModule module = ToModule(space);
+            string n = IdToString(name);
+            var autoloadScope = (_frame?.Scope ?? _context.EmptyScope).GlobalScope;
+            object value;
+            bool found = inherit ? module.TryResolveConstant(autoloadScope, n, out value) : module.TryGetConstant(autoloadScope, n, out value);
+            if (!found && orObject && !module.IsClass) {
+                found = _context.ObjectClass.TryResolveConstant(autoloadScope, n, out value);
+            }
+            return ToValue(found ? value : module.ConstantMissing(n));
+        }
+
         internal static VALUE rb_const_get(VALUE space, VALUE name) {
-            return ToValue(Send(FromValue(space), "const_get", null, IdToSymbol(name)));
+            return ConstGet(space, name, true, true);
         }
 
         internal static VALUE rb_const_get_at(VALUE space, VALUE name) {
-            return ToValue(Send(FromValue(space), "const_get", null, IdToSymbol(name), false));
+            return ConstGet(space, name, false, false);
+        }
+
+        internal static VALUE rb_const_get_from(VALUE space, VALUE name) {
+            return ConstGet(space, name, true, false);
         }
 
         internal static int rb_const_defined(VALUE space, VALUE name) {
             return Protocols.IsTrue(Send(FromValue(space), "const_defined?", null, IdToSymbol(name))) ? 1 : 0;
         }
 
+        // as a constant assignment: warns when it replaces one
         internal static void rb_const_set(VALUE space, VALUE name, VALUE val) {
-            ToModule(space).SetConstant(IdToString(name), FromValue(val));
+            RubyUtils.SetConstant(ToModule(space), IdToString(name), FromValue(val), null, 0);
         }
 
         internal static void rb_define_const(VALUE klass, byte* name, VALUE val) {
@@ -199,7 +233,7 @@ namespace IronRuby.Runtime.CApi {
             if (n.Length == 0 || !Char.IsUpper(n[0])) {
                 _context.ReportWarning(String.Format("rb_define_const: invalid name '{0}' for constant", n), false);
             }
-            ToModule(klass).SetConstant(n, FromValue(val));
+            RubyUtils.SetConstant(ToModule(klass), n, FromValue(val), null, 0);
         }
 
         internal static VALUE rb_ivar_get(VALUE obj, VALUE name) {
@@ -225,8 +259,9 @@ namespace IronRuby.Runtime.CApi {
             return rb_ivar_set(obj, Intern(FromCString(name)), val);
         }
 
+        // the ID is the variable's, @ included, as CRuby's rb_attr_get takes it
         internal static VALUE rb_attr_get(VALUE obj, VALUE name) {
-            return rb_ivar_get(obj, Intern("@" + IdToString(name)));
+            return rb_ivar_get(obj, name);
         }
 
         private static string/*!*/ GlobalName(byte* name) {
@@ -234,13 +269,14 @@ namespace IronRuby.Runtime.CApi {
             return n.StartsWith("$", StringComparison.Ordinal) ? n.Substring(1) : n;
         }
 
+        // $~, $_ and the match variables are the frame's that called the C method, as in CRuby
         internal static VALUE rb_gv_get(byte* name) {
             object value;
-            return _context.TryGetGlobalVariable(null, GlobalName(name), out value) ? ToValue(value) : Qnil;
+            return _context.TryGetGlobalVariable(_frame?.Scope, GlobalName(name), out value) ? ToValue(value) : Qnil;
         }
 
         internal static VALUE rb_gv_set(byte* name, VALUE val) {
-            _context.SetGlobalVariable(null, GlobalName(name), FromValue(val));
+            _context.SetGlobalVariable(_frame?.Scope, GlobalName(name), FromValue(val));
             return val;
         }
 
@@ -334,9 +370,10 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(_context.GetClass(typeof(System.Threading.Thread)), "current", null));
         }
 
+        // error.c's: typed data is T_DATA but not the plain RData that T_DATA asks for
         internal static void rb_check_type(VALUE obj, int t) {
             int actual = BuiltinType(obj);
-            if (actual != t && !(t == T_DATA && actual == T_DATA)) {
+            if (actual != t || (actual == T_DATA && FromValue(obj) is DataObject data && data.Typed)) {
                 rb_unexpected_type(obj, t);
             }
         }
@@ -369,6 +406,44 @@ namespace IronRuby.Runtime.CApi {
             return SymbolToId(_context.CreateSymbol(Bytes(name, len), RubyEncoding.UTF8));
         }
 
+        /// <summary>
+        /// symbol.c's rb_check_id: the name (a Symbol, or a String or something with #to_str) as
+        /// an ID if a symbol of that name exists, 0 otherwise - without making one.
+        /// </summary>
+        private static RubySymbol CheckSymbol(VALUE* namep) {
+            object name = FromValue(*namep);
+            if (name is RubySymbol sym) {
+                return sym;
+            }
+            var str = name as MutableString;
+            if (str == null) {
+                if (!RespondTo(name, "to_str")) {
+                    throw RubyExceptions.CreateTypeError(String.Format("{0} is not a symbol nor a string", Inspect(name)));
+                }
+                str = (MutableString)ConvertType(name, T_STRING, "String", "to_str", true);
+                *namep = ToValue(str);
+            }
+            return _context.TryFindSymbol(str);
+        }
+
+        internal static VALUE rb_check_id(VALUE* namep) {
+            var sym = CheckSymbol(namep);
+            return sym != null ? SymbolToId(sym) : 0;
+        }
+
+        internal static VALUE rb_check_symbol(VALUE* namep) {
+            return ToValue(CheckSymbol(namep));
+        }
+
+        internal static VALUE rb_check_id_cstr(byte* ptr, long len, void* enc) {
+            var sym = _context.TryFindSymbol(MutableString.CreateBinary(Bytes(ptr, len), FromNativeEncoding(enc) ?? RubyEncoding.UTF8));
+            return sym != null ? SymbolToId(sym) : 0;
+        }
+
+        internal static VALUE rb_check_symbol_cstr(byte* ptr, long len, void* enc) {
+            return ToValue(_context.TryFindSymbol(MutableString.CreateBinary(Bytes(ptr, len), FromNativeEncoding(enc) ?? RubyEncoding.UTF8)));
+        }
+
         internal static VALUE rb_intern_str(VALUE str) {
             return SymbolToId(_context.CreateSymbol(ToMutableString(str)));
         }
@@ -399,12 +474,13 @@ namespace IronRuby.Runtime.CApi {
             return SymbolToId(sym);
         }
 
+        // ID 0 is no symbol: NULL, and Qfalse (0) for the string
         internal static byte* rb_id2name(VALUE id) {
-            return PermanentCString(IdToString(id));
+            return id == 0 ? null : PermanentCString(IdToString(id));
         }
 
         internal static VALUE rb_id2str(VALUE id) {
-            return ToValue(IdToSymbol(id).String.Clone().Freeze());
+            return id == 0 ? Qfalse : ToValue(IdToSymbol(id).String.Clone().Freeze());
         }
 
         internal static VALUE rb_frame_this_func() {
@@ -412,19 +488,34 @@ namespace IronRuby.Runtime.CApi {
             return frame != null ? Intern(frame.Method.Name) : 0;
         }
 
+        // the Ruby code running on this thread: the innermost frame Kernel#caller_locations reports
+        private static object CurrentLocation() {
+            var locations = Send(_context.KernelModule, "caller_locations", null, 0, 1) as RubyArray;
+            return locations != null && locations.Count > 0 ? locations[0] : null;
+        }
+
         internal static byte* rb_sourcefile() {
-            return null;
+            object location = CurrentLocation();
+            object path = location != null ? Send(location, "path", null) : null;
+            return path != null ? PermanentCString(path.ToString()) : null;
         }
 
         internal static int rb_sourceline() {
-            return 0;
+            object location = CurrentLocation();
+            return location != null ? Convert.ToInt32(Send(location, "lineno", null)) : 0;
         }
 
         #endregion
 
         #region Exceptions
 
-        // what rb_protect & co caught on this thread (CRuby's ec->errinfo)
+        // what rb_protect & co caught on this thread, for rb_jump_tag to throw on
+        [ThreadStatic] private static Exception _caught;
+
+        // CRuby's ec->errinfo, which rb_errinfo reads: what a C-level catch caught, not $! - a
+        // C method called from a rescue clause sees nil. A catch sets $! (IronRuby's own,
+        // RubyContext.CurrentException) too, as Ruby code the handler calls sees ec->errinfo
+        // there; rb_rescue and rb_ensure (native/capi.c) put both back once the handler is done.
         [ThreadStatic] private static Exception _errinfo;
 
         // CRuby's TAG_RAISE, TAG_THROW...
@@ -433,16 +524,20 @@ namespace IronRuby.Runtime.CApi {
         internal static int rb_ir_caught() {
             Exception e = _pending;
             _pending = null;
-            _errinfo = e;
+            _caught = e;
             if (e is StackUnwinder) {
                 // throw, break and the like: the tag only has to be non-zero to the extension
                 return TAG_THROW;
             }
+            _errinfo = RubyUtils.GetVisibleException(e);
+            _context.SetCurrentException(_errinfo);
             return TAG_RAISE;
         }
 
         internal static void rb_jump_tag(int state) {
-            Exception e = _errinfo;
+            Exception e = _caught;
+            _caught = null;
+            // raised on: the rescue that catches it is Ruby's, which leaves ec->errinfo nil in CRuby
             _errinfo = null;
             if (e == null) {
                 throw RubyExceptions.CreateRuntimeError(String.Format("rb_jump_tag({0}) with nothing to rethrow", state));
@@ -451,25 +546,28 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static int rb_ir_rescue_match(int count, VALUE* classes) {
-            Exception e = _errinfo;
+            Exception e = _caught;
             if (e == null || e is StackUnwinder) {
                 return 0;
             }
+            bool matched = false;
             for (int i = 0; i < count; i++) {
                 var module = FromValue(classes[i]) as RubyModule;
-                if (module != null && _context.IsKindOf(e, module)) {
-                    return 1;
+                if (module == null) {
+                    // as a rescue clause naming something else does: the exception is lost
+                    _caught = null;
+                    _errinfo = null;
+                    throw RubyExceptions.CreateTypeError("class or module required for rescue clause");
+                }
+                if (!matched && _context.IsKindOf(RubyUtils.GetVisibleException(e), module)) {
+                    matched = true;
                 }
             }
-            return 0;
+            return matched ? 1 : 0;
         }
 
         internal static VALUE rb_errinfo() {
-            Exception e = _errinfo;
-            if (e != null && !(e is StackUnwinder)) {
-                return ToValue(e);
-            }
-            return ToValue(_context.CurrentException);
+            return ToValue(_errinfo);
         }
 
         internal static void rb_set_errinfo(VALUE err) {
@@ -478,6 +576,14 @@ namespace IronRuby.Runtime.CApi {
                 throw RubyExceptions.CreateTypeError("assigning non-exception to $!");
             }
             _errinfo = (Exception)e;
+        }
+
+        internal static VALUE rb_ir_current_exception() {
+            return ToValue(_context.CurrentExceptionNoExpose);
+        }
+
+        internal static void rb_ir_set_current_exception(VALUE exc) {
+            _context.SetCurrentException(FromValue(exc));
         }
 
         internal static void rb_exc_raise(VALUE exc) {

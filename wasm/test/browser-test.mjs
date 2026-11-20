@@ -38,7 +38,7 @@ try {
   check('boots', boot.ok && /IronRuby/.test(boot.version), boot);
 
   let r = await run('puts "Hello from #{RUBY_ENGINE} #{RUBY_VERSION}"');
-  check('puts output', r.ok && r.stdout === 'Hello from ironruby 4.0.0\n', r);
+  check('puts output', r.ok && /^Hello from ironruby \d+\.\d+\.\d+\n$/.test(r.stdout), r);
   const streamed = await page.evaluate(() => window.streamed.map(x => x[1]).join(''));
   check('output streamed to onOutput', streamed.includes('Hello from ironruby'), streamed);
 

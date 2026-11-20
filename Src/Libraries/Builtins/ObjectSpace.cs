@@ -23,14 +23,6 @@ using IronRuby.Runtime;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
-    /// <summary>
-    /// What a C extension's rb_data_type_t.dsize function reports: the bytes an object holds
-    /// outside its slot.  ObjectSpace.memsize_of adds it to the slot, as MRI does.
-    /// </summary>
-    internal interface IMemorySized {
-        long ExtraMemorySize { get; }
-    }
-
     [RubyModule("ObjectSpace")]
     public static class ObjectSpace {
         #region define_finalizer, undefine_finalizer

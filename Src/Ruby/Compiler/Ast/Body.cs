@@ -281,8 +281,12 @@ namespace IronRuby.Compiler.Ast {
             var retryLabel = Ast.Label("retry");
             ConstantSiteCache[][] rescueSites = null;
 
-            // The exception the rescue clauses ran for, once they are left: the cause of an exception they raise that has none
-            // yet (one C# threw), which the handler around them decides after the finally below has restored $!.
+            // The exception the rescue clauses run for: the cause of an exception they raise that has none yet (one C# threw),
+            // which the handler around them decides after the finally below has restored $!. Null while they do not run.
+            // It is $! as the clauses are entered, stored there and not in that finally as `thrown ? $! : null': compiled, with
+            // RubyOps.GetCurrentException inlined (a Release build), the JIT of .NET 10 emitted no store at all for that
+            // conditional in the finally block, and the handler read null - no cause - where the interpreter and a Debug build
+            // had the exception (Exception_CauseRaisedInClause1).
             MSA.Expression handledVariable = (_rescueClauses != null) ?
                 gen.CurrentScope.DefineHiddenVariable("#handled-exception", typeof(Exception)) : null;
 
@@ -372,11 +376,13 @@ namespace IronRuby.Compiler.Ast {
                         )
                     ),
                     Ast.Assign(passingVariable, AstUtils.Constant(null, typeof(Exception))),
-                    AstUtils.IfThen(exceptionThrownVariable, transformedRescue),
+                    AstUtils.IfThen(exceptionThrownVariable, Ast.Block(
+                        Ast.Assign(handledVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+                        transformedRescue,
+                        AstUtils.Empty()
+                    )),
                     AstUtils.Empty()
                 ).Finally(
-                    Ast.Assign(handledVariable, Ast.Condition(exceptionThrownVariable,
-                        Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable), AstUtils.Constant(null, typeof(Exception)))),
                     // restore previous exception if the current one has been handled:
                     AstUtils.Unless(exceptionRethrowVariable,
                         Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
@@ -393,11 +399,13 @@ namespace IronRuby.Compiler.Ast {
                         Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
                         AstUtils.Empty()
                     ),
-                    AstUtils.IfThen(exceptionThrownVariable, transformedRescue),
+                    AstUtils.IfThen(exceptionThrownVariable, Ast.Block(
+                        Ast.Assign(handledVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+                        transformedRescue,
+                        AstUtils.Empty()
+                    )),
                     AstUtils.Empty()
                 ).Finally(
-                    Ast.Assign(handledVariable, Ast.Condition(exceptionThrownVariable,
-                        Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable), AstUtils.Constant(null, typeof(Exception)))),
                     // restore previous exception if the current one has been handled:
                     AstUtils.Unless(exceptionRethrowVariable,
                         Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
@@ -432,6 +440,9 @@ namespace IronRuby.Compiler.Ast {
                 // save exception (old_$! is not used unless there is a rescue clause):
                 (_rescueClauses == null) ? (MSA.Expression)AstUtils.Empty() :
                     Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+                // no rescue clause has run yet, also after a retry: the else clause's exceptions have $! as their cause
+                (_rescueClauses == null) ? (MSA.Expression)AstUtils.Empty() :
+                    Ast.Assign(handledVariable, AstUtils.Constant(null, typeof(Exception))),
 
                 guarded,
 

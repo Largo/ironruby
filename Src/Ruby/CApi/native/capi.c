@@ -17,6 +17,7 @@
 # include <pthread.h>
 #endif
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -111,6 +112,40 @@ rb_ir_call_func1(void *fn, VALUE arg, int *raised)
     VALUE result = Qnil;
     *raised = 0;
     RB_IR_PROTECT(frame, result = ((rb_ir_f0)fn)(arg), *raised = 1);
+    return result;
+}
+
+/* rb_tracepoint_new's hook: void (*)(VALUE tpval, void *data). */
+RB_IR_EXPORT void
+rb_ir_call_tracepoint(void *fn, VALUE tpval, void *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    *raised = 0;
+    RB_IR_PROTECT(frame, ((void (*)(VALUE, void *))fn)(tpval, data), *raised = 1);
+}
+
+/* rb_debug_inspector_open's callback: rb_debug_inspector_func_t. */
+RB_IR_EXPORT VALUE
+rb_ir_call_inspector(void *fn, const rb_debug_inspector_t *dc, void *data, int *raised)
+{
+    struct rb_ir_frame frame;
+    VALUE result = Qnil;
+    *raised = 0;
+    RB_IR_PROTECT(frame, result = ((rb_debug_inspector_func_t)fn)(dc, data), *raised = 1);
+    return result;
+}
+
+/* What a typed object's dsize function says it holds outside its slot (ObjectSpace.memsize_of). */
+RB_IR_EXPORT size_t
+rb_ir_typed_data_memsize(VALUE obj, int *raised)
+{
+    struct rb_ir_frame frame;
+    size_t result = 0;
+    *raised = 0;
+    const rb_data_type_t *type = RTYPEDDATA_TYPE(obj);
+    void *data = RTYPEDDATA_GET_DATA(obj);
+    if (type == NULL || type->function.dsize == NULL || data == NULL) return 0;
+    RB_IR_PROTECT(frame, result = type->function.dsize(data), *raised = 1);
     return result;
 }
 
@@ -226,10 +261,18 @@ VALUE
 rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2)
 {
     struct rb_ir_frame frame;
-    VALUE result = Qnil;
+    VALUE result = Qnil, errinfo = rb_errinfo(), current = rb_ir_current_exception();
     int tag = 0;
     RB_IR_PROTECT(frame, result = b_proc(data1), tag = rb_ir_caught());
-    e_proc(data2);
+    /* $! is the exception while the ensure function runs, and what it was before afterwards,
+       whether the ensure function returns or raises */
+    {
+        int tag2 = 0;
+        RB_IR_PROTECT(frame, e_proc(data2), tag2 = rb_ir_caught());
+        rb_set_errinfo(errinfo);
+        rb_ir_set_current_exception(current);
+        if (tag2) rb_jump_tag(tag2);
+    }
     if (tag) rb_jump_tag(tag);
     return result;
 }
@@ -238,15 +281,19 @@ static VALUE
 rb_ir_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, int count, const VALUE *classes)
 {
     struct rb_ir_frame frame;
-    VALUE result = Qnil;
+    VALUE result = Qnil, errinfo = rb_errinfo(), current = rb_ir_current_exception();
     int tag = 0;
     RB_IR_PROTECT(frame, result = b_proc(data1), tag = rb_ir_caught());
     if (!tag) return result;
     if (!rb_ir_rescue_match(count, classes)) rb_jump_tag(tag);
+    /* $! is the exception while the rescue function runs, and what it was before afterwards,
+       whether the rescue function returns or raises */
     {
-        VALUE exc = rb_errinfo();
-        result = r_proc ? r_proc(data2, exc) : Qnil;
-        rb_set_errinfo(Qnil);
+        int tag2 = 0;
+        RB_IR_PROTECT(frame, result = r_proc ? r_proc(data2, rb_errinfo()) : Qnil, tag2 = rb_ir_caught());
+        rb_set_errinfo(errinfo);
+        rb_ir_set_current_exception(current);
+        if (tag2) rb_jump_tag(tag2);
     }
     return result;
 }
@@ -783,6 +830,123 @@ utf8_left_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *en
 static OnigUChar *sb_left_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *end, const OnigEncodingType *enc) { return (OnigUChar *)p; }
 static int always_true(const OnigUChar *p, const OnigUChar *end, const OnigEncodingType *enc) { return 1; }
 
+/* UTF-16 and UTF-32, either byte order: be is 1 for big-endian */
+static OnigCodePoint u16_at(const OnigUChar *p, int be) { return be ? (p[0] << 8) | p[1] : (p[1] << 8) | p[0]; }
+static OnigCodePoint
+u32_at(const OnigUChar *p, int be)
+{
+    return be ? ((OnigCodePoint)p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]
+              : ((OnigCodePoint)p[3] << 24) | (p[2] << 16) | (p[1] << 8) | p[0];
+}
+
+static int
+utf16_len(const OnigUChar *p, const OnigUChar *e, int be)
+{
+    if (e - p < 2) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(2 - (int)(e - p));
+    OnigCodePoint c = u16_at(p, be);
+    if (c >= 0xdc00 && c <= 0xdfff) return ONIGENC_CONSTRUCT_MBCLEN_INVALID();
+    if (c < 0xd800 || c > 0xdbff) return ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(2);
+    if (e - p < 4) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(4 - (int)(e - p));
+    c = u16_at(p + 2, be);
+    return c >= 0xdc00 && c <= 0xdfff ? ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(4) : ONIGENC_CONSTRUCT_MBCLEN_INVALID();
+}
+
+static int
+utf32_len(const OnigUChar *p, const OnigUChar *e, int be)
+{
+    if (e - p < 4) return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(4 - (int)(e - p));
+    OnigCodePoint c = u32_at(p, be);
+    return c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff) ? ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(4) : ONIGENC_CONSTRUCT_MBCLEN_INVALID();
+}
+
+static OnigCodePoint
+utf16_to_code(const OnigUChar *p, const OnigUChar *e, int be)
+{
+    if (e - p < 2) return *p;
+    OnigCodePoint c = u16_at(p, be);
+    if (c >= 0xd800 && c <= 0xdbff && e - p >= 4) {
+        OnigCodePoint lo = u16_at(p + 2, be);
+        if (lo >= 0xdc00 && lo <= 0xdfff) return 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+    }
+    return c;
+}
+
+static int
+utf16_code_to_mbc(OnigCodePoint c, OnigUChar *buf, int be)
+{
+    if (c > 0xffff) {
+        OnigCodePoint hi = 0xd800 + ((c - 0x10000) >> 10), lo = 0xdc00 + ((c - 0x10000) & 0x3ff);
+        utf16_code_to_mbc(hi, buf, be);
+        utf16_code_to_mbc(lo, buf + 2, be);
+        return 4;
+    }
+    buf[be ? 0 : 1] = (OnigUChar)(c >> 8);
+    buf[be ? 1 : 0] = (OnigUChar)c;
+    return 2;
+}
+
+static int
+utf32_code_to_mbc(OnigCodePoint c, OnigUChar *buf, int be)
+{
+    for (int i = 0; i < 4; i++) buf[be ? 3 - i : i] = (OnigUChar)(c >> (8 * i));
+    return 4;
+}
+
+static OnigUChar *
+utf16_left_adjust(const OnigUChar *start, const OnigUChar *p, int be)
+{
+    if (p <= start) return (OnigUChar *)p;
+    p -= (p - start) % 2;
+    if (p - start >= 2) {
+        OnigCodePoint c = u16_at(p, be), prev = u16_at(p - 2, be);
+        if (c >= 0xdc00 && c <= 0xdfff && prev >= 0xd800 && prev <= 0xdbff) p -= 2;
+    }
+    return (OnigUChar *)p;
+}
+
+#define RB_IR_WIDE(name, be) \
+    static int name##_precise_len(const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_len_(p, e, be); } \
+    static int name##_newline(const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_len_(p, e, be) > 0 && name##_to_code_(p, e, be) == '\n'; } \
+    static OnigCodePoint name##_code(const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_to_code_(p, e, be); } \
+    static int name##_to_mbc(OnigCodePoint c, OnigUChar *buf, const OnigEncodingType *enc) { return name##_code_to_mbc_(c, buf, be); } \
+    static OnigUChar *name##_adjust(const OnigUChar *start, const OnigUChar *p, const OnigUChar *e, const OnigEncodingType *enc) { return name##_left_adjust_(start, p, be); }
+
+static int utf16_len_(const OnigUChar *p, const OnigUChar *e, int be) { return utf16_len(p, e, be); }
+static OnigCodePoint utf16_to_code_(const OnigUChar *p, const OnigUChar *e, int be) { return utf16_to_code(p, e, be); }
+static int utf16_code_to_mbc_(OnigCodePoint c, OnigUChar *buf, int be) { return utf16_code_to_mbc(c, buf, be); }
+static OnigUChar *utf16_left_adjust_(const OnigUChar *start, const OnigUChar *p, int be) { return utf16_left_adjust(start, p, be); }
+static int utf32_len_(const OnigUChar *p, const OnigUChar *e, int be) { return utf32_len(p, e, be); }
+static OnigCodePoint utf32_to_code_(const OnigUChar *p, const OnigUChar *e, int be) { return e - p < 4 ? *p : u32_at(p, be); }
+static int utf32_code_to_mbc_(OnigCodePoint c, OnigUChar *buf, int be) { return utf32_code_to_mbc(c, buf, be); }
+static OnigUChar *utf32_left_adjust_(const OnigUChar *start, const OnigUChar *p, int be) { return (OnigUChar *)(p - (p - start) % 4); }
+
+#define utf16be_len_ utf16_len_
+#define utf16be_to_code_ utf16_to_code_
+#define utf16be_code_to_mbc_ utf16_code_to_mbc_
+#define utf16be_left_adjust_ utf16_left_adjust_
+#define utf16le_len_ utf16_len_
+#define utf16le_to_code_ utf16_to_code_
+#define utf16le_code_to_mbc_ utf16_code_to_mbc_
+#define utf16le_left_adjust_ utf16_left_adjust_
+#define utf32be_len_ utf32_len_
+#define utf32be_to_code_ utf32_to_code_
+#define utf32be_code_to_mbc_ utf32_code_to_mbc_
+#define utf32be_left_adjust_ utf32_left_adjust_
+#define utf32le_len_ utf32_len_
+#define utf32le_to_code_ utf32_to_code_
+#define utf32le_code_to_mbc_ utf32_code_to_mbc_
+#define utf32le_left_adjust_ utf32_left_adjust_
+RB_IR_WIDE(utf16be, 1)
+RB_IR_WIDE(utf16le, 0)
+RB_IR_WIDE(utf32be, 1)
+RB_IR_WIDE(utf32le, 0)
+
+static int utf16_code_len(OnigCodePoint c, const OnigEncodingType *enc) { return c > 0x10ffff ? ONIGERR_TOO_BIG_WIDE_CHAR_VALUE : c > 0xffff ? 4 : 2; }
+static int utf32_code_len(OnigCodePoint c, const OnigEncodingType *enc) { return c > 0x10ffff ? ONIGERR_TOO_BIG_WIDE_CHAR_VALUE : 4; }
+
+/* the encodings whose bytes 0xA0..0xFF are Latin-1's letters (rb_ir_make_encoding's kind 6) */
+#define RB_IR_LATIN1 (1U << 30)
+
 /* Character classes: exact for ASCII; a non-ASCII code point is a letter (and so alnum, word,
  * graph, print) in a Unicode encoding and nothing in any other, which is close enough for what
  * extensions ask (rb_enc_isalnum, rb_enc_isspace...) until IronRuby answers these itself. */
@@ -810,6 +974,23 @@ is_code_ctype(OnigCodePoint code, OnigCtype ctype, const OnigEncodingType *enc)
         }
         return 0;
     }
+    if (code < 256 && (enc->flags & (ONIGENC_FLAG_UNICODE | RB_IR_LATIN1))) {
+        int c = (int)code;
+        int upper = c >= 0xc0 && c <= 0xde && c != 0xd7;
+        int lower = (c >= 0xdf && c <= 0xff && c != 0xf7) || c == 0xaa || c == 0xb5 || c == 0xba;
+        switch (ctype) {
+          case ONIGENC_CTYPE_ALPHA: case ONIGENC_CTYPE_ALNUM: case ONIGENC_CTYPE_WORD: return upper || lower;
+          case ONIGENC_CTYPE_UPPER: return upper;
+          case ONIGENC_CTYPE_LOWER: return lower;
+          case ONIGENC_CTYPE_SPACE: return c == 0x85 || c == 0xa0;
+          case ONIGENC_CTYPE_BLANK: return c == 0xa0;
+          case ONIGENC_CTYPE_CNTRL: return c < 0xa0;
+          case ONIGENC_CTYPE_PRINT: return c >= 0xa0;
+          case ONIGENC_CTYPE_GRAPH: return c > 0xa0;
+          case ONIGENC_CTYPE_PUNCT: return c > 0xa0 && !upper && !lower;
+        }
+        return 0;
+    }
     if (!(enc->flags & ONIGENC_FLAG_UNICODE)) return 0;
     switch (ctype) {
       case ONIGENC_CTYPE_ALPHA: case ONIGENC_CTYPE_GRAPH: case ONIGENC_CTYPE_PRINT:
@@ -819,13 +1000,35 @@ is_code_ctype(OnigCodePoint code, OnigCtype ctype, const OnigEncodingType *enc)
     return 0;
 }
 
+/* lower case for ASCII, and for Latin-1's letters in a Unicode or Latin-1 encoding */
+static OnigCodePoint
+fold_code(OnigCodePoint c, const OnigEncodingType *enc)
+{
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    if (c >= 0xc0 && c <= 0xde && c != 0xd7 && (enc->flags & (ONIGENC_FLAG_UNICODE | RB_IR_LATIN1))) return c + 32;
+    return c;
+}
+
+static OnigCodePoint
+upcase_code(OnigCodePoint c, const OnigEncodingType *enc)
+{
+    if (c >= 'a' && c <= 'z') return c - 32;
+    if (c >= 0xe0 && c <= 0xfe && c != 0xf7 && (enc->flags & (ONIGENC_FLAG_UNICODE | RB_IR_LATIN1))) return c - 32;
+    return c;
+}
+
 static int
 mbc_case_fold(OnigCaseFoldType flag, const OnigUChar **pp, const OnigUChar *end, OnigUChar *to, const OnigEncodingType *enc)
 {
     const OnigUChar *p = *pp;
-    *to = (*p >= 'A' && *p <= 'Z') ? (OnigUChar)(*p + 32) : *p;
-    (*pp)++;
-    return 1;
+    int r = enc->precise_mbc_enc_len(p, end, enc);
+    if (!ONIGENC_MBCLEN_CHARFOUND_P(r)) {
+        *to = *p;
+        (*pp)++;
+        return 1;
+    }
+    *pp += ONIGENC_MBCLEN_CHARFOUND_LEN(r);
+    return enc->code_to_mbc(fold_code(enc->mbc_to_code(p, end, enc), enc), to, enc);
 }
 
 static int apply_all_case_fold(OnigCaseFoldType flag, OnigApplyAllCaseFoldFunc f, void *arg, const OnigEncodingType *enc) { return 0; }
@@ -837,18 +1040,31 @@ static int
 case_map(OnigCaseFoldType *flagP, const OnigUChar **pp, const OnigUChar *end, OnigUChar *to, OnigUChar *to_end, const OnigEncodingType *enc)
 {
     OnigUChar *start = to;
-    while (*pp < end && to < to_end) {
-        OnigUChar c = *(*pp)++;
-        if ((*flagP & ONIGENC_CASE_UPCASE) && c >= 'a' && c <= 'z') c -= 32;
-        else if ((*flagP & ONIGENC_CASE_DOWNCASE) && c >= 'A' && c <= 'Z') c += 32;
-        *to++ = c;
+    while (*pp < end && to_end - to >= enc->max_enc_len) {
+        const OnigUChar *p = *pp;
+        int r = enc->precise_mbc_enc_len(p, end, enc);
+        if (!ONIGENC_MBCLEN_CHARFOUND_P(r)) {
+            *to++ = *(*pp)++;
+            continue;
+        }
+        *pp += ONIGENC_MBCLEN_CHARFOUND_LEN(r);
+        OnigCodePoint c = enc->mbc_to_code(p, end, enc), m = c;
+        if (*flagP & ONIGENC_CASE_UPCASE) m = upcase_code(c, enc);
+        else if (*flagP & ONIGENC_CASE_DOWNCASE) m = fold_code(c, enc);
+        if (m != c) *flagP |= ONIGENC_CASE_MODIFIED;
+        to += enc->code_to_mbc(m, to, enc);
     }
     return (int)(to - start);
 }
 
+/*
+ * kind: 0 single-byte (or a multibyte encoding treated byte by byte), 1 UTF-8 and its variants,
+ * 2 UTF-16BE, 3 UTF-16LE, 4 UTF-32BE, 5 UTF-32LE, 6 single-byte with Latin-1's letters.
+ */
 RB_IR_EXPORT rb_encoding *
-rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int utf8)
+rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int kind)
 {
+    int utf8 = kind == 1;
     OnigEncodingType *enc = calloc(1, sizeof(OnigEncodingType));
     if (!enc) abort();
     enc->name = strdup(name);
@@ -863,6 +1079,18 @@ rb_ir_make_encoding(const char *name, int min_len, int max_len, int index, int u
     enc->code_to_mbc = utf8 ? utf8_code_to_mbc : sb_code_to_mbc;
     enc->left_adjust_char_head = utf8 ? utf8_left_adjust : sb_left_adjust;
     enc->is_allowed_reverse_match = always_true;
+    switch (kind) {
+#define RB_IR_SET_WIDE(n, len) \
+        enc->precise_mbc_enc_len = n##_precise_len; enc->is_mbc_newline = n##_newline; enc->mbc_to_code = n##_code; \
+        enc->code_to_mbclen = len; enc->code_to_mbc = n##_to_mbc; enc->left_adjust_char_head = n##_adjust; break;
+      case 2: RB_IR_SET_WIDE(utf16be, utf16_code_len)
+      case 3: RB_IR_SET_WIDE(utf16le, utf16_code_len)
+      case 4: RB_IR_SET_WIDE(utf32be, utf32_code_len)
+      case 5: RB_IR_SET_WIDE(utf32le, utf32_code_len)
+#undef RB_IR_SET_WIDE
+    }
+    if (kind >= 1 && kind <= 5) enc->flags = ONIGENC_FLAG_UNICODE;
+    if (kind == 6) enc->flags = RB_IR_LATIN1;
     enc->is_code_ctype = is_code_ctype;
     enc->mbc_case_fold = mbc_case_fold;
     enc->apply_all_case_fold = apply_all_case_fold;
@@ -974,10 +1202,26 @@ rb_eval_string_protect(const char *str, int *state)
     return rb_protect(do_eval_string, (VALUE)str, state);
 }
 
+/* error.c's rb_warning_category_enabled_p, asking Warning[] */
+static int
+ir_warning_category_enabled(rb_warning_category_t category)
+{
+    const char *name;
+    switch (category) {
+      case RB_WARN_CATEGORY_DEPRECATED: name = "deprecated"; break;
+      case RB_WARN_CATEGORY_EXPERIMENTAL: name = "experimental"; break;
+      case RB_WARN_CATEGORY_PERFORMANCE: name = "performance"; break;
+      case RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK: name = "strict_unused_block"; break;
+      default: return 1;
+    }
+    return RTEST(rb_funcall(rb_path2class("Warning"), rb_intern("[]"), 1, ID2SYM(rb_intern(name))));
+}
+
 void
 rb_category_warn(rb_warning_category_t category, const char *fmt, ...)
 {
     va_list ap;
+    if (!ir_warning_category_enabled(category)) return;
     va_start(ap, fmt);
     VALUE msg = rb_vsprintf(fmt, ap);
     va_end(ap);
@@ -988,6 +1232,7 @@ void
 rb_category_warning(rb_warning_category_t category, const char *fmt, ...)
 {
     va_list ap;
+    if (!ir_warning_category_enabled(category)) return;
     va_start(ap, fmt);
     VALUE msg = rb_vsprintf(fmt, ap);
     va_end(ap);
@@ -1015,6 +1260,28 @@ rb_struct_define(const char *name, ...)
     }
     va_end(ap);
     return rb_funcallv(rb_cStruct, rb_intern("new"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
+}
+
+/* struct.c's: a Data class with the NULL-terminated member names, under Data or super */
+VALUE
+rb_data_define(VALUE super, ...)
+{
+    VALUE args = rb_ary_new();
+    va_list ap;
+    va_start(ap, super);
+    for (;;) {
+        const char *member = va_arg(ap, const char *);
+        if (!member) break;
+        rb_ary_push(args, rb_id2sym(rb_intern(member)));
+    }
+    va_end(ap);
+    if (!super || NIL_P(super)) {
+        super = rb_path2class("Data");
+    }
+    else {
+        Check_Type(super, T_CLASS);
+    }
+    return rb_funcallv(super, rb_intern("define"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args));
 }
 
 VALUE
@@ -1086,9 +1353,66 @@ ruby_scan_hex(const char *start, size_t len, size_t *retlen)
     return v;
 }
 
+/* ------------------------------------------------------------------------------------------
+ * Digest plugins: an extension that brings its own hash function hands digest.so an
+ * rb_digest_metadata_t, wrapped by rb_digest_wrap_metadata, which ruby/digest.h finds through
+ * rb_ext_resolve_symbol("digest.so", ...). IronRuby's digest is C#: the wrapper is here, and
+ * Digest::Base calls the plugin's functions through rb_ir_digest_call (NativeDigest.cs).
+ */
+typedef struct {
+    int api_version;
+    size_t digest_len;
+    size_t block_len;
+    size_t ctx_size;
+    int (*init_func)(void *);
+    void (*update_func)(void *, unsigned char *, size_t);
+    int (*finish_func)(void *, unsigned char *);
+} rb_ir_digest_metadata_t;   /* ruby/digest.h's rb_digest_metadata_t */
+
+static const rb_data_type_t rb_ir_digest_metadata_type = {
+    "digest/metadata",
+    { 0, 0, 0, },
+    0, 0,
+    RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+static VALUE
+rb_ir_digest_wrap_metadata(const rb_ir_digest_metadata_t *meta)
+{
+    return rb_obj_freeze(TypedData_Wrap_Struct(0, &rb_ir_digest_metadata_type, (void *)meta));
+}
+
+/* The metadata a Digest::Base subclass's "metadata" holds, or NULL for any other typed object. */
+RB_IR_EXPORT const rb_ir_digest_metadata_t *
+rb_ir_digest_metadata(VALUE obj)
+{
+    return RTYPEDDATA_TYPE(obj) == &rb_ir_digest_metadata_type ? RTYPEDDATA_GET_DATA(obj) : NULL;
+}
+
+/* op 0: init_func(ctx); 1: update_func(ctx, ptr, len); 2: finish_func(ctx, ptr) */
+RB_IR_EXPORT int
+rb_ir_digest_call(const rb_ir_digest_metadata_t *meta, int op, void *ctx, unsigned char *ptr, size_t len, int *raised)
+{
+    struct rb_ir_frame frame;
+    int result = 0;
+    *raised = 0;
+    switch (op) {
+      case 0: RB_IR_PROTECT(frame, result = meta->init_func(ctx), *raised = 1); break;
+      case 1: RB_IR_PROTECT(frame, meta->update_func(ctx, ptr, len), *raised = 1); break;
+      case 2: RB_IR_PROTECT(frame, result = meta->finish_func(ctx, ptr), *raised = 1); break;
+    }
+    return result;
+}
+
+/* Only digest.so's rb_digest_wrap_metadata, which is all CRuby's own extensions look up with it. */
 void *
 rb_ext_resolve_symbol(const char *feature, const char *symbol)
 {
+    if ((strcmp(feature, "digest.so") == 0 || strcmp(feature, "digest") == 0) &&
+        strcmp(symbol, "rb_digest_wrap_metadata") == 0) {
+        rb_require("digest");
+        return (void *)(uintptr_t)rb_ir_digest_wrap_metadata;
+    }
     return NULL;
 }
 
@@ -1125,10 +1449,87 @@ rb_enc_nth(const char *p, const char *e, long nth, rb_encoding *enc)
     return (char *)(p > e ? e : p);
 }
 
+/* CRuby's: the original UTF-8 of up to 6 bytes, beyond U+10FFFF too */
 int
 rb_uv_to_utf8(char buf[6], unsigned long uv)
 {
-    return utf8_code_to_mbc((OnigCodePoint)uv, (OnigUChar *)buf, NULL);
+    if (uv < 0x200000) return utf8_code_to_mbc((OnigCodePoint)uv, (OnigUChar *)buf, NULL);
+    if (uv < 0x4000000) {
+        buf[0] = (char)(0xf8 | (uv >> 24));
+        buf[1] = (char)(0x80 | ((uv >> 18) & 0x3f));
+        buf[2] = (char)(0x80 | ((uv >> 12) & 0x3f));
+        buf[3] = (char)(0x80 | ((uv >> 6) & 0x3f));
+        buf[4] = (char)(0x80 | (uv & 0x3f));
+        return 5;
+    }
+    if (uv < 0x80000000UL) {
+        buf[0] = (char)(0xfc | (uv >> 30));
+        buf[1] = (char)(0x80 | ((uv >> 24) & 0x3f));
+        buf[2] = (char)(0x80 | ((uv >> 18) & 0x3f));
+        buf[3] = (char)(0x80 | ((uv >> 12) & 0x3f));
+        buf[4] = (char)(0x80 | ((uv >> 6) & 0x3f));
+        buf[5] = (char)(0x80 | (uv & 0x3f));
+        return 6;
+    }
+    rb_raise(rb_eRangeError, "pack(U): value out of range");
+    return 0;
+}
+
+/* string.c's: a fixed-width encoding counts whole and partial characters, any other walks them */
+long
+rb_enc_strlen(const char *p, const char *e, rb_encoding *enc)
+{
+    long c;
+    if (enc->min_enc_len == enc->max_enc_len) {
+        return (e - p + enc->min_enc_len - 1) / enc->min_enc_len;
+    }
+    for (c = 0; p < e; c++) p += rb_enc_mbclen(p, e, enc);
+    return c;
+}
+
+int
+rb_enc_codelen(int c, rb_encoding *enc)
+{
+    int n = enc->code_to_mbclen((OnigCodePoint)c, enc);
+    if (n <= 0) rb_raise(rb_eArgError, "invalid codepoint 0x%x in %s", (unsigned int)c, enc->name);
+    return n;
+}
+
+/*
+ * vm_method.c's: the function a method stands for when the platform lacks it. ruby.h names it
+ * through the pointer rb_f_notimplement_; IronRuby defines a method of it as one respond_to?
+ * denies (CApi.DefineMethod).
+ */
+void
+rb_notimplement(void)
+{
+    rb_raise(rb_eNotImpError, "%"PRIsVALUE"() function is unimplemented on this machine",
+             rb_id2str(rb_frame_this_func()));
+}
+
+#undef rb_f_notimplement
+VALUE
+rb_f_notimplement(int argc, const VALUE *argv, VALUE obj, VALUE marker)
+{
+    rb_notimplement();
+    UNREACHABLE_RETURN(Qnil);
+}
+VALUE (*const rb_f_notimplement_)(int, const VALUE *, VALUE, VALUE marker) = rb_f_notimplement;
+
+/* encoding.c's: a new dummy encoding, as many as fit in its 256 */
+int
+rb_define_dummy_encoding(const char *name)
+{
+    int index = rb_ir_define_dummy_encoding(name);
+    if (index < 0) rb_raise(rb_eEncodingError, "too many encoding (> 256)");
+    return index;
+}
+
+OnigUChar *
+onigenc_get_left_adjust_char_head(OnigEncoding enc, const OnigUChar *start, const OnigUChar *s, const OnigUChar *end)
+{
+    if (s <= start) return (OnigUChar *)s;
+    return enc->left_adjust_char_head(start, s, end, enc);
 }
 
 /* No GVL: IronRuby's threads run in parallel already, so these just call func. What they do
@@ -1442,4 +1843,613 @@ RB_IR_EXPORT VALUE
 rb_ir_default_allocator(VALUE klass)
 {
     return rb_ir_allocate_builtin(klass);
+}
+
+/*
+ * struct rb_io's layout as these headers have it, for IronRuby's rb_io_t mirrors
+ * (CApi.Io.cs): its size, then the offsets of self, fd, mode and pathv.
+ */
+/* the fields are deprecated for extensions, which should call rb_io_descriptor() and so on */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+RB_IR_EXPORT void
+rb_ir_io_layout(size_t *out)
+{
+    out[0] = sizeof(struct rb_io);
+    out[1] = offsetof(struct rb_io, self);
+    out[2] = offsetof(struct rb_io, fd);
+    out[3] = offsetof(struct rb_io, mode);
+    out[4] = offsetof(struct rb_io, pathv);
+}
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+/*
+ * io.c's: after a call on io failed with error, an interrupted one is retried at once (the
+ * events come back), one that would have blocked waits for them (rb_io_wait), and any other
+ * error leaves nothing ready (Qnil). Here rather than in C# for the platform's errno values.
+ */
+VALUE
+rb_io_maybe_wait(int error, VALUE io, VALUE events, VALUE timeout)
+{
+    rb_io_t *fptr;
+    RB_IO_POINTER(io, fptr);
+    switch (error) {
+#if defined(ERESTART)
+      case ERESTART:
+#endif
+      case EINTR:
+        rb_thread_check_ints();
+        return events;
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+      case EWOULDBLOCK:
+#endif
+      case EAGAIN:
+        return rb_io_wait(io, events, timeout);
+      default:
+        return Qnil;
+    }
+}
+
+int
+rb_io_maybe_wait_readable(int error, VALUE io, VALUE timeout)
+{
+    VALUE result = rb_io_maybe_wait(error, io, RB_INT2NUM(RUBY_IO_READABLE), timeout);
+    if (RTEST(result)) return RB_NUM2INT(result);
+    if (result == Qfalse) rb_raise(rb_eIOTimeoutError, "Timed out waiting for IO to become readable!");
+    return 0;
+}
+
+int
+rb_io_maybe_wait_writable(int error, VALUE io, VALUE timeout)
+{
+    VALUE result = rb_io_maybe_wait(error, io, RB_INT2NUM(RUBY_IO_WRITABLE), timeout);
+    if (RTEST(result)) return RB_NUM2INT(result);
+    if (result == Qfalse) rb_raise(rb_eIOTimeoutError, "Timed out waiting for IO to become writable!");
+    return 0;
+}
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/param.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+/* thread.c's rb_fd_* (the large-fdset flavour the headers declare): plain C over fd_set. */
+
+void
+rb_fd_init(rb_fdset_t *fds)
+{
+    fds->maxfd = 0;
+    fds->fdset = ALLOC(fd_set);
+    FD_ZERO(fds->fdset);
+}
+
+void
+rb_fd_term(rb_fdset_t *fds)
+{
+    xfree(fds->fdset);
+    fds->maxfd = 0;
+    fds->fdset = 0;
+}
+
+void
+rb_fd_zero(rb_fdset_t *fds)
+{
+    if (fds->fdset)
+        MEMZERO(fds->fdset, fd_mask, howmany(fds->maxfd, NFDBITS));
+}
+
+static void
+ir_fd_resize(int n, rb_fdset_t *fds)
+{
+    size_t m = howmany(n + 1, NFDBITS) * sizeof(fd_mask);
+    size_t o = howmany(fds->maxfd, NFDBITS) * sizeof(fd_mask);
+
+    if (m < sizeof(fd_set)) m = sizeof(fd_set);
+    if (o < sizeof(fd_set)) o = sizeof(fd_set);
+
+    if (m > o) {
+        fds->fdset = xrealloc(fds->fdset, m);
+        memset((char *)fds->fdset + o, 0, m - o);
+    }
+    if (n >= fds->maxfd) fds->maxfd = n + 1;
+}
+
+void
+rb_fd_set(int n, rb_fdset_t *fds)
+{
+    ir_fd_resize(n, fds);
+    FD_SET(n, fds->fdset);
+}
+
+void
+rb_fd_clr(int n, rb_fdset_t *fds)
+{
+    if (n >= fds->maxfd) return;
+    FD_CLR(n, fds->fdset);
+}
+
+int
+rb_fd_isset(int n, const rb_fdset_t *fds)
+{
+    if (n >= fds->maxfd) return 0;
+    return FD_ISSET(n, fds->fdset) != 0;
+}
+
+void
+rb_fd_copy(rb_fdset_t *dst, const fd_set *src, int max)
+{
+    size_t size = howmany(max, NFDBITS) * sizeof(fd_mask);
+
+    if (size < sizeof(fd_set)) size = sizeof(fd_set);
+    dst->maxfd = max;
+    dst->fdset = xrealloc(dst->fdset, size);
+    memcpy(dst->fdset, src, size);
+}
+
+void
+rb_fd_dup(rb_fdset_t *dst, const rb_fdset_t *src)
+{
+    size_t size = howmany(rb_fd_max(src), NFDBITS) * sizeof(fd_mask);
+
+    if (size < sizeof(fd_set)) size = sizeof(fd_set);
+    dst->maxfd = src->maxfd;
+    dst->fdset = xrealloc(dst->fdset, size);
+    memcpy(dst->fdset, src->fdset, size);
+}
+
+int
+rb_fd_select(int n, rb_fdset_t *readfds, rb_fdset_t *writefds, rb_fdset_t *exceptfds, struct timeval *timeout)
+{
+    fd_set *r = NULL, *w = NULL, *e = NULL;
+    if (readfds) {
+        ir_fd_resize(n - 1, readfds);
+        r = rb_fd_ptr(readfds);
+    }
+    if (writefds) {
+        ir_fd_resize(n - 1, writefds);
+        w = rb_fd_ptr(writefds);
+    }
+    if (exceptfds) {
+        ir_fd_resize(n - 1, exceptfds);
+        e = rb_fd_ptr(exceptfds);
+    }
+    return select(n, r, w, e, timeout);
+}
+
+/*
+ * select(2), waiting at most 100ms at a time and checking for interrupts in between, so that
+ * Thread#raise and Thread#kill reach a thread waiting here, as CRuby's do. The sets are
+ * restored before each retry; a timeout is the total.
+ */
+int
+rb_thread_fd_select(int max, rb_fdset_t *read, rb_fdset_t *write, rb_fdset_t *except, struct timeval *timeout)
+{
+    rb_fdset_t orig[3];
+    rb_fdset_t *sets[3] = { read, write, except };
+    struct timeval end, now;
+    int i, result;
+
+    if (!read && !write && !except) {
+        if (!timeout) {
+            rb_thread_sleep_forever();
+            return 0;
+        }
+        rb_thread_wait_for(*timeout);
+        return 0;
+    }
+    for (i = 0; i < 3; i++) {
+        orig[i].maxfd = 0;
+        orig[i].fdset = NULL;
+        if (sets[i]) {
+            ir_fd_resize(max - 1, sets[i]);
+            rb_fd_init(&orig[i]);
+            rb_fd_dup(&orig[i], sets[i]);
+        }
+    }
+    if (timeout) {
+        gettimeofday(&end, NULL);
+        timeradd(&end, timeout, &end);
+    }
+    for (;;) {
+        struct timeval slice = { 0, 100000 };
+        if (timeout) {
+            gettimeofday(&now, NULL);
+            if (timercmp(&now, &end, >=)) {
+                timerclear(&slice);
+            }
+            else {
+                struct timeval left;
+                timersub(&end, &now, &left);
+                if (timercmp(&left, &slice, <)) slice = left;
+            }
+        }
+        result = select(max, read ? rb_fd_ptr(read) : NULL, write ? rb_fd_ptr(write) : NULL,
+                        except ? rb_fd_ptr(except) : NULL, &slice);
+        if (result != 0 && !(result < 0 && errno == EINTR)) {
+            break;
+        }
+        if (timeout && result == 0 && !timerisset(&slice)) {
+            break;
+        }
+        for (i = 0; i < 3; i++) {
+            if (sets[i]) rb_fd_dup(sets[i], &orig[i]);
+        }
+        rb_thread_check_ints();
+    }
+    for (i = 0; i < 3; i++) {
+        if (orig[i].fdset) rb_fd_term(&orig[i]);
+    }
+    return result;
+}
+
+/* thread.c's: wait until fd is readable, or writable, letting interrupts in */
+int
+rb_thread_wait_fd(int fd)
+{
+    rb_fdset_t set;
+    rb_fd_init(&set);
+    rb_fd_set(fd, &set);
+    rb_thread_fd_select(fd + 1, &set, NULL, NULL, NULL);
+    rb_fd_term(&set);
+    return TRUE;
+}
+
+int
+rb_thread_fd_writable(int fd)
+{
+    rb_fdset_t set;
+    rb_fd_init(&set);
+    rb_fd_set(fd, &set);
+    rb_thread_fd_select(fd + 1, NULL, &set, NULL, NULL);
+    rb_fd_term(&set);
+    return TRUE;
+}
+
+/* io.c's: a descriptor above stderr is closed in a child process. */
+void
+rb_maygvl_fd_fix_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD), flags2;
+    if (flags == -1) {
+        rb_bug("rb_maygvl_fd_fix_cloexec: fcntl(%d, F_GETFD) failed: %s", fd, strerror(errno));
+    }
+    flags2 = fd <= 2 ? flags & ~FD_CLOEXEC : flags | FD_CLOEXEC;
+    if (flags != flags2 && fcntl(fd, F_SETFD, flags2) != 0) {
+        rb_bug("rb_maygvl_fd_fix_cloexec: fcntl(%d, F_SETFD, %d) failed: %s", fd, flags2, strerror(errno));
+    }
+}
+
+void
+rb_update_max_fd(int fd)
+{
+    /* CRuby tracks the largest descriptor for its child processes; IronRuby's do not need it */
+    (void)fd;
+}
+
+void
+rb_fd_fix_cloexec(int fd)
+{
+    /* IO#fileno is IronRuby's own number for the stream, which rb_io_descriptor hands out */
+    int native = rb_ir_native_fd(fd);
+    if (native >= 0) rb_maygvl_fd_fix_cloexec(native);
+    rb_update_max_fd(fd);
+}
+
+int
+rb_cloexec_open(const char *pathname, int flags, mode_t mode)
+{
+    int ret;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    while ((ret = open(pathname, flags, mode)) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    }
+    if (ret >= 0) {
+        rb_maygvl_fd_fix_cloexec(ret);
+    }
+    return ret;
+}
+
+int
+rb_cloexec_fcntl_dupfd(int fd, int minfd)
+{
+    int ret = fcntl(fd, F_DUPFD_CLOEXEC, minfd);
+    if (ret >= 0) {
+        rb_maygvl_fd_fix_cloexec(ret);
+    }
+    return ret;
+}
+
+int
+rb_cloexec_dup(int oldfd)
+{
+    /* not one of the standard descriptors 0, 1 and 2 */
+    return rb_cloexec_fcntl_dupfd(oldfd, 3);
+}
+
+int
+rb_cloexec_dup2(int oldfd, int newfd)
+{
+    int ret;
+    if (oldfd == newfd) {
+        ret = newfd;
+    }
+    else {
+#if defined(__linux__)
+        if (newfd > 2) {
+            ret = dup3(oldfd, newfd, O_CLOEXEC);
+            if (ret != -1 || errno != ENOSYS) return ret;
+        }
+#endif
+        ret = dup2(oldfd, newfd);
+        if (ret < 0) return ret;
+    }
+    rb_maygvl_fd_fix_cloexec(ret);
+    return ret;
+}
+
+int
+rb_cloexec_pipe(int descriptors[2])
+{
+#if defined(__linux__)
+    int result = pipe2(descriptors, O_CLOEXEC | O_NONBLOCK);
+#else
+    int result = pipe(descriptors);
+    if (result == 0) {
+        rb_maygvl_fd_fix_cloexec(descriptors[0]);
+        rb_maygvl_fd_fix_cloexec(descriptors[1]);
+        fcntl(descriptors[0], F_SETFL, fcntl(descriptors[0], F_GETFL) | O_NONBLOCK);
+        fcntl(descriptors[1], F_SETFL, fcntl(descriptors[1], F_GETFL) | O_NONBLOCK);
+    }
+#endif
+    return result;
+}
+/* io.c's descriptor-only waits, for a call that failed with errno */
+int
+rb_io_wait_readable(int f)
+{
+    switch (errno) {
+      case EINTR:
+#if defined(ERESTART)
+      case ERESTART:
+#endif
+        rb_thread_check_ints();
+        return TRUE;
+      case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+      case EWOULDBLOCK:
+#endif
+        rb_thread_wait_fd(f);
+        return TRUE;
+      default:
+        return FALSE;
+    }
+}
+
+int
+rb_io_wait_writable(int f)
+{
+    switch (errno) {
+      case EINTR:
+#if defined(ERESTART)
+      case ERESTART:
+#endif
+        rb_thread_check_ints();
+        return TRUE;
+      case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+      case EWOULDBLOCK:
+#endif
+        rb_thread_fd_writable(f);
+        return TRUE;
+      default:
+        return FALSE;
+    }
+}
+
+/* thread.c's: the RUBY_IO_* events that came ready, 0 after the timeout, -1 on an error */
+int
+rb_wait_for_single_fd(int fd, int events, struct timeval *tv)
+{
+    rb_fdset_t sets[3];
+    rb_fdset_t *r = NULL, *w = NULL, *e = NULL;
+    int i, result, ready = 0;
+
+    for (i = 0; i < 3; i++) rb_fd_init(&sets[i]);
+    if (events & RUBY_IO_READABLE) { r = &sets[0]; rb_fd_set(fd, r); }
+    if (events & RUBY_IO_WRITABLE) { w = &sets[1]; rb_fd_set(fd, w); }
+    if (events & RUBY_IO_PRIORITY) { e = &sets[2]; rb_fd_set(fd, e); }
+    result = rb_thread_fd_select(fd + 1, r, w, e, tv);
+    if (result > 0) {
+        if (r && rb_fd_isset(fd, r)) ready |= RUBY_IO_READABLE;
+        if (w && rb_fd_isset(fd, w)) ready |= RUBY_IO_WRITABLE;
+        if (e && rb_fd_isset(fd, e)) ready |= RUBY_IO_PRIORITY;
+    }
+    for (i = 0; i < 3; i++) rb_fd_term(&sets[i]);
+    return result < 0 ? -1 : ready;
+}
+#endif /* !_WIN32 */
+
+/*
+ * vm.c's ruby_vm_at_exit: functions run, last registered first, once the runtime is gone -
+ * here, at the process's exit (atexit), which is after IronRuby has run its at_exit blocks.
+ */
+#include "ruby/vm.h"
+#define IR_VM_AT_EXIT_MAX 64
+static void (*ir_vm_at_exit_funcs[IR_VM_AT_EXIT_MAX])(ruby_vm_t *);
+static int ir_vm_at_exit_count;
+
+static void
+ir_run_vm_at_exit(void)
+{
+    while (ir_vm_at_exit_count > 0) {
+        ir_vm_at_exit_funcs[--ir_vm_at_exit_count](NULL);
+    }
+    fflush(stdout);
+}
+
+void
+ruby_vm_at_exit(void (*func)(ruby_vm_t *))
+{
+    if (ir_vm_at_exit_count == 0) atexit(ir_run_vm_at_exit);
+    if (ir_vm_at_exit_count == IR_VM_AT_EXIT_MAX) rb_raise(rb_eRuntimeError, "too many ruby_vm_at_exit functions");
+    ir_vm_at_exit_funcs[ir_vm_at_exit_count++] = func;
+}
+
+/* ------------------------------------------------------------------------------------------
+ * ruby/ractor.h. A C extension only ever runs in the main Ractor here, so RB_EXT_RACTOR_SAFE has
+ * nothing to record, the Ractor's standard streams are the process's ($stdin & co), and a
+ * Ractor-local storage key holds one value for the process.
+ */
+#include "ruby/ractor.h"
+
+void
+rb_ext_ractor_safe(bool flag)
+{
+    (void)flag;
+}
+
+VALUE rb_ractor_stdin(void) { return rb_gv_get("$stdin"); }
+VALUE rb_ractor_stdout(void) { return rb_gv_get("$stdout"); }
+VALUE rb_ractor_stderr(void) { return rb_gv_get("$stderr"); }
+void rb_ractor_stdin_set(VALUE io) { rb_gv_set("$stdin", io); }
+void rb_ractor_stdout_set(VALUE io) { rb_gv_set("$stdout", io); }
+void rb_ractor_stderr_set(VALUE io) { rb_gv_set("$stderr", io); }
+
+VALUE
+rb_ractor_make_shareable(VALUE obj)
+{
+    return rb_funcall(rb_cRactor, rb_intern("make_shareable"), 1, obj);
+}
+
+VALUE
+rb_ractor_make_shareable_copy(VALUE obj)
+{
+    VALUE args[2];
+    args[0] = obj;
+    args[1] = rb_hash_new();
+    rb_hash_aset(args[1], ID2SYM(rb_intern("copy")), Qtrue);
+    return rb_funcallv_kw(rb_cRactor, rb_intern("make_shareable"), 2, args, RB_PASS_KEYWORDS);
+}
+
+/* what rb_ractor_shareable_p (an inline function) asks once the object's own bit says no */
+bool
+rb_ractor_shareable_p_continue(VALUE obj)
+{
+    return RTEST(rb_funcall(rb_cRactor, rb_intern("shareable?"), 1, obj));
+}
+
+struct rb_ractor_local_key_struct {
+    const struct rb_ractor_local_storage_type *type;
+    void *ptr;
+    VALUE value;
+    bool set;
+};
+
+const struct rb_ractor_local_storage_type rb_ractor_local_storage_type_free = { NULL, free };
+
+static rb_ractor_local_key_t
+ractor_local_newkey(const struct rb_ractor_local_storage_type *type)
+{
+    rb_ractor_local_key_t key = calloc(1, sizeof(struct rb_ractor_local_key_struct));
+    if (key == NULL) rb_memerror();
+    key->type = type;
+    key->value = Qnil;
+    return key;
+}
+
+rb_ractor_local_key_t rb_ractor_local_storage_value_newkey(void) { return ractor_local_newkey(NULL); }
+rb_ractor_local_key_t rb_ractor_local_storage_ptr_newkey(const struct rb_ractor_local_storage_type *type) { return ractor_local_newkey(type); }
+
+/* No GVL here: threads read and set a key at the same time. Each store of the value (or pointer)
+ * is a release and each load an acquire, so what a reader gets comes with everything its writer
+ * did before setting it - for every store, not only the first, which the flag orders. */
+static bool
+ractor_local_is_set(rb_ractor_local_key_t key)
+{
+    return __atomic_load_n(&key->set, __ATOMIC_ACQUIRE);
+}
+
+VALUE
+rb_ractor_local_storage_value(rb_ractor_local_key_t key)
+{
+    return ractor_local_is_set(key) ? __atomic_load_n(&key->value, __ATOMIC_ACQUIRE) : Qnil;
+}
+
+bool
+rb_ractor_local_storage_value_lookup(rb_ractor_local_key_t key, VALUE *val)
+{
+    if (!ractor_local_is_set(key)) return false;
+    *val = __atomic_load_n(&key->value, __ATOMIC_ACQUIRE);
+    return true;
+}
+
+void
+rb_ractor_local_storage_value_set(rb_ractor_local_key_t key, VALUE val)
+{
+    __atomic_store_n(&key->value, val, __ATOMIC_RELEASE);
+    __atomic_store_n(&key->set, true, __ATOMIC_RELEASE);
+}
+
+void *
+rb_ractor_local_storage_ptr(rb_ractor_local_key_t key)
+{
+    return ractor_local_is_set(key) ? __atomic_load_n(&key->ptr, __ATOMIC_ACQUIRE) : NULL;
+}
+
+void
+rb_ractor_local_storage_ptr_set(rb_ractor_local_key_t key, void *ptr)
+{
+    __atomic_store_n(&key->ptr, ptr, __ATOMIC_RELEASE);
+    __atomic_store_n(&key->set, true, __ATOMIC_RELEASE);
+}
+
+/* RB_OBJ_FREEZE / OBJ_FREEZE: CRuby sets the flag in place; here the object itself is frozen */
+void
+rb_obj_freeze_inline(VALUE obj)
+{
+    if (!RB_SPECIAL_CONST_P(obj)) rb_obj_freeze(obj);
+}
+
+/* RHASH_SIZE */
+size_t
+rb_hash_size_num(VALUE hash)
+{
+    return NUM2SIZET(rb_hash_size(hash));
+}
+
+/* object.c's: the exception: keyword of Integer() and friends, which extensions with
+ * conversion functions of their own (bigdecimal's BigDecimal()) reuse */
+int
+rb_opts_exception_p(VALUE opts, int default_value)
+{
+    ID kwds[1];
+    VALUE exception;
+    kwds[0] = rb_intern("exception");
+    if (!rb_get_kwargs(opts, kwds, 0, 1, &exception)) return default_value;
+    if (exception == Qtrue) return 1;
+    if (exception == Qfalse) return 0;
+    rb_raise(rb_eArgError, "expected true or false as exception: %+"PRIsVALUE, exception);
+    return 0;
+}
+
+void
+rb_must_asciicompat(VALUE str)
+{
+    rb_encoding *enc = rb_enc_get(str);
+    if (!enc) rb_raise(rb_eTypeError, "not encoding capable object");
+    if (!rb_enc_asciicompat(enc)) rb_raise(rb_eEncCompatError, "ASCII incompatible encoding: %s", rb_enc_name(enc));
+}
+
+/* seeded as CRuby's is, through rb_hash_start: the same bytes hash differently in another process */
+st_index_t
+rb_memhash(const void *ptr, long len)
+{
+    return rb_st_hash(ptr, (size_t)len, rb_hash_start(0));
 }

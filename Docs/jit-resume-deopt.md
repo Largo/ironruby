@@ -1,6 +1,8 @@
 # A deopt that does not restart the body: design
 
-Status: design only, nothing here is implemented. It answers gap 1 of `Util/perf/LEDGER.md`
+Status: stage 1 is implemented behind `-X:JITResume` (off by default; `Src/Ruby/Runtime/Jit/JitResume.cs`,
+`JitCompiler.Resume.cs`, matrix section 11 of `Util/jit-matrix.rb`), narrowed as its section says; the rest
+is design only. It answers gap 1 of `Util/perf/LEDGER.md`
 ("Calls of other methods from hot bodies"): `CallSite.Target` is 24-32% of every benchmark,
 and Richards, Towers, DeltaBlue, Bounce and CD's `tree_insert` all wait on one rule of the
 method JIT.
@@ -311,10 +313,19 @@ matrix in `Util/jit-matrix.rb`. Nothing below is merged before its rows exist.
   receiver of another class with its own `task_holding=`, a private one, a frozen one, a
   `method_missing`) and compares output with CRuby 4.0's.
 
-Not yet shown: that the deopt after an effect is the *only* thing keeping `hold_self` out. Gap
-11's table found it with the earlier obstacles patched; on master, `IR_JIT_VERBOSE=1` on Richards
-prints `declined Scheduler/hold_self arity 0 (passed the pre-screen)` with no reason. The
-stage's first step is to make that line name its reason, and to confirm that it is this one.
+Shown: the deopt after an effect is the only thing keeping `hold_self` out. `IR_JIT_VERBOSE=1`
+names the reason now (`declined Scheduler/hold_self arity 0 (passed the pre-screen): a deopt after
+an effect (attribute write task_holding= at line 216)`), and with the switch Richards' `hold_self`
+is specialized and nothing else in AWFY changes.
+
+As built, stage 1 is narrower than the list above: the fallbacks are on explicit receivers other
+than self (`@o.x`, `@o.x = v`), not on the Struct member pair (a Struct operation after an effect
+still declines the body), and a body with fallbacks that also has a self-call, a loop, element
+writes, a construction or an explicit `return` is declined. After the first fallback only literals,
+self, instance variable reads and self-guarded attribute operations may be emitted. The typed body
+stays part of its entry; a fallback's call and the hooks run in a small lambda named as the generic
+body's frame, which keeps the line in `PrecompiledFrames` while the call runs (a separate typed body
+cost ~4 ns a call). The light frame's filter is a catch that rethrows what is not its own.
 
 Expected gain, if it is: `hold_self` is 2.0% of Richards inclusive and 0.9% self (gap 11's table). Compiled,
 its two attribute calls become inline ivar accesses, so most of the 2.0% goes: about 1-1.5% of
@@ -330,6 +341,14 @@ generic slow path; typed locals that are assigned after it become `Obj`. Unlocks
 and `release` (given gap 11's nil-constant fix, which is built and on the Rejected list),
 `DeltaBlue`'s `remove_first`, and the start of `schedule` and `run_task`. This is perf/jcall's
 change with its restriction gone; measured against its numbers.
+
+Tried once, in another form, and rejected (`Util/perf/LEDGER.md`, Rejected, perf/resume2): the bodies the
+typed compiler declines compiled whole as a self-guarded tail, with no typed prefix. It was correct and
+exactly as fast as the generic body, 3% slower over the benchmarks: a self-guarded operation on objects in
+a body with a frame is what a call-site rule in the generic body already is. What that leaves of this
+stage is the part that keeps a typed, frameless prefix, and it pays only for methods whose time is in
+that prefix; for the methods named above the time is in the calls, and the gain has to come from the
+call itself (a compiled body entering a compiled body without the site, the boxes or the frame).
 
 **Stage 3 - resume (B).** The resumable generic body, resume points at statement boundaries,
 the frame-state map, per-statement undo marks, the per-try-region dispatch and the loop resume

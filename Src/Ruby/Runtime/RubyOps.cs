@@ -145,8 +145,11 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static void InitializeEvalScope(RubyScope/*!*/ scope, string/*!*/[]/*!*/ declaredNames, InterpretedFrame interpretedFrame) {
             scope.InterpretedFrame = interpretedFrame;
-            foreach (var name in declaredNames) {
-                scope.DeclareLocalVariable(name);
+            // Declared last to first: a scope lists the variables it was given later first
+            // (RubyScope.GetDeclaredLocalSymbols), and MRI lists the ones of a single eval in
+            // the order the string has them.
+            for (int i = declaredNames.Length - 1; i >= 0; i--) {
+                scope.DeclareLocalVariable(declaredNames[i]);
             }
         }
 
@@ -229,6 +232,202 @@ namespace IronRuby.Runtime {
             }
             return scope;
         }
+
+        #region Parked method scopes
+
+        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda or nested block in them)
+        // and which calls no super makes a scope and a Proc per literal on every call, the Proc's parent (`def each; (a..b).each
+        // { |i| yield @s[i] }; end'). Once such a call has returned normally, if nothing captured the scope (RubyScope.IsCaptured:
+        // binding, eval, a method or Symbol proc made in it, a TracePoint, a Proc of a literal replaced) and the last Proc of
+        // each literal is one only the frame holds (Proc.IsReusableAndInactive: given to light frames and [BlockNotKept]
+        // iterators only, and no scope it ran in captured), nothing can reach the scope or its Procs: they are parked in the
+        // body's ParkedScopeSlot, cleared of everything of the call that ended, and the next call takes them with an atomic
+        // exchange into a variable of its frame. A call that does not get them - a recursive call, one on another thread, or one
+        // after a call that could not park - makes a plain scope and Procs exactly as before. IR_PARKED_SCOPES=0 turns it off.
+
+        /// <summary>
+        /// The parked scope and Procs of the slot, now this call's, if they were parked by a call of the same definition.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ParkedProcs TakeParkedScope(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule) {
+            var parked = slot.Parked;
+            if (parked == null) {
+                return null;
+            }
+            return TakeParkedScopeSlow(slot, parked, parentScope, declaringModule);
+        }
+
+        private static ParkedProcs TakeParkedScopeSlow(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked, RubyScope/*!*/ parentScope,
+            RubyModule/*!*/ declaringModule) {
+            // Taken first, looked at after: until the exchange succeeds another call may take it, fail to park it and empty it.
+            if (Interlocked.CompareExchange(ref slot.Parked, null, parked) != parked) {
+                return null;
+            }
+            // the same body may be defined in more than one module or runtime: a scope is only reused for the definition it was
+            // made for (one parked for another goes back, or is dropped if a call parked meanwhile)
+            var scope = parked.Scope;
+            if (scope._parent != parentScope || scope.DeclaringModule != declaringModule) {
+                Interlocked.CompareExchange(ref slot.Parked, parked, null);
+                return null;
+            }
+            return parked;
+        }
+
+        /// <summary>
+        /// CreateMethodScope with the parked scope TakeParkedScope took: that scope, made the scope of this call.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ ReuseParkedScope(ParkedProcs/*!*/ parked, MutableTuple locals, object selfObject, Proc blockParameter,
+            InterpretedFrame interpretedFrame) {
+
+            RubyUtils.SafePoint();
+            RequireSufficientStack();
+
+            var scope = parked.Scope;
+            scope.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, null, null);
+            if (_aliasCallSeen) {
+                string callee = _pendingCallee;
+                if (callee != null) {
+                    _pendingCallee = null;
+                    if (_pendingCalleeDefinition == scope.DefinitionName) {
+                        scope.CalleeName = callee;
+                    }
+                }
+            }
+
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
+                TracePoint.OnMethodCall(scope);
+            }
+            return scope;
+        }
+
+        /// <summary>
+        /// CreateMethodScopeLazy of a light-frame body with the parked scope TakeParkedScope took.
+        /// </summary>
+        [Emitted]
+        public static RubyMethodScope/*!*/ ReuseParkedScopeLazy(ParkedProcs/*!*/ parked, MutableTuple locals, object selfObject,
+            Proc blockParameter, InterpretedFrame interpretedFrame, RuntimeFlowControl/*!*/ rfc, string calleeName) {
+
+            // (as CreateMethodScopeLazy: the scope holds the block, and whatever asked for the scope may keep it)
+            if (blockParameter != null) {
+                blockParameter.ClearReusable();
+            }
+            var scope = parked.Scope;
+            scope.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, rfc, calleeName);
+            return scope;
+        }
+
+        /// <summary>
+        /// InstantiateReusableBlock of a literal (the index-th) of a body with a parking slot: the Proc parked with the scope, if
+        /// this call took that scope, and a previous Proc that cannot be made again marks the scope captured - it may be held
+        /// somewhere, and it reaches the scope.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Proc InstantiateParkedBlock(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            ParkedProcs parked, int index) {
+            // the first evaluation of the literal in a call that took nothing: InstantiateReusableBlock's own
+            if (previous == null && parked == null) {
+                return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            }
+            return InstantiateParkedBlockSlow(previous, scope, self, dispatcher, parked, index);
+        }
+
+        private static Proc InstantiateParkedBlockSlow(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            ParkedProcs parked, int index) {
+            if (previous != null) {
+                if (previous.TryReuse()) {
+                    return previous;
+                }
+                scope.IsCaptured = true;
+            } else if (parked != null && parked.Scope == scope) {
+                var procs = parked.Procs;
+                var proc = procs[index];
+                if (proc != null) {
+                    procs[index] = null;
+                    proc.ReuseParked(self, parked.ThreadId != Environment.CurrentManagedThreadId);
+                    if (proc.TryReuse()) {
+                        return proc;
+                    }
+                }
+            }
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        /// <summary>
+        /// The normal end of a call of a body with a parking slot (an exception, a throw, Thread#kill skip it): if its scope may
+        /// be parked, where to stage its Procs (StageParkedProc, then EndPark) - what the call took, or an emptied one.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ParkedProcs BeginPark(ParkedScopeSlot/*!*/ slot, RubyScope scope, ParkedProcs taken) {
+            // a call that made no scope, or a slot that gave up: nothing to do, inlined into the body
+            if (scope == null || slot.Failures > ParkedScopeSlot.MaxFailures) {
+                return null;
+            }
+            return BeginParkSlow(slot, scope, taken);
+        }
+
+        private static ParkedProcs BeginParkSlow(ParkedScopeSlot/*!*/ slot, RubyScope/*!*/ scope, ParkedProcs taken) {
+            var methodScope = scope as RubyMethodScope;
+            if (methodScope == null || slot.IsOff || TracePoint.ActiveEvents != 0) {
+                return null;
+            }
+            if (methodScope.IsCaptured || methodScope.HasRareState || methodScope._activeFlowControlScope == methodScope) {
+                slot.Failures++;
+                return null;
+            }
+            if (taken != null) {
+                return taken;
+            }
+            var spare = slot.Spare;
+            if (spare != null && Interlocked.CompareExchange(ref slot.Spare, null, spare) == spare) {
+                return spare;
+            }
+            return new ParkedProcs(slot.ProcCount);
+        }
+
+        /// <summary>
+        /// The last Proc of the index-th literal, staged for parking; false if something else may hold it.
+        /// </summary>
+        [Emitted]
+        public static bool StageParkedProc(ParkedProcs/*!*/ parked, int index, Proc proc) {
+            if (proc != null && !proc.IsReusableAndInactive) {
+                return false;
+            }
+            parked.Procs[index] = proc;
+            return true;
+        }
+
+        /// <summary>
+        /// Parks the scope with the staged Procs, cleared of the call that ended; or, if a Proc may be held or another call
+        /// parked first, keeps the emptied ParkedProcs for the next.
+        /// </summary>
+        [Emitted]
+        public static void EndPark(ParkedScopeSlot/*!*/ slot, ParkedProcs/*!*/ parked, RubyScope/*!*/ scope, bool procsParkable) {
+            if (procsParkable) {
+                if (slot.Failures != 0) {
+                    slot.Failures = 0;
+                }
+                foreach (var proc in parked.Procs) {
+                    proc?.ClearForPark();
+                }
+                var methodScope = (RubyMethodScope)scope;
+                methodScope.ClearCallState();
+                parked.Scope = methodScope;
+                parked.ThreadId = Environment.CurrentManagedThreadId;
+                if (Interlocked.CompareExchange(ref slot.Parked, parked, null) == null) {
+                    return;
+                }
+            } else {
+                slot.Failures++;
+            }
+            parked.Clear();
+            Volatile.Write(ref slot.Spare, parked);
+        }
+
+        #endregion
 
         #region Light method frames
 
@@ -1337,6 +1536,7 @@ namespace IronRuby.Runtime {
             RubyModule mirror = GetHostedTopLevelMirror(scope, owner, atTopLevel);
 
             // as for `alias': Object's, and its NameError, as in CRuby; a singleton method of main only in main's singleton class
+            owner.WarnIfUndefiningCoreMethod(name);
             bool inMirror = mirror != null && mirror.ResolveMethod(name, VisibilityContext.AllVisible).Found;
             if (!inMirror && !owner.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
                 throw RubyExceptions.CreateUndefinedMethodError(mirror ?? owner, name);
@@ -5015,13 +5215,140 @@ namespace IronRuby.Runtime {
             if (data != null) {
                 object[] slots = data._ivars;
                 var entry = site.Cache;
-                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                // a raw shape is never PlainShape (RubyInstanceData, "Float locations"): this inlined read
+                // is the compare and the load it always was; a raw object's read is the first thing
+                // the out-of-line readers try (ReadInstanceVariable and the rest)
+                if (RubyInstanceData.ShapeOf(slots) == entry.PlainShape) {
                     value = RubyInstanceData.GetSlot(slots, entry.Index);
                     return true;
                 }
             }
             value = null;
             return false;
+        }
+
+        // The cached read of a variable of an object whose shape is raw (RubyInstanceData, "Float
+        // locations"), for a caller that TryReadCached has just turned away: the same protocol, and
+        // a Float comes boxed (the same box again while the value is unchanged).
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCachedRaw(RubyInstanceData data, InstanceVariableSite/*!*/ site, out object value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    value = RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
+                    return true;
+                }
+            }
+            value = null;
+            return false;
+        }
+
+        // The site's second shape, for the typed code, whose sites see a class's objects in two shapes
+        // once some have been promoted to raw Floats (RubyInstanceData, "Float locations").
+        // A raw second shape becomes the first, so that the inlined path reads it from then on; a plain
+        // one stays second, so that a site reading both kinds settles instead of swapping on every read.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryReadCachedFloatSlow(object[]/*!*/ slots, InstanceVariableSite/*!*/ site, InstanceVariableSite.Entry/*!*/ entry, out double value) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.Shape) {
+                // a plain object: a boxed Float or nothing for us
+                object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                if (slot is double) {
+                    value = (double)slot;
+                    return true;
+                }
+            } else if (shape == entry.OtherShape) {
+                object slot = RubyInstanceData.GetSlot(slots, entry.OtherIndex);
+                if (entry.OtherRaw) {
+                    site.Update(entry.Remember(entry.OtherShape, entry.OtherIndex));
+                    return RubyInstanceData.TryReadFloat(slot, out value);
+                }
+                if (slot is double) {
+                    value = (double)slot;
+                    return true;
+                }
+            }
+            value = 0;
+            return false;
+        }
+
+        // TryReadCached of a variable that holds a Float, for the typed code: the double, without
+        // boxing a raw one. False for a miss or a variable that holds anything else.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryReadCachedFloat(RubyInstanceData data, InstanceVariableSite/*!*/ site, out double value) {
+            if (data != null) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                    object slot = RubyInstanceData.GetSlot(slots, entry.Index);
+                    if (entry.Raw) {
+                        return RubyInstanceData.TryReadFloat(slot, out value);
+                    }
+                    // a plain object's slot never holds a FloatLocation: the type test GuardDouble made
+                    value = (slot is double) ? (double)slot : 0;
+                    return slot is double;
+                }
+                // kept small, for it is inlined into every typed read: the rest out of line
+                return TryReadCachedFloatSlow(slots, site, entry, out value);
+            }
+            value = 0;
+            return false;
+        }
+
+        // TryWriteCached of a Float the typed code holds raw: into the variable's FloatLocation
+        // (RubyInstanceData.TryWriteFloat). False for a miss, an add, a frozen object or a shape
+        // changed under it: the caller boxes the Float and takes the ordinary path.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryWriteCachedFloat(RubyInstanceData data, double value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            if (data != null && !data._frozen) {
+                object[] slots = data._ivars;
+                var entry = site.Cache;
+                object shape = RubyInstanceData.ShapeOf(slots);
+                if (shape == entry.Shape && entry.Raw && entry.Next == null) {
+                    return RubyInstanceData.TryWriteFloat(slots, shape, entry.Index, value);
+                }
+                // kept small, for it is inlined into every typed store: the rest out of line
+                return TryWriteCachedFloatSlow(data, slots, shape, value, site, ownerClass);
+            }
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryWriteCachedFloatSlow(RubyInstanceData/*!*/ data, object[]/*!*/ slots, object shape, double value,
+            InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            var entry = site.Cache;
+            {
+                if (shape == entry.Shape && entry.Next == null) {
+                    return TryWriteCachedFloatPlain(data, slots, entry.Shape, entry.Index, value, site, ownerClass);
+                }
+                if (shape == entry.Shape) {
+                    // adding the variable (a constructor's `@x = 1.5'): boxed, by the cached add
+                    return data.TrySetCached(entry, value, ownerClass);
+                }
+                if (shape == entry.OtherShape) {
+                    // the second shape: promoted and plain objects of one class side by side
+                    if (entry.OtherRaw) {
+                        // raw objects now come first at this site (see TryReadCachedFloatOther)
+                        site.Update(entry.Remember(entry.OtherShape, entry.OtherIndex));
+                        return RubyInstanceData.TryWriteFloat(slots, shape, entry.OtherIndex, value);
+                    }
+                    return TryWriteCachedFloatPlain(data, slots, entry.OtherShape, entry.OtherIndex, value, site, ownerClass);
+                }
+            }
+            return false;
+        }
+
+        // Not raw yet: a boxed store, or the promotion (RubyInstanceData.TryWriteFloatPlain), after
+        // which the site knows the raw shape first and the plain one second.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryWriteCachedFloatPlain(RubyInstanceData/*!*/ data, object[]/*!*/ slots, InstanceVariableShape/*!*/ shape,
+            int index, double value, InstanceVariableSite/*!*/ site, RubyClass ownerClass) {
+            var now = data.TryWriteFloatPlain(slots, shape, index, value, ownerClass);
+            if (now != null && now != shape) {
+                site.Update(site.Cache.Remember(now, index));
+            }
+            return now != null;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -5047,8 +5374,12 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.PlainShape) {
                 return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            if (shape == entry.Shape) {
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
@@ -5075,8 +5406,12 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.PlainShape) {
                 return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            if (shape == entry.Shape) {
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }
@@ -5105,8 +5440,12 @@ namespace IronRuby.Runtime {
             }
             object[] slots = data._ivars;
             var entry = site.Cache;
-            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+            object shape = RubyInstanceData.ShapeOf(slots);
+            if (shape == entry.PlainShape) {
                 return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            if (shape == entry.Shape) {
+                return RubyInstanceData.ValueOf(RubyInstanceData.GetSlot(slots, entry.Index));
             }
             return data.GetInstanceVariable(site);
         }

@@ -276,5 +276,50 @@ d.bar
 #<NameError: undefined method 'f' for class 'E'>
 ");
         }
+
+        /// <summary>
+        /// MRI warns on undefining, removing or redefining the methods the runtime itself calls: undefining
+        /// before it looks for the method; redefining object_id or __send__ (an undef too) when the class has it.
+        /// </summary>
+        public void UndefCoreMethodWarnings1() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+class X
+  undef object_id
+  undef object_id rescue p $!
+end
+module M
+  def __send__(*) = 1
+end
+class Y
+  def initialize = 1
+  remove_method :initialize
+  alias object_id to_s
+end
+", 0, 5);
+            }, @"
+#<NameError: undefined method 'object_id' for class 'X'>
+");
+        }
+
+        /// <summary>
+        /// BasicObject#initialize can be removed, with a warning, and is the only initialize Object has.
+        /// </summary>
+        public void RemoveBasicObjectInitialize1() {
+            AssertOutput(delegate() {
+                CompilerTest(@"
+p Object.private_instance_methods(false).include?(:initialize)
+BasicObject.send(:remove_method, :initialize)
+begin
+  Object.new
+rescue NoMethodError => e
+  puts e.message
+end
+", 0, 1);
+            }, @"
+false
+undefined method 'initialize' for an instance of Object
+");
+        }
     }
 }

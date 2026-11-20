@@ -77,11 +77,19 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// MRI's Binding#dup keeps every variable that already exists shared with the original and
         /// lets the two diverge over variables defined afterwards - in either of them. So both end up
-        /// with a fresh scope of their own nested in the one they shared until now.
+        /// with a fresh scope of their own nested in the one they shared until now. A binding whose own
+        /// scope has no variable in it yet keeps that scope, and the copy gets one next to it: nested,
+        /// every dup of one binding would add a level that each lookup through it then walks
+        /// (ERB#result_with_hash dups TOPLEVEL_BINDING on every call).
         /// </summary>
         object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
-            var shared = _localScope;
-            _localScope = new RubyBindingCopyScope(shared, _self);
+            RubyScope shared;
+            if (_localScope.Kind == ScopeKind.BindingCopy && !_localScope.HasDynamicLocals) {
+                shared = _localScope.Parent;
+            } else {
+                shared = _localScope;
+                _localScope = new RubyBindingCopyScope(shared, _self);
+            }
             var result = new Binding(new RubyBindingCopyScope(shared, _self), _self);
             result.SourcePath = SourcePath;
             result.SourceLine = SourceLine;

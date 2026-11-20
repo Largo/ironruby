@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using VALUE = System.UInt64;
@@ -35,25 +36,35 @@ namespace IronRuby.Runtime.CApi {
             public long tv_nsec { get { return (long)nsec.Value; } set { nsec = new CLong((nint)value); } }
         }
 
+        // The instant sec + frac / per_second, as a UTC Time. CRuby's rb_time_*_new make the
+        // Time directly, not through Time.at, which a program may have redefined: this goes
+        // through the epoch and Time#+ with an exact Rational instead.
+        private static object TimeFromParts(long sec, long frac, long perSecond) {
+            object epoch = Call(Constant("Time"), "utc", 1970);
+            object offset = frac == 0 ? Normalize(sec) :
+                Call(_context.KernelModule, "Rational", Normalize(new BigInteger(sec) * perSecond + frac), Normalize(perSecond));
+            return Call(epoch, "+", offset);
+        }
+
         internal static VALUE rb_time_new(long sec, long usec) {
-            return ToValue(Call(Constant("Time"), "at", Normalize(sec), Normalize(usec), Sym("usec")));
+            return ToValue(Call(TimeFromParts(sec, usec, 1000000), "localtime"));
         }
 
         internal static VALUE rb_time_nano_new(long sec, long nsec) {
-            return ToValue(Call(Constant("Time"), "at", Normalize(sec), Normalize(nsec), Sym("nsec")));
+            return ToValue(Call(TimeFromParts(sec, nsec, 1000000000), "localtime"));
         }
 
         // offset INT_MAX: local time; INT_MAX - 1: UTC; otherwise seconds east of UTC
         internal static VALUE rb_time_timespec_new(TimeSpec* ts, int offset) {
-            object t = Call(Constant("Time"), "at", Normalize(ts->tv_sec), Normalize(ts->tv_nsec), Sym("nsec"));
+            if (offset != Int32.MaxValue && offset != Int32.MaxValue - 1 && (offset <= -86400 || offset >= 86400)) {
+                throw RubyExceptions.CreateArgumentError("utc_offset out of range");
+            }
+            object t = TimeFromParts(ts->tv_sec, ts->tv_nsec, 1000000000);
             if (offset == Int32.MaxValue) {
-                return ToValue(t);
+                return ToValue(Call(t, "localtime"));
             }
             if (offset == Int32.MaxValue - 1) {
-                return ToValue(Call(t, "utc"));
-            }
-            if (offset <= -86400 || offset >= 86400) {
-                throw RubyExceptions.CreateArgumentError("utc_offset out of range");
+                return ToValue(t);
             }
             return ToValue(Call(t, "localtime", offset));
         }
@@ -130,7 +141,11 @@ namespace IronRuby.Runtime.CApi {
 
         internal static VALUE rb_cvar_get(VALUE klass, VALUE name) { return CallV(klass, "class_variable_get", IdToSymbol(name)); }
         internal static void rb_cvar_set(VALUE klass, VALUE name, VALUE val) { Call(FromValue(klass), "class_variable_set", IdToSymbol(name), FromValue(val)); }
-        internal static VALUE rb_cvar_defined(VALUE klass, VALUE name) { return CallV(klass, "class_variable_defined?", IdToSymbol(name)); }
+        // CRuby looks the ID up in the class's variable tables whatever it is: an @ivar of the class too
+        internal static VALUE rb_cvar_defined(VALUE klass, VALUE name) {
+            var sym = IdToSymbol(name);
+            return CallV(klass, sym.ToString().StartsWith("@@", StringComparison.Ordinal) ? "class_variable_defined?" : "instance_variable_defined?", sym);
+        }
         internal static VALUE rb_cv_get(VALUE klass, byte* name) { return CallV(klass, "class_variable_get", ClassVariableName(FromCString(name))); }
         internal static void rb_cv_set(VALUE klass, byte* name, VALUE val) { Call(FromValue(klass), "class_variable_set", ClassVariableName(FromCString(name)), FromValue(val)); }
 
@@ -158,10 +173,13 @@ namespace IronRuby.Runtime.CApi {
             public VALUE* Var;
             public IntPtr Getter, Setter;
             public bool ReadOnly;
+            public bool Virtual;
 
             public override object GetValue(RubyContext/*!*/ context, RubyScope scope) {
                 if (Getter == IntPtr.Zero) {
-                    return Var != null ? FromValue(*Var) : null;
+                    // CRuby's default getter of a virtual variable (rb_gvar_val_getter) answers its data
+                    // pointer, NULL - Qfalse; a hooked one's (rb_gvar_var_getter) nil for a NULL variable
+                    return Var != null ? FromValue(*Var) : Virtual ? (object)false : null;
                 }
                 int raised;
                 var depth = EnterNative();
@@ -200,7 +218,7 @@ namespace IronRuby.Runtime.CApi {
             }
         }
 
-        private static void DefineGlobal(byte* name, VALUE* var, IntPtr getter, IntPtr setter, bool readOnly) {
+        private static void DefineGlobal(byte* name, VALUE* var, IntPtr getter, IntPtr setter, bool readOnly, bool isVirtual = false) {
             if (_callGvarGet == null) {
                 _callGvarGet = (delegate* unmanaged[Cdecl]<void*, VALUE, VALUE*, int*, VALUE>)ShimExport("rb_ir_call_gvar_get");
                 _callGvarSet = (delegate* unmanaged[Cdecl]<void*, VALUE, VALUE, VALUE*, int*, void>)ShimExport("rb_ir_call_gvar_set");
@@ -209,7 +227,7 @@ namespace IronRuby.Runtime.CApi {
             if (n.StartsWith("$", StringComparison.Ordinal)) {
                 n = n.Substring(1);
             }
-            _context.DefineGlobalVariable(n, new CGlobalVariable { Name = n, Var = var, Getter = getter, Setter = setter, ReadOnly = readOnly });
+            _context.DefineGlobalVariable(n, new CGlobalVariable { Name = n, Var = var, Getter = getter, Setter = setter, ReadOnly = readOnly, Virtual = isVirtual });
         }
 
         internal static void rb_define_variable(byte* name, VALUE* var) {
@@ -226,7 +244,7 @@ namespace IronRuby.Runtime.CApi {
 
         // no setter: read-only
         internal static void rb_define_virtual_variable(byte* name, void* getter, void* setter) {
-            DefineGlobal(name, null, (IntPtr)getter, (IntPtr)setter, setter == null);
+            DefineGlobal(name, null, (IntPtr)getter, (IntPtr)setter, setter == null, true);
         }
 
         #endregion
@@ -251,8 +269,25 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(Send(HashClass(), "new", null), "compare_by_identity"));
         }
 
-        internal static VALUE rb_hash_new_capa(long capa) { return rb_hash_new(); }
-        internal static VALUE rb_hash(VALUE obj) { return CallV(obj, "hash"); }
+        internal static VALUE rb_hash_new_capa(long capa) {
+            if (capa < 0) {
+                throw RubyExceptions.CreateRuntimeError("st_table too big");
+            }
+            return rb_hash_new();
+        }
+
+        // hash.c's: #hash, through #to_int if need be, folded into a Fixnum
+        internal static VALUE rb_hash(VALUE obj) {
+            object h = Send(FromValue(obj), "hash", null);
+            if (!(h is int || h is long || h is BigInteger)) {
+                h = ConvertType(h, T_FIXNUM, "Integer", "to_int", true);
+            }
+            if (h is BigInteger big) {
+                h = (long)(ulong)(big & ulong.MaxValue);
+            }
+            long n = Convert.ToInt64(h);
+            return ToValue(Math.Clamp(n, FixnumMin, FixnumMax) == n ? n : n >> 1);
+        }
         internal static VALUE rb_hash_freeze(VALUE obj) { return rb_obj_freeze(obj); }
 
         internal static VALUE rb_hash_delete_if(VALUE hash) {
@@ -260,11 +295,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_proc_call_kw(VALUE recv, VALUE args, int kw_splat) {
-            return rb_proc_call(recv, args);
+            return ToValue(Send(FromValue(recv), "call", null, KeywordArgs(((RubyArray)FromValue(args)).ToArray(), kw_splat)));
         }
 
         internal static VALUE rb_proc_call_with_block_kw(VALUE recv, int argc, VALUE* argv, VALUE proc, int kw_splat) {
-            return rb_proc_call_with_block(recv, argc, argv, proc);
+            return ToValue(Send(FromValue(recv), "call", FromValue(proc) as Proc, KeywordArgs(argc, argv, kw_splat)));
         }
 
         internal static VALUE rb_catch(byte* tag, IntPtr func, VALUE data) {

@@ -19,9 +19,10 @@
  * of the deopts a typed body takes once it runs.
  *
  * What the census cannot see is the class a method ends up in. A call the screen asks
- * about ("may the typed body inline it?") is answered from the methods the files define
- * in the same class or module body, then from what Object has in this process, and a
- * name neither knows is taken as JitStub.IsLeafMethod takes a method not defined yet.
+ * about ("may the typed body inline it, or bind it?") is answered from the methods the
+ * files define in the same class or module body, then from what Object has in this
+ * process, and a name neither knows is taken as JitStub.IsLeafMethod and
+ * IsCallableMethod take a method not defined yet.
  *
  * ***************************************************************************/
 
@@ -253,20 +254,29 @@ namespace IronRuby.Runtime.Jit {
             Set(hash, "light_blocks", _lightBlocks);
 
             string verdict, stage, kind, why, types = null;
+            _allRefusals = null;
             try {
                 Decide(entry, out verdict, out stage, out kind, out why, out types);
             } catch (Exception e) {
                 verdict = "never";
                 stage = "screen";
                 kind = why = "census failed: " + e.GetType().Name;
+            } finally {
+                JitScreen.CollectAll = null;
             }
             Set(hash, "jit", Str(verdict));
             Set(hash, "jit_stage", (stage != null) ? Str(stage) : null);
             Set(hash, "jit_kind", (kind != null) ? Str(kind) : null);
             Set(hash, "jit_why", (why != null) ? Str(why) : null);
             Set(hash, "jit_types", (types != null) ? Str(types) : null);
+            // everything in the body the screen refuses, the first first ("MethodCall is_a?; MethodCall new"): a method
+            // with one entry is one that taking that one thing lets through the screen
+            Set(hash, "jit_all", (stage == "screen" && _allRefusals != null && _allRefusals.Count > 0) ? Str(String.Join("; ", _allRefusals)) : null);
             return hash;
         }
+
+        // Everything the screen refused in the method being examined (Decide).
+        private List<string> _allRefusals;
 
         private void Set(Hash/*!*/ hash, string/*!*/ key, object value) {
             hash[_context.CreateAsciiSymbol(key)] = value;
@@ -291,7 +301,13 @@ namespace IronRuby.Runtime.Jit {
             int typedCount, perCountMandatory;
             string rejectedBy;
             JitScreen.LastRejectionDetail = null;
-            if (!JitStub.CensusScreen(ast, _context, Callee(entry), out keywords, out typedCount, out perCountMandatory, out rejectedBy)) {
+            // the screen goes on after its first refusal and names every one (JitScreen.CollectAll)
+            var all = new List<string>();
+            JitScreen.CollectAll = all;
+            bool screened = JitStub.CensusScreen(ast, _context, Callee(entry), out keywords, out typedCount, out perCountMandatory, out rejectedBy);
+            JitScreen.CollectAll = null;
+            _allRefusals = all;
+            if (!screened) {
                 verdict = "never";
                 if (rejectedBy != null) {
                     stage = "screen";
@@ -356,10 +372,61 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// The screen's question of a call in the entry's body, as JitStub.Screen answers it for a method that has a
+        /// declaring module: of a method the typed body may inline (IsLeafMethod), or, for a call on self under
+        /// -X:JITCalls, of one it may bind (IsCallableMethod).
+        /// </summary>
+        private Func<string, bool, bool>/*!*/ Callee(Entry/*!*/ entry) {
+            var leaf = Leaf(entry);
+            bool calls = _context.RubyOptions.JitCalls;
+            return (name, onSelf) => leaf(name, onSelf) || (onSelf && calls && IsCallable(entry, name, 0));
+        }
+
+        /// <summary>
+        /// JitStub.IsCallableMethod without the declaring module: whether a call on self of a name in the owner's body
+        /// is of a method its typed body may bind - one the screen would take, its own calls on self looked at the same
+        /// way, three levels down.
+        /// </summary>
+        private bool IsCallable(Entry/*!*/ owner, string/*!*/ name, int depth) {
+            // the method the class or module body the owner is written in defines
+            MethodDeclaration defined;
+            if (_defined.TryGetValue(Key(owner.Module, owner.Singleton, name), out defined)) {
+                return IsCallableShape(owner, defined, depth);
+            }
+
+            // what every class has from Object - or, for a singleton method, every class from Class - in this process
+            RubyModule root = owner.Singleton ? (RubyModule)_context.ObjectClass.ImmediateClass : _context.ObjectClass;
+            if (root.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
+                return JitStub.IsCallableMethod(root, name, depth);
+            }
+
+            // a superclass's or a mixin's: any method of the name the files define
+            List<Entry> named;
+            if (_byName.TryGetValue(name, out named)) {
+                foreach (var other in named) {
+                    if (IsCallableShape(other, other.Ast, depth)) { return true; }
+                }
+                return false;
+            }
+            // a name nothing defines is taken on trust, as one defined further down is
+            return true;
+        }
+
+        private bool IsCallableShape(Entry/*!*/ owner, MethodDeclaration/*!*/ ast, int depth) {
+            if (!JitStub.IsCallableParameterList(ast)) { return false; }
+            if (depth >= 3) { return true; }
+            var leaf = Leaf(owner);
+            string rejectedBy;
+            HashSet<string> otherUses;
+            return JitScreen.CanEverCompile(ast, null,
+                (n, onSelf) => leaf(n, onSelf) || (onSelf && IsCallable(owner, n, depth + 1)), out rejectedBy, out otherUses);
+        }
+
+        /// <summary>
         /// JitStub.IsLeafMethod without the declaring module: whether a call of a name in the entry's body is of a method
         /// its typed body may inline.
         /// </summary>
-        private Func<string, bool, bool>/*!*/ Callee(Entry/*!*/ entry) {
+        private Func<string, bool, bool>/*!*/ Leaf(Entry/*!*/ entry) {
             return (name, onSelf) => {
                 // the method the class or module body the entry is written in defines
                 MethodDeclaration defined;

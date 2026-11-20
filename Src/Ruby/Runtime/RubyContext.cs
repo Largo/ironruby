@@ -66,12 +66,13 @@ namespace IronRuby.Runtime {
         private static readonly Guid LanguageVendor_Microsoft = new Guid(-1723120188, -6423, 0x11d2, 0x90, 0x3f, 0, 0xc0, 0x4f, 0xa3, 2, 0xa1);
         private static int _RuntimeIdGenerator = 0;
 
-        // MRI compliance: language level targeted by the prism front end.
+        // MRI compliance: the CRuby release IronRuby matches (RUBY_VERSION, RUBY_RELEASE_DATE and
+        // RUBY_PATCHLEVEL are that release's). The prism front end parses its language level, 4.0.
         public string/*!*/ MriVersion {
             get { return MriVersionString; }
         }
 
-        private const string MriVersionString = "4.0.0";
+        private const string MriVersionString = "4.0.10";
 
         // RbConfig's ruby_version, "4.0.0" as in CRuby 4.0: names the site directory
         // (ruby/site_ruby/4.0.0, empty as shipped). The standard library itself is ruby/4.0.
@@ -80,7 +81,7 @@ namespace IronRuby.Runtime {
         }
 
         public string/*!*/ MriReleaseDate {
-            get { return "2025-12-25"; }
+            get { return "2026-11-19"; }
         }
 
         public int MriPatchLevel {
@@ -280,6 +281,26 @@ namespace IronRuby.Runtime {
         [Emitted]
         public int ConstantAccessVersion = 1;
 
+        /// <summary>
+        /// A constant was set, removed or may resolve differently: the constant caches, the typed bodies
+        /// and the outlined loops that folded one find out by ConstantAccessVersion, on their next entry.
+        /// </summary>
+        internal void ConstantsChanged() {
+            ConstantAccessVersion++;
+        }
+
+        /// <summary>
+        /// An existing constant was assigned again or removed: the one change to constants that a running
+        /// compiled loop which folded the constant must see at its next iteration, as CRuby's next read does.
+        /// A new constant, a mixin, an autoload starting or ending move ConstantAccessVersion only
+        /// (ConstantsChanged): no loop has folded what they change, and moving the code epoch for them made
+        /// every running loop in the process hand itself back.
+        /// </summary>
+        internal void ConstantReassigned() {
+            ConstantAccessVersion++;
+            RubyUtils.InvalidateCompiledCode();
+        }
+
         // Number of autoloads running anywhere in this runtime. While one is in flight the
         // answer a constant site gets depends on which thread is asking -- the thread running
         // the file sees the constant as undefined and every other thread does not -- so the
@@ -292,12 +313,12 @@ namespace IronRuby.Runtime {
 
         public void EnterAutoload() {
             System.Threading.Interlocked.Increment(ref _autoloadsInProgress);
-            ConstantAccessVersion++;
+            ConstantsChanged();
         }
 
         public void LeaveAutoload() {
             System.Threading.Interlocked.Decrement(ref _autoloadsInProgress);
-            ConstantAccessVersion++;
+            ConstantsChanged();
         }
 
         // Set when the runtime starts its first non-main Ractor, and never cleared: from then on
@@ -318,7 +339,7 @@ namespace IronRuby.Runtime {
             if (!_ractorsStarted) {
                 using (ClassHierarchyLocker()) {
                     _ractorsStarted = true;
-                    ConstantAccessVersion++;
+                    ConstantsChanged();
                 }
             }
         }
@@ -566,24 +587,30 @@ namespace IronRuby.Runtime {
             get { return _mainThread; }
         }
 
+        /// <summary>
+        /// Told when $/, $\, $; or $, or one of $stdin, $stdout and $stderr is set: the C API keeps
+        /// copies of them in C globals (rb_rs, rb_stdout...) that extensions read directly.
+        /// </summary>
+        internal static Action<RubyContext> StandardGlobalsChanged;
+
         public MutableString InputSeparator {
             get { return _inputSeparator; }
-            set { _inputSeparator = value; }
+            set { _inputSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public MutableString OutputSeparator {
             get { return _outputSeparator; }
-            set { _outputSeparator = value; }
+            set { _outputSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public object StringSeparator {
             get { return _stringSeparator; }
-            set { _stringSeparator = value; }
+            set { _stringSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public MutableString ItemSeparator {
             get { return _itemSeparator; }
-            set { _itemSeparator = value; }
+            set { _itemSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public RubyInputProvider/*!*/ InputProvider {
@@ -1170,7 +1197,7 @@ namespace IronRuby.Runtime {
                 // and constant sites keep their answer per constant version) - its namespaces are
                 // loaded even if its extension methods can't be read.
                 using (ClassHierarchyLocker()) {
-                    ConstantAccessVersion++;
+                    ConstantsChanged();
                 }
             }
         }
@@ -1901,6 +1928,15 @@ namespace IronRuby.Runtime {
         /// Triggers "inherited" event.
         /// </summary>
         internal RubyClass/*!*/ DefineClass(RubyModule/*!*/ owner, string name, RubyClass/*!*/ superClass, RubyStruct.Info structInfo) {
+            return DefineClass(owner, name, superClass, structInfo, true);
+        }
+
+        /// <summary>
+        /// <paramref name="inheritedEvent"/> false: the C API's rb_class_new, which makes the class
+        /// without telling the superclass, as CRuby's does.
+        /// </summary>
+        internal RubyClass/*!*/ DefineClass(RubyModule/*!*/ owner, string name, RubyClass/*!*/ superClass, RubyStruct.Info structInfo,
+            bool inheritedEvent) {
             Assert.NotNull(owner, superClass);
 
             if (superClass.TypeTracker != null && superClass.TypeTracker.Type.ContainsGenericParameters) {
@@ -1915,7 +1951,9 @@ namespace IronRuby.Runtime {
                 qualifiedName, null, null, null, null, null, null, superClass, null, null, structInfo, true, false, ModuleRestrictions.None
             );
             PublishModule(name, owner, result);
-            superClass.ClassInheritedEvent(result);
+            if (inheritedEvent) {
+                superClass.ClassInheritedEvent(result);
+            }
 
             return result;
         }
@@ -3518,6 +3556,20 @@ namespace IronRuby.Runtime {
             return CreateSymbol(str, clone, out created);
         }
 
+        /// <summary>
+        /// The symbol of the given name if there is one yet, without making it (the C API's
+        /// rb_check_id and rb_check_symbol).
+        /// </summary>
+        public RubySymbol TryFindSymbol(MutableString/*!*/ str) {
+            if (str.Encoding != RubyEncoding.Ascii && str.Encoding.IsAsciiIdentity && str.IsAscii()) {
+                str = MutableString.Create(str.ToString(), RubyEncoding.Ascii);
+            }
+            RubySymbol result;
+            lock (SymbolsLock) {
+                return _symbols.TryGetValue(str, out result) ? result : null;
+            }
+        }
+
         private RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone, out bool created) {
             // A symbol whose name is ASCII-only is US-ASCII whatever the string it was interned
             // from was tagged with, so that "abc".b.to_sym.equal?(:abc) and the encoding does
@@ -3626,6 +3678,7 @@ namespace IronRuby.Runtime {
             set {
                 var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
                 if (ractor != null) { ractor.StandardInput = value; } else { _standardInput = value; }
+                StandardGlobalsChanged?.Invoke(this);
             }
         }
 
@@ -3637,6 +3690,7 @@ namespace IronRuby.Runtime {
             set {
                 var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
                 if (ractor != null) { ractor.StandardOutput = value; } else { _standardOutput = value; }
+                StandardGlobalsChanged?.Invoke(this);
             }
         }
 
@@ -3648,6 +3702,7 @@ namespace IronRuby.Runtime {
             set {
                 var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
                 if (ractor != null) { ractor.StandardErrorOutput = value; } else { _standardErrorOutput = value; }
+                StandardGlobalsChanged?.Invoke(this);
             }
         }
 

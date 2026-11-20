@@ -125,8 +125,10 @@ C: foo
 ");
         }
 
+        // MRI allows undefining initialize, with a warning ("undefining 'initialize' may cause serious problems")
         public void Scenario_RubyInitializers6() {
-            TestOutput(@"
+            AssertOutput(delegate() {
+                CompilerTest(@"
 class C
   undef :initialize rescue p $!
 
@@ -136,10 +138,19 @@ class C
   def initialize; puts 'init'; end
   new
 end
-", @"
-#<TypeError: Cannot undefine 'initialize' method>
+class D
+  undef_method :initialize
+end
+begin
+  D.new
+rescue NoMethodError => e
+  puts e.message
+end
+", 0, 2);
+            }, @"
 [1, 2, 3]
 init
+undefined method 'initialize' for an instance of D
 ");
         }
 
@@ -178,17 +189,22 @@ bar
 ");
         }
 
+        // initialize is BasicObject's alone, as in MRI, and can be removed (with a warning each time)
         public void RubyInitializersCaching3() {
-            TestOutput(@"
+            AssertOutput(delegate() {
+                CompilerTest(@"
 class Object
-  remove_method :initialize
+  remove_method :initialize rescue p $!
 end
 
 class BasicObject
   remove_method :initialize rescue p $!
 end
-", @"
-#<NameError: Cannot remove BasicObject#initialize>
+Object.new rescue p $!.class
+", 0, 2);
+            }, @"
+#<NameError: method 'initialize' not defined in Object>
+NoMethodError
 ");
         }
 

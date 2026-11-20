@@ -1029,12 +1029,8 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(dependentClass);
 
-            if (!isNew) {
-                foreach (var cls in DependentClasses) {
-                    if (ReferenceEquals(dependentClass, cls)) {
-                        return;
-                    }
-                }
+            if (!isNew && DependentClasses.Contains(dependentClass.WeakSelf)) {
+                return;
             }
 
             DependentClasses.Add(dependentClass.WeakSelf);
@@ -1063,8 +1059,13 @@ namespace IronRuby.Builtins {
                 return false;
             };
 
+            int version = GlobalMethodVersion;
             visitor(this);
             ForEachRecursivelyDependentClass(visitor);
+            // A compiled loop that is running checks the method version again at its next iteration: once for
+            // the whole update, after every version it bumped, and only if the global version moved - an update
+            // of modules alone (an extend, a singleton class) leaves every compiled body and loop current.
+            if (GlobalMethodVersion != version) { RubyUtils.InvalidateCompiledCode(); }
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5} rules={3,-5}", Name, reason, affectedModules, affectedRules), "UPDATED");
         }
@@ -1077,6 +1078,7 @@ namespace IronRuby.Builtins {
         internal void AllDependentMethodsUpdated(string/*!*/ reason) {
             Context.RequiresClassHierarchyLock();
 
+            int version = GlobalMethodVersion;
             var visited = new HashSet<RubyModule>(ReferenceEqualityComparer<RubyModule>.Instance);
             var stack = new Stack<RubyModule>();
             stack.Push(this);
@@ -1092,6 +1094,8 @@ namespace IronRuby.Builtins {
                     }
                 }
             }
+            // as in MethodsUpdated
+            if (GlobalMethodVersion != version) { RubyUtils.InvalidateCompiledCode(); }
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5}", Name, reason, visited.Count), "UPDATED");
         }
@@ -1550,7 +1554,7 @@ namespace IronRuby.Builtins {
                 } else if (_privateConstants != null) {
                     _privateConstants.Remove(name);
                 }
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
         }
 
@@ -1608,7 +1612,7 @@ namespace IronRuby.Builtins {
                 }
                 _deprecatedConstants.Add(name);
                 _context.NoteDeprecatedConstant();
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
         }
 
@@ -1762,7 +1766,14 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             InitializeConstantsNoLock();
-            _context.ConstantAccessVersion++;
+            ConstantStorage previous;
+            if (_constants.TryGetValue(name, out previous) && !previous.IsRemoved && !(previous.Value is AutoloadedConstant)) {
+                // assigned again: a running loop that folded it must see the new value (none has folded an
+                // autoload that has not run: the file it loads assigning the constant is no reassignment)
+                _context.ConstantReassigned();
+            } else {
+                _context.ConstantsChanged();
+            }
 
             // assigned by the file an autoload of the constant is running: kept by the autoload until it is done
             ConstantStorage existing;
@@ -1784,7 +1795,7 @@ namespace IronRuby.Builtins {
             ConstantStorage existing;
             if (_constants != null && _constants.TryGetValue(name, out existing) && !existing.IsRemoved && ReferenceEquals(existing.Value, autoloaded)) {
                 Mutate();
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
                 _constants[name] = new ConstantStorage(value);
                 if (sourcePath != null) {
                     SetConstantLocationNoLock(name, sourcePath, sourceLine);
@@ -2156,12 +2167,12 @@ namespace IronRuby.Builtins {
             object namespaceValue;
             if (_namespaceTracker != null && _namespaceTracker.TryGetValue(name, out namespaceValue)) {
                 _constants[name] = ConstantStorage.Removed;
-                _context.ConstantAccessVersion++;
+                _context.ConstantReassigned();
                 value = namespaceValue;
                 result = true;
             } else if (result) {
                 _constants.Remove(name);
-                _context.ConstantAccessVersion++;
+                _context.ConstantReassigned();
             }
 
             if (result) {
@@ -2288,10 +2299,13 @@ namespace IronRuby.Builtins {
                 // If this module defines the method itself, change the visibility of *that* definition.
                 // `method' is the result of a full MRO lookup, which with Module#prepend can land on an
                 // override in a prepended module; copying that one down here would make its `super' recurse.
-                var redefined = (existing != null && !existing.IsUndefined) ? existing : method;
+                bool own = existing != null && !existing.IsUndefined;
+                var redefined = own ? existing : method;
 
                 // CLR members: Detaches the member from its underlying type (by creating a copy).
-                SetMethodNoEventNoLock(callerContext, name, redefined.Copy((RubyMemberFlags)visibility, this));
+                // MRI changes the visibility of an own entry in place: not a new entry, so not "redefining".
+                Mutate();
+                SetMethodNoMutateNoEventNoLock(callerContext, name, redefined.Copy((RubyMemberFlags)visibility, this), !own);
             } else {
                 SetMethodNoEventNoLock(callerContext, name, new SuperForwarderInfo((RubyMemberFlags)visibility, method.DeclaringModule, name));
             }
@@ -2330,7 +2344,8 @@ namespace IronRuby.Builtins {
             SetMethodNoMutateNoEventNoLock(callerContext, name, method);
         }
 
-        internal void SetMethodNoMutateNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method) {
+        internal void SetMethodNoMutateNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method,
+            bool newEntry = true) {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(name, method);
 
@@ -2339,8 +2354,8 @@ namespace IronRuby.Builtins {
                     IsClass ? "class" : "module", _name, _context.RuntimeId));
             }
 
-            if (method.IsUndefined && name == Symbols.Initialize) {
-                throw RubyExceptions.CreateTypeError("Cannot undefine 'initialize' method");
+            if (newEntry) {
+                WarnIfRedefiningCoreMethodNoLock(name, method);
             }
 
             PrepareMethodUpdate(name, method);
@@ -2482,9 +2497,6 @@ namespace IronRuby.Builtins {
                 if (_methods.TryGetValue(name, out method)) {
                     if (method.IsHidden || method.IsUndefined) {
                         return false;
-                    } else if (IsBasicObjectClass && name == Symbols.Initialize) {
-                        // We prohibit removing Object#initialize to simplify object construction logic.
-                        return false;
                     } else if (method.IsRemovable) {
                         // Method is used in a dynamic site or group => update version of all dependencies of this module.
                         if (method.InvalidateSitesOnOverride || method.InvalidateGroupsOnRemoval) {
@@ -2522,6 +2534,46 @@ namespace IronRuby.Builtins {
         public void UndefineMethod(string/*!*/ name) {
             UndefineMethodNoEvent(name);
             MethodUndefined(name);
+        }
+
+        /// <summary>
+        /// MRI's rb_undef, behind `undef` and Module#undef_method: these methods may go, with a
+        /// warning, since the runtime itself calls them. rb_undef_method (the C API) says nothing.
+        /// MRI warns before it looks for the method, so also when undefining it then fails.
+        /// </summary>
+        public void WarnIfUndefiningCoreMethod(string/*!*/ name) {
+            WarnIfCoreMethod("undefining", name, true);
+        }
+
+        /// <summary>MRI's rb_remove_method_id: as <see cref="WarnIfUndefiningCoreMethod"/>, for remove_method.</summary>
+        public void WarnIfRemovingCoreMethod(string/*!*/ name) {
+            WarnIfCoreMethod("removing", name, true);
+        }
+
+        private void WarnIfCoreMethod(string/*!*/ what, string/*!*/ name, bool includeInitialize) {
+            if (name == "object_id" || name == "__send__" || includeInitialize && name == Symbols.Initialize) {
+                Context.ReportWarning(String.Format("{0} '{1}' may cause serious problems", what, name));
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_method_entry_make: a new entry for object_id or __send__ that is not a C function
+        /// (a def, define_method, alias, attr_reader, visibility change, undef) warns when the class
+        /// already has the method, defined or undefined, itself or from an ancestor. An alias is never
+        /// a C function there, though here it shares the aliased method's info.
+        /// </summary>
+        private void WarnIfRedefiningCoreMethodNoLock(string/*!*/ name, RubyMemberInfo/*!*/ method) {
+            if ((name != "object_id" && name != "__send__") || method.IsHidden
+                || method.AliasOwner == null && (method is RubyMethodGroupBase || method is RubyCustomMethodInfo)) {
+                return;
+            }
+            InitializeMethodsNoLock();
+            bool skipHidden = false, foundCallerSelf = false;
+            RubyMemberInfo existing;
+            RubyModule owner;
+            if (FindMethodInAncestorsNoLock(name, false, null, ref skipHidden, ref foundCallerSelf, out existing, out owner)) {
+                WarnIfCoreMethod("redefining", name, false);
+            }
         }
 
         // thread-safe:
@@ -3639,7 +3691,7 @@ namespace IronRuby.Builtins {
             }
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
         }
 
         /// <summary>
@@ -3736,7 +3788,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
         }
 
         private static RubyModule[]/*!*/ SpliceBefore(RubyModule/*!*/[]/*!*/ list, int index, RubyModule/*!*/[]/*!*/ added) {
@@ -3786,7 +3838,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -3832,7 +3884,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -3863,12 +3915,8 @@ namespace IronRuby.Builtins {
 
             if (_dependentModules == null) {
                 _dependentModules = new WeakList<RubyModule>();
-            } else {
-                foreach (var module in _dependentModules) {
-                    if (ReferenceEquals(dependentModule, module)) {
-                        return;
-                    }
-                }
+            } else if (_dependentModules.Contains(dependentModule.WeakSelf)) {
+                return;
             }
 
             _dependentModules.Add(dependentModule.WeakSelf);

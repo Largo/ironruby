@@ -875,11 +875,7 @@ namespace IronRuby.Builtins {
                 RequireMutable(self);
             }
             foreach (var methodName in methodNames) {
-                // MRI: reports a warning and allows removal
-                if (self.IsBasicObjectClass && methodName == Symbols.Initialize) {
-                    throw RubyExceptions.CreateNameError("Cannot remove BasicObject#initialize");
-                }
-
+                self.WarnIfRemovingCoreMethod(methodName);
                 if (!self.RemoveMethod(methodName)) {
                     // MRI's wording for remove_method differs from undef_method's:
                     //   "method 'x' not defined in C"
@@ -898,6 +894,7 @@ namespace IronRuby.Builtins {
                 RequireMutable(self);
             }
             foreach (var methodName in methodNames) {
+                self.WarnIfUndefiningCoreMethod(methodName);
                 if (!self.ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
                 }
@@ -1875,8 +1872,7 @@ namespace IronRuby.Builtins {
             if (!method.Found) {
                 return RubyMethodVisibility.None;
             }
-            var libraryMethod = method.Info as RubyLibraryMethodInfo;
-            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+            return method.Info.IsNotImplemented ? RubyMethodVisibility.None : method.Visibility;
         }
 
         // thread-safe:

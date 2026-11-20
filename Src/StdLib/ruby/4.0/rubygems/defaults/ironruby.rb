@@ -512,15 +512,24 @@ module Gem
     # and the pure-Ruby fallback most such gems carry (racc/parser.rb rescues
     # the LoadError of racc/cparse) is used instead.  The name is recorded so
     # that `gem env` and -w can report it.
+    #
+    # Prepended, so that `super` is RubyGems' own Specification#build_extensions:
+    # defined in this class body it would replace that method, and `super` would
+    # reach BasicSpecification, which has none (NoMethodError whenever a gem being
+    # installed depends on an installed gem with an extension - oj on bigdecimal).
 
-    def build_extensions # :nodoc:
-      return if extensions.empty?
-      return if default_gem?
-      return super if Gem.ironruby_build_extension?(self)
+    module IronRubyExtensionBuild # :nodoc:
+      def build_extensions
+        return if extensions.empty?
+        return if default_gem?
+        return super if Gem.ironruby_build_extension?(self)
 
-      Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
-      nil
+        Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
+        nil
+      end
     end
+    prepend IronRubyExtensionBuild
+    __hide_constant__ :IronRubyExtensionBuild
   end
 
   ##
@@ -724,4 +733,52 @@ module Gem
 
   BasicSpecification.prepend(IronRubyProvidedGem)
   __hide_constant__ :IronRubyProvidedGem
+end
+
+##
+# A library IronRuby implements itself provides its extension under the
+# extension's own name - Src/StdLib/ironruby/msgpack/msgpack.rb for msgpack's
+# msgpack/msgpack.so, oj/oj.rb, bcrypt_ext.rb - so that the gem's Ruby half
+# finds it.  When IRONRUBY_NATIVE_GEMS asks for the real gem, its compiled
+# extension is ahead on $LOAD_PATH and still loses: `require "msgpack/msgpack"`
+# takes a .rb from anywhere on the load path before a .so, as CRuby's does.
+# So each of those files first asks for the native extension here
+# (ironruby_require_native), which loads it in their place when there is one.
+
+module Gem
+  def self.ironruby_builtin_dir # :nodoc:
+    return @__ironruby_builtin_dir__ if defined?(@__ironruby_builtin_dir__)
+    dir = File.expand_path("../../../../ironruby", __dir__)
+    @__ironruby_builtin_dir__ = File.directory?(dir) ? dir : nil
+  end
+
+  ##
+  # The compiled extension +feature+ names in an activated gem IRONRUBY_NATIVE_GEMS
+  # asks for, or nil.
+
+  def self.ironruby_native_extension_for(feature) # :nodoc:
+    return nil if ironruby_native_gems.empty? || !ironruby_capi?
+
+    builtin = ironruby_builtin_dir
+    file = "#{feature}.#{RbConfig::CONFIG["DLEXT"]}"
+    $LOAD_PATH.each do |dir|
+      dir = dir.to_s
+      next if dir == builtin
+      path = File.join(dir, file)
+      next unless File.file?(path)
+      spec = loaded_specs.each_value.find {|s| path.start_with?(s.full_gem_path + "/", s.extension_dir + "/") }
+      return path if spec && ironruby_native_gem?(spec.name)
+    end
+    nil
+  end
+
+  ##
+  # Requires the compiled extension +feature+ names (ironruby_native_extension_for):
+  # true if there is one, false if IronRuby's own implementation is to load.
+
+  def self.ironruby_require_native(feature) # :nodoc:
+    native = ironruby_native_extension_for(feature) or return false
+    require native
+    true
+  end
 end

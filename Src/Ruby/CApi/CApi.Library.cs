@@ -34,7 +34,12 @@ namespace IronRuby.Runtime.CApi {
             return _context.CreateAsciiSymbol(name);
         }
 
+        // as CRuby's rb_check_funcall: #respond_to? when the object has one (a BasicObject has not),
+        // otherwise whether the method is there
         private static bool RespondTo(object obj, string/*!*/ name, bool includePrivate = true) {
+            if (!_context.ResolveMethod(obj, "respond_to?", true).Found) {
+                return _context.ResolveMethod(obj, name, includePrivate).Found;
+            }
             return Protocols.IsTrue(Call(obj, "respond_to?", Sym(name), includePrivate));
         }
 
@@ -203,14 +208,13 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(x, IdToString(op), y));
         }
 
+        // numeric.c's do_coerce(..., FALSE): nil when #coerce answers no pair, what it raises goes through
         internal static VALUE rb_num_coerce_cmp(VALUE lhs, VALUE rhs, VALUE op) {
-            object y, x;
-            try {
-                x = Coerce(lhs, rhs, out y);
-            } catch (Exception) {
+            var pair = Call(FromValue(rhs), "coerce", FromValue(lhs)) as RubyArray;
+            if (pair == null || pair.Count != 2) {
                 return Qnil;
             }
-            return ToValue(Call(x, IdToString(op), y));
+            return ToValue(Call(pair[0], IdToString(op), pair[1]));
         }
 
         internal static VALUE rb_num_coerce_relop(VALUE lhs, VALUE rhs, VALUE op) {
@@ -270,20 +274,18 @@ namespace IronRuby.Runtime.CApi {
             return Protocols.IsTrue(Call(FromValue(space), "const_defined?", IdToSymbol(name), false)) ? 1 : 0;
         }
 
-        internal static VALUE rb_const_get_from(VALUE space, VALUE name) {
-            return CallV(space, "const_get", IdToSymbol(name));
-        }
-
         internal static byte* rb_class2name(VALUE klass) {
+            // rb_class_name's: an anonymous class is its inspect, "#<Class:0x...>"
             var real = FromValue(rb_class_real(klass)) as RubyModule;
-            object name = real != null ? Call(real, "name") : null;
-            return name != null ? PermanentCString(name.ToString()) : null;
+            return real != null ? PermanentCString(FromValue(rb_class_path(ToValue(real))).ToString()) : null;
         }
 
         internal static VALUE rb_class_real(VALUE klass) {
-            var cls = FromValue(klass) as RubyClass;
+            object o = FromValue(klass);
+            var cls = o as RubyClass;
             if (cls == null) {
-                return Qfalse;
+                // a module is its own real class, as in CRuby
+                return o is RubyModule ? klass : Qfalse;
             }
             return ToValue(cls.GetNonSingletonClass());
         }
@@ -296,7 +298,9 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_class_new(VALUE super) {
-            return ToValue(Call(_context.ClassClass, "new", FromValue(super)));
+            // unlike Class.new, without the superclass's #inherited
+            RubyClass superClass = RubyClass.CheckInheritable(_context, FromValue(super));
+            return ToValue(_context.DefineClass(_context.ObjectClass, null, superClass, null, false));
         }
 
         internal static void rb_prepend_module(VALUE klass, VALUE module) {
@@ -360,16 +364,12 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(o, name, null, FromValues(argc, argv)));
         }
 
-        internal static VALUE rb_call_super_kw(int argc, VALUE* argv, int kw_splat) {
-            return rb_call_super(argc, argv);
-        }
-
         internal static VALUE rb_class_new_instance_kw(int argc, VALUE* argv, VALUE klass, int kw_splat) {
-            return rb_class_new_instance(argc, argv, klass);
+            return ToValue(Send(FromValue(klass), "new", null, KeywordArgs(argc, argv, kw_splat)));
         }
 
         internal static VALUE rb_funcall_with_block_kw(VALUE recv, VALUE mid, int argc, VALUE* argv, VALUE procval, int kw_splat) {
-            return rb_funcall_with_block(recv, mid, argc, argv, procval);
+            return ToValue(SendWith(true, FromValue(recv), IdToString(mid), FromValue(procval) as Proc, KeywordArgs(argc, argv, kw_splat)));
         }
 
         internal static int rb_frame_method_id_and_class(VALUE* idp, VALUE* klassp) {
@@ -403,6 +403,14 @@ namespace IronRuby.Runtime.CApi {
 
         internal static void rb_ivar_foreach(VALUE obj, IntPtr func, ulong arg) {
             object o = FromValue(obj);
+            // a class's or module's own class variables come first, as CRuby keeps them in the same table
+            if (o is RubyModule module) {
+                foreach (object cvar in (RubyArray)Call(module, "class_variables", false)) {
+                    if (CallForeach(func, Intern(cvar.ToString()), ToValue(Call(module, "class_variable_get", cvar)), arg) == ST_STOP) {
+                        return;
+                    }
+                }
+            }
             foreach (var name in _context.GetInstanceVariableNames(o)) {
                 object value;
                 _context.TryGetInstanceVariable(o, name, out value);
@@ -414,6 +422,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static void rb_free_generic_ivar(VALUE obj) {
+            object o = FromValue(obj);
+            foreach (var name in _context.GetInstanceVariableNames(o)) {
+                object unused;
+                _context.TryRemoveInstanceVariable(o, name, out unused);
+            }
         }
 
         internal static void rb_copy_generic_ivar(VALUE clone, VALUE obj) {
@@ -490,7 +503,11 @@ namespace IronRuby.Runtime.CApi {
             if (block == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return ToValue(Send(_context.KernelModule, "lambda", block));
+            if (block.Kind == ProcKind.Lambda || _frame.Bfc != null && !_frame.Bfc.IsLiteralBlock) {
+                // a Proc passed with &: CRuby hands it back as it is, lambda or not
+                return ToValue(block);
+            }
+            return ToValue(block.ToLambda(null));
         }
 
         internal static VALUE rb_yield_splat(VALUE ary) {
@@ -525,8 +542,26 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(FromValue(recv), "enum_for", args.ToArray()));
         }
 
+        /// <summary>
+        /// enumerator.c's: the enumerator's size comes from func(recv, args, enumerator), called
+        /// when Enumerator#size asks - a size block given to enum_for.
+        /// </summary>
         internal static VALUE rb_enumeratorize_with_size(VALUE recv, VALUE meth, int argc, VALUE* argv, void* func) {
-            return rb_enumeratorize(recv, meth, argc, argv);
+            if (func == null) {
+                return rb_enumeratorize(recv, meth, argc, argv);
+            }
+            var args = new List<object> { FromValue(meth) };
+            args.AddRange(FromValues(argc, argv));
+            var sizeArgs = new RubyArray(FromValues(argc, argv));
+            object enumerator = null;
+            var size = Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>((b, self, unused, rest) => {
+                VALUE* sizeArgv = stackalloc VALUE[2];
+                sizeArgv[0] = ToValue(sizeArgs);
+                sizeArgv[1] = ToValue(enumerator);
+                return FromValue(CallMethod((IntPtr)func, 2, recv, 2, sizeArgv));
+            }));
+            enumerator = Send(FromValue(recv), "enum_for", size, args.ToArray());
+            return ToValue(enumerator);
         }
 
         internal static void rb_set_end_proc(IntPtr func, VALUE arg) {
@@ -537,6 +572,17 @@ namespace IronRuby.Runtime.CApi {
         #endregion
 
         #region IO
+
+        // The descriptor the OS knows for one of IronRuby's (IO#fileno numbers a stream in IronRuby's
+        // own table), or fd itself when IronRuby has no stream under it: what an extension got
+        // from rb_cloexec_open or open(2) is native already. -1 for a stream with no descriptor.
+        internal static int rb_ir_native_fd(int fd) {
+            if (fd <= 2) {
+                return fd;
+            }
+            var stream = _context.GetStream(fd);
+            return stream != null ? RubyIO.DescriptorOf(stream) : fd;
+        }
 
         internal static int rb_io_descriptor(VALUE io) {
             return (int)Call(FromValue(io), "fileno");
@@ -550,7 +596,6 @@ namespace IronRuby.Runtime.CApi {
         internal static VALUE rb_io_binmode(VALUE io) { return CallV(io, "binmode"); }
         internal static VALUE rb_io_close(VALUE io) { return CallV(io, "close"); }
         internal static VALUE rb_io_path(VALUE io) { return CallV(io, "path"); }
-        internal static VALUE rb_io_taint_check(VALUE obj) { return obj; }
 
         internal static VALUE rb_io_get_io(VALUE io) {
             return ToValue(ConvertType(FromValue(io), T_FILE, "IO", "to_io", true));
@@ -589,8 +634,40 @@ namespace IronRuby.Runtime.CApi {
         internal static VALUE rb_struct_s_members(VALUE klass) { return CallV(klass, "members"); }
         internal static VALUE rb_struct_size(VALUE st) { return CallV(st, "size"); }
 
+        internal static VALUE rb_gc_latest_gc_info(VALUE key) {
+            object k = FromValue(key);
+            if (!(k is RubySymbol) && !(k is IDictionary<object, object>)) {
+                throw RubyExceptions.CreateTypeError("non-hash or symbol given");
+            }
+            if (k is RubySymbol sym && !((IDictionary<object, object>)Call(Constant("GC"), "latest_gc_info")).ContainsKey(sym)) {
+                throw RubyExceptions.CreateArgumentError("unknown key: " + sym);
+            }
+            return ToValue(Call(Constant("GC"), "latest_gc_info", k));
+        }
+
         internal static VALUE rb_struct_initialize(VALUE self, VALUE values) {
-            Send(FromValue(self), "initialize", null, ((RubyArray)FromValue(values)).ToArray());
+            object obj = FromValue(self);
+            var args = ((RubyArray)FromValue(values)).ToArray();
+            var data = Constant("Data") as RubyModule;
+            if (data != null && _context.IsKindOf(obj, data)) {
+                // a Data object takes its members positionally here, the missing ones nil, and is frozen after
+                if (_context.IsObjectFrozen(obj)) {
+                    throw RubyExceptions.CreateObjectFrozenError(_context, obj);
+                }
+                var members = (RubyArray)Call(_context.GetClassOf(obj), "members");
+                if (args.Length > members.Count) {
+                    throw RubyExceptions.CreateArgumentError("struct size differs");
+                }
+                var keywords = new Hash(_context.EqualityComparer, members.Count);
+                for (int i = 0; i < members.Count; i++) {
+                    keywords[members[i]] = i < args.Length ? args[i] : null;
+                }
+                keywords.IsKeywordArguments = true;
+                Send(obj, "initialize", null, keywords);
+                _context.FreezeObject(obj);
+                return Qnil;
+            }
+            Send(obj, "initialize", null, args);
             return Qnil;
         }
 
@@ -630,36 +707,127 @@ namespace IronRuby.Runtime.CApi {
             if (rb_range_values(range, &b, &e, &excl) == 0) {
                 return Qfalse;
             }
+            VALUE r = RangeComponentBegLen(b, e, excl, begp, lenp, len, err);
+            if (r == Qnil && err != 0) {
+                throw RubyExceptions.CreateRangeError(String.Format("{0} out of range", ToMutableString(rb_inspect(range))));
+            }
+            return r;
+        }
+
+        // CRuby's rb_range_component_beg_len (range.c): Qtrue, or Qnil when out of range.
+        private static VALUE RangeComponentBegLen(VALUE b, VALUE e, int excl, long* begp, long* lenp, long len, int err) {
             long beg = b == Qnil ? 0 : rb_num2long(b);
             long end = e == Qnil ? -1 : rb_num2long(e);
             if (e == Qnil) {
                 excl = 0;
             }
-            long origBeg = beg, origEnd = end;
             if (beg < 0) {
                 beg += len;
-                if (beg < 0) goto OutOfRange;
+                if (beg < 0) {
+                    return Qnil;
+                }
             }
             if (end < 0) {
                 end += len;
             }
-            if (excl == 0) {
+            // Include the end point; LONG_MAX + 1 is not representable, so saturate.
+            if (excl == 0 && end < Int64.MaxValue) {
                 end++;
             }
             if (err == 0 || err == 2) {
-                if (beg > len) goto OutOfRange;
-                if (end > len) end = len;
+                if (beg > len) {
+                    return Qnil;
+                }
+                if (end > len) {
+                    end = len;
+                }
             }
-            len = end - beg;
-            if (len < 0) len = 0;
             *begp = beg;
-            *lenp = len;
+            *lenp = end > beg ? end - beg : 0;
             return Qtrue;
-        OutOfRange:
-            if (err != 0) {
-                throw RubyExceptions.CreateRangeError(String.Format("{0}{1}{2} out of range", origBeg, excl != 0 ? "..." : "..", origEnd));
+        }
+
+        // rb_arithmetic_sequence_components_t (ruby/internal/intern/enumerator.h)
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct ArithmeticSequenceComponents {
+            public VALUE Begin;
+            public VALUE End;
+            public VALUE Step;
+            public int ExcludeEnd;
+        }
+
+        // CRuby's (enumerator.c): an Enumerator::ArithmeticSequence, or a Range with step 1.
+        internal static int rb_arithmetic_sequence_extract(VALUE obj, void* buf) {
+            var component = (ArithmeticSequenceComponents*)buf;
+            object o = FromValue(obj);
+            var arithSeq = Constant("Enumerator::ArithmeticSequence") as RubyModule;
+            if (arithSeq != null && _context.IsKindOf(o, arithSeq)) {
+                component->Begin = ToValue(Call(o, "begin"));
+                component->End = ToValue(Call(o, "end"));
+                component->Step = ToValue(Call(o, "step"));
+                component->ExcludeEnd = Protocols.IsTrue(Call(o, "exclude_end?")) ? 1 : 0;
+                return 1;
             }
-            return Qnil;
+            VALUE b, e;
+            int excl;
+            if (rb_range_values(obj, &b, &e, &excl) != 0) {
+                component->Begin = b;
+                component->End = e;
+                component->Step = ToValue((object)1);
+                component->ExcludeEnd = excl;
+                return 1;
+            }
+            return 0;
+        }
+
+        // CRuby's (enumerator.c)
+        internal static VALUE rb_arithmetic_sequence_beg_len_step(VALUE obj, System.Runtime.InteropServices.CLong* begp,
+            System.Runtime.InteropServices.CLong* lenp, System.Runtime.InteropServices.CLong* stepp, long len, int err) {
+            if (begp == null || lenp == null || stepp == null) {
+                throw RubyExceptions.CreateArgumentError("NULL pointer given");
+            }
+            ArithmeticSequenceComponents aseq;
+            if (rb_arithmetic_sequence_extract(obj, &aseq) == 0) {
+                return Qfalse;
+            }
+
+            long step = aseq.Step == Qnil ? 1 : rb_num2long(aseq.Step);
+            *stepp = new System.Runtime.InteropServices.CLong((nint)step);
+
+            if (step < 0) {
+                if (aseq.ExcludeEnd != 0 && aseq.End != Qnil) {
+                    // the exclusion is handled before the range is reversed
+                    aseq.End = ToValue(Protocols.Normalize(rb_num2long(aseq.End) + 1));
+                    // and does not exclude the previous beginning
+                    aseq.ExcludeEnd = 0;
+                }
+                VALUE tmp = aseq.Begin;
+                aseq.Begin = aseq.End;
+                aseq.End = tmp;
+            }
+
+            long beg = 0, length = 0;
+            VALUE result;
+            if (err == 0 && (step < -1 || step > 1)) {
+                result = RangeComponentBegLen(aseq.Begin, aseq.End, aseq.ExcludeEnd, &beg, &length, len, 1);
+                if (result == Qtrue && beg <= len && length <= len) {
+                    *begp = new System.Runtime.InteropServices.CLong((nint)beg);
+                    *lenp = new System.Runtime.InteropServices.CLong((nint)length);
+                    return Qtrue;
+                }
+                if (result == Qtrue) {
+                    *begp = new System.Runtime.InteropServices.CLong((nint)beg);
+                    *lenp = new System.Runtime.InteropServices.CLong((nint)length);
+                }
+            } else {
+                result = RangeComponentBegLen(aseq.Begin, aseq.End, aseq.ExcludeEnd, &beg, &length, len, err);
+                if (result == Qtrue) {
+                    *begp = new System.Runtime.InteropServices.CLong((nint)beg);
+                    *lenp = new System.Runtime.InteropServices.CLong((nint)length);
+                }
+                return result;
+            }
+            throw RubyExceptions.CreateRangeError(String.Format("{0} out of range", ToMutableString(rb_inspect(obj))));
         }
 
         internal static VALUE rb_reg_new(byte* src, long len, int opts) {
@@ -674,7 +842,16 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(Constant("Regexp"), "new", FromValue(str)));
         }
 
-        internal static VALUE rb_reg_match(VALUE re, VALUE str) { return CallV(re, "=~", FromValue(str)); }
+        // Regexp#=~, whose $~ is the frame's that called the C method (rb_backref_get reads it there)
+        internal static VALUE rb_reg_match(VALUE re, VALUE str) {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope == null) {
+                return CallV(re, "=~", FromValue(str));
+            }
+            object match = Call(FromValue(re), "match", FromValue(str));
+            scope.CurrentMatch = match as MatchData;
+            return match == null ? Qnil : ToValue(Call(match, "begin", 0));
+        }
         internal static int rb_reg_options(VALUE re) { return (int)Call(FromValue(re), "options"); }
 
         internal static VALUE rb_reg_nth_match(int n, VALUE md) {
@@ -682,8 +859,50 @@ namespace IronRuby.Runtime.CApi {
             return m == null ? Qnil : ToValue(Call(m, "[]", n));
         }
 
+        // $~ and $_ are the frame's that called the C method, as in CRuby. Outside one (an Init
+        // function, say) there is no Ruby frame of the extension's own: Kernel#eval's is used.
+        private static RubyClosureScope CallerClosureScope() {
+            RubyScope scope = _frame != null ? _frame.Scope : null;
+            return scope != null ? scope.GetInnerMostClosureScope() : null;
+        }
+
+        internal static VALUE rb_define_finalizer(VALUE obj, VALUE block) {
+            return ToValue(Call(Constant("ObjectSpace"), "define_finalizer", FromValue(obj), FromValue(block)));
+        }
+
+        internal static VALUE rb_undefine_finalizer(VALUE obj) {
+            return ToValue(Call(Constant("ObjectSpace"), "undefine_finalizer", FromValue(obj)));
+        }
+
         internal static VALUE rb_backref_get() {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                return ToValue(scope.CurrentMatch);
+            }
             return ToValue(Call(_context.KernelModule, "eval", MutableString.CreateAscii("$~")));
+        }
+
+        internal static void rb_backref_set(VALUE md) {
+            // CRuby stores whatever it is given (vm_svar_set); $~ = holds a MatchData or nil
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                scope.CurrentMatch = FromValue(md) as MatchData;
+            }
+        }
+
+        internal static VALUE rb_lastline_get() {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                return ToValue(scope.LastInputLine);
+            }
+            return ToValue(Call(_context.KernelModule, "eval", MutableString.CreateAscii("$_")));
+        }
+
+        internal static void rb_lastline_set(VALUE str) {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                scope.LastInputLine = FromValue(str);
+            }
         }
 
         internal static int rb_memcicmp(void* s1, void* s2, long n) {
@@ -791,8 +1010,12 @@ namespace IronRuby.Runtime.CApi {
             return hash;
         }
 
+        // MRI's rb_hash_seed: random, once per process, so an extension's hash values (rb_hash_start,
+        // rb_memhash) differ from one run to the next, as they do on CRuby
+        private static readonly ulong _hashSeed = BitConverter.ToUInt64(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8), 0);
+
         internal static ulong rb_hash_start(ulong i) {
-            return i * 0x9E3779B97F4A7C15UL + 0x632BE59BD9B4E019UL;
+            return (i + _hashSeed) * 0x9E3779B97F4A7C15UL + 0x632BE59BD9B4E019UL;
         }
 
         internal static void rb_hash_bulk_insert(long argc, VALUE* argv, VALUE hash) {
@@ -848,21 +1071,17 @@ namespace IronRuby.Runtime.CApi {
             return rb_enc_str_coderange(str) == (int)CR_7BIT ? 1 : 0;
         }
 
-        internal static long rb_enc_strlen(byte* head, byte* tail, void* enc) {
-            var s = MutableString.CreateBinary(Bytes(head, tail - head), FromNativeEncoding(enc) ?? RubyEncoding.Binary);
-            return s.GetCharCount();
-        }
 
         internal static int rb_to_encoding_index(VALUE obj) {
             object o = FromValue(obj);
             if (o is RubyEncoding e) {
                 return EncodingIndex(e);
             }
-            var s = o as MutableString;
-            if (s == null) {
+            VALUE name = rb_check_string_type(obj);
+            if (name == Qnil) {
                 return -1;
             }
-            var found = FindEncoding(s.ToString());
+            var found = FindEncoding(FromValue(name).ToString());
             return found != null ? EncodingIndex(found) : -1;
         }
 
@@ -903,7 +1122,50 @@ namespace IronRuby.Runtime.CApi {
         internal static int rb_filesystem_encindex() { return EncodingIndex(_context.GetPathEncoding()); }
 
         internal static int rb_enc_alias(byte* alias, byte* orig) {
-            return -1;
+            string name = FromCString(alias);
+            var encoding = RubyEncoding.DefineAlias(name, FromCString(orig));
+            if (encoding == null) {
+                return -1;
+            }
+            DefineEncodingConstants(name, encoding);
+            return EncodingIndex(encoding);
+        }
+
+        /// <summary>
+        /// The C half of rb_define_dummy_encoding (native/capi.c raises EncodingError on -1):
+        /// the new encoding's index, the last of Encoding.list.
+        /// </summary>
+        internal static int rb_ir_define_dummy_encoding(byte* name) {
+            string n = FromCString(name);
+            var encoding = RubyEncoding.DefineDummy(n);
+            if (encoding == null) {
+                return -1;
+            }
+            DefineEncodingConstants(n, encoding);
+            return EncodingIndex(encoding);
+        }
+
+        /// <summary>
+        /// encoding.c's set_encoding_const: the name as a constant of Encoding when it can be one
+        /// (characters that cannot be in a constant name become '_'), and its upper case form.
+        /// </summary>
+        private static void DefineEncodingConstants(string/*!*/ name, RubyEncoding/*!*/ encoding) {
+            if (name.Length == 0 || !Char.IsAsciiLetterUpper(name[0])) {
+                return;
+            }
+            var chars = name.ToCharArray();
+            for (int i = 0; i < chars.Length; i++) {
+                if (!Char.IsAsciiLetterOrDigit(chars[i])) {
+                    chars[i] = '_';
+                }
+            }
+            var constant = new string(chars);
+            var module = (RubyModule)Constant("Encoding");
+            foreach (var c in new[] { constant, constant.ToUpperInvariant() }) {
+                if (!module.TryGetConstant(null, c, out object _)) {
+                    module.SetConstant(c, encoding);
+                }
+            }
         }
 
         #endregion
@@ -930,7 +1192,8 @@ namespace IronRuby.Runtime.CApi {
 
         /// <summary>
         /// CRuby's rb_get_kwargs: takes the required and optional keywords out of the hash into
-        /// values (Qundef for an optional one not given); optional &lt; 0 means other keys are allowed.
+        /// values (Qundef for an optional one not given) - with values NULL it only looks; optional
+        /// &lt; 0 means other keys are allowed and stay in the hash.
         /// </summary>
         internal static int rb_get_kwargs(VALUE keyword_hash, VALUE* table, int required, int optional, VALUE* values) {
             bool rest = optional < 0;
@@ -945,6 +1208,8 @@ namespace IronRuby.Runtime.CApi {
                 object value;
                 if (hash != null && hash.TryGetValue(key, out value)) {
                     if (values != null) {
+                        // taken out, as CRuby's extract_kwarg does: what is left over is the rest
+                        hash.Remove(key);
                         values[i] = ToValue(value);
                     }
                     found++;
@@ -961,7 +1226,7 @@ namespace IronRuby.Runtime.CApi {
                 throw RubyExceptions.CreateArgumentError(String.Format("missing keyword{0}: {1}", missing.Count > 1 ? "s" : "",
                     String.Join(", ", missing.ConvertAll(k => ":" + k))));
             }
-            if (!rest && hash != null && hash.Count > found) {
+            if (!rest && hash != null && hash.Count > (values != null ? 0 : found)) {
                 var known = new HashSet<object>();
                 for (int i = 0; i < required + optional; i++) {
                     known.Add(IdToSymbol(table[i]));

@@ -107,8 +107,7 @@ namespace IronRuby.Runtime.Calls {
 
             bool answer;
             if (lookup.Found && lookup.Visibility == RubyMethodVisibility.Public) {
-                var libraryMethod = lookup.Info as RubyLibraryMethodInfo;
-                answer = libraryMethod == null || !libraryMethod.IsNotImplemented;
+                answer = !lookup.Info.IsNotImplemented;
             } else {
                 // a user-defined respond_to_missing? is called every time:
                 int missingVersion;
