@@ -2299,10 +2299,13 @@ namespace IronRuby.Builtins {
                 // If this module defines the method itself, change the visibility of *that* definition.
                 // `method' is the result of a full MRO lookup, which with Module#prepend can land on an
                 // override in a prepended module; copying that one down here would make its `super' recurse.
-                var redefined = (existing != null && !existing.IsUndefined) ? existing : method;
+                bool own = existing != null && !existing.IsUndefined;
+                var redefined = own ? existing : method;
 
                 // CLR members: Detaches the member from its underlying type (by creating a copy).
-                SetMethodNoEventNoLock(callerContext, name, redefined.Copy((RubyMemberFlags)visibility, this));
+                // MRI changes the visibility of an own entry in place: not a new entry, so not "redefining".
+                Mutate();
+                SetMethodNoMutateNoEventNoLock(callerContext, name, redefined.Copy((RubyMemberFlags)visibility, this), !own);
             } else {
                 SetMethodNoEventNoLock(callerContext, name, new SuperForwarderInfo((RubyMemberFlags)visibility, method.DeclaringModule, name));
             }
@@ -2341,7 +2344,8 @@ namespace IronRuby.Builtins {
             SetMethodNoMutateNoEventNoLock(callerContext, name, method);
         }
 
-        internal void SetMethodNoMutateNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method) {
+        internal void SetMethodNoMutateNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method,
+            bool newEntry = true) {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(name, method);
 
@@ -2350,7 +2354,9 @@ namespace IronRuby.Builtins {
                     IsClass ? "class" : "module", _name, _context.RuntimeId));
             }
 
-            WarnIfRedefiningCoreMethodNoLock(name, method);
+            if (newEntry) {
+                WarnIfRedefiningCoreMethodNoLock(name, method);
+            }
 
             PrepareMethodUpdate(name, method);
 
