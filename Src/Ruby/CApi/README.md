@@ -32,7 +32,7 @@ installs and builds the real sqlite3 gem, and with the variable set `require "sq
 (`rubygems/defaults/ironruby.rb`). `--platform ruby` because the precompiled platform gems are
 built for CRuby. Where IronRuby's own implementation sits under the extension's name
 (`msgpack/msgpack.rb`, `oj/oj.rb`, `bcrypt_ext.rb` in `Src/StdLib/ironruby`), that file loads the
-native gem's extension instead (`Gem.ironruby_native_extension_for`): a `.rb` anywhere on the load
+native gem's extension instead (`Gem.ironruby_require_native`): a `.rb` anywhere on the load
 path would otherwise win over the gem's `.so`.
 
 Gems whose extensions build and give CRuby's results (Linux x64, checked against CRuby 4.0 with
@@ -53,6 +53,10 @@ and oj.
 
 A variadic function, or one that must catch a raise (`rb_protect` & co), goes in
 `native/capi.c` instead.
+
+A function ruby/spec's capi suite does not call gets a check in `Util/capi/selftest`, a small
+extension that `ruby Util/capi/selftest.rb` builds and runs on CRuby (the expected results) and
+`./ir.sh Util/capi/selftest.rb` on IronRuby; release.yml runs it on the Linux archive.
 
 ## Design
 

@@ -19,11 +19,8 @@
 # A pinned default gemspec makes RubyGems agree that oj 3.17.6 is installed.
 
 # With IRONRUBY_NATIVE_GEMS naming the gem, its compiled extension is loaded instead
-# (Gem.ironruby_native_extension_for, rubygems/defaults/ironruby.rb).
-if defined?(Gem.ironruby_native_extension_for) && (native = Gem.ironruby_native_extension_for("oj/oj"))
-  require native
-  return
-end
+# (rubygems/defaults/ironruby.rb).
+return if defined?(Gem.ironruby_require_native) && Gem.ironruby_require_native("oj/oj")
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Oj'
 

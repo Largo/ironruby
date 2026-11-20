@@ -15,11 +15,8 @@
 # resolves here instead of stopping at extconf.rb.
 
 # With IRONRUBY_NATIVE_GEMS naming the gem, its compiled extension is loaded instead
-# (Gem.ironruby_native_extension_for, rubygems/defaults/ironruby.rb).
-if defined?(Gem.ironruby_native_extension_for) && (native = Gem.ironruby_native_extension_for("msgpack/msgpack"))
-  require native
-  return
-end
+# (rubygems/defaults/ironruby.rb).
+return if defined?(Gem.ironruby_require_native) && Gem.ironruby_require_native("msgpack/msgpack")
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.MessagePack'
 
