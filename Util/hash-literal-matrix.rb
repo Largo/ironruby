@@ -14,9 +14,10 @@
 # duplicate keys, the String key's frozen copy, the result being a new plain Hash on every call (no default,
 # no compare_by_identity, mutation not seen by the next call), literals in blocks, with yields, in defaults, in
 # loops, recursion, exceptions and their backtraces, defined?, tracing, threads, and the keyword hash a call
-# site builds (`f(a: x)') next to the literal it is not. Sections 7 to 11 are about the call a light frame makes
-# with keywords: the callee's visibility, a callee that reads the caller's scope, the callee or a key's #hash
-# changing half way through the N calls, and a refinement in use where the caller is defined.
+# site builds (`f(a: x)') next to the literal it is not. Sections 7 to 12 are about the call a light frame makes
+# with keywords and about what may outlive it: the callee's visibility, a callee that reads the caller's scope, the
+# callee or a key's #hash changing half way through the N calls, a literal in a method whose scope is parked for
+# its next call, and a refinement in use where the caller is defined.
 #
 #   IR_LIGHT_FRAMES=why ./ir.sh Util/hash-literal-matrix.rb 2>&1 >/dev/null | grep -a '^\[light\]'
 #
@@ -448,7 +449,53 @@ t('Hash.new redefined, a literal does not call it') do |i|
   r
 end
 
-# ---------------------------------------------------------------- 11. a refinement where the caller is defined
+# ---------------------------------------------------------------- 11. a literal in a method whose scope is parked
+# A method whose literal blocks all reuse their Procs keeps its scope for its next call (IR_PARKED_SCOPES,
+# Util/parked-scope-matrix.rb). With a Hash literal or keywords in it, it is a light frame that parks: nothing of
+# one call may show in the next, whether the call returned, raised, threw or returned from the block.
+class ParkedLit
+  def initialize = @s = [1, 2, 3]
+  def each = 3.times { |i| yield @s[i] }
+  def each_lit = 3.times { |i| yield({ i: i, v: @s[i] }) }
+  def each_kw = 3.times { |i| yield(i: i, v: @s[i]) }
+  def lit_local(x); h = { n: x }; 3.times { |i| h[:n] += @s[i] }; h; end
+  def lit_in_block(x); r = nil; 3.times { |i| r = { x => i } }; r; end
+  def lit_default(x, h = {}); 3.times { |i| h[i] = x }; h; end
+  def kw_out(x); r = 0; 3.times { |i| r += kw(a: x, b: i) }; r; end
+  def kw(a:, b: 0) = a + b
+  def keep(x); h = { x: x }; 3.times { |i| h[i] = binding if i == 1 }; h; end
+  def lam(x) = { f: [0, 1, 2].map { |i| -> { i + x } } }
+  def raise_mid(x); h = { x: x }; 3.times { |i| raise IndexError, h.inspect if i == x }; h; end
+  def thrown(x); h = { x: x }; 3.times { |i| throw :out, h if i == x }; h; end
+  def early(x); h = { x: x }; 3.times { |i| return h.merge(i: i) if i == x }; h; end
+  def rec(n); h = { n: n }; 1.times { |_| h[:d] = n > 0 ? rec(n - 1) : nil }; h; end
+end
+
+v = ParkedLit.new
+t('yield a literal from a parked block') { |i| a = []; v.each_lit { |h| a << h }; [a, a.map(&:object_id).uniq.size] }
+t('yield keywords from a parked block') { |i| a = []; v.each_kw { |**h| a << h }; a }
+t('a literal in a local, changed by the block') { |i| v.lit_local(i % 2) }
+t('the result is not the next call\'s') { |i| r = v.lit_local(0); r[:n] += 100; [r, v.lit_local(0)] }
+t('a literal made in the block') { |i| v.lit_in_block(i % 2) }
+t('a `{}\' default') { |i| [v.lit_default(i % 2), v.lit_default(1).equal?(v.lit_default(1))] }
+t('a default given by the caller') { |i| h = { z: 1 }; v.lit_default(i % 2, h).equal?(h) }
+t('keywords from a parked block') { |i| v.kw_out(i % 2) }
+t('binding kept, each call its own literal') do |i|
+  b1 = v.keep(1)[1]; b2 = v.keep(2)[1]
+  [b1.local_variable_get(:h)[:x], b2.local_variable_get(:h)[:x], b1.local_variable_get(:h).equal?(b2.local_variable_get(:h)), b1.local_variable_get(:x)]
+end
+t('lambdas in a literal') { |i| a = v.lam(i % 2)[:f]; b = v.lam(10)[:f]; [a.map(&:call), b.map(&:call)] }
+t('raise in the block, then a normal call') { |i| r = (v.raise_mid(i % 4) rescue $!.message); [r, v.raise_mid(9)] }
+t('throw from the block') { |i| [catch(:out) { v.thrown(i % 4) }, v.thrown(9)] }
+t('return from the block') { |i| [v.early(i % 4), v.early(9)] }
+t('recursion through the block') { |i| v.rec(3) }
+t('threads') do |i|
+  next :skipped unless i % 500 == 0
+  pvt_r = Array.new(4) { |pvt_k| Thread.new { Array.new(50) { v.lit_local(pvt_k) } } }.map(&:value)
+  pvt_r.map(&:uniq)
+end
+
+# ---------------------------------------------------------------- 12. a refinement where the caller is defined
 # Last in the file: a method defined where a refinement is in use is never a light frame, so every
 # method after `using' is one with a scope.
 module Loud
