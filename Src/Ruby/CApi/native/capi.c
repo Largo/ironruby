@@ -1353,9 +1353,66 @@ ruby_scan_hex(const char *start, size_t len, size_t *retlen)
     return v;
 }
 
+/* ------------------------------------------------------------------------------------------
+ * Digest plugins: an extension that brings its own hash function hands digest.so an
+ * rb_digest_metadata_t, wrapped by rb_digest_wrap_metadata, which ruby/digest.h finds through
+ * rb_ext_resolve_symbol("digest.so", ...). IronRuby's digest is C#: the wrapper is here, and
+ * Digest::Base calls the plugin's functions through rb_ir_digest_call (NativeDigest.cs).
+ */
+typedef struct {
+    int api_version;
+    size_t digest_len;
+    size_t block_len;
+    size_t ctx_size;
+    int (*init_func)(void *);
+    void (*update_func)(void *, unsigned char *, size_t);
+    int (*finish_func)(void *, unsigned char *);
+} rb_ir_digest_metadata_t;   /* ruby/digest.h's rb_digest_metadata_t */
+
+static const rb_data_type_t rb_ir_digest_metadata_type = {
+    "digest/metadata",
+    { 0, 0, 0, },
+    0, 0,
+    RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+static VALUE
+rb_ir_digest_wrap_metadata(const rb_ir_digest_metadata_t *meta)
+{
+    return rb_obj_freeze(TypedData_Wrap_Struct(0, &rb_ir_digest_metadata_type, (void *)meta));
+}
+
+/* The metadata a Digest::Base subclass's "metadata" holds, or NULL for any other typed object. */
+RB_IR_EXPORT const rb_ir_digest_metadata_t *
+rb_ir_digest_metadata(VALUE obj)
+{
+    return RTYPEDDATA_TYPE(obj) == &rb_ir_digest_metadata_type ? RTYPEDDATA_GET_DATA(obj) : NULL;
+}
+
+/* op 0: init_func(ctx); 1: update_func(ctx, ptr, len); 2: finish_func(ctx, ptr) */
+RB_IR_EXPORT int
+rb_ir_digest_call(const rb_ir_digest_metadata_t *meta, int op, void *ctx, unsigned char *ptr, size_t len, int *raised)
+{
+    struct rb_ir_frame frame;
+    int result = 0;
+    *raised = 0;
+    switch (op) {
+      case 0: RB_IR_PROTECT(frame, result = meta->init_func(ctx), *raised = 1); break;
+      case 1: RB_IR_PROTECT(frame, meta->update_func(ctx, ptr, len), *raised = 1); break;
+      case 2: RB_IR_PROTECT(frame, result = meta->finish_func(ctx, ptr), *raised = 1); break;
+    }
+    return result;
+}
+
+/* Only digest.so's rb_digest_wrap_metadata, which is all CRuby's own extensions look up with it. */
 void *
 rb_ext_resolve_symbol(const char *feature, const char *symbol)
 {
+    if ((strcmp(feature, "digest.so") == 0 || strcmp(feature, "digest") == 0) &&
+        strcmp(symbol, "rb_digest_wrap_metadata") == 0) {
+        rb_require("digest");
+        return (void *)(uintptr_t)rb_ir_digest_wrap_metadata;
+    }
     return NULL;
 }
 

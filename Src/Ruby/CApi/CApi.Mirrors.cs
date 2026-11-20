@@ -246,7 +246,7 @@ namespace IronRuby.Runtime.CApi {
         /// <summary>
         /// Before IronRuby calls C: Ruby code may have changed what C has pointers into.
         /// </summary>
-        private static int EnterNative() {
+        internal static int EnterNative() {
             if (_nativeDepth > 0) {
                 RefreshAll();
             }
@@ -256,7 +256,7 @@ namespace IronRuby.Runtime.CApi {
         /// <summary>
         /// After C returns (or unwinds) to IronRuby.
         /// </summary>
-        private static void LeaveNative(int depth) {
+        internal static void LeaveNative(int depth) {
             _nativeDepth = depth;
             var mirrors = _activeMirrors;
             if (mirrors != null && mirrors.Count > 0) {

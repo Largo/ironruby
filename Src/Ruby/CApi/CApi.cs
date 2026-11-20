@@ -249,7 +249,7 @@ namespace IronRuby.Runtime.CApi {
             _defaultAllocator = ShimExport("rb_ir_default_allocator");
         }
 
-        private static IntPtr ShimExport(string/*!*/ name) {
+        internal static IntPtr ShimExport(string/*!*/ name) {
             IntPtr result = Symbol(_shim, name);
             if (result == IntPtr.Zero) {
                 throw RubyExceptions.CreateLoadError("libironruby-capi has no " + name + " (rebuild it with Util/build-capi.sh)");
@@ -325,7 +325,7 @@ namespace IronRuby.Runtime.CApi {
         /// <summary>
         /// Rethrows what a C function raised: called when a trampoline reports that it unwound.
         /// </summary>
-        private static void Rethrow() {
+        internal static void Rethrow() {
             Exception e = _pending;
             _pending = null;
             if (e == null) {
