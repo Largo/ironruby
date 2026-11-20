@@ -550,7 +550,6 @@ namespace IronRuby.Runtime.CApi {
         internal static VALUE rb_io_binmode(VALUE io) { return CallV(io, "binmode"); }
         internal static VALUE rb_io_close(VALUE io) { return CallV(io, "close"); }
         internal static VALUE rb_io_path(VALUE io) { return CallV(io, "path"); }
-        internal static VALUE rb_io_taint_check(VALUE obj) { return obj; }
 
         internal static VALUE rb_io_get_io(VALUE io) {
             return ToValue(ConvertType(FromValue(io), T_FILE, "IO", "to_io", true));

@@ -18,6 +18,7 @@
 
 #include "ruby.h"
 #include "ruby/encoding.h"
+#include "ruby/io.h"
 #include <setjmp.h>
 #include <string.h>
 

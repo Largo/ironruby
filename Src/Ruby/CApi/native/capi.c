@@ -17,6 +17,7 @@
 # include <pthread.h>
 #endif
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -1443,3 +1444,432 @@ rb_ir_default_allocator(VALUE klass)
 {
     return rb_ir_allocate_builtin(klass);
 }
+
+/*
+ * struct rb_io's layout as these headers have it, for IronRuby's rb_io_t mirrors
+ * (CApi.Io.cs): its size, then the offsets of self, fd, mode and pathv.
+ */
+/* the fields are deprecated for extensions, which should call rb_io_descriptor() and so on */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+RB_IR_EXPORT void
+rb_ir_io_layout(size_t *out)
+{
+    out[0] = sizeof(struct rb_io);
+    out[1] = offsetof(struct rb_io, self);
+    out[2] = offsetof(struct rb_io, fd);
+    out[3] = offsetof(struct rb_io, mode);
+    out[4] = offsetof(struct rb_io, pathv);
+}
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+/*
+ * io.c's: after a call on io failed with error, an interrupted one is retried at once (the
+ * events come back), one that would have blocked waits for them (rb_io_wait), and any other
+ * error leaves nothing ready (Qnil). Here rather than in C# for the platform's errno values.
+ */
+VALUE
+rb_io_maybe_wait(int error, VALUE io, VALUE events, VALUE timeout)
+{
+    rb_io_t *fptr;
+    RB_IO_POINTER(io, fptr);
+    switch (error) {
+#if defined(ERESTART)
+      case ERESTART:
+#endif
+      case EINTR:
+        rb_thread_check_ints();
+        return events;
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+      case EWOULDBLOCK:
+#endif
+      case EAGAIN:
+        return rb_io_wait(io, events, timeout);
+      default:
+        return Qnil;
+    }
+}
+
+int
+rb_io_maybe_wait_readable(int error, VALUE io, VALUE timeout)
+{
+    VALUE result = rb_io_maybe_wait(error, io, RB_INT2NUM(RUBY_IO_READABLE), timeout);
+    if (RTEST(result)) return RB_NUM2INT(result);
+    if (result == Qfalse) rb_raise(rb_eIOTimeoutError, "Timed out waiting for IO to become readable!");
+    return 0;
+}
+
+int
+rb_io_maybe_wait_writable(int error, VALUE io, VALUE timeout)
+{
+    VALUE result = rb_io_maybe_wait(error, io, RB_INT2NUM(RUBY_IO_WRITABLE), timeout);
+    if (RTEST(result)) return RB_NUM2INT(result);
+    if (result == Qfalse) rb_raise(rb_eIOTimeoutError, "Timed out waiting for IO to become writable!");
+    return 0;
+}
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/param.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+/* thread.c's rb_fd_* (the large-fdset flavour the headers declare): plain C over fd_set. */
+
+void
+rb_fd_init(rb_fdset_t *fds)
+{
+    fds->maxfd = 0;
+    fds->fdset = ALLOC(fd_set);
+    FD_ZERO(fds->fdset);
+}
+
+void
+rb_fd_term(rb_fdset_t *fds)
+{
+    xfree(fds->fdset);
+    fds->maxfd = 0;
+    fds->fdset = 0;
+}
+
+void
+rb_fd_zero(rb_fdset_t *fds)
+{
+    if (fds->fdset)
+        MEMZERO(fds->fdset, fd_mask, howmany(fds->maxfd, NFDBITS));
+}
+
+static void
+ir_fd_resize(int n, rb_fdset_t *fds)
+{
+    size_t m = howmany(n + 1, NFDBITS) * sizeof(fd_mask);
+    size_t o = howmany(fds->maxfd, NFDBITS) * sizeof(fd_mask);
+
+    if (m < sizeof(fd_set)) m = sizeof(fd_set);
+    if (o < sizeof(fd_set)) o = sizeof(fd_set);
+
+    if (m > o) {
+        fds->fdset = xrealloc(fds->fdset, m);
+        memset((char *)fds->fdset + o, 0, m - o);
+    }
+    if (n >= fds->maxfd) fds->maxfd = n + 1;
+}
+
+void
+rb_fd_set(int n, rb_fdset_t *fds)
+{
+    ir_fd_resize(n, fds);
+    FD_SET(n, fds->fdset);
+}
+
+void
+rb_fd_clr(int n, rb_fdset_t *fds)
+{
+    if (n >= fds->maxfd) return;
+    FD_CLR(n, fds->fdset);
+}
+
+int
+rb_fd_isset(int n, const rb_fdset_t *fds)
+{
+    if (n >= fds->maxfd) return 0;
+    return FD_ISSET(n, fds->fdset) != 0;
+}
+
+void
+rb_fd_copy(rb_fdset_t *dst, const fd_set *src, int max)
+{
+    size_t size = howmany(max, NFDBITS) * sizeof(fd_mask);
+
+    if (size < sizeof(fd_set)) size = sizeof(fd_set);
+    dst->maxfd = max;
+    dst->fdset = xrealloc(dst->fdset, size);
+    memcpy(dst->fdset, src, size);
+}
+
+void
+rb_fd_dup(rb_fdset_t *dst, const rb_fdset_t *src)
+{
+    size_t size = howmany(rb_fd_max(src), NFDBITS) * sizeof(fd_mask);
+
+    if (size < sizeof(fd_set)) size = sizeof(fd_set);
+    dst->maxfd = src->maxfd;
+    dst->fdset = xrealloc(dst->fdset, size);
+    memcpy(dst->fdset, src->fdset, size);
+}
+
+int
+rb_fd_select(int n, rb_fdset_t *readfds, rb_fdset_t *writefds, rb_fdset_t *exceptfds, struct timeval *timeout)
+{
+    fd_set *r = NULL, *w = NULL, *e = NULL;
+    if (readfds) {
+        ir_fd_resize(n - 1, readfds);
+        r = rb_fd_ptr(readfds);
+    }
+    if (writefds) {
+        ir_fd_resize(n - 1, writefds);
+        w = rb_fd_ptr(writefds);
+    }
+    if (exceptfds) {
+        ir_fd_resize(n - 1, exceptfds);
+        e = rb_fd_ptr(exceptfds);
+    }
+    return select(n, r, w, e, timeout);
+}
+
+/*
+ * select(2), waiting at most 100ms at a time and checking for interrupts in between, so that
+ * Thread#raise and Thread#kill reach a thread waiting here, as CRuby's do. The sets are
+ * restored before each retry; a timeout is the total.
+ */
+int
+rb_thread_fd_select(int max, rb_fdset_t *read, rb_fdset_t *write, rb_fdset_t *except, struct timeval *timeout)
+{
+    rb_fdset_t orig[3];
+    rb_fdset_t *sets[3] = { read, write, except };
+    struct timeval end, now;
+    int i, result;
+
+    if (!read && !write && !except) {
+        if (!timeout) {
+            rb_thread_sleep_forever();
+            return 0;
+        }
+        rb_thread_wait_for(*timeout);
+        return 0;
+    }
+    for (i = 0; i < 3; i++) {
+        orig[i].maxfd = 0;
+        orig[i].fdset = NULL;
+        if (sets[i]) {
+            ir_fd_resize(max - 1, sets[i]);
+            rb_fd_init(&orig[i]);
+            rb_fd_dup(&orig[i], sets[i]);
+        }
+    }
+    if (timeout) {
+        gettimeofday(&end, NULL);
+        timeradd(&end, timeout, &end);
+    }
+    for (;;) {
+        struct timeval slice = { 0, 100000 };
+        if (timeout) {
+            gettimeofday(&now, NULL);
+            if (timercmp(&now, &end, >=)) {
+                timerclear(&slice);
+            }
+            else {
+                struct timeval left;
+                timersub(&end, &now, &left);
+                if (timercmp(&left, &slice, <)) slice = left;
+            }
+        }
+        result = select(max, read ? rb_fd_ptr(read) : NULL, write ? rb_fd_ptr(write) : NULL,
+                        except ? rb_fd_ptr(except) : NULL, &slice);
+        if (result != 0 && !(result < 0 && errno == EINTR)) {
+            break;
+        }
+        if (timeout && result == 0 && !timerisset(&slice)) {
+            break;
+        }
+        for (i = 0; i < 3; i++) {
+            if (sets[i]) rb_fd_dup(sets[i], &orig[i]);
+        }
+        rb_thread_check_ints();
+    }
+    for (i = 0; i < 3; i++) {
+        if (orig[i].fdset) rb_fd_term(&orig[i]);
+    }
+    return result;
+}
+
+/* thread.c's: wait until fd is readable, or writable, letting interrupts in */
+int
+rb_thread_wait_fd(int fd)
+{
+    rb_fdset_t set;
+    rb_fd_init(&set);
+    rb_fd_set(fd, &set);
+    rb_thread_fd_select(fd + 1, &set, NULL, NULL, NULL);
+    rb_fd_term(&set);
+    return TRUE;
+}
+
+int
+rb_thread_fd_writable(int fd)
+{
+    rb_fdset_t set;
+    rb_fd_init(&set);
+    rb_fd_set(fd, &set);
+    rb_thread_fd_select(fd + 1, NULL, &set, NULL, NULL);
+    rb_fd_term(&set);
+    return TRUE;
+}
+
+/* io.c's: a descriptor above stderr is closed in a child process. */
+void
+rb_maygvl_fd_fix_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD), flags2;
+    if (flags == -1) {
+        rb_bug("rb_maygvl_fd_fix_cloexec: fcntl(%d, F_GETFD) failed: %s", fd, strerror(errno));
+    }
+    flags2 = fd <= 2 ? flags & ~FD_CLOEXEC : flags | FD_CLOEXEC;
+    if (flags != flags2 && fcntl(fd, F_SETFD, flags2) != 0) {
+        rb_bug("rb_maygvl_fd_fix_cloexec: fcntl(%d, F_SETFD, %d) failed: %s", fd, flags2, strerror(errno));
+    }
+}
+
+void
+rb_update_max_fd(int fd)
+{
+    /* CRuby tracks the largest descriptor for its child processes; IronRuby's do not need it */
+    (void)fd;
+}
+
+void
+rb_fd_fix_cloexec(int fd)
+{
+    rb_maygvl_fd_fix_cloexec(fd);
+    rb_update_max_fd(fd);
+}
+
+int
+rb_cloexec_open(const char *pathname, int flags, mode_t mode)
+{
+    int ret;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    while ((ret = open(pathname, flags, mode)) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    }
+    if (ret >= 0) {
+        rb_maygvl_fd_fix_cloexec(ret);
+    }
+    return ret;
+}
+
+int
+rb_cloexec_fcntl_dupfd(int fd, int minfd)
+{
+    int ret = fcntl(fd, F_DUPFD_CLOEXEC, minfd);
+    if (ret >= 0) {
+        rb_maygvl_fd_fix_cloexec(ret);
+    }
+    return ret;
+}
+
+int
+rb_cloexec_dup(int oldfd)
+{
+    /* not one of the standard descriptors 0, 1 and 2 */
+    return rb_cloexec_fcntl_dupfd(oldfd, 3);
+}
+
+int
+rb_cloexec_dup2(int oldfd, int newfd)
+{
+    int ret;
+    if (oldfd == newfd) {
+        ret = newfd;
+    }
+    else {
+#if defined(__linux__)
+        if (newfd > 2) {
+            ret = dup3(oldfd, newfd, O_CLOEXEC);
+            if (ret != -1 || errno != ENOSYS) return ret;
+        }
+#endif
+        ret = dup2(oldfd, newfd);
+        if (ret < 0) return ret;
+    }
+    rb_maygvl_fd_fix_cloexec(ret);
+    return ret;
+}
+
+int
+rb_cloexec_pipe(int descriptors[2])
+{
+#if defined(__linux__)
+    int result = pipe2(descriptors, O_CLOEXEC | O_NONBLOCK);
+#else
+    int result = pipe(descriptors);
+    if (result == 0) {
+        rb_maygvl_fd_fix_cloexec(descriptors[0]);
+        rb_maygvl_fd_fix_cloexec(descriptors[1]);
+        fcntl(descriptors[0], F_SETFL, fcntl(descriptors[0], F_GETFL) | O_NONBLOCK);
+        fcntl(descriptors[1], F_SETFL, fcntl(descriptors[1], F_GETFL) | O_NONBLOCK);
+    }
+#endif
+    return result;
+}
+/* io.c's descriptor-only waits, for a call that failed with errno */
+int
+rb_io_wait_readable(int f)
+{
+    switch (errno) {
+      case EINTR:
+#if defined(ERESTART)
+      case ERESTART:
+#endif
+        rb_thread_check_ints();
+        return TRUE;
+      case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+      case EWOULDBLOCK:
+#endif
+        rb_thread_wait_fd(f);
+        return TRUE;
+      default:
+        return FALSE;
+    }
+}
+
+int
+rb_io_wait_writable(int f)
+{
+    switch (errno) {
+      case EINTR:
+#if defined(ERESTART)
+      case ERESTART:
+#endif
+        rb_thread_check_ints();
+        return TRUE;
+      case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+      case EWOULDBLOCK:
+#endif
+        rb_thread_fd_writable(f);
+        return TRUE;
+      default:
+        return FALSE;
+    }
+}
+
+/* thread.c's: the RUBY_IO_* events that came ready, 0 after the timeout, -1 on an error */
+int
+rb_wait_for_single_fd(int fd, int events, struct timeval *tv)
+{
+    rb_fdset_t sets[3];
+    rb_fdset_t *r = NULL, *w = NULL, *e = NULL;
+    int i, result, ready = 0;
+
+    for (i = 0; i < 3; i++) rb_fd_init(&sets[i]);
+    if (events & RUBY_IO_READABLE) { r = &sets[0]; rb_fd_set(fd, r); }
+    if (events & RUBY_IO_WRITABLE) { w = &sets[1]; rb_fd_set(fd, w); }
+    if (events & RUBY_IO_PRIORITY) { e = &sets[2]; rb_fd_set(fd, e); }
+    result = rb_thread_fd_select(fd + 1, r, w, e, tv);
+    if (result > 0) {
+        if (r && rb_fd_isset(fd, r)) ready |= RUBY_IO_READABLE;
+        if (w && rb_fd_isset(fd, w)) ready |= RUBY_IO_WRITABLE;
+        if (e && rb_fd_isset(fd, e)) ready |= RUBY_IO_PRIORITY;
+    }
+    for (i = 0; i < 3; i++) rb_fd_term(&sets[i]);
+    return result < 0 ? -1 : ready;
+}
+#endif /* !_WIN32 */
