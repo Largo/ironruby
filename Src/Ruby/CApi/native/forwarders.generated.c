@@ -3,6 +3,7 @@
 
 #undef rb_ir_builtin_type
 #undef rb_ir_rbasic_class
+#undef rb_ir_define_dummy_encoding
 #undef rb_ir_fl_test
 #undef rb_ir_fl_set
 #undef rb_ir_fl_unset
@@ -315,7 +316,6 @@
 #undef rb_call_super_kw
 #undef rb_enc_str_coderange
 #undef rb_obj_method_arity
-#undef rb_enc_strlen
 #undef rb_check_to_integer
 #undef rb_check_array_type
 #undef rb_make_exception
@@ -551,6 +551,7 @@
 struct rb_ir_function_table {
     VALUE (*rb_ir_builtin_type)(VALUE obj);
     VALUE (*rb_ir_rbasic_class)(VALUE obj);
+    int (*rb_ir_define_dummy_encoding)(const char *name);
     VALUE (*rb_ir_fl_test)(VALUE obj, VALUE flags);
     void (*rb_ir_fl_set)(VALUE obj, VALUE flags);
     void (*rb_ir_fl_unset)(VALUE obj, VALUE flags);
@@ -863,7 +864,6 @@ struct rb_ir_function_table {
     VALUE (*rb_call_super_kw)(int argc, const VALUE *argv, int kw_splat);
     int (*rb_enc_str_coderange)(VALUE str);
     int (*rb_obj_method_arity)(VALUE obj, ID mid);
-    long (*rb_enc_strlen)(const char *head, const char *tail, rb_encoding *enc);
     VALUE (*rb_check_to_integer)(VALUE val, const char *mid);
     VALUE (*rb_check_array_type)(VALUE obj);
     VALUE (*rb_make_exception)(int argc, const VALUE *argv);
@@ -1116,6 +1116,14 @@ VALUE
 (rb_ir_rbasic_class)(VALUE obj)
 {
     VALUE rb_ir_result = rb_ir_fns.rb_ir_rbasic_class(obj);
+    RB_IR_CHECK();
+    return rb_ir_result;
+}
+
+int
+(rb_ir_define_dummy_encoding)(const char *name)
+{
+    int rb_ir_result = rb_ir_fns.rb_ir_define_dummy_encoding(name);
     RB_IR_CHECK();
     return rb_ir_result;
 }
@@ -3552,14 +3560,6 @@ int
 (rb_obj_method_arity)(VALUE obj, ID mid)
 {
     int rb_ir_result = rb_ir_fns.rb_obj_method_arity(obj, mid);
-    RB_IR_CHECK();
-    return rb_ir_result;
-}
-
-long
-(rb_enc_strlen)(const char *head, const char *tail, rb_encoding *enc)
-{
-    long rb_ir_result = rb_ir_fns.rb_enc_strlen(head, tail, enc);
     RB_IR_CHECK();
     return rb_ir_result;
 }

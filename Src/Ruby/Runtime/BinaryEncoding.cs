@@ -41,6 +41,11 @@ namespace IronRuby.Runtime {
             : base(RubyEncoding.CodePageBinary) {
         }
 
+        // a dummy encoding the C API defines (RubyEncoding.DefineDummy): bytes, like ASCII-8BIT
+        internal BinaryEncoding(int codepage)
+            : base(codepage) {
+        }
+
         private static void CheckBytes(ReadOnlySpan<char> chars) {
             if (chars.IndexOfAnyExceptInRange('\0', 'ÿ') >= 0) {
                 // TODO: we don't support fallbacks (we should add the result of the fallback to the count):

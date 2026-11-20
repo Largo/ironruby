@@ -77,6 +77,24 @@ namespace IronRuby.Runtime.CApi {
             return 1;
         }
 
+        /// <summary>
+        /// rb_ir_make_encoding's kind: which character functions the native rb_encoding gets.
+        /// </summary>
+        private static int NativeKind(RubyEncoding/*!*/ encoding) {
+            switch (encoding.Name) {
+                case "UTF-8": case "UTF8-MAC": case "UTF8-DoCoMo": case "UTF8-KDDI": case "UTF8-SoftBank": case "CESU-8":
+                    return 1;
+                case "UTF-16BE": return 2;
+                case "UTF-16LE": return 3;
+                case "UTF-32BE": return 4;
+                case "UTF-32LE": return 5;
+                case "ISO-8859-1": case "ISO-8859-15": case "Windows-1252":
+                    return 6;
+                default:
+                    return 0;
+            }
+        }
+
         internal static void* NativeEncoding(RubyEncoding encoding) {
             if (encoding == null) {
                 return null;
@@ -87,7 +105,7 @@ namespace IronRuby.Runtime.CApi {
                 if (native == IntPtr.Zero) {
                     fixed (byte* name = CString(encoding.Name)) {
                         native = (IntPtr)_makeEncoding(name, MinCharLength(encoding), Math.Max(1, encoding.MaxBytesPerChar), index,
-                            encoding == RubyEncoding.UTF8 ? 1 : 0);
+                            NativeKind(encoding));
                     }
                     _nativeEncodings[index] = native;
                 }
@@ -134,13 +152,24 @@ namespace IronRuby.Runtime.CApi {
             SetEncoding(FromValue(obj), EncodingAt(encindex));
         }
 
+        // encoding.c's rb_enc_associate_index: strings and regexps carry one, a symbol's is fixed
         private static void SetEncoding(object obj, RubyEncoding/*!*/ encoding) {
-            var s = obj as MutableString;
-            if (s == null) {
-                throw RubyExceptions.CreateArgumentError(String.Format("cannot set encoding on non-encoding capable object"));
+            switch (obj) {
+                case MutableString s:
+                    s.RequireNotFrozen();
+                    s.ForceEncoding(encoding);
+                    return;
+                case RubyRegex r:
+                    // the source's bytes in the new encoding, kept by FIXEDENCODING as CRuby's are
+                    if (r.Encoding != encoding) {
+                        r.Set(MutableString.CreateBinary(r.Pattern.ToByteArray(), encoding),
+                            (r.Options & ~RubyRegexOptions.EncodingMask) | RubyRegexOptions.FixedEncoding);
+                    }
+                    return;
+                case RubySymbol _:
+                    throw RubyExceptions.CreateRuntimeError("cannot modify the encoding of a Symbol");
             }
-            s.RequireNotFrozen();
-            s.ForceEncoding(encoding);
+            throw RubyExceptions.CreateArgumentError(String.Format("cannot set encoding on non-encoding capable object"));
         }
 
         internal static void* rb_enc_get(VALUE obj) {
@@ -153,7 +182,7 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_enc_associate(VALUE obj, void* enc) {
-            SetEncoding(FromValue(obj), FromNativeEncoding(enc));
+            SetEncoding(FromValue(obj), FromNativeEncoding(enc) ?? RubyEncoding.Binary);
             return obj;
         }
 
@@ -188,19 +217,18 @@ namespace IronRuby.Runtime.CApi {
             return NativeEncoding(FindEncoding(FromCString(name)));
         }
 
+        // encoding.c's str_to_encoding: an Encoding, or a name through to_str
         internal static void* rb_to_encoding(VALUE obj) {
             object o = FromValue(obj);
             if (o is RubyEncoding e) {
                 return NativeEncoding(e);
             }
-            if (o is MutableString s) {
-                var found = FindEncoding(s.ToString());
-                if (found == null) {
-                    throw RubyExceptions.CreateArgumentError(String.Format("unknown encoding name - {0}", s));
-                }
-                return NativeEncoding(found);
+            var name = FromValue(rb_str_to_str(obj)).ToString();
+            var found = FindEncoding(name);
+            if (found == null) {
+                throw RubyExceptions.CreateArgumentError(String.Format("unknown encoding name - {0}", name));
             }
-            throw RubyExceptions.CreateTypeError(String.Format("wrong argument type {0} (expected Encoding)", ClassName(o)));
+            return NativeEncoding(found);
         }
 
         internal static VALUE rb_enc_from_encoding(void* enc) {
