@@ -56,9 +56,9 @@ namespace IronRuby.Runtime.CApi {
             if (obj is bool b) {
                 throw RubyExceptions.CreateTypeError(String.Format("no implicit conversion of {0} into Integer", b ? "true" : "false"));
             }
-            object converted = Send(_context.KernelModule, "Integer", null, obj);
+            // a String is no Integer to C (rb_to_int), whatever Kernel#Integer would make of it
             if (!(obj is MutableString)) {
-                var r = AsInteger(converted);
+                var r = AsInteger(Send(_context.KernelModule, "Integer", null, obj));
                 if (r.HasValue) {
                     return r.Value;
                 }
@@ -137,8 +137,8 @@ namespace IronRuby.Runtime.CApi {
 
         internal static ulong rb_num2uint(VALUE num) {
             long n = ToLong(num, "unsigned int");
-            // CRuby accepts -UINT_MAX..UINT_MAX and wraps the negatives (check_uint)
-            if (n < -(long)UInt32.MaxValue || n > UInt32.MaxValue) {
+            // CRuby accepts INT_MIN..UINT_MAX and wraps the negatives (check_uint)
+            if (n < Int32.MinValue || n > UInt32.MaxValue) {
                 throw RubyExceptions.CreateRangeError(String.Format("integer {0} too {1} to convert to 'unsigned int'", n, n < 0 ? "small" : "big"));
             }
             return (ulong)n;

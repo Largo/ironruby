@@ -34,7 +34,12 @@ namespace IronRuby.Runtime.CApi {
             return _context.CreateAsciiSymbol(name);
         }
 
+        // as CRuby's rb_check_funcall: #respond_to? when the object has one (a BasicObject has not),
+        // otherwise whether the method is there
         private static bool RespondTo(object obj, string/*!*/ name, bool includePrivate = true) {
+            if (!_context.ResolveMethod(obj, "respond_to?", true).Found) {
+                return _context.ResolveMethod(obj, name, includePrivate).Found;
+            }
             return Protocols.IsTrue(Call(obj, "respond_to?", Sym(name), includePrivate));
         }
 
@@ -203,14 +208,13 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(x, IdToString(op), y));
         }
 
+        // numeric.c's do_coerce(..., FALSE): nil when #coerce answers no pair, what it raises goes through
         internal static VALUE rb_num_coerce_cmp(VALUE lhs, VALUE rhs, VALUE op) {
-            object y, x;
-            try {
-                x = Coerce(lhs, rhs, out y);
-            } catch (Exception) {
+            var pair = Call(FromValue(rhs), "coerce", FromValue(lhs)) as RubyArray;
+            if (pair == null || pair.Count != 2) {
                 return Qnil;
             }
-            return ToValue(Call(x, IdToString(op), y));
+            return ToValue(Call(pair[0], IdToString(op), pair[1]));
         }
 
         internal static VALUE rb_num_coerce_relop(VALUE lhs, VALUE rhs, VALUE op) {
@@ -270,10 +274,6 @@ namespace IronRuby.Runtime.CApi {
             return Protocols.IsTrue(Call(FromValue(space), "const_defined?", IdToSymbol(name), false)) ? 1 : 0;
         }
 
-        internal static VALUE rb_const_get_from(VALUE space, VALUE name) {
-            return CallV(space, "const_get", IdToSymbol(name));
-        }
-
         internal static byte* rb_class2name(VALUE klass) {
             // rb_class_name's: an anonymous class is its inspect, "#<Class:0x...>"
             var real = FromValue(rb_class_real(klass)) as RubyModule;
@@ -281,9 +281,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_class_real(VALUE klass) {
-            var cls = FromValue(klass) as RubyClass;
+            object o = FromValue(klass);
+            var cls = o as RubyClass;
             if (cls == null) {
-                return Qfalse;
+                // a module is its own real class, as in CRuby
+                return o is RubyModule ? klass : Qfalse;
             }
             return ToValue(cls.GetNonSingletonClass());
         }
@@ -401,6 +403,14 @@ namespace IronRuby.Runtime.CApi {
 
         internal static void rb_ivar_foreach(VALUE obj, IntPtr func, ulong arg) {
             object o = FromValue(obj);
+            // a class's or module's own class variables come first, as CRuby keeps them in the same table
+            if (o is RubyModule module) {
+                foreach (object cvar in (RubyArray)Call(module, "class_variables", false)) {
+                    if (CallForeach(func, Intern(cvar.ToString()), ToValue(Call(module, "class_variable_get", cvar)), arg) == ST_STOP) {
+                        return;
+                    }
+                }
+            }
             foreach (var name in _context.GetInstanceVariableNames(o)) {
                 object value;
                 _context.TryGetInstanceVariable(o, name, out value);
@@ -412,6 +422,11 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static void rb_free_generic_ivar(VALUE obj) {
+            object o = FromValue(obj);
+            foreach (var name in _context.GetInstanceVariableNames(o)) {
+                object unused;
+                _context.TryRemoveInstanceVariable(o, name, out unused);
+            }
         }
 
         internal static void rb_copy_generic_ivar(VALUE clone, VALUE obj) {
@@ -590,8 +605,40 @@ namespace IronRuby.Runtime.CApi {
         internal static VALUE rb_struct_s_members(VALUE klass) { return CallV(klass, "members"); }
         internal static VALUE rb_struct_size(VALUE st) { return CallV(st, "size"); }
 
+        internal static VALUE rb_gc_latest_gc_info(VALUE key) {
+            object k = FromValue(key);
+            if (!(k is RubySymbol) && !(k is IDictionary<object, object>)) {
+                throw RubyExceptions.CreateTypeError("non-hash or symbol given");
+            }
+            if (k is RubySymbol sym && !((IDictionary<object, object>)Call(Constant("GC"), "latest_gc_info")).ContainsKey(sym)) {
+                throw RubyExceptions.CreateArgumentError("unknown key: " + sym);
+            }
+            return ToValue(Call(Constant("GC"), "latest_gc_info", k));
+        }
+
         internal static VALUE rb_struct_initialize(VALUE self, VALUE values) {
-            Send(FromValue(self), "initialize", null, ((RubyArray)FromValue(values)).ToArray());
+            object obj = FromValue(self);
+            var args = ((RubyArray)FromValue(values)).ToArray();
+            var data = Constant("Data") as RubyModule;
+            if (data != null && _context.IsKindOf(obj, data)) {
+                // a Data object takes its members positionally here, the missing ones nil, and is frozen after
+                if (_context.IsObjectFrozen(obj)) {
+                    throw RubyExceptions.CreateObjectFrozenError(_context, obj);
+                }
+                var members = (RubyArray)Call(_context.GetClassOf(obj), "members");
+                if (args.Length > members.Count) {
+                    throw RubyExceptions.CreateArgumentError("struct size differs");
+                }
+                var keywords = new Hash(_context.EqualityComparer, members.Count);
+                for (int i = 0; i < members.Count; i++) {
+                    keywords[members[i]] = i < args.Length ? args[i] : null;
+                }
+                keywords.IsKeywordArguments = true;
+                Send(obj, "initialize", null, keywords);
+                _context.FreezeObject(obj);
+                return Qnil;
+            }
+            Send(obj, "initialize", null, args);
             return Qnil;
         }
 

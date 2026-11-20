@@ -586,24 +586,30 @@ namespace IronRuby.Runtime {
             get { return _mainThread; }
         }
 
+        /// <summary>
+        /// Told when $/, $\, $; or $, or one of $stdin, $stdout and $stderr is set: the C API keeps
+        /// copies of them in C globals (rb_rs, rb_stdout...) that extensions read directly.
+        /// </summary>
+        internal static Action<RubyContext> StandardGlobalsChanged;
+
         public MutableString InputSeparator {
             get { return _inputSeparator; }
-            set { _inputSeparator = value; }
+            set { _inputSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public MutableString OutputSeparator {
             get { return _outputSeparator; }
-            set { _outputSeparator = value; }
+            set { _outputSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public object StringSeparator {
             get { return _stringSeparator; }
-            set { _stringSeparator = value; }
+            set { _stringSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public MutableString ItemSeparator {
             get { return _itemSeparator; }
-            set { _itemSeparator = value; }
+            set { _itemSeparator = value; StandardGlobalsChanged?.Invoke(this); }
         }
 
         public RubyInputProvider/*!*/ InputProvider {
@@ -3549,6 +3555,20 @@ namespace IronRuby.Runtime {
             return CreateSymbol(str, clone, out created);
         }
 
+        /// <summary>
+        /// The symbol of the given name if there is one yet, without making it (the C API's
+        /// rb_check_id and rb_check_symbol).
+        /// </summary>
+        public RubySymbol TryFindSymbol(MutableString/*!*/ str) {
+            if (str.Encoding != RubyEncoding.Ascii && str.Encoding.IsAsciiIdentity && str.IsAscii()) {
+                str = MutableString.Create(str.ToString(), RubyEncoding.Ascii);
+            }
+            RubySymbol result;
+            lock (SymbolsLock) {
+                return _symbols.TryGetValue(str, out result) ? result : null;
+            }
+        }
+
         private RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone, out bool created) {
             // A symbol whose name is ASCII-only is US-ASCII whatever the string it was interned
             // from was tagged with, so that "abc".b.to_sym.equal?(:abc) and the encoding does
@@ -3657,6 +3677,7 @@ namespace IronRuby.Runtime {
             set {
                 var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
                 if (ractor != null) { ractor.StandardInput = value; } else { _standardInput = value; }
+                StandardGlobalsChanged?.Invoke(this);
             }
         }
 
@@ -3668,6 +3689,7 @@ namespace IronRuby.Runtime {
             set {
                 var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
                 if (ractor != null) { ractor.StandardOutput = value; } else { _standardOutput = value; }
+                StandardGlobalsChanged?.Invoke(this);
             }
         }
 
@@ -3679,6 +3701,7 @@ namespace IronRuby.Runtime {
             set {
                 var ractor = _ractorsStarted ? RactorIsolation.GetNonMain(this) : null;
                 if (ractor != null) { ractor.StandardErrorOutput = value; } else { _standardErrorOutput = value; }
+                StandardGlobalsChanged?.Invoke(this);
             }
         }
 
