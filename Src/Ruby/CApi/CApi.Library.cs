@@ -630,36 +630,127 @@ namespace IronRuby.Runtime.CApi {
             if (rb_range_values(range, &b, &e, &excl) == 0) {
                 return Qfalse;
             }
+            VALUE r = RangeComponentBegLen(b, e, excl, begp, lenp, len, err);
+            if (r == Qnil && err != 0) {
+                throw RubyExceptions.CreateRangeError(String.Format("{0} out of range", ToMutableString(rb_inspect(range))));
+            }
+            return r;
+        }
+
+        // CRuby's rb_range_component_beg_len (range.c): Qtrue, or Qnil when out of range.
+        private static VALUE RangeComponentBegLen(VALUE b, VALUE e, int excl, long* begp, long* lenp, long len, int err) {
             long beg = b == Qnil ? 0 : rb_num2long(b);
             long end = e == Qnil ? -1 : rb_num2long(e);
             if (e == Qnil) {
                 excl = 0;
             }
-            long origBeg = beg, origEnd = end;
             if (beg < 0) {
                 beg += len;
-                if (beg < 0) goto OutOfRange;
+                if (beg < 0) {
+                    return Qnil;
+                }
             }
             if (end < 0) {
                 end += len;
             }
-            if (excl == 0) {
+            // Include the end point; LONG_MAX + 1 is not representable, so saturate.
+            if (excl == 0 && end < Int64.MaxValue) {
                 end++;
             }
             if (err == 0 || err == 2) {
-                if (beg > len) goto OutOfRange;
-                if (end > len) end = len;
+                if (beg > len) {
+                    return Qnil;
+                }
+                if (end > len) {
+                    end = len;
+                }
             }
-            len = end - beg;
-            if (len < 0) len = 0;
             *begp = beg;
-            *lenp = len;
+            *lenp = end > beg ? end - beg : 0;
             return Qtrue;
-        OutOfRange:
-            if (err != 0) {
-                throw RubyExceptions.CreateRangeError(String.Format("{0}{1}{2} out of range", origBeg, excl != 0 ? "..." : "..", origEnd));
+        }
+
+        // rb_arithmetic_sequence_components_t (ruby/internal/intern/enumerator.h)
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct ArithmeticSequenceComponents {
+            public VALUE Begin;
+            public VALUE End;
+            public VALUE Step;
+            public int ExcludeEnd;
+        }
+
+        // CRuby's (enumerator.c): an Enumerator::ArithmeticSequence, or a Range with step 1.
+        internal static int rb_arithmetic_sequence_extract(VALUE obj, void* buf) {
+            var component = (ArithmeticSequenceComponents*)buf;
+            object o = FromValue(obj);
+            var arithSeq = Constant("Enumerator::ArithmeticSequence") as RubyModule;
+            if (arithSeq != null && _context.IsKindOf(o, arithSeq)) {
+                component->Begin = ToValue(Call(o, "begin"));
+                component->End = ToValue(Call(o, "end"));
+                component->Step = ToValue(Call(o, "step"));
+                component->ExcludeEnd = Protocols.IsTrue(Call(o, "exclude_end?")) ? 1 : 0;
+                return 1;
             }
-            return Qnil;
+            VALUE b, e;
+            int excl;
+            if (rb_range_values(obj, &b, &e, &excl) != 0) {
+                component->Begin = b;
+                component->End = e;
+                component->Step = ToValue((object)1);
+                component->ExcludeEnd = excl;
+                return 1;
+            }
+            return 0;
+        }
+
+        // CRuby's (enumerator.c)
+        internal static VALUE rb_arithmetic_sequence_beg_len_step(VALUE obj, System.Runtime.InteropServices.CLong* begp,
+            System.Runtime.InteropServices.CLong* lenp, System.Runtime.InteropServices.CLong* stepp, long len, int err) {
+            if (begp == null || lenp == null || stepp == null) {
+                throw RubyExceptions.CreateArgumentError("NULL pointer given");
+            }
+            ArithmeticSequenceComponents aseq;
+            if (rb_arithmetic_sequence_extract(obj, &aseq) == 0) {
+                return Qfalse;
+            }
+
+            long step = aseq.Step == Qnil ? 1 : rb_num2long(aseq.Step);
+            *stepp = new System.Runtime.InteropServices.CLong((nint)step);
+
+            if (step < 0) {
+                if (aseq.ExcludeEnd != 0 && aseq.End != Qnil) {
+                    // the exclusion is handled before the range is reversed
+                    aseq.End = ToValue(Protocols.Normalize(rb_num2long(aseq.End) + 1));
+                    // and does not exclude the previous beginning
+                    aseq.ExcludeEnd = 0;
+                }
+                VALUE tmp = aseq.Begin;
+                aseq.Begin = aseq.End;
+                aseq.End = tmp;
+            }
+
+            long beg = 0, length = 0;
+            VALUE result;
+            if (err == 0 && (step < -1 || step > 1)) {
+                result = RangeComponentBegLen(aseq.Begin, aseq.End, aseq.ExcludeEnd, &beg, &length, len, 1);
+                if (result == Qtrue && beg <= len && length <= len) {
+                    *begp = new System.Runtime.InteropServices.CLong((nint)beg);
+                    *lenp = new System.Runtime.InteropServices.CLong((nint)length);
+                    return Qtrue;
+                }
+                if (result == Qtrue) {
+                    *begp = new System.Runtime.InteropServices.CLong((nint)beg);
+                    *lenp = new System.Runtime.InteropServices.CLong((nint)length);
+                }
+            } else {
+                result = RangeComponentBegLen(aseq.Begin, aseq.End, aseq.ExcludeEnd, &beg, &length, len, err);
+                if (result == Qtrue) {
+                    *begp = new System.Runtime.InteropServices.CLong((nint)beg);
+                    *lenp = new System.Runtime.InteropServices.CLong((nint)length);
+                }
+                return result;
+            }
+            throw RubyExceptions.CreateRangeError(String.Format("{0} out of range", ToMutableString(rb_inspect(obj))));
         }
 
         internal static VALUE rb_reg_new(byte* src, long len, int opts) {
@@ -674,7 +765,16 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Call(Constant("Regexp"), "new", FromValue(str)));
         }
 
-        internal static VALUE rb_reg_match(VALUE re, VALUE str) { return CallV(re, "=~", FromValue(str)); }
+        // Regexp#=~, whose $~ is the frame's that called the C method (rb_backref_get reads it there)
+        internal static VALUE rb_reg_match(VALUE re, VALUE str) {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope == null) {
+                return CallV(re, "=~", FromValue(str));
+            }
+            object match = Call(FromValue(re), "match", FromValue(str));
+            scope.CurrentMatch = match as MatchData;
+            return match == null ? Qnil : ToValue(Call(match, "begin", 0));
+        }
         internal static int rb_reg_options(VALUE re) { return (int)Call(FromValue(re), "options"); }
 
         internal static VALUE rb_reg_nth_match(int n, VALUE md) {
@@ -682,8 +782,50 @@ namespace IronRuby.Runtime.CApi {
             return m == null ? Qnil : ToValue(Call(m, "[]", n));
         }
 
+        // $~ and $_ are the frame's that called the C method, as in CRuby. Outside one (an Init
+        // function, say) there is no Ruby frame of the extension's own: Kernel#eval's is used.
+        private static RubyClosureScope CallerClosureScope() {
+            RubyScope scope = _frame != null ? _frame.Scope : null;
+            return scope != null ? scope.GetInnerMostClosureScope() : null;
+        }
+
+        internal static VALUE rb_define_finalizer(VALUE obj, VALUE block) {
+            return ToValue(Call(Constant("ObjectSpace"), "define_finalizer", FromValue(obj), FromValue(block)));
+        }
+
+        internal static VALUE rb_undefine_finalizer(VALUE obj) {
+            return ToValue(Call(Constant("ObjectSpace"), "undefine_finalizer", FromValue(obj)));
+        }
+
         internal static VALUE rb_backref_get() {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                return ToValue(scope.CurrentMatch);
+            }
             return ToValue(Call(_context.KernelModule, "eval", MutableString.CreateAscii("$~")));
+        }
+
+        internal static void rb_backref_set(VALUE md) {
+            // CRuby stores whatever it is given (vm_svar_set); $~ = holds a MatchData or nil
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                scope.CurrentMatch = FromValue(md) as MatchData;
+            }
+        }
+
+        internal static VALUE rb_lastline_get() {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                return ToValue(scope.LastInputLine);
+            }
+            return ToValue(Call(_context.KernelModule, "eval", MutableString.CreateAscii("$_")));
+        }
+
+        internal static void rb_lastline_set(VALUE str) {
+            RubyClosureScope scope = CallerClosureScope();
+            if (scope != null) {
+                scope.LastInputLine = FromValue(str);
+            }
         }
 
         internal static int rb_memcicmp(void* s1, void* s2, long n) {

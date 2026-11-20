@@ -269,6 +269,14 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(_context.KernelModule, "Float", null, FromValue(val)));
         }
 
+        internal static VALUE rb_Rational(VALUE num, VALUE den) {
+            return ToValue(Send(_context.KernelModule, "Rational", null, FromValue(num), FromValue(den)));
+        }
+
+        internal static VALUE rb_Complex(VALUE real, VALUE imag) {
+            return ToValue(Send(_context.KernelModule, "Complex", null, FromValue(real), FromValue(imag)));
+        }
+
         internal static VALUE rb_to_int(VALUE val) {
             object obj = FromValue(val);
             if (AsInteger(obj).HasValue) {

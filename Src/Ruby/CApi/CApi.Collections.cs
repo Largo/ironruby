@@ -138,6 +138,10 @@ namespace IronRuby.Runtime.CApi {
             return ToValue(Send(_context.KernelModule, "Array", null, FromValue(val)));
         }
 
+        internal static VALUE rb_Hash(VALUE val) {
+            return ToValue(Send(_context.KernelModule, "Hash", null, FromValue(val)));
+        }
+
         #endregion
 
         #region Hashes

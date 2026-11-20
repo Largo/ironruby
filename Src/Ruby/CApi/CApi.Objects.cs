@@ -234,13 +234,14 @@ namespace IronRuby.Runtime.CApi {
             return n.StartsWith("$", StringComparison.Ordinal) ? n.Substring(1) : n;
         }
 
+        // $~, $_ and the match variables are the frame's that called the C method, as in CRuby
         internal static VALUE rb_gv_get(byte* name) {
             object value;
-            return _context.TryGetGlobalVariable(null, GlobalName(name), out value) ? ToValue(value) : Qnil;
+            return _context.TryGetGlobalVariable(_frame?.Scope, GlobalName(name), out value) ? ToValue(value) : Qnil;
         }
 
         internal static VALUE rb_gv_set(byte* name, VALUE val) {
-            _context.SetGlobalVariable(null, GlobalName(name), FromValue(val));
+            _context.SetGlobalVariable(_frame?.Scope, GlobalName(name), FromValue(val));
             return val;
         }
 
