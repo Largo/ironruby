@@ -1404,6 +1404,27 @@ rb_enc_codelen(int c, rb_encoding *enc)
     return n;
 }
 
+/*
+ * vm_method.c's: the function a method stands for when the platform lacks it. ruby.h names it
+ * through the pointer rb_f_notimplement_; IronRuby defines a method of it as one respond_to?
+ * denies (CApi.DefineMethod).
+ */
+void
+rb_notimplement(void)
+{
+    rb_raise(rb_eNotImpError, "%"PRIsVALUE"() function is unimplemented on this machine",
+             rb_id2str(rb_frame_this_func()));
+}
+
+#undef rb_f_notimplement
+VALUE
+rb_f_notimplement(int argc, const VALUE *argv, VALUE obj, VALUE marker)
+{
+    rb_notimplement();
+    UNREACHABLE_RETURN(Qnil);
+}
+VALUE (*const rb_f_notimplement_)(int, const VALUE *, VALUE, VALUE marker) = rb_f_notimplement;
+
 /* encoding.c's: a new dummy encoding, as many as fit in its 256 */
 int
 rb_define_dummy_encoding(const char *name)

@@ -150,7 +150,9 @@ namespace IronRuby.Runtime.CApi {
                 visibility = RubyMemberFlags.Private;
             }
             var method = new CMethod(func, arity, name) { Owner = module };
-            module.AddMethod(_context, name, new RubyCustomMethodInfo(MakeRule(method), visibility, module, arity >= 0 ? arity : -1));
+            module.AddMethod(_context, name, new RubyCustomMethodInfo(MakeRule(method), visibility, module, arity >= 0 ? arity : -1) {
+                NotImplemented = func == ShimExport("rb_f_notimplement")
+            });
         }
 
         private static RubyModule/*!*/ ToModule(VALUE value) {

@@ -106,7 +106,7 @@ namespace IronRuby.Runtime.Calls {
         /// True if every overload is marked [RubyNotImplemented] - the method exists but can only raise
         /// NotImplementedError, so #respond_to? denies it.
         /// </summary>
-        public bool IsNotImplemented {
+        public override bool IsNotImplemented {
             get {
                 if (_notImplemented == 0) {
                     bool result = true;

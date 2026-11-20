@@ -1875,8 +1875,7 @@ namespace IronRuby.Builtins {
             if (!method.Found) {
                 return RubyMethodVisibility.None;
             }
-            var libraryMethod = method.Info as RubyLibraryMethodInfo;
-            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+            return method.Info.IsNotImplemented ? RubyMethodVisibility.None : method.Visibility;
         }
 
         // thread-safe:

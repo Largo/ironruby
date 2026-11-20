@@ -1688,8 +1688,7 @@ namespace IronRuby.Builtins {
             if (!method.Found) {
                 return RubyMethodVisibility.None;
             }
-            var libraryMethod = method.Info as RubyLibraryMethodInfo;
-            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+            return method.Info.IsNotImplemented ? RubyMethodVisibility.None : method.Visibility;
         }
 
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
@@ -2176,8 +2175,7 @@ namespace IronRuby.Builtins {
 
         // MRI's rb_f_notimplement methods (fork on a platform without it) are defined but denied.
         private static bool IsImplemented(RubyMemberInfo/*!*/ method) {
-            var libraryMethod = method as RubyLibraryMethodInfo;
-            return libraryMethod == null || !libraryMethod.IsNotImplemented;
+            return !method.IsNotImplemented;
         }
 
         private static readonly MethodInfo/*!*/ _respondToMissingMethod = typeof(KernelOps).GetMethod("RespondToMissing");
