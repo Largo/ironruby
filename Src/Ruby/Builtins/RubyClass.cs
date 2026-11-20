@@ -1807,10 +1807,21 @@ namespace IronRuby.Builtins {
                 metaBuilder.AddVersionTest(this);
 
                 initializer = ResolveMethodForSiteNoLock(Symbols.Initialize, VisibilityContext.AllVisible).Info;
+            }
 
-                // Initializer resolves to BasicObject#initialize unless overridden in a derived class.
-                // We ensure that initializer cannot be removed/undefined so that we don't ever fall back to method_missing (see RubyModule.RemoveMethodNoEvent).
-                Debug.Assert(initializer != null);
+            if (initializer == null) {
+                // initialize was undefined, which MRI allows (with a warning): the object is allocated and
+                // #initialize called anyway, which ends in method_missing - NoMethodError unless defined.
+                bool allocated = BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name));
+                if (metaBuilder.Error) {
+                    return;
+                }
+                if (!allocated) {
+                    metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
+                    return;
+                }
+                BuildOverriddenInitializerCall(metaBuilder, args, null);
+                return;
             }
 
             bool isLibraryMethod = initializer is RubyLibraryMethodInfo;
@@ -1932,7 +1943,8 @@ namespace IronRuby.Builtins {
             return IsException() ? Methods.MarkException.OpCall(AstUtils.Convert(expression, typeof(Exception))) : expression;
         }
 
-        private static void BuildOverriddenInitializerCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, RubyMemberInfo/*!*/ initializer) {
+        // initializer: null when initialize is undefined; it is then called dynamically, reaching method_missing
+        private static void BuildOverriddenInitializerCall(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, RubyMemberInfo initializer) {
             var instanceExpr = metaBuilder.Result;
             metaBuilder.Result = null;
 

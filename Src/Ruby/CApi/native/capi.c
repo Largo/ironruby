@@ -2301,3 +2301,141 @@ ruby_vm_at_exit(void (*func)(ruby_vm_t *))
     if (ir_vm_at_exit_count == IR_VM_AT_EXIT_MAX) rb_raise(rb_eRuntimeError, "too many ruby_vm_at_exit functions");
     ir_vm_at_exit_funcs[ir_vm_at_exit_count++] = func;
 }
+
+/* ------------------------------------------------------------------------------------------
+ * ruby/ractor.h. A C extension only ever runs in the main Ractor here, so RB_EXT_RACTOR_SAFE has
+ * nothing to record, the Ractor's standard streams are the process's ($stdin & co), and a
+ * Ractor-local storage key holds one value for the process.
+ */
+#include "ruby/ractor.h"
+
+void
+rb_ext_ractor_safe(bool flag)
+{
+    (void)flag;
+}
+
+VALUE rb_ractor_stdin(void) { return rb_gv_get("$stdin"); }
+VALUE rb_ractor_stdout(void) { return rb_gv_get("$stdout"); }
+VALUE rb_ractor_stderr(void) { return rb_gv_get("$stderr"); }
+void rb_ractor_stdin_set(VALUE io) { rb_gv_set("$stdin", io); }
+void rb_ractor_stdout_set(VALUE io) { rb_gv_set("$stdout", io); }
+void rb_ractor_stderr_set(VALUE io) { rb_gv_set("$stderr", io); }
+
+VALUE
+rb_ractor_make_shareable(VALUE obj)
+{
+    return rb_funcall(rb_cRactor, rb_intern("make_shareable"), 1, obj);
+}
+
+VALUE
+rb_ractor_make_shareable_copy(VALUE obj)
+{
+    VALUE args[2];
+    args[0] = obj;
+    args[1] = rb_hash_new();
+    rb_hash_aset(args[1], ID2SYM(rb_intern("copy")), Qtrue);
+    return rb_funcallv_kw(rb_cRactor, rb_intern("make_shareable"), 2, args, RB_PASS_KEYWORDS);
+}
+
+/* what rb_ractor_shareable_p (an inline function) asks once the object's own bit says no */
+bool
+rb_ractor_shareable_p_continue(VALUE obj)
+{
+    return RTEST(rb_funcall(rb_cRactor, rb_intern("shareable?"), 1, obj));
+}
+
+struct rb_ractor_local_key_struct {
+    const struct rb_ractor_local_storage_type *type;
+    void *ptr;
+    VALUE value;
+    bool set;
+};
+
+const struct rb_ractor_local_storage_type rb_ractor_local_storage_type_free = { NULL, free };
+
+static rb_ractor_local_key_t
+ractor_local_newkey(const struct rb_ractor_local_storage_type *type)
+{
+    rb_ractor_local_key_t key = calloc(1, sizeof(struct rb_ractor_local_key_struct));
+    if (key == NULL) rb_memerror();
+    key->type = type;
+    key->value = Qnil;
+    return key;
+}
+
+rb_ractor_local_key_t rb_ractor_local_storage_value_newkey(void) { return ractor_local_newkey(NULL); }
+rb_ractor_local_key_t rb_ractor_local_storage_ptr_newkey(const struct rb_ractor_local_storage_type *type) { return ractor_local_newkey(type); }
+
+VALUE
+rb_ractor_local_storage_value(rb_ractor_local_key_t key)
+{
+    return key->set ? key->value : Qnil;
+}
+
+bool
+rb_ractor_local_storage_value_lookup(rb_ractor_local_key_t key, VALUE *val)
+{
+    if (!key->set) return false;
+    *val = key->value;
+    return true;
+}
+
+void
+rb_ractor_local_storage_value_set(rb_ractor_local_key_t key, VALUE val)
+{
+    key->value = val;
+    key->set = true;
+}
+
+void *rb_ractor_local_storage_ptr(rb_ractor_local_key_t key) { return key->ptr; }
+
+void
+rb_ractor_local_storage_ptr_set(rb_ractor_local_key_t key, void *ptr)
+{
+    key->ptr = ptr;
+    key->set = true;
+}
+
+/* RB_OBJ_FREEZE / OBJ_FREEZE: CRuby sets the flag in place; here the object itself is frozen */
+void
+rb_obj_freeze_inline(VALUE obj)
+{
+    if (!RB_SPECIAL_CONST_P(obj)) rb_obj_freeze(obj);
+}
+
+/* RHASH_SIZE */
+size_t
+rb_hash_size_num(VALUE hash)
+{
+    return NUM2SIZET(rb_hash_size(hash));
+}
+
+/* object.c's: the exception: keyword of Integer() and friends, which extensions with
+ * conversion functions of their own (bigdecimal's BigDecimal()) reuse */
+int
+rb_opts_exception_p(VALUE opts, int default_value)
+{
+    ID kwds[1];
+    VALUE exception;
+    kwds[0] = rb_intern("exception");
+    if (!rb_get_kwargs(opts, kwds, 0, 1, &exception)) return default_value;
+    if (exception == Qtrue) return 1;
+    if (exception == Qfalse) return 0;
+    rb_raise(rb_eArgError, "expected true or false as exception: %+"PRIsVALUE, exception);
+    return 0;
+}
+
+void
+rb_must_asciicompat(VALUE str)
+{
+    rb_encoding *enc = rb_enc_get(str);
+    if (!enc) rb_raise(rb_eTypeError, "not encoding capable object");
+    if (!rb_enc_asciicompat(enc)) rb_raise(rb_eEncCompatError, "ASCII incompatible encoding: %s", rb_enc_name(enc));
+}
+
+st_index_t
+rb_memhash(const void *ptr, long len)
+{
+    return rb_st_hash(ptr, (size_t)len, 0);
+}

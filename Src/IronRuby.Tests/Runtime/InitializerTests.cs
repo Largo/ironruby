@@ -125,8 +125,10 @@ C: foo
 ");
         }
 
+        // MRI allows undefining initialize, with a warning ("undefining 'initialize' may cause serious problems")
         public void Scenario_RubyInitializers6() {
-            TestOutput(@"
+            AssertOutput(delegate() {
+                CompilerTest(@"
 class C
   undef :initialize rescue p $!
 
@@ -136,10 +138,19 @@ class C
   def initialize; puts 'init'; end
   new
 end
-", @"
-#<TypeError: Cannot undefine 'initialize' method>
+class D
+  undef_method :initialize
+end
+begin
+  D.new
+rescue NoMethodError => e
+  puts e.message
+end
+", 0, 2);
+            }, @"
 [1, 2, 3]
 init
+undefined method 'initialize' for an instance of D
 ");
         }
 
