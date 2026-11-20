@@ -3212,6 +3212,14 @@ one area the hunt had called sound:
 
 Ten faults in all after the gate had passed: seven found by review, three by the hunt.
 
+A review of this branch's Hash-literal change found an eleventh:
+
+- **`def hash; {self => 0}; 0; end` ended the process** (460cac05). The literal's helper
+  (`RubyOps.MakeHash`) is no call site, so the light frame dropped its stack check, but
+  it calls the key's `#hash` and `#eql?`. The gate's million-deep probe recursed through a
+  helper method that made a call, and so kept its check; the review found the method whose
+  only call is the literal's helper. Section 12 of the Hash-literal matrix has the case.
+
 The full five-suite sweep (`Util/ci-sweep.sh`, then `Util/sweep-check.rb`) was run on
 commit 72c29b4c, Release net10.0, four jobs, after all of the above: core 23130 examples,
 library 6011, language 2935, command_line 175, security 34; no failing example that
