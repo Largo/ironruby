@@ -14,10 +14,11 @@
 # duplicate keys, the String key's frozen copy, the result being a new plain Hash on every call (no default,
 # no compare_by_identity, mutation not seen by the next call), literals in blocks, with yields, in defaults, in
 # loops, recursion, exceptions and their backtraces, defined?, tracing, threads, and the keyword hash a call
-# site builds (`f(a: x)') next to the literal it is not. Sections 7 to 12 are about the call a light frame makes
+# site builds (`f(a: x)') next to the literal it is not. Sections 7 to 13 are about the call a light frame makes
 # with keywords and about what may outlive it: the callee's visibility, a callee that reads the caller's scope, the
 # callee or a key's #hash changing half way through the N calls, a literal in a method whose scope is parked for
-# its next call, and a refinement in use where the caller is defined.
+# its next call, a key's #hash or #eql? recursing a million deep through a literal, and a refinement in use where
+# the caller is defined. The script ends with `alive'.
 #
 #   IR_LIGHT_FRAMES=why ./ir.sh Util/hash-literal-matrix.rb 2>&1 >/dev/null | grep -a '^\[light\]'
 #
@@ -495,7 +496,68 @@ t('threads') do |i|
   pvt_r.map(&:uniq)
 end
 
-# ---------------------------------------------------------------- 12. a refinement where the caller is defined
+# ---------------------------------------------------------------- 12. recursion through a key's #hash or #eql?
+# The helper that makes a literal is no call site, but it calls the keys' #hash and #eql?: a method whose only call
+# is that helper may still recurse, and its light frame must check the stack (LightFrame.MakesCalls), or the CLR
+# stack overflows and ends the process. Each probe recurses a million deep, once (each level is a call, so the body
+# runs interpreted and compiled), and prints SystemStackError. The Integer keys after the one that recurses are for
+# CRuby: they keep its VM stack running out before its machine stack, whose overflow in C it cannot rescue.
+class DeepKey
+  def initialize(nxt) = @nxt = nxt
+  def hash
+    @h = { @nxt => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8,
+           9 => 9, 10 => 10, 11 => 11, 12 => 12, 13 => 13, 14 => 14, 15 => 15, 16 => 16 }
+    0
+  end
+end
+class DeepMixedKey
+  def initialize(nxt) = @nxt = nxt
+  def hash
+    @h = { @nxt => 0, :a => 1, "b" => 2, 3 => 3, 4.5 => 4, nil => 5, true => 6, false => 7, 8 => 8,
+           9 => 9, 10 => 10, 11 => 11, 12 => 12, 13 => 13, 14 => 14, 15 => 15, 16 => 16 }
+    0
+  end
+end
+class DeepEql
+  def initialize(a, b) = (@a = a; @b = b)
+  def hash = 0
+  def eql?(other)
+    @h = { @a => 0, @b => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8,
+           9 => 9, 10 => 10, 11 => 11, 12 => 12, 13 => 13, 14 => 14, 15 => 15, 16 => 16 } if @a
+    false
+  end
+end
+class DeepKeywordKey
+  def initialize(nxt) = @nxt = nxt
+  def hash
+    @h = sink(@nxt => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8,
+              9 => 9, 10 => 10, 11 => 11, 12 => 12, 13 => 13, 14 => 14, 15 => 15, 16 => 16)
+    0
+  end
+  def sink(h) = h
+end
+class DeepToHash
+  def initialize(nxt) = @nxt = nxt
+  def to_hash
+    @a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, { **@nxt }]
+    {}
+  end
+end
+
+def deep_chain(depth) = (n = nil; depth.times { n = yield(n) }; n)
+def deep(label)
+  print label.ljust(52), ' => '
+  puts(begin; yield; "returned"; rescue SystemStackError => e; e.class; end)
+end
+
+DEEP = 1_000_000
+deep('#hash of the key of a literal') { deep_chain(DEEP) { |n| DeepKey.new(n) }.hash }
+deep('#hash of a key among literal ones') { deep_chain(DEEP) { |n| DeepMixedKey.new(n) }.hash }
+deep('#eql? of two keys whose #hash is the same') { a, b = deep_chain(DEEP) { |n| n ? [DeepEql.new(*n), DeepEql.new(*n)] : [nil, nil] }; { a => 0, b => 1 } }
+deep('#hash of the key of a call\'s hash') { deep_chain(DEEP) { |n| DeepKeywordKey.new(n) }.hash }
+deep('#to_hash of a **splat') { { **deep_chain(DEEP) { |n| DeepToHash.new(n || {}) } } }
+
+# ---------------------------------------------------------------- 13. a refinement where the caller is defined
 # Last in the file: a method defined where a refinement is in use is never a light frame, so every
 # method after `using' is one with a scope.
 module Loud
@@ -512,3 +574,4 @@ def refined_center(s) = s.center(5, loud: true)
 t('unrefined caller') { |i| unrefined_tag("s", i % 2) }
 t('refined caller') { |i| refined_tag("s", i % 2) }
 t('refined, keyword only it knows') { |_| refined_center("s") }
+puts "alive"

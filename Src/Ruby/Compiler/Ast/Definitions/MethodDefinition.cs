@@ -583,7 +583,8 @@ namespace IronRuby.Compiler.Ast {
             /// <summary>
             /// Set if the body makes calls (LightFrameRewriter.LightScopeCall): it may then recurse, and needs the stack check
             /// CreateMethodScope makes, so that too deep a recursion is a SystemStackError and not the end of the process.
-            /// A body that makes no call cannot recurse, and skips it.
+            /// A body that makes no call cannot recurse, and skips it. A Hash literal whose keys' #hash and #eql? may be Ruby methods
+            /// counts as a call (AstGenerator.MethodScope.HasHashCallingKeys): its helper is no call site, but it calls them.
             /// </summary>
             internal bool MakesCalls;
 
@@ -800,7 +801,8 @@ namespace IronRuby.Compiler.Ast {
                 }
                 // `{a: x}', `{"k" => v}', `{}': the helper a literal is made by takes the scope only for its runtime
                 // (LightFrameRewriter.ScopeOperandIndex), and a String key's frozen copy and the keys' #hash and #eql? are
-                // the runtime's too. `**h' in a literal is a call of Hash#merge on it. The hash a call site builds for its
+                // the runtime's too; a key whose #hash may be a Ruby method keeps the frame's stack check (LightFrame.MakesCalls),
+                // as a call would. `**h' in a literal is a call of Hash#merge on it. The hash a call site builds for its
                 // keywords (`f(a: x)') is made the same way, only marked as keywords, and is an argument of the call like
                 // any other; `f(**h)' is a KeywordSplatMerge, not taken.
                 var hash = node as HashConstructor;
@@ -1031,7 +1033,7 @@ namespace IronRuby.Compiler.Ast {
                 return null;
             }
             statements = rewritten;
-            light.MakesCalls = rewriter.MakesCalls;
+            light.MakesCalls = rewriter.MakesCalls || gen.CurrentMethod.HasHashCallingKeys;
             return light;
         }
 

@@ -89,6 +89,9 @@ namespace IronRuby.Compiler.Ast {
             if (!_isKeywordArguments && _maplets.Length > 0 && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
                 return TransformSymbolHash(gen);
             }
+            if (!HasPlainLiteralKeys()) {
+                gen.CurrentMethod.HasHashCallingKeys = true;
+            }
             var items = gen.TransformMapletsToExpressions(_maplets);
             return _isKeywordArguments ? gen.MakeKeywordArgumentsHashOpCall(items) : gen.MakeHashOpCall(items);
         }
@@ -96,6 +99,18 @@ namespace IronRuby.Compiler.Ast {
         private bool HasSymbolLiteralKeys() {
             foreach (var maplet in _maplets) {
                 if (!(maplet.Key is SymbolLiteral)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // A Symbol, String, Integer or Float literal, nil, true or false: a key the runtime's comparer hashes itself, without
+        // calling #hash (EqualityComparer.GetHashCode). Any other key may be an object whose #hash or #eql? is a Ruby method,
+        // which the helper building the hash calls.
+        private bool HasPlainLiteralKeys() {
+            foreach (var maplet in _maplets) {
+                if (!(maplet.Key is SymbolLiteral || maplet.Key is StringLiteral || maplet.Key is Literal)) {
                     return false;
                 }
             }
