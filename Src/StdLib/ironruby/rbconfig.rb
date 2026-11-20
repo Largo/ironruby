@@ -146,6 +146,27 @@ module RbConfig
   CONFIG["topdir"] = File.dirname(__FILE__)
   CONFIG["build_os"] ||= CONFIG["host_os"].dup
 
+  # autoconf's system triplets, as CRuby's configure records them ("x86_64-pc-linux"): build
+  # scripts hand them to the configure of a library they compile (nokogiri's libxml2, through
+  # mini_portile, passes --host=CONFIG["host"] unless host_alias names one). The *_alias are
+  # what --host/--build/--target said, and IronRuby is not cross-built: empty.
+  %w[host build target].each do |kind|
+    CONFIG["#{kind}_cpu"] ||= cpu_and_os[0].dup
+    CONFIG["#{kind}_os"] ||= cpu_and_os[1].dup
+    CONFIG["#{kind}_vendor"] = "pc"
+    CONFIG["#{kind}_alias"] = ""
+  end
+
+  # The installation layout autoconf describes, under prefix as in CRuby.
+  {
+    "datarootdir" => "#{prefix}/share", "includedir" => "#{prefix}/include", "oldincludedir" => "/usr/include",
+    "docdir" => "#{prefix}/share/doc/ruby", "htmldir" => "#{prefix}/share/doc/ruby", "mandir" => "#{prefix}/share/man",
+    "infodir" => "#{prefix}/share/info", "localedir" => "#{prefix}/share/locale", "sysconfdir" => "#{prefix}/etc",
+    "localstatedir" => "#{prefix}/var", "runstatedir" => "#{prefix}/var/run", "sharedstatedir" => "#{prefix}/com",
+    "sbindir" => "#{prefix}/sbin", "libexecdir" => "#{prefix}/libexec",
+  }.each { |key, value| CONFIG[key] = value }
+  CONFIG["platform"] = RUBY_PLATFORM.dup
+
   # The C toolchain mkmf drives. Where IronRuby has no C API (Windows so far), every one of
   # these is empty: mkmf reads them while it loads and would otherwise fail on nil, and empty
   # makes every compile mkmf attempts fail rather than appear to succeed. Linux fills the
@@ -215,6 +236,17 @@ module RbConfig
       # gcc's, not MSVC's: mkmf's try_compile looks for conftest.$(OBJEXT)
       "OBJEXT" => "o", "LIBEXT" => "a",
     }.each { |key, value| CONFIG[key] = value.dup }
+  end
+
+  # the binutils and helpers configure found, by name: build scripts run them (mini_portile's
+  # libxml2 build, extconf.rb's pkg-config lookups), and the triplets are complete only now
+  {
+    "NM" => "nm", "RANLIB" => "ranlib", "LD" => "ld", "OBJDUMP" => "objdump", "OBJCOPY" => "objcopy",
+    "PKG_CONFIG" => "pkg-config", "GNU_LD" => "yes", "LN_S" => "ln -s", "GREP" => "grep", "EGREP" => "grep -E",
+    "SOEXT" => windows ? "dll" : "so",
+  }.each { |key, value| CONFIG[key] = value.dup }
+  %w[host build target].each do |kind|
+    CONFIG[kind] = "#{CONFIG["#{kind}_cpu"]}-#{CONFIG["#{kind}_vendor"]}-#{CONFIG["#{kind}_os"]}"
   end
 
   # Naming conventions rather than tools, so these have an answer even here.
