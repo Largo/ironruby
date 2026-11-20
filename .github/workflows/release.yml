@@ -275,16 +275,24 @@ jobs:
           printf 'require "mkmf"\ncreate_makefile("capi_smoke")\n' > "$ext/extconf.rb"
           cat > "$ext/capi_smoke.c" <<'EOF'
           #include <ruby.h>
+          VALUE capi_smoke_cxx(VALUE self);
           static VALUE twice(VALUE self, VALUE x) { return rb_funcall(x, '*', 1, INT2FIX(2)); }
           void Init_capi_smoke(void) {
-            rb_define_module_function(rb_define_module("CApiSmoke"), "twice", twice, 1);
+            VALUE m = rb_define_module("CApiSmoke");
+            rb_define_module_function(m, "twice", twice, 1);
+            rb_define_module_function(m, "cxx", capi_smoke_cxx, 0);
           }
+          EOF
+          # ruby.h has to compile as C++ too (unf_ext and the like)
+          cat > "$ext/capi_smoke_cxx.cc" <<'EOF'
+          #include <ruby.h>
+          extern "C" VALUE capi_smoke_cxx(VALUE self) { return rb_str_new_cstr("c++"); }
           EOF
           ir=$(echo "$RUNNER_TEMP"/startup-check/ironruby-*/ir.sh)
           (cd "$ext" && "$ir" extconf.rb && make)
-          out=$("$ir" -I"$ext" -e 'require "capi_smoke"; p CApiSmoke.twice(21), CApiSmoke.twice("ab")')
+          out=$("$ir" -I"$ext" -e 'require "capi_smoke"; p CApiSmoke.twice(21), CApiSmoke.twice("ab"), CApiSmoke.cxx')
           echo "$out"
-          [ "$out" = $'42\n"abab"' ]
+          [ "$out" = $'42\n"abab"\n"c++"' ]
 
       # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
       # the Release build the archive ships. package-release.sh leaves the tree in dist/.
