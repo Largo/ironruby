@@ -14,6 +14,13 @@
 # RubyGems agree that msgpack 1.8.5 is installed, so `gem "msgpack"` in a Gemfile
 # resolves here instead of stopping at extconf.rb.
 
+# With IRONRUBY_NATIVE_GEMS naming the gem, its compiled extension is loaded instead
+# (Gem.ironruby_native_extension_for, rubygems/defaults/ironruby.rb).
+if defined?(Gem.ironruby_native_extension_for) && (native = Gem.ironruby_native_extension_for("msgpack/msgpack"))
+  require native
+  return
+end
+
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.MessagePack'
 
 module MessagePack

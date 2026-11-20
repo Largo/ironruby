@@ -30,7 +30,15 @@ nokogiri, json...) keep their built-in version unless `IRONRUBY_NATIVE_GEMS` nam
 
 installs and builds the real sqlite3 gem, and with the variable set `require "sqlite3"` loads it
 (`rubygems/defaults/ironruby.rb`). `--platform ruby` because the precompiled platform gems are
-built for CRuby.
+built for CRuby. Where IronRuby's own implementation sits under the extension's name
+(`msgpack/msgpack.rb`, `oj/oj.rb`, `bcrypt_ext.rb` in `Src/StdLib/ironruby`), that file loads the
+native gem's extension instead (`Gem.ironruby_native_extension_for`): a `.rb` anywhere on the load
+path would otherwise win over the gem's `.so`.
+
+Gems whose extensions build and give CRuby's results (Linux x64, checked against CRuby 4.0 with
+a script exercising each): fast_blank, redcarpet, jaro_winkler, escape_utils, racc (cparse),
+digest-murmurhash, unf_ext (C++), and with `IRONRUBY_NATIVE_GEMS` bigdecimal, msgpack, bcrypt
+and oj.
 
 ## Adding a function
 

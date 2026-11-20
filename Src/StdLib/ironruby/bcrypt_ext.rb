@@ -13,4 +13,11 @@
 # A pinned default gemspec makes RubyGems agree that bcrypt 3.1.22 is installed,
 # so `gem "bcrypt"` in a Gemfile resolves here instead of stopping at extconf.rb.
 
+# With IRONRUBY_NATIVE_GEMS naming the gem, its compiled extension is loaded instead
+# (Gem.ironruby_native_extension_for, rubygems/defaults/ironruby.rb).
+if defined?(Gem.ironruby_native_extension_for) && (native = Gem.ironruby_native_extension_for("bcrypt_ext"))
+  require native
+  return
+end
+
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.BCrypt'
