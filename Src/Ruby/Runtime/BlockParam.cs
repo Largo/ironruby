@@ -138,6 +138,14 @@ namespace IronRuby.Runtime {
             get { return _targetFrame != null; }
         }
 
+        // The Proc is parked with its method scope (Proc.ClearForPark): the scope kept for the next call, or the target of a
+        // break, belong to the call that ended, and the next call through this BlockParam starts as a first one.
+        internal void ClearForPark() {
+            _targetFrame = null;
+            _flow = 0;
+            _methodLookupModule = null;
+        }
+
         // The scope is taken for a call of the block (it was the ReusableScope).
         internal void TakeReusableScope() {
             _targetFrame = null;

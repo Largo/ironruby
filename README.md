@@ -215,8 +215,8 @@ release notes say which CRuby release the specs were checked against. The last r
 the original project was 1.1.3, for Ruby 1.9.2, in 2011.
 
 `IRONRUBY_VERSION` is the full version (`4.0.6`, or `4.0.0-preview1` for a pre-release),
-`RUBY_ENGINE_VERSION` the same without the pre-release suffix, and `RUBY_VERSION` the Ruby
-version (`4.0.0`).
+`RUBY_ENGINE_VERSION` the same without the pre-release suffix, and `RUBY_VERSION` the CRuby
+release it matches (`4.0.10`).
 
 ## What changed
 
@@ -225,7 +225,7 @@ version (`4.0.0`).
 | Runtime | .NET Framework 4 | **.NET 10 and 11** (Linux, macOS, Windows) |
 | Build | legacy msbuild, 12 configurations | SDK-style `dotnet build` |
 | Parser | hand-ported 1.9 grammar (~13k lines) | **prism** — the parser CRuby uses |
-| `RUBY_VERSION` | `1.9.2` | `4.0.0` |
+| `RUBY_VERSION` | `1.9.2` | `4.0.10` |
 | Big integers | `Microsoft.Scripting.Math` | `System.Numerics` |
 | Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
 | Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
@@ -445,7 +445,8 @@ Two compilers specialize on the types a program actually uses. Both are **on by 
 guess:
 
 - **Method JIT** — a hot method body is replaced by a copy with unboxed `int`/`long`/`double`
-  locals, CLR arithmetic, no per-call scope, and direct calls for self-recursion. One integer
+  locals, CLR arithmetic, no per-call scope, and direct calls for self-recursion and for the
+  other compiled methods it calls on self (`-X:NoJITCalls` turns those off). One integer
   compare of a global method-table version guards redefinition, override, singleton methods,
   `prepend`, `include` and `alias`; refinements switch it off; overflow and division by zero
   deopt to the generic body.

@@ -1029,12 +1029,8 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(dependentClass);
 
-            if (!isNew) {
-                foreach (var cls in DependentClasses) {
-                    if (ReferenceEquals(dependentClass, cls)) {
-                        return;
-                    }
-                }
+            if (!isNew && DependentClasses.Contains(dependentClass.WeakSelf)) {
+                return;
             }
 
             DependentClasses.Add(dependentClass.WeakSelf);
@@ -1063,8 +1059,13 @@ namespace IronRuby.Builtins {
                 return false;
             };
 
+            int version = GlobalMethodVersion;
             visitor(this);
             ForEachRecursivelyDependentClass(visitor);
+            // A compiled loop that is running checks the method version again at its next iteration: once for
+            // the whole update, after every version it bumped, and only if the global version moved - an update
+            // of modules alone (an extend, a singleton class) leaves every compiled body and loop current.
+            if (GlobalMethodVersion != version) { RubyUtils.InvalidateCompiledCode(); }
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5} rules={3,-5}", Name, reason, affectedModules, affectedRules), "UPDATED");
         }
@@ -1077,6 +1078,7 @@ namespace IronRuby.Builtins {
         internal void AllDependentMethodsUpdated(string/*!*/ reason) {
             Context.RequiresClassHierarchyLock();
 
+            int version = GlobalMethodVersion;
             var visited = new HashSet<RubyModule>(ReferenceEqualityComparer<RubyModule>.Instance);
             var stack = new Stack<RubyModule>();
             stack.Push(this);
@@ -1092,6 +1094,8 @@ namespace IronRuby.Builtins {
                     }
                 }
             }
+            // as in MethodsUpdated
+            if (GlobalMethodVersion != version) { RubyUtils.InvalidateCompiledCode(); }
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5}", Name, reason, visited.Count), "UPDATED");
         }
@@ -1550,7 +1554,7 @@ namespace IronRuby.Builtins {
                 } else if (_privateConstants != null) {
                     _privateConstants.Remove(name);
                 }
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
         }
 
@@ -1608,7 +1612,7 @@ namespace IronRuby.Builtins {
                 }
                 _deprecatedConstants.Add(name);
                 _context.NoteDeprecatedConstant();
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
             }
         }
 
@@ -1762,7 +1766,14 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             InitializeConstantsNoLock();
-            _context.ConstantAccessVersion++;
+            ConstantStorage previous;
+            if (_constants.TryGetValue(name, out previous) && !previous.IsRemoved && !(previous.Value is AutoloadedConstant)) {
+                // assigned again: a running loop that folded it must see the new value (none has folded an
+                // autoload that has not run: the file it loads assigning the constant is no reassignment)
+                _context.ConstantReassigned();
+            } else {
+                _context.ConstantsChanged();
+            }
 
             // assigned by the file an autoload of the constant is running: kept by the autoload until it is done
             ConstantStorage existing;
@@ -1784,7 +1795,7 @@ namespace IronRuby.Builtins {
             ConstantStorage existing;
             if (_constants != null && _constants.TryGetValue(name, out existing) && !existing.IsRemoved && ReferenceEquals(existing.Value, autoloaded)) {
                 Mutate();
-                _context.ConstantAccessVersion++;
+                _context.ConstantsChanged();
                 _constants[name] = new ConstantStorage(value);
                 if (sourcePath != null) {
                     SetConstantLocationNoLock(name, sourcePath, sourceLine);
@@ -2156,12 +2167,12 @@ namespace IronRuby.Builtins {
             object namespaceValue;
             if (_namespaceTracker != null && _namespaceTracker.TryGetValue(name, out namespaceValue)) {
                 _constants[name] = ConstantStorage.Removed;
-                _context.ConstantAccessVersion++;
+                _context.ConstantReassigned();
                 value = namespaceValue;
                 result = true;
             } else if (result) {
                 _constants.Remove(name);
-                _context.ConstantAccessVersion++;
+                _context.ConstantReassigned();
             }
 
             if (result) {
@@ -3639,7 +3650,7 @@ namespace IronRuby.Builtins {
             }
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
         }
 
         /// <summary>
@@ -3736,7 +3747,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
         }
 
         private static RubyModule[]/*!*/ SpliceBefore(RubyModule/*!*/[]/*!*/ list, int index, RubyModule/*!*/[]/*!*/ added) {
@@ -3786,7 +3797,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -3832,7 +3843,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantAccessVersion++;
+            _context.ConstantsChanged();
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -3863,12 +3874,8 @@ namespace IronRuby.Builtins {
 
             if (_dependentModules == null) {
                 _dependentModules = new WeakList<RubyModule>();
-            } else {
-                foreach (var module in _dependentModules) {
-                    if (ReferenceEquals(dependentModule, module)) {
-                        return;
-                    }
-                }
+            } else if (_dependentModules.Contains(dependentModule.WeakSelf)) {
+                return;
             }
 
             _dependentModules.Add(dependentModule.WeakSelf);

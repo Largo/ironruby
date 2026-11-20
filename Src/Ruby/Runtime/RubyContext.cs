@@ -66,12 +66,13 @@ namespace IronRuby.Runtime {
         private static readonly Guid LanguageVendor_Microsoft = new Guid(-1723120188, -6423, 0x11d2, 0x90, 0x3f, 0, 0xc0, 0x4f, 0xa3, 2, 0xa1);
         private static int _RuntimeIdGenerator = 0;
 
-        // MRI compliance: language level targeted by the prism front end.
+        // MRI compliance: the CRuby release IronRuby matches (RUBY_VERSION, RUBY_RELEASE_DATE and
+        // RUBY_PATCHLEVEL are that release's). The prism front end parses its language level, 4.0.
         public string/*!*/ MriVersion {
             get { return MriVersionString; }
         }
 
-        private const string MriVersionString = "4.0.0";
+        private const string MriVersionString = "4.0.10";
 
         // RbConfig's ruby_version, "4.0.0" as in CRuby 4.0: names the site directory
         // (ruby/site_ruby/4.0.0, empty as shipped). The standard library itself is ruby/4.0.
@@ -80,7 +81,7 @@ namespace IronRuby.Runtime {
         }
 
         public string/*!*/ MriReleaseDate {
-            get { return "2025-12-25"; }
+            get { return "2026-11-19"; }
         }
 
         public int MriPatchLevel {
@@ -280,6 +281,26 @@ namespace IronRuby.Runtime {
         [Emitted]
         public int ConstantAccessVersion = 1;
 
+        /// <summary>
+        /// A constant was set, removed or may resolve differently: the constant caches, the typed bodies
+        /// and the outlined loops that folded one find out by ConstantAccessVersion, on their next entry.
+        /// </summary>
+        internal void ConstantsChanged() {
+            ConstantAccessVersion++;
+        }
+
+        /// <summary>
+        /// An existing constant was assigned again or removed: the one change to constants that a running
+        /// compiled loop which folded the constant must see at its next iteration, as CRuby's next read does.
+        /// A new constant, a mixin, an autoload starting or ending move ConstantAccessVersion only
+        /// (ConstantsChanged): no loop has folded what they change, and moving the code epoch for them made
+        /// every running loop in the process hand itself back.
+        /// </summary>
+        internal void ConstantReassigned() {
+            ConstantAccessVersion++;
+            RubyUtils.InvalidateCompiledCode();
+        }
+
         // Number of autoloads running anywhere in this runtime. While one is in flight the
         // answer a constant site gets depends on which thread is asking -- the thread running
         // the file sees the constant as undefined and every other thread does not -- so the
@@ -292,12 +313,12 @@ namespace IronRuby.Runtime {
 
         public void EnterAutoload() {
             System.Threading.Interlocked.Increment(ref _autoloadsInProgress);
-            ConstantAccessVersion++;
+            ConstantsChanged();
         }
 
         public void LeaveAutoload() {
             System.Threading.Interlocked.Decrement(ref _autoloadsInProgress);
-            ConstantAccessVersion++;
+            ConstantsChanged();
         }
 
         // Set when the runtime starts its first non-main Ractor, and never cleared: from then on
@@ -318,7 +339,7 @@ namespace IronRuby.Runtime {
             if (!_ractorsStarted) {
                 using (ClassHierarchyLocker()) {
                     _ractorsStarted = true;
-                    ConstantAccessVersion++;
+                    ConstantsChanged();
                 }
             }
         }
@@ -1176,7 +1197,7 @@ namespace IronRuby.Runtime {
                 // and constant sites keep their answer per constant version) - its namespaces are
                 // loaded even if its extension methods can't be read.
                 using (ClassHierarchyLocker()) {
-                    ConstantAccessVersion++;
+                    ConstantsChanged();
                 }
             }
         }

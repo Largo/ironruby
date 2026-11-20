@@ -1,5 +1,5 @@
 
-This is CRuby 4.0.9's library directory (lib/ and ext/*/lib/ of the ruby-4.0.9
+This is CRuby 4.0.10's library directory (lib/ and ext/*/lib/ of the ruby-4.0.10
 source tarball; RubyGems and Bundler 4.0.20), with the changes below.  To move
 it to a later release, run Util/sync-stdlib.rb with this release's tarball and
 the new one: it copies what IronRuby has not changed and merges the new
@@ -41,7 +41,7 @@ shim elsewhere on the load path cannot shadow them):
                           "IronRuby 4.0.2 (4.0.0)", not "Ruby 4.0.0"
 
 Added from the gems MRI 4.0 ships (lib/ copied verbatim):
-  irb.rb, irb/       - irb 1.18.0, with its LICENSE.txt.  MRI 4.0.9 ships
+  irb.rb, irb/       - irb 1.18.0, with its LICENSE.txt.  MRI 4.0.10 ships
                        1.16.0; 1.18.0 is the release from rubygems.org,
                        for its startup banner
   reline.rb, reline/ - reline 0.6.3, irb's line editor, with COPYING, BSDL and

@@ -35,11 +35,21 @@ run side by side (`/perf-step 3`). Default: the worst open gap, one experiment.
    about; or, if none is, the top line of the census that has no rejected attempt in the
    ledger. A gap with three rejected attempts is skipped until someone writes a new idea
    under it.
-3. The census counts methods, not calls: a refusal in a method nothing calls costs nothing.
+3. The screen stops at the first thing it refuses, and `JIT never: what refused the method`
+   counts that one; most methods have more behind it. Read the three tables under it before
+   believing a line: `one thing only` (the methods that taking this one thing lets through
+   the screen - what a step can win), `two things: the pairs` (what a step that takes two
+   wins) and `in how many methods a thing is refused at all`, with the count of those where
+   it stands alone. A line that is first in 674 methods and alone in 144 is a step of 144.
+   (`-l -a` lists every refusal of each method.) Round twenty-three took `is_a?` by the
+   first table and was rejected: 206 methods passed the screen and none compiled.
+4. The census counts methods, not calls: a refusal in a method nothing calls costs nothing.
    Before taking a line, see that methods which matter have it - the benchmarks' own
    (`census.rb -l "$AWFY" | grep 'MethodCall each'`), or the prelude's
-   (`Src/StdLib/ironruby/ruby4.rb`), which every program calls.
-4. State the hypothesis in one sentence, with the count that supports it:
+   (`Src/StdLib/ironruby/ruby4.rb`), which every program calls; or the methods ordinary Ruby
+   really calls: `census.rb -u LOG` on a trace of `Util/bench/app-shapes.rb` keeps only those,
+   and says which of them the run specialized and declined.
+5. State the hypothesis in one sentence, with the count that supports it:
    *"577 methods of the standard library and 10 of the benchmarks' are `never` because
    they call `each` with a block: the screen refuses any call with a block."* If you
    cannot say which decision refuses them, the experiment is to find out (step 2), not to
@@ -66,7 +76,10 @@ Where the ideas come from:
 `Util/bench/README.md` says what the JIT and OSR tiers already do and decline; read it
 before proposing something they already cover. `Util/bench/truffleruby-lessons.md` has
 what TruffleRuby keeps in Ruby and in Java, what a core method written in Ruby costs here
-part by part, and a ranked list of what transfers.
+part by part, and a ranked list of what transfers. `Util/bench/daloze-lessons.md` has
+what the papers, posts and talks of TruffleRuby's lead give: unboxed instance variables,
+array storage strategies, thread-safe collections without a GVL, safepoints, what each
+AWFY benchmark is meant to stress, and how they measure.
 
 Two kinds of gap have a skill of their own, with the traps of that kind of work; read it
 for how to make the change, and come back here to judge and to record:

@@ -354,6 +354,132 @@ TypeError
         }
 
         /// <summary>
+        /// A block loop whose block holds another core iterator with a literal block runs the inner loop in place
+        /// (JitCompiler.Nest.cs): a Float crossing the inner block, a bound of another type on a late outer
+        /// iteration, and the backtrace of an error raised in the inner block.
+        /// </summary>
+        public void BlockLoopNested1() {
+            TestOutput(@"
+require 'ruby4'
+class P; attr_accessor :x, :v; def initialize(x); @x = x; @v = 0.5; end; end
+def pairs(ps); e = 0.0; ps.each_index { |i| a = ps[i]; ((i + 1)...ps.size).each { |j| b = ps[j]; d = a.x - b.x; e += d * d * a.v * b.v } }; e; end
+def tt(n, m); s = 0; n.times { |i| m.times { |j| s += i * j } }; s; end
+def sum(a, hi); s = 0; a.each_index { |i| t = i * 2; (i...hi).each { |j| s += j + t } }; s; end
+ps = Array.new(8) { |i| P.new(i + 0.5) }
+e = 0.0
+3000.times { e += pairs(ps) }
+p e
+r = 0
+3000.times { |k| r += tt(8, k == 2500 ? 2.5 : 3) rescue r += 1000 }
+p r
+r = 0
+3000.times { |k| r += sum((0...8).to_a, k == 2900 ? 8.5 : 8) rescue r += 1000 }
+p r
+def rz(a, z); s = 0; a.each_index { |i| (0...3).each { |j| s += 10 / (z - j) } }; s
+rescue ZeroDivisionError => e
+  e.backtrace_locations[0, 5].map(&:label)
+end
+3000.times { rz((0...8).to_a, 9) }
+p rz((0...8).to_a, 2)
+def gw(n, m); c = 0; begin; n.times { |i| m.times { |j| c += 1; $gw = c } }; rescue RuntimeError; end; c - $gw; end
+$gw = 0
+300.times { gw(20, 20) }
+p (1..3).map {
+  q = Queue.new
+  th = Thread.new { q << 1; gw(100_000, 50_000) }
+  q.pop; sleep 0.05; th.raise(""stop"")
+  d = th.value
+  d == 0 || d == 1
+}
+def fl(flags, acc, n); n.times { |i| f = flags[0]; f.times { |j| acc[0] = acc[0] + j + 1 } }; end
+5.times { fl([2], [0], 2000) }
+flags = [0]; acc = [0]
+th = Thread.new { sleep 0.03; Integer.class_eval { remove_method :times; def times; yield 98; self; end }; flags[0] = 1 }
+fl(flags, acc, 30_000_000)
+th.join
+p [acc[0] % 99 == 0, acc[0] > 0]
+", @"
+252000.0
+462916
+1008120
+[""Integer#/"", ""block (2 levels) in Object#rz"", ""Range#each"", ""block in Object#rz"", ""Array#each_index""]
+[true, true, true]
+[true, true]
+");
+        }
+
+        /// <summary>
+        /// A compiled loop that is running when another thread redefines a method it was built on - an outlined
+        /// `while' inlining Array#size, a block loop over `times', a typed method body inlining a callee - calls the
+        /// new method from its next iteration on (JitRuntime.OsrHandBack, MethodLoopSafePointSlow); it checked the
+        /// method version only on entry before. The thread redefines, then sets the flag, and the loop counts only
+        /// iterations after the one that saw the flag, so the output is CRuby 4.0's every run.
+        /// </summary>
+        public void JitRunningLoopRedefined1() {
+            TestOutput(@"
+def after_a_while(flag)
+  Thread.new { |; t0|
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    Thread.pass while Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 0.05
+    yield
+    flag[0] = 1
+  }
+end
+def w(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    if seen == 1
+      c += a.size
+      after += 1
+    end
+    seen = 1 if flag[0] == 1
+  end
+  c
+end
+def bt(a, flag)
+  c = 0; seen = 0; after = 0
+  while after < 1000
+    100_000.times { |i| if seen == 1 && after < 1000; c += a.size; after += 1; end; seen = 1 if flag[0] == 1 }
+  end
+  c
+end
+class K
+  def k(x) = x * 2
+  def m(flag, n)
+    c = 0; seen = 0; after = 0
+    while after < n
+      if seen == 1
+        c += k(3)
+        after += 1
+      end
+      seen = 1 if flag[0] == 1
+    end
+    c
+  end
+end
+flag = [0]
+th = after_a_while(flag) { Array.class_eval { alias_method :__size, :size; def size = 0 } }
+p w([1, 2], flag); th.join
+Array.class_eval { alias_method :size, :__size; remove_method :__size }
+flag = [0]
+th = after_a_while(flag) { Array.class_eval { alias_method :__size, :size; def size = 0 } }
+p bt([1, 2], flag); th.join
+Array.class_eval { alias_method :size, :__size; remove_method :__size }
+o = K.new
+3000.times { o.k(1); o.m([1], 10) }
+flag = [0]
+th = after_a_while(flag) { K.class_eval { def k(x) = 0 } }
+p o.m(flag, 1000); th.join
+p w([1, 2], [1])
+", @"
+0
+0
+0
+2000
+");
+        }
+
+        /// <summary>
         /// A global variable read or assigned in a specialized method or an outlined loop (JitCompiler.EmitGlobalRead,
         /// EmitGlobalWrite): the value it holds now, whatever it is, through an alias too; what an assignment stores
         /// is what a read sees, and trace_var still sees every assignment. A special variable, an undefined one, or
@@ -461,29 +587,229 @@ nil
         }
 
         /// <summary>
-        /// -X:JITCalls (a prototype, off by default): a method the JIT compiles calls the typed bodies of the
+        /// Direct calls (on by default, -X:NoJITCalls): a method the JIT compiles calls the typed bodies of the
         /// other methods it calls on self directly. What the callee's entry would have guarded falls to the
         /// caller's: a callee redefined, overridden in a subclass, deopting, or passed a type it was not
         /// compiled for still gives CRuby 4.0's output.
         /// </summary>
         public void JitCalls1() {
             int bound = IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies;
-            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITCalls"] = true; });
-            AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+            AreEqual(Engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                 JitCallsExpected);
             // the output is the same when nothing is bound: tot's call of acc, a callee with a loop, is one
             // the inliner never takes, and Shape#area's of side is another
             Assert(IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies >= bound + 2);
             bound = IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies;
-            AreEqual(Engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITCalls"] = false; });
+            AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitcalls.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                 JitCallsExpected);
-            // and without the switch nothing is
+            // and with -X:NoJITCalls nothing is
             Assert(IronRuby.Runtime.Jit.JitRuntime.DirectCallBodies == bound);
         }
 
         /// <summary>
+        /// `private :x' or `protected :x' in a subclass leaves an entry there that forwards to the inherited x, and the
+        /// method the resolution arrives at is the superclass's public one. A compiled `o.x', `o.x = v' or Struct member
+        /// access asks the lookup for the visibility (JitRuntime.SelfAttrSite.Resolve) and makes the call, which raises
+        /// CRuby 4.0's NoMethodError; asking the method, it read and wrote the variable. With -X:JITResume the
+        /// attribute operations after an effect fall back to the same call.
+        /// </summary>
+        public void JitAttrVisibility1() {
+            // (this file's line ends are CRLF, the script's "\n")
+            string expected = JitAttrVisibilityExpected.Replace("\r", "");
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITResume"] = true; });
+            AreEqual(engine.CreateScriptSourceFromString(JitAttrVisibilityScript, "jitattrvisibility.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                expected);
+            AreEqual(Engine.CreateScriptSourceFromString(JitAttrVisibilityScript, "jitattrvisibility.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                expected);
+        }
+
+        private const string JitAttrVisibilityScript = @"
+class VNode
+  attr_accessor :val, :other, :n
+  def initialize
+    @val = 0
+    @other = nil
+    @n = 0
+  end
+  def peek
+    @other.val
+  end
+  def poke
+    @other.val = :w
+  end
+  def hold
+    @n += 1
+    @other.val = :h
+    @other.val
+  end
+end
+class VProtected < VNode
+  protected :val, :val=
+end
+class VPrivate < VNode
+  private :val, :val=
+end
+class VPublicAgain < VPrivate
+  public :val, :val=
+end
+VStruct = Struct.new(:m)
+class VStructPrivate < VStruct
+  private :m, :m=
+end
+class VHolder
+  attr_accessor :s
+  def get
+    @s.m
+  end
+  def set
+    @s.m = 5
+  end
+end
+
+$out = []
+def t
+  $out << yield.inspect
+rescue NoMethodError => e
+  $out << e.message
+end
+
+node = VNode.new
+node.other = VNode.new
+holder = VHolder.new
+holder.s = VStruct.new(1)
+# an error message's first use defines methods, which sends hot bodies back to profiling: once before the warm-up
+t { nil.val }
+i = 0
+while i < 400
+  node.peek
+  node.poke
+  node.hold
+  holder.get
+  holder.set
+  i += 1
+end
+[VProtected, VPrivate, VPublicAgain].each do |c|
+  node.other = c.new
+  t { node.peek }
+  t { node.poke }
+  t { node.hold }
+end
+t { node.n }
+holder.s = VStructPrivate.new(1)
+t { holder.get }
+t { holder.set }
+$out.join(""\n"")
+";
+
+        private const string JitAttrVisibilityExpected = @"undefined method 'val' for nil
+protected method 'val' called for an instance of VProtected
+protected method 'val=' called for an instance of VProtected
+protected method 'val=' called for an instance of VProtected
+private method 'val' called for an instance of VPrivate
+private method 'val=' called for an instance of VPrivate
+private method 'val=' called for an instance of VPrivate
+0
+:w
+:h
+403
+private method 'm' called for an instance of VStructPrivate
+private method 'm=' called for an instance of VStructPrivate";
+
+        /// <summary>
+        /// -X:JITResume (Docs/jit-resume-deopt.md, stage 1, off by default): Richards' Scheduler#hold_self - an ivar
+        /// increment, then an attribute write and an attribute read on another object - is specialized only under the
+        /// switch, and then falls back to the call of each attribute operation whose guard fails after the first
+        /// effect, without running the body again: a receiver of another class, a private writer, a frozen receiver
+        /// and method_missing give CRuby 4.0's output, and the body goes on running typed afterwards.
+        /// </summary>
+        public void JitResume1() {
+            int bodies = IronRuby.Runtime.Jit.JitRuntime.ResumeBodies;
+            int fallbacks = IronRuby.Runtime.Jit.JitRuntime.FallbackCount;
+            var engine = IronRuby.Ruby.CreateEngine((setup) => { setup.Options["JITResume"] = true; });
+            AreEqual(engine.CreateScriptSourceFromString(JitResumeScript, "jitresume.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitResumeExpected);
+            Assert(IronRuby.Runtime.Jit.JitRuntime.ResumeBodies == bodies + 1);
+            // ROdd's writer and reader, RMissing's, RPrivate's writer, the frozen receiver's
+            Assert(IronRuby.Runtime.Jit.JitRuntime.FallbackCount >= fallbacks + 6);
+            // without the switch hold_self is declined (a deopt after an effect) and nothing falls back
+            bodies = IronRuby.Runtime.Jit.JitRuntime.ResumeBodies;
+            fallbacks = IronRuby.Runtime.Jit.JitRuntime.FallbackCount;
+            AreEqual(Engine.CreateScriptSourceFromString(JitResumeScript, "jitresume.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
+                JitResumeExpected);
+            Assert(IronRuby.Runtime.Jit.JitRuntime.ResumeBodies == bodies);
+            Assert(IronRuby.Runtime.Jit.JitRuntime.FallbackCount == fallbacks);
+        }
+
+        private const string JitResumeScript = @"
+class RTask
+  attr_accessor :task_holding
+  attr_reader :link
+  def initialize(link)
+    @link = link
+    @task_holding = false
+  end
+end
+class ROdd
+  def task_holding=(v)
+    $log << [:odd, v]
+  end
+  def link = :odd_link
+end
+class RPrivate
+  attr_reader :link
+  private
+  def task_holding=(v)
+    $log << [:private, v]
+  end
+end
+class RMissing
+  def method_missing(name, *args)
+    $log << [name, args]
+    :missing
+  end
+  def respond_to_missing?(*) = true
+end
+class RSched
+  attr_accessor :hold_count, :current_task
+  def initialize(task)
+    @hold_count = 0
+    @current_task = task
+  end
+  def hold_self
+    @hold_count += 1
+    @current_task.task_holding = true
+    @current_task.link
+  end
+end
+def probe(s, probes, frozen)
+  r = []
+  probes.each do |task|
+    s.current_task = task
+    r << (s.hold_self rescue $!.class)
+    r << s.hold_count
+  end
+  r << frozen.task_holding << $log.inspect
+  s.current_task = RTask.new(:again)
+  r << s.hold_self << s.hold_count
+end
+frozen = RTask.new(:frozen_link).freeze
+# the ones that raise last: an error message made defines methods, which sends the rest to the generic
+# body (the entry's method version)
+probes = [ROdd.new, RMissing.new, RPrivate.new, frozen]
+# everything the probes run, once before anything is hot: a library class first used defines its methods
+$log = []
+probe(RSched.new(RTask.new(:first)), probes, frozen)
+$log = []
+s = RSched.new(RTask.new(:plain))
+100.times { s.hold_self }
+([s.hold_count, s.current_task.task_holding] + probe(s, probes, frozen)).join(',')
+";
+        private const string JitResumeExpected = "100,true,odd_link,101,missing,102,NoMethodError,103,FrozenError,104,false,[[:odd, true], [:task_holding=, [true]], [:link, []]],again,105";
+
+        /// <summary>
         /// -X:JITMethods (a prototype, off by default): the method JIT's typed bodies as static methods of a runtime
-        /// assembly, in each of its modes, alone and with -X:JITCalls, whose direct calls are then calls of those
+        /// assembly, in each of its modes, alone and with direct calls, which are then calls of those
         /// methods. The tree compiler is IronRuby.JitEmit.dll, which this project references so that it sits next
         /// to IronRuby.dll; without it the switch would compile as before, so the test checks that bodies were emitted.
         /// </summary>
@@ -494,8 +820,8 @@ nil
                 int failed = IronRuby.Runtime.Jit.JitMethodEmitter.Failed;
                 var engine = IronRuby.Ruby.CreateEngine((setup) => {
                     setup.Options["JITMethods"] = mode.TrimEnd('+');
-                    // with -X:JITCalls
-                    if (mode.EndsWith("+")) { setup.Options["JITCalls"] = true; }
+                    // with direct calls, and without them (-X:NoJITCalls)
+                    setup.Options["JITCalls"] = mode.EndsWith("+");
                 });
                 AreEqual(engine.CreateScriptSourceFromString(JitCallsScript, "jitmethods.rb", Microsoft.Scripting.SourceCodeKind.File).Execute().ToString(),
                     JitCallsExpected);

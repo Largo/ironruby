@@ -50,6 +50,10 @@ git -C <tree> diff --stat <base>...HEAD
 - Uncommitted changes in the baseline checkout make the baseline something other than the
   commit the candidate branched from, and every comparison below is against it: commit or
   stash them, and rebuild the baseline, first.
+- The candidate's Release build must be of its last commit: build it here (console and
+  tests) before measuring or probing anything, whatever its author says was built. In
+  round fifteen a worktree's console build still held two steps its author had dropped
+  from the branch, and the first measurement and probe were of those.
 
 - Whole-file churn means line endings or a BOM were rewritten: fix that first (CLAUDE.md).
 - A `*.Generated.cs` in the diff must come from its generator. A `[RubyMethod]`,
@@ -97,7 +101,16 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | exceptions, backtraces | `Util/raise-matrix.rb`, `Util/full-message-matrix.rb` |
 | calls, blocks, scopes, dispatch | `Util/perf/hot-shapes-matrix.rb` |
 | light frames (`MethodDefinition.cs`), rules that answer for the frame (`DispatchIntrinsics.cs`) | `Util/block-given-matrix.rb`, `Util/light-rest-matrix.rb`, each also with its switch off and with `IR_LIGHT_FRAMES=0` |
-| calls bound by `-X:JITCalls` | `Util/jit-calls-matrix.rb` |
+| calls a compiled method binds to another's typed body (on by default) | `Util/jit-calls-matrix.rb`, also with `-X:NoJITCalls` |
+
+A matrix is compared only after it is seen to end: `ruby FILE; echo $?` prints 0 and the
+output's last line is the file's last row. A file that dies of the same exception under
+CRuby and under every build prints the same four times; one did in round seventeen (a
+`p [..]` after `p` had become a local), and its last rows had not run for two commits.
+And for a change that lets more bodies compile, compare the `specialized` and `declined`
+lines of both builds on the matrices and on the probes as well as on the benchmarks: a
+body that was specialized before and is declined now is a fault of the change even when
+every answer is right ("no reason recorded" is an exception swallowed).
 
 And always, because an optimization that is only wrong when hot passes everything above:
 
@@ -106,9 +119,9 @@ ruby Util/perf/awfy.rb 8 "new=env IR_CONFIG=Release <tree>/ir.sh"     # any FAIL
 <tree>/ir.sh -X:NoJIT -X:NoOSR <a script the change speeds up>         # same output as with them on
 ```
 
-Three shapes got past this gate once and were found in review, and a fourth got past its
-author's checks and was caught here (`Util/perf/LEDGER.md`, "Faults the gate missed").
-Ask each of them of every change:
+Three shapes got past this gate once and were found in review, a fourth got past its
+author's checks and was caught here, and a fifth had been on master since before the gate
+existed (`Util/perf/LEDGER.md`, "Faults the gate missed"). Ask each of them of every change:
 - Can a frame that this makes cheaper recurse - directly, through a block it passes, through
   a callee - without passing a stack check? Run it a million deep: it must raise
   SystemStackError, not end the process.
@@ -124,6 +137,12 @@ Ask each of them of every change:
   receiver with a private method of that name, one with a protected one called from an
   unrelated class, one with `method_missing`, and a refinement active where the caller is
   defined.
+- Does a fast path decide from a resolved method whether a call may reach it? Make the
+  method private or protected in two ways: where it is defined, and with `private :x` in a
+  subclass of the class that defines it. The second leaves an entry that only forwards to the
+  inherited method; resolution follows it and returns the superclass's method, whose own
+  visibility is still public. The visibility is the lookup's
+  (`RubyModule.GetMethodLookup(name).Visibility`), not `resolved.Info`'s.
 
 Write one new differential case for the shortcut itself: the shape it accelerates, run hot
 (a few thousand iterations, past the JIT thresholds), with the thing that must invalidate
@@ -188,6 +207,7 @@ ruby $BASE/Util/perf/awfy.rb 12 "base=env IR_CONFIG=Release $BASE/ir.sh" "new=en
 ruby $BASE/Util/perf/awfy.rb 12 "new=env IR_CONFIG=Release $NEW/ir.sh" "base=env IR_CONFIG=Release $BASE/ir.sh"
 ```
 
+Both runs are of all fourteen AWFY benchmarks, Havlak included: that is awfy.rb's default.
 The second run has the columns the other way round on purpose. Which column runs first
 moves single benchmarks by more than the 5% this step allows: in four runs of round six
 Towers was 7-10% slower in whichever tree ran second and NBody 1-6% faster. A benchmark
@@ -222,13 +242,42 @@ allocated nothing more anywhere, and made `a.each { |x| s += x }` over one or tw
 `[jit] specialized= rejected= screen-rejected=` line of every benchmark, not only what is
 newly specialized: a method that is newly wrapped and then declined is a cost.
 
+A change that adds a way for compiled code to be invalidated (a version, an epoch, a guard
+that hands a loop back) is measured with the events that do *not* concern the code: a
+second thread, and a second runtime in the process, that extends objects, defines new
+constants, singleton methods and classes, and autoloads, beside a hot loop, with
+`IR_OSR_VERBOSE=1`'s `stale=` and `IR_JIT_VERBOSE=1`'s `invalidations=` next to the
+baseline's. In round fifteen every check that changed something the loop was built on
+passed, and a loop beside a thread calling `extend` was 15 times slower.
+
 On a machine that will not be quiet, `ruby Util/perf/ab.rb -i` on the shape files
 (`/perf-ab`, step 7) says which small shapes changed their instruction count, and so which
 are worth waiting for a quiet minute to time; it does not replace the two timed runs, and
 the AWFY benchmarks are not counted.
 
 More than 5% slower on any line in both runs fails the gate. Check start-up too, which
-these do not see: `time` of `ir.sh -e 1` ten times on each, best of each, within 5%.
+these do not see, on the ReadyToRun host: it is what `ir.sh` runs when `IR_CONFIG` is not
+set and what a release ships, a Release build on Linux makes it (`Src/Console/bin/R2R`),
+and it starts three times faster than the Release build beside it, so a time taken with
+`IR_CONFIG=Release` is not the start-up anybody sees. Ten times each on both trees, best
+of each, within 5%:
+
+```sh
+IR_CONFIG=R2R $TREE/ir.sh -e 1
+IR_CONFIG=R2R $TREE/ir.sh -S gem --version
+IR_CONFIG=R2R $TREE/ir.sh -S gem list
+IR_CONFIG=R2R $TREE/ir.sh -e 'require "irb"'
+echo '1+1' | IR_CONFIG=R2R $TREE/ir.sh -S irb
+```
+
+(`ls -l` the two `ir.dll` first: `ir.sh` falls back to nothing here, and a host older than
+the Release build is the tree before the change.) The command-line tools are what
+start-up is for, and they run more Ruby before they answer than `-e 1` does, so a change
+to when or what the tiers compile shows on them first. The tiers are on by default and
+are meant to stay on; these five are the price that is watched for it. At a7060a27 they
+took 0.53, 0.68, 1.65, 1.39 and 2.18 s, of which the tiers were 0-10% (`-X:NoJIT
+-X:NoOSR`: 0.54, 0.67, 1.50, 1.32, 2.06). Making start-up itself shorter is gap 26 of
+`Util/perf/LEDGER.md`.
 
 ## 5. Verdict
 

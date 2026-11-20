@@ -414,6 +414,20 @@ namespace IronRuby.Compiler.Ast {
             // the hook that reports the implicit return at `end'. Null until a `return' needs it.
             internal MSA.LabelTarget ExplicitReturnLabel { get; set; }
 
+            // What decides whether the method may park its scope for its next call (MethodDefinition.ParkedScopesEnabled):
+            // the number of block literals in it, whether one of them does not reuse its Proc (BlockDispatcher.ReusesProc),
+            // and whether it calls super, which hands the method's block - converted by this scope - to a method that may keep it.
+            internal int BlockLiteralCount;
+            internal bool HasUnreusableBlock;
+            internal bool HasSuperCall;
+
+            // The slot the method's literals take their parked Procs from (BlockDefinition), set by MethodDefinition before the
+            // body is transformed if the method may have one at all; it is disabled afterwards if the body turns out not to qualify.
+            internal ParkedScopeSlot ParkSlot;
+            internal readonly List<MSA.Expression> ParkProcVariables = new List<MSA.Expression>();
+            // the ParkedProcs the call took (RubyOps.TakeParkedScope), or null
+            internal MSA.ParameterExpression ParkedVariable;
+
             public MethodScope(
                 ScopeBuilder/*!*/ builder,
                 MSA.Expression/*!*/ selfVariable,

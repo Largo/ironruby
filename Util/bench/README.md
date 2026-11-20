@@ -105,13 +105,15 @@ before, 0.57x after.
 - `raise_rescue` (~150x) and `fiber_switch` (~237x) are unrelated to both: exception
   backtrace construction, and a real CLR thread per Fiber.
 
-## -X:JITMethods and -X:JITCalls - prototypes
+## -X:JITMethods (a prototype) and direct calls
 
 `-X:JITMethods`: the method JIT's typed bodies as static methods of a runtime assembly, so that
 a method's call to itself is a `call` and the .NET JIT can tier, profile and inline them.
-`-X:JITCalls`: a compiled method calls the typed bodies of the other methods it calls on self,
-where the inliner could not make them part of it. Both are off by default and not for shipping
-as they are; `jit-methods.md` has what they measured and the verdict, `jit-methods.rb` and
+Direct calls (`-X:JITCalls`): a compiled method calls the typed bodies of the other methods it
+calls on self, where the inliner could not make them part of it. `-X:JITMethods` is off by
+default and not for shipping as it is. Direct calls began as the second prototype and are on by
+default since round thirteen of `Util/perf/LEDGER.md` (`-X:NoJITCalls` turns them off).
+`jit-methods.md` has what both measured and the verdict, `jit-methods.rb` and
 `jit-methods-run.rb` the benchmarks, `Util/jit-calls-matrix.rb` the differential check.
 
 ## Core methods written in Ruby
@@ -120,6 +122,15 @@ as they are; `jit-methods.md` has what they measured and the verdict, `jit-metho
 and the host language, measures what a core method written in Ruby costs here against the
 same method in C# (`prelude-cost.rb`, `core-small.rb`, `core-inventory.rb`), and ranks what
 transfers.
+
+`daloze-lessons.md` is the same kind of reading of Benoit Daloze's papers, blog and talks
+(thread-safe objects and collections, safepoints, Are-We-Fast-Yet, regexps): ranked ideas
+with their sources, eight probes of what a runtime without a GVL must get right (two fail
+today), and what their way of measuring has that `Util/perf/` lacks.
+
+`zjit-lessons.md` does the same for the ZJIT status post of October 2026, with
+`zjit-post-shapes.rb`: the shapes a JIT for application code is built around (exception
+handlers, `define_method` methods, Struct objects, Hash iteration), measured here.
 
 ## Fiber switches and parked-thread GC cost
 

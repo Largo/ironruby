@@ -41,6 +41,13 @@
  * of the body that assigns it (`x = i * 2; s += x'); a block with any other local is not
  * outlined.
  *
+ * A statement of the body may itself be a core iterator called with a literal block -
+ * `(a...b).each { |j| }', `n.times { |j| }', `a.upto(b) { |j| }', `a.downto(b) { |j| }' - whose
+ * block passes the same screen (NestedBlockLoop). The copy then runs that iterator's loop in place,
+ * inside the outer one, the inner block's locals CLR locals of the copy (JitCompiler.Nest.cs): no
+ * Proc, no yield, and a Float the inner block computes for the outer one is never boxed. This is
+ * TruffleRuby's block inlining, for the two levels NBody's `advance' and `energy' nest.
+ *
  * ***************************************************************************/
 
 using System;
@@ -87,10 +94,14 @@ namespace IronRuby.Runtime.Osr {
         // the shortest run of Times, UpTo, DownTo, Range#each, Array#each and #each_index worth entering the copy for
         // (BlockLoopSite.MinRun, BlockLoopSite.MinMediumRun, BlockLoopSite.MinLightRun)
         internal readonly int Floor;
+        // The body's last statement is an iterator run in place (NestedBlockLoop), whose value the copy
+        // does not compute: only the kinds that drop the block's value may take the block.
+        internal readonly bool LastIsNested;
 
         private BlockLoopInfo(BlockDefinition/*!*/ ast, RubyContext/*!*/ context, int depth, LocalVariable parameter,
-            LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name, int calls) {
+            LocalVariable/*!*/[]/*!*/ locals, string/*!*/ name, int calls, bool lastIsNested) {
             Ast = ast;
+            LastIsNested = lastIsNested;
             Floor = (calls >= BlockLoopSite.HeavyBody) ? BlockLoopSite.MinRun :
                 (calls >= BlockLoopSite.MediumBody) ? BlockLoopSite.MinMediumRun : BlockLoopSite.MinLightRun;
             Locals = locals;
@@ -107,30 +118,48 @@ namespace IronRuby.Runtime.Osr {
         internal static BlockLoopInfo TryCreate(BlockDefinition/*!*/ ast, RubyContext/*!*/ context, int depth, string/*!*/ name) {
             if (depth <= 0) { return null; }
 
-            var parameters = ast.Parameters;
-            if (parameters.Optional.Length != 0 || parameters.Unsplat != null || parameters.Block != null ||
-                parameters.SuperSplat != null || parameters.Mandatory.Length > 1) {
+            LocalVariable parameter;
+            if (!TryGetParameter(ast, depth, out parameter)) {
                 return null;
-            }
-            var signature = parameters.Signature;
-            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords || signature.MaxPositionalCount != parameters.Mandatory.Length)) {
-                return null;
-            }
-
-            LocalVariable parameter = null;
-            if (parameters.Mandatory.Length == 1) {
-                parameter = parameters.Mandatory[0] as LocalVariable;
-                if (parameter == null || parameter.DefinitionLexicalDepth != depth) {
-                    return null;
-                }
             }
 
             List<LocalVariable> locals;
             int calls;
-            if (ast.Body.Count == 0 || !Screen.Accepts(ast.Body, depth, parameter, out locals, out calls)) {
+            bool lastIsNested;
+            if (ast.Body.Count == 0 || !Screen.Accepts(ast.Body, depth, parameter, null, out locals, out calls, out lastIsNested)) {
                 return null;
             }
-            return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), name, calls);
+            return new BlockLoopInfo(ast, context, depth, parameter, locals.ToArray(), name, calls, lastIsNested);
+        }
+
+        /// <summary>
+        /// The parameter of a block given to an iterator, if it takes the block: at most one plain parameter,
+        /// no optional, rest, block or keyword parameter. False when it does not.
+        /// </summary>
+        internal static bool TryGetParameter(BlockDefinition/*!*/ ast, int depth, out LocalVariable parameter) {
+            parameter = null;
+            var parameters = ast.Parameters;
+            if (parameters.Optional.Length != 0 || parameters.Unsplat != null || parameters.Block != null ||
+                parameters.SuperSplat != null || parameters.Mandatory.Length > 1) {
+                return false;
+            }
+            var signature = parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords || signature.MaxPositionalCount != parameters.Mandatory.Length)) {
+                return false;
+            }
+            if (parameters.Mandatory.Length == 1) {
+                parameter = parameters.Mandatory[0] as LocalVariable;
+                if (parameter == null || parameter.DefinitionLexicalDepth != depth) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>Whether a site of this kind may run the block: one that uses the block's value cannot when its last statement runs in place.</summary>
+        internal bool Takes(BlockLoopKind kind) {
+            return !LastIsNested || kind == BlockLoopKind.Times || kind == BlockLoopKind.UpTo || kind == BlockLoopKind.DownTo ||
+                kind == BlockLoopKind.Each || kind == BlockLoopKind.EachIndex;
         }
 
         internal BlockLoopSite/*!*/ GetSite(BlockLoopKind kind) {
@@ -146,36 +175,71 @@ namespace IronRuby.Runtime.Osr {
         private sealed class Screen : Walker {
             private readonly int _depth;
             private readonly LocalVariable _parameter;
+            // the screen of the block this one's block is nested in (NestedBlockLoop), or null
+            private readonly Screen _parent;
             private int _loops;
             private int _calls;
             private bool _rejected;
 
-            private Screen(int depth, LocalVariable parameter) {
+            private Screen(int depth, LocalVariable parameter, Screen parent) {
                 _depth = depth;
                 _parameter = parameter;
+                _parent = parent;
             }
 
             // The block's own locals other than its parameter: each the target of a statement of the
             // body's own, `x = v', before anything else in the body mentions it (see Enter(LocalVariable)).
             private readonly List<LocalVariable>/*!*/ _locals = new List<LocalVariable>();
 
-            internal static bool Accepts(Statements/*!*/ body, int depth, LocalVariable parameter, out List<LocalVariable> locals, out int calls) {
-                var screen = new Screen(depth, parameter);
+            internal static bool Accepts(Statements/*!*/ body, int depth, LocalVariable parameter, Screen parent,
+                out List<LocalVariable> locals, out int calls, out bool lastIsNested) {
+                var screen = new Screen(depth, parameter, parent);
                 locals = screen._locals;
                 calls = 0;
+                lastIsNested = false;
+                int i = 0;
                 foreach (var statement in body) {
                     var assignment = statement as SimpleAssignmentExpression;
                     var target = (assignment != null && assignment.Operation == null) ? assignment.Left as LocalVariable : null;
+                    var call = statement as MethodCall;
                     if (target != null && target.DefinitionLexicalDepth == depth && !screen.IsKnown(target)) {
                         // the value first, which may not read the local it is about to be stored in
                         assignment.Right.Walk(screen);
                         screen._locals.Add(target);
+                    } else if (call != null && call.Block != null) {
+                        // an iterator with a literal block, as a statement of its own: run in place if its block
+                        // passes this screen too (NestedBlockLoop)
+                        if (!screen.AcceptsNested(call)) { return false; }
+                        lastIsNested = (i == body.Count - 1);
                     } else {
                         statement.Walk(screen);
                     }
                     if (screen._rejected) { return false; }
+                    i++;
                 }
                 calls = screen._calls;
+                return true;
+            }
+
+            private bool AcceptsNested(MethodCall/*!*/ call) {
+                var nested = NestedBlockLoop.TryCreate(call, _depth + 1);
+                if (nested == null) { return Reject(); }
+                // the receiver and the arguments are evaluated where the call is, in this block
+                if (call.Target != null) { call.Target.Walk(this); }
+                if (call.Arguments != null) {
+                    foreach (var argument in call.Arguments.Expressions) { argument.Walk(this); }
+                }
+                if (_rejected) { return false; }
+                _calls++;
+                List<LocalVariable> innerLocals;
+                int innerCalls;
+                bool innerLast;
+                if (nested.Block.Body.Count == 0 ||
+                    !Accepts(nested.Block.Body, _depth + 1, nested.Parameter, this, out innerLocals, out innerCalls, out innerLast)) {
+                    return Reject();
+                }
+                // a run of the inner block is at least as heavy as its body: the floor of this block counts it whole
+                _calls += innerCalls;
                 return true;
             }
 
@@ -214,16 +278,81 @@ namespace IronRuby.Runtime.Osr {
             public override bool Enter(MethodCall/*!*/ node) { _calls++; return node.Block != null ? Reject() : !_rejected; }
 
             public override bool Enter(LocalVariable/*!*/ node) {
-                // A local of the block's own is nil at the top of every iteration, which a loop slot
-                // carried over from the iteration before is not. The parameter is assigned at the top of
-                // every iteration, and so is a local whose first mention is a statement that assigns it;
-                // any other is out.
-                if (node.DefinitionLexicalDepth < 0 || (node.DefinitionLexicalDepth >= _depth &&
-                    (node.DefinitionLexicalDepth != _depth || !IsKnown(node)))) {
-                    return Reject();
-                }
-                return !_rejected;
+                return Admits(node) ? !_rejected : Reject();
             }
+
+            // A local of the block's own is nil at the top of every iteration, which a loop slot
+            // carried over from the iteration before is not. The parameter is assigned at the top of
+            // every iteration, and so is a local whose first mention is a statement that assigns it;
+            // any other is out. A local of the block this one is nested in is that block's to admit:
+            // assigned by one of its statements before the one that runs this block.
+            private bool Admits(LocalVariable/*!*/ node) {
+                int d = node.DefinitionLexicalDepth;
+                if (d < 0 || d > _depth) { return false; }
+                if (d == _depth) { return IsKnown(node); }
+                return _parent == null || _parent.Admits(node);
+            }
+        }
+    }
+
+    /// <summary>
+    /// `(a...b).each { |j| }', `(a..b).each { |j| }', `n.times { |j| }', `a.upto(b) { |j| }', `a.downto(b) { |j| }'
+    /// as a statement of a block BlockLoopInfo screens: the loop the copy runs in place of the call
+    /// (JitCompiler.Nest.cs), from From to To by Step, To excluded when Exclusive. The copy checks what
+    /// the shape cannot: that the bounds are Integers (a deopt otherwise, and the generic code makes the
+    /// call) and that the iterator is the library's (the compile declines otherwise).
+    /// </summary>
+    internal sealed class NestedBlockLoop {
+        internal readonly string/*!*/ Iterator;
+        // null for times, which counts from 0
+        internal readonly Expression From;
+        internal readonly Expression/*!*/ To;
+        internal readonly bool Exclusive;
+        internal readonly int Step;
+        internal readonly BlockDefinition/*!*/ Block;
+        internal readonly LocalVariable Parameter;
+
+        private NestedBlockLoop(string/*!*/ iterator, Expression from, Expression/*!*/ to, bool exclusive, int step,
+            BlockDefinition/*!*/ block, LocalVariable parameter) {
+            Iterator = iterator; From = from; To = to; Exclusive = exclusive; Step = step;
+            Block = block; Parameter = parameter;
+        }
+
+        /// <summary>The shape, or null; <paramref name="depth"/> is the lexical depth of the call's block.</summary>
+        internal static NestedBlockLoop TryCreate(MethodCall/*!*/ call, int depth) {
+            var block = call.Block as BlockDefinition;
+            if (block == null || call.Target == null) { return null; }
+            LocalVariable parameter;
+            if (!BlockLoopInfo.TryGetParameter(block, depth, out parameter)) { return null; }
+            var args = call.Arguments;
+            int argc = (args == null) ? 0 : args.Expressions.Length;
+            if (argc > 0 && args.Expressions[0] is SplattedArgument) { return null; }
+            switch (call.MethodName) {
+                case "each":
+                    var range = Unwrap(call.Target) as RangeExpression;
+                    if (range == null || argc != 0 || range.Begin == null || range.End == null) { return null; }
+                    return new NestedBlockLoop("each", range.Begin, range.End, range.IsExclusive, 1, block, parameter);
+                case "times":
+                    if (argc != 0) { return null; }
+                    return new NestedBlockLoop("times", null, call.Target, true, 1, block, parameter);
+                case "upto":
+                case "downto":
+                    if (argc != 1) { return null; }
+                    return new NestedBlockLoop(call.MethodName, call.Target, args.Expressions[0], false,
+                        call.MethodName == "upto" ? 1 : -1, block, parameter);
+                default:
+                    return null;
+            }
+        }
+
+        // `((i + 1)...n)': the parentheses
+        private static Expression/*!*/ Unwrap(Expression/*!*/ e) {
+            var sequence = e as BlockExpression;
+            while (sequence != null && sequence.Statements.Count == 1) {
+                e = sequence.Statements.First;
+                sequence = e as BlockExpression;
+            }
+            return e;
         }
     }
 
@@ -424,7 +553,7 @@ namespace IronRuby.Runtime.Osr {
         public static BlockLoopSite For(BlockParam/*!*/ block, BlockLoopKind kind) {
             var proc = block.Proc;
             var info = proc.Dispatcher.LoopInfo;
-            if (info == null || proc.Kind == ProcKind.Lambda) { return null; }
+            if (info == null || proc.Kind == ProcKind.Lambda || !info.Takes(kind)) { return null; }
             return info.GetSite(kind);
         }
 
@@ -436,7 +565,7 @@ namespace IronRuby.Runtime.Osr {
         public static BlockLoopSite For(BlockParam/*!*/ block, BlockLoopKind kind, long run) {
             var proc = block.Proc;
             var info = proc.Dispatcher.LoopInfo;
-            if (info == null || proc.Kind == ProcKind.Lambda || run < info.Floor) { return null; }
+            if (info == null || proc.Kind == ProcKind.Lambda || run < info.Floor || !info.Takes(kind)) { return null; }
             return info.GetSite(kind);
         }
 
