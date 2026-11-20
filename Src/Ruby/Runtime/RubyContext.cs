@@ -66,12 +66,13 @@ namespace IronRuby.Runtime {
         private static readonly Guid LanguageVendor_Microsoft = new Guid(-1723120188, -6423, 0x11d2, 0x90, 0x3f, 0, 0xc0, 0x4f, 0xa3, 2, 0xa1);
         private static int _RuntimeIdGenerator = 0;
 
-        // MRI compliance: language level targeted by the prism front end.
+        // MRI compliance: the CRuby release IronRuby matches (RUBY_VERSION, RUBY_RELEASE_DATE and
+        // RUBY_PATCHLEVEL are that release's). The prism front end parses its language level, 4.0.
         public string/*!*/ MriVersion {
             get { return MriVersionString; }
         }
 
-        private const string MriVersionString = "4.0.0";
+        private const string MriVersionString = "4.0.10";
 
         // RbConfig's ruby_version, "4.0.0" as in CRuby 4.0: names the site directory
         // (ruby/site_ruby/4.0.0, empty as shipped). The standard library itself is ruby/4.0.
@@ -80,7 +81,7 @@ namespace IronRuby.Runtime {
         }
 
         public string/*!*/ MriReleaseDate {
-            get { return "2025-12-25"; }
+            get { return "2026-11-19"; }
         }
 
         public int MriPatchLevel {
