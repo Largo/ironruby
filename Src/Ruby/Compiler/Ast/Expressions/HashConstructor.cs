@@ -107,10 +107,19 @@ namespace IronRuby.Compiler.Ast {
 
         // A Symbol, String, Integer or Float literal, nil, true or false: a key the runtime's comparer hashes itself, without
         // calling #hash (EqualityComparer.GetHashCode). Any other key may be an object whose #hash or #eql? is a Ruby method,
-        // which the helper building the hash calls.
+        // which the helper building the hash calls. Two Float or Bignum literals of the same value are two objects, which
+        // the comparer tells apart by calling #eql? (EqualityComparer.Equals), so such a key is plain only when it is alone.
         private bool HasPlainLiteralKeys() {
             foreach (var maplet in _maplets) {
-                if (!(maplet.Key is SymbolLiteral || maplet.Key is StringLiteral || maplet.Key is Literal)) {
+                if (maplet.Key is SymbolLiteral || maplet.Key is StringLiteral) {
+                    continue;
+                }
+                var literal = maplet.Key as Literal;
+                if (literal == null) {
+                    return false;
+                }
+                object value = literal.Value;
+                if (!(value == null || value is bool || value is int) && _maplets.Length > 1) {
                     return false;
                 }
             }
