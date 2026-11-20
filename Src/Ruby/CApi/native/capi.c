@@ -2367,34 +2367,46 @@ ractor_local_newkey(const struct rb_ractor_local_storage_type *type)
 rb_ractor_local_key_t rb_ractor_local_storage_value_newkey(void) { return ractor_local_newkey(NULL); }
 rb_ractor_local_key_t rb_ractor_local_storage_ptr_newkey(const struct rb_ractor_local_storage_type *type) { return ractor_local_newkey(type); }
 
+/* No GVL here: threads read and set a key at the same time, so the value is published before
+ * the flag that says there is one (release), and read after it (acquire). */
+static bool
+ractor_local_is_set(rb_ractor_local_key_t key)
+{
+    return __atomic_load_n(&key->set, __ATOMIC_ACQUIRE);
+}
+
 VALUE
 rb_ractor_local_storage_value(rb_ractor_local_key_t key)
 {
-    return key->set ? key->value : Qnil;
+    return ractor_local_is_set(key) ? __atomic_load_n(&key->value, __ATOMIC_RELAXED) : Qnil;
 }
 
 bool
 rb_ractor_local_storage_value_lookup(rb_ractor_local_key_t key, VALUE *val)
 {
-    if (!key->set) return false;
-    *val = key->value;
+    if (!ractor_local_is_set(key)) return false;
+    *val = __atomic_load_n(&key->value, __ATOMIC_RELAXED);
     return true;
 }
 
 void
 rb_ractor_local_storage_value_set(rb_ractor_local_key_t key, VALUE val)
 {
-    key->value = val;
-    key->set = true;
+    __atomic_store_n(&key->value, val, __ATOMIC_RELAXED);
+    __atomic_store_n(&key->set, true, __ATOMIC_RELEASE);
 }
 
-void *rb_ractor_local_storage_ptr(rb_ractor_local_key_t key) { return key->ptr; }
+void *
+rb_ractor_local_storage_ptr(rb_ractor_local_key_t key)
+{
+    return ractor_local_is_set(key) ? __atomic_load_n(&key->ptr, __ATOMIC_RELAXED) : NULL;
+}
 
 void
 rb_ractor_local_storage_ptr_set(rb_ractor_local_key_t key, void *ptr)
 {
-    key->ptr = ptr;
-    key->set = true;
+    __atomic_store_n(&key->ptr, ptr, __ATOMIC_RELAXED);
+    __atomic_store_n(&key->set, true, __ATOMIC_RELEASE);
 }
 
 /* RB_OBJ_FREEZE / OBJ_FREEZE: CRuby sets the flag in place; here the object itself is frozen */
@@ -2434,8 +2446,9 @@ rb_must_asciicompat(VALUE str)
     if (!rb_enc_asciicompat(enc)) rb_raise(rb_eEncCompatError, "ASCII incompatible encoding: %s", rb_enc_name(enc));
 }
 
+/* seeded as CRuby's is, through rb_hash_start: the same bytes hash differently in another process */
 st_index_t
 rb_memhash(const void *ptr, long len)
 {
-    return rb_st_hash(ptr, (size_t)len, 0);
+    return rb_st_hash(ptr, (size_t)len, rb_hash_start(0));
 }
