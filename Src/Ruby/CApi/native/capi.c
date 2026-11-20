@@ -2367,8 +2367,9 @@ ractor_local_newkey(const struct rb_ractor_local_storage_type *type)
 rb_ractor_local_key_t rb_ractor_local_storage_value_newkey(void) { return ractor_local_newkey(NULL); }
 rb_ractor_local_key_t rb_ractor_local_storage_ptr_newkey(const struct rb_ractor_local_storage_type *type) { return ractor_local_newkey(type); }
 
-/* No GVL here: threads read and set a key at the same time, so the value is published before
- * the flag that says there is one (release), and read after it (acquire). */
+/* No GVL here: threads read and set a key at the same time. Each store of the value (or pointer)
+ * is a release and each load an acquire, so what a reader gets comes with everything its writer
+ * did before setting it - for every store, not only the first, which the flag orders. */
 static bool
 ractor_local_is_set(rb_ractor_local_key_t key)
 {
@@ -2378,34 +2379,34 @@ ractor_local_is_set(rb_ractor_local_key_t key)
 VALUE
 rb_ractor_local_storage_value(rb_ractor_local_key_t key)
 {
-    return ractor_local_is_set(key) ? __atomic_load_n(&key->value, __ATOMIC_RELAXED) : Qnil;
+    return ractor_local_is_set(key) ? __atomic_load_n(&key->value, __ATOMIC_ACQUIRE) : Qnil;
 }
 
 bool
 rb_ractor_local_storage_value_lookup(rb_ractor_local_key_t key, VALUE *val)
 {
     if (!ractor_local_is_set(key)) return false;
-    *val = __atomic_load_n(&key->value, __ATOMIC_RELAXED);
+    *val = __atomic_load_n(&key->value, __ATOMIC_ACQUIRE);
     return true;
 }
 
 void
 rb_ractor_local_storage_value_set(rb_ractor_local_key_t key, VALUE val)
 {
-    __atomic_store_n(&key->value, val, __ATOMIC_RELAXED);
+    __atomic_store_n(&key->value, val, __ATOMIC_RELEASE);
     __atomic_store_n(&key->set, true, __ATOMIC_RELEASE);
 }
 
 void *
 rb_ractor_local_storage_ptr(rb_ractor_local_key_t key)
 {
-    return ractor_local_is_set(key) ? __atomic_load_n(&key->ptr, __ATOMIC_RELAXED) : NULL;
+    return ractor_local_is_set(key) ? __atomic_load_n(&key->ptr, __ATOMIC_ACQUIRE) : NULL;
 }
 
 void
 rb_ractor_local_storage_ptr_set(rb_ractor_local_key_t key, void *ptr)
 {
-    __atomic_store_n(&key->ptr, ptr, __ATOMIC_RELAXED);
+    __atomic_store_n(&key->ptr, ptr, __ATOMIC_RELEASE);
     __atomic_store_n(&key->set, true, __ATOMIC_RELEASE);
 }
 
