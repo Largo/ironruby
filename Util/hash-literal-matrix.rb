@@ -29,16 +29,23 @@ N = 3000
 def t(label)
   print label.ljust(52), ' => '
   seen = []
+  at = []
   begin
     N.times do |i|
       v = yield i
-      seen << v unless seen.include?(v)
+      next if seen.include?(v)
+      seen << v
+      at << i
     end
-    puts seen.map(&:inspect).join(', ')
+    puts answers(seen, at)
   rescue Exception => e
-    puts "#{seen.map(&:inspect).join(', ')} then #{e.class}: #{e.message[0, 70]}"
+    puts "#{answers(seen, at)} then #{e.class}: #{e.message[0, 70]}"
   end
 end
+
+# Each distinct answer once, in order. One that first appears after the first two calls says at which call (`@1500'):
+# a change made half way must show at that call and the next, not some calls later.
+def answers(seen, at) = seen.each_with_index.map { |v, k| at[k] < 2 ? v.inspect : "#{v.inspect}@#{at[k]}" }.join(', ')
 
 def label(line) = line[/'(?:[^']*[#.])?([^']*)'/, 1]
 
@@ -400,6 +407,10 @@ t('singleton method half way') do |i|
 end
 t('callee takes a positional Hash half way') do |i|
   Chg.class_eval { def f(h = nil, **k) = [:v3, h, k] } if i == N / 2
+  Chg.new.go(i % 2)
+end
+t('callee takes only a positional Hash half way') do |i|
+  Chg.class_eval { def f(h) = [:v4, h] } if i == N / 2
   Chg.new.go(i % 2)
 end
 t('callee removed half way') do |i|
