@@ -1250,6 +1250,44 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - Start-up, `-e 1`, best of ten: 1,148 ms on master, 1,177 on the branch (+2.5%).
   Not measured: TruffleRuby (not installed here), net11.0, Debug.
 
+  Gated again the same day, after master's parked scopes (perf/park) were merged into the
+  branch: the branch at 2a516b4d against master at 1522386b, both Release net10.0, load
+  1.0 to 1.6 during the timing: **PASS**. The two changes meet in `MethodDefinition.cs`: a
+  method that is a light frame only because of this change may now also park its scope.
+  - IronRuby.Tests: `PASSED` on both trees, 1,290 tests each, with
+    `MutableString_CopyOnWrite3` left out on both. Its reader starves against the writer
+    on a Release build on this machine (past 100 s in 8 of 8 runs alone, four on each
+    tree, and on Release builds of two days before): master's, and none of this code.
+  - Twenty-one matrices, the seventeen above and parked-scope, block-scope-reuse,
+    block-loop and binding-lvar, each as built, with `IR_LIGHT_HASH=0
+    IR_LIGHT_KEYWORD_HASH=0`, with `IR_LIGHT_FRAMES=0`, with `IR_PARKED_SCOPES=0` and with
+    `-X:NoJIT -X:NoOSR`: the branch prints what master prints in all 105 runs.
+  - A literal in a method whose scope is parked is section 11 of
+    `Util/hash-literal-matrix.rb` (15 probes): CRuby's output on both trees and in the
+    five modes. `IR_PARKED_SCOPES=verbose` on them: 11 methods park as light frames and 1
+    with a scope on the branch, 4 and 8 on master, so the probes run the path they are
+    about. The first version of them did not: `(0..2).each` in a body with literal blocks
+    keeps the method out of light frames, so they use `3.times`. The million-deep probes
+    and the 31 probes of visibility, scope readers and callees changing half way print
+    what master prints in the same modes.
+  - Census on the merged trees, 28,337 methods: light frames 20,318 -> 21,793 (+1,475),
+    JIT compiles 2,979, maybe 2,771 and never 22,587 on both.
+  - ruby/spec, all five suites: 32,680 examples, 45 failing, every one listed, none new,
+    no file without a summary.
+  - Time on the shapes (`ab.rb -r 5`, switches off -> on; CRuby 4.0.10): `{a: x}` 160 ->
+    120 (CRuby 92), `{a: x, b: x}` 214 -> 142 (108), `{}` filled 218 -> 175 (134),
+    `{"k" => x}` 240 -> 174 (96), `f(a: x)` 104 -> 70 (60), two keywords to `**o` 278 ->
+    244 (154), `tally` 368 -> 336 (250), `uniq` with a block 768 -> 656 (320); `to_h`,
+    `group_by` and the two controls overlap. Instructions per call: 0.82, 0.75, 0.93,
+    0.80, 0.77, 0.89 on the first six, 0.89 on `tally`.
+  - AWFY, `awfy.rb 12` in both column orders, no FAIL: geomean branch/master 1.005 and
+    0.995. The largest single difference is Bounce, 3.6% slower in one order and 0.6% in
+    the other.
+  - `micro-table.rb` three times, once reversed: no line is more than 5% slower in all
+    three; `nil?` is in two (14% and 9%). In a process of its own it counts 502.1 and
+    501.8 instructions per call and takes 41.3 and 40.0 ns over eight alternating rounds.
+  - Start-up, best of ten: 1,167 ms on master, 1,204 on the branch (+3.2%).
+
 - **perf/why (/perf-step, 2026-11-19) - a find-out step: the census names the construct
   that keeps a method out of light frames.** `IR_LIGHT_FRAMES=why` and the census said
   only which statement of a body was not scope-free (`IfExpression at line 12`), so its
