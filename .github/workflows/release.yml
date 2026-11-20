@@ -293,6 +293,8 @@ jobs:
           out=$("$ir" -I"$ext" -e 'require "capi_smoke"; p CApiSmoke.twice(21), CApiSmoke.twice("ab"), CApiSmoke.cxx')
           echo "$out"
           [ "$out" = $'42\n"abab"\n"c++"' ]
+          # the C API functions real gems use beyond ruby/spec's capi suite, and IRONRUBY_NATIVE_GEMS
+          "$ir" "$GITHUB_WORKSPACE/ironruby/Util/capi/selftest.rb"
 
       # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
       # the Release build the archive ships. package-release.sh leaves the tree in dist/.

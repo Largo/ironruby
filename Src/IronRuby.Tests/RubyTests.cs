@@ -844,6 +844,8 @@ namespace IronRuby.Tests {
                 UndefMethodLookup3,
                 UndefMethodLookup4,
                 UndefMethodLookup6,
+                UndefCoreMethodWarnings1,
+                RemoveBasicObjectInitialize1,
                 MethodAdded1,
                 MethodLookup1,
                 Visibility1,

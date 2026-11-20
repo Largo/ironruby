@@ -1010,8 +1010,12 @@ namespace IronRuby.Runtime.CApi {
             return hash;
         }
 
+        // MRI's rb_hash_seed: random, once per process, so an extension's hash values (rb_hash_start,
+        // rb_memhash) differ from one run to the next, as they do on CRuby
+        private static readonly ulong _hashSeed = BitConverter.ToUInt64(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8), 0);
+
         internal static ulong rb_hash_start(ulong i) {
-            return i * 0x9E3779B97F4A7C15UL + 0x632BE59BD9B4E019UL;
+            return (i + _hashSeed) * 0x9E3779B97F4A7C15UL + 0x632BE59BD9B4E019UL;
         }
 
         internal static void rb_hash_bulk_insert(long argc, VALUE* argv, VALUE hash) {

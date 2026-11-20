@@ -1536,11 +1536,11 @@ namespace IronRuby.Runtime {
             RubyModule mirror = GetHostedTopLevelMirror(scope, owner, atTopLevel);
 
             // as for `alias': Object's, and its NameError, as in CRuby; a singleton method of main only in main's singleton class
+            owner.WarnIfUndefiningCoreMethod(name);
             bool inMirror = mirror != null && mirror.ResolveMethod(name, VisibilityContext.AllVisible).Found;
             if (!inMirror && !owner.ResolveMethod(name, VisibilityContext.AllVisible).Found) {
                 throw RubyExceptions.CreateUndefinedMethodError(mirror ?? owner, name);
             }
-            owner.WarnIfUndefiningCoreMethod(name);
             if (inMirror) {
                 mirror.UndefineMethod(name);
             }

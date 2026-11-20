@@ -742,8 +742,8 @@ end
 # finds it.  When IRONRUBY_NATIVE_GEMS asks for the real gem, its compiled
 # extension is ahead on $LOAD_PATH and still loses: `require "msgpack/msgpack"`
 # takes a .rb from anywhere on the load path before a .so, as CRuby's does.
-# So each of those files first asks for the native extension here, and loads
-# that instead of itself when there is one.
+# So each of those files first asks for the native extension here
+# (ironruby_require_native), which loads it in their place when there is one.
 
 module Gem
   def self.ironruby_builtin_dir # :nodoc:
@@ -770,5 +770,15 @@ module Gem
       return path if spec && ironruby_native_gem?(spec.name)
     end
     nil
+  end
+
+  ##
+  # Requires the compiled extension +feature+ names (ironruby_native_extension_for):
+  # true if there is one, false if IronRuby's own implementation is to load.
+
+  def self.ironruby_require_native(feature) # :nodoc:
+    native = ironruby_native_extension_for(feature) or return false
+    require native
+    true
   end
 end
