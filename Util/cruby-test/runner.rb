@@ -17,6 +17,8 @@ Warning[:experimental] = false
 
 $LOAD_PATH.unshift File.join(cruby, "tool/lib")
 $LOAD_PATH.unshift File.join(cruby, "test/lib")
+# Stand-ins for the few -test-/ C extensions a test file requires at its top, which raise NotImplementedError when called.
+$LOAD_PATH.push File.expand_path("lib", __dir__)
 
 require 'test/unit'
 
