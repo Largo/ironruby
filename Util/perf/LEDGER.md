@@ -961,6 +961,23 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site whose Array is the caller's own rest parameter, passing the elements on without
     the copy (TruffleRuby's splat of a rest Array is the same Array when it does not
     escape).
+    The third (found 2026-11-21, perf/masgnfix): **a large light frame compiles to two or
+    three times the IL of the same body with a scope**, and past the CLR's limits it is
+    compiled without optimization. Each call becomes the light site, a test of its answer
+    and the call again with the scope made on demand, and that copies every register local
+    into a new tuple (`ScopeBuilder.MaterializeLocals`, once per call site); each access of
+    a register local becomes a test of the tuple. `String#bytesplice`'s body, light: 49 KB
+    of IL against 15 KB, and `DOTNET_JitDisasmSummary=1` says `Tier-0 switched MinOpts` (the
+    scoped one `FullOpts`). No scope is made late (a counter in `CreateMethodScopeLazy`
+    read 0 after warm-up), and the light frame allocates less (656 against 960 B a call).
+    Not only a multiple assignment: the same body with its multiple assignments written as
+    single ones (a light frame before perf/masgn too) counts 13,295 instructions a call light
+    against 11,486 with `IR_LIGHT_FRAMES=0`, and 11,171 light without register locals (a
+    temporary switch; FullOpts at 29 KB). Straight-line bodies with ten locals: the gain
+    shrinks with the number of calls (8 calls 0.93, 16 0.95, 32 0.97, 48 1.05). perf/masgnfix
+    only keeps a body with a multiple assignment and more than 24 calls out. Untried: register
+    locals only for a small body (the numbers above say that alone recovers most of it),
+    and one copy of the scope-making code per frame instead of one per call site.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -1200,6 +1217,20 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   light-rest, block-given, block-pass, splat-pass, jit and jit-calls matrices print the
   baseline's; `census.rb -c` on traces of the matrix and of Json: 0 differ. Not measured on
   the clock: the shape is entered no faster unless it is called hot, and none of AWFY's is.
+  Gated afterwards (`ab.rb -i`, switch off against on): small bodies gain (`a, b = b, a`
+  0.82, `@a, @b = @b, @a` 0.86, `a, b = [x, 2]` and `a, *b = x, 1, 2` 0.86), but
+  `String#bytesplice` lost (10,940 -> 11,500 instructions, +17% on the clock), and copies of
+  it 7-26%. The mechanism is gap 16's third: the light lambda is 2-3x the IL, and past the
+  CLR's limits it is compiled MinOpts. **Narrowed (perf/masgnfix)**: a body with a multiple
+  assignment and more than 24 calls (`MethodCall`, `[]`, attribute, `super` and `yield`
+  nodes; a literal block's body not counted) keeps its scope (`IsLargeWithMultipleAssignment`;
+  `IR_LIGHT_FRAMES=why` says "multiple assignment in a body of more than 24 calls"). The
+  limit comes from straight-line bodies with ten locals: 16 calls 0.95, 24-32 0.97, 48 1.05.
+  Light frames 21,793 -> 22,265 (472 methods moved up instead of 515; of the prelude's,
+  `bytesplice` and `__arithmetic_slice__` keep their scope). `bytesplice` 10,899 (off) /
+  11,445 (merged) / 10,901 (narrowed); the copies of it 0.79-0.94 of the merged count, each
+  within 0.3% of switch-off; swap, iswap, arr2, rest and attr2 unchanged against merged
+  (0.999-1.001). `Util/masgn-matrix.rb` prints CRuby 4.0's output in all four modes.
 
 - **perf/jinterp (/perf-step, 2026-11-21, 2220ed2d) - an interpolated String in a body the method
   JIT compiles** (`"#{@path}:#{@lineno}"`, `"v#{x}"`, `%W[a#{x}]`, a heredoc) - census only, not
