@@ -1168,6 +1168,57 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jinterp (/perf-step, 2026-11-21, 2220ed2d) - an interpolated String in a body the method
+  JIT compiles** (`"#{@path}:#{@lineno}"`, `"v#{x}"`, `%W[a#{x}]`, a heredoc) - census only, not
+  gated. The screen refused every StringConstructor: 1,191 methods refused for one at all, 432 for
+  nothing else, 610 at it first. `EmitInterpolation` makes the String the generic body makes
+  (`StringConstructor.TransformWithoutScope`, in the source encoding the parser now records on
+  the node), each part converted by `JitRuntime.InterpolatedPart`, which runs no Ruby code: a
+  String as it is, an Integer, Float, Symbol, nil, true or false through the generic body's own
+  conversion site while that class's `to_s` is the library one (resolved when compiling, kept so
+  by the entry's method version guard), and anything else deopts before its `to_s` could run.
+  So a typed body never calls a `to_s` written in Ruby: visibility, `method_missing`, a `to_s`
+  answering a non-String, one with side effects or one that recurses are the generic body's.
+  Not where a refinement is active, not in an outlined loop, not `:"a#{x}"` or a command.
+  JIT compiles 11.5% -> 11.6% (3,268 -> 3,293), maybe 10.2% -> 10.3% (2,890 -> 2,911), never
+  78.3% -> 78.1% (22,179 -> 22,133), light frames unchanged (Src/StdLib + AWFY, 28,337 methods;
+  46 methods moved up, none down) - census only, not gated.
+  `StringConstructor` refused at all 1,191 -> 434, alone 432 -> 61; the parts it now refuses
+  are counted as their calls (`MethodCall (screen)` 14,461 -> 14,921).
+  Moved: 25 to `compiles` (the prelude's `Thread::Backtrace::Location#to_s`,
+  `Gem::Specification#to_s`, `Gem::NameTuple#inspect`, `Racc::Rule#to_s`, ...), 21 to `maybe`
+  (mostly a constant or a call elsewhere in the body). None of AWFY's: its methods do not
+  interpolate.
+  What the screen still refuses, and why:
+  - a part that is a call other than a binary operator (`#{self.class}`, `#{name}`,
+    `#{x.inspect}`). The first build took them: 273 up (248 to `maybe`, 77 at `call: class/0`),
+    and app-shapes declined three more methods after the screen than the baseline (30 -> 33:
+    `Gem::BasicSpecification#full_name` at `==` on an unknown receiver,
+    `CSV::Parser#validate_field_size` at `<=` on nil, `ERB#set_eoutvar`) and specialized none
+    more. The call is the wall (gap 1), not the interpolation; and the object of a call on
+    another receiver is mostly one whose `to_s` the conversion would deopt on anyway.
+  - an interpolation after a write that is not to a local of the method, the part's own write
+    included (`"#{@n += 1}"`): its conversion can deopt, which after an effect declines the
+    method. With calls refused and this taken, app-shapes still declined `ERB#set_eoutvar`
+    (`compiler.put_cmd = "#{eoutvar}.<<"` twice: the second conversion is a deopt after the
+    attribute write). A conversion of a local already converted on every path before it cannot
+    deopt; that is a flow fact the compiler does not keep, and is what to try next here.
+  - an interpolation in an operand or as an argument of a call on self or a variable, as for a
+    String literal (perf/strlit).
+  Checked: `Util/jit-interp-matrix.rb` (new, 74 rows: every kind of part, typed parts, deopts
+  mid-run, encodings, effects before and after a part, `to_s` of NilClass, Symbol and Integer
+  redefined and restored after the bodies were compiled, a private `TrueClass#to_s`, a prepended
+  `Float#to_s`, a million-deep self-recursion and a million-deep nested `to_s`, threads,
+  `frozen_string_literal: true`; 22 `si_*` methods specialized under `IR_JIT_VERBOSE=1`) and the
+  interpolation, jit, jit-strlit, jit-scan, jit-calls, jit-construct, jit-raise, jit-const, ivar
+  and hash-literal matrices: CRuby's output on the baseline, the candidate and the candidate with
+  `-X:NoJIT -X:NoOSR` (jit-construct's stderr notes differ from CRuby's in order, as on the
+  baseline). Traces of Json, Richards, DeltaBlue, CD and Havlak (3 x 10): the same specialized
+  and declined counts as the baseline; `census.rb -c` 290 methods, 0 differ. app-shapes: the
+  same checksums, the same 106 specialized and 30 declined as the baseline; `-c` 0 differ on
+  light frames and the same 15 screen differences the baseline's trace has.
+  For the gate: no timing taken; IronRuby.Tests and the spec suites not run.
+
 - **perf/strlit (/perf-step, 2026-11-21, 2f7e4647) - a String literal in a body the method
   JIT compiles** (`def name = "document"`, `@buf = ''`, `h['k']`, `['a', 'b']`) - census
   only, not gated. The screen refused every String literal: 2,208 methods refused for one
