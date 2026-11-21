@@ -1193,6 +1193,55 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lbreak (/perf-step, 2026-11-21) - `break`, `next` and `redo` in a `while`/`until` loop, a
+  `begin ... end` without clauses, and a light frame's OSR site without a scope** (`IR_LIGHT_BREAK=0`,
+  `IR_LIGHT_BEGIN=0`, `IR_LIGHT_OSR=0`) - census only, not gated. Three commits.
+  - **break/next/redo.** In a loop each is a jump to one of the loop's labels, a break's value
+    stored in the loop's result (`TransformJump`); the scope is read only in an eval, which is
+    never light, or to leave a class body. `IsScopeFree` walks no block's body and the parser
+    refuses one outside a loop or block, so every one it meets is a loop's; a break in a block is
+    as before. Nothing in the code says why they were left out.
+  - **The OSR site.** Alone, the break step lost: `ab.rb -i`, off -> on, a loop of one iteration
+    with a break 1.07, of four 1.07, `next` in four 1.21, where `take_while` gained (0.86). The
+    method JIT's screen refuses BreakStatement, so these loops get fast only through OSR; once the
+    loop is specialized every call enters the copy at its first back edge, and a light frame made
+    its scope on demand for that site: a RubyMethodScope a call (`perf` showed its constructor
+    only in the light arm). The copy reads the scope for two things, folded constants and
+    refinements (`JitLoopCompiler`). A method's light frame now hands the site its declaring
+    scope, in which the constants resolve as in the method's (its child), and the site is marked
+    `OsrLoopSite.InLightFrame`, for which the copy is built with no refinements and no test of
+    them: a light frame is compiled only where none is active. Light blocks keep the old path.
+    By itself, with `-X:NoJIT`: a light loop of four iterations without a jump 1,572 -> 1,188
+    instructions a call (0.76), one of 10,000 iterations 1.000.
+  - **begin.** A Body without rescue, else or ensure compiles to its statements in place
+    (`Body.TransformRead`), so it is as scope-free as they are. One with clauses now says so in
+    the census (460 methods).
+  - Light frames 82.6% -> 83.8% (23,418 -> 23,758), JIT unchanged (Src/StdLib + AWFY, 28,337
+    methods; 209 moved up by the jumps, 131 by begin, none down). By the jumps: `Array#take_while`,
+    `#drop_while`, `#rfind`, the prelude's sum helpers, `Pathname#ascend`, Zlib::GzipReader's
+    readers, RDoc::Markdown's rules; by begin: the `@x ||= begin ... end` memoizers of RubyGems
+    and Bundler. 73 methods with a break are kept out by something else.
+  - Measured (`ab.rb -i`, instructions a call, baseline -> the three together,
+    `Util/bench/loop-shapes.rb`): a loop of one iteration with a break 1,417 -> 1,292 (0.91), of
+    four 1,477 -> 1,205 (0.82), of a hundred 2,708 -> 2,459 (0.91), of 10,000 133,094 -> 132,797
+    (1.00), `next` in four 1,685 -> 1,501 (0.89), `take_while` 3,492 -> 2,975 (0.85),
+    `drop_while` 0.87, `rfind` 0.94, `sum` with a block 0.98, a loop of four without a jump
+    (already light) 655 -> 632 (0.97), `@m ||= begin [1, 2].sum end` 0.82.
+  - Checked: `Util/loop-light-matrix.rb` (new; every jump in every kind of loop, nested, as a
+    value, after a call that makes the scope, through OSR, with threads, a million deep; an OSR'd
+    loop in a light frame whose folded constant is redefined, and one in a method defined before
+    a `using` that refines `Integer#+`) prints CRuby 4.0's output on the baseline and on the
+    candidate as built, with each of the three switches off, with `IR_LIGHT_FRAMES=0`, with
+    `-X:NoJIT -X:NoOSR` and with `-X:NoJITCalls`. A second probe (loops of 30,000 iterations in
+    light frames that call `local_variables`, `binding`, `block_given?`, a protected and a
+    private method, `eval`, `method_missing`, `caller_locations`, `__method__`, raise; a constant
+    redefined; four threads; a million deep) prints CRuby's as built, with `IR_LIGHT_OSR=0` and
+    with `IR_LIGHT_FRAMES=0`. `census.rb -c`: 0 differ.
+  - Not done, and larger than this step by the counts: the method JIT's screen refuses
+    BreakStatement, so a loop with a break runs at 1,200-1,500 instructions where one without
+    runs typed at about 630. `census.rb -c LOG` with one file matches no method ("called 0 of
+    46"); with a second file it works.
+
 - **Gate of 2026-11-21 for perf/lsuper and the call counter fixes**: the branch at 4f66f1ae against
   master at 951a0ddb, Release net10.0: **PASS**. IronRuby.Tests 1,291 executed and PASSED on both
   trees. 31 matrices in five modes (as built; `IR_LIGHT_REGEX=0 IR_LIGHT_MASGN=0 IR_LIGHT_SUPER=0`;
