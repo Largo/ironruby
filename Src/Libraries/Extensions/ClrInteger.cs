@@ -824,9 +824,37 @@ namespace IronRuby.Builtins {
             return (double)self / other;
         }
 
+        // rb_big_fdiv_double: the two as doubles, divided, unless the Bignum is past Float::MAX
+        // (big_fdiv_float). A finite Float is exactly an Integer mantissa times a power of two,
+        // so then the division is the Bignum one: (10**500).fdiv(1E+200) is 1.0e+300, not
+        // Infinity / 1E+200. There, as in big_fdiv_float, an infinite Float will not convert
+        // (FloatDomainError) and a zero one is a Bignum division by zero (ZeroDivisionError).
         [RubyMethod("fdiv")]
         public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
-            return Protocols.ToDouble(self) / other;
+            double dividend = Protocols.ToDouble(self);
+            if (!Double.IsInfinity(dividend) || Double.IsNaN(other)) {
+                return dividend / other;
+            }
+            if (Double.IsInfinity(other)) {
+                throw new FloatDomainError(other > 0 ? "Infinity" : "-Infinity");
+            }
+            if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            // other = mantissa * 2**exponent, the mantissa an integer of at most 53 bits
+            long bits = BitConverter.DoubleToInt64Bits(other);
+            int rawExponent = (int)((bits >> 52) & 0x7FF);
+            long mantissa = bits & 0xFFFFFFFFFFFFFL;
+            if (rawExponent == 0) {
+                rawExponent = 1;
+            } else {
+                mantissa |= 1L << 52;
+            }
+            int exponent = rawExponent - 1075;
+            BigInteger divisor = (other < 0) ? -new BigInteger(mantissa) : new BigInteger(mantissa);
+            return (exponent >= 0)
+                ? FDiv(self, divisor << exponent)
+                : FDiv(self << -exponent, divisor);
         }
 
         /// <summary>
