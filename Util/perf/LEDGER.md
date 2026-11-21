@@ -1288,6 +1288,28 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     501.8 instructions per call and takes 41.3 and 40.0 ns over eight alternating rounds.
   - Start-up, best of ten: 1,167 ms on master, 1,204 on the branch (+3.2%).
 
+  Gated a third time, after the stack check came back for a literal whose keys may run
+  Ruby code (the eleventh fault below): the branch at 0347de88 against master at 1522386b,
+  Release net10.0, load 1.0 to 1.3 during the timing: **PASS**.
+  - IronRuby.Tests: `PASSED` on both trees, 1,290 each, `MutableString_CopyOnWrite3` left
+    out as before (its lock has since been fixed on master). A first run, made while two
+    other builds ran on the machine, failed `Backtrace_LibraryFrames1` on the branch only:
+    the backtrace of `[].each.next` had no `Enumerator#next` line. It passes alone 25 times
+    of 25 on both trees, and that line was right 3,000 times of 3,000 in three processes
+    per tree, also with `IR_LIGHT_HASH=0` and with `IR_LIGHT_FRAMES=0`; the second whole
+    run passed. Not reproduced, so not explained.
+  - The 21 matrices in the five modes: 105 runs print what master prints.
+    `Util/hash-literal-matrix.rb` now has section 12, a million deep through a key's
+    `#hash`, `#eql?` and a splat's `#to_hash`: SystemStackError as on CRuby.
+  - ruby/spec, all five suites: 32,680 examples, 45 failing, every one listed, none new.
+  - Time on the shapes, switches off -> on: `{a: x}` 162 -> 120, `{a: x, b: x}` 212 -> 140,
+    `{}` filled 212 -> 172, `{"k" => x}` 244 -> 178, `f(a: x)` 104 -> 68, two keywords to
+    `**o` 284 -> 248. `group_by` counts 1.7% more instructions than on master in a process
+    of its own (5,016 -> 5,102, three runs), with the two Hash switches off as well and
+    not with `IR_LIGHT_FRAMES=0`; its time overlaps. Which step costs it is not known.
+  - AWFY in both orders, no FAIL: geomean branch/master 1.001 and 0.989. `micro-table.rb`
+    three times, once reversed: no line slower in all three. Start-up 1,171 -> 1,193 ms.
+
 - **perf/why (/perf-step, 2026-11-19) - a find-out step: the census names the construct
   that keeps a method out of light frames.** `IR_LIGHT_FRAMES=why` and the census said
   only which statement of a body was not scope-free (`IfExpression at line 12`), so its
