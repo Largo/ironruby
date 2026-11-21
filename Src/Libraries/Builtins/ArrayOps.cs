@@ -130,12 +130,14 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
-        public static RubyArray/*!*/ CreateArray(BlockParam/*!*/ block, RubyClass/*!*/ self, [DefaultProtocol]int size, object value) {
+        public static RubyArray/*!*/ CreateArray([NotNull]BlockParam/*!*/ block, RubyClass/*!*/ self, [DefaultProtocol]int size, object value) {
             return Reinitialize(block, new RubyArray(), size, value);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyArray/*!*/ Reinitialize(BlockParam/*!*/ block, RubyArray/*!*/ self, int size, object value) {
+        // The block is there: a call that passes none - `super(n, 0)' in a subclass's initialize passes the method's, which
+        // is null - is ReinitializeByRepeatedValue's, and bound here it failed on the null.
+        public static RubyArray/*!*/ Reinitialize([NotNull]BlockParam/*!*/ block, RubyArray/*!*/ self, int size, object value) {
             block.RubyContext.ReportWarning("block supersedes default value argument");
             Reinitialize(block, self, size);
             return self;

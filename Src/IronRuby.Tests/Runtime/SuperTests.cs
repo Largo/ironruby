@@ -968,6 +968,25 @@ NoMethodError
         }
 
         /// <summary>
+        /// `super(n, 0)' in the initialize of an Array subclass passes the method's block, which is none: it is the
+        /// overload without a block, not the one that warns that the block supersedes the value and then calls it.
+        /// </summary>
+        public void SuperArrayInitialize1() {
+            TestOutput(@"
+class V < Array; def initialize(n); super(n, 0); end; end
+class W < Array; def initialize(n); super(n); end; end
+p V.new(3), V.new(0), V.new(2).class, W.new(2)
+a = [1]; a.send(:initialize, 2, 7); p a
+", @"
+[0, 0, 0]
+[]
+V
+[nil, nil]
+[7, 7]
+");
+        }
+
+        /// <summary>
         /// MRI 1.9: The self object captured by Kernel#binding is the one captured by the scope, not the receiver of the binding call.
         /// </summary>
         public void SuperCallInEvalWithBinding19() {
