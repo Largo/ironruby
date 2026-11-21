@@ -2436,11 +2436,14 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// A line of the stream, as its bytes are, which FinishLine has yet to convert - unless
         /// #ungetc left something in the character buffer: the line then starts with that, and is
-        /// read as converted text all the way (<paramref name="converted"/>).
+        /// read as converted text all the way (<paramref name="converted"/>). So is every line of
+        /// a stream that converts from a wide encoding (UTF-16, UTF-32): the byte of a "\n" is no
+        /// line end there - it is half of one, or part of another character - and MRI looks for
+        /// the separator in the text it converted.
         /// </summary>
         private static MutableString ReadLineOrParagraph(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self,
             bool universalNewline, MutableString separator, int limit, out bool converted) {
-            converted = self.HasPendingChars;
+            converted = self.HasPendingChars || (self.Enc2 != null && self.Enc2.MinBytesPerChar > 1);
             if (converted) {
                 return ReadLineFromPendingChars(transcode, universal, self, separator, limit);
             }
@@ -2740,11 +2743,37 @@ namespace IronRuby.Builtins {
                 first = self.ReadByteNormalizeEoln();
             }
             MutableString c = ReadCharacter(self, (byte)first, encoding);
+            // In a wide encoding the "\r" and the "\n" are characters to compare, not bytes.
+            if (encoding.MinBytesPerChar > 1 && IsUniversalNewline(universal, self) && IsCharacter(c, encoding, "\r")) {
+                int next = self.ReadByteNormalizeEoln();
+                if (next != -1) {
+                    MutableString following = ReadCharacter(self, (byte)next, encoding);
+                    if (IsCharacter(following, encoding, "\n")) {
+                        c = following;
+                    } else {
+                        byte[] bytes = following.ToByteArray();
+                        PushBack(self, bytes, 0, bytes.Length);
+                    }
+                }
+            }
             if (self.Enc2 != null || self.ConversionOptions != null) {
                 var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
                 return site.Target(site, self, c);
             }
             return c;
+        }
+
+        private static bool IsCharacter(MutableString/*!*/ c, RubyEncoding/*!*/ encoding, string/*!*/ character) {
+            byte[] expected = encoding.StrictEncoding.GetBytes(character);
+            if (c.GetByteCount() != expected.Length) {
+                return false;
+            }
+            for (int i = 0; i < expected.Length; i++) {
+                if (c.GetByte(i) != expected[i]) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// <summary>

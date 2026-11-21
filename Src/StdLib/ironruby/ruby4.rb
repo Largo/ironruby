@@ -10575,7 +10575,11 @@ class IO
     newline = options[:newline]
     if reading
       if options[:universal_newline] || newline == :universal
-        return text.gsub("\r\n", "\n").gsub("\r", "\n")
+        return text.gsub("\r\n", "\n").gsub("\r", "\n") if text.encoding.ascii_compatible?
+        # A wide encoding (UTF-16, UTF-32) has the two as characters, not as bytes.
+        cr = "\r".encode(text.encoding)
+        lf = "\n".encode(text.encoding)
+        return text.gsub(cr + lf, lf).gsub(cr, lf)
       end
       return text
     end
