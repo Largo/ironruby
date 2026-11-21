@@ -96,6 +96,20 @@ namespace IronRuby.Compiler.Ast {
         }
 
         /// <summary>
+        /// The method JIT's typed body (JitCompiler.EmitStringLiteral): what TransformReadCore emits in a
+        /// run without --debug-frozen-string-literal, the only kind the JIT compiles a literal in. Each
+        /// evaluation makes the String the generic body makes - a new one, or the frozen literal
+        /// interned once, which a box of its own finds again (RubyOps.InternFrozenStringLiteral).
+        /// </summary>
+        internal MSA.Expression/*!*/ TransformWithoutSite() {
+            switch (_mutability) {
+                case StringLiteralMutability.Frozen: return TransformFrozen(_value, _encoding, null);
+                case StringLiteralMutability.Chilled: return TransformChilled(_value, _encoding, null);
+                default: return Transform(_value, _encoding);
+            }
+        }
+
+        /// <summary>
         /// `"literal".freeze': MRI compiles this to the deduplicated frozen string (opt_str_freeze),
         /// whatever the file says about frozen_string_literal, so every evaluation answers the same
         /// object - the one -"literal" answers too.
