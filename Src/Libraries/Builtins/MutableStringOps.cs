@@ -1302,6 +1302,17 @@ namespace IronRuby.Builtins {
             // The first character, as the string's characters are walked: taking the first char
             // of the content answered the first byte of a UTF-16 or UTF-32 string held as bytes,
             // 66 for "\u3042" in UTF-16LE.
+            //
+            // An ASCII character of an encoding that keeps ASCII where it is needs no walk, and
+            // the walk is not free: GetCharacters marks the content copy-on-write, so that
+            // s << c; s.ord in a loop would copy the string each time round.
+            if (str.Encoding.MinBytesPerChar == 1 && str.Encoding.IsAsciiIdentity) {
+                char c1 = str.GetChar(0);
+                if (c1 < 0x80) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(c1);
+                }
+            }
+
             var characters = str.GetCharacters();
             characters.MoveNext();
             var first = characters.Current;
