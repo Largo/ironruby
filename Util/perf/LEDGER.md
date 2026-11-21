@@ -1207,6 +1207,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   number for it); by instructions it is 0.998. Instructions a call agree with the step's own
   (0.72-0.91 on the shapes above), and two shapes count more: the plain `begin` 658 -> 682
   (1.036, spread 5%) and the control 931 -> 958 (1.029), neither slower on the clock.
+  `ab.rb` runs the baseline first in every round, so these ratios carry whatever the order is
+  worth; the instruction counts do not, and the two tables that are run in both orders follow.
   The regex, step and super shapes 0.91-1.10, all overlapping. micro-table in both orders: no
   line slower in both. AWFY, 12 iterations, both orders: geomean 0.991 and 0.990 (new/base),
   every benchmark verified; start-up 1,188 and 1,209 ms.

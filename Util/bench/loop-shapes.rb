@@ -112,7 +112,7 @@ a = [1, 2, 3]
 t("brk1", N) { |n| i = 0; c = 0; while i < n; c += h.brk(1); i += 1; end; c }
 t("brk4", N) { |n| i = 0; c = 0; while i < n; c += h.brk(4); i += 1; end; c }
 t("brk100", N / 10) { |n| i = 0; c = 0; while i < n; c += h.brk(100); i += 1; end; c }
-t("long", N / 1000) { |n| i = 0; c = 0; while i < n; c += h.brk(10_000); i += 1; end; c }
+t("long", [N / 1000, 1].max) { |n| i = 0; c = 0; while i < n; c += h.brk(10_000); i += 1; end; c }
 t("next4", N) { |n| i = 0; c = 0; while i < n; c += h.nxt(4); i += 1; end; c }
 t("take_while", N) { |n| i = 0; c = 0; while i < n; c += a.take_while { |x| x < 2 }.size; i += 1; end; c }
 t("drop_while", N) { |n| i = 0; c = 0; while i < n; c += a.drop_while { |x| x < 2 }.size; i += 1; end; c }

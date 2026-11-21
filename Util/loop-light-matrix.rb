@@ -154,7 +154,7 @@ def w_redo(n)
   while i < n
     i += 1
     tries += 1
-    redo if tries.odd? && i == 2
+    redo if tries.even? && i == 2
     out << [i, tries]
   end
   out

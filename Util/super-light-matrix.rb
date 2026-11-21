@@ -398,7 +398,7 @@ class C17 < P17
   def r(a) = ([1].each { return super(a) }; :no)
   def kw(a, k: 1) = super(a)
 end
-class D17 < P17; def two(a, b) = super(a, b, 3); def kw(a, k: 1) = super(a, z: 1); end
+class D17 < P17; def two(a, b) = super(a, b, 3); def kw(a, k: 1) = super(a, k: k, z: 1); end
 t("too few arguments through super") { |i| guard2 { C17.new.two(i % 2, 1) } }
 t("too many arguments through super") { |i| guard2 { D17.new.two(i % 2, 1) } }
 t("no superclass method, three arguments") { |i| guard2 { C17.new.many(i % 2) } }
