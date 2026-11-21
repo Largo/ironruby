@@ -405,6 +405,139 @@ namespace IronRuby.Builtins {
             GetReadableStream();
         }
 
+        /// <summary>
+        /// MRI's rb_io_check_byte_readable: a read that counts bytes has no way to take what
+        /// #ungetc left in the character buffer, which is characters already converted.
+        /// </summary>
+        public void RequireByteReadable() {
+            GetReadableStream();
+            if (_pendingCharCount > 0) {
+                throw RubyExceptions.CreateIOError("byte oriented read for character buffered IO");
+            }
+        }
+
+        #region Character buffer (MRI's fptr->cbuf)
+
+        // What #ungetc pushed back on a stream that converts what it reads - one with an internal
+        // encoding, or in text mode. It is text as reads hand it out, so it must not go through
+        // the conversion again: MRI keeps it in fptr->cbuf, apart from the bytes of fptr->rbuf,
+        // and so does this. The readers of characters (getc, gets, read with no length...) take
+        // from it first; the readers of bytes refuse while it holds something.
+        private byte[] _pendingChars;
+        private int _pendingCharStart;
+        private int _pendingCharCount;
+
+        // MRI's cbuf.capa: the buffer is made as large as the first #ungetc needs, and no
+        // smaller than IO_CBUF_CAPA_MIN, and it does not grow - an #ungetc it has no room for
+        // is an IOError - until clear_readconv frees it.
+        private int _pendingCharCapacity;
+        private const int MinPendingCharCapacity = 128 * 1024;
+
+        public bool HasPendingChars {
+            get { return _pendingCharCount > 0; }
+        }
+
+        public int PendingCharCount {
+            get { return _pendingCharCount; }
+        }
+
+        public byte GetPendingChar(int index) {
+            System.Diagnostics.Debug.Assert(index >= 0 && index < _pendingCharCount);
+            return _pendingChars[_pendingCharStart + index];
+        }
+
+        /// <summary>
+        /// #ungetc: the bytes go in front of what is pending.
+        /// </summary>
+        public void PushBackChars(byte[]/*!*/ bytes, int start, int count) {
+            if (count == 0) {
+                return;
+            }
+            if (_pendingCharCapacity == 0) {
+                _pendingCharCapacity = Math.Max(count, MinPendingCharCapacity);
+            }
+            if (_pendingCharCapacity - _pendingCharCount < count) {
+                throw RubyExceptions.CreateIOError("ungetc failed");
+            }
+            InsertPendingChars(bytes, start, count, true);
+        }
+
+        /// <summary>
+        /// Puts back, in front, text that was taken from the buffer.
+        /// </summary>
+        public void RestorePendingChars(byte[]/*!*/ bytes, int start, int count) {
+            if (count > 0) {
+                InsertPendingChars(bytes, start, count, true);
+            }
+        }
+
+        /// <summary>
+        /// MRI's more_char: text converted from the stream goes behind what is pending.
+        /// </summary>
+        public void AppendPendingChars(byte[]/*!*/ bytes, int start, int count) {
+            if (count > 0) {
+                InsertPendingChars(bytes, start, count, false);
+            }
+        }
+
+        private void InsertPendingChars(byte[]/*!*/ bytes, int start, int count, bool inFront) {
+            if (inFront && _pendingCharStart >= count) {
+                _pendingCharStart -= count;
+                Buffer.BlockCopy(bytes, start, _pendingChars, _pendingCharStart, count);
+            } else if (!inFront && _pendingChars != null && _pendingChars.Length - _pendingCharStart - _pendingCharCount >= count) {
+                Buffer.BlockCopy(bytes, start, _pendingChars, _pendingCharStart + _pendingCharCount, count);
+            } else {
+                // Room is left at the front, where the next #ungetc goes.
+                int total = _pendingCharCount + count;
+                var buffer = new byte[Math.Max(2 * total, 16)];
+                int newStart = buffer.Length - total;
+                Buffer.BlockCopy(bytes, start, buffer, inFront ? newStart : newStart + _pendingCharCount, count);
+                if (_pendingCharCount > 0) {
+                    Buffer.BlockCopy(_pendingChars, _pendingCharStart, buffer, inFront ? newStart + count : newStart, _pendingCharCount);
+                }
+                _pendingChars = buffer;
+                _pendingCharStart = newStart;
+            }
+            _pendingCharCount += count;
+        }
+
+        /// <summary>
+        /// Takes the first <paramref name="count"/> pending bytes.
+        /// </summary>
+        public byte[]/*!*/ ShiftPendingChars(int count) {
+            System.Diagnostics.Debug.Assert(count >= 0 && count <= _pendingCharCount);
+            var result = new byte[count];
+            Buffer.BlockCopy(_pendingChars, _pendingCharStart, result, 0, count);
+            _pendingCharStart += count;
+            _pendingCharCount -= count;
+            return result;
+        }
+
+        /// <summary>
+        /// MRI's io_unread, which runs before a seek, a #pos, a write or a flush: when it has
+        /// read-ahead to give back it ends the conversion too, and what #ungetc left goes with
+        /// it. With nothing read ahead - nothing read yet, or all of it - the text stays.
+        /// </summary>
+        public void UnreadPendingChars() {
+            if (_pendingCharCount > 0) {
+                var stream = _stream;
+                if (stream != null && stream.HasReadAheadInMri) {
+                    ClearPendingChars();
+                }
+            }
+        }
+
+        /// <summary>
+        /// MRI's clear_readconv, which frees the buffer: at the end of the stream, and when the
+        /// conversion changes (#binmode, #set_encoding).
+        /// </summary>
+        public void ClearPendingChars() {
+            _pendingChars = null;
+            _pendingCharStart = _pendingCharCount = _pendingCharCapacity = 0;
+        }
+
+        #endregion
+
         public RubyBufferedStream/*!*/ GetWritableStream() {
             var result = GetStream();
             if (!_mode.CanWrite()) {
@@ -456,6 +589,7 @@ namespace IronRuby.Builtins {
 
         public void Seek(long offset, SeekOrigin origin) {
             var stream = GetStream();
+            UnreadPendingChars();
             long position;
             if (TrySeekDescriptor(stream, offset, origin, out position)) {
                 return;
@@ -573,6 +707,7 @@ namespace IronRuby.Builtins {
         // TODO: transcoding
         private int WriteBytes(byte[] bytes, MutableString str, int index, int count) {
             var stream = GetWritableStream();
+            UnreadPendingChars();
 
             if ((_mode & IOMode.WriteAppends) != 0 && stream.CanSeek) {
                 stream.Seek(0, SeekOrigin.End);

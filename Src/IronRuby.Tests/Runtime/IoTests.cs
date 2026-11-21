@@ -773,5 +773,101 @@ puts [[], nil, [2, [3]]], 'x'
 x
 ");
         }
+
+        /// <summary>
+        /// IO#ungetc on a stream that converts what it reads - text mode, or an internal encoding - puts the text in
+        /// a buffer of characters already converted, as MRI's rb_io_ungetc puts it in fptr->cbuf: the readers of
+        /// characters hand it back as it is ("\r" stays "\r", and what #getc gave of a UTF-16 file is not decoded
+        /// from UTF-16 again), the readers of bytes raise IOError while it holds something, and a seek, a #pos or a
+        /// write after a read drops it (Util/ungetc-matrix.rb).
+        /// </summary>
+        public void Io_UngetcConverted1() {
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                return;
+            }
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+def bin(x) = x.is_a?(String) ? x.b : x.is_a?(Array) ? x.map { |y| bin(y) } : x
+def t(label)
+  r = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{label}: #{bin(r).inspect}""
+end
+u = File.join(dir, 'u.txt')
+File.binwrite(u, ""a\nb\r\nc\rd"")
+o = ->(mode = 'rt', path = u, &b) { File.open(path, mode, &b) }
+t('getc') { o.() { |io| io.ungetc(""\r""); [io.getc, io.getc, io.pos] } }
+t('gets') { o.() { |io| io.getc; io.ungetc(""X\r""); [io.gets, io.gets, io.gets, io.lineno] } }
+t('read') { o.() { |io| io.ungetc(""\r\n""); io.read } }
+t('readlines') { o.() { |io| io.ungetc(""\r\n""); io.readlines(chomp: true) } }
+t('paragraph') { o.() { |io| io.getc; io.ungetc(""\n\n\r\n\n""); [io.gets(''), io.gets('')] } }
+t('limit') { o.('rt:utf-8') { |io| io.ungetc(""éé""); [io.gets(1), io.gets(3), io.gets(1)] } }
+t('half') { o.('rt:utf-8') { |io| io.ungetc(""\xc3""); [io.getc, io.getc] } }
+t('eof?') { o.() { |io| io.read; io.ungetc('q'); [io.eof?, io.readchar, io.eof?, io.getc] } }
+%w[getbyte readbyte read(1) read(0) readpartial(1) sysread(1) each_byte{} ungetbyte(1) pread(1,0) sysseek(0)].each do |m|
+  t(m) { o.() { |io| io.ungetc(""\r""); io.instance_eval(m) } }
+end
+t('copy_stream') { o.() { |io| io.ungetc(""\r""); IO.copy_stream(io, File::NULL) } }
+t('drained') { o.() { |io| io.ungetc(""\r""); io.getc; io.getbyte } }
+t('rewind') { o.() { |io| io.ungetc('Z'); io.rewind; io.getc } }
+t('seek') { o.() { |io| io.ungetc('Z'); io.seek(1); io.getc } }
+t('getc, seek') { o.() { |io| io.getc; io.ungetc('Z'); io.seek(0); io.getc } }
+t('getc, pos') { o.() { |io| io.getc; io.ungetc('Z'); [io.pos, io.getc] } }
+t('read, pos') { o.() { |io| io.read; io.ungetc('Z'); [io.pos, io.getc] } }
+t('getc, write') { o.('r+t') { |io| io.getc; io.ungetc('Z'); io.write(""\n""); io.getc } }
+t('binmode') { o.() { |io| io.ungetc('Z'); io.binmode; io.getc } }
+t('full') { o.() { |io| io.ungetc('x' * 131072); [(io.ungetc('y') rescue $!.message), io.read.size, io.ungetc('y' * 200000)] } }
+t('r') { o.('r') { |io| io.ungetc(""\r""); [io.getbyte, io.getc] } }
+t('newline: :lf') { File.open(u, 'r', newline: :lf) { |io| io.ungetc(""\r""); io.getbyte } }
+w = File.join(dir, 'w.txt')
+File.binwrite(w, ""é\nü"".encode('utf-16le'))
+e = ->(x) { x.is_a?(String) ? [x, x.encoding.to_s] : x }
+m = 'rb:utf-16le:utf-8'
+t('utf-16 getc') { o.(m, w) { |io| c = io.getc; io.ungetc(c); [e[io.getc], e[io.getc], io.pos] } }
+t('utf-16 read') { o.(m, w) { |io| io.ungetc(""ß""); e[io.read] } }
+t('utf-16 codepoint') { o.(m, w) { |io| io.ungetc(0xdf); io.ungetc(65); io.each_char.to_a } }
+t('utf-16 getbyte') { o.(m, w) { |io| io.ungetc(65); io.getbyte } }
+t('to utf-16') { o.('r:utf-8:utf-16le') { |io| io.ungetc(65); io.ungetc('x'); io.each_char.first(3).map(&:b) } }
+t('us-ascii') { o.('rt:us-ascii') { |io| io.ungetc(0xe9) } }
+", @"
+getc: [""\r"", ""a"", 1]
+gets: [""X\r\n"", ""b\n"", ""c\n"", 3]
+read: ""\r\na\nb\nc\nd""
+readlines: ["""", ""a"", ""b"", ""c"", ""d""]
+paragraph: [""\r\n\n"", ""b\nc\nd""]
+limit: [""\xC3\xA9"", ""\xC3\xA9a"", ""\n""]
+half: [""\xC3"", ""a""]
+eof?: [false, ""q"", true, nil]
+getbyte: [IOError, ""byte oriented read for character buffered IO""]
+readbyte: [IOError, ""byte oriented read for character buffered IO""]
+read(1): [IOError, ""byte oriented read for character buffered IO""]
+read(0): [IOError, ""byte oriented read for character buffered IO""]
+readpartial(1): [IOError, ""byte oriented read for character buffered IO""]
+sysread(1): [IOError, ""byte oriented read for character buffered IO""]
+each_byte{}: [IOError, ""byte oriented read for character buffered IO""]
+ungetbyte(1): [IOError, ""byte oriented read for character buffered IO""]
+pread(1,0): [IOError, ""byte oriented read for character buffered IO""]
+sysseek(0): [IOError, ""sysseek for buffered IO""]
+copy_stream: [IOError, ""byte oriented read for character buffered IO""]
+drained: 97
+rewind: ""a""
+seek: ""Z""
+getc, seek: ""a""
+getc, pos: [1, ""\n""]
+read, pos: [8, ""Z""]
+getc, write: ""b""
+binmode: ""a""
+full: [""ungetc failed"", 131079, nil]
+r: [13, ""a""]
+newline: :lf: [IOError, ""byte oriented read for character buffered IO""]
+utf-16 getc: [[""\xC3\xA9"", ""UTF-8""], [""\n"", ""UTF-8""], 4]
+utf-16 read: [""\xC3\x9F\xC3\xA9\n\xC3\xBC"", ""UTF-8""]
+utf-16 codepoint: [""A"", ""\xC3\x9F"", ""\xC3\xA9"", ""\n"", ""\xC3\xBC""]
+utf-16 getbyte: [IOError, ""byte oriented read for character buffered IO""]
+to utf-16: [""xA"", ""\x00a"", ""\x00\n""]
+us-ascii: [RangeError, ""invalid codepoint 0xE9 in US-ASCII""]
+");
+        }
     }
 }

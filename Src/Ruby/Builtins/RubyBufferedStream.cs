@@ -49,6 +49,9 @@ namespace IronRuby.Builtins {
         private bool _writePending;
         private bool _writeFlushFailed;
 
+        // Whether the stream was read since the last seek or write (HasReadAheadInMri).
+        private bool _readSinceSeek;
+
         // IO#timeout: the IO whose timeout bounds a read or a write that has to wait for the
         // underlying stream; null when it has none.
         private RubyIO _timeoutOwner;
@@ -91,6 +94,7 @@ namespace IronRuby.Builtins {
         }
 
         private int BaseRead(byte[]/*!*/ buffer, int offset, int count) {
+            _readSinceSeek = true;
             var owner = _timeoutOwner;
             if (owner == null || count == 0) {
                 return _stream.Read(buffer, offset, count);
@@ -101,6 +105,17 @@ namespace IronRuby.Builtins {
             } catch (TimeoutException) {
                 throw owner.CreateTimeoutError();
             }
+        }
+
+        /// <summary>
+        /// Whether MRI's read buffer would hold something here. MRI fills its buffer with what a
+        /// file has whenever it reads, where this one reads as little as it is asked for; so
+        /// the answer is that a seekable stream was read since it was last positioned, and has
+        /// not been read to its end. What MRI does when it gives its read-ahead back (io_unread)
+        /// depends on it.
+        /// </summary>
+        public bool HasReadAheadInMri {
+            get { return _readSinceSeek && _stream.CanSeek && PeekByte(0) != -1; }
         }
 
         private void BaseWrite(byte[]/*!*/ buffer, int offset, int count) {
@@ -214,6 +229,7 @@ namespace IronRuby.Builtins {
             // clear any buffer content (including ungetc):
             _bufferStart = _bufferCount = _pushedBackCount = 0;
             _writePending = false;
+            _readSinceSeek = false;
 
             return result;
         }
@@ -233,6 +249,7 @@ namespace IronRuby.Builtins {
             FlushRead();
             BaseWrite(buffer, offset, count);
             _writePending = true;
+            _readSinceSeek = false;
         }
 
         public int WriteBytes(MutableString/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
@@ -314,6 +331,7 @@ namespace IronRuby.Builtins {
                 var one = new byte[1];
                 return BaseRead(one, 0, 1) == 1 ? one[0] : -1;
             }
+            _readSinceSeek = true;
             return _stream.ReadByte();
         }
 
