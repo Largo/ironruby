@@ -1193,8 +1193,26 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/lsuper and the call counter fixes**: the branch at 4f66f1ae against
+  master at 951a0ddb, Release net10.0: **PASS**. IronRuby.Tests 1,291 executed and PASSED on both
+  trees. 31 matrices in five modes (as built; `IR_LIGHT_REGEX=0 IR_LIGHT_MASGN=0 IR_LIGHT_SUPER=0`;
+  `IR_LIGHT_FRAMES=0`; `IR_PARKED_SCOPES=0`; `-X:NoJIT -X:NoOSR`): 155 same, 0 differ. ruby/spec,
+  all five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, ns a call, baseline -> candidate): `initialize` calling `super(a)`
+  197 -> 162 (0.82), `super()` into Object 196 -> 130 (0.66), `super` with two implicit arguments
+  115 -> 76 (0.66), super passing the block 232 -> 178 (0.77), super into `Array#size` 120 -> 68
+  (0.57), super reaching a Ruby `method_missing` 178 -> 126 (0.71); `respond_to?` through super,
+  which keeps its scope, 0.96 and the three controls 1.00-1.02, all overlapping. The regex shapes
+  and the step-shapes 0.95-1.09, all overlapping. micro-table in both orders: no line slower in
+  both. AWFY, 12 iterations, both orders: geomean 0.990 and 0.987 (new/base), every benchmark
+  verified; start-up 1,182 and 1,209 ms.
+  The prelude's `bytesplice` counts 10,901 -> 11,544 instructions a call (1.059) here too, with a
+  baseline that already has the changes the last gate measured it on, and `bs_a` (the same body
+  in the script) 1.002: the difference follows the tree the build runs from and not a change.
+  Which property of the tree is not found.
+
 - **perf/lsuper (/perf-step, 2026-11-21) - a method that calls `super` in a light frame, unless
-  super reads the caller's scope** (`IR_LIGHT_SUPER=0` turns it off) - census only, not gated.
+  super reads the caller's scope** (`IR_LIGHT_SUPER=0` turns it off) - census only when merged, gated on 2026-11-21 (first entry).
   `IsScopeFree` had no case for a SuperCall, which kept about 1,050 methods out. A super site read
   three things from the scope: the module the method was defined in and the name it was defined
   under (`RubyScope.GetSuperCallTarget`), for the lookup, and the method's self. A light frame's
