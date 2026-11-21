@@ -553,6 +553,12 @@ namespace IronRuby.Compiler.Ast {
         internal static readonly bool LightRegexEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") != "0";
         private static readonly bool LightRegexAll = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") == "all";
 
+        /// <summary>
+        /// IR_LIGHT_OSR=0 makes a light frame's scope on demand for its loop's OSR site, as before, instead of handing the site
+        /// the declaring scope (see LightFrameRewriter.VisitMethodCall and OsrLoopSite.InLightFrame).
+        /// </summary>
+        internal static readonly bool LightOsrEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_OSR") != "0";
+
         // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
         // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
         // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
@@ -657,7 +663,7 @@ namespace IronRuby.Compiler.Ast {
         /// A call without a block takes the scope too, but makes it only when the method it binds to would read it
         /// (LightFrameRewriter.LightScopeCall), so `def getter; a; end', `def cmp(o); @x < o; end' and conditions over
         /// such calls are light as well, and so are the attribute and element assignments, string interpolation, `case/when'
-        /// and `while' loops made of them (a loop's OSR site gets the scope made on demand). Global variables need the scope.
+        /// and `while' loops made of them (a loop's OSR site gets the declaring scope). Global variables need the scope.
         /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
         /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
         /// and keywords are not taken. A splatted argument (`inner(*args)') is converted by a site that takes no scope.
@@ -1289,6 +1295,9 @@ namespace IronRuby.Compiler.Ast {
             if (rewriter.NeedsScope) {
                 return null;
             }
+            foreach (var site in rewriter.OsrSites) {
+                site.InLightFrame = true;
+            }
             statements = rewritten;
             light.MakesCalls = rewriter.MakesCalls || gen.CurrentMethod.HasHashCallingKeys;
             return light;
@@ -1345,6 +1354,9 @@ namespace IronRuby.Compiler.Ast {
             // method from its scope, and where light super sites are off (IR_LIGHT_SUPER=0).
             internal RubyModule SuperModule;
             internal string SuperName;
+
+            // The OSR sites handed the declaring scope (see VisitMethodCall): marked as in a light frame once the body is one.
+            internal readonly List<IronRuby.Runtime.Osr.OsrLoopSite>/*!*/ OsrSites = new List<IronRuby.Runtime.Osr.OsrLoopSite>();
 
             internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc,
                 MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ inLoop, bool lazyUses) {
@@ -1420,8 +1432,24 @@ namespace IronRuby.Compiler.Ast {
                     );
                 }
                 if (node.Method == IronRuby.Runtime.Osr.OsrLoopSite.RunMethod) {
-                    // -X:OSR: a loop that has taken enough back edges hands its specialized copy the scope (for its constants
-                    // and the sites it binds), made on demand like a TracePoint hook's - once per loop entry that gets that far
+                    // -X:OSR: a loop that has taken enough back edges hands its specialized copy the scope, which the copy
+                    // reads only for its constants and its refinements. A method's light frame hands it the declaring scope
+                    // instead, which the constants resolve in as the method scope's do (it is that scope's parent, and a method
+                    // scope has no module of its own), and the site is told that the refinements are none (OsrLoopSite.
+                    // InLightFrame). Making the scope on demand there cost a RubyMethodScope at every entry once the loop was
+                    // specialized, which a loop entered at each call of its method then made at every call.
+                    var site = (node.Object as MSA.ConstantExpression)?.Value as IronRuby.Runtime.Osr.OsrLoopSite;
+                    var arguments = (node.Arguments.Count == 1) ? node.Arguments[0] as MSA.NewArrayExpression : null;
+                    if (LightOsrEnabled && _rfc != null && site != null && arguments != null && site.ScopeArgIndex >= 0 &&
+                        site.ScopeArgIndex < arguments.Expressions.Count && IsScope(arguments.Expressions[site.ScopeArgIndex])) {
+                        var items = new MSA.Expression[arguments.Expressions.Count];
+                        for (int i = 0; i < items.Length; i++) {
+                            items[i] = (i == site.ScopeArgIndex) ? AstUtils.Convert(_declaringScope, typeof(object)) : Visit(arguments.Expressions[i]);
+                        }
+                        OsrSites.Add(site);
+                        return Ast.Call(node.Object, node.Method, Ast.NewArrayInit(typeof(object), items));
+                    }
+                    // otherwise the scope is made on demand like a TracePoint hook's - once per loop entry that gets that far
                     _inTraceHook++;
                     try {
                         return base.VisitMethodCall(node);
