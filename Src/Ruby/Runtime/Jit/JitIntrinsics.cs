@@ -985,6 +985,55 @@ namespace IronRuby.Runtime.Jit {
                 spec.Stub.RevalidateConstants(spec);
         }
 
+        // ---- "a#{x}" (JitCompiler.EmitInterpolation) ---------------------------------------
+
+        /// <summary>
+        /// What a typed body converts its interpolated parts with: the generic body's conversion site
+        /// (StringConstructor.MakeConversion), and the classes whose to_s it may call it for - those whose to_s was the
+        /// library method when the body was compiled, which the entry's method version guard keeps so while it runs.
+        /// </summary>
+        public sealed class InterpolationSite {
+            internal readonly CallSite<Func<CallSite, object, MutableString>>/*!*/ Convert;
+            internal readonly bool Integers, Floats, Symbols, Nil, True, False;
+
+            internal InterpolationSite(RubyContext/*!*/ context, bool integers, bool floats, bool symbols, bool nil, bool trueToS, bool falseToS) {
+                Convert = CallSite<Func<CallSite, object, MutableString>>.Create(Conversions.ConvertToSAction.Make(context));
+                Integers = integers;
+                Floats = floats;
+                Symbols = symbols;
+                Nil = nil;
+                True = trueToS;
+                False = falseToS;
+            }
+        }
+
+        /// <summary>
+        /// An interpolated part, as the generic body converts it: a String as it is (the String made of the parts copies
+        /// it), an Integer, Float, Symbol, nil, true or false through the same conversion site, which calls the library
+        /// to_s. Anything else deopts: its to_s may be Ruby code, which may do anything - redefine an operator the body
+        /// has inlined, raise from a frame the typed body does not have - and the generic body calls it from its own.
+        /// </summary>
+        public static MutableString/*!*/ InterpolatedPart(InterpolationSite/*!*/ site, object value) {
+            var str = value as MutableString;
+            if (str != null) { return str; }
+            bool library;
+            if (value == null) {
+                library = site.Nil;
+            } else if (value is int || value is long || value is BigInteger) {
+                library = site.Integers;
+            } else if (value is double) {
+                library = site.Floats;
+            } else if (value is RubySymbol) {
+                library = site.Symbols;
+            } else if (value is bool) {
+                library = (bool)value ? site.True : site.False;
+            } else {
+                library = false;
+            }
+            if (!library) { throw Deopt(); }
+            return site.Convert.Target(site.Convert, value);
+        }
+
         // ---- Class#new (JitCompiler.EmitConstruction) -------------------------------------
 
         /// <summary>
