@@ -1193,6 +1193,48 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lkw (/perf-step, 2026-11-22) - a method with keyword parameters in a light frame**
+  (`IR_LIGHT_KEYWORDS=0` turns it off) - census only, not gated. Three commits.
+  `IsLightFrameCandidate` refused any method with keywords, a `**rest` or `**nil` outright, the
+  largest line of the census (1,257 methods). Nothing in their lowering needs the scope: the
+  keywords arrive in a hidden optional parameter that holds the call's keyword hash, and a
+  prologue at the head of the body checks it and binds each keyword to its local, the defaults
+  evaluated there in order (`PrismAstBridge.LowerKeywords`): `KeywordArgumentsTest` and
+  `KeywordParameterRead`, runtime calls that take no scope. Only the hidden parameter's own
+  default read the scope, for its RubyContext (`GetOmittedKeywordArguments`,
+  `MakeOmittedKeywordArguments`); a light frame hands it the declaring scope. `eval("super")`
+  finds the keyword signature by the scope's local names, which a light frame now records too.
+  - The prologue's error message was `list.inspect[1..-2]`, and a Range literal keeps a method
+    with literal blocks out: it is `text[1, text.size - 2]` now. The step first used
+    `delete_prefix`/`delete_suffix`, which the prelude defines in Ruby; a runtime without the
+    prelude then raised NoMethodError for an unknown keyword, found by a probe that redefines
+    `String#delete_prefix` and fixed before the merge.
+  - Not taken, each with a census reason of its own: keywords beside a rest or post parameter
+    (146: `Kernel#warn`, `IO#read`, `String#each_line`, `Kernel#open`; the general lowering binds
+    the positionals out of one splat with helpers `IsScopeFree` does not take), a body that passes
+    `**opts` on (52), and bodies kept out by something else (rescue 27, a large multiple
+    assignment 24, about 60 scattered).
+  - Light frames 83.8% -> 87.4% (23,758 -> 24,777), JIT unchanged (Src/StdLib + AWFY, 28,337
+    methods; 1,019 moved up, none down): `Psych.load`, `Prism.parse`, `Pathname#rmtree`,
+    `Exception#detailed_message`, `Array#shuffle!`, `GC#start`, `Kernel#BigDecimal`.
+  - Measured (`ab.rb -i`, instructions a call, switch off -> on, `Util/bench/keyword-shapes.rb`,
+    bodies the method JIT refuses, since it specializes a trivial keyword method and the frame
+    then never runs): a required keyword 1,797 -> 1,625 (0.90), an optional one given 0.88 and
+    left out 1,556 -> 1,330 (0.86), a default that reads a parameter 0.83, two keywords 0.91, a
+    keyword after a positional 0.94, after an optional 0.93, `**rest` 0.91; a JIT-specialized
+    keyword method 1.00 and three controls without keywords 0.99-1.00. Not timed.
+  - Checked: `Util/keyword-light-matrix.rb` (new) prints CRuby 4.0's output on the baseline and
+    on the candidate as built, with the switch off, with `IR_LIGHT_FRAMES=0`, with
+    `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`; nine older matrices the same on both builds. A
+    second probe written for the merge (defaults that call `binding`, `local_variables`,
+    `block_given?`, `__method__`; a `**rest` mutated; a keyword named `if`; zsuper, `eval("super")`
+    and eval reading a keyword; a Hash for an optional before keywords; `**nil`; ten keywords;
+    a frozen Hash splatted; the messages for `:"]"` and a String key; a redefinition half way; a
+    million deep; four threads) prints CRuby's in the same four modes.
+  - Found on the baseline, not fixed: `local_variables` lists keyword parameters in declaration
+    order where CRuby lists the required ones first (`def m(a, k: 1, j:)`: `[:a, :j, :k]`); and
+    an exception raised with an interpolated message reports the `def` line in `backtrace[0]`.
+
 - **Gate of 2026-11-21 for perf/jbreak**: the branch at 9bc85a93 against master at 8251113c,
   Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 34 matrices
   in five modes: 165 same; `int-matrix.rb` prints sixteen `Integer#hash` values, which are seeded
