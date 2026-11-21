@@ -644,7 +644,47 @@ namespace IronRuby.Compiler.Ast {
             if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 return false;
             }
+            if (IsLargeWithMultipleAssignment()) {
+                return false;
+            }
             return FirstNotScopeFree(false) == null || LightBlocksEnabled && FirstNotScopeFree(true) == null;
+        }
+
+        // The most calls a body with a multiple assignment may make and still be a light frame. A light frame's lambda grows
+        // with each call (the light site, the test of its answer and the call again with the scope made on demand, which
+        // copies every register local into the new tuple: ScopeBuilder.MaterializeLocals) and with each access of a register
+        // local (a test of the tuple), so a large body compiles to two or three times the IL of the same body with its scope.
+        // Straight-line bodies with a multiple assignment and ten locals measured, in instructions per call against
+        // IR_LIGHT_MASGN=0: 8 calls 0.93, 16 calls 0.95, 24 and 32 calls 0.97, 48 calls 1.05. Past the CLR's limits
+        // (String#bytesplice's body as a light frame: 49 KB of IL) the method is compiled without optimization
+        // ("Tier-0 switched MinOpts"), 1.26. Bodies without a multiple assignment are not held to it (see the ledger, gap 16).
+        private const int MaxMultipleAssignmentCalls = 24;
+
+        // A body with a multiple assignment and more than MaxMultipleAssignmentCalls calls keeps its scope.
+        private bool IsLargeWithMultipleAssignment() {
+            var statements = Body.Statements;
+            if (!LightMultipleAssignmentEnabled || statements == null) {
+                return false;
+            }
+            var counter = new CallCounter();
+            foreach (var statement in statements) {
+                statement.Walk(counter);
+            }
+            return counter.HasMultipleAssignment && counter.Calls > MaxMultipleAssignmentCalls;
+        }
+
+        private sealed class CallCounter : Walker {
+            internal int Calls;
+            internal bool HasMultipleAssignment;
+
+            public override bool Enter(ParallelAssignmentExpression/*!*/ node) { HasMultipleAssignment = true; return true; }
+            public override bool Enter(MethodCall/*!*/ node) { Calls++; return true; }
+            public override bool Enter(ArrayItemAccess/*!*/ node) { Calls++; return true; }
+            public override bool Enter(AttributeAccess/*!*/ node) { Calls++; return true; }
+            public override bool Enter(SuperCall/*!*/ node) { Calls++; return true; }
+            public override bool Enter(YieldCall/*!*/ node) { Calls++; return true; }
+            public override bool Enter(BlockDefinition/*!*/ node) { return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
         }
 
         // The first statement of the body that is not scope-free (blockLiterals: with literal blocks), or null.
@@ -687,6 +727,9 @@ namespace IronRuby.Compiler.Ast {
                     return String.Format("{0} at line {1}: {2}", statement.GetType().Name, statement.Location.Start.Line,
                         WhyNotScopeFree(statement, LightBlocksEnabled));
                 }
+            }
+            if (IsLargeWithMultipleAssignment()) {
+                return "multiple assignment in a body of more than " + MaxMultipleAssignmentCalls + " calls";
             }
             return IsLightFrameCandidate() ? null : "parameters";
         }
