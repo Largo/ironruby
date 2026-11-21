@@ -560,6 +560,12 @@ namespace IronRuby.Compiler.Ast {
         internal static readonly bool LightBreakEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BREAK") != "0";
 
         /// <summary>
+        /// IR_LIGHT_BEGIN=0 keeps every method with a `begin ... end' (or `begin ... end while') out of light frames, also one
+        /// without rescue, else or ensure (see IsScopeFree).
+        /// </summary>
+        internal static readonly bool LightBeginEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BEGIN") != "0";
+
+        /// <summary>
         /// IR_LIGHT_OSR=0 makes a light frame's scope on demand for its loop's OSR site, as before, instead of handing the site
         /// the declaring scope (see LightFrameRewriter.VisitMethodCall and OsrLoopSite.InLightFrame).
         /// </summary>
@@ -1161,6 +1167,15 @@ namespace IronRuby.Compiler.Ast {
             var yieldCall = node as YieldCall;
             if (yieldCall != null) {
                 return (yieldCall.Block == null || Refuse(why, "yield with a block")) && AreScopeFree(yieldCall.Arguments, blockLiterals, why);
+            }
+            // `begin ... end' without rescue, else or ensure: its statements, compiled in place (Body.TransformRead); one with
+            // them sets and reads $! through the scope
+            var begin = node as Body;
+            if (begin != null) {
+                if (begin.RescueClauses != null || begin.ElseStatements != null || begin.EnsureStatements != null) {
+                    return Refuse(why, "Body with rescue, else or ensure");
+                }
+                return (LightBeginEnabled || Refuse(why, "Body (IR_LIGHT_BEGIN=0)")) && AreScopeFree(begin.Statements, blockLiterals, why);
             }
             // `(yield self; self)', the body of an endless def written with several statements
             var block = node as BlockExpression;

@@ -10,7 +10,8 @@
 #
 # brk1, brk4, brk100 and next4 are loops of 1, 4, 100 and 4 iterations that end with a break or skip with next;
 # long is one of 10,000 iterations (through OSR); take_while, drop_while, sum_block (Array#sum with a block)
-# and rfind are the prelude's; scan is a scanner's loop of calls. nobrk4 (a loop without a
+# and rfind are the prelude's; scan is a scanner's loop of calls. begin and memo are `begin ... end' without a rescue
+# (IR_LIGHT_BEGIN=0 is their off arm). nobrk4 (a loop without a
 # jump, light in both arms) and size (no loop) are the controls.
 $stdout.sync = true
 
@@ -52,6 +53,21 @@ class H
       pos += 1
     end
     pos
+  end
+
+  # `begin ... end' without rescue (IR_LIGHT_BEGIN): a value computed in one, and the memoizing `@x ||= begin ... end'
+  def bgn(n)
+    x = begin
+      y = n + 1
+      y * 2
+    end
+    x + y
+  end
+
+  def memo
+    @memo ||= begin
+      [1, 2].sum
+    end
   end
 
   def size(s) = s.size
@@ -103,5 +119,7 @@ t("drop_while", N) { |n| i = 0; c = 0; while i < n; c += a.drop_while { |x| x < 
 t("sum_block", N) { |n| i = 0; c = 0; while i < n; c += a.sum { |x| x }; i += 1; end; c }
 t("rfind", N) { |n| i = 0; c = 0; while i < n; c += a.rfind { |x| x < 3 }; i += 1; end; c }
 t("scan", N) { |n| i = 0; c = 0; while i < n; c += h.scan("abcd efg"); i += 1; end; c }
+t("begin", N) { |n| i = 0; c = 0; while i < n; c += h.bgn(i); i += 1; end; c }
+t("memo", N) { |n| i = 0; c = 0; while i < n; c += h.memo; i += 1; end; c }
 t("nobrk4", N) { |n| i = 0; c = 0; while i < n; c += h.nobrk(4); i += 1; end; c }
 t("size", N) { |n| i = 0; c = 0; while i < n; c += h.size(a); i += 1; end; c }

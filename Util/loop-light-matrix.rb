@@ -14,7 +14,8 @@
 # stored in the loop's result; none of them reads the scope. The probes cover each loop form, the loop's value, nested
 # loops, jumps under conditions, blocks around and inside the loop, callees that make the frame's scope (binding,
 # local_variables, block_given?, a $~-setting call, eval), ensure and rescue in a callee, a loop long enough for OSR,
-# register locals and a large body, threads, recursion a million deep, and a TracePoint for :line.
+# register locals and a large body, threads, recursion a million deep, and a TracePoint for :line; and `begin ... end'
+# in its forms (IR_LIGHT_BEGIN=0 keeps those out).
 #
 #   IR_LIGHT_FRAMES=why ./ir.sh Util/loop-light-matrix.rb 2>&1 >/dev/null | grep -a '^\[light\]'
 #
@@ -524,7 +525,42 @@ def begin_value(n)
   end
 end
 
+def begin_empty = begin; end
+
+def begin_block(n)
+  r = begin
+    [1, 2, 3].map { |x| x * n }
+  end
+  r.sum
+end
+
+def begin_arg(n) = [begin; n * 3; end, begin n end]
+
+def begin_until_next(n)
+  i = 0
+  s = 0
+  begin
+    i += 1
+    next if i == n
+    s += i
+  end until i >= 5
+  s
+end
+
+def begin_binding(n)
+  x = begin
+    y = n
+    binding.local_variable_get(:y) + 1
+  end
+  [x, y]
+end
+
 t("plain begin")                 { |i| plain_begin(i % 3) }
+t("empty begin")                 { |i| begin_empty }
+t("begin with a block")          { |i| begin_block(i % 3) }
+t("begin as arguments")          { |i| begin_arg(i % 2) }
+t("begin end until, next")       { |i| begin_until_next(i % 6) }
+t("binding in begin")            { |i| begin_binding(i % 2) }
 t("begin in while")              { |i| begin_in_while(i % 4) }
 t("begin value")                 { |i| begin_value(i % 2) }
 
