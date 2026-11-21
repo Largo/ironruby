@@ -793,9 +793,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    literal or the keywords of a call (`{a: x}`, `{}`, `f(a: x)`; `IR_LIGHT_HASH=0`,
    `IR_LIGHT_KEYWORD_HASH=0`, see Landed, perf/hashlit; `f(**h)` is still out);
    nor a multiple assignment (`a, b = b, a`; `IR_LIGHT_MASGN=0`, see Landed, perf/masgn);
+   nor a regex literal whose method leaves `$~` alone (`s.match?(/x/)`, `/a#{x}/`; `IR_LIGHT_REGEX=0`,
+   see Landed, perf/lightre: one passed to `gsub`, `=~`, `split`, `when` and the like stays out);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
-   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb, Util/hash-literal-matrix.rb and
-   Util/masgn-matrix.rb are their matrices.
+   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb, Util/hash-literal-matrix.rb,
+   Util/masgn-matrix.rb and Util/regex-light-matrix.rb are their matrices.
    What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
    them not light). By its first table: keyword parameters 1,257 (37 of them the
    prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
@@ -817,9 +819,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    literal that receives `each` with a block 12 (`Vector#each`, `Sieve#sieve`; the scope
    is made for the block anyway, so letting the Range in buys nothing by itself), `super`
    6 (five DeltaBlue constraints' `initialize`, Richards' TaskControlBlock), a
-   `begin ... end while` 2 (Json's `read_object`, `read_array`) and a regex 1. Not looked into, from reading
-   `IsScopeFree`: a regex literal is refused by itself
-   although `$~` is written by the call that matches; `defined?(@x)` is refused.
+   `begin ... end while` 2 (Json's `read_object`, `read_array`) and a regex 1. A regex literal was
+   refused by itself although `$~` is written by the call that matches (perf/lightre took the part
+   whose call does not); `defined?(@x)` is refused.
    A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
@@ -978,6 +980,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     only keeps a body with a multiple assignment and more than 24 calls out. Untried: register
     locals only for a small body (the numbers above say that alone recovers most of it),
     and one copy of the scope-making code per frame instead of one per call site.
+    **perf/lightsize** did the first (at most 40 calls; that copy of `bytesplice` 0.82, and
+    0.97 of its scoped count) and found the second cannot be built in an expression tree (a
+    site is inside an expression, which control cannot enter). Left: the arms still double a
+    large light frame's IL without register locals (m48 11.7 KB against 5.7), and a body with
+    a multiple assignment and more than 24 calls loses 2-4% light for a reason not yet found.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -1185,6 +1192,118 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **Gate of 2026-11-21 for perf/lightsize, perf/lightre and the block-pass count**: the branch at
+  0db76bbc against master at 45a1eeff, Release net10.0: **PASS**. IronRuby.Tests 1,291 executed
+  and PASSED on both trees, no failing name on either. 30 matrices in five modes (as built,
+  `IR_LIGHT_REGEX=0`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, `-X:NoJIT -X:NoOSR`): 150 same,
+  0 differ. ruby/spec, all five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, ns a call, baseline -> candidate): `s.match?(/b/)` 202 -> 171
+  (0.85), `/b/.match?(s)` 224 -> 184 (0.82), a literal as a value 128 -> 96 (0.75); the shapes
+  kept out (`gsub`, `split`, `case`, `=~`) 0.91-1.03, all overlapping; the step-shapes 0.97-1.08,
+  all overlapping. micro-table in both orders: no line slower in both (the lines 5-14% slower
+  in one order are as much faster in the other). AWFY, 12 iterations, both orders: geomean
+  0.996 and 1.000, every benchmark verified; start-up 1,183 and 1,199 ms.
+  Not explained: the prelude's `bytesplice` counts 10,903 -> 11,529 instructions a call (1.057,
+  spread 0.1%) while its time is 1,568 -> 1,536 ns (overlapping) and `bs_a`, the same body
+  defined in the script, counts 0.998. It keeps its scope on both trees (the masgn limit), and
+  with `IR_LIGHT_REGEX=0` the candidate still counts 11,436 in most processes and 10,914 in
+  some, so it is a state of the process and not the regex step.
+
+- **perf/lightre (/perf-step, 2026-11-21) - a regex literal in a light frame, unless it goes to a
+  method that stores `$~`** (`s.match?(/x/)`, `/x/.match?(s)`, `/a#{x}/o`, a literal as a value or
+  passed to a method of the program; `IR_LIGHT_REGEX=0` turns it off, `IR_LIGHT_REGEX=all` lets the
+  rest in too, for measuring) - census only when merged, gated on 2026-11-21 (first entry). `IsScopeFree` had no case for a
+  RegularExpression, so it kept 1,066 methods out (census of 2026-11-21). The literal reads no scope:
+  its Regexp is made once into a box of the site (`RubyOps.CreateRegex*`), and the parts of one with
+  interpolation go through to_s sites as a String's do. What reads the scope is the callee: the C#
+  methods that store the caller's `$~` take a RubyScope, so from a light frame their rule answers
+  `LightScopeRequired`, the frame makes its scope and calls again - correct, and already what
+  `s.gsub(r, "")` with a non-literal `r` did, but gap 16's cost on every call. So a literal passed
+  to (or the receiver of) a call named `=~ !~ === match gsub(!) sub(!) scan split index rindex
+  byteindex byterindex [] []= slice(!) start_with? partition rpartition grep grep_v`, or a `when`
+  comparison, still keeps its method out; the name decides only which frame is worth making light,
+  the call's rule still decides what the call needs. `if /x/` (a RegularExpressionCondition, `$_`)
+  and named captures (a MatchExpression) are other nodes and stay out.
+  The 1,066 by use (classified with prism, first that applies, outside blocks): the method reads
+  `$~`/`$1`/`Regexp.last_match` 213; the literal goes to a `$~`-setting call 502 (gsub 264, sub 94,
+  split 67, scan 60, match 43, sub! 33, gsub! 28, [] 22), `=~`/`!~` 129, `when` 50; only a value or
+  passed to a method that leaves `$~` alone 129 (match? 87, grep 11, a method of the program) and
+  37 more with interpolation; 6 not found by line.
+  Light frames 78.5% -> 79.1% (22,255 -> 22,410), light blocks +21, JIT unchanged (Src/StdLib +
+  AWFY, 28,337 methods; 155 methods moved up, none down). With `IR_LIGHT_REGEX=all` 650 would move.
+  Moved: `Pathname#chop_basename`, `URI.encode_www_form_component` and its three siblings,
+  `Reline::Unicode.space_character?`, `Net::HTTPHeader#connection_close?`, ERB's compiler, Gem's
+  suffix regexps, Psych's `visit_String`, OpenSSL and Puma helpers; none of the prelude's (its 12
+  all pass the literal to a `$~`-setting call) and none of AWFY's.
+  Measured (`ab.rb -i`, three rounds, `Util/bench/regex-shapes.rb`, instructions a call, off -> on
+  -> all): `s.match?(/b/)` 2,126 -> 1,869 (0.88), `/b/.match?(s)` 2,152 -> 1,890 (0.88), a literal as
+  a value 1,370 -> 1,100 (0.80), `space_character?` 2,490 -> 2,149 (0.86),
+  `URI.encode_www_form_component` 12,246 -> 12,072 (0.99), `Pathname#+` 37,299 -> 35,848 (0.96).
+  The shapes kept out lose when let in (all/on): `gsub(/b/, "x")` 1.028, `split(/,/)` 1.039, `case
+  when /z/ ... when /b/` 1.067, `=~ /d/` 1.030 - gap 16, measured again, and the reason for the
+  restriction. Controls (a light frame without a regex, a method that reads `$~`): 0.991 and 0.997
+  on/off in six rounds, both two-state shapes.
+  Checked: `Util/regex-light-matrix.rb` (new: `$~`, `$1`, `$&`, `` $` ``, `Regexp.last_match` after
+  every kind of call, in the method, in its blocks, through binding and eval, in the caller and in
+  another thread (which keep their own), nested callees, a scope made late, case/when, named
+  captures, `if /x/`, `match?` leaving `$~` alone, gsub with a block and a hash, scan with a block,
+  `String#[]`, `=~` on nil, Symbol, send/public_send/Method#call, method_missing, a private method
+  with an explicit receiver, `String#gsub`/`match?` and `Regexp#===` redefined after binding and put
+  back, TracePoint `:call`/`:c_call`, one frozen object per literal, `o`, a refinement of `=~` and
+  `match?`, recursion a million deep with match?, gsub, split and interpolation: SystemStackError)
+  prints CRuby 4.0's output on the baseline and on the candidate as built, with `IR_LIGHT_REGEX=0`,
+  with `IR_LIGHT_REGEX=all`, with `IR_LIGHT_FRAMES=0` and with `-X:NoJIT -X:NoOSR`; block-given,
+  light-rest, masgn, binding-lvar, parked-scope and hot-shapes print the baseline's in every one of
+  those modes (hot-shapes differs from CRuby on the baseline too: an Encoding::CompatibilityError
+  where CRuby raises FrozenError). `census.rb -c` on traces of the matrix and of the shapes: 0
+  differ, but for the matrix's method defined after `using` (`ref_matchp`), which the census calls light and
+  the run gives a scope for the refinement - as it does on the baseline for any method after
+  `using`. No IronRuby.Tests, sweep or AWFY run (owed to the gate).
+
+- **perf/lightsize (/perf-step, 2026-11-21) - register locals only in a light frame of at most
+  40 calls** (`MethodDefinition.MaxRegisterLocalsCalls`) - gated on 2026-11-21 (first entry). A larger light frame keeps
+  its locals in their tuple, made at entry, as one with more than 16 locals already did.
+  Asked first: could the scope-making arm of `LightFrameRewriter.LightScopeCall` be one copy
+  per frame instead of one per call site (gap 16's third)? **No, not in an expression tree.**
+  Each site's arm is `LightDynamic(action, #scope ?? (#scope = LightScopeInLoop(
+  CreateMethodScopeLazy(shape, ..., MaterializeLocals(), self, block, ..., #rfc, #callee),
+  #in-loop)), args...)`, and `MaterializeLocals` is `#locals ?? {new tuple; one store per
+  register; }`. A shared block the sites jump to and come back from cannot be had: a site is
+  inside an expression (an argument, a condition), and the DLR refuses a jump into one
+  ("Control cannot enter an expression", `LabelInfo.ValidateJump`; System.Linq.Expressions
+  has the same rule), nor is a branch with values on the IL stack valid. A nested lambda would
+  close over the register locals and hoist them into a closure for the whole body; a helper
+  taking them by ref makes them address-exposed, so the JIT keeps them in memory; a helper
+  taking them by value still loads each one at every site. What is left per site is the
+  site, the test and the second call: without register locals the arms alone still double a
+  straight-line body (m48: 11.7 KB of IL against 5.7 KB with its scope; m24 6.1 against 3.1).
+  - Measured (`ab.rb -i`, instructions a call): a copy of `bytesplice`'s body written with
+    single assignments (81-100 calls; `bs_g`) 13,394 -> 10,993 (0.82; with
+    `IR_LIGHT_FRAMES=0` 11,380), IL 51,959 `Tier-0 switched MinOpts` -> 30,036 `FullOpts`;
+    allocated 626 -> 769 B a call (the tuple; 1,297 with its scope). Straight-line bodies
+    with ten locals and a multiple assignment, the masgn limit lifted (calls counted where the
+    register switch flips them): with register locals against without, m8 (~10 calls)
+    3,188/3,267, m16 4,693/4,855, m24 6,367/6,687, m32 (31-36) 7,811/8,016, m48 (45-50)
+    11,774/11,550, so the limit sits between m32 and m48. The step-shapes (`swap`, `ctl`,
+    `ctl2`, `lit_sz`, `itp_sz`, `iswap`, `attr2`, `arr2`) 0.978-1.005 against the baseline,
+    all overlapping (their IL is unchanged); `bytesplice` and `bs_a`-`bs_f` (they keep their
+    scope by the masgn limit) 0.998-1.013. Tried and dropped: comparing with a static field
+    for `RubyOps.LightScopeRequired` instead of a closure constant (m48 within 0.3%).
+  - The masgn limit (`MaxMultipleAssignmentCalls`, 24) stays: with this change, the `bs_*`
+    copies with the limit lifted count 1.019-1.037 of `IR_LIGHT_MASGN=0` (bytesplice 1.012),
+    so a large body with a multiple assignment still loses for a reason that is not the
+    register locals; at 40 instead of 24, m32 gains 1%, inside the noise. Census unchanged
+    (light frames 22,255: it says which methods are light, not how they keep their locals).
+  - Checked: `Util/binding-lvar-matrix.rb` has new rows (a light body of more than 40 calls
+    whose scope is made at its first, second and third call, in a loop, after a literal block
+    and an eval wrote a local, `local_variables`; the same with rescue and ensure, which keeps
+    its scope; a million-deep recursion through it, SystemStackError) that print CRuby 4.0's
+    output on the baseline and the candidate in every mode; block-given, light-rest, masgn,
+    hash-literal, parked-scope, binding-lvar, block-pass, splat-pass and hot-shapes print on
+    the candidate what they print on the baseline, as built, with `IR_LIGHT_FRAMES=0`, with
+    `IR_PARKED_SCOPES=0` and with `-X:NoJIT -X:NoOSR` (36 of 36 identical). No IronRuby.Tests,
+    sweep or AWFY run (owed to the gate).
 
 - **Gate of 2026-11-21 for perf/strlit, perf/jinterp, perf/masgn and its narrowing**: the
   branch at c2b83fc9 against master at e83e9af7, Release net10.0: **PASS**, the second

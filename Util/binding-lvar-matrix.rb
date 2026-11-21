@@ -319,6 +319,59 @@ def threads
 end
 threads
 
+# --- a body of more than 40 calls (MethodDefinition.MaxRegisterLocalsCalls) -------------------------
+# Its locals live in their tuple, not in CLR variables: the scope made on demand at any of its calls - the first,
+# a later one, one in a loop, one after a block or eval wrote a local - sees each local's value at that point, and
+# the body sees what was written through it.
+def blv_big(x)
+  z = x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs
+  a = 1
+  b = 2
+  r1 = binding.local_variable_get(:a)
+  a = 10
+  r2 = binding.local_variable_get(:a)
+  binding.local_variable_set(:b, 99)
+  r3 = b
+  i = 0
+  r4 = []
+  while i < 3
+    a += 1
+    r4 << binding.local_variable_get(:a)
+    i += 1
+  end
+  [1].each { |v| a = v + 100 }
+  r5 = binding.local_variable_get(:a)
+  eval("b = 7")
+  r6 = [b, local_variables.sort]
+  [z, r1, r2, r3, r4, r5, r6]
+end
+row "large body, scope made at later calls", blv_big(-1)
+row "large body, again", blv_big(-2)
+
+def blv_big_rescue(x)
+  z = x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs
+  a = 1
+  begin
+    a = 2
+    raise "e" if a > 1
+  rescue => e
+    a = 3
+    r1 = [binding.local_variable_get(:a), e.message]
+  ensure
+    a += 1
+    r2 = binding.local_variable_get(:a)
+  end
+  [z, a, r1, r2]
+end
+row "large body, rescue and ensure", blv_big_rescue(-1)
+
+def blv_big_deep(n, x)
+  z = x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs + x.abs
+  n == 0 ? z : blv_big_deep(n - 1, x)
+end
+row "large body, a million deep", (begin; blv_big_deep(1_000_000, 1); rescue SystemStackError => e; e.class; end)
+
+
 # --- ERB ----------------------------------------------------------------------------------------
 erb = ERB.new("<%= defined?(a) ? a : '-' %>,<%= defined?(b) ? b : '-' %>")
 row "erb 1", erb.result_with_hash(a: 1)

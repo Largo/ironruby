@@ -16,6 +16,7 @@
 using MSA = System.Linq.Expressions;
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -389,11 +390,11 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
-            // A light frame keeps its locals in CLR variables if it can: `def one(x); yield x; end' would otherwise allocate their
-            // tuple on every call.
+            // A light frame keeps its locals in CLR variables if it can and makes few calls (MaxRegisterLocalsCalls):
+            // `def one(x); yield x; end' would otherwise allocate their tuple on every call.
             MSA.Expression enter = null;
             if (light != null) {
-                var registerBody = scope.TryUseRegisterLocals(body);
+                var registerBody = (CountCalls() <= MaxRegisterLocalsCalls) ? scope.TryUseRegisterLocals(body) : null;
                 if (registerBody != null) {
                     body = registerBody;
                     enter = light.EnterWithRegisterLocals(scope);
@@ -539,6 +540,36 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightMultipleAssignmentEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MASGN") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_REGEX=0 keeps every method with a regex literal (`s.match?(/x/)', `/a#{x}/') out of light frames;
+        /// IR_LIGHT_REGEX=all also lets in one whose literal goes to a method that sets $~ (see IsScopeFree).
+        /// </summary>
+        internal static readonly bool LightRegexEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") != "0";
+        private static readonly bool LightRegexAll = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") == "all";
+
+        // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
+        // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
+        // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
+        // so it decides nothing but which frame is worth making light; the call's rule decides what the call needs.
+        private static readonly HashSet<string>/*!*/ RegexScopeMethods = new HashSet<string> {
+            "=~", "!~", "===", "match", "gsub", "gsub!", "sub", "sub!", "scan", "split", "index", "rindex", "byteindex",
+            "byterindex", "[]", "[]=", "slice", "slice!", "start_with?", "partition", "rpartition", "grep", "grep_v",
+        };
+
+        private static bool HasRegexLiteral(Expression target, Arguments arguments) {
+            if (target is RegularExpression) {
+                return true;
+            }
+            if (arguments != null) {
+                foreach (var argument in arguments.Expressions) {
+                    if (argument is RegularExpression) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -662,15 +693,35 @@ namespace IronRuby.Compiler.Ast {
 
         // A body with a multiple assignment and more than MaxMultipleAssignmentCalls calls keeps its scope.
         private bool IsLargeWithMultipleAssignment() {
-            var statements = Body.Statements;
-            if (!LightMultipleAssignmentEnabled || statements == null) {
+            if (!LightMultipleAssignmentEnabled) {
                 return false;
             }
-            var counter = new CallCounter();
-            foreach (var statement in statements) {
-                statement.Walk(counter);
-            }
+            var counter = WalkCalls();
             return counter.HasMultipleAssignment && counter.Calls > MaxMultipleAssignmentCalls;
+        }
+
+        // The most calls a light frame may make and still keep its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals).
+        // Each call's scope-making arm copies every register local into the tuple (ScopeBuilder.MaterializeLocals) and each
+        // access of one is a test of the tuple, so a large body's lambda doubles: a copy of String#bytesplice's body written with single assignments (81-100
+        // calls) is 52 KB of IL and compiled MinOpts with them, 30 KB and FullOpts without, 13,290 instructions a call against 11,140 (11,440
+        // with its scope). One copy of the arm per frame cannot be had: each call site is inside an expression, which control
+        // cannot enter, and a nested lambda would hoist the locals into a closure. Straight-line bodies with ten locals gain
+        // from them up to 32 calls (2-3%) and not at 48.
+        private const int MaxRegisterLocalsCalls = 40;
+
+        private int CountCalls() {
+            return WalkCalls().Calls;
+        }
+
+        private CallCounter/*!*/ WalkCalls() {
+            var counter = new CallCounter();
+            var statements = Body.Statements;
+            if (statements != null) {
+                foreach (var statement in statements) {
+                    statement.Walk(counter);
+                }
+            }
+            return counter;
         }
 
         private sealed class CallCounter : Walker {
@@ -685,7 +736,15 @@ namespace IronRuby.Compiler.Ast {
                 }
                 return true;
             }
-            public override bool Enter(MethodCall/*!*/ node) { Calls++; return true; }
+            // the walker visits a call's target and arguments, not its block: the calls of `&expr' count too
+            public override bool Enter(MethodCall/*!*/ node) {
+                Calls++;
+                var blockPass = node.Block as BlockReference;
+                if (blockPass != null) {
+                    blockPass.Expression.Walk(this);
+                }
+                return true;
+            }
             public override bool Enter(ArrayItemAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(AttributeAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(SuperCall/*!*/ node) { Calls++; return true; }
@@ -911,6 +970,22 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return IsScopeFreeTarget(parallel.Left, blockLiterals, why);
                 }
+                // `/x/', `/a#{x}/o': the Regexp of a literal is made once and kept in a box of the site's own
+                // (RubyOps.CreateRegex*), the parts of one with interpolation are converted as a String's are; it reads no
+                // scope. What reads one is the method it is given to, if it stores $~ (RegexScopeMethods); `if /x/' (a
+                // RegularExpressionCondition) and `/(?<a>.)/ =~ s' (a MatchExpression) read the scope themselves.
+                var regex = node as RegularExpression;
+                if (regex != null) {
+                    if (!LightRegexEnabled) {
+                        return Refuse(why, "RegularExpression (IR_LIGHT_REGEX=0)");
+                    }
+                    foreach (var part in regex.Pattern) {
+                        if (!IsScopeFree(part, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
                 var loop = node as WhileLoopExpression;
                 if (loop != null) {
                     return IsScopeFree(loop.Condition, blockLiterals, why) && AreScopeFree(loop.Statements, blockLiterals, why);
@@ -922,6 +997,9 @@ namespace IronRuby.Compiler.Ast {
                     }
                     foreach (var clause in caseExpression.WhenClauses) {
                         foreach (var comparison in clause.Comparisons) {
+                            if (comparison is RegularExpression && !LightRegexAll) {
+                                return Refuse(why, "RegularExpression in a when clause (Regexp#=== sets $~)");
+                            }
                             if (!IsScopeFree(comparison, blockLiterals, why)) {
                                 return false;
                             }
@@ -943,6 +1021,9 @@ namespace IronRuby.Compiler.Ast {
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
                 if (call != null) {
+                    if (!LightRegexAll && HasRegexLiteral(call.Target, call.Arguments) && RegexScopeMethods.Contains(call.MethodName)) {
+                        return why != null && Refuse(why, "RegularExpression passed to " + call.MethodName + " (it sets $~)");
+                    }
                     var blockReference = call.Block as BlockReference;
                     if (call.Block != null && !(blockLiterals && call.Block is BlockDefinition)) {
                         if (blockReference == null || !LightBlockPassEnabled) {
