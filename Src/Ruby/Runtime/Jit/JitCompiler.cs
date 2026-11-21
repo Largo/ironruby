@@ -282,6 +282,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<LocalVariable, JT, JitLoopSlot> _bindSlot;
         private readonly List<JitLoopSlot> _slots;
         private MSA.LabelTarget _breakLabel, _continueLabel;
+        // The innermost loop's result, made by its first `break v' (EmitBreak); null while it has none.
+        private MSA.ParameterExpression _breakValue;
 
         // Loop mode: what an instance variable of the loop's self holds right now, as a type
         // (see NumericIVar). Null when the loop was entered without its self, which is then
@@ -1151,13 +1153,11 @@ namespace IronRuby.Runtime.Jit {
             var loop = node as WhileLoopExpression;
             if (loop != null) { return EmitWhile(loop, out type); }
 
-            if (_loop != null && _breakLabel != null) {
+            // A jump of the innermost `while' being emitted (EmitWhile). No block body is emitted in a method's typed body
+            // (EmitCall bails on a call with one), so every break or next met here is the loop's.
+            if (_breakLabel != null) {
                 var brk = node as BreakStatement;
-                if (brk != null) {
-                    if (brk.Arguments != null) { throw JitBailout.Instance; }
-                    type = JT.Obj;
-                    return Ast.Block(typeof(object), Ast.Break(_breakLabel), Ast.Constant(null, typeof(object)));
-                }
+                if (brk != null) { return EmitBreak(brk, out type); }
                 var nxt = node as NextStatement;
                 if (nxt != null) {
                     if (nxt.Arguments != null) { throw JitBailout.Instance; }
@@ -1610,8 +1610,8 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// `while c; body; end' / `until c; body; end'. Any break/next/redo inside makes Emit
-        /// bail, so the loop has exactly one exit and its value is always nil.
+        /// `while c; body; end' / `until c; body; end'. A `break' jumps to the exit and a `next' to the test
+        /// (EmitBreak); a `redo' makes Emit bail. The value is nil, or what a `break v' stored in the loop's result.
         /// </summary>
         private MSA.Expression/*!*/ EmitWhile(WhileLoopExpression/*!*/ node, out JT type) {
             if (node.IsPostTest) { throw JitBailout.Instance; }
@@ -1620,14 +1620,18 @@ namespace IronRuby.Runtime.Jit {
             var cont = Ast.Label("#while-continue");
             var savedBreak = _breakLabel;
             var savedContinue = _continueLabel;
+            var savedValue = _breakValue;
             _breakLabel = exit;
             _continueLabel = cont;
+            _breakValue = null;
             var test = EmitCondition(node.Condition);
             if (!node.IsWhileLoop) { test = Ast.Not(test); }
             JT ignored;
             var body = EmitRegion(node.Statements, out ignored);
+            var result = _breakValue;
             _breakLabel = savedBreak;
             _continueLabel = savedContinue;
+            _breakValue = savedValue;
             type = JT.Obj;
 
             // The outlined loop keeps a copy of its locals as they were at the top of the
@@ -1651,9 +1655,44 @@ namespace IronRuby.Runtime.Jit {
                 ? Ast.Block(snapshot, Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body)
                 : Ast.Block(Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body);
 
-            return Ast.Block(typeof(object), (epoch != null) ? new[] { epoch } : new MSA.ParameterExpression[0],
+            var variables = new List<MSA.ParameterExpression>();
+            if (epoch != null) { variables.Add(epoch); }
+            if (result == null) {
+                return Ast.Block(typeof(object), variables,
+                    StartLoopEpoch(epoch),
+                    Ast.Loop(iteration, exit, cont),
+                    Ast.Constant(null, typeof(object))
+                );
+            }
+            // An inner loop is entered again on each iteration of the outer one: its result starts as nil every time.
+            variables.Add(result);
+            return Ast.Block(typeof(object), variables,
+                Ast.Assign(result, Ast.Constant(null, typeof(object))),
                 StartLoopEpoch(epoch),
                 Ast.Loop(iteration, exit, cont),
+                result
+            );
+        }
+
+        /// <summary>
+        /// `break' / `break v' in the innermost loop being emitted: v, boxed, goes into the loop's result, and the jump
+        /// to its exit follows. An outlined loop (-X:OSR) takes only a bare `break', as it always has: its site hands
+        /// back the locals, not a value.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitBreak(BreakStatement/*!*/ node, out JT type) {
+            type = JT.Obj;
+            var args = node.Arguments;
+            if (args == null || args.Expressions.Length == 0) {
+                return Ast.Block(typeof(object), Ast.Break(_breakLabel), Ast.Constant(null, typeof(object)));
+            }
+            if (_loop != null) { throw Bail("break with a value in an outlined loop"); }
+            if (args.Expressions.Length != 1 || args.Expressions[0] is SplattedArgument) { throw Bail("break of several values"); }
+            JT vt;
+            var value = Emit(args.Expressions[0], out vt);
+            if (_breakValue == null) { _breakValue = Ast.Variable(typeof(object), "#break"); }
+            return Ast.Block(typeof(object),
+                Ast.Assign(_breakValue, Coerce(value, vt, JT.Obj)),
+                Ast.Break(_breakLabel),
                 Ast.Constant(null, typeof(object))
             );
         }
@@ -3016,6 +3055,9 @@ namespace IronRuby.Runtime.Jit {
         // walking a keyword default, which may not assign a local (JitCompiler.EmitKeywordDefaults)
         private bool _inKeywordDefault;
 
+        // the `while'/`until' loops around the node being walked, whose break and next Emit takes
+        private int _loops;
+
         private JitScreen(MethodDeclaration/*!*/ ast, JitKeywords keywords) {
             _scopeDepth = ast.DefinedScope.Depth;
             _methodName = ast.Name;
@@ -3283,8 +3325,26 @@ namespace IronRuby.Runtime.Jit {
             var loop = node as WhileLoopExpression;
             if (loop != null) {
                 if (loop.IsPostTest) { return No(node); }
-                return WalkCondition(loop.Condition) && WalkStatements(loop.Statements);
+                _loops++;
+                try {
+                    return WalkCondition(loop.Condition) && WalkStatements(loop.Statements);
+                } finally {
+                    _loops--;
+                }
             }
+
+            // A jump of the loop around it (JitCompiler.EmitBreak); one anywhere else is a block's, whose body the
+            // census's screen may walk on into after refusing the call.
+            var brk = node as BreakStatement;
+            if (brk != null) {
+                if (_loops == 0) { return No(node); }
+                var brkArgs = brk.Arguments;
+                if (brkArgs == null || brkArgs.Expressions.Length == 0) { return true; }
+                if (brkArgs.Expressions.Length != 1 || brkArgs.Expressions[0] is SplattedArgument) { return No(node); }
+                return Walk(brkArgs.Expressions[0]);
+            }
+            var nxt = node as NextStatement;
+            if (nxt != null) { return (_loops != 0 && nxt.Arguments == null) || No(node); }
 
             // `return' / `return v'. Emit's ReturnStatement case lands in a parallel change; the
             // screen already says yes so that the two merge into a working whole. Until then a

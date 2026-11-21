@@ -1193,6 +1193,65 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/jbreak**: the branch at 9bc85a93 against master at 8251113c,
+  Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 34 matrices
+  in five modes: 165 same; `int-matrix.rb` prints sixteen `Integer#hash` values, which are seeded
+  per process, and is the same on both trees without those lines in every mode. ruby/spec, all
+  five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, the order turned each round, ns a call, baseline -> candidate,
+  `Util/bench/loop-shapes.rb`): a loop of one iteration with a break 98 -> 56 (0.57), of four
+  109 -> 46 (0.43), `next` in four 135 -> 56 (0.41); of a hundred 131 -> 80 (0.61) with
+  overlapping rounds (spreads of 61% and 100%), so by time it has not shown a difference, and by
+  instructions it is 2,445 -> 1,578 (0.645). The loop of 10,000 iterations printed no time on
+  either tree; by instructions 131,821 -> 102,253 (0.776). The other loop shapes 0.97-1.00, all
+  overlapping; `sum` with a block and the scan loop count 0.6% and 1.3% more instructions.
+  The regex, step and super shapes overlap, but for `respond_to?` through super (1.08 in three
+  rounds); alone, eight rounds, it is 124 -> 121 ns and 1,360 instructions on both. micro-table:
+  `str==` was slower in both orders (1.09 and 1.11); alone, eight rounds, 53.5 -> 54.1 ns,
+  overlapping. AWFY, 12 iterations, both orders: geomean 1.000 and 1.002 (new/base), every
+  benchmark verified: no AWFY method has such a loop. Start-up 1,193 and 1,205 ms.
+
+- **perf/jbreak (/perf-step, 2026-11-21) - the method JIT compiles a `while`/`until` loop with
+  `break`, `break v` or `next`** - census only when merged, gated on 2026-11-21 (first entry).
+  Two places refused them. The screen (`JitScreen.Walk`) had no case for a BreakStatement or a
+  NextStatement; and Emit took them only in an outlined OSR loop, and `break v` not even there.
+  The OSR copy already made each a jump to the loop's labels. Emit now takes them in any loop it
+  emits (no block body is emitted in a typed body, so each one met is the loop's), and in a
+  method's body `break v` stores v, boxed, in the loop's result (`EmitBreak`), which is nil again
+  each time the loop is entered. The screen counts the loops around a node. Still refused: `redo`,
+  `next v`, a break of several values or a splat, and `break v` in an outlined loop.
+  - Census: JIT maybe 2,911 -> 2,923, never 22,133 -> 22,121, compiles and light frames unchanged
+    (Src/StdLib + AWFY, 28,337 methods; 12 moved up, none down): `Rational.__rationalize_internal__`
+    and eleven rules of RDoc::Markdown (`_Space`, `_Endline`, `_Sp`...). BreakStatement was the
+    first refusal of 45 methods and the only one of 12; most have a call the screen refuses too.
+  - **Kept against the rule for never -> maybe, and why.** In a traced run of Markdown parsing and
+    `rationalize`, every one of the moved methods that ran was declined after the pre-screen, for
+    a call on self and not for the break (`_Spacechar/0`, `get_byte/0`, `ceil/0`): declined 3 ->
+    14, specialized 30 on both. The rule is there because a declined method keeps its stub. What
+    that costs here was measured: parsing a Markdown document 1,800 times counts 421.5e9
+    instructions on the baseline and 421.0e9 with the change (two alternating runs of each, user
+    mode), so nothing that shows. What the step is for is not in the corpus: a numeric loop with a
+    break, in which the break was the only refusal.
+  - Measured (`ab.rb -i`, instructions a call, `Util/bench/loop-shapes.rb`): a loop of one
+    iteration with a break 1,292 -> 697 (0.54), of four 1,206 -> 638 (0.53; one without a jump is
+    630), of a hundred 2,457 -> 1,566 (0.64), of 10,000 132,887 -> 101,282 (0.76), `next` in four
+    1,579 -> 743 (0.47); `take_while`, `drop_while`, `rfind`, `sum` with a block, the scan loop and
+    the controls 0.96-1.02. Not timed.
+  - Checked: section 10 of `Util/loop-light-matrix.rb` (new; twelve probes, each seen as
+    `[jit] specialized` under `IR_JIT_VERBOSE=1`) and the rest of the file print CRuby 4.0's
+    output on the baseline and on the candidate, as built, with `IR_LIGHT_FRAMES=0` and with
+    `-X:NoOSR`; `jit-matrix.rb`, `osr-array-matrix.rb`, `block-loop-matrix.rb` the same on both.
+    A second probe written for the merge (a local retyped before a break and after a `next`, a
+    break of a Float, a String, a Bignum and an element as the loop's value, a break in the
+    condition, nested loops, a callee redefined half way, a million deep, four threads) prints
+    CRuby's as built, with `IR_LIGHT_FRAMES=0` and with `-X:NoJIT -X:NoOSR`; a loop that retypes
+    a local around the jump is declined, not miscompiled.
+  - Next, by the trace: a call on self with no arguments to a method that is neither a leaf nor
+    an attribute reader passes the screen and is declined at the first compile. Refusing it in
+    the screen would take the eleven declines above, and the older ones like it, off the stub.
+  - `ab.rb` now turns the order of the builds round after each round (asked for in the review of
+    the last gate's numbers): a cell's least is then taken over rounds in both orders.
+
 - **Gate of 2026-11-21 for perf/lbreak**: the branch at 86fcbc2e against master at 831508a0,
   Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 33 matrices
   in five modes (as built; the six light-frame switches off; `IR_LIGHT_FRAMES=0`;
