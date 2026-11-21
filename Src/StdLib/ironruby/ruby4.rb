@@ -7122,6 +7122,13 @@ class Integer
           ::Kernel.raise(::RangeError, "bignum too big to convert into 'long long'")
         end
       end
+      # rb_big_aref2 copies no more than the Bignum's own digits: past its top bit a
+      # non-negative one has only zeros, so x[5, FIXNUM_MAX] is x >> 5, not a mask of 2**62 bits
+      if size > 0 && self > 0
+        top = bit_length - offset
+        return 0 if top <= 0
+        size = top if size > top
+      end
     end
     (self >> offset) & ((1 << size) - 1)
   end
