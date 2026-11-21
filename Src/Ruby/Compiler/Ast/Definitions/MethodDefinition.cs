@@ -743,6 +743,10 @@ namespace IronRuby.Compiler.Ast {
 
         private CallCounter/*!*/ WalkCalls() {
             var counter = new CallCounter();
+            // the defaults of optional parameters are part of the frame's lambda (TransformBody)
+            foreach (var optional in _parameters.Optional) {
+                optional.Walk(counter);
+            }
             var statements = Body.Statements;
             if (statements != null) {
                 foreach (var statement in statements) {
@@ -776,6 +780,19 @@ namespace IronRuby.Compiler.Ast {
             }
             public override bool Enter(ArrayItemAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(AttributeAccess/*!*/ node) { Calls++; return true; }
+            // `x += v' calls the operator, and `a[i] += v' and `o.x += v' read and write through two calls, of which the
+            // walk of the left side counts one; `&&=' and `||=' call no operator
+            public override bool Enter(SimpleAssignmentExpression/*!*/ node) {
+                if (node.Operation != null) {
+                    if (node.Operation != Symbols.And && node.Operation != Symbols.Or) {
+                        Calls++;
+                    }
+                    if (node.Left is ArrayItemAccess || node.Left is AttributeAccess) {
+                        Calls++;
+                    }
+                }
+                return true;
+            }
             public override bool Enter(SuperCall/*!*/ node) { Calls++; HasSuperCall = true; return true; }
             public override bool Enter(YieldCall/*!*/ node) { Calls++; return true; }
             public override bool Enter(BlockDefinition/*!*/ node) { return false; }
@@ -934,6 +951,10 @@ namespace IronRuby.Compiler.Ast {
                     // the reason is built only when it was asked for: this path runs for every method definition
                     return why != null && Refuse(why, item == null ? "assignment to " + assignment.Left.GetType().Name :
                         LightCallsEnabled ? "assignment to an element with a block" : "assignment to an element (IR_LIGHT_CALLS=0)");
+                }
+                // `s[/x/] = v' is String#[]=, which stores $~ (RegexScopeMethods)
+                if (!LightRegexAll && HasRegexLiteral(null, item.Arguments)) {
+                    return why != null && Refuse(why, "RegularExpression passed to []= (it sets $~)");
                 }
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
             }
@@ -1171,6 +1192,9 @@ namespace IronRuby.Compiler.Ast {
             }
             var item = target as ArrayItemAccess;
             if (item != null && item.Block == null) {
+                if (!LightRegexAll && HasRegexLiteral(null, item.Arguments)) {
+                    return why != null && Refuse(why, "RegularExpression passed to []= (it sets $~)");
+                }
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
             }
             return why != null && Refuse(why, "multiple assignment to " + target.GetType().Name);
