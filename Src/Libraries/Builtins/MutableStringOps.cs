@@ -1285,27 +1285,28 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("ord")]
-        public static int Ord(MutableString/*!*/ str) {
+        public static object Ord(MutableString/*!*/ str) {
             if (str.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("empty string");
             }
 
-            char c1 = str.GetChar(0);
-            if (!Char.IsSurrogate(c1)) {
-                return NativeCode(str.Encoding, new[] { c1 }, c1);
+            // The first character, as the string's characters are walked: taking the first char
+            // of the content answered the first byte of a UTF-16 or UTF-32 string held as bytes,
+            // 66 for "\u3042" in UTF-16LE.
+            var characters = str.GetCharacters();
+            characters.MoveNext();
+            var first = characters.Current;
+            if (first.IsValid) {
+                return CodeToObject(NativeCode(str.Encoding, first));
             }
 
             // A byte with no Unicode counterpart is held as an escape (U+DC80 plus the byte, see
             // EscapingEncoding). In a single byte encoding other than US-ASCII it is a character
             // all the same - GB1988, macThai and the like have nothing but such bytes above 0x7F.
-            if (IsEscapedByte(str, 0) && str.Encoding.StrictEncoding.IsSingleByte && str.Encoding != RubyEncoding.Ascii) {
-                return c1 - '\uDC00';
+            if (first.Invalid.Length == 1 && str.Encoding.StrictEncoding.IsSingleByte && str.Encoding != RubyEncoding.Ascii) {
+                return ScriptingRuntimeHelpers.Int32ToObject(first.Invalid[0]);
             }
 
-            char c2;
-            if (Tokenizer.IsHighSurrogate(c1) && str.GetCharCount() > 1 && Tokenizer.IsLowSurrogate(c2 = str.GetChar(1))) {
-                return NativeCode(str.Encoding, new[] { c1, c2 }, Tokenizer.ToCodePoint(c1, c2));
-            }
             throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding);
         }
 
@@ -1316,7 +1317,7 @@ namespace IronRuby.Builtins {
         /// What #codepoints and #each_codepoint answer for a character: its code in the string's
         /// encoding, as #ord does - 0x82A0 for a Shift_JIS "あ", not U+3042.
         /// </summary>
-        private static int NativeCode(RubyEncoding/*!*/ encoding, MutableString.Character character) {
+        private static long NativeCode(RubyEncoding/*!*/ encoding, MutableString.Character character) {
             int codepoint = character.Codepoint;
             if (codepoint < 0x80 && encoding.IsAsciiIdentity) {
                 return codepoint;
@@ -1325,17 +1326,23 @@ namespace IronRuby.Builtins {
                 character.IsSurrogate ? new[] { character.Value, character.LowSurrogate } : new[] { character.Value }, codepoint);
         }
 
-        private static int NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
+        private static long NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
             if (encoding.IsUnicodeEncoding || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
                 return codepoint;
             }
-            int code = 0;
+            // four bytes with the first above 0x7F - GB18030's, EUC-TW's - do not fit an int:
+            // "\x84\x31\xA4\x30" is 2217845808
+            long code = 0;
             // not the strict encoding: a well formed sequence its table has no character for is
             // still a character, held as one the escaping encoding writes back as its bytes
             foreach (byte b in encoding.EscapingEncoding.GetBytes(character)) {
                 code = (code << 8) | b;
             }
             return code;
+        }
+
+        private static object CodeToObject(long code) {
+            return (code <= Int32.MaxValue) ? ScriptingRuntimeHelpers.Int32ToObject((int)code) : (BigInteger)code;
         }
 
         #endregion
@@ -2369,7 +2376,7 @@ namespace IronRuby.Builtins {
                 if (!enumerator.Current.IsValid) {
                     throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
                 }
-                result.Add(ScriptingRuntimeHelpers.Int32ToObject(NativeCode(self.Encoding, enumerator.Current)));
+                result.Add(CodeToObject(NativeCode(self.Encoding, enumerator.Current)));
             }
             return result;
         }
@@ -2390,7 +2397,7 @@ namespace IronRuby.Builtins {
                 }
 
                 object result;
-                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject(NativeCode(self.Encoding, enumerator.Current)), out result)) {
+                if (block.Yield(CodeToObject(NativeCode(self.Encoding, enumerator.Current)), out result)) {
                     return result;
                 }
             }

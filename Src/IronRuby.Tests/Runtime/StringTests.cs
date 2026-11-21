@@ -686,5 +686,49 @@ p t { '""\\xE3\\u3042""'.undump }, t { '""\\u3042\\xE3""'.undump }, t { '""\\x41
 ""AB""
 ");
         }
+
+        /// <summary>
+        /// String#ord and #codepoints answer the character's code in its encoding. A four byte character whose
+        /// first byte is above 0x7F (GB18030's, EUC-TW's) has a code above the int range - 2217845808, where
+        /// the bytes shifted into an int came out negative - and #ord of a UTF-16 or UTF-32 string held as
+        /// bytes answered its first byte instead of its first character (issue 214's leftovers).
+        /// </summary>
+        public void String_OrdWide1() {
+            TestOutput(@"
+def t(l) = puts(""#{l}: #{(yield rescue [$!.class, $!.message]).inspect}"")
+{ 'GB18030' => ['843130a4', '8431a430', '81308130', '90308130', 'e3329a35', 'a1a1', '61'], 'EUC-TW' => ['8ea1a1a1', '8ea2c1c1', 'a4a1'],
+  'EUC-JP' => ['8fb0a1', 'a4a2'], 'Shift_JIS' => ['82a0'], 'UTF-16LE' => ['4230', '3dd800de', '6100'], 'UTF-16BE' => ['3042'],
+  'UTF-32LE' => ['42300000', '00f60100'], 'UTF-32BE' => ['00003042', '0010ffff'], 'UTF-8' => ['e38182', 'f09f9880'] }.each do |e, list|
+  list.each do |hex|
+    s = [hex].pack('H*').force_encoding(e)
+    t(""#{e} #{hex}"") { [s.ord, s.ord.class, s.codepoints, (s * 2).each_codepoint.to_a, (s + s).ord] }
+  end
+end
+", @"
+GB18030 843130a4: [ArgumentError, ""invalid byte sequence in GB18030""]
+GB18030 8431a430: [2217845808, Integer, [2217845808], [2217845808, 2217845808], 2217845808]
+GB18030 81308130: [2167439664, Integer, [2167439664], [2167439664, 2167439664], 2167439664]
+GB18030 90308130: [2419097904, Integer, [2419097904], [2419097904, 2419097904], 2419097904]
+GB18030 e3329a35: [3811744309, Integer, [3811744309], [3811744309, 3811744309], 3811744309]
+GB18030 a1a1: [41377, Integer, [41377], [41377, 41377], 41377]
+GB18030 61: [97, Integer, [97], [97, 97], 97]
+EUC-TW 8ea1a1a1: [2392957345, Integer, [2392957345], [2392957345, 2392957345], 2392957345]
+EUC-TW 8ea2c1c1: [2393031105, Integer, [2393031105], [2393031105, 2393031105], 2393031105]
+EUC-TW a4a1: [42145, Integer, [42145], [42145, 42145], 42145]
+EUC-JP 8fb0a1: [9416865, Integer, [9416865], [9416865, 9416865], 9416865]
+EUC-JP a4a2: [42146, Integer, [42146], [42146, 42146], 42146]
+Shift_JIS 82a0: [33440, Integer, [33440], [33440, 33440], 33440]
+UTF-16LE 4230: [12354, Integer, [12354], [12354, 12354], 12354]
+UTF-16LE 3dd800de: [128512, Integer, [128512], [128512, 128512], 128512]
+UTF-16LE 6100: [97, Integer, [97], [97, 97], 97]
+UTF-16BE 3042: [12354, Integer, [12354], [12354, 12354], 12354]
+UTF-32LE 42300000: [12354, Integer, [12354], [12354, 12354], 12354]
+UTF-32LE 00f60100: [128512, Integer, [128512], [128512, 128512], 128512]
+UTF-32BE 00003042: [12354, Integer, [12354], [12354, 12354], 12354]
+UTF-32BE 0010ffff: [1114111, Integer, [1114111], [1114111, 1114111], 1114111]
+UTF-8 e38182: [12354, Integer, [12354], [12354, 12354], 12354]
+UTF-8 f09f9880: [128512, Integer, [128512], [128512, 128512], 128512]
+");
+        }
     }
 }
