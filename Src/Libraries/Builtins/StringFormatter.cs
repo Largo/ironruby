@@ -1434,7 +1434,7 @@ namespace IronRuby.Builtins {
 
                 MutableString character;
                 try {
-                    character = Integer.ToChr(encoding, encoding, codepoint);
+                    character = Integer.ToFormatChr(encoding, codepoint);
                 } catch (ArgumentOutOfRangeException e) {
                     if (e.Message.StartsWith("invalid codepoint", StringComparison.Ordinal)) {
                         throw RubyExceptions.CreateArgumentError("invalid character");

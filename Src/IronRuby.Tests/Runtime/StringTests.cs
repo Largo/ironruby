@@ -759,6 +759,10 @@ big = 2**64
 end
 t('concat') { (+'').force_encoding('GB18030').concat(0x41, 0x8431a430, 0xa1a1) }
 t('round trip') { s = [0x84, 0x31, 0xa4, 0x30].pack('C*').force_encoding('GB18030'); [s.ord, s.ord.chr('GB18030') == s] }
+# %c puts the bytes of the number and does not ask whether they are a character
+t('%c EUC-KR 0x100') { format('%c'.encode('EUC-KR'), 0x100) }
+t('%c Big5 0x3042') { format('<%c>'.encode('Big5'), 0x3042) }
+t('%c EUC-KR 0xa1a1') { '%c'.encode('EUC-KR') % 0xa1a1 }
 ", @"
 GB18030 80 chr: RangeError: invalid codepoint 0x80 in GB18030
 GB18030 80 <<: RangeError: invalid codepoint 0x80 in GB18030
@@ -954,6 +958,9 @@ US-ASCII -1 chr: RangeError: -1 out of char range
 US-ASCII -1 <<: RangeError: -1 out of char range
 concat: 418431a430a1a1
 round trip: [2217845808, true]
+%c EUC-KR 0x100: 0100
+%c Big5 0x3042: 3c30423e
+%c EUC-KR 0xa1a1: a1a1
 ");
         }
     }

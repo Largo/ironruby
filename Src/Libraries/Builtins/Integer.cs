@@ -256,8 +256,25 @@ namespace IronRuby.Builtins {
             return ToChr(encoding, resultEncoding, (uint)codepoint);
         }
 
+        /// <summary>
+        /// The character of a %c directive. MRI's rb_str_format puts the bytes of the number
+        /// (rb_enc_mbcput) without asking whether they are a character of the encoding, which
+        /// rb_enc_uint_chr does: "%c" % 0x100 is "\x01\x00" in EUC-KR, where 0x100.chr("EUC-KR")
+        /// is an invalid codepoint. So the shapes of the multibyte encodings are not consulted.
+        /// </summary>
+        internal static MutableString/*!*/ ToFormatChr(RubyEncoding/*!*/ encoding, int codepoint) {
+            if (codepoint < 0) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            }
+            return ToChr(encoding, encoding, (uint)codepoint, false);
+        }
+
         /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
         internal static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
+            return ToChr(encoding, resultEncoding, codepoint, true);
+        }
+
+        private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint, bool checkShape) {
             switch (encoding.CodePage) {
                 case RubyEncoding.CodePageUTF16BE:
                 case RubyEncoding.CodePageUTF16LE:
@@ -292,6 +309,9 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageEmacsMule:
                 case RubyEncoding.CodePageStatelessISO2022JP:
                 case RubyEncoding.CodePageStatelessISO2022JPKDDI:
+                    if (!checkShape) {
+                        goto default;
+                    }
                     // enc/emacs_mule.c, which stateless-ISO-2022-JP is a replica of: a lead byte
                     // of 0x81-0x8F begins two bytes, 0x90-0x9B three, 0x9C-0x9D four, and the
                     // bytes after it are 0xA0-0xFF - but the second byte of a private charset
@@ -403,7 +423,7 @@ namespace IronRuby.Builtins {
                     // is not a character is an invalid codepoint: 0x80 and 0x100 in EUC-KR,
                     // 0x10000 in GB18030. A well formed sequence the table has no character for
                     // is a character all the same.
-                    if (codepoint > 0x7f) {
+                    if (codepoint > 0x7f && checkShape) {
                         int count = (codepoint <= 0xff) ? 1 : (codepoint <= 0xffff) ? 2 : (codepoint <= 0xffffff) ? 3 : 4;
                         var bytes = new byte[count];
                         for (int i = 0; i < count; i++) {
