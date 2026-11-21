@@ -88,9 +88,12 @@ fi
 # --- Session environment ---------------------------------------------------------------------
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   # Apphosts (ironruby, ir) find the runtime through DOTNET_ROOT; point it at the real install.
-  dotnet_root=$(dirname "$(readlink -f "$(command -v dotnet)")")
-  {
-    echo "export DOTNET_ROOT=\"$dotnet_root\""
-    echo "export DLR_SOURCE_DIR=\"$DLR/src/core\""
-  } >> "$CLAUDE_ENV_FILE"
+  # In an environment whose setup script installed no .NET there is nothing to point at, and
+  # the directory of no path is ".", which the apphosts would then be told to look in.
+  if dotnet=$(command -v dotnet); then
+    echo "export DOTNET_ROOT=\"$(dirname "$(readlink -f "$dotnet")")\"" >> "$CLAUDE_ENV_FILE"
+  else
+    echo "session-start: no dotnet on PATH: install the .NET SDK before building (DOTNET_ROOT is not set)" >&2
+  fi
+  echo "export DLR_SOURCE_DIR=\"$DLR/src/core\"" >> "$CLAUDE_ENV_FILE"
 fi
