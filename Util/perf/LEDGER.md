@@ -1256,6 +1256,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   declined counts as the baseline; `census.rb -c` 290 methods, 0 differ. app-shapes:
   specialized 103 -> 104 (`CSV::InputRecordSeparator.value`, `"\n"`), the same 30 declined.
   For the gate: no timing taken; IronRuby.Tests and the spec suites not run.
+  Fixed after (perf/prefrozen): a startup-library def's JIT source had no magic comments, so
+  under `frozen_string_literal: true` (34 of the 48 startup files) its typed body made chilled
+  Strings. The library now keeps the file's frozen comment before the def; census unchanged.
 
 - **perf/hashlit (/perf-step, 2026-11-19) - a method with a Hash literal, or one that
   passes keywords, runs without a scope** (`{a: x}`, `{"k" => v}`, `{}`, `f(a: x)`;
