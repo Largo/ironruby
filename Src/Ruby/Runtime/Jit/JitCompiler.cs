@@ -1096,6 +1096,9 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Constant(_context.CreateSymbol(name, symbol.Encoding), typeof(object));
             }
 
+            var str = node as StringLiteral;
+            if (str != null) { return EmitStringLiteral(str, out type); }
+
             var local = node as LocalVariable;
             if (local != null) { return EmitLocalRead(local, out type); }
 
@@ -1314,6 +1317,19 @@ namespace IronRuby.Runtime.Jit {
             if (v is bool) { type = JT.Bool; return Ast.Constant((bool)v, typeof(bool)); }
             if (v == null) { type = JT.Obj; return Ast.Constant(null, typeof(object)); }
             throw Bail("literal: " + (v == null ? "nil" : v.GetType().Name));
+        }
+
+        /// <summary>
+        /// `"lit"': the String the generic body would make (StringLiteral.TransformWithoutSite) - a new one on
+        /// each evaluation, chilled or plain as the file says, or under `frozen_string_literal: true' the one
+        /// interned frozen literal. Making it changes nothing a deopt could see done twice: a String nothing has
+        /// seen yet is dropped, and the interned one is found again. Under --debug-frozen-string-literal a
+        /// literal carries the place it was written, which only the generic body knows.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitStringLiteral(StringLiteral/*!*/ node, out JT type) {
+            if (_context.RubyOptions.DebugFrozenStringLiteral) { throw Bail("string literal under --debug-frozen-string-literal"); }
+            type = JT.Obj;
+            return Ast.Convert(node.TransformWithoutSite(), typeof(object));
         }
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
@@ -3100,14 +3116,23 @@ namespace IronRuby.Runtime.Jit {
         /// unprofiled one is speculated to be a number next to one that is.
         /// </summary>
         private bool WalkOperand(RExpr/*!*/ node) {
-            if (node is AstGlobalVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
+            if (node is AstGlobalVariable || node is SelfReference || node is StringLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
             // a Hash query is a Bool, never a number (an element read is speculated to be one)
             var call = node as MethodCall;
             if (call != null && call.Target != null && IsBoolQueryName(call.MethodName)) { return No(node); }
-            return Walk(node);
+            // nor is anything holding a String literal (`suffixes - [".rb"]'): such an operator only deopts
+            _inOperand++;
+            try {
+                return Walk(node);
+            } finally {
+                _inOperand--;
+            }
         }
+
+        // walking an operand (WalkOperand), where a String literal is refused
+        private int _inOperand;
 
         /// <summary>`a[i]', `h.fetch(k)': an object, whatever the types the profile sees.</summary>
         private static bool IsElementRead(RExpr/*!*/ node) {
@@ -3136,6 +3161,8 @@ namespace IronRuby.Runtime.Jit {
                 return (v is int || v is long || v is double || v is bool || v == null) || No(node);
             }
             if (node is SymbolLiteral) { return true; }
+            // a String literal is any other object (JitCompiler.EmitStringLiteral), never an operand (WalkOperand)
+            if (node is StringLiteral) { return _inOperand == 0 || No(node); }
 
             var local = node as LocalVariable;
             if (local != null) {
@@ -3413,7 +3440,12 @@ namespace IronRuby.Runtime.Jit {
                 }
                 if (argc > JitStub.MaxArity || node.Target != null && !Walk(node.Target)) { return No(node); }
                 for (int i = 0; i < argc; i++) {
-                    if (args.Expressions[i] is SplattedArgument || !Walk(args.Expressions[i])) { return No(node); }
+                    var arg = args.Expressions[i];
+                    // Nor a String literal argument (`read_char('.')'): a callee that takes one is rarely a body the JIT has
+                    // compiled, and with it taken AWFY's Json binds `read_char' and declines read_number, read_null and four
+                    // more, each then paying for its stub on every call.
+                    if (arg is StringLiteral && !(arg is SymbolLiteral)) { return No(arg); }
+                    if (arg is SplattedArgument || !Walk(arg)) { return No(node); }
                 }
                 return true;
             }
