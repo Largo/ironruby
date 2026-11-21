@@ -677,7 +677,14 @@ namespace IronRuby.Compiler.Ast {
             internal int Calls;
             internal bool HasMultipleAssignment;
 
-            public override bool Enter(ParallelAssignmentExpression/*!*/ node) { HasMultipleAssignment = true; return true; }
+            // the walker visits only the left side of a multiple assignment: the calls of the right side count too
+            public override bool Enter(ParallelAssignmentExpression/*!*/ node) {
+                HasMultipleAssignment = true;
+                foreach (var value in node.Right) {
+                    value.Walk(this);
+                }
+                return true;
+            }
             public override bool Enter(MethodCall/*!*/ node) { Calls++; return true; }
             public override bool Enter(ArrayItemAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(AttributeAccess/*!*/ node) { Calls++; return true; }

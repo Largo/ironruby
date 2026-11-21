@@ -113,7 +113,7 @@ t('escaped') { probe(o, :sl_escaped) }
 t('invalid byte') { probe(o, :sl_invalid) }
 t('binary escape') { probe(o, :sl_binary_escape) }
 t('stored in an ivar') { probe(o, :sl_store) }
-t('stored, then something else answered') { [probe(o, :sl_store_then), desc(o.s), o.sl_store_then && o.s.equal?(o.s)] }
+t('stored, then something else answered') { [probe(o, :sl_store_then), desc(o.s), (was = o.s; o.sl_store_then && o.s.equal?(was))] }
 t('a Hash key') { probe(o, :sl_key) }
 t('?: on an Integer') { [probe(o, :sl_cond, 1), probe(o, :sl_cond, -1)] }
 t('case/when') { [probe(o, :sl_case, 1), probe(o, :sl_case, 2), probe(o, :sl_case, 3)] }
