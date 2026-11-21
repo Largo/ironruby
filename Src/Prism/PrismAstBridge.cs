@@ -2870,12 +2870,14 @@ namespace IronRuby.Prism {
         /// <summary>
         /// `raise ArgumentError, "&lt;singular|plural&gt;#{list}" unless list.empty?`, where the list
         /// is spelled the way MRI spells it: ":a, :b, :c" - Array#inspect without the brackets. They are
-        /// taken off by delete_prefix and delete_suffix, not `[1..-2]': a Range literal keeps a method
-        /// with literal blocks out of light frames (MethodDefinition.IsScopeFree), and this prologue is
-        /// in every method with keyword parameters and no **rest.
+        /// taken off by `text[1, text.size - 2]', not `[1..-2]': a Range literal keeps a method with
+        /// literal blocks out of light frames (MethodDefinition.IsScopeFree), and this prologue is in
+        /// every method with keyword parameters and no **rest. Only methods defined in C# are called:
+        /// a runtime without the prelude raises the same error.
         /// </summary>
         private Expression/*!*/ RaiseForKeywordList(Expression/*!*/ list, string/*!*/ singular, string/*!*/ plural, SourceSpan span) {
             var listVar = CurrentScope.AddVariable("?kwlist" + _tempCounter++ + "?", span);
+            var textVar = CurrentScope.AddVariable("?kwtext" + _tempCounter++ + "?", span);
             var message = new MethodCall(
                 new ConditionalExpression(
                     new MethodCall(new MethodCall(listVar, "size", null, span), "==",
@@ -2883,19 +2885,21 @@ namespace IronRuby.Prism {
                     new StringLiteral(singular, _encoding, span),
                     new StringLiteral(plural, _encoding, span), span),
                 "+",
-                new Arguments(new MethodCall(
-                    new MethodCall(new MethodCall(listVar, "inspect", null, span), "delete_prefix",
-                        new Arguments(new StringLiteral("[", _encoding, span)), span),
-                    "delete_suffix", new Arguments(new StringLiteral("]", _encoding, span)), span)),
+                new Arguments(new MethodCall(textVar, "[]", new Arguments(new Expression[] {
+                    Literal.Integer(1, span),
+                    new MethodCall(new MethodCall(textVar, "size", null, span), "-", new Arguments(Literal.Integer(2, span)), span)
+                }), span)),
                 span);
 
             return new BlockExpression(MakeStatements(
                 new SimpleAssignmentExpression(listVar, list, null, span),
                 new UnlessExpression(
                     new MethodCall(listVar, "empty?", null, span),
-                    new Statements(new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
-                        new ConstantVariable(null, "ArgumentError", span), message
-                    }), span)),
+                    MakeStatements(
+                        new SimpleAssignmentExpression(textVar, new MethodCall(listVar, "inspect", null, span), null, span),
+                        new MethodCall(KernelModule(span), "__ir_raise__", new Arguments(new Expression[] {
+                            new ConstantVariable(null, "ArgumentError", span), message
+                        }), span)),
                     null, span)), span);
         }
 
