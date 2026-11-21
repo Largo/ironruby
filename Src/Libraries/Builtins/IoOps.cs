@@ -1615,6 +1615,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("set_encoding")]
         public static RubyIO/*!*/ SetEncodings(RubyIO/*!*/ self, RubyEncoding external, [DefaultParameterValue(null)]RubyEncoding @internal) {
             self.RequireOpen();
+            // A new conversion starts with nothing converted: MRI's clear_codeconv.
+            self.ClearPendingChars();
             self.SetEncodings(external, @internal);
             return self;
         }

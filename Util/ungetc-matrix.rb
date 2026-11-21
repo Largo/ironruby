@@ -125,6 +125,20 @@ g = ->(io) { [io.getc, io.getc] }
   t("#{m} getc, syswrite", d, m) { |io| io.getc; io.ungetc("Z"); [(io.syswrite("W") rescue $!.class), io.getc] }
 end
 
+# what MRI has read ahead: a read into the caller's buffer leaves nothing, and a write gives it back
+r = ->(label, &b) { t("r+t #{label}", "abcdefgh", "r+t", &b) }
+r.("read(1), pos") { |io| io.read(1); io.ungetc("X"); [io.pos, io.getc] }
+r.("readpartial, pos") { |io| io.readpartial(1); io.ungetc("X"); [io.pos, io.getc] }
+r.("getbyte, seek cur") { |io| io.getbyte; io.ungetc("X"); io.seek(0, IO::SEEK_CUR); io.getc }
+r.("gets(2), pos") { |io| io.gets(2); io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, write, ungetc, pos") { |io| io.getc; io.write("W"); io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, print, ungetc, pos") { |io| io.getc; io.print("W"); io.ungetc("X"); [io.pos, io.getc] }
+r.("set_encoding(Encoding)") { |io| io.ungetc("X"); io.set_encoding(Encoding::UTF_8); io.getc }
+r.("set_encoding(Encoding, Encoding)") { |io| io.ungetc("X"); io.set_encoding(Encoding::UTF_8, Encoding::UTF_16LE); io.getc.b }
+r.("set_encoding(String)") { |io| io.ungetc("X"); io.set_encoding("utf-8"); io.getc }
+r.("read(nil, frozen)") { |io| io.ungetc("X"); [(io.read(nil, "".freeze) rescue $!.class), io.getc] }
+r.("read(nil, 1)") { |io| io.ungetc("X"); [(io.read(nil, 1) rescue $!.class), io.getc] }
+
 # --- an internal encoding: the text is in it, a codepoint is one of its characters ---------------------------
 
 U = "é\nü\r\nz".encode("utf-16le").b

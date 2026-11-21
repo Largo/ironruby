@@ -10405,10 +10405,11 @@ class IO
   private :__ir_read__
 
   def read(*args)
-    # What #ungetc left on a stream that converts what it reads is text already converted
-    # (IoOps.cs keeps it apart, as MRI's cbuf): a read of everything starts with it.
-    pending = (args.empty? || args[0].nil?) ? __ir_take_pending_chars__ : nil
     result = __ir_read__(*args)
+    # What #ungetc left on a stream that converts what it reads is text already converted
+    # (IoOps.cs keeps it apart, as MRI's cbuf): a read of everything starts with it. It is
+    # taken once the read has not refused its arguments, a frozen buffer for one.
+    pending = (args.empty? || args[0].nil?) ? __ir_take_pending_chars__ : nil
     return result if result.nil?
     return result unless args.empty? || args[0].nil?
     return result unless result.respond_to?(:force_encoding)

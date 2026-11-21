@@ -261,6 +261,8 @@ namespace IronRuby.Builtins {
         public int WriteBytes(byte[]/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             ContractUtils.RequiresArrayRange(buffer.Length, offset, count, "offset", "count");
             FlushRead();
+            // MRI gives its read-ahead back before it writes (HasReadAheadInMri).
+            _readSinceSeek = false;
 
             // pending once something went out: a write that timed out (IO#timeout) left nothing
             if (preserveEndOfLines) {
@@ -434,8 +436,12 @@ namespace IronRuby.Builtins {
                 return buffered;
             }
 
+            // MRI's read of what is available goes to the caller's buffer and reads nothing ahead
+            // (HasReadAheadInMri).
+            bool readSinceSeek = _readSinceSeek;
             var bytes = new byte[count];
             int read = BaseRead(bytes, 0, count);
+            _readSinceSeek = readSinceSeek;
             if (read > 0) {
                 buffer.Append(bytes, 0, read);
             }
