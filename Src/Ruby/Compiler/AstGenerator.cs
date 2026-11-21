@@ -421,6 +421,10 @@ namespace IronRuby.Compiler.Ast {
             internal bool HasUnreusableBlock;
             internal bool HasSuperCall;
 
+            // The method has a Hash literal (HashConstructor) with a key whose #hash or #eql? may be a Ruby method: the helper
+            // that makes it calls them, so a light frame of the method keeps its stack check (MethodDefinition.LightFrame.MakesCalls).
+            internal bool HasHashCallingKeys;
+
             // The slot the method's literals take their parked Procs from (BlockDefinition), set by MethodDefinition before the
             // body is transformed if the method may have one at all; it is disabled afterwards if the body turns out not to qualify.
             internal ParkedScopeSlot ParkSlot;

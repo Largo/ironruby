@@ -778,8 +778,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    SOM's `Vector#each` over 4 elements ran at 0.98-1.05 of before and over 100 at
    1.00-1.15 (round nine). Closed. What DeltaBlue pays is in gap 14.
 9. **Light frames still exclude** a `while` with a `break` in it (`Array#take_while`),
-   an empty Hash literal `{}` (found on `Array#to_h`;
-   `::Hash.new` is scope-free but calls a redefined Hash.new), `super` (6 hot `initialize`
+   `super` (6 hot `initialize`
    methods; also `Array#sum` without a block, 5.3x CRuby, whose rare path is `super`), `rescue`,
    keywords, `$~` and regex literals.
    `IR_LIGHT_FRAMES=why` lists them. Also a Range per `(a..b).each`, and
@@ -790,14 +789,37 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    (`inner(&block)`, `map(&:sym)`; `IR_LIGHT_BLOCK_PASS=0`, see Landed, perf/blockpass), nor
    one that splats a value (`inner(*args)`, `[*a]`, `yield(*a)`; `IR_LIGHT_SPLAT=0`, see
    Landed, perf/splat), nor an interpolation (`"a#{x}"`; `IR_LIGHT_INTERPOLATION=0`, see
-   Landed, perf/interp; a block that interpolates still makes its scope);
+   Landed, perf/interp; a block that interpolates still makes its scope), nor a Hash
+   literal or the keywords of a call (`{a: x}`, `{}`, `f(a: x)`; `IR_LIGHT_HASH=0`,
+   `IR_LIGHT_KEYWORD_HASH=0`, see Landed, perf/hashlit; `f(**h)` is still out);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
-   Util/splat-pass-matrix.rb and Util/interpolation-matrix.rb are their matrices.
-   What the census names next (2026-11-19, 28,335 methods): "optional, splat or post
-   parameters" 1,525, `super` 755, `rescue`/`ensure` 475, and 167 candidates that still
-   need their scope after the rewrite (in the prelude `Enumerable#zip`,
-   `Enumerator::Lazy#zip`, `Enumerator#__size_from_target__`, `Process#detach`,
-   `Process.waitall`; nobody has looked at what refuses them). A method with both a literal block and a passed one still makes its scope
+   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb and Util/hash-literal-matrix.rb
+   are their matrices.
+   What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
+   them not light). By its first table: keyword parameters 1,257 (37 of them the
+   prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
+   scope after the rewrite (in the prelude `Enumerable#zip`, `Enumerator::Lazy#zip`,
+   `Enumerator#__size_from_target__`, `Process#detach`, `Process.waitall`,
+   `__errno_class__`; nine of them were looked at in perf/hashlit and are a `rescue`
+   inside a literal block, `a.map { |x| begin; x; rescue; end }`, by the subagent's probe), and other optional,
+   splat or post parameters 176.
+   The rest are refused by a statement of the body, and the census's second table says
+   for which construct inside it: `super` 1,054, a regex literal 1,008, a parallel
+   assignment 661, a `begin ... end` block 523 (the table calls it Body), `break` 268
+   (258 of them in a `while`), `defined?` 190, a global variable 158, a Range literal in a
+   body with literal blocks 138, a class variable 86, a qualified constant 76, a lambda
+   literal 47, a `rescue` modifier 43. (The lines grew when Hash literals left: a method
+   is counted under the first construct that refuses it.)
+   Where it matters: the prelude's 191 are keyword parameters 37, a `begin` block 27, a
+   parallel assignment 24, `defined?` 23, `super` 16, a regex 12, a `rescue` modifier 10;
+   AWFY's 21 are a Range
+   literal that receives `each` with a block 12 (`Vector#each`, `Sieve#sieve`; the scope
+   is made for the block anyway, so letting the Range in buys nothing by itself), `super`
+   6 (five DeltaBlue constraints' `initialize`, Richards' TaskControlBlock), a
+   `begin ... end while` 2 (Json's `read_object`, `read_array`) and a regex 1. Not looked into, from reading
+   `IsScopeFree`: a regex literal is refused by itself
+   although `$~` is written by the call that matches; `defined?(@x)` is refused.
+   A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
@@ -1128,7 +1150,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `def o.x` invalidates, counted (rules rebuilt, typed bodies respecialized), on
     `ostruct` of `app-shapes.rb`.
 
-21. **Three differences from CRuby in interpolation**, found by the probes of
+33. **Three differences from CRuby in interpolation**, found by the probes of
     `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
     (the matrix avoids them); not speed gaps. When a part's `to_s` raises, the backtrace
     names the method's first line for that frame where CRuby names the interpolation's own
@@ -1136,9 +1158,172 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     without a scope. A TracePoint `:line` event is reported for the body of an endless
     `def`, CRuby reports none. And with a refinement of `Symbol#to_s` in use, `"#{:s}"` asks
     the refined `to_s`; CRuby answers `"s"` without asking it.
+34. **Two differences from CRuby in Hash literals**, found by the probes of
+    `Util/hash-literal-matrix.rb` on the build before perf/hashlit and left as they were
+    (the matrix leaves them out, with a comment); not speed gaps. A key that is an
+    instance of a String subclass is copied and frozen (`k = MyS.new("k"); h = {k => 1}`:
+    `h.keys[0].frozen?` is true and it is not `k`); CRuby 4.0 keeps `k` itself, unfrozen,
+    and copies only a plain String. The same with `h[k] = 1`. And `defined?({a: 1.nope})`
+    is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
 
+- **perf/hashlit (/perf-step, 2026-11-19) - a method with a Hash literal, or one that
+  passes keywords, runs without a scope** (`{a: x}`, `{"k" => v}`, `{}`, `f(a: x)`;
+  `IR_LIGHT_HASH=0` and `IR_LIGHT_KEYWORD_HASH=0` turn each off). `IsScopeFree` had no
+  case for a HashConstructor, so one anywhere in a body sent the method to the final
+  refusal, while an Array literal was taken element by element. The helpers a literal
+  and a call's keyword hash compile to (`RubyOps.MakeHash`, `MakeSymbolHash1..3`,
+  `MakeKeywordArgumentsHash`, `MakeKeywordArgumentsHash0..3`) take the scope only for
+  the runtime's equality comparer, so the rewriter now passes them the declaring scope,
+  as it does for instance variables and constants (`ScopeOperandIndex`), and the filter
+  takes a Hash whose keys and values are scope-free. `**h` in a literal already was a
+  call of `Hash#merge`; `f(**h)` (KeywordSplatMerge) and the defaults of keyword
+  parameters are not taken. Two commits, the keywords second, so either reverts alone.
+  light frames 71.7% -> 76.9% (20,318 -> 21,793), light blocks 7,389 -> 7,724, JIT
+  compiles, maybe and never unchanged (Src/StdLib + AWFY, 28,335 methods; 1,475 methods
+  moved up, none down: 807 for the literal, 148 of those a `h = {}` default, and 668 for
+  the keywords). 42 of them are the prelude's, among them
+  `group_by`, `uniq`, `tally`, `uniq!`, six `to_h`, `transform_keys`, `slice`, `fetch`,
+  `to_set`, `transform_values!`, `__check_frozen__`; none is AWFY's, whose methods
+  write no Hash literal, so the AWFY table is not expected to move.
+  131 of the 789 the literal kept out did not move with the first commit: another
+  construct keeps them (parallel assignment, a regex, `super`, a global variable).
+  Checked, by the subagent and again by me on its build: `Util/hash-literal-matrix.rb`
+  (new, 111 probes) prints CRuby 4.0's output on the build before, the new one, with
+  each switch off and both, with `-X:NoAdaptiveCompilation` and with `IR_LIGHT_FRAMES=0`;
+  the interpolation, splat-pass, block-pass, light-rest and block-given matrices print
+  CRuby's on both builds; `census.rb -c` against traced runs of Richards and Json says
+  0 differ; the merged build's census is the worktree's row for row.
+  Instructions per call (`ab.rb -i`, the subagent's run, not repeated): `{a: x}` 1,663
+  -> 1,360, `{a: x, b: x}` 1,761 -> 1,449, `{}` filled with two keys 2,220 -> 1,964,
+  `{"k" => x}` 2,010 -> 1,797, `f(a: x)` to a keyword 1,161 -> 893, two keywords to
+  `**o` 2,692 -> 2,466, a control without a Hash 910 -> 872 (within its spread).
+  Found on the way: gap 34.
+
+  Gated on 2026-11-20 together with perf/why, the branch at 9f8bc1a7 against master at
+  084b09cf, both Release net10.0, 8 cores, load 1.1 to 1.7 (`/perf-gate`): **PASS**.
+  - IronRuby.Tests: the same one failure on both trees (`Exception_CauseRaisedInClause1`,
+    master's, Release only).
+  - Seventeen matrices (hash-literal, interpolation, block-given, light-rest, block-pass,
+    splat-pass, hot-shapes, hash-order, hash-struct, callable-parameters, raise,
+    full-message, refinement, refinement-binding, jit, jit-calls, set-backtrace), each as
+    built, with `IR_LIGHT_HASH=0 IR_LIGHT_KEYWORD_HASH=0`, with `IR_LIGHT_FRAMES=0` and
+    with `-X:NoJIT -X:NoOSR`: the branch prints what master prints in all 68 runs (the
+    one line of callable-parameters that differs is a `source_location` with the tree's
+    own path in it), and CRuby's output wherever master does.
+  - The four questions. A million deep through a literal's value, its String key, a key's
+    `#hash`, a keyword call to a required keyword, to `**o`, from a block and inside a
+    literal: SystemStackError each time and the process alive, as on master. Visibility,
+    a callee that reads the caller's scope, a callee and a key's `#hash` changing half
+    way, and a refinement in use where the caller is defined are sections 7 to 11 of
+    `Util/hash-literal-matrix.rb` (31 probes, 148 lines in all): CRuby's output on both
+    trees and in every mode above and with `-X:NoAdaptiveCompilation`; `IR_LIGHT_FRAMES=why`
+    names 113 of the file's methods as light frames on the branch and 21 on master, the
+    new callers among them. The first version of these probes tested less than it
+    said: a `using` in the middle of the file kept every later method out of light
+    frames, and the methods that recursed through a keyword call had keyword parameters
+    of their own. The refinement section is last for that reason.
+  - ruby/spec, all five suites (`Util/ci-sweep.sh`, then `sweep-check.rb`): 32,680
+    examples, 45 failing, every one listed, none new, no file without a summary.
+  - Time on the shapes it is about (`ab.rb -r 5`, on-CPU ns per call, the branch with
+    both switches off -> on; CRuby 4.0.9 in the same rounds): `{a: x}` 162 -> 118 (CRuby
+    92), `{a: x, b: x}` 213 -> 140 (108), `{}` filled with two keys 214 -> 172 (133),
+    `{"k" => x}` 244 -> 175 (97), `f(a: x)` to a keyword 104 -> 72 (60), two keywords to
+    `**o` 288 -> 242 (155), `to_h` with a block 528 -> 480 (123). `tally`, `group_by`,
+    `uniq` with a block and the two controls overlap: the prelude's methods that moved
+    spend their time elsewhere. Instructions per call agree (`ab.rb -i`: 0.82, 0.74,
+    0.92, 0.78, 0.79, 0.86 on the first six; master counts what the switches-off build
+    counts).
+  - AWFY, `awfy.rb 12` in both column orders, no FAIL: geomean branch/master 1.002 and
+    1.014; nothing is more than 5% slower in both orders (Richards and NBody are 5.5%
+    and 5.9% slower in the order where the branch ran first and 1.8% and 0.2% faster in
+    the other). As expected: none of AWFY's methods moved.
+  - `micro-table.rb` three times, once with the columns the other way round: `empty` was
+    6 to 8% slower on the branch in all three, `while10` and `selfcall` in two. Each in
+    a process of its own (`ab.rb ... -- NAME`): the same instructions per call on both
+    trees to two parts in a thousand (342.4 and 341.8, 791.2 and 790.9, 596.2 and 595.8)
+    and the same time over eight alternating rounds (27.5 and 26.7 ns, 68.0 and 68.0,
+    46.3 and 46.4). So it is the state the table's earlier shapes leave the process in,
+    as in round eight, and not a cost of the change, which decides only what is
+    compiled.
+  - Start-up, `-e 1`, best of ten: 1,148 ms on master, 1,177 on the branch (+2.5%).
+  Not measured: TruffleRuby (not installed here), net11.0, Debug.
+
+  Gated again the same day, after master's parked scopes (perf/park) were merged into the
+  branch: the branch at 2a516b4d against master at 1522386b, both Release net10.0, load
+  1.0 to 1.6 during the timing: **PASS**. The two changes meet in `MethodDefinition.cs`: a
+  method that is a light frame only because of this change may now also park its scope.
+  - IronRuby.Tests: `PASSED` on both trees, 1,290 tests each, with
+    `MutableString_CopyOnWrite3` left out on both. Its reader starves against the writer
+    on a Release build on this machine (past 100 s in 8 of 8 runs alone, four on each
+    tree, and on Release builds of two days before): master's, and none of this code.
+  - Twenty-one matrices, the seventeen above and parked-scope, block-scope-reuse,
+    block-loop and binding-lvar, each as built, with `IR_LIGHT_HASH=0
+    IR_LIGHT_KEYWORD_HASH=0`, with `IR_LIGHT_FRAMES=0`, with `IR_PARKED_SCOPES=0` and with
+    `-X:NoJIT -X:NoOSR`: the branch prints what master prints in all 105 runs.
+  - A literal in a method whose scope is parked is section 11 of
+    `Util/hash-literal-matrix.rb` (15 probes): CRuby's output on both trees and in the
+    five modes. `IR_PARKED_SCOPES=verbose` on them: 11 methods park as light frames and 1
+    with a scope on the branch, 4 and 8 on master, so the probes run the path they are
+    about. The first version of them did not: `(0..2).each` in a body with literal blocks
+    keeps the method out of light frames, so they use `3.times`. The million-deep probes
+    and the 31 probes of visibility, scope readers and callees changing half way print
+    what master prints in the same modes.
+  - Census on the merged trees, 28,337 methods: light frames 20,318 -> 21,793 (+1,475),
+    JIT compiles 2,979, maybe 2,771 and never 22,587 on both.
+  - ruby/spec, all five suites: 32,680 examples, 45 failing, every one listed, none new,
+    no file without a summary.
+  - Time on the shapes (`ab.rb -r 5`, switches off -> on; CRuby 4.0.10): `{a: x}` 160 ->
+    120 (CRuby 92), `{a: x, b: x}` 214 -> 142 (108), `{}` filled 218 -> 175 (134),
+    `{"k" => x}` 240 -> 174 (96), `f(a: x)` 104 -> 70 (60), two keywords to `**o` 278 ->
+    244 (154), `tally` 368 -> 336 (250), `uniq` with a block 768 -> 656 (320); `to_h`,
+    `group_by` and the two controls overlap. Instructions per call: 0.82, 0.75, 0.93,
+    0.80, 0.77, 0.89 on the first six, 0.89 on `tally`.
+  - AWFY, `awfy.rb 12` in both column orders, no FAIL: geomean branch/master 1.005 and
+    0.995. The largest single difference is Bounce, 3.6% slower in one order and 0.6% in
+    the other.
+  - `micro-table.rb` three times, once reversed: no line is more than 5% slower in all
+    three; `nil?` is in two (14% and 9%). In a process of its own it counts 502.1 and
+    501.8 instructions per call and takes 41.3 and 40.0 ns over eight alternating rounds.
+  - Start-up, best of ten: 1,167 ms on master, 1,204 on the branch (+3.2%).
+
+  Gated a third time, after the stack check came back for a literal whose keys may run
+  Ruby code (the eleventh fault below): the branch at 0347de88 against master at 1522386b,
+  Release net10.0, load 1.0 to 1.3 during the timing: **PASS**.
+  - IronRuby.Tests: `PASSED` on both trees, 1,290 each, `MutableString_CopyOnWrite3` left
+    out as before (its lock has since been fixed on master). A first run, made while two
+    other builds ran on the machine, failed `Backtrace_LibraryFrames1` on the branch only:
+    the backtrace of `[].each.next` had no `Enumerator#next` line. It passes alone 25 times
+    of 25 on both trees, and that line was right 3,000 times of 3,000 in three processes
+    per tree, also with `IR_LIGHT_HASH=0` and with `IR_LIGHT_FRAMES=0`; the second whole
+    run passed. Not reproduced, so not explained.
+  - The 21 matrices in the five modes: 105 runs print what master prints.
+    `Util/hash-literal-matrix.rb` now has section 12, a million deep through a key's
+    `#hash`, `#eql?` and a splat's `#to_hash`: SystemStackError as on CRuby.
+  - ruby/spec, all five suites: 32,680 examples, 45 failing, every one listed, none new.
+  - Time on the shapes, switches off -> on: `{a: x}` 162 -> 120, `{a: x, b: x}` 212 -> 140,
+    `{}` filled 212 -> 172, `{"k" => x}` 244 -> 178, `f(a: x)` 104 -> 68, two keywords to
+    `**o` 284 -> 248. `group_by` counts 1.7% more instructions than on master in a process
+    of its own (5,016 -> 5,102, three runs), with the two Hash switches off as well and
+    not with `IR_LIGHT_FRAMES=0`; its time overlaps. Which step costs it is not known.
+  - AWFY in both orders, no FAIL: geomean branch/master 1.001 and 0.989. `micro-table.rb`
+    three times, once reversed: no line slower in all three. Start-up 1,171 -> 1,193 ms.
+
+- **perf/why (/perf-step, 2026-11-19) - a find-out step: the census names the construct
+  that keeps a method out of light frames.** `IR_LIGHT_FRAMES=why` and the census said
+  only which statement of a body was not scope-free (`IfExpression at line 12`), so its
+  three largest lines after the parameters were statement names, and nobody could say
+  which decision of `IsScopeFree` kept 5,704 methods out. `IsScopeFree` now takes a box
+  for the reason, null on the normal path, and a refusal records what it refused
+  (`IfExpression at line 12: GlobalVariable`); the reason's text is built only when asked
+  for. `census.rb` has a second table, "not a light frame: the construct". Nothing was
+  meant to move and nothing did: of the 28,335 rows of the census 0 differ outside
+  `light_why`, and the 5,704 that had a line number are the old text plus the construct
+  (my own comparison of the two TSVs; the merged build's census is the worktree's byte
+  for byte). The interpolation, block-pass and splat-pass matrices print CRuby's output
+  on the merged build. Gated on 2026-11-20 with perf/hashlit (above). Not checked: the
+  texts that only appear with a switch off. What it found is under gap 9.
 - **perf/bindlv (round twenty-eight, 2026-11-19, 3820abf2, merged in 508f543d) - `Binding#local_variable_get`,
   `_set`, `_defined?` and `local_variables` without `eval`** (gap 30). The prelude's four
   methods were each one or two `eval`s of source text; the slot access is now
@@ -3048,6 +3233,14 @@ one area the hunt had called sound:
   without a check; the question to ask of any new direct path into Ruby code.
 
 Ten faults in all after the gate had passed: seven found by review, three by the hunt.
+
+A review of this branch's Hash-literal change found an eleventh:
+
+- **`def hash; {self => 0}; 0; end` ended the process** (460cac05). The literal's helper
+  (`RubyOps.MakeHash`) is no call site, so the light frame dropped its stack check, but
+  it calls the key's `#hash` and `#eql?`. The gate's million-deep probe recursed through a
+  helper method that made a call, and so kept its check; the review found the method whose
+  only call is the literal's helper. Section 12 of the Hash-literal matrix has the case.
 
 The full five-suite sweep (`Util/ci-sweep.sh`, then `Util/sweep-check.rb`) was run on
 commit 72c29b4c, Release net10.0, four jobs, after all of the above: core 23130 examples,
