@@ -1193,10 +1193,27 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/lightsize, perf/lightre and the block-pass count**: the branch at
+  0db76bbc against master at 45a1eeff, Release net10.0: **PASS**. IronRuby.Tests 1,291 executed
+  and PASSED on both trees, no failing name on either. 30 matrices in five modes (as built,
+  `IR_LIGHT_REGEX=0`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, `-X:NoJIT -X:NoOSR`): 150 same,
+  0 differ. ruby/spec, all five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, ns a call, baseline -> candidate): `s.match?(/b/)` 202 -> 171
+  (0.85), `/b/.match?(s)` 224 -> 184 (0.82), a literal as a value 128 -> 96 (0.75); the shapes
+  kept out (`gsub`, `split`, `case`, `=~`) 0.91-1.03, all overlapping; the step-shapes 0.97-1.08,
+  all overlapping. micro-table in both orders: no line slower in both (the lines 5-14% slower
+  in one order are as much faster in the other). AWFY, 12 iterations, both orders: geomean
+  0.996 and 1.000, every benchmark verified; start-up 1,183 and 1,199 ms.
+  Not explained: the prelude's `bytesplice` counts 10,903 -> 11,529 instructions a call (1.057,
+  spread 0.1%) while its time is 1,568 -> 1,536 ns (overlapping) and `bs_a`, the same body
+  defined in the script, counts 0.998. It keeps its scope on both trees (the masgn limit), and
+  with `IR_LIGHT_REGEX=0` the candidate still counts 11,436 in most processes and 10,914 in
+  some, so it is a state of the process and not the regex step.
+
 - **perf/lightre (/perf-step, 2026-11-21) - a regex literal in a light frame, unless it goes to a
   method that stores `$~`** (`s.match?(/x/)`, `/x/.match?(s)`, `/a#{x}/o`, a literal as a value or
   passed to a method of the program; `IR_LIGHT_REGEX=0` turns it off, `IR_LIGHT_REGEX=all` lets the
-  rest in too, for measuring) - census only, not gated. `IsScopeFree` had no case for a
+  rest in too, for measuring) - census only when merged, gated on 2026-11-21 (first entry). `IsScopeFree` had no case for a
   RegularExpression, so it kept 1,066 methods out (census of 2026-11-21). The literal reads no scope:
   its Regexp is made once into a box of the site (`RubyOps.CreateRegex*`), and the parts of one with
   interpolation go through to_s sites as a String's do. What reads the scope is the callee: the C#
@@ -1245,7 +1262,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `using`. No IronRuby.Tests, sweep or AWFY run (owed to the gate).
 
 - **perf/lightsize (/perf-step, 2026-11-21) - register locals only in a light frame of at most
-  40 calls** (`MethodDefinition.MaxRegisterLocalsCalls`) - not gated. A larger light frame keeps
+  40 calls** (`MethodDefinition.MaxRegisterLocalsCalls`) - gated on 2026-11-21 (first entry). A larger light frame keeps
   its locals in their tuple, made at entry, as one with more than 16 locals already did.
   Asked first: could the scope-making arm of `LightFrameRewriter.LightScopeCall` be one copy
   per frame instead of one per call site (gap 16's third)? **No, not in an expression tree.**
