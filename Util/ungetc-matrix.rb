@@ -17,6 +17,7 @@
 #   - a byte read after #ungetc and #rewind/#binmode raises in MRI (clear_readconv leaves cbuf.len as it was);
 #   - #size, #stat, #truncate and #fsync after a read and an #ungetc (which of them MRI flushes through);
 #   - #ungetbyte and #pos around a lone "\r" a universal newline stream has looked past;
+#   - #reopen with a mode that no longer converts, or to a stream that does not (MRI drops the text there);
 #   - #dup after a read and an #ungetc (the two share an offset, and MRI's has read ahead);
 #   - line readers and universal newlines on a stream whose external encoding is a wide one (UTF-16, UTF-32).
 
@@ -142,6 +143,15 @@ r.("getc, seek, ungetc, pos") { |io| io.getc; io.seek(0); io.ungetc("X"); [io.po
 r.("getc, pos=, ungetc, seek cur") { |io| io.getc; io.pos = 3; io.ungetc("X"); io.seek(0, IO::SEEK_CUR); io.getc }
 r.("getc, pos, ungetc, pos") { |io| io.getc; io.pos; io.ungetc("X"); [io.pos, io.getc] }
 r.("getc, flush, ungetc, pos") { |io| io.getc; io.flush; io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, ungetc, pos, getc, ungetc, pos") { |io| io.getc; io.ungetc("Q"); io.pos; io.getc; io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, pos, getc, ungetc, pos") { |io| io.getc; io.pos; io.getc; io.ungetc("X"); [io.pos, io.getc] }
+r.("gets(2), pos, getc, ungetc, pos") { |io| io.gets(2); io.pos; io.getc; io.ungetc("X"); [io.pos, io.getc] }
+r.("getbyte, pos, getbyte, ungetc, seek cur") { |io| io.getbyte; io.pos; io.getbyte; io.ungetc("X"); io.seek(0, IO::SEEK_CUR); io.getc }
+r.("getc, pos, ungetbyte, getc, ungetc, pos") { |io| io.getc; io.pos; io.ungetbyte("z"); io.getc; io.ungetc("X"); [io.pos, io.getc] }
+r.("reopen(path, 'rt')") { |io| io.ungetc("X"); io.reopen(io.path, "rt"); [io.getc, io.getc] }
+r.("getc, reopen(path)") { |io| io.getc; io.ungetc("X"); io.reopen(io.path); [io.getc, io.getc] }
+r.("reopen(io)") { |io| io.ungetc("X"); o = File.open(io.path, "rt"); o.getc; io.reopen(o); [io.getc, io.getc] }
+r.("getc, reopen(io)") { |io| io.getc; io.ungetc("X"); o = File.open(io.path, "rt"); io.reopen(o); [io.getc, io.getc] }
 r.("set_encoding(Encoding)") { |io| io.ungetc("X"); io.set_encoding(Encoding::UTF_8); io.getc }
 r.("set_encoding(Encoding, Encoding)") { |io| io.ungetc("X"); io.set_encoding(Encoding::UTF_8, Encoding::UTF_16LE); io.getc.b }
 r.("set_encoding(String)") { |io| io.ungetc("X"); io.set_encoding("utf-8"); io.getc }
@@ -201,6 +211,23 @@ t("gets chomp: \\r", D) { |io| io.ungetc("x\r"); [io.gets(chomp: true), io.gets(
 t("at the end", D) { |io| io.read; io.ungetc("q"); [io.eof?, io.getc, io.eof?, io.getc] }
 t("readchar at the end", D) { |io| io.read; io.ungetc("z"); [io.readchar, (io.readchar rescue $!.class)] }
 t("each_char break", D) { |io| io.ungetc("\rQ"); io.each_char { break }; (io.getbyte rescue $!.message) }
+
+# --- a pipe with nothing in it: the text is there to read ---------------------------------------------------
+
+def pipe(label)
+  r, w = IO.pipe
+  r.set_encoding("utf-8", universal_newline: true)
+  x = begin; yield r, w; rescue => e; [e.class, e.message]; end
+  puts "pipe #{label}: #{x.inspect}"
+ensure
+  r.close rescue nil
+  w.close rescue nil
+end
+pipe("select") { |r, _| r.ungetc("X"); [IO.select([r], nil, nil, 0)&.first&.size, r.getc] }
+pipe("wait_readable") { |r, _| r.ungetc("X"); [!!r.wait_readable(0), r.getc] }
+pipe("select after data") { |r, w| w.write("ab"); r.getc; r.ungetc("X"); [IO.select([r], nil, nil, 0)&.first&.size, r.getc, r.getc] }
+pipe("read_nonblock") { |r, _| r.ungetc("X"); (r.read_nonblock(1) rescue $!.class) }
+pipe("eof?") { |r, w| r.ungetc("X"); w.close; [r.eof?, r.getc, r.eof?] }
 
 # --- arguments -----------------------------------------------------------------------------------------------
 

@@ -325,6 +325,10 @@ namespace IronRuby.Builtins {
             if (self.Closed || source.Closed) {
                 throw RubyExceptions.CreateIOError("closed stream");
             }
+            // MRI's io_reopen gives the read-ahead back first, and what #ungetc left goes with it
+            // when there is some; with nothing read the text stays, as it does when a path is
+            // reopened.
+            self.UnreadPendingChars();
 
             // MRI's reopen is dup2(2): it points *this descriptor* at the other one's file,
             // which is why everything started afterwards inherits the redirection. Pointing
@@ -951,7 +955,9 @@ namespace IronRuby.Builtins {
             }
 
             var stream = io.GetStream();
-            if (kind == Readiness.Read && !ignoreBuffer && stream.DataBuffered) {
+            // What #ungetc left in the character buffer can be read without waiting, as what is
+            // in the byte buffer can (MRI's rb_io_read_pending looks at both).
+            if (kind == Readiness.Read && !ignoreBuffer && (stream.DataBuffered || io.HasPendingChars)) {
                 return true;
             }
 

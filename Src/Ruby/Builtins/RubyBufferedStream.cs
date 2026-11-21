@@ -335,6 +335,11 @@ namespace IronRuby.Builtins {
         // TODO: read in full buffer (underlying FileStream will buffer it anyways)
         public override int ReadByte() {
             if (_bufferCount > 0) {
+                // A byte that a look ahead loaded is one MRI has read ahead of; one that was
+                // pushed back is not (HasReadAheadInMri).
+                if (_pushedBackCount == 0) {
+                    _readSinceSeek = true;
+                }
                 return ReadBufferByte();
             }
             if (_timeoutOwner != null) {
