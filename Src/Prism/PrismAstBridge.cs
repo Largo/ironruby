@@ -2869,7 +2869,10 @@ namespace IronRuby.Prism {
 
         /// <summary>
         /// `raise ArgumentError, "&lt;singular|plural&gt;#{list}" unless list.empty?`, where the list
-        /// is spelled the way MRI spells it: ":a, :b, :c" - Array#inspect without the brackets.
+        /// is spelled the way MRI spells it: ":a, :b, :c" - Array#inspect without the brackets. They are
+        /// taken off by delete_prefix and delete_suffix, not `[1..-2]': a Range literal keeps a method
+        /// with literal blocks out of light frames (MethodDefinition.IsScopeFree), and this prologue is
+        /// in every method with keyword parameters and no **rest.
         /// </summary>
         private Expression/*!*/ RaiseForKeywordList(Expression/*!*/ list, string/*!*/ singular, string/*!*/ plural, SourceSpan span) {
             var listVar = CurrentScope.AddVariable("?kwlist" + _tempCounter++ + "?", span);
@@ -2880,8 +2883,10 @@ namespace IronRuby.Prism {
                     new StringLiteral(singular, _encoding, span),
                     new StringLiteral(plural, _encoding, span), span),
                 "+",
-                new Arguments(new MethodCall(new MethodCall(listVar, "inspect", null, span), "[]",
-                    new Arguments(new RangeExpression(Literal.Integer(1, span), Literal.Integer(-2, span), false, span)), span)),
+                new Arguments(new MethodCall(
+                    new MethodCall(new MethodCall(listVar, "inspect", null, span), "delete_prefix",
+                        new Arguments(new StringLiteral("[", _encoding, span)), span),
+                    "delete_suffix", new Arguments(new StringLiteral("]", _encoding, span)), span)),
                 span);
 
             return new BlockExpression(MakeStatements(
