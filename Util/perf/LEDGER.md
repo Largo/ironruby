@@ -1186,9 +1186,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/strlit, perf/jinterp, perf/masgn and its narrowing**: the
+  branch at c2b83fc9 against master at e83e9af7, Release net10.0: **PASS**, the second
+  time. The first run failed step 4 on one shape, `String#bytesplice`, 1,485 -> 1,744 ns
+  alone: perf/masgn had made it a light frame, whose lambda was 2.9 times the IL and, for
+  a copy of its body, compiled without optimization (the entry below and gap 16).
+  - IronRuby.Tests: `PASSED`, 1,291 on both trees.
+  - 30 matrices (the 21 of the gate before, jit-strlit, jit-interp, masgn, jit-scan,
+    jit-construct, jit-raise, jit-const, ivar, int), each as built, with `IR_LIGHT_MASGN=0`,
+    with `IR_LIGHT_FRAMES=0` and with `-X:NoJIT -X:NoOSR`: 120 runs print what master
+    prints, but for `Integer#hash` in int-matrix, which differs from process to process,
+    and once for two lines of block-loop-matrix without the JIT, whose backtraces had no
+    `Range#each`: master loses that frame too, in 1 run of 12 (the branch in 0 of 12). A
+    library frame missing from a backtrace now and then is master's, and is the same kind
+    of failure as `Backtrace_LibraryFrames1` in the gate before. Not explained.
+  - ruby/spec, all five suites: 32,680 examples, 45 failing, every one listed, none new.
+  - Time (`ab.rb -r 5`, `IR_LIGHT_MASGN=0` -> on; CRuby 4.0.10): `a, b = b, a` 174 -> 131
+    (CRuby 46), `@a, @b = @b, @a` 186 -> 142 (50), `a, b = [x, 2]` 192 -> 138 (40),
+    `a, *b = x, 1, 2` 206 -> 184 (124), `self.p, self.q = x, 1` 198 -> 142 (68). A method
+    returning a String literal 148 -> 135 against master (95), `"a#{x}b"` 244 -> 238 (238);
+    `bytesplice` and its six cut-down copies count the instructions they count on master
+    (0.989 to 1.005).
+  - AWFY on the branch before the narrowing, both orders, no FAIL: geomean 0.996 and 0.994;
+    not run again after it (no method of the benchmarks moved with perf/masgn). The micro
+    table in both orders after it: no line more than 5% slower in both. Start-up 1,180 ->
+    1,201 ms.
+  - A precompiled library kept no `frozen_string_literal` for the JIT's parse of a def, so
+    perf/strlit made unfrozen literals there; found in review of perf/jinterp, reproduced,
+    fixed (the perf/strlit entry).
+
 - **perf/masgn (/perf-step, 2026-11-21) - a multiple assignment in a light frame** (`a, b = b, a`,
   `x, *rest = list`, `@a, (b, c) = v`, `a[i], a[j] = a[j], a[i]`, `self.x, self.y = 1, 2`;
-  `IR_LIGHT_MASGN=0` turns it off) - census only, not gated. `IsScopeFree` had no case for a
+  `IR_LIGHT_MASGN=0` turns it off) - gated 2026-11-21, see the note above perf/masgn. `IsScopeFree` had no case for a
   ParallelAssignmentExpression, so it kept 661 methods out of light frames (476 at it first; 24
   of the prelude's). Nothing it compiles to takes the scope: the right side is an Array made by
   `RubyOps.MakeArrayN` or one value through an ImplicitSplatAction site (`#to_ary`, given no
@@ -1200,7 +1229,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   check. Left values that are globals, class variables, constants or `x&.y` still refuse.
   Light frames 76.9% -> 78.7% (21,793 -> 22,308), light blocks 67.1% -> 67.6% (7,725 ->
   7,783), JIT unchanged (Src/StdLib + AWFY, 28,337 methods; 515 methods moved up, none down;
-  50 methods have more light blocks, none fewer) - census only, not gated.
+  50 methods have more light blocks, none fewer) - gated 2026-11-21, see the note above perf/masgn.
   Moved: 18 of the prelude's (`__ir_each_impl__`, `__ir_step_slow__`, `__step_scan_args__`,
   `bytesplice`, `__ir_byteindex__`, `__arithmetic_slice__`, `remainder`, `__ir_log__`,
   `__ir_hypot__`, `marshal_load`, `inspect`, ...), Rational/Complex/BigDecimal/Date/Pathname
@@ -1246,7 +1275,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   Not where a refinement is active, not in an outlined loop, not `:"a#{x}"` or a command.
   JIT compiles 11.5% -> 11.6% (3,268 -> 3,293), maybe 10.2% -> 10.3% (2,890 -> 2,911), never
   78.3% -> 78.1% (22,179 -> 22,133), light frames unchanged (Src/StdLib + AWFY, 28,337 methods;
-  46 methods moved up, none down) - census only, not gated.
+  46 methods moved up, none down) - gated 2026-11-21, see the note above perf/masgn.
   `StringConstructor` refused at all 1,191 -> 434, alone 432 -> 61; the parts it now refuses
   are counted as their calls (`MethodCall (screen)` 14,461 -> 14,921).
   Moved: 25 to `compiles` (the prelude's `Thread::Backtrace::Location#to_s`,
@@ -1294,7 +1323,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   declines (only the generic body knows the site).
   JIT compiles 10.5% -> 11.5% (2,979 -> 3,268), maybe 9.8% -> 10.2% (2,771 -> 2,890), never
   79.7% -> 78.3% (22,587 -> 22,179), light frames unchanged (Src/StdLib + AWFY, 28,337
-  methods; 408 methods moved up, none down) - census only, not gated.
+  methods; 408 methods moved up, none down) - gated 2026-11-21, see the note above perf/masgn.
   `StringLiteral (screen)` 1,046 -> 259; refused at all 2,208 -> 860, alone 498 -> 100.
   Moved: 202 of the vendored stdlib, 161 of the gems, 44 of `ironruby/` (the prelude's
   `IO::Buffer#nl_` compiles, `IO#path` and `Process.__spawn_shell__` are `maybe`), and
