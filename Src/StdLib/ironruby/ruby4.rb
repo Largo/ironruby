@@ -10406,12 +10406,17 @@ class IO
 
   def read(*args)
     result = __ir_read__(*args)
+    # What #ungetc left on a stream that converts what it reads is text already converted
+    # (IoOps.cs keeps it apart, as MRI's cbuf): a read of everything starts with it. It is
+    # taken once the read has not refused its arguments, a frozen buffer for one.
+    pending = (args.empty? || args[0].nil?) ? __ir_take_pending_chars__ : nil
     return result if result.nil?
     return result unless args.empty? || args[0].nil?
     return result unless result.respond_to?(:force_encoding)
     enc = (external_encoding rescue nil) || ::Encoding.default_external
     result.force_encoding(enc) if enc
     converted = __transcode__(result)
+    converted = (pending << converted.b).force_encoding(converted.encoding) if pending
     return converted unless args.size >= 2 && args[1].equal?(result) && !converted.equal?(result)
     # A caller-supplied buffer is filled in place, so the transcoded text has to
     # go back into it rather than being handed back beside it.
@@ -10571,7 +10576,11 @@ class IO
     newline = options[:newline]
     if reading
       if options[:universal_newline] || newline == :universal
-        return text.gsub("\r\n", "\n").gsub("\r", "\n")
+        return text.gsub("\r\n", "\n").gsub("\r", "\n") if text.encoding.ascii_compatible?
+        # A wide encoding (UTF-16, UTF-32) has the two as characters, not as bytes.
+        cr = "\r".encode(text.encoding)
+        lf = "\n".encode(text.encoding)
+        return text.gsub(cr + lf, lf).gsub(cr, lf)
       end
       return text
     end
@@ -10750,6 +10759,7 @@ class IO
     if maxlen == 0
       # Even a zero-length readpartial looks at the stream, so a closed one is an error.
       ::Kernel.raise(::IOError, "closed stream") if closed?
+      __read_available__(0)
       result = "".b
       return outbuf ? __fill_buffer__(outbuf, result) : result
     end
@@ -10879,13 +10889,14 @@ class IO
   end
 
   # ungetc takes a String as well as a codepoint, and a codepoint is a character
-  # in the stream's external encoding rather than a single byte. The built-in
-  # (IoOps.cs) pushes a String and an ASCII codepoint itself and hands anything
-  # else to this; __ir_ungetc__ pushes one byte.
+  # in the encoding the stream's reads hand out - the internal one, when there is
+  # one - rather than a single byte. The built-in (IoOps.cs) pushes a String and an
+  # ASCII codepoint itself and hands anything else to this; __ir_ungetc_text__
+  # pushes a String. A codepoint the encoding does not have is a RangeError.
   def __ungetc_rest__(value)
     if value.is_a?(::Integer)
-      enc = (external_encoding rescue nil) || ::Encoding.default_external
-      text = (value.chr(enc) rescue value.chr)
+      enc = (internal_encoding rescue nil) || (external_encoding rescue nil) || ::Encoding.default_external
+      text = value.chr(enc)
     else
       unless value.is_a?(::String)
         unless value.respond_to?(:to_str)
@@ -10895,7 +10906,7 @@ class IO
       end
       text = value
     end
-    text.bytes.reverse_each { |b| __ir_ungetc__(b) }
+    __ir_ungetc_text__(text)
     nil
   end
   private :__ungetc_rest__
@@ -11038,6 +11049,9 @@ class IO
       target = buffer
       buffer = buffer.to_str
     end
+    # A read of bytes: it refuses a stream whose character buffer holds something, and
+    # before #pos would give the read-ahead back.
+    __read_available__(0)
     saved = pos
     begin
       seek(offset)

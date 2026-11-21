@@ -1067,6 +1067,8 @@ namespace IronRuby.Tests {
                 Io_BuiltinReaders1,
                 Io_LineReaders2,
                 Io_LineReaders3,
+                Io_UngetcConverted1,
+                Io_WideLineReaders1,
                 Io_Timeout1,
                 Io_Timeout2,
                 Io_Timeout3,

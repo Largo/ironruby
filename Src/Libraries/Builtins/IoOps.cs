@@ -325,6 +325,10 @@ namespace IronRuby.Builtins {
             if (self.Closed || source.Closed) {
                 throw RubyExceptions.CreateIOError("closed stream");
             }
+            // MRI's io_reopen gives the read-ahead back first, and what #ungetc left goes with it
+            // when there is some; with nothing read the text stays, as it does when a path is
+            // reopened.
+            self.UnreadPendingChars();
 
             // MRI's reopen is dup2(2): it points *this descriptor* at the other one's file,
             // which is why everything started afterwards inherits the redirection. Pointing
@@ -951,7 +955,9 @@ namespace IronRuby.Builtins {
             }
 
             var stream = io.GetStream();
-            if (kind == Readiness.Read && !ignoreBuffer && stream.DataBuffered) {
+            // What #ungetc left in the character buffer can be read without waiting, as what is
+            // in the byte buffer can (MRI's rb_io_read_pending looks at both).
+            if (kind == Readiness.Read && !ignoreBuffer && (stream.DataBuffered || io.HasPendingChars)) {
                 return true;
             }
 
@@ -1350,18 +1356,24 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("flush")]
         public static RubyIO/*!*/ Flush(RubyIO/*!*/ self) {
+            // MRI's rb_io_flush gives the read-ahead of a readable stream back, which #fsync does not.
+            self.UnreadPendingChars();
+            FlushWrites(self);
+            return self;
+        }
+
+        private static void FlushWrites(RubyIO/*!*/ self) {
             try {
                 self.Flush();
             } catch (IOException e) {
                 throw TranslateWriteError(e, self);
             }
-            return self;
         }
 
         // fsync is flush plus the write-back the name promises, and MRI answers 0 for it.
         [RubyMethod("fsync")]
         public static int FSync(RubyIO/*!*/ self) {
-            Flush(self);
+            FlushWrites(self);
             return 0;
         }
 
@@ -1373,7 +1385,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("eof?")]
         public static bool Eof(RubyIO/*!*/ self) {
             self.RequireReadable();
-            return self.IsEndOfStream();
+            // What #ungetc left in the character buffer is still to be read.
+            return !self.HasPendingChars && self.IsEndOfStream();
         }
 
         [RubyMethod("pid")]
@@ -1391,6 +1404,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("binmode")]
         public static RubyIO/*!*/ Binmode(RubyIO/*!*/ self) {
             self.RequireOpen();
+            // MRI's rb_io_ascii8bit_binmode ends the conversion, and what #ungetc left with it.
+            self.ClearPendingChars();
             if (self.Position == 0) {
                 self.PreserveEndOfLines = true;
             }
@@ -1563,6 +1578,8 @@ namespace IronRuby.Builtins {
             self.RequireOpen();
             Protocols.TryConvertToOptions(toHash, ref options, ref external, ref @internal);
             self.ConversionOptions = options;
+            // A new conversion starts with nothing converted: MRI's clear_codeconv.
+            self.ClearPendingChars();
 
             RubyEncoding externalEncoding = null, internalEncoding = null;
             if (external != Missing.Value && external != null) {
@@ -1604,6 +1621,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("set_encoding")]
         public static RubyIO/*!*/ SetEncodings(RubyIO/*!*/ self, RubyEncoding external, [DefaultParameterValue(null)]RubyEncoding @internal) {
             self.RequireOpen();
+            // A new conversion starts with nothing converted: MRI's clear_codeconv.
+            self.ClearPendingChars();
             self.SetEncodings(external, @internal);
             return self;
         }
@@ -1616,6 +1635,8 @@ namespace IronRuby.Builtins {
         public static int Rewind(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             self.Seek(0, SeekOrigin.Begin);
             self.LineNumber = 0;
+            // MRI's rb_io_rewind ends the conversion, and what #ungetc left with it.
+            self.ClearPendingChars();
             return 0;
         }
 
@@ -1631,7 +1652,7 @@ namespace IronRuby.Builtins {
         public static object SysSeek(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyIO/*!*/ self, [DefaultProtocol]IntegerValue pos, [DefaultProtocol, DefaultParameterValue(SEEK_SET)]int seekOrigin) {
             var stream = self.GetStream();
-            if (stream.DataBuffered) {
+            if (stream.DataBuffered || self.HasPendingChars) {
                 throw RubyExceptions.CreateIOError("sysseek for buffered IO");
             }
             if (stream.WritePending) {
@@ -1645,6 +1666,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("pos")]
         [RubyMethod("tell")]
         public static object/*!*/ Pos(RubyIO/*!*/ self) {
+            self.UnreadPendingChars();
             if (self.Position <= Int32.MaxValue) {
                 return (int)self.Position;
             }
@@ -1941,6 +1963,7 @@ namespace IronRuby.Builtins {
             if (bytes < 0) {
                 throw RubyExceptions.CreateArgumentError("negative length {0} given", bytes);
             }
+            self.RequireByteReadable();
 
             buffer = PrepareReadBuffer(self, buffer);
             int bytesRead = self.AppendBytes(buffer, bytes);
@@ -1963,6 +1986,7 @@ namespace IronRuby.Builtins {
                 return buffer ?? MutableString.CreateBinary();
             }
 
+            self.RequireByteReadable();
             var stream = self.GetReadableStream();
             if (stream.DataBuffered) {
                 throw RubyExceptions.CreateIOError("sysread for buffered IO");
@@ -1993,6 +2017,7 @@ namespace IronRuby.Builtins {
             if (bytes < 0) {
                 throw RubyExceptions.CreateArgumentError("negative length " + bytes + " given");
             }
+            self.RequireByteReadable();
             var buffer = MutableString.CreateBinary();
             if (bytes == 0) {
                 return buffer;
@@ -2008,7 +2033,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("read_nonblock")]
         public static MutableString ReadNoBlock(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
-            self.RequireReadable();
+            self.RequireByteReadable();
             MutableString result = null;
             self.RunNonBlocking(() => result = ReadOnceWithoutWaiting(self, bytes, buffer), true);
             if (result == null) {
@@ -2024,7 +2049,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("__data_buffered__", RubyMethodAttributes.PrivateInstance)]
         public static bool IsDataBuffered(RubyIO/*!*/ self) {
             self.RequireReadable();
-            return self.GetReadableStream().DataBuffered;
+            return self.HasPendingChars || self.GetReadableStream().DataBuffered;
         }
 
         /// <summary>
@@ -2172,6 +2197,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("readbyte")]
         public static int ReadByte(RubyIO/*!*/ self) {
+            self.RequireByteReadable();
             int b = self.ReadByteNormalizeEoln();
             if (b == -1) {
                 throw new EOFError("end of file reached");
@@ -2289,11 +2315,12 @@ namespace IronRuby.Builtins {
             // no dynamic call, doesn't modify $_ scope variable:
             bool universalNewline = IsUniversalNewline(universal, self);
             MutableString line;
-            while ((line = ReadLineOrParagraph(self, universalNewline, separator, limit)) != null) {
+            bool converted;
+            while ((line = ReadLineOrParagraph(transcode, universal, self, universalNewline, separator, limit, out converted)) != null) {
                 if (CountsAsLine(line, separator, limit)) {
                     self.LineNumber++;
                 }
-                result.Add(FinishLine(transcode, self, line, separator, chomp));
+                result.Add(FinishLine(transcode, self, line, separator, chomp, converted));
             }
 
             context.InputProvider.LastInputLineNumber = self.LineNumber;
@@ -2314,7 +2341,7 @@ namespace IronRuby.Builtins {
 
             var result = new Hash(context);
             if (options != null) {
-                foreach (var name in new[] { "newline", "universal_newline", "crlf_newline", "cr_newline", "lf_newline" }) {
+                foreach (var name in NewlineDecorators) {
                     if (options.ContainsKey(context.CreateAsciiSymbol(name))) {
                         return options;
                     }
@@ -2414,8 +2441,97 @@ namespace IronRuby.Builtins {
             return true;
         }
 
-        private static MutableString ReadLineOrParagraph(RubyIO/*!*/ self, bool universal, MutableString separator, int limit) {
-            return universal ? ReadLineUniversal(self, separator, limit) : self.ReadLineOrParagraph(separator, limit);
+        /// <summary>
+        /// A line of the stream, as its bytes are, which FinishLine has yet to convert - unless
+        /// #ungetc left something in the character buffer: the line then starts with that, and is
+        /// read as converted text all the way (<paramref name="converted"/>). So is every line of
+        /// a stream that converts from a wide encoding (UTF-16, UTF-32): the byte of a "\n" is no
+        /// line end there - it is half of one, or part of another character - and MRI looks for
+        /// the separator in the text it converted.
+        /// </summary>
+        private static MutableString ReadLineOrParagraph(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self,
+            bool universalNewline, MutableString separator, int limit, out bool converted) {
+            converted = self.HasPendingChars || (self.Enc2 != null && self.Enc2.MinBytesPerChar > 1);
+            if (converted) {
+                return ReadLineFromPendingChars(transcode, universal, self, separator, limit);
+            }
+            return universalNewline ? ReadLineUniversal(self, separator, limit) : self.ReadLineOrParagraph(separator, limit);
+        }
+
+        /// <summary>
+        /// The line reader of a stream whose character buffer holds something (MRI's appendline
+        /// under NEED_READCONV): the text is taken a character at a time, from the buffer and then
+        /// from the stream through the conversion, so that a separator or a paragraph's blank
+        /// line is found across the two. Only a read that follows an #ungetc comes here. The
+        /// separator is compared as bytes of the text read, the default one in the encoding
+        /// read when that is a wide one; a limit that falls inside a character takes all of it.
+        /// </summary>
+        private static MutableString ReadLineFromPendingChars(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self,
+            MutableString separator, int limit) {
+            self.RequireReadable();
+            RubyEncoding encoding = ReadEncoding(self);
+            if (limit == 0) {
+                return MutableString.CreateEmpty(encoding);
+            }
+
+            bool wide = encoding.MinBytesPerChar > 1;
+            byte[] newline = wide ? encoding.StrictEncoding.GetBytes("\n") : new byte[] { (byte)'\n' };
+            bool paragraph = separator != null && separator.IsEmpty;
+            byte[] sep;
+            if (separator == null) {
+                sep = null;
+            } else if (paragraph) {
+                sep = new byte[2 * newline.Length];
+                Buffer.BlockCopy(newline, 0, sep, 0, newline.Length);
+                Buffer.BlockCopy(newline, 0, sep, newline.Length, newline.Length);
+            } else if (wide && ReferenceEquals(separator, self.Context.InputSeparator)) {
+                sep = newline;
+            } else {
+                sep = separator.ToByteArray();
+            }
+
+            if (paragraph) {
+                SkipConvertedNewlines(transcode, universal, self, newline);
+            }
+
+            var bytes = new List<byte>();
+            bool atSeparator = false;
+            MutableString c;
+            while ((c = ReadConvertedChar(transcode, universal, self)) != null) {
+                bytes.AddRange(c.ToByteArray());
+                if (sep != null && EndsWith(bytes, sep)) {
+                    atSeparator = true;
+                    break;
+                }
+                if (limit > 0 && bytes.Count >= limit) {
+                    break;
+                }
+            }
+
+            if (bytes.Count == 0) {
+                self.ClearPendingChars();
+                return null;
+            }
+            if (paragraph && atSeparator) {
+                SkipConvertedNewlines(transcode, universal, self, newline);
+            }
+            return MutableString.CreateBinary(bytes.ToArray(), encoding);
+        }
+
+        private static void SkipConvertedNewlines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self, byte[]/*!*/ newline) {
+            MutableString c;
+            while ((c = ReadConvertedChar(transcode, universal, self)) != null) {
+                byte[] bytes = c.ToByteArray();
+                bool isNewline = bytes.Length == newline.Length;
+                for (int i = 0; isNewline && i < bytes.Length; i++) {
+                    isNewline = bytes[i] == newline[i];
+                }
+                if (!isNewline) {
+                    // Not one of them: it is the next character to read, as MRI's swallow leaves it.
+                    self.RestorePendingChars(bytes, 0, bytes.Length);
+                    return;
+                }
+            }
         }
 
         /// <summary>
@@ -2424,8 +2540,8 @@ namespace IronRuby.Builtins {
         /// IO#__transcode__ in ruby4.rb), and chomped when chomp: was given.
         /// </summary>
         private static MutableString/*!*/ FinishLine(TranscodeStorage/*!*/ transcode, RubyIO/*!*/ self, MutableString/*!*/ line,
-            MutableString separator, bool chomp) {
-            if (self.Enc2 != null || self.ConversionOptions != null) {
+            MutableString separator, bool chomp, bool converted) {
+            if (!converted && (self.Enc2 != null || self.ConversionOptions != null)) {
                 var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
                 line = site.Target(site, self, line) as MutableString ?? line;
             }
@@ -2481,6 +2597,148 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("getc")]
         public static object Getc(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self) {
+            if (self.HasPendingChars) {
+                self.RequireReadable();
+                return ReadPendingChar(transcode, universal, self);
+            }
+            object c = GetcFromStream(transcode, universal, self);
+            if (c == null) {
+                self.ClearPendingChars();
+            }
+            return c;
+        }
+
+        /// <summary>
+        /// MRI's io_read_encoding: the encoding of what the reads hand out, which is the
+        /// internal one when the stream has one.
+        /// </summary>
+        private static RubyEncoding/*!*/ ReadEncoding(RubyIO/*!*/ self) {
+            return (self.Enc2 != null ? self.Enc : GetExternalEncoding(self)) ?? self.Context.DefaultExternalEncoding;
+        }
+
+        private static readonly string[] NewlineDecorators = new[] { "newline", "universal_newline", "crlf_newline", "cr_newline", "lf_newline" };
+
+        /// <summary>
+        /// MRI's NEED_READCONV: the stream converts what it reads - it has an internal encoding,
+        /// or it is in text mode, which "rt" and each of the newline decorators ask for. On
+        /// such a stream #ungetc takes text that is already converted, and keeps it apart from
+        /// the bytes still to convert (RubyIO's character buffer).
+        /// </summary>
+        private static bool NeedsReadConversion(RubyIO/*!*/ self) {
+            if (self.Enc2 != null) {
+                return true;
+            }
+            var options = self.ConversionOptions;
+            if (options == null) {
+                return false;
+            }
+            foreach (var name in NewlineDecorators) {
+                object value;
+                if (options.TryGetValue(self.Context.CreateAsciiSymbol(name), out value) && RubyOps.IsTrue(value)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // The next character of the converted text: what is pending, then the stream's.
+        private static MutableString ReadConvertedChar(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self) {
+            return self.HasPendingChars ? ReadPendingChar(transcode, universal, self) : GetcFromStream(transcode, universal, self) as MutableString;
+        }
+
+        /// <summary>
+        /// One character off the character buffer, as MRI's io_getc takes it under NEED_READCONV.
+        /// When the bytes there stop short of a character, more text is converted from the
+        /// stream behind them; at the end of the stream the first byte goes out by itself.
+        /// </summary>
+        private static MutableString/*!*/ ReadPendingChar(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self) {
+            RubyEncoding encoding = ReadEncoding(self);
+            while (true) {
+                bool needMore;
+                int length = PendingCharLength(self, encoding, out needMore);
+                if (!needMore) {
+                    return MutableString.CreateBinary(self.ShiftPendingChars(length), encoding);
+                }
+                var more = GetcFromStream(transcode, universal, self) as MutableString;
+                if (more == null || more.IsEmpty) {
+                    return MutableString.CreateBinary(self.ShiftPendingChars(1), encoding);
+                }
+                byte[] bytes = more.ToByteArray();
+                self.AppendPendingChars(bytes, 0, bytes.Length);
+            }
+        }
+
+        /// <summary>
+        /// The length of the character the character buffer starts with, measured as
+        /// ReadCharacter measures one on the stream. <paramref name="needMore"/> says that the
+        /// buffer ends before the character does. Outside UTF-8 that cannot be told from a
+        /// sequence that is not a character at all, so it is said of any run of fewer than four
+        /// bytes none of whose prefixes is one.
+        /// </summary>
+        private static int PendingCharLength(RubyIO/*!*/ self, RubyEncoding/*!*/ encoding, out bool needMore) {
+            needMore = false;
+            int available = self.PendingCharCount;
+            byte first = self.GetPendingChar(0);
+            if ((first < 0x80 && encoding.IsAsciiIdentity) || encoding == RubyEncoding.Binary || encoding.IsSingleByteCharacterSet) {
+                return 1;
+            }
+
+            if (encoding == RubyEncoding.UTF8) {
+                int length;
+                byte low = 0x80, high = 0xBF;
+                if (first >= 0xC2 && first <= 0xDF) {
+                    length = 2;
+                } else if (first >= 0xE0 && first <= 0xEF) {
+                    length = 3;
+                    if (first == 0xE0) {
+                        low = 0xA0;
+                    } else if (first == 0xED) {
+                        high = 0x9F;
+                    }
+                } else if (first >= 0xF0 && first <= 0xF4) {
+                    length = 4;
+                    if (first == 0xF0) {
+                        low = 0x90;
+                    } else if (first == 0xF4) {
+                        high = 0x8F;
+                    }
+                } else {
+                    length = 1;
+                }
+                for (int i = 1; i < length; i++) {
+                    if (i >= available) {
+                        needMore = true;
+                        return 0;
+                    }
+                    byte next = self.GetPendingChar(i);
+                    if (next < low || next > high) {
+                        return 1;
+                    }
+                    low = 0x80;
+                    high = 0xBF;
+                }
+                return length;
+            }
+
+            int max = Math.Min(4, available);
+            for (int count = 1; count <= max; count++) {
+                byte[] bytes = new byte[count];
+                for (int i = 0; i < count; i++) {
+                    bytes[i] = self.GetPendingChar(i);
+                }
+                if (!MutableString.CreateBinary(bytes, encoding).ContainsInvalidCharacters()) {
+                    return count;
+                }
+            }
+            if (available < 4) {
+                needMore = true;
+                return 0;
+            }
+            return 1;
+        }
+
+        // #getc when the character buffer is empty: a character of the stream, converted.
+        private static object GetcFromStream(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self) {
             int first = self.ReadByteNormalizeEoln();
             if (first == -1) {
                 return null;
@@ -2493,11 +2751,37 @@ namespace IronRuby.Builtins {
                 first = self.ReadByteNormalizeEoln();
             }
             MutableString c = ReadCharacter(self, (byte)first, encoding);
+            // In a wide encoding the "\r" and the "\n" are characters to compare, not bytes.
+            if (encoding.MinBytesPerChar > 1 && IsUniversalNewline(universal, self) && IsCharacter(c, encoding, "\r")) {
+                int next = self.ReadByteNormalizeEoln();
+                if (next != -1) {
+                    MutableString following = ReadCharacter(self, (byte)next, encoding);
+                    if (IsCharacter(following, encoding, "\n")) {
+                        c = following;
+                    } else {
+                        byte[] bytes = following.ToByteArray();
+                        PushBack(self, bytes, 0, bytes.Length);
+                    }
+                }
+            }
             if (self.Enc2 != null || self.ConversionOptions != null) {
                 var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
                 return site.Target(site, self, c);
             }
             return c;
+        }
+
+        private static bool IsCharacter(MutableString/*!*/ c, RubyEncoding/*!*/ encoding, string/*!*/ character) {
+            byte[] expected = encoding.StrictEncoding.GetBytes(character);
+            if (c.GetByteCount() != expected.Length) {
+                return false;
+            }
+            for (int i = 0; i < expected.Length; i++) {
+                if (c.GetByte(i) != expected[i]) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// <summary>
@@ -2591,6 +2875,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("getbyte")]
         public static object GetByte(RubyIO/*!*/ self) {
+            self.RequireByteReadable();
             int b = self.ReadByteNormalizeEoln();
             return (b != -1) ? ScriptingRuntimeHelpers.Int32ToObject(b) : null;
         }
@@ -2641,12 +2926,13 @@ namespace IronRuby.Builtins {
         private static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyScope/*!*/ scope, RubyIO/*!*/ self,
             MutableString separator, int limit, bool chomp) {
 
-            MutableString result = ReadLineOrParagraph(self, IsUniversalNewline(universal, self), separator, limit);
+            bool converted;
+            MutableString result = ReadLineOrParagraph(transcode, universal, self, IsUniversalNewline(universal, self), separator, limit, out converted);
             if (result != null) {
                 if (CountsAsLine(result, separator, limit)) {
                     self.LineNumber++;
                 }
-                result = FinishLine(transcode, self, result, separator, chomp);
+                result = FinishLine(transcode, self, result, separator, chomp, converted);
             }
 
             scope.GetInnerMostClosureScope().LastInputLine = result;
@@ -2799,13 +3085,45 @@ namespace IronRuby.Builtins {
         // The byte pusher the prelude's #ungetc and #ungetbyte are written in terms of.
         [RubyMethod("__ir_ungetc__", RubyMethodAttributes.PrivateInstance)]
         public static void SetPreviousByte(RubyIO/*!*/ self, [DefaultProtocol]int b) {
-            self.RequireReadable();
+            self.RequireByteReadable();
             self.PushBack(unchecked((byte)b));
         }
 
+        // What IO#read (ruby4.rb) puts before the rest of the stream: the text in the character
+        // buffer, as bytes, or nil when there is none. Reading everything reaches the end of the
+        // stream, where MRI frees the buffer.
+        [RubyMethod("__ir_take_pending_chars__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString TakePendingChars(RubyIO/*!*/ self) {
+            if (!self.HasPendingChars) {
+                return null;
+            }
+            var result = MutableString.CreateBinary(self.ShiftPendingChars(self.PendingCharCount));
+            self.ClearPendingChars();
+            return result;
+        }
+
+        // The pusher of IO#__ungetc_rest__: text, which goes where #ungetc's goes.
+        [RubyMethod("__ir_ungetc_text__", RubyMethodAttributes.PrivateInstance)]
+        public static void PushBackText(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ text) {
+            self.RequireReadable();
+            PushBackText(self, text.ToByteArray());
+        }
+
         /// <summary>
-        /// ungetc pushes a String's bytes back, and takes an Integer as a codepoint in the stream's
-        /// external encoding. A String, and an ASCII codepoint in an ASCII-compatible encoding,
+        /// MRI's rb_io_ungetc: on a stream that converts what it reads the text goes into the
+        /// character buffer, to be read back as it is; on any other it is bytes like the rest.
+        /// </summary>
+        private static void PushBackText(RubyIO/*!*/ self, byte[]/*!*/ bytes) {
+            if (NeedsReadConversion(self)) {
+                self.PushBackChars(bytes, 0, bytes.Length);
+            } else {
+                PushBack(self, bytes, 0, bytes.Length);
+            }
+        }
+
+        /// <summary>
+        /// ungetc pushes a String's bytes back, and takes an Integer as a codepoint in the encoding
+        /// the stream's reads hand out. A String, and an ASCII codepoint in an ASCII-compatible encoding,
         /// are pushed here; anything else - a longer character, an object that converts with
         /// #to_str, nil - is IO#__ungetc_rest__ in ruby4.rb.
         /// </summary>
@@ -2815,17 +3133,14 @@ namespace IronRuby.Builtins {
 
             var str = value as MutableString;
             if (str != null) {
-                for (int i = str.GetByteCount() - 1; i >= 0; i--) {
-                    self.PushBack(str.GetByte(i));
-                }
+                PushBackText(self, str.ToByteArray());
                 return null;
             }
 
             if (value is int) {
                 int codepoint = (int)value;
-                RubyEncoding encoding = GetExternalEncoding(self) ?? self.Context.DefaultExternalEncoding;
-                if (codepoint >= 0 && codepoint < 0x80 && encoding.IsAsciiIdentity) {
-                    self.PushBack((byte)codepoint);
+                if (codepoint >= 0 && codepoint < 0x80 && ReadEncoding(self).IsAsciiIdentity) {
+                    PushBackText(self, new byte[] { (byte)codepoint });
                     return null;
                 }
             }
@@ -2939,7 +3254,8 @@ namespace IronRuby.Builtins {
 
             bool universalNewline = IsUniversalNewline(universal, self);
             MutableString line;
-            while ((line = ReadLineOrParagraph(self, universalNewline, separator, limit)) != null) {
+            bool converted;
+            while ((line = ReadLineOrParagraph(transcode, universal, self, universalNewline, separator, limit, out converted)) != null) {
                 if (block == null) {
                     throw RubyExceptions.NoBlockGiven();
                 }
@@ -2949,7 +3265,7 @@ namespace IronRuby.Builtins {
                     self.LineNumber++;
                 }
                 context.InputProvider.LastInputLineNumber = self.LineNumber;
-                line = FinishLine(transcode, self, line, separator, chomp);
+                line = FinishLine(transcode, self, line, separator, chomp, converted);
 
                 object result;
                 if (block.Yield(line, out result)) {
@@ -2969,6 +3285,7 @@ namespace IronRuby.Builtins {
                 // size: a stream does not say how much of it is left.
                 return new Enumerator(self, "each_byte") { SizeOp = "none" };
             }
+            self.RequireByteReadable();
 
             int aByte;
             while ((aByte = self.ReadByteNormalizeEoln()) != -1) {
@@ -3022,6 +3339,7 @@ namespace IronRuby.Builtins {
                 var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
                 RubyIO srcIO = TryToIO(respondTo, toIoStorage, context, src, false);
                 if (srcIO != null) {
+                    srcIO.RequireByteReadable();
                     srcStream = srcIO.GetReadableStream();
                 } else {
                     var srcPath = toPathSite.Target(toPathSite, src);

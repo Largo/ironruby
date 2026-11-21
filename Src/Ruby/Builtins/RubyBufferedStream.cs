@@ -49,6 +49,9 @@ namespace IronRuby.Builtins {
         private bool _writePending;
         private bool _writeFlushFailed;
 
+        // Whether the stream was read since the last seek or write (HasReadAheadInMri).
+        private bool _readSinceSeek;
+
         // IO#timeout: the IO whose timeout bounds a read or a write that has to wait for the
         // underlying stream; null when it has none.
         private RubyIO _timeoutOwner;
@@ -91,6 +94,7 @@ namespace IronRuby.Builtins {
         }
 
         private int BaseRead(byte[]/*!*/ buffer, int offset, int count) {
+            _readSinceSeek = true;
             var owner = _timeoutOwner;
             if (owner == null || count == 0) {
                 return _stream.Read(buffer, offset, count);
@@ -101,6 +105,25 @@ namespace IronRuby.Builtins {
             } catch (TimeoutException) {
                 throw owner.CreateTimeoutError();
             }
+        }
+
+        /// <summary>
+        /// Whether MRI's read buffer would hold something here. MRI fills its buffer with what a
+        /// file has whenever it reads, where this one reads as little as it is asked for; so
+        /// the answer is that a seekable stream was read since it was last positioned, and has
+        /// not been read to its end. What MRI does when it gives its read-ahead back (io_unread)
+        /// depends on it.
+        /// </summary>
+        public bool HasReadAheadInMri {
+            get { return _readSinceSeek && _stream.CanSeek && PeekByte(0) != -1; }
+        }
+
+        /// <summary>
+        /// MRI has given its read-ahead back (io_unread: before a seek, a #pos, a write or a
+        /// flush), and has none until it reads again.
+        /// </summary>
+        public void ReadAheadGivenBack() {
+            _readSinceSeek = false;
         }
 
         private void BaseWrite(byte[]/*!*/ buffer, int offset, int count) {
@@ -214,6 +237,7 @@ namespace IronRuby.Builtins {
             // clear any buffer content (including ungetc):
             _bufferStart = _bufferCount = _pushedBackCount = 0;
             _writePending = false;
+            _readSinceSeek = false;
 
             return result;
         }
@@ -233,6 +257,7 @@ namespace IronRuby.Builtins {
             FlushRead();
             BaseWrite(buffer, offset, count);
             _writePending = true;
+            _readSinceSeek = false;
         }
 
         public int WriteBytes(MutableString/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
@@ -244,6 +269,8 @@ namespace IronRuby.Builtins {
         public int WriteBytes(byte[]/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             ContractUtils.RequiresArrayRange(buffer.Length, offset, count, "offset", "count");
             FlushRead();
+            // MRI gives its read-ahead back before it writes (HasReadAheadInMri).
+            _readSinceSeek = false;
 
             // pending once something went out: a write that timed out (IO#timeout) left nothing
             if (preserveEndOfLines) {
@@ -308,12 +335,18 @@ namespace IronRuby.Builtins {
         // TODO: read in full buffer (underlying FileStream will buffer it anyways)
         public override int ReadByte() {
             if (_bufferCount > 0) {
+                // A byte that a look ahead loaded is one MRI has read ahead of; one that was
+                // pushed back is not (HasReadAheadInMri).
+                if (_pushedBackCount == 0) {
+                    _readSinceSeek = true;
+                }
                 return ReadBufferByte();
             }
             if (_timeoutOwner != null) {
                 var one = new byte[1];
                 return BaseRead(one, 0, 1) == 1 ? one[0] : -1;
             }
+            _readSinceSeek = true;
             return _stream.ReadByte();
         }
 
@@ -416,8 +449,12 @@ namespace IronRuby.Builtins {
                 return buffered;
             }
 
+            // MRI's read of what is available goes to the caller's buffer and reads nothing ahead
+            // (HasReadAheadInMri).
+            bool readSinceSeek = _readSinceSeek;
             var bytes = new byte[count];
             int read = BaseRead(bytes, 0, count);
+            _readSinceSeek = readSinceSeek;
             if (read > 0) {
                 buffer.Append(bytes, 0, read);
             }
@@ -470,6 +507,8 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's read of a number of bytes fills the caller's buffer from the descriptor once its
+        // own is empty, and reads nothing ahead (HasReadAheadInMri): this is not a read to count.
         private void AppendFromStream(MutableString/*!*/ buffer, int count) {
             var owner = _timeoutOwner;
             if (owner == null) {
