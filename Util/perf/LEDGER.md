@@ -1193,6 +1193,74 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/lsuper and the call counter fixes**: the branch at 4f66f1ae against
+  master at 951a0ddb, Release net10.0: **PASS**. IronRuby.Tests 1,291 executed and PASSED on both
+  trees. 31 matrices in five modes (as built; `IR_LIGHT_REGEX=0 IR_LIGHT_MASGN=0 IR_LIGHT_SUPER=0`;
+  `IR_LIGHT_FRAMES=0`; `IR_PARKED_SCOPES=0`; `-X:NoJIT -X:NoOSR`): 155 same, 0 differ. ruby/spec,
+  all five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, ns a call, baseline -> candidate): `initialize` calling `super(a)`
+  197 -> 162 (0.82), `super()` into Object 196 -> 130 (0.66), `super` with two implicit arguments
+  115 -> 76 (0.66), super passing the block 232 -> 178 (0.77), super into `Array#size` 120 -> 68
+  (0.57), super reaching a Ruby `method_missing` 178 -> 126 (0.71); `respond_to?` through super,
+  which keeps its scope, 0.96 and the three controls 1.00-1.02, all overlapping. The regex shapes
+  and the step-shapes 0.95-1.09, all overlapping. micro-table in both orders: no line slower in
+  both. AWFY, 12 iterations, both orders: geomean 0.990 and 0.987 (new/base), every benchmark
+  verified; start-up 1,182 and 1,209 ms.
+  The prelude's `bytesplice` counts 10,901 -> 11,544 instructions a call (1.059) here too, with a
+  baseline that already has the changes the last gate measured it on, and `bs_a` (the same body
+  in the script) 1.002: the difference follows the tree the build runs from and not a change.
+  Which property of the tree is not found.
+
+- **perf/lsuper (/perf-step, 2026-11-21) - a method that calls `super` in a light frame, unless
+  super reads the caller's scope** (`IR_LIGHT_SUPER=0` turns it off) - census only when merged, gated on 2026-11-21 (first entry).
+  `IsScopeFree` had no case for a SuperCall, which kept about 1,050 methods out. A super site read
+  three things from the scope: the module the method was defined in and the name it was defined
+  under (`RubyScope.GetSuperCallTarget`), for the lookup, and the method's self. A light frame's
+  body is compiled per declaring module (`RubyMethodBody.GetDelegate`), so the module and the name
+  are constants of the compilation and self is the site's own operand. The rewriter turns the
+  site into a `SuperCallAction` of its own (`MakeLight`) that carries the two and is bound with a
+  light scope; a rule that reads the scope answers `LightScopeRequired`, and the frame makes its
+  scope and calls the ordinary site (`MakeLightCall`, the code `LightScopeCall` had). A `super`
+  without arguments reads the parameters, which are locals. Not let in: `super` with a literal
+  block (its Proc needs the scope as its parent), and `super` inside a block of the method, which
+  goes through the block's scope as before.
+  - A fault found by the matrix and fixed in the step: super hands the method's block on, and a
+    light frame reuses the Proc of a literal block after the call, so a parent that kept the block
+    (`def keep(&b) = b`, child `def keep = super`) raised NullReferenceException. A method with a
+    super now enters as one that names its block (`LightFrame.NamesBlock`).
+  - What loses stays out: `def respond_to?(m, p = false) = m == :zz || super` counts 1,489
+    instructions a call as a light frame against 1,360 with its scope, because
+    `Kernel#respond_to?` asks for the caller's scope on every call (gap 16). So a method named like
+    a library method that takes its caller's scope (`SuperScopeMethods`, from the `[RubyMethod]`s
+    with a RubyScope parameter) keeps its scope when it calls super. The name decides only which
+    frame is made; the rule still decides what the call needs. `method_missing` is not on the
+    list: super into a Ruby one gains 21%.
+  - Light frames 79.1% -> 82.6% (22,410 -> 23,419), JIT unchanged (Src/StdLib + AWFY, 28,337
+    methods; 1,009 moved up, none down). 387 of them are `initialize`; of AWFY's, DeltaBlue's
+    `Plan`, `BinaryConstraint`, `UnaryConstraint`, `EqualityConstraint`, `ScaleConstraint` and
+    Richards's `TaskControlBlock`, all `initialize`.
+  - Measured (`ab.rb -i`, instructions a call, `IR_LIGHT_SUPER=0` -> on): `initialize` calling
+    `super(a)` 2,078 -> 1,723 (0.83), `super()` into Object 1,823 -> 1,384 (0.76), `super` with two
+    implicit arguments 1,257 -> 951 (0.76), super passing the method's block 2,281 -> 2,087
+    (0.92), super into `Array#size` 1,191 -> 876 (0.74), an Exception subclass's `initialize`
+    3,283 -> 2,908 (0.89), super reaching a Ruby `method_missing` 1,801 -> 1,414 (0.79). Controls
+    (an `initialize` without super, a plain call, a yield) 1.002-1.007.
+  - Checked: `Util/super-light-matrix.rb` (new) prints CRuby 4.0's output on the baseline and on
+    the candidate as built, with `IR_LIGHT_SUPER=0`, `IR_LIGHT_FRAMES=0`, `IR_LIGHT_BLOCK_PASS=0`,
+    `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`; block-given, light-rest, masgn, regex-light,
+    binding-lvar, hot-shapes, jit and jit-calls print the baseline's. A second probe (a class
+    made by `dup` and by `clone`, a module in two classes, `module_function`, a singleton method
+    and its clone, `bind_call`, `super_method`, prepend and extend half way, four threads,
+    `BasicObject`, `defined?(super)`) prints CRuby's with the switch on and off. `census.rb -c`
+    on traces of the matrix, the shapes and DeltaBlue: 0 differ.
+  - Two faults of the baseline the matrix is written around, not fixed here: `super(n, 0)` from
+    an Array subclass's `initialize` raises NullReferenceException in `Array#initialize`, and a
+    TracePoint sees no `:c_call` for a super into a C# method.
+  - With it, three findings of the review of the regex and register-local steps: the call counter
+    counts the operator of `x += v`, both calls of `a[i] += v` and `o.x += v`, and the defaults of
+    optional parameters; `s[/x/] = v` (String#[]=, which stores `$~`) keeps the scope. One method
+    moves down by the count, `Ripper.add_spaces` (light frames 23,418).
+
 - **Gate of 2026-11-21 for perf/lightsize, perf/lightre and the block-pass count**: the branch at
   0db76bbc against master at 45a1eeff, Release net10.0: **PASS**. IronRuby.Tests 1,291 executed
   and PASSED on both trees, no failing name on either. 30 matrices in five modes (as built,
