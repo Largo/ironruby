@@ -1193,9 +1193,29 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/lbreak**: the branch at 86fcbc2e against master at 831508a0,
+  Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 33 matrices
+  in five modes (as built; the six light-frame switches off; `IR_LIGHT_FRAMES=0`;
+  `IR_PARKED_SCOPES=0`; `-X:NoJIT -X:NoOSR`): 165 same, 0 differ. ruby/spec, all five suites
+  (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, ns a call, baseline -> candidate, `Util/bench/loop-shapes.rb`): a
+  loop of one iteration with a break 136 -> 104 (0.76), of four 152 -> 112 (0.74), of a hundred
+  240 -> 154 (0.64), `next` in four 160 -> 144 (0.90), `take_while` and `drop_while` 328 -> 272
+  (0.83), `rfind` 0.91, the scan loop 0.90, `@m ||= begin ... end` 96 -> 56 (0.58); `sum` with a
+  block, a plain `begin`, a loop of four without a jump and the control 0.99-1.11, all
+  overlapping. The loop of 10,000 iterations was not timed on the baseline (the run printed no
+  number for it); by instructions it is 0.998. Instructions a call agree with the step's own
+  (0.72-0.91 on the shapes above), and two shapes count more: the plain `begin` 658 -> 682
+  (1.036, spread 5%) and the control 931 -> 958 (1.029), neither slower on the clock.
+  The regex, step and super shapes 0.91-1.10, all overlapping. micro-table in both orders: no
+  line slower in both. AWFY, 12 iterations, both orders: geomean 0.991 and 0.990 (new/base),
+  every benchmark verified; start-up 1,188 and 1,209 ms.
+  The prelude's `bytesplice` counts 11,568 -> 11,657 instructions a call here (1.008), where the
+  last two gates had 1.06.
+
 - **perf/lbreak (/perf-step, 2026-11-21) - `break`, `next` and `redo` in a `while`/`until` loop, a
   `begin ... end` without clauses, and a light frame's OSR site without a scope** (`IR_LIGHT_BREAK=0`,
-  `IR_LIGHT_BEGIN=0`, `IR_LIGHT_OSR=0`) - census only, not gated. Three commits.
+  `IR_LIGHT_BEGIN=0`, `IR_LIGHT_OSR=0`) - census only when merged, gated on 2026-11-21 (first entry). Three commits.
   - **break/next/redo.** In a loop each is a jump to one of the loop's labels, a break's value
     stored in the loop's result (`TransformJump`); the scope is read only in an eval, which is
     never light, or to leave a class body. `IsScopeFree` walks no block's body and the parser
