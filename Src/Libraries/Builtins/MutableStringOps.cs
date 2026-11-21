@@ -2410,14 +2410,17 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each_codepoint")]
         public static object EachCodePoint([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
+            // The encoding the characters were walked in, which the block may change under the
+            // walk (force_encoding): MRI takes the bytes and the encoding together, once.
+            var encoding = self.Encoding;
             var enumerator = self.GetCharacters();
             while (enumerator.MoveNext()) {
                 if (!enumerator.Current.IsValid) {
-                    throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
+                    throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", encoding.Name);
                 }
 
                 object result;
-                if (block.Yield(CodeToObject(NativeCode(self.Encoding, enumerator.Current)), out result)) {
+                if (block.Yield(CodeToObject(NativeCode(encoding, enumerator.Current)), out result)) {
                     return result;
                 }
             }
