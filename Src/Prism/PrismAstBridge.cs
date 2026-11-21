@@ -676,7 +676,7 @@ namespace IronRuby.Prism {
                     // interpolated string with nothing interpolated; MRI treats it as the single
                     // literal it looks like, frozen or chilled with the rest of the file's.
                     var folded = TryFoldAdjacentLiterals(interp, span);
-                    return folded ?? new StringConstructor(StringParts(interp.Parts), StringKind.Mutable, span);
+                    return folded ?? new StringConstructor(StringParts(interp.Parts), StringKind.Mutable, span) { SourceEncoding = _encoding };
                 }
                 case Pm.InterpolatedSymbolNode interpSymbol:
                     return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);

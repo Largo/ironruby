@@ -52,6 +52,10 @@ namespace IronRuby.Compiler.Ast {
             get { return _parts; }
         }
 
+        // The encoding of the source a String is written in (PrismAstBridge), which the method JIT makes it in
+        // (TransformWithoutScope); the generic body has it from its AstGenerator. Null where the parser did not say.
+        internal RubyEncoding SourceEncoding { get; set; }
+
         public StringConstructor(List<Expression>/*!*/ parts, StringKind kind, SourceSpan location) 
             : base(location) {
             ContractUtils.RequiresNotNullItems(parts, "parts");
@@ -89,6 +93,47 @@ namespace IronRuby.Compiler.Ast {
             throw Assert.Unreachable;
         }
         
+        /// <summary>
+        /// The method JIT's typed body (JitCompiler.EmitInterpolation): the String TransformReadCore makes of a "a#{x}b",
+        /// each interpolated part converted by <paramref name="convert"/>, in the order the generic body converts them
+        /// through its scope (MakeConversion). Null for a Symbol or a command, for a String whose source encoding the
+        /// parser did not record, and where literal parts of incompatible encodings leave the error to run time.
+        /// </summary>
+        internal MSA.Expression TransformWithoutScope(Func<Expression, MSA.Expression>/*!*/ convert) {
+            var encoding = SourceEncoding;
+            if (_kind != StringKind.Mutable || encoding == null) {
+                return null;
+            }
+
+            var factory = StringFactory.Instance;
+            if (_parts.Count == 1) {
+                var literal = _parts[0] as StringLiteral;
+                if (literal != null) {
+                    var str = literal.Value as string;
+                    return (str != null) ? factory.CreateExpression(null, str, literal.Encoding) : factory.CreateExpression(null, (byte[])literal.Value, literal.Encoding);
+                }
+                return Methods.CreateMutableString("M").OpCall(convert(_parts[0]), encoding.Expression);
+            }
+
+            var merged = new MSAst.ExpressionCollectionBuilder();
+            var concat = new LiteralConcatenation(encoding);
+            if (!ConcatLiteralsAndTransformRecursive(_parts, concat, merged, convert)) {
+                return null;
+            }
+            if (concat.Count > 0) {
+                merged.Add(TransformLiteralPart(concat.GetValue(), concat.Encoding));
+            }
+            if (merged.Count == 0) {
+                return factory.CreateExpression(null, String.Empty, encoding);
+            }
+            if (merged.Count > RubyOps.MakeStringParamCount) {
+                return factory.CreateExpressionN(null, merged);
+            }
+            string suffix = new String('M', merged.Count);
+            merged.Add(encoding.Expression);
+            return Methods.CreateMutableString(suffix).OpCall(merged);
+        }
+
         internal static MSA.Expression/*!*/ MakeConversion(AstGenerator/*!*/ gen, Expression/*!*/ expression) {
             // an interpolation in a heredoc can be lines below the statement: a backtrace from it
             // names its own line
@@ -270,7 +315,7 @@ namespace IronRuby.Compiler.Ast {
             var merged = new MSAst.ExpressionCollectionBuilder();
             var concat = new LiteralConcatenation(gen.Encoding);
 
-            if (!ConcatLiteralsAndTransformRecursive(gen, parts, concat, merged)) {
+            if (!ConcatLiteralsAndTransformRecursive(parts, concat, merged, part => MakeConversion(gen, part))) {
                 // TODO: we should emit Append calls directly, and not create an array first
                 // TODO: MRI reports a syntax error
                 // we can't concatenate due to encoding incompatibilities, report error at runtime:
@@ -314,9 +359,10 @@ namespace IronRuby.Compiler.Ast {
         //    or "encoding" suffix (for each concatenated literal).
         //
         // Returns false if the parts can't be concatenated due to encoding incompatibilities.
+        // "convert" makes the String of a part that is not a literal (MakeConversion), in the parts' order.
         // 
-        private static bool ConcatLiteralsAndTransformRecursive(AstGenerator/*!*/ gen, List<Expression>/*!*/ parts,
-            LiteralConcatenation/*!*/ concat, MSAst.ExpressionCollectionBuilder/*!*/ result) {
+        private static bool ConcatLiteralsAndTransformRecursive(List<Expression>/*!*/ parts,
+            LiteralConcatenation/*!*/ concat, MSAst.ExpressionCollectionBuilder/*!*/ result, Func<Expression, MSA.Expression>/*!*/ convert) {
 
             for (int i = 0; i < parts.Count; i++) {
                 Expression part = parts[i];
@@ -328,7 +374,7 @@ namespace IronRuby.Compiler.Ast {
                         return false;
                     }
                 } else if ((ctor = part as StringConstructor) != null) {
-                    if (!ConcatLiteralsAndTransformRecursive(gen, ctor.Parts, concat, result)) {
+                    if (!ConcatLiteralsAndTransformRecursive(ctor.Parts, concat, result, convert)) {
                         return false;
                     }
                 } else {
@@ -337,7 +383,7 @@ namespace IronRuby.Compiler.Ast {
                         concat.Clear();
                     }
 
-                    result.Add(MakeConversion(gen, part));
+                    result.Add(convert(part));
                 }
             }
 
