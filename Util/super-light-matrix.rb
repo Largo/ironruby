@@ -385,6 +385,35 @@ tp.enable { C17.new.f(1); MyArr.new(0).push(1) }
 p calls
 t("after the TracePoint") { |i| C17.new.f(i % 2) }
 
+# ---------------------------------------------------------------- 8b. errors of the call, a shared site, a value
+def guard2
+  yield
+rescue Exception => e
+  "#{e.class}: #{e.message}"
+end
+class P17; def two(a, b) = [a, b]; def r(a) = a * 2; def kw(a, k:) = [a, k]; end
+class C17 < P17
+  def two(a, b) = super(a)
+  def many(a) = super(a, a, a)
+  def r(a) = ([1].each { return super(a) }; :no)
+  def kw(a, k: 1) = super(a)
+end
+class D17 < P17; def two(a, b) = super(a, b, 3); def kw(a, k: 1) = super(a, k: k, z: 1); end
+t("too few arguments through super") { |i| guard2 { C17.new.two(i % 2, 1) } }
+t("too many arguments through super") { |i| guard2 { D17.new.two(i % 2, 1) } }
+t("no superclass method, three arguments") { |i| guard2 { C17.new.many(i % 2) } }
+t("return super from a block") { |i| C17.new.r(i % 2) }
+t("missing keyword through super") { |i| guard2 { C17.new.kw(i % 2) } }
+t("unknown keyword through super") { |i| guard2 { D17.new.kw(i % 2) } }
+module M17; def f(x) = [:m, super]; end
+class X17a; def f(x) = [:x, x]; end
+class Y17a; def f(x) = [:y, x]; end
+class X17 < X17a; include M17; end
+class Y17 < Y17a; include M17; end
+t("one module's super site, two classes in turn") { |i| (i.odd? ? X17 : Y17).new.f(i % 2) }
+class V17 < Array; def initialize(n) = super(n, 0); end
+t("Array#initialize with a value through super") { |i| V17.new(i % 3) }
+
 # ---------------------------------------------------------------- 9. refinements
 
 class P16; def f = :p16; end

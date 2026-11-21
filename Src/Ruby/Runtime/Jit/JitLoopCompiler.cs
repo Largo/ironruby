@@ -72,15 +72,16 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex,
-            out JitLoopGuard loopGuard, bool longRuns = false) {
+            out JitLoopGuard loopGuard, bool longRuns = false, bool lightFrame = false) {
 
             loopGuard = null;
 
             // The refinements active where the loop is written: the operators it inlines are resolved
-            // under them, as its call sites would resolve them.
+            // under them, as its call sites would resolve them. A light frame's loop is handed its method's
+            // declaring scope, whose refinements are not the method's: it has none (OsrLoopSite.InLightFrame).
             RubyScope scope = (scopeArgIndex >= 0 && scopeArgIndex < args.Length) ? args[scopeArgIndex] as RubyScope : null;
             if (scope == null) { return null; }
-            RefinementActivation refinements = scope.GetActiveRefinements();
+            RefinementActivation refinements = lightFrame ? RefinementActivation.Empty : scope.GetActiveRefinements();
 
             // What the prologue's version guard compares against: read before the compiler
             // resolves anything (see JitStub.TrySpecialize), so that a method table change racing
@@ -243,14 +244,16 @@ namespace IronRuby.Runtime.Jit {
             // The same loop can be entered under other refinements than the ones the copy was built
             // under - an eval string's, say: build one for those. Not a Retype: the locals' types are
             // as the copy expects, and those rebuilds are kept for the day one of them widens.
-            prologue.Add(Ast.IfThen(
-                Ast.NotEqual(
-                    Ast.Call(IronRuby.Compiler.Methods.GetActiveRefinements,
-                        Ast.Convert(Ast.ArrayIndex(argsParameter, Ast.Constant(scopeArgIndex)), typeof(RubyScope))),
-                    Ast.Constant(refinements, typeof(RefinementActivation))
-                ),
-                Ast.Return(exit, Ast.Constant(OsrLoopSite.RefinementsChanged, typeof(object)))
-            ));
+            if (!lightFrame) {
+                prologue.Add(Ast.IfThen(
+                    Ast.NotEqual(
+                        Ast.Call(IronRuby.Compiler.Methods.GetActiveRefinements,
+                            Ast.Convert(Ast.ArrayIndex(argsParameter, Ast.Constant(scopeArgIndex)), typeof(RubyScope))),
+                        Ast.Constant(refinements, typeof(RefinementActivation))
+                    ),
+                    Ast.Return(exit, Ast.Constant(OsrLoopSite.RefinementsChanged, typeof(object)))
+                ));
+            }
 
             if (self != null) {
                 prologue.Add(Ast.Assign(self, Ast.ArrayIndex(argsParameter, Ast.Constant(selfArgIndex))));
