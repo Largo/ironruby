@@ -554,6 +554,12 @@ namespace IronRuby.Compiler.Ast {
         private static readonly bool LightRegexAll = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") == "all";
 
         /// <summary>
+        /// IR_LIGHT_BREAK=0 keeps every method with a `break', `next' or `redo' in a `while'/`until' loop of its body out of
+        /// light frames (see IsScopeFree).
+        /// </summary>
+        internal static readonly bool LightBreakEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_BREAK") != "0";
+
+        /// <summary>
         /// IR_LIGHT_OSR=0 makes a light frame's scope on demand for its loop's OSR site, as before, instead of handing the site
         /// the declaring scope (see LightFrameRewriter.VisitMethodCall and OsrLoopSite.InLightFrame).
         /// </summary>
@@ -663,7 +669,8 @@ namespace IronRuby.Compiler.Ast {
         /// A call without a block takes the scope too, but makes it only when the method it binds to would read it
         /// (LightFrameRewriter.LightScopeCall), so `def getter; a; end', `def cmp(o); @x < o; end' and conditions over
         /// such calls are light as well, and so are the attribute and element assignments, string interpolation, `case/when'
-        /// and `while' loops made of them (a loop's OSR site gets the declaring scope). Global variables need the scope.
+        /// and `while' loops made of them, with their `break', `next' and `redo' (a loop's OSR site gets the declaring scope).
+        /// Global variables need the scope.
         /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
         /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
         /// and keywords are not taken. A splatted argument (`inner(*args)') is converted by a site that takes no scope.
@@ -1168,6 +1175,14 @@ namespace IronRuby.Compiler.Ast {
             var jump = node as ReturnStatement;
             if (jump != null) {
                 return AreScopeFree(jump.Arguments, blockLiterals, why);
+            }
+            // `break v', `next', `redo' in a loop: a jump to one of the loop's labels, the value stored in the loop's result
+            // (Break/Next/RedoStatement.TransformJump). IsScopeFree walks neither a block's body nor eval'd code, and the
+            // parser refuses one outside a loop or a block, so every one it meets is a loop's. The scope is read only in an
+            // eval, which is never a light frame, or to leave a class body, which is not scope-free.
+            if (node is BreakStatement || node is NextStatement || node is RedoStatement) {
+                return (LightBreakEnabled || Refuse(why, node.GetType().Name + " (IR_LIGHT_BREAK=0)")) &&
+                    AreScopeFree(((JumpStatement)node).Arguments, blockLiterals, why);
             }
             // a node of a kind not taken at all: its type says what it is, and a Hash says whether it is a call's keywords
             if (why == null) {
