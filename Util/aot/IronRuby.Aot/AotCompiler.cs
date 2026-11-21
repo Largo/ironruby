@@ -1131,11 +1131,13 @@ namespace IronRuby.Aot {
 
         private string _sourcePath;
         private byte[] _sourceBytes;
+        private string _sourceMagicComments;
 
         /// <summary>
         /// The source of a `def' the method JIT may specialize (JitStub.IsCandidate), which the library keeps for it: the JIT
         /// works from the method's AST, and the compiled method has none (PrecompiledCode.ParseJitSource parses this at the
         /// method's first call). Kept only if it parses back, the way the runtime will parse it, to a method the JIT takes too.
+        /// The file's frozen_string_literal comment goes before it, so that the JIT's String literals are the compiled body's.
         /// </summary>
         private string JitSource(RubyMethodBody body, MethodDefinition ast) {
             string path = body.Document?.FileName;
@@ -1145,11 +1147,17 @@ namespace IronRuby.Aot {
             if (_sourcePath != path) {
                 // what prism was given: the UTF-8 bytes of the file's code, whose offsets the AST's locations are
                 _sourceBytes = System.Text.Encoding.UTF8.GetBytes(_context.CreateFileUnit(path).GetCode());
+                _sourceMagicComments = PrecompiledCode.MagicComments(_sourceBytes);
                 _sourcePath = path;
             }
             int start = ast.Location.Start.Index, end = ast.Location.End.Index;
             string text = start >= 0 && end > start && end <= _sourceBytes.Length ? System.Text.Encoding.UTF8.GetString(_sourceBytes, start, end - start) : null;
-            var parsed = text != null && text.StartsWith("def", StringComparison.Ordinal) ? PrecompiledCode.ParseJitSource(_context, text, ast, path) : null;
+            if (text == null || !text.StartsWith("def", StringComparison.Ordinal)) {
+                text = null;
+            } else if (_sourceMagicComments != null) {
+                text = _sourceMagicComments + text;
+            }
+            var parsed = text != null ? PrecompiledCode.ParseJitSource(_context, text, ast, path) : null;
             if (parsed == null || !IronRuby.Runtime.Jit.JitStub.IsCandidate(parsed, _context)) {
                 Count("JIT candidates whose source does not parse back (not kept)");
                 return null;
