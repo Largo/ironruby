@@ -118,6 +118,14 @@ namespace IronRuby.Builtins {
             get { return _readSinceSeek && _stream.CanSeek && PeekByte(0) != -1; }
         }
 
+        /// <summary>
+        /// MRI has given its read-ahead back (io_unread: before a seek, a #pos, a write or a
+        /// flush), and has none until it reads again.
+        /// </summary>
+        public void ReadAheadGivenBack() {
+            _readSinceSeek = false;
+        }
+
         private void BaseWrite(byte[]/*!*/ buffer, int offset, int count) {
             var owner = _timeoutOwner;
             if (owner == null || count == 0) {
@@ -494,6 +502,8 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's read of a number of bytes fills the caller's buffer from the descriptor once its
+        // own is empty, and reads nothing ahead (HasReadAheadInMri): this is not a read to count.
         private void AppendFromStream(MutableString/*!*/ buffer, int count) {
             var owner = _timeoutOwner;
             if (owner == null) {

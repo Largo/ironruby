@@ -133,6 +133,15 @@ r.("getbyte, seek cur") { |io| io.getbyte; io.ungetc("X"); io.seek(0, IO::SEEK_C
 r.("gets(2), pos") { |io| io.gets(2); io.ungetc("X"); [io.pos, io.getc] }
 r.("getc, write, ungetc, pos") { |io| io.getc; io.write("W"); io.ungetc("X"); [io.pos, io.getc] }
 r.("getc, print, ungetc, pos") { |io| io.getc; io.print("W"); io.ungetc("X"); [io.pos, io.getc] }
+r.("seek, read(1), pos") { |io| io.seek(2); io.read(1); io.ungetc("X"); [io.pos, io.getc] }
+r.("seek, readpartial, pos") { |io| io.seek(2); io.readpartial(1); io.ungetc("X"); [io.pos, io.getc] }
+r.("seek, read(100), pos") { |io| io.seek(2); io.read(100); io.ungetc("X"); [io.pos, io.getc] }
+r.("sysread, pos") { |io| io.sysread(1); io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, readpartial, pos") { |io| io.getc; io.readpartial(1); io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, seek, ungetc, pos") { |io| io.getc; io.seek(0); io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, pos=, ungetc, seek cur") { |io| io.getc; io.pos = 3; io.ungetc("X"); io.seek(0, IO::SEEK_CUR); io.getc }
+r.("getc, pos, ungetc, pos") { |io| io.getc; io.pos; io.ungetc("X"); [io.pos, io.getc] }
+r.("getc, flush, ungetc, pos") { |io| io.getc; io.flush; io.ungetc("X"); [io.pos, io.getc] }
 r.("set_encoding(Encoding)") { |io| io.ungetc("X"); io.set_encoding(Encoding::UTF_8); io.getc }
 r.("set_encoding(Encoding, Encoding)") { |io| io.ungetc("X"); io.set_encoding(Encoding::UTF_8, Encoding::UTF_16LE); io.getc.b }
 r.("set_encoding(String)") { |io| io.ungetc("X"); io.set_encoding("utf-8"); io.getc }

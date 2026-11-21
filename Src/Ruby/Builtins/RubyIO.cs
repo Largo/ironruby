@@ -519,12 +519,14 @@ namespace IronRuby.Builtins {
         /// it. With nothing read ahead - nothing read yet, or all of it - the text stays.
         /// </summary>
         public void UnreadPendingChars() {
-            if (_pendingCharCount > 0) {
-                var stream = _stream;
-                if (stream != null && stream.HasReadAheadInMri) {
-                    ClearPendingChars();
-                }
+            var stream = _stream;
+            if (stream == null) {
+                return;
             }
+            if (_pendingCharCount > 0 && stream.HasReadAheadInMri) {
+                ClearPendingChars();
+            }
+            stream.ReadAheadGivenBack();
         }
 
         /// <summary>
