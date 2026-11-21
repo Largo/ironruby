@@ -389,11 +389,11 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
 
-            // A light frame keeps its locals in CLR variables if it can: `def one(x); yield x; end' would otherwise allocate their
-            // tuple on every call.
+            // A light frame keeps its locals in CLR variables if it can and makes few calls (MaxRegisterLocalsCalls):
+            // `def one(x); yield x; end' would otherwise allocate their tuple on every call.
             MSA.Expression enter = null;
             if (light != null) {
-                var registerBody = scope.TryUseRegisterLocals(body);
+                var registerBody = (CountCalls() <= MaxRegisterLocalsCalls) ? scope.TryUseRegisterLocals(body) : null;
                 if (registerBody != null) {
                     body = registerBody;
                     enter = light.EnterWithRegisterLocals(scope);
@@ -662,15 +662,35 @@ namespace IronRuby.Compiler.Ast {
 
         // A body with a multiple assignment and more than MaxMultipleAssignmentCalls calls keeps its scope.
         private bool IsLargeWithMultipleAssignment() {
-            var statements = Body.Statements;
-            if (!LightMultipleAssignmentEnabled || statements == null) {
+            if (!LightMultipleAssignmentEnabled) {
                 return false;
             }
-            var counter = new CallCounter();
-            foreach (var statement in statements) {
-                statement.Walk(counter);
-            }
+            var counter = WalkCalls();
             return counter.HasMultipleAssignment && counter.Calls > MaxMultipleAssignmentCalls;
+        }
+
+        // The most calls a light frame may make and still keep its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals).
+        // Each call's scope-making arm copies every register local into the tuple (ScopeBuilder.MaterializeLocals) and each
+        // access of one is a test of the tuple, so a large body's lambda doubles: a copy of String#bytesplice's body written with single assignments (81-100
+        // calls) is 52 KB of IL and compiled MinOpts with them, 30 KB and FullOpts without, 13,290 instructions a call against 11,140 (11,440
+        // with its scope). One copy of the arm per frame cannot be had: each call site is inside an expression, which control
+        // cannot enter, and a nested lambda would hoist the locals into a closure. Straight-line bodies with ten locals gain
+        // from them up to 32 calls (2-3%) and not at 48.
+        private const int MaxRegisterLocalsCalls = 40;
+
+        private int CountCalls() {
+            return WalkCalls().Calls;
+        }
+
+        private CallCounter/*!*/ WalkCalls() {
+            var counter = new CallCounter();
+            var statements = Body.Statements;
+            if (statements != null) {
+                foreach (var statement in statements) {
+                    statement.Walk(counter);
+                }
+            }
+            return counter;
         }
 
         private sealed class CallCounter : Walker {

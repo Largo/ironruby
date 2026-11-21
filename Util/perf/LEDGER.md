@@ -978,6 +978,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     only keeps a body with a multiple assignment and more than 24 calls out. Untried: register
     locals only for a small body (the numbers above say that alone recovers most of it),
     and one copy of the scope-making code per frame instead of one per call site.
+    **perf/lightsize** did the first (at most 40 calls; that copy of `bytesplice` 0.82, and
+    0.97 of its scoped count) and found the second cannot be built in an expression tree (a
+    site is inside an expression, which control cannot enter). Left: the arms still double a
+    large light frame's IL without register locals (m48 11.7 KB against 5.7), and a body with
+    a multiple assignment and more than 24 calls loses 2-4% light for a reason not yet found.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -1185,6 +1190,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **perf/lightsize (/perf-step, 2026-11-21) - register locals only in a light frame of at most
+  40 calls** (`MethodDefinition.MaxRegisterLocalsCalls`) - not gated. A larger light frame keeps
+  its locals in their tuple, made at entry, as one with more than 16 locals already did.
+  Asked first: could the scope-making arm of `LightFrameRewriter.LightScopeCall` be one copy
+  per frame instead of one per call site (gap 16's third)? **No, not in an expression tree.**
+  Each site's arm is `LightDynamic(action, #scope ?? (#scope = LightScopeInLoop(
+  CreateMethodScopeLazy(shape, ..., MaterializeLocals(), self, block, ..., #rfc, #callee),
+  #in-loop)), args...)`, and `MaterializeLocals` is `#locals ?? {new tuple; one store per
+  register; }`. A shared block the sites jump to and come back from cannot be had: a site is
+  inside an expression (an argument, a condition), and the DLR refuses a jump into one
+  ("Control cannot enter an expression", `LabelInfo.ValidateJump`; System.Linq.Expressions
+  has the same rule), nor is a branch with values on the IL stack valid. A nested lambda would
+  close over the register locals and hoist them into a closure for the whole body; a helper
+  taking them by ref makes them address-exposed, so the JIT keeps them in memory; a helper
+  taking them by value still loads each one at every site. What is left per site is the
+  site, the test and the second call: without register locals the arms alone still double a
+  straight-line body (m48: 11.7 KB of IL against 5.7 KB with its scope; m24 6.1 against 3.1).
+  - Measured (`ab.rb -i`, instructions a call): a copy of `bytesplice`'s body written with
+    single assignments (81-100 calls; `bs_g`) 13,394 -> 10,993 (0.82; with
+    `IR_LIGHT_FRAMES=0` 11,380), IL 51,959 `Tier-0 switched MinOpts` -> 30,036 `FullOpts`;
+    allocated 626 -> 769 B a call (the tuple; 1,297 with its scope). Straight-line bodies
+    with ten locals and a multiple assignment, the masgn limit lifted (calls counted where the
+    register switch flips them): with register locals against without, m8 (~10 calls)
+    3,188/3,267, m16 4,693/4,855, m24 6,367/6,687, m32 (31-36) 7,811/8,016, m48 (45-50)
+    11,774/11,550, so the limit sits between m32 and m48. The step-shapes (`swap`, `ctl`,
+    `ctl2`, `lit_sz`, `itp_sz`, `iswap`, `attr2`, `arr2`) 0.978-1.005 against the baseline,
+    all overlapping (their IL is unchanged); `bytesplice` and `bs_a`-`bs_f` (they keep their
+    scope by the masgn limit) 0.998-1.013. Tried and dropped: comparing with a static field
+    for `RubyOps.LightScopeRequired` instead of a closure constant (m48 within 0.3%).
+  - The masgn limit (`MaxMultipleAssignmentCalls`, 24) stays: with this change, the `bs_*`
+    copies with the limit lifted count 1.019-1.037 of `IR_LIGHT_MASGN=0` (bytesplice 1.012),
+    so a large body with a multiple assignment still loses for a reason that is not the
+    register locals; at 40 instead of 24, m32 gains 1%, inside the noise. Census unchanged
+    (light frames 22,255: it says which methods are light, not how they keep their locals).
+  - Checked: `Util/binding-lvar-matrix.rb` has new rows (a light body of more than 40 calls
+    whose scope is made at its first, second and third call, in a loop, after a literal block
+    and an eval wrote a local, `local_variables`; the same with rescue and ensure, which keeps
+    its scope; a million-deep recursion through it, SystemStackError) that print CRuby 4.0's
+    output on the baseline and the candidate in every mode; block-given, light-rest, masgn,
+    hash-literal, parked-scope, binding-lvar, block-pass, splat-pass and hot-shapes print on
+    the candidate what they print on the baseline, as built, with `IR_LIGHT_FRAMES=0`, with
+    `IR_PARKED_SCOPES=0` and with `-X:NoJIT -X:NoOSR` (36 of 36 identical). No IronRuby.Tests,
+    sweep or AWFY run (owed to the gate).
 
 - **Gate of 2026-11-21 for perf/strlit, perf/jinterp, perf/masgn and its narrowing**: the
   branch at c2b83fc9 against master at e83e9af7, Release net10.0: **PASS**, the second
