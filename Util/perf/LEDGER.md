@@ -1168,6 +1168,44 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/strlit (/perf-step, 2026-11-21, 2f7e4647) - a String literal in a body the method
+  JIT compiles** (`def name = "document"`, `@buf = ''`, `h['k']`, `['a', 'b']`) - census
+  only, not gated. The screen refused every String literal: 2,208 methods refused for one
+  at all, 498 for nothing else, the most frequent refusal after `new`. `EmitStringLiteral`
+  makes the String the generic body makes (`StringLiteral.TransformWithoutSite`): a new
+  chilled or plain one on each evaluation, or the interned frozen one under
+  `frozen_string_literal: true`, which a box of the typed body's own finds again. Neither is
+  an effect a deopt could repeat. Under `--debug-frozen-string-literal` the compiler
+  declines (only the generic body knows the site).
+  JIT compiles 10.5% -> 11.5% (2,979 -> 3,268), maybe 9.8% -> 10.2% (2,771 -> 2,890), never
+  79.7% -> 78.3% (22,587 -> 22,179), light frames unchanged (Src/StdLib + AWFY, 28,337
+  methods; 408 methods moved up, none down) - census only, not gated.
+  `StringLiteral (screen)` 1,046 -> 259; refused at all 2,208 -> 860, alone 498 -> 100.
+  Moved: 202 of the vendored stdlib, 161 of the gems, 44 of `ironruby/` (the prelude's
+  `IO::Buffer#nl_` compiles, `IO#path` and `Process.__spawn_shell__` are `maybe`), and
+  Json's `Parser#initialize` (compiles).
+  What the screen still refuses, and why: a literal anywhere inside an operand of a binary
+  operator (`suffixes - [".rb"]`, `@buf += "\b"`: the operator only deopts; refusing the
+  Array literal operand itself instead moved 12 methods down), and a literal argument of a
+  call on self or on a variable. The first build took the arguments: 458 up, and Json's
+  trace declined 12 methods after the screen instead of 6 - `read_null`, `read_true`,
+  `read_false`, `read_number`, `read_fraction`, `read_exponent`, all at their calls of
+  `read_char('.')`/`read_required_char('u')` (no typed body; a deopt after an effect, gap
+  1). That is the wall again, not the literal: those 100 left alone wait for the call.
+  Tried and reverted: the literal makers (`RubyOps.Create*MutableString*`) among the helpers
+  a body with held-back writes may call: 0 up, 2 down (rdoc's `set_string`, `compiles` ->
+  `maybe` at `size on a Int`).
+  Checked: `Util/jit-strlit-matrix.rb` (new, 36 rows: chilled, frozen and mutable literals,
+  encodings, an invalid byte, identity across calls, `-"lit"`, the chilled warning, a deopt
+  after a literal, a literal in a loop; every `sl_*` method specialized under
+  `IR_JIT_VERBOSE=1`) and the jit, jit-scan, jit-calls, jit-construct, jit-raise, jit-const
+  and ivar matrices: CRuby's output on the baseline, the candidate and the candidate with
+  `-X:NoJIT -X:NoOSR` (jit-construct's stdout; its stderr notes differ in order only).
+  Traces of Json, Richards, DeltaBlue, CD and Havlak (3 x 10): the same specialized and
+  declined counts as the baseline; `census.rb -c` 290 methods, 0 differ. app-shapes:
+  specialized 103 -> 104 (`CSV::InputRecordSeparator.value`, `"\n"`), the same 30 declined.
+  For the gate: no timing taken; IronRuby.Tests and the spec suites not run.
+
 - **perf/hashlit (/perf-step, 2026-11-19) - a method with a Hash literal, or one that
   passes keywords, runs without a scope** (`{a: x}`, `{"k" => v}`, `{}`, `f(a: x)`;
   `IR_LIGHT_HASH=0` and `IR_LIGHT_KEYWORD_HASH=0` turn each off). `IsScopeFree` had no
