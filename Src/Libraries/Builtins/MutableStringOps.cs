@@ -813,6 +813,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
+            // A code above the int range is still a number of 32 bits to MRI's rb_str_concat, and
+            // a character where the encoding has one that wide: 0x8431A430 in GB18030. A wider
+            // one that is still a Fixnum in MRI is named in the message.
+            if (c.Sign > 0 && c <= UInt32.MaxValue) {
+                return self.Append(Integer.ToChr(self.Encoding, self.Encoding, (uint)c));
+            }
+            if (c >= -((BigInteger)1 << 62) && c < ((BigInteger)1 << 62)) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
             throw RubyExceptions.CreateRangeError("bignum out of char range");
         }
 

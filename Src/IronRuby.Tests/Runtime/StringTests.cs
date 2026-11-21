@@ -730,5 +730,231 @@ UTF-8 e38182: [12354, Integer, [12354], [12354, 12354], 12354]
 UTF-8 f09f9880: [128512, Integer, [128512], [128512, 128512], 128512]
 ");
         }
+
+        /// <summary>
+        /// Integer#chr and String#&lt;&lt; with an Integer, in the multibyte encodings: MRI's rb_enc_uint_chr takes the
+        /// bytes of the number and accepts them when they are exactly one well formed character of the encoding -
+        /// "invalid codepoint" when they are not, "out of char range" when the number is wider than the encoding's
+        /// longest character. 0x80 and 0x100 were bytes of EUC-KR, 0x8431A430 (GB18030) and 0x8EA1A1A1 (EUC-TW)
+        /// were out of range, and #&lt;&lt; refused every number above the int range as a bignum (Util/chr-matrix.rb).
+        /// </summary>
+        public void Integer_ChrMultibyte1() {
+            TestOutput(@"
+def t(l)
+  v = begin; yield; rescue => e; ""#{e.class}: #{e.message}""; end
+  puts ""#{l}: #{v.is_a?(String) && v.encoding != Encoding::UTF_8 ? v.unpack1('H*') : v}""
+end
+big = 2**64
+{ 'GB18030' => [0x80, 0x100, 0x8130, 0x8140, 0x817f, 0x10000, 0x81308130, 0x84328130, 0x81308140, 0xffffffff],
+  'EUC-TW' => [0xa1a1, 0x8ea1, 0x8ea1a1a1, 0x8eb1a1a1], 'EUC-KR' => [0x80, 0x100, 0xa1a1, 0xfe40, 0x10000],
+  'Big5' => [0xa140, 0xff40, 0x10000], 'GBK' => [0x81, 0x8130, 0x8140], 'EUC-JP' => [0x8ee0, 0x8fa1a1, 0x1000000],
+  'Emacs-Mule' => [0x80, 0x81fe, 0x8180, 0x90a1a1, 0x9ae0a0, 0x9aa0a1, 0x9cf0a0a0, 0x9df4a0a0],
+  'stateless-ISO-2022-JP' => [0xa1a1, 0x8ea1], 'UTF8-MAC' => [0x80, 0x3042, 0x10ffff, 0x110000],
+  'UTF-8' => [0xfffffffd, 0xfffffffe], 'UTF-32BE' => [0x3042, 0xd800, 0x110000, 0x7fffffff, 0x80000000],
+  'UTF-32LE' => [0x81308130], 'UTF-16LE' => [0x110000, 0x81308130], 'US-ASCII' => [0x80, 0x100] }.each do |e, list|
+  (list + [2**32, big, -1]).each do |n|
+    t(""#{e} #{n.to_s(16)} chr"") { n.chr(e) }
+    t(""#{e} #{n.to_s(16)} <<"") { (+'').force_encoding(e) << n }
+  end
+end
+t('concat') { (+'').force_encoding('GB18030').concat(0x41, 0x8431a430, 0xa1a1) }
+t('round trip') { s = [0x84, 0x31, 0xa4, 0x30].pack('C*').force_encoding('GB18030'); [s.ord, s.ord.chr('GB18030') == s] }
+", @"
+GB18030 80 chr: RangeError: invalid codepoint 0x80 in GB18030
+GB18030 80 <<: RangeError: invalid codepoint 0x80 in GB18030
+GB18030 100 chr: RangeError: invalid codepoint 0x100 in GB18030
+GB18030 100 <<: RangeError: invalid codepoint 0x100 in GB18030
+GB18030 8130 chr: RangeError: invalid codepoint 0x8130 in GB18030
+GB18030 8130 <<: RangeError: invalid codepoint 0x8130 in GB18030
+GB18030 8140 chr: 8140
+GB18030 8140 <<: 8140
+GB18030 817f chr: RangeError: invalid codepoint 0x817F in GB18030
+GB18030 817f <<: RangeError: invalid codepoint 0x817F in GB18030
+GB18030 10000 chr: RangeError: invalid codepoint 0x10000 in GB18030
+GB18030 10000 <<: RangeError: invalid codepoint 0x10000 in GB18030
+GB18030 81308130 chr: 81308130
+GB18030 81308130 <<: 81308130
+GB18030 84328130 chr: 84328130
+GB18030 84328130 <<: 84328130
+GB18030 81308140 chr: RangeError: invalid codepoint 0x81308140 in GB18030
+GB18030 81308140 <<: RangeError: invalid codepoint 0x81308140 in GB18030
+GB18030 ffffffff chr: RangeError: invalid codepoint 0xFFFFFFFF in GB18030
+GB18030 ffffffff <<: RangeError: invalid codepoint 0xFFFFFFFF in GB18030
+GB18030 100000000 chr: RangeError: 4294967296 out of char range
+GB18030 100000000 <<: RangeError: 4294967296 out of char range
+GB18030 10000000000000000 chr: RangeError: bignum out of char range
+GB18030 10000000000000000 <<: RangeError: bignum out of char range
+GB18030 -1 chr: RangeError: -1 out of char range
+GB18030 -1 <<: RangeError: -1 out of char range
+EUC-TW a1a1 chr: a1a1
+EUC-TW a1a1 <<: a1a1
+EUC-TW 8ea1 chr: RangeError: invalid codepoint 0x8EA1 in EUC-TW
+EUC-TW 8ea1 <<: RangeError: invalid codepoint 0x8EA1 in EUC-TW
+EUC-TW 8ea1a1a1 chr: 8ea1a1a1
+EUC-TW 8ea1a1a1 <<: 8ea1a1a1
+EUC-TW 8eb1a1a1 chr: RangeError: invalid codepoint 0x8EB1A1A1 in EUC-TW
+EUC-TW 8eb1a1a1 <<: RangeError: invalid codepoint 0x8EB1A1A1 in EUC-TW
+EUC-TW 100000000 chr: RangeError: 4294967296 out of char range
+EUC-TW 100000000 <<: RangeError: 4294967296 out of char range
+EUC-TW 10000000000000000 chr: RangeError: bignum out of char range
+EUC-TW 10000000000000000 <<: RangeError: bignum out of char range
+EUC-TW -1 chr: RangeError: -1 out of char range
+EUC-TW -1 <<: RangeError: -1 out of char range
+EUC-KR 80 chr: RangeError: invalid codepoint 0x80 in EUC-KR
+EUC-KR 80 <<: RangeError: invalid codepoint 0x80 in EUC-KR
+EUC-KR 100 chr: RangeError: invalid codepoint 0x100 in EUC-KR
+EUC-KR 100 <<: RangeError: invalid codepoint 0x100 in EUC-KR
+EUC-KR a1a1 chr: a1a1
+EUC-KR a1a1 <<: a1a1
+EUC-KR fe40 chr: RangeError: invalid codepoint 0xFE40 in EUC-KR
+EUC-KR fe40 <<: RangeError: invalid codepoint 0xFE40 in EUC-KR
+EUC-KR 10000 chr: RangeError: 65536 out of char range
+EUC-KR 10000 <<: RangeError: 65536 out of char range
+EUC-KR 100000000 chr: RangeError: 4294967296 out of char range
+EUC-KR 100000000 <<: RangeError: 4294967296 out of char range
+EUC-KR 10000000000000000 chr: RangeError: bignum out of char range
+EUC-KR 10000000000000000 <<: RangeError: bignum out of char range
+EUC-KR -1 chr: RangeError: -1 out of char range
+EUC-KR -1 <<: RangeError: -1 out of char range
+Big5 a140 chr: a140
+Big5 a140 <<: a140
+Big5 ff40 chr: RangeError: invalid codepoint 0xFF40 in Big5
+Big5 ff40 <<: RangeError: invalid codepoint 0xFF40 in Big5
+Big5 10000 chr: RangeError: 65536 out of char range
+Big5 10000 <<: RangeError: 65536 out of char range
+Big5 100000000 chr: RangeError: 4294967296 out of char range
+Big5 100000000 <<: RangeError: 4294967296 out of char range
+Big5 10000000000000000 chr: RangeError: bignum out of char range
+Big5 10000000000000000 <<: RangeError: bignum out of char range
+Big5 -1 chr: RangeError: -1 out of char range
+Big5 -1 <<: RangeError: -1 out of char range
+GBK 81 chr: RangeError: invalid codepoint 0x81 in GBK
+GBK 81 <<: RangeError: invalid codepoint 0x81 in GBK
+GBK 8130 chr: RangeError: invalid codepoint 0x8130 in GBK
+GBK 8130 <<: RangeError: invalid codepoint 0x8130 in GBK
+GBK 8140 chr: 8140
+GBK 8140 <<: 8140
+GBK 100000000 chr: RangeError: 4294967296 out of char range
+GBK 100000000 <<: RangeError: 4294967296 out of char range
+GBK 10000000000000000 chr: RangeError: bignum out of char range
+GBK 10000000000000000 <<: RangeError: bignum out of char range
+GBK -1 chr: RangeError: -1 out of char range
+GBK -1 <<: RangeError: -1 out of char range
+EUC-JP 8ee0 chr: 8ee0
+EUC-JP 8ee0 <<: 8ee0
+EUC-JP 8fa1a1 chr: 8fa1a1
+EUC-JP 8fa1a1 <<: 8fa1a1
+EUC-JP 1000000 chr: RangeError: 16777216 out of char range
+EUC-JP 1000000 <<: RangeError: 16777216 out of char range
+EUC-JP 100000000 chr: RangeError: 4294967296 out of char range
+EUC-JP 100000000 <<: RangeError: 4294967296 out of char range
+EUC-JP 10000000000000000 chr: RangeError: bignum out of char range
+EUC-JP 10000000000000000 <<: RangeError: bignum out of char range
+EUC-JP -1 chr: RangeError: -1 out of char range
+EUC-JP -1 <<: RangeError: -1 out of char range
+Emacs-Mule 80 chr: RangeError: invalid codepoint 0x80 in Emacs-Mule
+Emacs-Mule 80 <<: RangeError: invalid codepoint 0x80 in Emacs-Mule
+Emacs-Mule 81fe chr: 81fe
+Emacs-Mule 81fe <<: 81fe
+Emacs-Mule 8180 chr: RangeError: invalid codepoint 0x8180 in Emacs-Mule
+Emacs-Mule 8180 <<: RangeError: invalid codepoint 0x8180 in Emacs-Mule
+Emacs-Mule 90a1a1 chr: 90a1a1
+Emacs-Mule 90a1a1 <<: 90a1a1
+Emacs-Mule 9ae0a0 chr: 9ae0a0
+Emacs-Mule 9ae0a0 <<: 9ae0a0
+Emacs-Mule 9aa0a1 chr: RangeError: invalid codepoint 0x9AA0A1 in Emacs-Mule
+Emacs-Mule 9aa0a1 <<: RangeError: invalid codepoint 0x9AA0A1 in Emacs-Mule
+Emacs-Mule 9cf0a0a0 chr: 9cf0a0a0
+Emacs-Mule 9cf0a0a0 <<: 9cf0a0a0
+Emacs-Mule 9df4a0a0 chr: RangeError: invalid codepoint 0x9DF4A0A0 in Emacs-Mule
+Emacs-Mule 9df4a0a0 <<: RangeError: invalid codepoint 0x9DF4A0A0 in Emacs-Mule
+Emacs-Mule 100000000 chr: RangeError: 4294967296 out of char range
+Emacs-Mule 100000000 <<: RangeError: 4294967296 out of char range
+Emacs-Mule 10000000000000000 chr: RangeError: bignum out of char range
+Emacs-Mule 10000000000000000 <<: RangeError: bignum out of char range
+Emacs-Mule -1 chr: RangeError: -1 out of char range
+Emacs-Mule -1 <<: RangeError: -1 out of char range
+stateless-ISO-2022-JP a1a1 chr: RangeError: invalid codepoint 0xA1A1 in stateless-ISO-2022-JP
+stateless-ISO-2022-JP a1a1 <<: RangeError: invalid codepoint 0xA1A1 in stateless-ISO-2022-JP
+stateless-ISO-2022-JP 8ea1 chr: 8ea1
+stateless-ISO-2022-JP 8ea1 <<: 8ea1
+stateless-ISO-2022-JP 100000000 chr: RangeError: 4294967296 out of char range
+stateless-ISO-2022-JP 100000000 <<: RangeError: 4294967296 out of char range
+stateless-ISO-2022-JP 10000000000000000 chr: RangeError: bignum out of char range
+stateless-ISO-2022-JP 10000000000000000 <<: RangeError: bignum out of char range
+stateless-ISO-2022-JP -1 chr: RangeError: -1 out of char range
+stateless-ISO-2022-JP -1 <<: RangeError: -1 out of char range
+UTF8-MAC 80 chr: c280
+UTF8-MAC 80 <<: c280
+UTF8-MAC 3042 chr: e38182
+UTF8-MAC 3042 <<: e38182
+UTF8-MAC 10ffff chr: f48fbfbf
+UTF8-MAC 10ffff <<: f48fbfbf
+UTF8-MAC 110000 chr: RangeError: 1114112 out of char range
+UTF8-MAC 110000 <<: RangeError: 1114112 out of char range
+UTF8-MAC 100000000 chr: RangeError: 4294967296 out of char range
+UTF8-MAC 100000000 <<: RangeError: 4294967296 out of char range
+UTF8-MAC 10000000000000000 chr: RangeError: bignum out of char range
+UTF8-MAC 10000000000000000 <<: RangeError: bignum out of char range
+UTF8-MAC -1 chr: RangeError: -1 out of char range
+UTF8-MAC -1 <<: RangeError: -1 out of char range
+UTF-8 fffffffd chr: RangeError: 4294967293 out of char range
+UTF-8 fffffffd <<: RangeError: 4294967293 out of char range
+UTF-8 fffffffe chr: RangeError: invalid codepoint 0xFFFFFFFE in UTF-8
+UTF-8 fffffffe <<: RangeError: invalid codepoint 0xFFFFFFFE in UTF-8
+UTF-8 100000000 chr: RangeError: 4294967296 out of char range
+UTF-8 100000000 <<: RangeError: 4294967296 out of char range
+UTF-8 10000000000000000 chr: RangeError: bignum out of char range
+UTF-8 10000000000000000 <<: RangeError: bignum out of char range
+UTF-8 -1 chr: RangeError: -1 out of char range
+UTF-8 -1 <<: RangeError: -1 out of char range
+UTF-32BE 3042 chr: 00003042
+UTF-32BE 3042 <<: 00003042
+UTF-32BE d800 chr: RangeError: invalid codepoint 0xD800 in UTF-32BE
+UTF-32BE d800 <<: RangeError: invalid codepoint 0xD800 in UTF-32BE
+UTF-32BE 110000 chr: RangeError: invalid codepoint 0x110000 in UTF-32BE
+UTF-32BE 110000 <<: RangeError: invalid codepoint 0x110000 in UTF-32BE
+UTF-32BE 7fffffff chr: RangeError: invalid codepoint 0x7FFFFFFF in UTF-32BE
+UTF-32BE 7fffffff <<: RangeError: invalid codepoint 0x7FFFFFFF in UTF-32BE
+UTF-32BE 80000000 chr: 80000000
+UTF-32BE 80000000 <<: 80000000
+UTF-32BE 100000000 chr: RangeError: 4294967296 out of char range
+UTF-32BE 100000000 <<: RangeError: 4294967296 out of char range
+UTF-32BE 10000000000000000 chr: RangeError: bignum out of char range
+UTF-32BE 10000000000000000 <<: RangeError: bignum out of char range
+UTF-32BE -1 chr: RangeError: -1 out of char range
+UTF-32BE -1 <<: RangeError: -1 out of char range
+UTF-32LE 81308130 chr: 30813081
+UTF-32LE 81308130 <<: 30813081
+UTF-32LE 100000000 chr: RangeError: 4294967296 out of char range
+UTF-32LE 100000000 <<: RangeError: 4294967296 out of char range
+UTF-32LE 10000000000000000 chr: RangeError: bignum out of char range
+UTF-32LE 10000000000000000 <<: RangeError: bignum out of char range
+UTF-32LE -1 chr: RangeError: -1 out of char range
+UTF-32LE -1 <<: RangeError: -1 out of char range
+UTF-16LE 110000 chr: RangeError: invalid codepoint 0x110000 in UTF-16LE
+UTF-16LE 110000 <<: RangeError: invalid codepoint 0x110000 in UTF-16LE
+UTF-16LE 81308130 chr: RangeError: invalid codepoint 0x81308130 in UTF-16LE
+UTF-16LE 81308130 <<: RangeError: invalid codepoint 0x81308130 in UTF-16LE
+UTF-16LE 100000000 chr: RangeError: 4294967296 out of char range
+UTF-16LE 100000000 <<: RangeError: 4294967296 out of char range
+UTF-16LE 10000000000000000 chr: RangeError: bignum out of char range
+UTF-16LE 10000000000000000 <<: RangeError: bignum out of char range
+UTF-16LE -1 chr: RangeError: -1 out of char range
+UTF-16LE -1 <<: RangeError: -1 out of char range
+US-ASCII 80 chr: RangeError: invalid codepoint 0x80 in US-ASCII
+US-ASCII 80 <<: 80
+US-ASCII 100 chr: RangeError: 256 out of char range
+US-ASCII 100 <<: RangeError: 256 out of char range
+US-ASCII 100000000 chr: RangeError: 4294967296 out of char range
+US-ASCII 100000000 <<: RangeError: 4294967296 out of char range
+US-ASCII 10000000000000000 chr: RangeError: bignum out of char range
+US-ASCII 10000000000000000 <<: RangeError: bignum out of char range
+US-ASCII -1 chr: RangeError: -1 out of char range
+US-ASCII -1 <<: RangeError: -1 out of char range
+concat: 418431a430a1a1
+round trip: [2217845808, true]
+");
+        }
     }
 }

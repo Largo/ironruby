@@ -178,6 +178,27 @@ namespace IronRuby.Runtime {
         /// That is decided on the bytes, not on characters: "\xA1\x39" is one run in GB18030
         /// even though "\x39" alone is a valid character.
         /// </summary>
+        /// <summary>
+        /// MRI's rb_enc_precise_mbclen for the multibyte encodings whose shape is known here: the
+        /// length of the well formed character the bytes begin with, 0 if they are the beginning
+        /// of one that is cut short, negative if they begin none. <paramref name="maxLength"/> is
+        /// the encoding's longest character, and 0 - with a result of 0 - for an encoding this
+        /// does not cover (the Unicode ones and the single byte ones).
+        /// </summary>
+        internal static int PreciseLength(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count, out int maxLength) {
+            var multiByte = encoding as MultiByteEncoding;
+            if (multiByte != null) {
+                maxLength = multiByte.MaxLength;
+                return multiByte.PreciseLength(bytes, 0, count);
+            }
+            if (encoding.CodePage == 54936) {
+                maxLength = 4;
+                return ScanGb18030(bytes, 0, count);
+            }
+            maxLength = 0;
+            return 0;
+        }
+
         internal static System.Collections.Generic.List<int> FindScrubRuns(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count) {
             var multiByte = encoding as MultiByteEncoding;
             int maxLength;
