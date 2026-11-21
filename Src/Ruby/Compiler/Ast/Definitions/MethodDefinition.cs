@@ -533,6 +533,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightKeywordHashEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORD_HASH") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_MASGN=0 keeps every method with a multiple assignment (`a, b = b, a', `x, *rest = list') out of light frames
+        /// (see IsScopeFree).
+        /// </summary>
+        internal static readonly bool LightMultipleAssignmentEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MASGN") != "0";
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -839,6 +845,22 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return true;
                 }
+                // `a, b = b, a', `x, *rest = list', `@a, (b, c) = f': the right side becomes an Array of its values (or one value
+                // through an ImplicitSplatAction site, which takes no scope), the left values' receivers go to hidden variables,
+                // and each left value is written from the list by an Array helper; a write is a local, an instance variable or a
+                // call of x= or []=, each what a simple assignment to it is
+                var parallel = node as ParallelAssignmentExpression;
+                if (parallel != null) {
+                    if (!LightMultipleAssignmentEnabled) {
+                        return Refuse(why, "ParallelAssignmentExpression (IR_LIGHT_MASGN=0)");
+                    }
+                    foreach (var value in parallel.Right) {
+                        if (!IsScopeFree(value, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    return IsScopeFreeTarget(parallel.Left, blockLiterals, why);
+                }
                 var loop = node as WhileLoopExpression;
                 if (loop != null) {
                     return IsScopeFree(loop.Condition, blockLiterals, why) && AreScopeFree(loop.Statements, blockLiterals, why);
@@ -944,6 +966,31 @@ namespace IronRuby.Compiler.Ast {
             var keywords = node as HashConstructor;
             return Refuse(why, node.GetType().Name + (keywords != null && keywords.IsKeywordArguments ? " (keyword arguments)" : "") +
                 (LightCallsEnabled ? "" : " (IR_LIGHT_CALLS=0)"));
+        }
+
+        // A left value of a multiple assignment that a light frame writes without its scope (see IsScopeFree)
+        private static bool IsScopeFreeTarget(LeftValue/*!*/ target, bool blockLiterals, StrongBox<string> why) {
+            if (target is LocalVariable || target is InstanceVariable || target is Placeholder) {
+                return true;
+            }
+            var compound = target as CompoundLeftValue;
+            if (compound != null) {
+                foreach (var nested in compound.LeftValues) {
+                    if (!IsScopeFreeTarget(nested, blockLiterals, why)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            var attribute = target as AttributeAccess;
+            if (attribute != null && !attribute.IsSafeNavigation) {
+                return IsScopeFree(attribute.Qualifier, blockLiterals, why);
+            }
+            var item = target as ArrayItemAccess;
+            if (item != null && item.Block == null) {
+                return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
+            }
+            return why != null && Refuse(why, "multiple assignment to " + target.GetType().Name);
         }
 
         // A, ::A, A::B::C - the reads ConstantVariable.MakeCachedRead makes - not {expr}::A
@@ -1254,6 +1301,10 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (LightInterpolationEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ConvertToSAction) {
                     // "#{x}": #to_s through a conversion site, which is given no scope
+                    return base.VisitExtension(node);
+                }
+                if (LightMultipleAssignmentEnabled && dynamic != null && dynamic.Binder is IronRuby.Runtime.Conversions.ImplicitSplatAction) {
+                    // `a, b = x': #to_ary through a conversion site, which is given no scope
                     return base.VisitExtension(node);
                 }
                 NeedsScope = true;

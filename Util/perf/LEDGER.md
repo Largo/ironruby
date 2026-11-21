@@ -792,9 +792,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    Landed, perf/interp; a block that interpolates still makes its scope), nor a Hash
    literal or the keywords of a call (`{a: x}`, `{}`, `f(a: x)`; `IR_LIGHT_HASH=0`,
    `IR_LIGHT_KEYWORD_HASH=0`, see Landed, perf/hashlit; `f(**h)` is still out);
+   nor a multiple assignment (`a, b = b, a`; `IR_LIGHT_MASGN=0`, see Landed, perf/masgn);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
-   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb and Util/hash-literal-matrix.rb
-   are their matrices.
+   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb, Util/hash-literal-matrix.rb and
+   Util/masgn-matrix.rb are their matrices.
    What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
    them not light). By its first table: keyword parameters 1,257 (37 of them the
    prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
@@ -1167,6 +1168,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **perf/masgn (/perf-step, 2026-11-21) - a multiple assignment in a light frame** (`a, b = b, a`,
+  `x, *rest = list`, `@a, (b, c) = v`, `a[i], a[j] = a[j], a[i]`, `self.x, self.y = 1, 2`;
+  `IR_LIGHT_MASGN=0` turns it off) - census only, not gated. `IsScopeFree` had no case for a
+  ParallelAssignmentExpression, so it kept 661 methods out of light frames (476 at it first; 24
+  of the prelude's). Nothing it compiles to takes the scope: the right side is an Array made by
+  `RubyOps.MakeArrayN` or one value through an ImplicitSplatAction site (`#to_ary`, given no
+  scope, as ExplicitSplatAction's `*x` is), the left values' receivers go to hidden variables,
+  and each is written by an Array helper and the write a simple assignment to it is (a local,
+  an instance variable, a call of `x=` or `[]=` through LightScopeCall). The rewriter now lets
+  the ImplicitSplatAction site through as it does the other conversion sites; any such site
+  sets MakesCalls, so a frame that recurses through a `#to_ary` written in Ruby keeps its stack
+  check. Left values that are globals, class variables, constants or `x&.y` still refuse.
+  Light frames 76.9% -> 78.7% (21,793 -> 22,308), light blocks 67.1% -> 67.6% (7,725 ->
+  7,783), JIT unchanged (Src/StdLib + AWFY, 28,337 methods; 515 methods moved up, none down;
+  50 methods have more light blocks, none fewer) - census only, not gated.
+  Moved: 18 of the prelude's (`__ir_each_impl__`, `__ir_step_slow__`, `__step_scan_args__`,
+  `bytesplice`, `__ir_byteindex__`, `__arithmetic_slice__`, `remainder`, `__ir_log__`,
+  `__ir_hypot__`, `marshal_load`, `inspect`, ...), Rational/Complex/BigDecimal/Date/Pathname
+  helpers, none of AWFY's (its methods have no multiple assignment in a body that is otherwise
+  light). 15 more pass the filter and still need their scope after the rewrite
+  (`__io_each_line__`, `DelegateClass`, `Resolv#get_rr`, irb commands): unchanged, a scope as
+  before; not looked into.
+  Checked: `Util/masgn-matrix.rb` (new: every kind of right side and `#to_ary`, the value of the
+  assignment, evaluation order, attribute and element writes private, protected, made private
+  in a subclass, refined, through `method_missing` and redefined after binding, what a scope
+  made on demand sees, blocks, TracePoint, and recursion a million deep through `#to_ary` and
+  on the right side, which raises SystemStackError) prints CRuby 4.0's output on the baseline,
+  the candidate, `IR_LIGHT_MASGN=0`, `IR_LIGHT_FRAMES=0` and `-X:NoJIT -X:NoOSR`; the
+  light-rest, block-given, block-pass, splat-pass, jit and jit-calls matrices print the
+  baseline's; `census.rb -c` on traces of the matrix and of Json: 0 differ. Not measured on
+  the clock: the shape is entered no faster unless it is called hot, and none of AWFY's is.
 
 - **perf/jinterp (/perf-step, 2026-11-21, 2220ed2d) - an interpolated String in a body the method
   JIT compiles** (`"#{@path}:#{@lineno}"`, `"v#{x}"`, `%W[a#{x}]`, a heredoc) - census only, not
