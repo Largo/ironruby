@@ -88,7 +88,7 @@ namespace IronRuby.Runtime.CApi {
                     throw RubyExceptions.CreateLoadError("Init_" + name + " is not defined - " + path);
                 }
 
-                CallInit(new CExtension(path), init);
+                CallInit(path, init);
             }
         }
 

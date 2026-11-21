@@ -250,7 +250,14 @@ namespace IronRuby.Runtime.CApi {
             var scope = new NativeScope();
             EnterCode(code, ref scope);
             if (_nativeDepth > 0) {
-                RefreshAll();
+                try {
+                    RefreshAll();
+                } catch {
+                    // no call into C follows, so nothing calls LeaveNative: put back the lock and the
+                    // running extension EnterCode changed, or the caller's C code goes on as another's
+                    LeaveCode(ref scope);
+                    throw;
+                }
             }
             scope.Depth = _nativeDepth++;
             return scope;

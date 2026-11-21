@@ -103,8 +103,17 @@ Dir.mktmpdir("capi-selftest") do |dir|
   q = Queue.new
   waiter = Thread.new { m::Unsafe.yield_nil { q.pop } }
   sleep 0.1
-  Thread.new { m::Unsafe.yield_nil { q << :fed } }.join
-  check.("lock let go while C runs Ruby", waiter.join(10) && waiter.value, :fed)
+  # bounded: were the lock held in rb_yield, the feeder could not get in to feed the waiter
+  feeder = Thread.new { m::Unsafe.yield_nil { q << :fed } }
+  fed = feeder.join(10) && waiter.join(10) && waiter.value
+  [feeder, waiter].each(&:kill)
+  check.("lock let go while C runs Ruby", fed, :fed)
+  check.("lock kept after a nested rb_thread_call_with_gvl",
+    4.times.map { Thread.new { m::Unsafe.nested_exclusive(20_000_000) } }.map(&:value).uniq, [false])
+  waiter = Thread.new { m::Unsafe.wait_in_nested_region(5000) }
+  sleep 0.1
+  Thread.new { m::Unsafe.feed }.join(10)
+  check.("lock let go by a region after a region nested in it", waiter.join(10) && waiter.value, true)
 
   # IRONRUBY_NATIVE_GEMS: a gem's compiled extension in place of IronRuby's own
   if defined?(Gem.ironruby_native_extension_for)

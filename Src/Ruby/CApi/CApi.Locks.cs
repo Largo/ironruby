@@ -26,10 +26,15 @@ namespace IronRuby.Runtime.CApi {
 
         internal readonly CCode/*!*/ LockedCode, FreeCode;
 
-        internal CExtension(string/*!*/ path) {
+        // its Init_, which runs under the lock as it does under CRuby's GVL: a method Init_ has
+        // defined already can be called from another thread before Init_ returns
+        internal readonly CCode/*!*/ InitCode;
+
+        internal CExtension(string/*!*/ path, bool locks) {
             Path = path;
-            LockedCode = new CCode(this, true);
-            FreeCode = new CCode(this, false);
+            LockedCode = new CCode(this, true, false);
+            FreeCode = new CCode(this, false, false);
+            InitCode = new CCode(this, locks, true);
         }
     }
 
@@ -40,13 +45,16 @@ namespace IronRuby.Runtime.CApi {
     internal sealed class CCode {
         internal readonly CExtension Extension;
         internal readonly bool Locked;
+        // the extension's Init_ (CApi.CurrentCode)
+        internal readonly bool Init;
 
         // not an extension's, or with IRONRUBY_CEXT_LOCK=0
-        internal static readonly CCode/*!*/ Free = new CCode(null, false);
+        internal static readonly CCode/*!*/ Free = new CCode(null, false, false);
 
-        internal CCode(CExtension extension, bool locked) {
+        internal CCode(CExtension extension, bool locked, bool init) {
             Extension = extension;
             Locked = locked;
+            Init = init;
         }
     }
 
@@ -116,7 +124,7 @@ namespace IronRuby.Runtime.CApi {
                 return;
             }
             _extension = code.Extension;
-            _inInit = false;
+            _inInit = code.Init;
             if (code.Locked) {
                 var ext = code.Extension;
                 if (_held == ext) {
@@ -126,7 +134,7 @@ namespace IronRuby.Runtime.CApi {
                         Monitor.Exit(_held.Lock);
                         _held = null;
                     }
-                    Monitor.Enter(ext.Lock);
+                    EnterLock(ext);
                     _held = ext;
                     _heldCount = 1;
                 }
@@ -140,7 +148,7 @@ namespace IronRuby.Runtime.CApi {
                     _held = null;
                 }
                 if (scope.Held != null) {
-                    Monitor.Enter(scope.Held.Lock);
+                    EnterLock(scope.Held);
                 }
                 _held = scope.Held;
             }
@@ -170,24 +178,39 @@ namespace IronRuby.Runtime.CApi {
             }
             if (_held != null) {
                 Monitor.Exit(_held.Lock);
+                _held = null;
             }
-            Monitor.Enter(released.Held.Lock);
+            EnterLock(released.Held);
             _held = released.Held;
             _heldCount = released.Count;
         }
 
-        /// <summary>Calls an extension's Init_: its code from here on is that extension's.</summary>
-        private static void CallInit(CExtension/*!*/ ext, IntPtr init) {
-            var savedExtension = _extension;
-            var savedInInit = _inInit;
-            _extension = ext;
-            _inInit = true;
-            try {
-                CallVoid(init, null);
-            } finally {
-                _extension = savedExtension;
-                _inInit = savedInInit;
+        /// <summary>
+        /// Takes an extension's lock, however long another thread keeps it, as a thread waits for
+        /// CRuby's GVL. A nudge (Thread#raise, Thread#kill: RubyUtils.NudgeThread) breaks a
+        /// contended Monitor.Enter, and then the thread would go on without the lock its C code
+        /// assumes - into an rb_ensure's cleanup, or back into the C function that called Ruby. So
+        /// the wait goes on, as RubyUtils.UninterruptedLock's does, and what the nudge was for stays
+        /// parked until the thread's next safe point.
+        /// </summary>
+        private static void EnterLock(CExtension/*!*/ ext) {
+            bool taken = false;
+            while (true) {
+                try {
+                    Monitor.Enter(ext.Lock, ref taken);
+                    return;
+                } catch (ThreadInterruptedException) {
+                    if (taken) {
+                        return;
+                    }
+                }
             }
+        }
+
+        /// <summary>Calls an extension's Init_, under its lock: its code from here on is that extension's.</summary>
+        private static void CallInit(string/*!*/ path, IntPtr init) {
+            var ext = new CExtension(path, _extensionLocks);
+            CallVoid(init, null, ext.InitCode);
         }
     }
 }

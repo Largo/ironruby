@@ -276,7 +276,7 @@ namespace IronRuby.Runtime.CApi {
             if (cls == null) {
                 throw RubyExceptions.CreateTypeError("wrong argument type (expected Class)");
             }
-            var obj = new DataObject(cls.GetNonSingletonClass(), typed != 0);
+            var obj = new DataObject(cls.GetNonSingletonClass(), typed != 0, CurrentCode());
             VALUE value = ToValue(obj);
             if (klass == 0) {
                 rb_obj_hide(value);

@@ -5,7 +5,9 @@
 #include <ruby.h>
 #include <ruby/encoding.h>
 #include <ruby/ractor.h>
+#include <ruby/thread.h>
 #include <stdlib.h>
+#include <time.h>
 
 /* not in the public headers: extensions declare it themselves, as bigdecimal does */
 int rb_opts_exception_p(VALUE opts, int default_value);
@@ -97,6 +99,67 @@ exclusive(VALUE self, VALUE n)
 
 static VALUE yield_nil(VALUE self) { return rb_yield(Qnil); }
 
+/* the same count, in code that runs with the GVL (CRuby) or the extension's lock (IronRuby) again
+ * after a nested rb_thread_call_with_gvl has returned: the inner call must not let go of it */
+static volatile int nested_inside, nested_overlapped;
+static void *noop(void *data) { return data; }
+
+static void *
+nested_exclusive_with_gvl(void *data)
+{
+    long i, m = *(long *)data;
+    volatile unsigned long x = 0;
+    rb_thread_call_with_gvl(noop, NULL);
+    if (__atomic_add_fetch(&nested_inside, 1, __ATOMIC_SEQ_CST) > 1) nested_overlapped = 1;
+    for (i = 0; i < m; i++) x += i;
+    __atomic_sub_fetch(&nested_inside, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
+static void *
+nested_exclusive_without_gvl(void *data)
+{
+    return rb_thread_call_with_gvl(nested_exclusive_with_gvl, data);
+}
+
+static VALUE
+nested_exclusive(VALUE self, VALUE n)
+{
+    long m = NUM2LONG(n);
+    rb_thread_call_without_gvl(nested_exclusive_without_gvl, &m, RUBY_UBF_IO, NULL);
+    return nested_overlapped ? Qtrue : Qfalse;
+}
+
+/* a blocking region that runs another one inside an rb_thread_call_with_gvl, then waits for
+ * another thread to call feed: the outer region must have let go of the GVL or lock again */
+static volatile int fed;
+static VALUE feed(VALUE self) { fed = 1; return Qnil; }
+
+static void *
+region_in_with_gvl(void *data)
+{
+    rb_thread_call_without_gvl(noop, NULL, RUBY_UBF_IO, NULL);
+    return NULL;
+}
+
+static void *
+wait_for_feed(void *data)
+{
+    long waited, limit = *(long *)data;
+    struct timespec ms = { 0, 1000000 };
+    rb_thread_call_with_gvl(region_in_with_gvl, NULL);
+    for (waited = 0; !fed && waited < limit; waited++) nanosleep(&ms, NULL);
+    return (void *)(fed ? 1 : 0);
+}
+
+static VALUE
+wait_in_nested_region(VALUE self, VALUE ms)
+{
+    long limit = NUM2LONG(ms);
+    fed = 0;
+    return rb_thread_call_without_gvl(wait_for_feed, &limit, RUBY_UBF_IO, NULL) ? Qtrue : Qfalse;
+}
+
 static VALUE
 std_streams(VALUE self)
 {
@@ -131,6 +194,9 @@ Init_capi_selftest(void)
     VALUE unsafe = rb_define_module_under(m, "Unsafe");
     rb_define_module_function(unsafe, "exclusive", exclusive, 1);
     rb_define_module_function(unsafe, "yield_nil", yield_nil, 0);
+    rb_define_module_function(unsafe, "nested_exclusive", nested_exclusive, 1);
+    rb_define_module_function(unsafe, "wait_in_nested_region", wait_in_nested_region, 1);
+    rb_define_module_function(unsafe, "feed", feed, 0);
 
     /* as racc's cparse does: allowed, and silent from C */
     VALUE no_init = rb_define_class_under(m, "NoInit", rb_cObject);

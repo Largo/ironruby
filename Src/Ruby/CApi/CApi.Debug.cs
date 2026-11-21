@@ -226,7 +226,8 @@ namespace IronRuby.Runtime.CApi {
             }
             int raised;
             nuint size;
-            var depth = EnterNative();
+            // ObjectSpace.memsize_of runs in Ruby: dsize runs under the lock of the extension whose object it is
+            var depth = EnterNative(obj.Code);
             try {
                 size = _typedDataMemsize(ToValue(obj), &raised);
             } finally {
