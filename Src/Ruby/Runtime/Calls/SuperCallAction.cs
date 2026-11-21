@@ -36,6 +36,13 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyCallSignature _signature;
         private readonly int _lexicalScopeId;
 
+        // A site in the body of a light-frame method (MethodDefinition.LightFrameRewriter): the module the body was compiled
+        // for and the name it was defined under, which are what its scope would hold (RubyMethodScope.DeclaringModule and
+        // DefinitionName, both constants of the compilation: RubyMethodBody.GetDelegate compiles a body per module). Null
+        // for any other site.
+        private readonly RubyModule _lightModule;
+        private readonly string _lightName;
+
         internal SuperCallAction(RubyContext context, RubyCallSignature signature, int lexicalScopeId)
             : base(context) {
             Debug.Assert(signature.HasImplicitSelf && signature.HasScope && (signature.HasBlock || signature.ResolveOnly));
@@ -48,13 +55,34 @@ namespace IronRuby.Runtime.Calls {
             return context.MetaBinderFactory.SuperCall(lexicalScopeId, signature);
         }
 
+        /// <summary>
+        /// The site of this `super' in the body of a light-frame method compiled for <paramref name="declaringModule"/>
+        /// (MethodDefinition.LightFrameRewriter.LightSuperCall): a site of its own, bound with a light scope
+        /// (RubyCallFlags.HasLightScope) and given the declaring scope and the method's self. A rule that would read the
+        /// scope - a library method that takes it (binding, local_variables, block_given?...) - answers
+        /// RubyOps.LightScopeRequired instead (RubyMetaBinder.Bind), and the method makes its scope and calls again through
+        /// the ordinary site.
+        /// </summary>
+        internal SuperCallAction/*!*/ MakeLight(RubyModule/*!*/ declaringModule, string/*!*/ methodName) {
+            Debug.Assert(!_signature.ResolveOnly && !_signature.HasLightScope && _lightModule == null && declaringModule != null && methodName != null);
+            return new SuperCallAction(Context, new RubyCallSignature(_signature.ArgumentCount, _signature.Flags | RubyCallFlags.HasLightScope),
+                _lexicalScopeId, declaringModule, methodName);
+        }
+
+        private SuperCallAction(RubyContext/*!*/ context, RubyCallSignature signature, int lexicalScopeId, RubyModule/*!*/ declaringModule,
+            string/*!*/ methodName)
+            : this(context, signature, lexicalScopeId) {
+            _lightModule = declaringModule;
+            _lightName = methodName;
+        }
+
         [Emitted]
         public static SuperCallAction/*!*/ MakeShared(RubyCallSignature signature, int lexicalScopeId) {
             return RubyMetaBinderFactory.Shared.SuperCall(lexicalScopeId, signature);
         }
 
         public override string/*!*/ ToString() {
-            return "super" + _signature.ToString() + ":" + _lexicalScopeId + (Context != null ? " @" + Context.RuntimeId.ToString() : null);
+            return "super" + (_lightModule != null ? " " + _lightName : "") + _signature.ToString() + ":" + _lexicalScopeId + (Context != null ? " @" + Context.RuntimeId.ToString() : null);
         }
 
         public override RubyCallSignature Signature {
@@ -70,36 +98,44 @@ namespace IronRuby.Runtime.Calls {
         protected override bool Build(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool defaultFallback) {
             RubyModule currentDeclaringModule;
             string currentMethodName;
+            object target;
 
-            var scope = args.Scope;
-            var scopeExpr = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
+            if (_lightModule != null) {
+                // the body of the method itself: self is the site's target, as the scope's self would be
+                currentDeclaringModule = _lightModule;
+                currentMethodName = _lightName;
+                target = args.Target;
+            } else {
+                var scope = args.Scope;
+                var scopeExpr = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
 
-            RubyScope targetScope;
-            int scopeNesting = scope.GetSuperCallTarget(out currentDeclaringModule, out currentMethodName, out targetScope);
+                RubyScope targetScope;
+                int scopeNesting = scope.GetSuperCallTarget(out currentDeclaringModule, out currentMethodName, out targetScope);
 
-            if (scopeNesting == -1) {
-                metaBuilder.AddCondition(Methods.IsSuperOutOfMethodScope.OpCall(scopeExpr));
-                metaBuilder.SetError(Methods.MakeTopLevelSuperException.OpCall());
-                return true;
+                if (scopeNesting == -1) {
+                    metaBuilder.AddCondition(Methods.IsSuperOutOfMethodScope.OpCall(scopeExpr));
+                    metaBuilder.SetError(Methods.MakeTopLevelSuperException.OpCall());
+                    return true;
+                }
+
+                target = targetScope.SelfObject;
+                var targetExpression = metaBuilder.GetTemporary(typeof(object), "#super-self");
+                var assignTarget = Ast.Assign(
+                    targetExpression,
+                    Methods.GetSuperCallTarget.OpCall(scopeExpr, AstUtils.Constant(scopeNesting))
+                );
+
+                if (_signature.HasImplicitArguments && targetScope.Kind == ScopeKind.BlockMethod) {
+                    metaBuilder.AddCondition(Ast.NotEqual(assignTarget, Ast.Field(null, Fields.NeedsUpdate)));
+                    metaBuilder.SetError(Methods.MakeImplicitSuperInBlockMethodError.OpCall());
+                    return true;
+                }
+
+                // If we need to update we return RubyOps.NeedsUpdate instance that will cause the subsequent conditions to fail:
+                metaBuilder.AddInitialization(assignTarget);
+
+                args.SetTarget(targetExpression, target);
             }
-
-            object target = targetScope.SelfObject;
-            var targetExpression = metaBuilder.GetTemporary(typeof(object), "#super-self");
-            var assignTarget = Ast.Assign(
-                targetExpression,
-                Methods.GetSuperCallTarget.OpCall(scopeExpr, AstUtils.Constant(scopeNesting))
-            );
-
-            if (_signature.HasImplicitArguments && targetScope.Kind == ScopeKind.BlockMethod) {
-                metaBuilder.AddCondition(Ast.NotEqual(assignTarget, Ast.Field(null, Fields.NeedsUpdate)));
-                metaBuilder.SetError(Methods.MakeImplicitSuperInBlockMethodError.OpCall());
-                return true;
-            }
-
-            // If we need to update we return RubyOps.NeedsUpdate instance that will cause the subsequent conditions to fail:
-            metaBuilder.AddInitialization(assignTarget);
-
-            args.SetTarget(targetExpression, target);
 
             Debug.Assert(currentDeclaringModule != null);
 
@@ -110,14 +146,14 @@ namespace IronRuby.Runtime.Calls {
             // called on a target of another class. See http://redmine.ruby-lang.org/issues/show/2419.
 
             // we need to lock the hierarchy of the target class:
-            var targetClass = scope.RubyContext.GetImmediateClassOf(target);
+            var targetClass = args.RubyContext.GetImmediateClassOf(target);
             using (targetClass.Context.ClassHierarchyLocker()) {
                 // initialize all methods in ancestors:                
                 targetClass.InitializeMethodsNoLock();
 
                 // target is stored in a local, therefore it cannot be part of the restrictions:
                 metaBuilder.TreatRestrictionsAsConditions = true;
-                metaBuilder.AddTargetTypeTest(target, targetClass, targetExpression, args.MetaContext, 
+                metaBuilder.AddTargetTypeTest(target, targetClass, args.TargetExpression, args.MetaContext, 
                     new[] { Symbols.MethodMissing } // currentMethodName is resolved for super, which cannot be an instance singleton
                 );
                 metaBuilder.TreatRestrictionsAsConditions = false;
@@ -266,6 +302,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override Expression/*!*/ CreateExpression() {
+            if (_lightModule != null) {
+                // a light frame's body is never saved (MethodDefinition.TransformBody: allowLightFrame)
+                throw new NotSupportedException("a light-frame super site cannot be serialized");
+            }
             return Methods.GetMethod(GetType(), "MakeShared").OpCall(_signature.CreateExpression(), AstUtils.Constant(_lexicalScopeId));
         }
     }
