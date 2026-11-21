@@ -80,6 +80,23 @@ static VALUE make_shareable(VALUE self, VALUE obj) { return rb_ractor_make_share
 static VALUE make_shareable_copy(VALUE self, VALUE obj) { return rb_ractor_make_shareable_copy(obj); }
 static VALUE shareable_p(VALUE self, VALUE obj) { return rb_ractor_shareable_p(obj) ? Qtrue : Qfalse; }
 
+/* how many threads are inside at once: never more than one for code under the GVL (CRuby) or
+ * its extension's lock (IronRuby, for code the extension has not declared thread-safe) */
+static volatile int inside, overlapped;
+
+static VALUE
+exclusive(VALUE self, VALUE n)
+{
+    long i, m = NUM2LONG(n);
+    volatile unsigned long x = 0;
+    if (__atomic_add_fetch(&inside, 1, __ATOMIC_SEQ_CST) > 1) overlapped = 1;
+    for (i = 0; i < m; i++) x += i;
+    __atomic_sub_fetch(&inside, 1, __ATOMIC_SEQ_CST);
+    return overlapped ? Qtrue : Qfalse;
+}
+
+static VALUE yield_nil(VALUE self) { return rb_yield(Qnil); }
+
 static VALUE
 std_streams(VALUE self)
 {
@@ -108,6 +125,12 @@ Init_capi_selftest(void)
     rb_define_module_function(m, "make_shareable_copy", make_shareable_copy, 1);
     rb_define_module_function(m, "shareable?", shareable_p, 1);
     rb_define_module_function(m, "std_streams", std_streams, 0);
+
+    /* defined after taking back RB_EXT_RACTOR_SAFE: not thread-safe, so one thread at a time */
+    RB_EXT_RACTOR_SAFE(false);
+    VALUE unsafe = rb_define_module_under(m, "Unsafe");
+    rb_define_module_function(unsafe, "exclusive", exclusive, 1);
+    rb_define_module_function(unsafe, "yield_nil", yield_nil, 0);
 
     /* as racc's cparse does: allowed, and silent from C */
     VALUE no_init = rb_define_class_under(m, "NoInit", rb_cObject);

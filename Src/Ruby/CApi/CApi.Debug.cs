@@ -33,9 +33,10 @@ namespace IronRuby.Runtime.CApi {
             if (_callTracepoint == null) {
                 _callTracepoint = (delegate* unmanaged[Cdecl]<void*, VALUE, void*, int*, void>)ShimExport("rb_ir_call_tracepoint");
             }
+            var code = CurrentCode();
             var handler = Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>((b, self, unused, args) => {
                 int raised;
-                var depth = EnterNative();
+                var depth = EnterNative(code);
                 try {
                     _callTracepoint((void*)func, ToValue(args.Count > 0 ? args[0] : null), data, &raised);
                 } finally {

@@ -89,5 +89,8 @@ VALUE rb_ir_data_new(VALUE klass, int typed);
 VALUE rb_ir_allocate_builtin(VALUE klass);
 int rb_ir_blocking_begin(void *ubf, void *data2, void *thread);
 void rb_ir_blocking_end(int token);
+void rb_ir_with_gvl_begin(void);
+void rb_ir_with_gvl_end(void);
+void rb_ir_ext_thread_safe(int flag);
 
 #endif

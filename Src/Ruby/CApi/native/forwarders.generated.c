@@ -501,6 +501,9 @@
 #undef rb_frame_method_id_and_class
 #undef rb_ir_blocking_begin
 #undef rb_ir_blocking_end
+#undef rb_ir_with_gvl_begin
+#undef rb_ir_with_gvl_end
+#undef rb_ir_ext_thread_safe
 #undef rb_time_new
 #undef rb_time_nano_new
 #undef rb_time_timespec_new
@@ -1077,6 +1080,9 @@ struct rb_ir_function_table {
     int (*rb_frame_method_id_and_class)(ID *idp, VALUE *klassp);
     int (*rb_ir_blocking_begin)(void *ubf, void *data2, void *thread);
     void (*rb_ir_blocking_end)(int token);
+    void (*rb_ir_with_gvl_begin)(void);
+    void (*rb_ir_with_gvl_end)(void);
+    void (*rb_ir_ext_thread_safe)(int flag);
     VALUE (*rb_time_new)(time_t sec, long usec);
     VALUE (*rb_time_nano_new)(time_t sec, long nsec);
     VALUE (*rb_time_timespec_new)(const struct timespec *ts, int offset);
@@ -1154,7 +1160,7 @@ struct rb_ir_function_table {
 };
 
 static struct rb_ir_function_table rb_ir_fns;
-const int rb_ir_function_count = 574;
+const int rb_ir_function_count = 577;
 
 void rb_ir_set_functions(void **table) {
     memcpy(&rb_ir_fns, table, sizeof(rb_ir_fns));
@@ -5070,6 +5076,27 @@ void
 (rb_ir_blocking_end)(int token)
 {
     rb_ir_fns.rb_ir_blocking_end(token);
+    RB_IR_CHECK();
+}
+
+void
+(rb_ir_with_gvl_begin)(void)
+{
+    rb_ir_fns.rb_ir_with_gvl_begin();
+    RB_IR_CHECK();
+}
+
+void
+(rb_ir_with_gvl_end)(void)
+{
+    rb_ir_fns.rb_ir_with_gvl_end();
+    RB_IR_CHECK();
+}
+
+void
+(rb_ir_ext_thread_safe)(int flag)
+{
+    rb_ir_fns.rb_ir_ext_thread_safe(flag);
     RB_IR_CHECK();
 }
 

@@ -1603,10 +1603,14 @@ rb_thread_call_without_gvl2(void *(*func)(void *), void *data1, rb_unblock_funct
     return rb_ir_blocking_region(func, data1, ubf, data2);
 }
 
+/* the extension's lock again for func, if the blocking region let go of it (CApi.Locks.cs) */
 void *
 rb_thread_call_with_gvl(void *(*func)(void *), void *data1)
 {
-    return func(data1);
+    rb_ir_with_gvl_begin();
+    void *result = func(data1);
+    rb_ir_with_gvl_end();
+    return result;
 }
 
 void *
@@ -2303,16 +2307,24 @@ ruby_vm_at_exit(void (*func)(ruby_vm_t *))
 }
 
 /* ------------------------------------------------------------------------------------------
- * ruby/ractor.h. A C extension only ever runs in the main Ractor here, so RB_EXT_RACTOR_SAFE has
- * nothing to record, the Ractor's standard streams are the process's ($stdin & co), and a
- * Ractor-local storage key holds one value for the process.
+ * ruby/ractor.h. A C extension only ever runs in the main Ractor here, so the Ractor's standard
+ * streams are the process's ($stdin & co), and a Ractor-local storage key holds one value for
+ * the process. Code that is Ractor-safe can run on several threads at once too, so
+ * RB_EXT_RACTOR_SAFE(true) lifts the extension's lock, as TruffleRuby's rb_ext_thread_safe does
+ * (CApi.Locks.cs).
  */
 #include "ruby/ractor.h"
 
 void
 rb_ext_ractor_safe(bool flag)
 {
-    (void)flag;
+    rb_ir_ext_thread_safe(flag);
+}
+
+void
+rb_ext_thread_safe(bool flag)
+{
+    rb_ir_ext_thread_safe(flag);
 }
 
 VALUE rb_ractor_stdin(void) { return rb_gv_get("$stdin"); }

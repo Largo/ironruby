@@ -19,6 +19,8 @@ namespace IronRuby.Runtime.CApi {
         private sealed class BlockingRegion {
             public IntPtr Ubf, Data, NativeThread;
             public bool WasBlocked;
+            // the extension lock let go of for the region, taken again by rb_thread_call_with_gvl
+            public ReleasedLock Released;
         }
 
         private static readonly ConcurrentDictionary<Thread, BlockingRegion> _blockingRegions = new ConcurrentDictionary<Thread, BlockingRegion>();
@@ -33,6 +35,7 @@ namespace IronRuby.Runtime.CApi {
         internal static int rb_ir_blocking_begin(void* ubf, void* data2, void* thread) {
             var region = new BlockingRegion { Ubf = (IntPtr)ubf, Data = (IntPtr)data2, NativeThread = (IntPtr)thread };
             region.WasBlocked = RubyUtils.EnterNativeWait();
+            region.Released = ReleaseForRuby();
             _blockingRegions[Thread.CurrentThread] = region;
             return 0;
         }
@@ -41,6 +44,22 @@ namespace IronRuby.Runtime.CApi {
             BlockingRegion region;
             if (_blockingRegions.TryRemove(Thread.CurrentThread, out region)) {
                 RubyUtils.ExitNativeWait(region.WasBlocked);
+                Reacquire(region.Released);
+            }
+        }
+
+        // rb_thread_call_with_gvl inside a blocking region: the region's lock again, for its function
+        internal static void rb_ir_with_gvl_begin() {
+            BlockingRegion region;
+            if (_blockingRegions.TryGetValue(Thread.CurrentThread, out region)) {
+                Reacquire(region.Released);
+            }
+        }
+
+        internal static void rb_ir_with_gvl_end() {
+            BlockingRegion region;
+            if (_blockingRegions.TryGetValue(Thread.CurrentThread, out region)) {
+                region.Released = ReleaseForRuby();
             }
         }
 

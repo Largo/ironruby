@@ -246,17 +246,28 @@ namespace IronRuby.Runtime.CApi {
         /// <summary>
         /// Before IronRuby calls C: Ruby code may have changed what C has pointers into.
         /// </summary>
-        internal static int EnterNative() {
+        internal static NativeScope EnterNative(CCode code = null) {
+            var scope = new NativeScope();
+            EnterCode(code, ref scope);
             if (_nativeDepth > 0) {
                 RefreshAll();
             }
-            return _nativeDepth++;
+            scope.Depth = _nativeDepth++;
+            return scope;
         }
 
         /// <summary>
         /// After C returns (or unwinds) to IronRuby.
         /// </summary>
-        internal static void LeaveNative(int depth) {
+        internal static void LeaveNative(NativeScope scope) {
+            try {
+                LeaveMirrors(scope.Depth);
+            } finally {
+                LeaveCode(ref scope);
+            }
+        }
+
+        private static void LeaveMirrors(int depth) {
             _nativeDepth = depth;
             var mirrors = _activeMirrors;
             if (mirrors != null && mirrors.Count > 0) {
