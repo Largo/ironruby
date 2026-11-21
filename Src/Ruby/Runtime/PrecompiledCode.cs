@@ -235,12 +235,21 @@ namespace IronRuby.Runtime.Precompiled {
         /// The `def' a precompiled method was compiled from, parsed from the source the library keeps for it
         /// (CreateMethodBody), for the JIT: the same parser on the same text, starting at the def's line, gives the AST
         /// the compiler screened. Null if it does not (the method then runs as compiled, unspecialized).
+        /// The source starts with the file's <see cref="MagicComments"/>, if it has any: without its frozen_string_literal
+        /// the JIT's String literals would be chilled where the compiled body's are frozen.
         /// </summary>
         internal static MethodDefinition ParseJitSource(RubyContext/*!*/ context, string/*!*/ source, MethodDefinition/*!*/ header, string path) {
             if (Trace) {
                 Console.Error.WriteLine("IronRuby.Startup: the JIT parses `def " + header.Name + "' (" + path + ":" + header.Location.Start.Line + ")");
             }
-            return ParseMethod(context, null, source, header, path);
+            int def = 0;
+            while (def < source.Length && source[def] == '#') {
+                def = source.IndexOf('\n', def) + 1;
+                if (def == 0) {
+                    return null;
+                }
+            }
+            return ParseMethod(context, def > 0 ? source.Substring(0, def) : null, source.Substring(def), header, path);
         }
 
         // magicComments: lines put before the def, which the def's first line is moved up by

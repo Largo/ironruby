@@ -792,9 +792,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    Landed, perf/interp; a block that interpolates still makes its scope), nor a Hash
    literal or the keywords of a call (`{a: x}`, `{}`, `f(a: x)`; `IR_LIGHT_HASH=0`,
    `IR_LIGHT_KEYWORD_HASH=0`, see Landed, perf/hashlit; `f(**h)` is still out);
+   nor a multiple assignment (`a, b = b, a`; `IR_LIGHT_MASGN=0`, see Landed, perf/masgn);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
-   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb and Util/hash-literal-matrix.rb
-   are their matrices.
+   Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb, Util/hash-literal-matrix.rb and
+   Util/masgn-matrix.rb are their matrices.
    What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
    them not light). By its first table: keyword parameters 1,257 (37 of them the
    prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
@@ -960,6 +961,23 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site whose Array is the caller's own rest parameter, passing the elements on without
     the copy (TruffleRuby's splat of a rest Array is the same Array when it does not
     escape).
+    The third (found 2026-11-21, perf/masgnfix): **a large light frame compiles to two or
+    three times the IL of the same body with a scope**, and past the CLR's limits it is
+    compiled without optimization. Each call becomes the light site, a test of its answer
+    and the call again with the scope made on demand, and that copies every register local
+    into a new tuple (`ScopeBuilder.MaterializeLocals`, once per call site); each access of
+    a register local becomes a test of the tuple. `String#bytesplice`'s body, light: 49 KB
+    of IL against 15 KB, and `DOTNET_JitDisasmSummary=1` says `Tier-0 switched MinOpts` (the
+    scoped one `FullOpts`). No scope is made late (a counter in `CreateMethodScopeLazy`
+    read 0 after warm-up), and the light frame allocates less (656 against 960 B a call).
+    Not only a multiple assignment: the same body with its multiple assignments written as
+    single ones (a light frame before perf/masgn too) counts 13,295 instructions a call light
+    against 11,486 with `IR_LIGHT_FRAMES=0`, and 11,171 light without register locals (a
+    temporary switch; FullOpts at 29 KB). Straight-line bodies with ten locals: the gain
+    shrinks with the number of calls (8 calls 0.93, 16 0.95, 32 0.97, 48 1.05). perf/masgnfix
+    only keeps a body with a multiple assignment and more than 24 calls out. Untried: register
+    locals only for a small body (the numbers above say that alone recovers most of it),
+    and one copy of the scope-making code per frame instead of one per call site.
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
     site at start-up, 0.2-0.4 ms). TruffleRuby's `Primitive.x` is replaced at parse time.
@@ -1167,6 +1185,173 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **Gate of 2026-11-21 for perf/strlit, perf/jinterp, perf/masgn and its narrowing**: the
+  branch at c2b83fc9 against master at e83e9af7, Release net10.0: **PASS**, the second
+  time. The first run failed step 4 on one shape, `String#bytesplice`, 1,485 -> 1,744 ns
+  alone: perf/masgn had made it a light frame, whose lambda was 2.9 times the IL and, for
+  a copy of its body, compiled without optimization (the entry below and gap 16).
+  - IronRuby.Tests: `PASSED`, 1,291 on both trees.
+  - 30 matrices (the 21 of the gate before, jit-strlit, jit-interp, masgn, jit-scan,
+    jit-construct, jit-raise, jit-const, ivar, int), each as built, with `IR_LIGHT_MASGN=0`,
+    with `IR_LIGHT_FRAMES=0` and with `-X:NoJIT -X:NoOSR`: 120 runs print what master
+    prints, but for `Integer#hash` in int-matrix, which differs from process to process,
+    and once for two lines of block-loop-matrix without the JIT, whose backtraces had no
+    `Range#each`: master loses that frame too, in 1 run of 12 (the branch in 0 of 12). A
+    library frame missing from a backtrace now and then is master's, and is the same kind
+    of failure as `Backtrace_LibraryFrames1` in the gate before. Not explained.
+  - ruby/spec, all five suites: 32,680 examples, 45 failing, every one listed, none new.
+  - Time (`ab.rb -r 5`, `IR_LIGHT_MASGN=0` -> on; CRuby 4.0.10): `a, b = b, a` 174 -> 131
+    (CRuby 46), `@a, @b = @b, @a` 186 -> 142 (50), `a, b = [x, 2]` 192 -> 138 (40),
+    `a, *b = x, 1, 2` 206 -> 184 (124), `self.p, self.q = x, 1` 198 -> 142 (68). A method
+    returning a String literal 148 -> 135 against master (95), `"a#{x}b"` 244 -> 238 (238);
+    `bytesplice` and its six cut-down copies count the instructions they count on master
+    (0.989 to 1.005).
+  - AWFY on the branch before the narrowing, both orders, no FAIL: geomean 0.996 and 0.994;
+    not run again after it (no method of the benchmarks moved with perf/masgn). The micro
+    table in both orders after it: no line more than 5% slower in both. Start-up 1,180 ->
+    1,201 ms.
+  - A precompiled library kept no `frozen_string_literal` for the JIT's parse of a def, so
+    perf/strlit made unfrozen literals there; found in review of perf/jinterp, reproduced,
+    fixed (the perf/strlit entry).
+
+- **perf/masgn (/perf-step, 2026-11-21) - a multiple assignment in a light frame** (`a, b = b, a`,
+  `x, *rest = list`, `@a, (b, c) = v`, `a[i], a[j] = a[j], a[i]`, `self.x, self.y = 1, 2`;
+  `IR_LIGHT_MASGN=0` turns it off) - gated 2026-11-21, see the note above perf/masgn. `IsScopeFree` had no case for a
+  ParallelAssignmentExpression, so it kept 661 methods out of light frames (476 at it first; 24
+  of the prelude's). Nothing it compiles to takes the scope: the right side is an Array made by
+  `RubyOps.MakeArrayN` or one value through an ImplicitSplatAction site (`#to_ary`, given no
+  scope, as ExplicitSplatAction's `*x` is), the left values' receivers go to hidden variables,
+  and each is written by an Array helper and the write a simple assignment to it is (a local,
+  an instance variable, a call of `x=` or `[]=` through LightScopeCall). The rewriter now lets
+  the ImplicitSplatAction site through as it does the other conversion sites; any such site
+  sets MakesCalls, so a frame that recurses through a `#to_ary` written in Ruby keeps its stack
+  check. Left values that are globals, class variables, constants or `x&.y` still refuse.
+  Light frames 76.9% -> 78.7% (21,793 -> 22,308), light blocks 67.1% -> 67.6% (7,725 ->
+  7,783), JIT unchanged (Src/StdLib + AWFY, 28,337 methods; 515 methods moved up, none down;
+  50 methods have more light blocks, none fewer) - gated 2026-11-21, see the note above perf/masgn.
+  Moved: 18 of the prelude's (`__ir_each_impl__`, `__ir_step_slow__`, `__step_scan_args__`,
+  `bytesplice`, `__ir_byteindex__`, `__arithmetic_slice__`, `remainder`, `__ir_log__`,
+  `__ir_hypot__`, `marshal_load`, `inspect`, ...), Rational/Complex/BigDecimal/Date/Pathname
+  helpers, none of AWFY's (its methods have no multiple assignment in a body that is otherwise
+  light). 15 more pass the filter and still need their scope after the rewrite
+  (`__io_each_line__`, `DelegateClass`, `Resolv#get_rr`, irb commands): unchanged, a scope as
+  before; not looked into.
+  Checked: `Util/masgn-matrix.rb` (new: every kind of right side and `#to_ary`, the value of the
+  assignment, evaluation order, attribute and element writes private, protected, made private
+  in a subclass, refined, through `method_missing` and redefined after binding, what a scope
+  made on demand sees, blocks, TracePoint, and recursion a million deep through `#to_ary` and
+  on the right side, which raises SystemStackError) prints CRuby 4.0's output on the baseline,
+  the candidate, `IR_LIGHT_MASGN=0`, `IR_LIGHT_FRAMES=0` and `-X:NoJIT -X:NoOSR`; the
+  light-rest, block-given, block-pass, splat-pass, jit and jit-calls matrices print the
+  baseline's; `census.rb -c` on traces of the matrix and of Json: 0 differ. Not measured on
+  the clock: the shape is entered no faster unless it is called hot, and none of AWFY's is.
+  Gated afterwards (`ab.rb -i`, switch off against on): small bodies gain (`a, b = b, a`
+  0.82, `@a, @b = @b, @a` 0.86, `a, b = [x, 2]` and `a, *b = x, 1, 2` 0.86), but
+  `String#bytesplice` lost (10,940 -> 11,500 instructions, +17% on the clock), and copies of
+  it 7-26%. The mechanism is gap 16's third: the light lambda is 2-3x the IL, and past the
+  CLR's limits it is compiled MinOpts. **Narrowed (perf/masgnfix)**: a body with a multiple
+  assignment and more than 24 calls (`MethodCall`, `[]`, attribute, `super` and `yield`
+  nodes; a literal block's body not counted) keeps its scope (`IsLargeWithMultipleAssignment`;
+  `IR_LIGHT_FRAMES=why` says "multiple assignment in a body of more than 24 calls"). The
+  limit comes from straight-line bodies with ten locals: 16 calls 0.95, 24-32 0.97, 48 1.05.
+  Light frames 21,793 -> 22,265 (472 methods moved up instead of 515; of the prelude's,
+  `bytesplice` and `__arithmetic_slice__` keep their scope). `bytesplice` 10,899 (off) /
+  11,445 (merged) / 10,901 (narrowed); the copies of it 0.79-0.94 of the merged count, each
+  within 0.3% of switch-off; swap, iswap, arr2, rest and attr2 unchanged against merged
+  (0.999-1.001). `Util/masgn-matrix.rb` prints CRuby 4.0's output in all four modes.
+
+- **perf/jinterp (/perf-step, 2026-11-21, 2220ed2d) - an interpolated String in a body the method
+  JIT compiles** (`"#{@path}:#{@lineno}"`, `"v#{x}"`, `%W[a#{x}]`, a heredoc) - census only, not
+  gated. The screen refused every StringConstructor: 1,191 methods refused for one at all, 432 for
+  nothing else, 610 at it first. `EmitInterpolation` makes the String the generic body makes
+  (`StringConstructor.TransformWithoutScope`, in the source encoding the parser now records on
+  the node), each part converted by `JitRuntime.InterpolatedPart`, which runs no Ruby code: a
+  String as it is, an Integer, Float, Symbol, nil, true or false through the generic body's own
+  conversion site while that class's `to_s` is the library one (resolved when compiling, kept so
+  by the entry's method version guard), and anything else deopts before its `to_s` could run.
+  So a typed body never calls a `to_s` written in Ruby: visibility, `method_missing`, a `to_s`
+  answering a non-String, one with side effects or one that recurses are the generic body's.
+  Not where a refinement is active, not in an outlined loop, not `:"a#{x}"` or a command.
+  JIT compiles 11.5% -> 11.6% (3,268 -> 3,293), maybe 10.2% -> 10.3% (2,890 -> 2,911), never
+  78.3% -> 78.1% (22,179 -> 22,133), light frames unchanged (Src/StdLib + AWFY, 28,337 methods;
+  46 methods moved up, none down) - gated 2026-11-21, see the note above perf/masgn.
+  `StringConstructor` refused at all 1,191 -> 434, alone 432 -> 61; the parts it now refuses
+  are counted as their calls (`MethodCall (screen)` 14,461 -> 14,921).
+  Moved: 25 to `compiles` (the prelude's `Thread::Backtrace::Location#to_s`,
+  `Gem::Specification#to_s`, `Gem::NameTuple#inspect`, `Racc::Rule#to_s`, ...), 21 to `maybe`
+  (mostly a constant or a call elsewhere in the body). None of AWFY's: its methods do not
+  interpolate.
+  What the screen still refuses, and why:
+  - a part that is a call other than a binary operator (`#{self.class}`, `#{name}`,
+    `#{x.inspect}`). The first build took them: 273 up (248 to `maybe`, 77 at `call: class/0`),
+    and app-shapes declined three more methods after the screen than the baseline (30 -> 33:
+    `Gem::BasicSpecification#full_name` at `==` on an unknown receiver,
+    `CSV::Parser#validate_field_size` at `<=` on nil, `ERB#set_eoutvar`) and specialized none
+    more. The call is the wall (gap 1), not the interpolation; and the object of a call on
+    another receiver is mostly one whose `to_s` the conversion would deopt on anyway.
+  - an interpolation after a write that is not to a local of the method, the part's own write
+    included (`"#{@n += 1}"`): its conversion can deopt, which after an effect declines the
+    method. With calls refused and this taken, app-shapes still declined `ERB#set_eoutvar`
+    (`compiler.put_cmd = "#{eoutvar}.<<"` twice: the second conversion is a deopt after the
+    attribute write). A conversion of a local already converted on every path before it cannot
+    deopt; that is a flow fact the compiler does not keep, and is what to try next here.
+  - an interpolation in an operand or as an argument of a call on self or a variable, as for a
+    String literal (perf/strlit).
+  Checked: `Util/jit-interp-matrix.rb` (new, 74 rows: every kind of part, typed parts, deopts
+  mid-run, encodings, effects before and after a part, `to_s` of NilClass, Symbol and Integer
+  redefined and restored after the bodies were compiled, a private `TrueClass#to_s`, a prepended
+  `Float#to_s`, a million-deep self-recursion and a million-deep nested `to_s`, threads,
+  `frozen_string_literal: true`; 22 `si_*` methods specialized under `IR_JIT_VERBOSE=1`) and the
+  interpolation, jit, jit-strlit, jit-scan, jit-calls, jit-construct, jit-raise, jit-const, ivar
+  and hash-literal matrices: CRuby's output on the baseline, the candidate and the candidate with
+  `-X:NoJIT -X:NoOSR` (jit-construct's stderr notes differ from CRuby's in order, as on the
+  baseline). Traces of Json, Richards, DeltaBlue, CD and Havlak (3 x 10): the same specialized
+  and declined counts as the baseline; `census.rb -c` 290 methods, 0 differ. app-shapes: the
+  same checksums, the same 106 specialized and 30 declined as the baseline; `-c` 0 differ on
+  light frames and the same 15 screen differences the baseline's trace has.
+  For the gate: no timing taken; IronRuby.Tests and the spec suites not run.
+
+- **perf/strlit (/perf-step, 2026-11-21, 2f7e4647) - a String literal in a body the method
+  JIT compiles** (`def name = "document"`, `@buf = ''`, `h['k']`, `['a', 'b']`) - census
+  only, not gated. The screen refused every String literal: 2,208 methods refused for one
+  at all, 498 for nothing else, the most frequent refusal after `new`. `EmitStringLiteral`
+  makes the String the generic body makes (`StringLiteral.TransformWithoutSite`): a new
+  chilled or plain one on each evaluation, or the interned frozen one under
+  `frozen_string_literal: true`, which a box of the typed body's own finds again. Neither is
+  an effect a deopt could repeat. Under `--debug-frozen-string-literal` the compiler
+  declines (only the generic body knows the site).
+  JIT compiles 10.5% -> 11.5% (2,979 -> 3,268), maybe 9.8% -> 10.2% (2,771 -> 2,890), never
+  79.7% -> 78.3% (22,587 -> 22,179), light frames unchanged (Src/StdLib + AWFY, 28,337
+  methods; 408 methods moved up, none down) - gated 2026-11-21, see the note above perf/masgn.
+  `StringLiteral (screen)` 1,046 -> 259; refused at all 2,208 -> 860, alone 498 -> 100.
+  Moved: 202 of the vendored stdlib, 161 of the gems, 44 of `ironruby/` (the prelude's
+  `IO::Buffer#nl_` compiles, `IO#path` and `Process.__spawn_shell__` are `maybe`), and
+  Json's `Parser#initialize` (compiles).
+  What the screen still refuses, and why: a literal anywhere inside an operand of a binary
+  operator (`suffixes - [".rb"]`, `@buf += "\b"`: the operator only deopts; refusing the
+  Array literal operand itself instead moved 12 methods down), and a literal argument of a
+  call on self or on a variable. The first build took the arguments: 458 up, and Json's
+  trace declined 12 methods after the screen instead of 6 - `read_null`, `read_true`,
+  `read_false`, `read_number`, `read_fraction`, `read_exponent`, all at their calls of
+  `read_char('.')`/`read_required_char('u')` (no typed body; a deopt after an effect, gap
+  1). That is the wall again, not the literal: those 100 left alone wait for the call.
+  Tried and reverted: the literal makers (`RubyOps.Create*MutableString*`) among the helpers
+  a body with held-back writes may call: 0 up, 2 down (rdoc's `set_string`, `compiles` ->
+  `maybe` at `size on a Int`).
+  Checked: `Util/jit-strlit-matrix.rb` (new, 36 rows: chilled, frozen and mutable literals,
+  encodings, an invalid byte, identity across calls, `-"lit"`, the chilled warning, a deopt
+  after a literal, a literal in a loop; every `sl_*` method specialized under
+  `IR_JIT_VERBOSE=1`) and the jit, jit-scan, jit-calls, jit-construct, jit-raise, jit-const
+  and ivar matrices: CRuby's output on the baseline, the candidate and the candidate with
+  `-X:NoJIT -X:NoOSR` (jit-construct's stdout; its stderr notes differ in order only).
+  Traces of Json, Richards, DeltaBlue, CD and Havlak (3 x 10): the same specialized and
+  declined counts as the baseline; `census.rb -c` 290 methods, 0 differ. app-shapes:
+  specialized 103 -> 104 (`CSV::InputRecordSeparator.value`, `"\n"`), the same 30 declined.
+  For the gate: no timing taken; IronRuby.Tests and the spec suites not run.
+  Fixed after (perf/prefrozen): a startup-library def's JIT source had no magic comments, so
+  under `frozen_string_literal: true` (34 of the 48 startup files) its typed body made chilled
+  Strings. The library now keeps the file's frozen comment before the def; census unchanged.
 
 - **perf/hashlit (/perf-step, 2026-11-19) - a method with a Hash literal, or one that
   passes keywords, runs without a scope** (`{a: x}`, `{"k" => v}`, `{}`, `f(a: x)`;

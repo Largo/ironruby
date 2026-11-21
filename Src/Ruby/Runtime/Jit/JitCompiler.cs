@@ -1096,6 +1096,12 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Constant(_context.CreateSymbol(name, symbol.Encoding), typeof(object));
             }
 
+            var str = node as StringLiteral;
+            if (str != null) { return EmitStringLiteral(str, out type); }
+
+            var interpolation = node as StringConstructor;
+            if (interpolation != null) { return EmitInterpolation(interpolation, out type); }
+
             var local = node as LocalVariable;
             if (local != null) { return EmitLocalRead(local, out type); }
 
@@ -1315,6 +1321,52 @@ namespace IronRuby.Runtime.Jit {
             if (v == null) { type = JT.Obj; return Ast.Constant(null, typeof(object)); }
             throw Bail("literal: " + (v == null ? "nil" : v.GetType().Name));
         }
+
+        /// <summary>
+        /// `"lit"': the String the generic body would make (StringLiteral.TransformWithoutSite) - a new one on
+        /// each evaluation, chilled or plain as the file says, or under `frozen_string_literal: true' the one
+        /// interned frozen literal. Making it changes nothing a deopt could see done twice: a String nothing has
+        /// seen yet is dropped, and the interned one is found again. Under --debug-frozen-string-literal a
+        /// literal carries the place it was written, which only the generic body knows.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitStringLiteral(StringLiteral/*!*/ node, out JT type) {
+            if (_context.RubyOptions.DebugFrozenStringLiteral) { throw Bail("string literal under --debug-frozen-string-literal"); }
+            type = JT.Obj;
+            return Ast.Convert(node.TransformWithoutSite(), typeof(object));
+        }
+
+        /// <summary>
+        /// `"a#{x}b"': the String the generic body makes (StringConstructor.TransformWithoutScope), each part converted by
+        /// JitRuntime.InterpolatedPart, which runs no Ruby code: a String is taken as it is, an Integer, Float, Symbol, nil,
+        /// true or false goes through the conversion site the generic body converts with while its class's to_s is the
+        /// library one (as it was when the body was compiled: the entry's method version guard), and anything else deopts
+        /// before its to_s could run - the generic body calls that from its own frame. So a deopt follows each part, after
+        /// whatever the part did (_canDeopt). Not where a refinement is active, which the generic body asks about the to_s
+        /// it calls (RubyOps.TryConvertToSWithRefinements), nor in an outlined loop.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitInterpolation(StringConstructor/*!*/ node, out JT type) {
+            if (_loop != null) { throw Bail("interpolation in a loop"); }
+            if (!_refinements.IsEmpty) { throw Bail("interpolation where a refinement is active"); }
+            if (_interpolationSite == null) {
+                _interpolationSite = new JitRuntime.InterpolationSite(_context,
+                    IsBuiltinMethod(_context.IntegerClass, "to_s"), IsBuiltinMethod(_context.GetClass(typeof(double)), "to_s"),
+                    IsBuiltinMethod(_context.GetClass(typeof(RubySymbol)), "to_s"), IsBuiltinMethod(_context.NilClass, "to_s"),
+                    IsBuiltinMethod(_context.TrueClass, "to_s"), IsBuiltinMethod(_context.FalseClass, "to_s"));
+            }
+            var result = node.TransformWithoutScope(part => {
+                JT partType;
+                var value = Emit(part, out partType);
+                var converted = Ast.Call(JitRuntime.M("InterpolatedPart"), Ast.Constant(_interpolationSite), BoxForStore(value, partType));
+                _canDeopt = true;
+                return converted;
+            });
+            if (result == null) { throw Bail("interpolation: " + node.Kind + " or literals of incompatible encodings"); }
+            type = JT.Obj;
+            return Ast.Convert(result, typeof(object));
+        }
+
+        // what the body's interpolations convert their parts with (EmitInterpolation)
+        private JitRuntime.InterpolationSite _interpolationSite;
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
             if (_loop == null && local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
@@ -3100,14 +3152,23 @@ namespace IronRuby.Runtime.Jit {
         /// unprofiled one is speculated to be a number next to one that is.
         /// </summary>
         private bool WalkOperand(RExpr/*!*/ node) {
-            if (node is AstGlobalVariable || node is SelfReference || node is SymbolLiteral) { return No(node); }
+            if (node is AstGlobalVariable || node is SelfReference || node is StringLiteral) { return No(node); }
             var literal = node as Literal;
             if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
             // a Hash query is a Bool, never a number (an element read is speculated to be one)
             var call = node as MethodCall;
             if (call != null && call.Target != null && IsBoolQueryName(call.MethodName)) { return No(node); }
-            return Walk(node);
+            // nor is anything holding a String literal (`suffixes - [".rb"]'): such an operator only deopts
+            _inOperand++;
+            try {
+                return Walk(node);
+            } finally {
+                _inOperand--;
+            }
         }
+
+        // walking an operand (WalkOperand), where a String literal is refused
+        private int _inOperand;
 
         /// <summary>`a[i]', `h.fetch(k)': an object, whatever the types the profile sees.</summary>
         private static bool IsElementRead(RExpr/*!*/ node) {
@@ -3136,6 +3197,25 @@ namespace IronRuby.Runtime.Jit {
                 return (v is int || v is long || v is double || v is bool || v == null) || No(node);
             }
             if (node is SymbolLiteral) { return true; }
+            // a String literal is any other object (JitCompiler.EmitStringLiteral), never an operand (WalkOperand)
+            if (node is StringLiteral) { return _inOperand == 0 || No(node); }
+            // and so is an interpolated String (JitCompiler.EmitInterpolation), whose parts are any values
+            var interpolation = node as StringConstructor;
+            if (interpolation != null) {
+                if (interpolation.Kind != StringKind.Mutable || _inOperand != 0) { return No(node); }
+                foreach (var part in interpolation.Parts) {
+                    if (part is StringLiteral) { continue; }
+                    // Not a call (`#{self.class}', `#{name}'), unless a binary operator: a call on self is compiled only as an
+                    // attribute read, and the object of any other is one whose to_s the conversion leaves to the generic body.
+                    var partCall = part as MethodCall;
+                    if (partCall != null && !(partCall.Target != null && partCall.Block == null && IsBinaryOperator(partCall.MethodName))) { return No(part); }
+                    if (!Walk(part)) { return false; }
+                    // The part's conversion can deopt, after whatever was written before it, the part included: such a method
+                    // would be wrapped to be declined (ERB#set_eoutvar's `compiler.put_cmd = "#{eoutvar}.<<"', twice).
+                    if (_effectWalked) { return No(node); }
+                }
+                return true;
+            }
 
             var local = node as LocalVariable;
             if (local != null) {
@@ -3147,67 +3227,10 @@ namespace IronRuby.Runtime.Jit {
 
             var assign = node as SimpleAssignmentExpression;
             if (assign != null) {
-                string op = assign.Operation;
-                if (op == "&&" || op == "||") {
-                    // `@x ||= v', `x ||= v' (and `&&=') are `@x || (@x = v)' (JitCompiler.EmitOrAssignment);
-                    // every other target stays out. So does a value that is a call (`@x ||= compute_x',
-                    // `@x ||= @o.find'): a memo's work is the callee's, which in the census and in traced runs is
-                    // rarely a body the JIT has compiled, and this one is then declined (it pays for the stub on every
-                    // call). An operator (`a &&= a + 1') is not such a call. Nor is a memo of nil or false worth one:
-                    // `@x ||= nil' stores only to turn false into nil or to define the variable, an effect that keeps
-                    // what follows it from deopting. The memos it takes are of other literals, `[]', constants,
-                    // operators and the method's own variables.
-                    var valueCall = assign.Right as MethodCall;
-                    if (valueCall != null && !(valueCall.Target != null && valueCall.Block == null && IsBinaryOperator(valueCall.MethodName))) { return No(node); }
-                    var valueLiteral = assign.Right as Literal;
-                    if (valueLiteral != null && (valueLiteral.Value == null || false.Equals(valueLiteral.Value))) { return No(node); }
-                    var orTarget = assign.Left;
-                    if (orTarget is InstanceVariable) { return Walk(assign.Right); }
-                    var orLocal = orTarget as LocalVariable;
-                    if (orLocal == null || orLocal.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
-                    _otherUses.Add(orLocal.Name);
-                    return Walk(assign.Right);
-                }
-                // `x op= v' becomes `x = x op v', so an operator EmitBinary does not know is out.
-                if (op != null && !IsBinaryOperator(op)) { return No(node); }
-
-                // `a[i] = v', `a[i] op= v' (JitCompiler.EmitIndexWrite)
-                var element = assign.Left as ArrayItemAccess;
-                if (element != null) {
-                    var indexArgs = element.Arguments.Expressions;
-                    if (element.Block != null || indexArgs.Length != 1 || indexArgs[0] is SplattedArgument) { return No(node); }
-                    if (!Walk(element.Array) || !Walk(indexArgs[0])) { return false; }
-                    if (op != null) { return WalkOperand(assign.Right); }
-                    // a local stored as the element is only stored, as it is into an instance variable
-                    var storedElement = assign.Right as LocalVariable;
-                    if (storedElement != null && storedElement.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
-                    return Walk(assign.Right);
-                }
-
-                var ivarTarget = assign.Left as InstanceVariable;
-                if (ivarTarget != null) {
-                    if (op != null) { return WalkOperand(assign.Right); }
-                    var stored = assign.Right as LocalVariable;
-                    if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
-                    return Walk(assign.Right);
-                }
-                // `@o.x = v', `o.x = v', `self.x = v' in a method (JitCompiler.EmitAttributeWrite)
-                var attribute = assign.Left as AttributeAccess;
-                if (attribute != null) {
-                    if (op != null || attribute.IsSafeNavigation || _inKeywordDefault) { return No(node); }
-                    var q = attribute.Qualifier;
-                    if (!(q is SelfReference || q is InstanceVariable || q is LocalVariable) || !Walk(q)) { return No(node); }
-                    return Walk(assign.Right);
-                }
-                // `$x = v' (JitCompiler.EmitGlobalWrite)
-                if (assign.Left is AstGlobalVariable) {
-                    if (op != null || _inKeywordDefault) { return No(node); }
-                    return Walk(assign.Right);
-                }
-                var target = assign.Left as LocalVariable;
-                if (target == null || target.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
-                _otherUses.Add(target.Name);
-                return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
+                bool ok = WalkAssignment(assign);
+                // a write anywhere but to a local of the method is an effect, after which an interpolation is refused
+                if (!(assign.Left is LocalVariable)) { _effectWalked = true; }
+                return ok;
             }
 
             var call = node as MethodCall;
@@ -3302,6 +3325,76 @@ namespace IronRuby.Runtime.Jit {
 
             return No(node);
         }
+
+        /// <summary>Mirrors JitCompiler.EmitAssignment and the writes it leads to.</summary>
+        private bool WalkAssignment(SimpleAssignmentExpression/*!*/ assign) {
+            RExpr node = assign;
+            string op = assign.Operation;
+            if (op == "&&" || op == "||") {
+                // `@x ||= v', `x ||= v' (and `&&=') are `@x || (@x = v)' (JitCompiler.EmitOrAssignment);
+                // every other target stays out. So does a value that is a call (`@x ||= compute_x',
+                // `@x ||= @o.find'): a memo's work is the callee's, which in the census and in traced runs is
+                // rarely a body the JIT has compiled, and this one is then declined (it pays for the stub on every
+                // call). An operator (`a &&= a + 1') is not such a call. Nor is a memo of nil or false worth one:
+                // `@x ||= nil' stores only to turn false into nil or to define the variable, an effect that keeps
+                // what follows it from deopting. The memos it takes are of other literals, `[]', constants,
+                // operators and the method's own variables.
+                var valueCall = assign.Right as MethodCall;
+                if (valueCall != null && !(valueCall.Target != null && valueCall.Block == null && IsBinaryOperator(valueCall.MethodName))) { return No(node); }
+                var valueLiteral = assign.Right as Literal;
+                if (valueLiteral != null && (valueLiteral.Value == null || false.Equals(valueLiteral.Value))) { return No(node); }
+                var orTarget = assign.Left;
+                if (orTarget is InstanceVariable) { return Walk(assign.Right); }
+                var orLocal = orTarget as LocalVariable;
+                if (orLocal == null || orLocal.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
+                _otherUses.Add(orLocal.Name);
+                return Walk(assign.Right);
+            }
+            // `x op= v' becomes `x = x op v', so an operator EmitBinary does not know is out.
+            if (op != null && !IsBinaryOperator(op)) { return No(node); }
+
+            // `a[i] = v', `a[i] op= v' (JitCompiler.EmitIndexWrite)
+            var element = assign.Left as ArrayItemAccess;
+            if (element != null) {
+                var indexArgs = element.Arguments.Expressions;
+                if (element.Block != null || indexArgs.Length != 1 || indexArgs[0] is SplattedArgument) { return No(node); }
+                if (!Walk(element.Array) || !Walk(indexArgs[0])) { return false; }
+                if (op != null) { return WalkOperand(assign.Right); }
+                // a local stored as the element is only stored, as it is into an instance variable
+                var storedElement = assign.Right as LocalVariable;
+                if (storedElement != null && storedElement.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
+                return Walk(assign.Right);
+            }
+
+            var ivarTarget = assign.Left as InstanceVariable;
+            if (ivarTarget != null) {
+                if (op != null) { return WalkOperand(assign.Right); }
+                var stored = assign.Right as LocalVariable;
+                if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
+                return Walk(assign.Right);
+            }
+            // `@o.x = v', `o.x = v', `self.x = v' in a method (JitCompiler.EmitAttributeWrite)
+            var attribute = assign.Left as AttributeAccess;
+            if (attribute != null) {
+                if (op != null || attribute.IsSafeNavigation || _inKeywordDefault) { return No(node); }
+                var q = attribute.Qualifier;
+                if (!(q is SelfReference || q is InstanceVariable || q is LocalVariable) || !Walk(q)) { return No(node); }
+                return Walk(assign.Right);
+            }
+            // `$x = v' (JitCompiler.EmitGlobalWrite)
+            if (assign.Left is AstGlobalVariable) {
+                if (op != null || _inKeywordDefault) { return No(node); }
+                return Walk(assign.Right);
+            }
+            var target = assign.Left as LocalVariable;
+            if (target == null || target.DefinitionLexicalDepth != _scopeDepth || _inKeywordDefault) { return No(node); }
+            _otherUses.Add(target.Name);
+            return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
+        }
+
+        // An assignment of something other than a local of the method was walked (Walk): an effect, which the walk's
+        // order puts before what is walked after it.
+        private bool _effectWalked;
 
         /// <summary>Mirrors JitCompiler.ResolveConstant: `C', `::C', and `A::B' qualified by constants.</summary>
         private static bool WalkConstant(ConstantVariable/*!*/ node) {
@@ -3413,7 +3506,12 @@ namespace IronRuby.Runtime.Jit {
                 }
                 if (argc > JitStub.MaxArity || node.Target != null && !Walk(node.Target)) { return No(node); }
                 for (int i = 0; i < argc; i++) {
-                    if (args.Expressions[i] is SplattedArgument || !Walk(args.Expressions[i])) { return No(node); }
+                    var arg = args.Expressions[i];
+                    // Nor a String literal argument (`read_char('.')'): a callee that takes one is rarely a body the JIT has
+                    // compiled, and with it taken AWFY's Json binds `read_char' and declines read_number, read_null and four
+                    // more, each then paying for its stub on every call.
+                    if (arg is StringLiteral && !(arg is SymbolLiteral) || arg is StringConstructor) { return No(arg); }
+                    if (arg is SplattedArgument || !Walk(arg)) { return No(node); }
                 }
                 return true;
             }
