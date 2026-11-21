@@ -9,7 +9,8 @@
 #
 # FILE prints `<shape> <ns> ns <checksum>` per shape and takes shape names as arguments
 # (Util/bench/prelude-cost.rb, Util/bench/core-small.rb; Util/perf/micro.rb's `ns/op` lines too).
-# Each round runs FILE once under every interpreter, in the order given, a fresh process each; a
+# Each round runs FILE once under every interpreter, a fresh process each, in the order given in
+# the first round and the third, and in the reverse order in the second and the fourth; a
 # cell is the least of its rounds. Rows come in the order of the shapes after `--`. The last
 # column is the last interpreter over the one before it.
 # Util/perf/micro.rb's lines are read too, but it times wall clock, prints no checksum and has
@@ -89,7 +90,9 @@ prefix =
 times = Hash.new { |h, k| h[k] = Hash.new { |g, j| g[j] = [] } }   # shape -> interpreter -> [ns], or with -i [instructions]
 sums = Hash.new { |h, k| h[k] = {} }
 rounds.times do |round|
-  interps.each do |name, cmd|
+  # the order turns round after each round: what a build gains or loses by running first or last
+  # (the cache's state, the clock's frequency) then falls on each of them in turn
+  (round.odd? ? interps.reverse : interps).each do |name, cmd|
     out = IO.popen("LANG=C.UTF-8 #{'INSTR=1 ' if instr}#{"N=#{n.shellescape} " if n}#{prefix}#{cmd} #{file.shellescape} #{only.shelljoin} 2>&1", &:read)
     abort "#{name} (#{cmd}) failed with #{$?.exitstatus || $?.termsig}:\n#{out.lines.last(15).join}" unless $?.success?
     rows = out.scan(/^(\S+)\s+([\d.]+) ns(?:\/op)?(?:[ \t]+(\S+))?(?:[ \t]+([\d.]+) instr)?/)
