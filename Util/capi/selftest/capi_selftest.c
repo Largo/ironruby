@@ -132,8 +132,8 @@ nested_exclusive(VALUE self, VALUE n)
 
 /* a blocking region that runs another one inside an rb_thread_call_with_gvl, then waits for
  * another thread to call feed: the outer region must have let go of the GVL or lock again */
-static volatile int fed;
-static VALUE feed(VALUE self) { fed = 1; return Qnil; }
+static int fed;
+static VALUE feed(VALUE self) { __atomic_store_n(&fed, 1, __ATOMIC_SEQ_CST); return Qnil; }
 
 static void *
 region_in_with_gvl(void *data)
@@ -148,15 +148,15 @@ wait_for_feed(void *data)
     long waited, limit = *(long *)data;
     struct timespec ms = { 0, 1000000 };
     rb_thread_call_with_gvl(region_in_with_gvl, NULL);
-    for (waited = 0; !fed && waited < limit; waited++) nanosleep(&ms, NULL);
-    return (void *)(fed ? 1 : 0);
+    for (waited = 0; !__atomic_load_n(&fed, __ATOMIC_SEQ_CST) && waited < limit; waited++) nanosleep(&ms, NULL);
+    return (void *)(__atomic_load_n(&fed, __ATOMIC_SEQ_CST) ? 1 : 0);
 }
 
 static VALUE
 wait_in_nested_region(VALUE self, VALUE ms)
 {
     long limit = NUM2LONG(ms);
-    fed = 0;
+    __atomic_store_n(&fed, 0, __ATOMIC_SEQ_CST);
     return rb_thread_call_without_gvl(wait_for_feed, &limit, RUBY_UBF_IO, NULL) ? Qtrue : Qfalse;
 }
 

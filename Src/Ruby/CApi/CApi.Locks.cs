@@ -134,7 +134,14 @@ namespace IronRuby.Runtime.CApi {
                         Monitor.Exit(_held.Lock);
                         _held = null;
                     }
-                    EnterLock(ext);
+                    try {
+                        EnterLock(ext);
+                    } catch {
+                        // no LeaveNative follows: put back the lock and the running extension, as
+                        // EnterNative does when its refresh throws
+                        LeaveCode(ref scope);
+                        throw;
+                    }
                     _held = ext;
                     _heldCount = 1;
                 }
