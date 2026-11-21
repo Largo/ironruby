@@ -1193,8 +1193,26 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-21 for perf/jbreak**: the branch at 9bc85a93 against master at 8251113c,
+  Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 34 matrices
+  in five modes: 165 same; `int-matrix.rb` prints sixteen `Integer#hash` values, which are seeded
+  per process, and is the same on both trees without those lines in every mode. ruby/spec, all
+  five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, five rounds, the order turned each round, ns a call, baseline -> candidate,
+  `Util/bench/loop-shapes.rb`): a loop of one iteration with a break 98 -> 56 (0.57), of four
+  109 -> 46 (0.43), `next` in four 135 -> 56 (0.41); of a hundred 131 -> 80 (0.61) with
+  overlapping rounds (spreads of 61% and 100%), so by time it has not shown a difference, and by
+  instructions it is 2,445 -> 1,578 (0.645). The loop of 10,000 iterations printed no time on
+  either tree; by instructions 131,821 -> 102,253 (0.776). The other loop shapes 0.97-1.00, all
+  overlapping; `sum` with a block and the scan loop count 0.6% and 1.3% more instructions.
+  The regex, step and super shapes overlap, but for `respond_to?` through super (1.08 in three
+  rounds); alone, eight rounds, it is 124 -> 121 ns and 1,360 instructions on both. micro-table:
+  `str==` was slower in both orders (1.09 and 1.11); alone, eight rounds, 53.5 -> 54.1 ns,
+  overlapping. AWFY, 12 iterations, both orders: geomean 1.000 and 1.002 (new/base), every
+  benchmark verified: no AWFY method has such a loop. Start-up 1,193 and 1,205 ms.
+
 - **perf/jbreak (/perf-step, 2026-11-21) - the method JIT compiles a `while`/`until` loop with
-  `break`, `break v` or `next`** - census only, not gated.
+  `break`, `break v` or `next`** - census only when merged, gated on 2026-11-21 (first entry).
   Two places refused them. The screen (`JitScreen.Walk`) had no case for a BreakStatement or a
   NextStatement; and Emit took them only in an outlined OSR loop, and `break v` not even there.
   The OSR copy already made each a jump to the loop's labels. Emit now takes them in any loop it
