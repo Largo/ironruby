@@ -3222,6 +3222,37 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jscreen 41ef00da (/perf-step, 2026-11-21) - the screen refuses `x`, a call on self with no
+  arguments, unless x is a leaf, a bindable method, an attribute reader or undefined.** Not merged.
+  The screen took every such call as a possible attr_reader read; a method that calls a Ruby
+  method of its own that way is wrapped, profiled, and declined at the first compile
+  (`rejected ... call: _Spacechar/0`), and keeps its stub.
+  - Counted first, over sixteen traced runs (the fourteen AWFY benchmarks, RDoc::Markdown with
+    `rationalize`, a load of eight libraries): 48 methods declined after the pre-screen. 35 for a
+    call (17 of them a call on self with no arguments, the rest calls with arguments, calls on a
+    local, `<<`, `downcase`), 6 for a deopt after an effect, 2 for `[]` on a RubyArray, 2 for an
+    attribute assignment on an unprofiled receiver, 3 others.
+  - With the change: declined 48 -> 31, specialized 168 -> 168 with the same names, the matrices
+    and a probe of thirteen kinds of callee the same on both builds and on CRuby. Census: maybe
+    2,923 -> 2,393, never 22,121 -> 22,651, all 530 from maybe to never.
+  - **Why not kept: it buys nothing that can be measured.** Instructions a call of a Markdown
+    rule 2,570 -> 2,611 (1.016, inside what the controls move by); the main thread's
+    instructions per parse 49-52e6 on both builds; 1,500 parses 68.6 and 70.0 s against 68.6 and
+    72.2 s. A declined method's stub has settled and costs nothing a call, which the jbreak
+    step's measurement had already said. What the change risks is 530 verdicts decided by the
+    declaring module at the first call (a subclass whose attr_reader shadows the method is then
+    never tried), for no gain.
+  - Learned: (1) Whole-process `perf stat` does not measure a JIT change here: about 60% of a
+    Markdown run's instructions are libclrjit on thread-pool workers and vary by 15e9 between
+    runs. Count the main thread, or use `ab.rb -i`. (2) Compiling these callers is stage 2 of
+    `Docs/jit-resume-deopt.md` (a generic call in a typed body needs a light-scope site, a frame
+    for the backtrace, the tracing hooks, and something to do about a deopt after it); the
+    "tail mode" attempt above was as fast as the generic body. For the Markdown rules the time is
+    in the generic callee anyway. (3) `census.rb -c` differs on a file that defines a method
+    twice under a condition (`markdown.rb`'s `get_byte`): the census keeps the last def, the run
+    the first. (4) `Util/perf/hot-shapes-matrix.rb` differs from CRuby on the baseline in three
+    lines: Encoding::CompatibilityError where CRuby raises FrozenError. Not looked into.
+
 - **`Kernel.raise(...)` and `::Kernel.raise(...)` as the deopt a bare `raise` is**
   (/perf-step, round twenty-four, 2026-11-19, perf/kraise, not merged; census only). The
   prelude writes its 322 raises with the receiver, the screen refuses that in 120 of its
