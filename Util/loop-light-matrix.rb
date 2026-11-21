@@ -15,7 +15,7 @@
 # loops, jumps under conditions, blocks around and inside the loop, callees that make the frame's scope (binding,
 # local_variables, block_given?, a $~-setting call, eval), ensure and rescue in a callee, a loop long enough for OSR,
 # register locals and a large body, threads, recursion a million deep, and a TracePoint for :line; and `begin ... end'
-# in its forms (IR_LIGHT_BEGIN=0 keeps those out).
+# in its forms (IR_LIGHT_BEGIN=0 keeps those out). Section 10 has such loops in methods the method JIT specializes.
 #
 #   IR_LIGHT_FRAMES=why ./ir.sh Util/loop-light-matrix.rb 2>&1 >/dev/null | grep -a '^\[light\]'
 #
@@ -563,6 +563,162 @@ t("begin end until, next")       { |i| begin_until_next(i % 6) }
 t("binding in begin")            { |i| begin_binding(i % 2) }
 t("begin in while")              { |i| begin_in_while(i % 4) }
 t("begin value")                 { |i| begin_value(i % 2) }
+
+# ---------------------------------------------------------------- 10. the method JIT's typed body
+# The methods of this section are ones the method JIT specializes (JitCompiler.EmitWhile): a break or next in a loop of
+# the typed body is a jump to the loop's labels, a break's value stored in the loop's result. Each is hot well before the
+# probe crosses an edge: an Integer accumulator that leaves Int64 (a deopt after the loop has run), a Float loop, a
+# callee redefined part way through. IR_JIT_VERBOSE=1 says `[jit] specialized' for each.
+
+def j_int_break(n)
+  i = 0
+  s = 0
+  while true
+    break if i >= n
+    s += i
+    i += 1
+  end
+  s
+end
+
+def j_float_break(x)
+  y = 0.0
+  while y < 100.0
+    y += x
+    break if y > 10.0
+  end
+  y
+end
+
+def j_break_value(n)
+  i = 0
+  r = while i < 10
+    break i * 2 if i == n
+    i += 1
+  end
+  r
+end
+
+def j_break_loop_value(n)
+  i = 0
+  while true
+    i += 1
+    break i if i >= n
+  end
+end
+
+def j_break_float_value(n)
+  i = 0
+  v = while i < n
+    i += 1
+    break 1.5 if i == 3
+    break if i == 5
+  end
+  v
+end
+
+def j_next(n)
+  i = 0
+  s = 0
+  while i < n
+    i += 1
+    next if i % 3 == 0
+    s += i
+  end
+  s
+end
+
+def j_until_next(n)
+  i = 0
+  s = 0
+  until i >= n
+    i += 1
+    next unless i % 2 == 1
+    s += i
+  end
+  s
+end
+
+def j_nested(n)
+  i = 0
+  s = 0
+  while i < n
+    j = 0
+    while true
+      break if j >= i
+      j += 1
+      next if j == 2
+      s += j
+    end
+    i += 1
+    break if s > 50
+  end
+  s
+end
+
+def j_nested_value(n)
+  i = 0
+  s = 0
+  while i < n
+    v = while true
+      break i * 3 if i % 2 == 1
+      break
+    end
+    s += v if v
+    i += 1
+  end
+  s
+end
+
+def j_overflow(n)
+  x = 1
+  i = 0
+  while true
+    x *= n
+    i += 1
+    break if i >= 4
+  end
+  x
+end
+
+def j_float_next(x)
+  y = 0.0
+  k = 0
+  while k < 8
+    k += 1
+    next if k == 4
+    y += x
+  end
+  y
+end
+
+def j_callee(x)
+  x + 1
+end
+
+def j_calls(n)
+  i = 0
+  s = 0
+  while true
+    s += j_callee(i)
+    i += 1
+    break if i >= n
+  end
+  s
+end
+
+t("jit: Integer loop, break")            { |i| j_int_break(i % 7) }
+t("jit: Float loop, break")              { |i| j_float_break(0.75 + (i % 5) * 1.5) }
+t("jit: break with a value")             { |i| j_break_value(i % 12) }
+t("jit: break as the method's value")    { |i| j_break_loop_value(i % 6 + 1) }
+t("jit: break 1.5, bare break, nil")     { |i| j_break_float_value(i % 7) }
+t("jit: next")                           { |i| j_next(i % 9) }
+t("jit: until, next")                    { |i| j_until_next(i % 9) }
+t("jit: nested, break and next")         { |i| j_nested(i % 11) }
+t("jit: nested loop's break value")      { |i| j_nested_value(i % 6) }
+t("jit: break after a deopt point")      { |i| j_overflow(i < 2500 ? (i % 5) + 2 : 3_000_000_000) }
+t("jit: Float loop, next")               { |i| j_float_next(0.25 * (i % 4)) }
+t("jit: callee redefined")               { |i| (eval "def j_callee(x); x + 2; end") if i == 1500; j_calls(i % 5 + 1) }
 
 # ---------------------------------------------------------------- 9. what an OSR'd loop of a light frame reads from its scope
 # A light frame hands its loop's OSR site the declaring scope: its constants resolve there, and its refinements are none.
