@@ -16,6 +16,7 @@
 using MSA = System.Linq.Expressions;
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -539,6 +540,36 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightMultipleAssignmentEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MASGN") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_REGEX=0 keeps every method with a regex literal (`s.match?(/x/)', `/a#{x}/') out of light frames;
+        /// IR_LIGHT_REGEX=all also lets in one whose literal goes to a method that sets $~ (see IsScopeFree).
+        /// </summary>
+        internal static readonly bool LightRegexEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") != "0";
+        private static readonly bool LightRegexAll = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") == "all";
+
+        // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
+        // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
+        // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
+        // so it decides nothing but which frame is worth making light; the call's rule decides what the call needs.
+        private static readonly HashSet<string>/*!*/ RegexScopeMethods = new HashSet<string> {
+            "=~", "!~", "===", "match", "gsub", "gsub!", "sub", "sub!", "scan", "split", "index", "rindex", "byteindex",
+            "byterindex", "[]", "[]=", "slice", "slice!", "start_with?", "partition", "rpartition", "grep", "grep_v",
+        };
+
+        private static bool HasRegexLiteral(Expression target, Arguments arguments) {
+            if (target is RegularExpression) {
+                return true;
+            }
+            if (arguments != null) {
+                foreach (var argument in arguments.Expressions) {
+                    if (argument is RegularExpression) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         private static readonly bool LightFramesWhy = Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "why";
         private static readonly bool LightFramesVerbose = LightFramesWhy || Environment.GetEnvironmentVariable("IR_LIGHT_FRAMES") == "verbose";
 
@@ -939,6 +970,22 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return IsScopeFreeTarget(parallel.Left, blockLiterals, why);
                 }
+                // `/x/', `/a#{x}/o': the Regexp of a literal is made once and kept in a box of the site's own
+                // (RubyOps.CreateRegex*), the parts of one with interpolation are converted as a String's are; it reads no
+                // scope. What reads one is the method it is given to, if it stores $~ (RegexScopeMethods); `if /x/' (a
+                // RegularExpressionCondition) and `/(?<a>.)/ =~ s' (a MatchExpression) read the scope themselves.
+                var regex = node as RegularExpression;
+                if (regex != null) {
+                    if (!LightRegexEnabled) {
+                        return Refuse(why, "RegularExpression (IR_LIGHT_REGEX=0)");
+                    }
+                    foreach (var part in regex.Pattern) {
+                        if (!IsScopeFree(part, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
                 var loop = node as WhileLoopExpression;
                 if (loop != null) {
                     return IsScopeFree(loop.Condition, blockLiterals, why) && AreScopeFree(loop.Statements, blockLiterals, why);
@@ -950,6 +997,9 @@ namespace IronRuby.Compiler.Ast {
                     }
                     foreach (var clause in caseExpression.WhenClauses) {
                         foreach (var comparison in clause.Comparisons) {
+                            if (comparison is RegularExpression && !LightRegexAll) {
+                                return Refuse(why, "RegularExpression in a when clause (Regexp#=== sets $~)");
+                            }
                             if (!IsScopeFree(comparison, blockLiterals, why)) {
                                 return false;
                             }
@@ -971,6 +1021,9 @@ namespace IronRuby.Compiler.Ast {
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
                 if (call != null) {
+                    if (!LightRegexAll && HasRegexLiteral(call.Target, call.Arguments) && RegexScopeMethods.Contains(call.MethodName)) {
+                        return why != null && Refuse(why, "RegularExpression passed to " + call.MethodName + " (it sets $~)");
+                    }
                     var blockReference = call.Block as BlockReference;
                     if (call.Block != null && !(blockLiterals && call.Block is BlockDefinition)) {
                         if (blockReference == null || !LightBlockPassEnabled) {
