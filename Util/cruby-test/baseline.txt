@@ -1,0 +1,145 @@
+test_alias                          18 tests     1 failures     1 errors    0 skips
+test_allocation                     76 tests     0 failures    76 errors    0 skips
+test_argf                        NO SUMMARY (exit 124, timed out)
+test_arithmetic_sequence            37 tests     1 failures     1 errors    0 skips
+test_arity                           3 tests     1 failures     0 errors    0 skips
+test_array                         477 tests    30 failures    18 errors    2 skips
+test_assignment                     29 tests     1 failures     0 errors    0 skips
+test_ast                           729 tests     9 failures   720 errors    0 skips
+test_autoload                       27 tests     1 failures     1 errors    0 skips
+test_backtrace                      31 tests     4 failures     0 errors    0 skips
+test_basicinstructions              26 tests     0 failures     0 errors    0 skips
+test_beginendblock                  16 tests     3 failures     1 errors    1 skips
+test_bignum                          0 tests     0 failures     0 errors    0 skips
+test_box                            65 tests     5 failures    22 errors   31 skips
+test_call                            0 tests     0 failures     0 errors    0 skips
+test_case                            6 tests     0 failures     0 errors    0 skips
+test_class                          62 tests     7 failures     3 errors    0 skips
+test_clone                           7 tests     0 failures     0 errors    0 skips
+test_comparable                     11 tests     0 failures     0 errors    0 skips
+test_compile_prism                 182 tests     1 failures   179 errors    0 skips
+test_complex                        57 tests    10 failures     0 errors    0 skips
+test_complex2                        2 tests     0 failures     0 errors    0 skips
+test_complexrational                 2 tests     0 failures     0 errors    0 skips
+test_condition                       1 tests     0 failures     0 errors    0 skips
+test_const                           5 tests     0 failures     0 errors    0 skips
+test_continuation                    7 tests     0 failures     0 errors    7 skips
+test_data                           16 tests     0 failures     0 errors    0 skips
+test_default_gems                    1 tests     1 failures     0 errors    0 skips
+test_defined                        39 tests     8 failures     1 errors    0 skips
+test_dir                            38 tests     8 failures     2 errors    0 skips
+test_dir_m17n                        0 tests     0 failures     0 errors    0 skips
+test_dup                             6 tests     0 failures     0 errors    0 skips
+test_econv                          84 tests    24 failures     5 errors    0 skips
+test_encoding                       15 tests     2 failures     0 errors    0 skips
+test_enum                           90 tests     3 failures    18 errors    1 skips
+test_enumerator                     70 tests     5 failures     1 errors    0 skips
+test_env                            94 tests    30 failures     0 errors    1 skips
+test_eval                        NO SUMMARY (exit 134)
+test_exception                      98 tests    15 failures     1 errors    0 skips
+test_fiber                          35 tests     3 failures     0 errors    2 skips
+test_file                            0 tests     0 failures     0 errors    0 skips
+test_file_exhaustive                 0 tests     0 failures     0 errors    0 skips
+test_fixnum                         39 tests     0 failures     0 errors    0 skips
+test_flip                            5 tests     1 failures     0 errors    0 skips
+test_float                          63 tests     6 failures     1 errors    0 skips
+test_fnmatch                        15 tests     3 failures     0 errors    0 skips
+test_frozen                          6 tests     0 failures     0 errors    0 skips
+test_frozen_error                    5 tests     1 failures     0 errors    0 skips
+test_gc                          NO SUMMARY (exit 124, timed out)
+test_gc_compact                     28 tests     9 failures     4 errors    7 skips
+test_hash                          306 tests    16 failures     1 errors    8 skips
+test_ifunless                        1 tests     0 failures     0 errors    0 skips
+test_inlinecache                     3 tests     0 failures     0 errors    0 skips
+test_insns_leaf                      2 tests     0 failures     0 errors    0 skips
+test_integer                        38 tests     1 failures     0 errors    0 skips
+test_integer_comb                   41 tests     0 failures     0 errors    0 skips
+test_io                          NO SUMMARY (exit 124, timed out)
+test_io_buffer                      80 tests     8 failures    11 errors    1 skips
+test_io_m17n                       159 tests    40 failures     8 errors    0 skips
+test_io_timeout                      4 tests     0 failures     0 errors    4 skips
+test_iseq                        NO SUMMARY (exit 1)
+test_iterator                       32 tests     0 failures     0 errors    0 skips
+test_key_error                       6 tests     0 failures     0 errors    0 skips
+test_keyword                         0 tests     0 failures     0 errors    0 skips
+test_lambda                         27 tests     4 failures     1 errors    0 skips
+test_lazy_enumerator                64 tests     5 failures     1 errors    0 skips
+test_literal                        29 tests     2 failures     2 errors    0 skips
+test_m17n                          127 tests    18 failures     2 errors    1 skips
+test_m17n_comb                      82 tests    11 failures     1 errors    0 skips
+test_marshal                       231 tests    25 failures     7 errors    1 skips
+test_math                           34 tests     1 failures     1 errors    0 skips
+test_memory_view                     0 tests     0 failures     0 errors    0 skips
+test_metaclass                       1 tests     0 failures     0 errors    0 skips
+test_method                         98 tests    14 failures     2 errors    0 skips
+test_method_cache                    4 tests     0 failures     0 errors    0 skips
+test_mixed_unicode_escapes           1 tests     1 failures     0 errors    0 skips
+test_module                        195 tests    14 failures     8 errors    0 skips
+test_name_error                     11 tests     0 failures     0 errors    0 skips
+test_nomethod_error                 10 tests     0 failures     0 errors    0 skips
+test_not                             2 tests     0 failures     0 errors    0 skips
+test_numeric                        27 tests     5 failures     0 errors    0 skips
+test_object                         67 tests    12 failures     3 errors    0 skips
+test_object_id                     132 tests     0 failures     0 errors    0 skips
+test_objectspace                    37 tests     9 failures    10 errors    0 skips
+test_optimization                   89 tests    47 failures    23 errors    0 skips
+test_pack                        NO SUMMARY (exit 134)
+test_parse                         102 tests    19 failures     0 errors    0 skips
+test_path                            6 tests     0 failures     0 errors    0 skips
+test_pattern_matching               30 tests     2 failures     0 errors    0 skips
+test_pipe                           12 tests     0 failures     2 errors    0 skips
+test_primitive                      25 tests     0 failures     0 errors    0 skips
+test_proc                          118 tests    10 failures     6 errors    0 skips
+test_process                     NO SUMMARY (exit 124, timed out)
+test_ractor                         17 tests     6 failures     0 errors    0 skips
+test_rand                           41 tests     6 failures     1 errors    0 skips
+test_random_formatter               26 tests     0 failures     2 errors    0 skips
+test_range                          67 tests    11 failures     4 errors    0 skips
+test_rational                       52 tests     3 failures     0 errors    0 skips
+test_rational2                       1 tests     0 failures     0 errors    0 skips
+test_readpartial                     4 tests     1 failures     0 errors    0 skips
+test_refinement                    122 tests    12 failures     3 errors    0 skips
+test_regexp                      NO SUMMARY (exit 124, timed out)
+test_require                     NO SUMMARY (exit 1)
+test_require_lib                     0 tests     0 failures     0 errors    0 skips
+test_rubyoptions                    68 tests    51 failures     1 errors    0 skips
+test_rubyvm                          3 tests     1 failures     2 errors    0 skips
+test_set                            63 tests     4 failures     0 errors    2 skips
+test_settracefunc                  102 tests    40 failures     7 errors    0 skips
+test_shapes                          0 tests     0 failures     0 errors    0 skips
+test_signal                         21 tests     2 failures     2 errors    1 skips
+test_sleep                           2 tests     0 failures     0 errors    0 skips
+test_sprintf                        33 tests     5 failures     0 errors    0 skips
+test_sprintf_comb                   95 tests     6 failures     0 errors    0 skips
+test_stack                           3 tests     2 failures     1 errors    0 skips
+test_string                        442 tests    23 failures     7 errors    0 skips
+test_string_memory                   3 tests     0 failures     3 errors    0 skips
+test_stringchar                      4 tests     2 failures     0 errors    0 skips
+test_struct                        102 tests     0 failures     2 errors    0 skips
+test_super                          50 tests     5 failures     1 errors    0 skips
+test_symbol                         59 tests     1 failures     1 errors    0 skips
+test_syntax                        170 tests     8 failures     3 errors    0 skips
+test_system                          8 tests     2 failures     1 errors    0 skips
+test_thread                      NO SUMMARY (exit 124, timed out)
+test_thread_cv                      13 tests     2 failures     1 errors    0 skips
+test_thread_queue                   40 tests     4 failures     1 errors    0 skips
+test_threadgroup                     3 tests     1 failures     0 errors    0 skips
+test_time                           88 tests     6 failures    11 errors    0 skips
+test_time_tz                       155 tests     3 failures     1 errors    0 skips
+test_trace                       NO SUMMARY (exit 124, timed out)
+test_transcode                      98 tests    17 failures     5 errors    0 skips
+test_undef                           3 tests     0 failures     0 errors    0 skips
+test_unicode_escape                  8 tests     0 failures     0 errors    0 skips
+test_variable                       32 tests     3 failures     0 errors    0 skips
+test_vm_dump                         0 tests     0 failures     0 errors    0 skips
+test_warning                         1 tests     0 failures     0 errors    0 skips
+test_weakkeymap                     13 tests     0 failures     0 errors    0 skips
+test_weakmap                        19 tests     1 failures     0 errors    3 skips
+test_whileuntil                      3 tests     0 failures     0 errors    0 skips
+test_yield                          13 tests     2 failures     0 errors    0 skips
+test_yjit                            0 tests     0 failures     0 errors    0 skips
+test_yjit_exit_locations             0 tests     0 failures     0 errors    0 skips
+test_zjit                            0 tests     0 failures     0 errors    0 skips
+
+142 files: 48 clean, 83 with failures, 11 without a summary
+6903 tests, 1943577 assertions, 687 failures, 1204 errors, 73 skips; 4939 passing

@@ -281,6 +281,15 @@ class Set
   end
   private :__do_with_enum__
 
+  # An empty set of the receiver's class that compares the way the receiver does: core
+  # Set's results (&, flatten, collect!, classify, divide) keep compare_by_identity.
+  def __new_like__ # :nodoc:
+    n = self.class.new
+    n.compare_by_identity if compare_by_identity?
+    n
+  end
+  private :__new_like__
+
   # Ruby 4.0's core Set names itself, not its table, when frozen:
   # "can't modify frozen Set: Set[1]".
   def __check_frozen__ # :nodoc:
@@ -389,7 +398,7 @@ class Set
   # Returns a new set that is a copy of the set, flattening each
   # containing set recursively.
   def flatten
-    self.class.new.__flatten_merge__(self)
+    __new_like__.__flatten_merge__(self)
   end
 
   # Equivalent to Set#flatten, but replaces the receiver with the
@@ -602,7 +611,7 @@ class Set
   def collect!
     block_given? or return enum_for(__method__) { size }
     __check_frozen__
-    set = self.class.new
+    set = __new_like__
     each { |o| set << yield(o) }
     replace(set)
   end
@@ -680,7 +689,7 @@ class Set
   #     Set[1, 3, 5] & Set[3, 2, 1]             #=> #<Set: {3, 1}>
   #     Set['a', 'b', 'z'] & ['a', 'b', 'c']    #=> #<Set: {"a", "b"}>
   def &(enum)
-    n = self.class.new
+    n = __new_like__
     if enum.is_a?(Set)
       if enum.size > size
         each { |o| n.add(o) if enum.include?(o) }
@@ -688,7 +697,8 @@ class Set
         enum.each { |o| n.add(o) if include?(o) }
       end
     else
-      __do_with_enum__(enum) { |o| n.add(o) if include?(o) }
+      # the block returns nil, as core Set's does: an enumerable may keep it and call it later
+      __do_with_enum__(enum) { |o| n.add(o) if include?(o); nil }
     end
     n
   end
@@ -702,10 +712,11 @@ class Set
   #     Set[1, 'b', 'c'] ^ ['b', 'd']           #=> #<Set: {"d", 1, "c"}>
   #
   # Ruby 4.0 starts from a copy of the receiver, so the result keeps its class
-  # and compare_by_identity; the argument is deduplicated first.
+  # and compare_by_identity; the argument is deduplicated first, the way the
+  # receiver compares.
   def ^(enum)
     n = dup
-    enum = Set.new(enum) unless enum.is_a?(Set)
+    enum = __new_like__.merge(enum) unless enum.is_a?(Set)
     enum.each { |o| n.add(o) unless n.delete?(o) }
     n
   end
@@ -792,7 +803,7 @@ class Set
     h = {}
 
     each { |i|
-      (h[yield(i)] ||= self.class.new).add(i)
+      (h[yield(i)] ||= __new_like__).add(i)
     }
 
     h
@@ -838,7 +849,7 @@ class Set
 
       set = Set.new()
       dig.each_strongly_connected_component { |css|
-        set.add(self.class.new(css))
+        set.add(__new_like__.merge(css))
       }
       set
     else

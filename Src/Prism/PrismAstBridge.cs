@@ -650,7 +650,26 @@ namespace IronRuby.Prism {
 
                 case Pm.ArrayNode array: {
                     var items = new List<Expression>();
-                    foreach (var element in array.Elements) items.Add(Argument(element));
+                    foreach (var element in array.Elements) {
+                        if (element is Pm.KeywordHashNode elementHash) {
+                            // `[1, a: 1]` holds a plain Hash, not keyword arguments that a later
+                            // `f(*ary)` would pass as such; and `[**h]` holds nothing when h is empty
+                            var elementSpan = Span(element);
+                            var plain = HashExpression(elementHash.Elements, false, elementSpan);
+                            if (IsSplattedKeywordHash(element)) {
+                                var temp = NewTemp(plain, elementSpan, out var assignment);
+                                items.Add(new SplattedArgument(new ConditionalExpression(
+                                    new MethodCall(assignment, "empty?", null, elementSpan),
+                                    new ArrayConstructor(new Arguments(new Expression[0]), elementSpan),
+                                    new ArrayConstructor(new Arguments(new Expression[] { temp }), elementSpan),
+                                    elementSpan)));
+                            } else {
+                                items.Add(plain);
+                            }
+                        } else {
+                            items.Add(Argument(element));
+                        }
+                    }
                     return new ArrayConstructor(new Arguments(items.ToArray()), span);
                 }
                 case Pm.HashNode hash:
@@ -976,7 +995,10 @@ namespace IronRuby.Prism {
                         Statements prologue;
                         var parameters = BlockParameters(lambda.Parameters, false, out prologue);
                         var body = BlockBody(lambda.Body, span, prologue);
-                        return new LambdaDefinition(new BlockDefinition(scope, parameters, body, span));
+                        // MRI places a lambda literal at its body's opening { or do, which for
+                        // ->(x,\n y) { } is not the line of the arrow (Proc#source_location).
+                        var blockSpan = Span(lambda.OpeningLoc.Start, lambda.StartOffset + lambda.Length - lambda.OpeningLoc.Start);
+                        return new LambdaDefinition(new BlockDefinition(scope, parameters, body, blockSpan));
                     } finally {
                         _scopes.Pop();
                     }
@@ -1398,7 +1420,23 @@ namespace IronRuby.Prism {
 
                 // an array literal is only defined if every element is
                 case Pm.ArrayNode array:
-                    return DefinedAs(ElementsDefined(array, span), "expression", span);
+                    return DefinedAs(ElementsDefined(array.Elements, span), "expression", span);
+
+                // ... and so is a hash literal: every key and value, and what ** splats
+                case Pm.HashNode hash:
+                    return DefinedAs(ElementsDefined(hash.Elements, span), "expression", span);
+
+                // A call is defined only if its arguments are (CRuby's defined_expr checks each
+                // one, splatted or keyword, before the method): `f(undefined_local)` is nil. A
+                // block argument is not checked.
+                case Pm.CallNode argumentsCall
+                    when argumentsCall.Arguments is Pm.ArgumentsNode callArguments && callArguments.Arguments.Length > 0
+                        && !HasFlag(argumentsCall, Pm.CallNodeFlags.AttributeWrite):
+                    var callDefined = argumentsCall.Receiver != null
+                        ? GuardedDefined(argumentsCall.Receiver, new IsDefinedExpression(Expr(node), span), span)
+                        : Freeze(new IsDefinedExpression(Expr(node), span), span);
+                    return new ConditionalExpression(ElementsDefined(((Pm.ArgumentsNode)argumentsCall.Arguments).Arguments, span),
+                        callDefined, Literal.Nil(span), span);
 
                 // `a.x = v` and `a[i] = v` are the x= / []= methods, not assignments; they lower
                 // to a SimpleAssignmentExpression, which would report "assignment"
@@ -1449,13 +1487,37 @@ namespace IronRuby.Prism {
             }
         }
 
-        private Expression/*!*/ ElementsDefined(Pm.ArrayNode/*!*/ node, SourceSpan span) {
+        // The elements of an array or hash literal, or a call's arguments, all defined: a splat
+        // stands for what it splats, a hash (a keyword one too) for its keys and values. Each
+        // is tested as defined? itself would test it, so `[[a]]` and `f(g(a))` look inside.
+        private Expression/*!*/ ElementsDefined(Pm.PmNode/*!*/[]/*!*/ elements, SourceSpan span) {
             Expression result = null;
-            foreach (var element in node.Elements) {
-                var value = element is Pm.SplatNode splat ? splat.Expression : element;
-                if (value == null) continue;
-                var test = new IsDefinedExpression(Expr(Unparen(value)), Span(value));
-                result = (result == null) ? (Expression)test : new AndExpression(result, test, span);
+            foreach (var element in elements) {
+                Expression test;
+                switch (element) {
+                    case Pm.SplatNode splat:
+                        // an anonymous `*' is always there
+                        if (splat.Expression == null) continue;
+                        test = Defined(splat.Expression, Span(splat.Expression));
+                        break;
+                    case Pm.AssocSplatNode assocSplat:
+                        if (assocSplat.Value == null) continue;
+                        test = Defined(assocSplat.Value, Span(assocSplat.Value));
+                        break;
+                    case Pm.AssocNode assoc:
+                        test = new AndExpression(Defined(assoc.Key, Span(assoc.Key)), Defined(assoc.Value, Span(assoc.Value)), span);
+                        break;
+                    case Pm.KeywordHashNode keywords:
+                        test = ElementsDefined(keywords.Elements, span);
+                        break;
+                    case Pm.ForwardingArgumentsNode _:
+                    case Pm.BlockArgumentNode _:
+                        continue;
+                    default:
+                        test = Defined(element, Span(element));
+                        break;
+                }
+                result = (result == null) ? test : new AndExpression(result, test, span);
             }
             return result ?? (Expression)Literal.True(span);
         }
@@ -2467,6 +2529,11 @@ namespace IronRuby.Prism {
                         // `super` must not forward the hash taken only to be refused
                         _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
                     }
+                } else if (isMethod || !autoSplat) {
+                    // with optional or rest positionals the hash would land among them
+                    // (`def merge(*enums, **nil)`), so take the arguments apart by hand like a
+                    // keyword-accepting signature does, and refuse what is left as keywords
+                    return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
                 }
             } else if (node.KeywordRest != null) {
                 throw Unsupported(node.KeywordRest);
@@ -2768,6 +2835,14 @@ namespace IronRuby.Prism {
         /// </summary>
         private List<Expression>/*!*/ BindKeywordsFrom(Pm.ParametersNode/*!*/ node, LocalVariable/*!*/ kwVar, bool isMethod) {
             var span = Span(node);
+            if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
+                // `**nil`: MRI says "no keywords accepted" rather than naming the keywords
+                return new List<Expression> {
+                    new UnlessExpression(
+                        new MethodCall(kwVar, "empty?", null, span),
+                        new Statements(RaiseError("ArgumentError", "no keywords accepted", span)), null, span)
+                };
+            }
             var prologue = new List<Expression>();
             var names = new List<string>();
             var requiredNames = new List<string>();
@@ -3253,8 +3328,8 @@ namespace IronRuby.Prism {
                 Expression hasKey = new MethodCall(hash, "key?", new Arguments(keySymbol), span);
                 if (_patternMissingKey != null) {
                     hasKey = new OrExpression(hasKey, new BlockExpression(MakeStatements(new Expression[] {
-                        new SimpleAssignmentExpression(_patternMissingKey,
-                            new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key)), null, span),
+                        new SimpleAssignmentExpression(_patternMissingKey, new ArrayConstructor(new Arguments(new Expression[] {
+                            new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key)), hash }), span), null, span),
                         Literal.False(span)
                     }), span), span);
                 }
@@ -3313,7 +3388,8 @@ namespace IronRuby.Prism {
             Expression lenAssign;
             var len = NewTemp(new MethodCall(arr, "length", null, span), span, out lenAssign);
             tests.Add(new BlockExpression(MakeStatements(lenAssign, Literal.True(span)), span));
-            tests.Add(new MethodCall(len, ">=", new Arguments(Literal.Integer(count, span)), span));
+            tests.Add(Explained(new MethodCall(len, ">=", new Arguments(Literal.Integer(count, span)), span),
+                "length", new Expression[] { arr, len, Literal.Integer(count, span), Literal.True(span) }, span));
 
             // captures inside the block must live in the enclosing scope
             PreDeclareCaptures(node.Requireds);

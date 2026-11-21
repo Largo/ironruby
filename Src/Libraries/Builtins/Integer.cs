@@ -255,7 +255,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
-        private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
+        internal static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
             switch (encoding.CodePage) {
                 case RubyEncoding.CodePageUTF16BE:
                 case RubyEncoding.CodePageUTF16LE:
@@ -333,6 +333,29 @@ namespace IronRuby.Builtins {
                     }
                     if (codepoint > 0xffffff) {
                         throw OutOfCharRange(codepoint);
+                    }
+                    throw InvalidCodePoint(encoding, codepoint);
+
+                case 54936: // GB18030
+                    // Onigmo's gb18030_code_to_mbc writes the code point's significant bytes as
+                    // they are, and rb_enc_uint_chr then rejects anything that is not one valid
+                    // character: ASCII, a two byte lead/trail pair or a four byte
+                    // lead/digit/lead/digit sequence.
+                    if (codepoint <= 0x7f) {
+                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
+                    }
+                    if (codepoint > 0xff && codepoint <= 0xffff) {
+                        uint lead = codepoint >> 8, trail = codepoint & 0xff;
+                        if (lead >= 0x81 && lead <= 0xfe && trail >= 0x40 && trail <= 0xfe && trail != 0x7f) {
+                            return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
+                        }
+                    }
+                    if (codepoint > 0xffffff) {
+                        byte b1 = (byte)(codepoint >> 24), b2 = (byte)(codepoint >> 16), b3 = (byte)(codepoint >> 8), b4 = (byte)codepoint;
+                        if (b1 >= 0x81 && b1 <= 0xfe && b2 >= 0x30 && b2 <= 0x39 &&
+                            b3 >= 0x81 && b3 <= 0xfe && b4 >= 0x30 && b4 <= 0x39) {
+                            return MutableString.CreateBinary(new[] { b1, b2, b3, b4 }, resultEncoding);
+                        }
                     }
                     throw InvalidCodePoint(encoding, codepoint);
 
@@ -726,8 +749,45 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [BlockNotKept]
-        public static object Times(BlockParam/*!*/ block, int self) {
-            return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
+        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam/*!*/ block, int self) {
+            if (block == null) {
+                return new Enumerator(self, "times");
+            }
+            // numeric.rb's Integer#times is `while i < self; yield i; i = i.succ; end`, whose
+            // `<` and `succ` are calls once either has been redefined (#times on a Bignum does the same)
+            return AreTimesOpsBasic(lessThanStorage.Context)
+                ? TimesImpl(block, self)
+                : TimesImpl(lessThanStorage, succStorage, block, self);
+        }
+
+        private sealed class TimesOpsState {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly bool Basic;
+
+            internal TimesOpsState(RubyContext/*!*/ context, int version, bool basic) {
+                Context = context;
+                Version = version;
+                Basic = basic;
+            }
+        }
+
+        private static volatile TimesOpsState _timesOps;
+
+        private static bool AreTimesOpsBasic(RubyContext/*!*/ context) {
+            var state = _timesOps;
+            if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookups: a change that races with them leaves the state stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                bool basic = IsLibraryMethod(context, "<") && IsLibraryMethod(context, "succ");
+                _timesOps = state = new TimesOpsState(context, version, basic);
+            }
+            return state.Basic;
+        }
+
+        private static bool IsLibraryMethod(RubyContext/*!*/ context, string/*!*/ name) {
+            var lookup = context.IntegerClass.ResolveMethod(name, VisibilityContext.AllVisible);
+            return lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass;
         }
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
@@ -756,18 +816,18 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self</returns>
         /// <remarks>
-        /// Dynamically invokes "+" operator to find next item.
+        /// Dynamically invokes "succ" to find next item.
         /// Dynamically invokes "&lt;" operator to check if we have reached self - 1.
         /// </remarks>
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [BlockNotKept]
-        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
-            return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
+        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam block, object/*!*/ self) {
+            return (block != null) ? TimesImpl(lessThanStorage, succStorage, block, self) : 
                 new Enumerator(self, "times");
         }
 
-        public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam/*!*/ block, object/*!*/ self) {
+        public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam/*!*/ block, object/*!*/ self) {
             object i = 0;
             var lessThan = lessThanStorage.GetCallSite("<");
             while (RubyOps.IsTrue(lessThan.Target(lessThan, i, self))) {
@@ -776,8 +836,8 @@ namespace IronRuby.Builtins {
                     return result;
                 }
 
-                var add = addStorage.GetCallSite("+");
-                i = add.Target(add, i, 1);
+                var succ = succStorage.GetCallSite("succ");
+                i = succ.Target(succ, i);
             }
             return self;
         }

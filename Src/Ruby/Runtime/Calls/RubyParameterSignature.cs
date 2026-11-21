@@ -121,6 +121,17 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// Whether a block with these parameters takes a single Array argument apart: more than one
+        /// positional parameter, or one and a rest (|a, b|, |a, *r|, but not |a| or |*r|).
+        /// </summary>
+        public bool AutoSplatsSingleArray {
+            get {
+                int count = _leadingCount + _optionalCount + _postCount;
+                return count >= 2 || count >= 1 && _hasRest;
+            }
+        }
+
+        /// <summary>
         /// The "expected" part of MRI's argument_arity_error: the positional bounds ("1", "1..2" or
         /// "1+"), then every required keyword, given or not: "1; required keyword: k".
         /// </summary>

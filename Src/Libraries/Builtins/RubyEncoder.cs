@@ -395,14 +395,15 @@ namespace IronRuby.Builtins {
                     break;
 
                 case 12:
-                    if (padding != 2) {
+                    // MRI's strict decoder also rejects a final character whose unused bits are set
+                    if (padding != 2 || (buffer & 0xf) != 0) {
                         throw RubyExceptions.CreateArgumentError("invalid base64");
                     }
                     result.Append((byte)((buffer >> 4) & 0xff));
                     break;
 
                 case 18:
-                    if (padding != 1) {
+                    if (padding != 1 || (buffer & 0x3) != 0) {
                         throw RubyExceptions.CreateArgumentError("invalid base64");
                     }
                     result.Append((byte)((buffer >> 10) & 0xff));
@@ -516,58 +517,44 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's 'M' case in pack_unpack_internal: "=XX" is a byte and "=\n" (or "=\r\n") a soft
+        // line break. Anything else after an "=" - a non-hex digit, or the end of the data - ends
+        // decoding, and the rest of the data from that "=" on is appended as it is.
         private static MutableString/*!*/ ReadQuotedPrintable(MutableString/*!*/ data, ref int index) {
             MutableString result = MutableString.CreateBinary();
-            int length = data.GetByteCount();
-            int i = index;
-            while (i < length) {
-                byte c = data.GetByte(i++);
+            int send = data.GetByteCount();
+            int s = index;
+            int ss = s;
+            while (s < send) {
+                byte c = data.GetByte(s);
                 if (c == '=') {
-                    // An "=" that does not begin a complete escape is not an error and does not
-                    // end the string: it was never an escape, so it and whatever followed it
-                    // stay exactly as they were found.
-                    if (i >= length) {
-                        result.Append((byte)'=');
+                    if (++s == send) {
                         break;
                     }
-
-                    c = data.GetByte(i);
-                    if (c == '\n') {
-                        i++;
-                        continue;
-                    } 
-                    if (c == '\r' && i + 1 < length && data.GetByte(i + 1) == '\n') {
-                        i += 2;
-                        continue;
+                    if (s + 1 < send && data.GetByte(s) == '\r' && data.GetByte(s + 1) == '\n') {
+                        s++;
                     }
-
-                    int hi = Tokenizer.ToDigit(c);
-                    if (hi >= 16) {
-                        result.Append((byte)'=');
-                        continue;
+                    if (data.GetByte(s) != '\n') {
+                        int hi = Tokenizer.ToDigit(data.GetByte(s));
+                        if (hi >= 16 || ++s == send) {
+                            break;
+                        }
+                        int lo = Tokenizer.ToDigit(data.GetByte(s));
+                        if (lo >= 16) {
+                            break;
+                        }
+                        result.Append((byte)((hi << 4) | lo));
                     }
-                    i++;
-
-                    if (i >= length) {
-                        result.Append((byte)'=');
-                        result.Append(c);
-                        break;
-                    }
-
-                    int lo = Tokenizer.ToDigit(data.GetByte(i));
-                    if (lo >= 16) {
-                        result.Append((byte)'=');
-                        result.Append(c);
-                        continue;
-                    }
-
-                    i++;
-                    result.Append((byte)((hi << 4) | lo));
                 } else {
                     result.Append(c);
                 }
+                s++;
+                ss = s;
             }
-            index = i;
+            for (int k = ss; k < send; k++) {
+                result.Append(data.GetByte(k));
+            }
+            index = send;
             return result;
         }
 
@@ -583,6 +570,10 @@ namespace IronRuby.Builtins {
                 return;
             }
 
+            // MRI's pack.c caps a 'u' line at 63 bytes, the largest length one UU character can encode.
+            if (bytesPerLine > 63) {
+                bytesPerLine = 63;
+            }
             bytesPerLine = bytesPerLine - bytesPerLine % 3;
 
             int remains = input.Length % bytesPerLine;
@@ -624,64 +615,53 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI's 'u' case in pack_unpack_internal: a line with a length character, groups of four
+        // characters of which a missing or out-of-range one counts as zero, an optional checksum
+        // character and a line end. The output is capped at 3/4 of the input, so a length that
+        // promises more than the line holds gives zero bytes rather than reading on.
         private static MutableString/*!*/ ReadUU(MutableString/*!*/ data, ref int position) {
-            var input = new MutableStringStream(data);
-            var output = new MutableStringStream();
-            input.Position = position;
-            ReadUU(input, output);
-            position = (int)input.Position;
-            output.Dispose();
-            return output.String;
-        }
-
-        private static bool ReadUU(Stream/*!*/ input, Stream/*!*/ output) {
-            while (true) {
-                int lineLength = input.ReadByte();
-                if (lineLength == -1) {
-                    return true;
+            byte[] bytes = data.ToByteArray();
+            int s = position, send = bytes.Length;
+            int capacity = (send - s) * 3 / 4;
+            var buf = new byte[Math.Max(capacity, 0)];
+            int ptr = 0, total = 0;
+            while (s < send && bytes[s] > ' ' && bytes[s] < 'a') {
+                int len = (bytes[s++] - ' ') & 0x3f;
+                total += len;
+                if (total > capacity) {
+                    len -= total - capacity;
+                    total = capacity;
                 }
-
-                lineLength = DecodeUUByte(lineLength);
-
-                int remains = lineLength % 3;
-                int triples = lineLength / 3;
-
-                for (int i = 0; i < triples; i++) {
-                    int a = DecodeUUByte(input.ReadByte());
-                    int b = DecodeUUByte(input.ReadByte());
-                    int c = DecodeUUByte(input.ReadByte());
-                    int d = input.ReadByte();
-                    if (d == -1) {
-                        return false;
-                    }
-                    d = DecodeUUByte(d);
-
-                    output.WriteByte((byte)((a << 2 | b >> 4) & 0xff));
-                    output.WriteByte((byte)((b << 4 | c >> 2) & 0xff));
-                    output.WriteByte((byte)((c << 6 | d) & 0xff));
+                while (len > 0) {
+                    int mlen = len > 3 ? 3 : len;
+                    int a = UUDigit(bytes, ref s, send), b = UUDigit(bytes, ref s, send);
+                    int c = UUDigit(bytes, ref s, send), d = UUDigit(bytes, ref s, send);
+                    byte[] hunk = { (byte)(a << 2 | b >> 4), (byte)(b << 4 | c >> 2), (byte)(c << 6 | d) };
+                    Array.Copy(hunk, 0, buf, ptr, mlen);
+                    ptr += mlen;
+                    len -= mlen;
                 }
-
-                if (remains > 0) {
-                    int a = DecodeUUByte(input.ReadByte());
-                    int b = DecodeUUByte(input.ReadByte());
-                    int c = DecodeUUByte(input.ReadByte());
-                    int d = input.ReadByte();
-                    if (d == -1) {
-                        return false;
-                    }
-                    d = DecodeUUByte(d);
-
-                    output.WriteByte((byte)(a << 2 | b >> 4));
-
-                    if (remains == 2) {
-                        output.WriteByte((byte)(b << 4 | c >> 2));
-                    }
+                if (s < send && bytes[s] != '\r' && bytes[s] != '\n') {
+                    s++; // a possible checksum character
                 }
-
-                if (input.ReadByte() != '\n') {
-                    return false;
+                if (s < send && bytes[s] == '\r') {
+                    s++;
+                }
+                if (s < send && bytes[s] == '\n') {
+                    s++;
                 }
             }
+            position = s;
+            var result = new byte[total];
+            Array.Copy(buf, result, total);
+            return MutableString.CreateBinary(result);
+        }
+
+        private static int UUDigit(byte[]/*!*/ bytes, ref int s, int send) {
+            if (s < send && bytes[s] >= ' ' && bytes[s] < 'a') {
+                return (bytes[s++] - ' ') & 0x3f;
+            }
+            return 0;
         }
 
         private static void EncodeUUTriple(Stream/*!*/ output, int a, int b, int c) {
@@ -694,10 +674,6 @@ namespace IronRuby.Builtins {
         private static byte EncodeUUByte(int b) {
             Debug.Assert(b <= 0x3f);
             return (byte)((b == 0) ? '`' : (0x20 + b));
-        }
-
-        private static byte DecodeUUByte(int c) {
-            return (byte)((c - 0x20) & 0x3f);
         }
 
         #endregion
@@ -1301,7 +1277,13 @@ namespace IronRuby.Builtins {
 
                 string formatString = format.ConvertToString();
                 ParsedFormat parsed = FormatDirective.Parse(formatString, true);
+                int formatLength = format.GetByteCount();
                 foreach (FormatDirective directive in parsed.Directives) {
+                    // MRI's pack_pack checks, before each directive, that a conversion (#to_int,
+                    // #to_str) has not resized the format it is reading.
+                    if (format.GetByteCount() != formatLength) {
+                        throw RubyExceptions.CreateRuntimeError("format string modified");
+                    }
                     int count = directive.Count ?? self.Count - i;
 
                     switch (directive.Directive) {
@@ -1510,6 +1492,15 @@ namespace IronRuby.Builtins {
                             long pointer = 0;
                             if (pointerArg != null) {
                                 MutableString target = ToMutableString(stringCast, pointerArg);
+                                // 'P' points at a fixed-length structure: MRI refuses a string
+                                // shorter than the count (1 when none is given).
+                                if (target != null && directive.Directive == 'P') {
+                                    int needed = directive.Count ?? 1;
+                                    if (target.GetByteCount() < needed) {
+                                        throw RubyExceptions.CreateArgumentError(
+                                            "too short buffer for P({0} for {1})", target.GetByteCount(), needed);
+                                    }
+                                }
                                 if (target != null) {
                                     if (pointers == null) {
                                         pointers = new RubyArray();
@@ -1660,8 +1651,16 @@ namespace IronRuby.Builtins {
         /// String#unpack1: stop after the first directive that yields a value, as MRI's UNPACK_1 does,
         /// rather than decoding the rest of the format for values that would be thrown away.
         /// </param>
+        /// <param name="padWithNils">
+        /// False for unpack with a block: MRI's PACK_ITEM_ADJUST fills in the nils of a directive that
+        /// ran out of data only when it collects an array, so a block never sees them.
+        /// </param>
         public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset,
-            bool firstOnly) {
+            bool firstOnly, bool padWithNils = true) {
+            // pack_unpack_internal reads the format as ASCII (rb_must_asciicompat)
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError("ASCII incompatible encoding: " + format.Encoding.Name);
+            }
 
             // The array grows with what is unpacked. It used to start at half the receiver's length,
             // which made every unpack of a large buffer - unpack1("E", offset: i) reading one double
@@ -1906,7 +1905,7 @@ namespace IronRuby.Builtins {
                         result.Add(ToHex(self, ref position, Math.Min(directive.Count ?? maxCount, maxCount), directive.Directive == 'h'));
                         break;
                 }
-                for (int i = 0; i < nilCount; i++) {
+                for (int i = 0; padWithNils && i < nilCount; i++) {
                     result.Add(null);
                 }
                 if (firstOnly && result.Count > 0) {

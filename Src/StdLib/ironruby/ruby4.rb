@@ -68,8 +68,11 @@ class NoMatchingPatternKeyError < NoMatchingPatternError
   end
 
   # What a `case/in` or `=>` raises when the last thing that failed was a hash pattern's key.
-  def self.__missing_key__(matchee, key)
-    new("#{matchee.inspect}: key not found: #{key.inspect}", matchee: matchee, key: key)
+  # The message quotes the whole subject; #matchee is the hash that lacked the key, which for a
+  # nested pattern ({a: {bb:}}) is the inner one, as in MRI.
+  def self.__missing_key__(subject, missing)
+    key, matchee = missing
+    new("#{subject.inspect}: key not found: #{key.inspect}", matchee: matchee, key: key)
   end
 end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
@@ -342,11 +345,36 @@ module Enumerable
   end
   private :__enum_item__
 
+  # MRI yields an element to these blocks with rb_yield_force_blockarg: a lambda is called
+  # the way a plain block is, so one with several parameters takes an Array element apart
+  # (each_with_index.min_by(&->(x, i) { })). True when the block is such a lambda; the
+  # caller then splats Array elements into it.
+  def __enum_force_splat__?(block)
+    return false unless block.lambda?
+    parameters = block.parameters
+    # a Symbol's proc (group_by(&:itself)) is a lambda too, and takes the element whole
+    return false if parameters == [[:req], [:rest]]
+    positional = 0
+    rest = false
+    parameters.each do |kind, _|
+      case kind
+      when :req, :opt then positional += 1
+      when :rest then rest = true
+      end
+    end
+    positional >= 2 || (positional >= 1 && rest)
+  end
+  private :__enum_force_splat__?
+
   # Extra arguments are passed straight through to #each, which is how a
   # receiver whose #each takes parameters gets to see them.
   def each_entry(*args, &block)
     return to_enum(:each_entry, *args) unless block
-    each(*args) { |*values| block.call(__enum_item__(values)) }
+    splat = __enum_force_splat__?(block)
+    each(*args) do |*values|
+      item = __enum_item__(values)
+      splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+    end
     self
   end unless method_defined?(:each_entry)
 
@@ -461,7 +489,12 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
-    each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
+    splat = __enum_force_splat__?(block)
+    each do |*values|
+      item = __enum_item__(values)
+      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+      (result[key] ||= []) << item
+    end
     result
   end unless method_defined?(:group_by)
 
@@ -500,9 +533,10 @@ module Enumerable
     best = nil
     best_key = nil
     found = false
+    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      key = block.call(item)
+      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
       if found
         c = (key <=> best_key)
         if c.nil?
@@ -513,6 +547,7 @@ module Enumerable
       found = true
       best_key = key
       best = item
+      nil
     end
     best
   end
@@ -588,12 +623,22 @@ module Enumerable
     return __list_sort_by_key__(&block) if __plain_list__?
     decorated = []
     index = 0
+    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      decorated << [block.call(item), index, item]
+      decorated << [splat && item.is_a?(Array) ? block.call(*item) : block.call(item), index, item]
       index += 1
+      # the block #each was given answers nil, as MRI's does, should #each keep it and call it
+      nil
     end
-    decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
+    decorated.sort do |a, b|
+      c = (a[0] <=> b[0])
+      # the keys that will not compare are named, not the triples carrying them
+      if c.nil?
+        raise ArgumentError, "comparison of #{a[0].class} with #{::Comparable.__cmp_operand__(b[0])} failed"
+      end
+      c == 0 ? (a[1] <=> b[1]) : c
+    end.map { |triple| triple[2] }
   end
   private :__sort_by_key__
 
@@ -672,12 +717,13 @@ module Enumerable
     __ir_same_method__(:collect_concat, :flat_map)
   end
 
-  def uniq
+  def uniq(&block)
     seen = {}
     result = []
     each do |*values|
       item = __enum_item__(values)
-      key = block_given? ? yield(item) : item
+      # MRI's uniq_iter yields the values as they came (rb_yield_values2), not the packed item
+      key = block ? block.call(*values) : item
       next if seen.key?(key)
       seen[key] = true
       result << item
@@ -1028,6 +1074,7 @@ module Enumerable
         end
       end
       result = block ? nil : []
+      splat = block && __enum_force_splat__?(block)
       index = 0
       each do |*values|
         row = [__enum_item__(values)]
@@ -1045,7 +1092,11 @@ module Enumerable
                  end
         end
         index += 1
-        block ? block.call(row) : result << row
+        if block
+          splat ? block.call(*row) : block.call(row)
+        else
+          result << row
+        end
       end
       result
     end
@@ -1190,7 +1241,7 @@ class Range
       # path unless #each has been redefined (rb_method_basic_definition_p): a subclass with
       # an #each of its own gets to_a.last(n).
       # (..5).last(2) too: a beginless Integer range counts down from its end.
-      if (b.nil? || ::Integer === b) && ::Integer === e && (instance_of?(::Range) || method(:each).owner.equal?(::Range))
+      if (b.nil? || ::Integer === b) && ::Integer === e && method(:each).owner.equal?(::Range) && method(:each).source_location.nil?
         top = exclude_end? ? e - 1 : e
         first_value = top - n + 1
         first_value = b if !b.nil? && first_value < b
@@ -1729,46 +1780,108 @@ class Array
   # The core #shuffle takes no arguments; MRI's takes a :random generator and
   # must hand back a plain Array.  Defined unconditionally for that reason.
   def shuffle(random: Random)
-    result = [].concat(self)
-    index = result.size - 1
-    while index > 0
-      swap = __array_rand_index__(random, index + 1)
-      result[index], result[swap] = result[swap], result[index]
-      index -= 1
-    end
-    result
+    [].concat(self).shuffle!(random: random)
   end
 
+  # MRI's rb_ary_shuffle_bang: in place, and a generator that changes the array's
+  # length is caught ("modified during shuffle") before the swap it would break.
   def shuffle!(random: Random)
     __array_check_frozen__
-    replace(shuffle(random: random))
+    len = i = size
+    while i > 1
+      j = __array_rand_index__(random, i)
+      raise RuntimeError, "modified during shuffle" if size != len
+      i -= 1
+      self[i], self[j] = self[j], self[i]
+    end
+    self
   end
 
+  # MRI's ary_sample, step for step, so that a given generator picks the same
+  # elements: the random numbers are drawn first, then the array is read again, and
+  # what the generator emptied in the meantime is not there to sample.
   def sample(*args, random: Random)
     if args.size > 1
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
+    len = size
     if args.empty?
-      return nil if empty?
-      return self[__array_rand_index__(random, size)]
+      return self[len < 2 ? 0 : __array_rand_index__(random, len)]
     end
 
     # an explicit nil is not "no count": sample(nil) is a TypeError
-    count = __array_to_int__(args[0])
-    raise ArgumentError, "negative sample number" if count < 0
-    total = size
-    count = total if count > total
-
-    pool = [].concat(self)
-    result = []
-    index = 0
-    while index < count
-      swap = index + __array_rand_index__(random, total - index)
-      pool[index], pool[swap] = pool[swap], pool[index]
-      result << pool[index]
-      index += 1
+    n = __array_to_int__(args[0])
+    raise ArgumentError, "negative sample number" if n < 0
+    n = len if n > len
+    rnds = n <= 10 ? Array.new(n) { |i| __array_rand_index__(random, len - i) } : nil
+    k = len
+    len = size
+    return [] if len < k && rnds && rnds.any? { |r| r >= len }
+    n = len if n > len
+    case n
+    when 0
+      return []
+    when 1
+      return [self[rnds[0]]]
+    when 2
+      i, j = rnds
+      j += 1 if j >= i
+      return [self[i], self[j]]
+    when 3
+      i, j, k = rnds
+      l, g = j, i
+      if j >= i
+        l = i
+        g = (j += 1)
+      end
+      k += 1 if k >= l && (k += 1) >= g
+      return [self[i], self[j], self[k]]
     end
-    result
+    memo_threshold =
+      if len < 2560 then len / 128
+      elsif len < 5120 then len / 64
+      elsif len < 10240 then len / 32
+      else len / 16
+      end
+    if rnds
+      sorted = [rnds[0]]
+      idx = [rnds[0]]
+      (1...n).each do |i|
+        k = rnds[i]
+        j = 0
+        while j < i
+          break if k < sorted[j]
+          k += 1
+          j += 1
+        end
+        sorted.insert(j, k)
+        idx << k
+      end
+      idx.map { |x| self[x] }
+    elsif n <= memo_threshold / 2
+      picks = Array.new(n) { |i| __array_rand_index__(random, len - i) + i }
+      len = size
+      if len <= picks.max
+        n = 0
+      elsif n > len
+        n = len
+      end
+      memo = {}
+      Array.new(n) do |i|
+        j = picks[i]
+        i2 = memo.fetch(i, i)
+        j2 = memo.fetch(j, j)
+        memo[j] = i2
+        self[j2]
+      end
+    else
+      result = [].concat(self)
+      n.times do |i|
+        j = __array_rand_index__(random, len - i) + i
+        result[i], result[j] = result[j], result[i]
+      end
+      result.first(n)
+    end
   end unless method_defined?(:sample)
 
   # --- helpers -----------------------------------------------------------
@@ -1799,7 +1912,8 @@ class Array
   def __array_rand_index__(random, limit)
     value = random.rand(limit)
     value = value.to_int unless value.is_a?(Integer)
-    raise RangeError, "random number too big #{value}" if value < 0 || value >= limit
+    raise RangeError, "random number too small #{value}" if value < 0
+    raise RangeError, "random number too big #{value}" if value >= limit
     value
   end
 
@@ -2007,8 +2121,18 @@ class String
   end
   private :__affix__
 
+  # MRI's deleted_prefix_length skips the encoding check for a broken prefix when both
+  # sides are ASCII compatible: it compares the bytes and removes them only if they end
+  # on a character boundary of the receiver.
   def delete_prefix(prefix)
     prefix = __affix__(prefix)
+    if !prefix.valid_encoding? && encoding.ascii_compatible? && prefix.encoding.ascii_compatible?
+      n = prefix.bytesize
+      return dup if n == 0 || n > bytesize || byteslice(0, n).b != prefix.b
+      at = 0
+      each_char { |c| break if at >= n; at += c.bytesize }
+      return at == n ? byteslice(n, bytesize - n) : dup
+    end
     (!prefix.empty? && start_with?(prefix)) ? self[prefix.length..-1] : dup
   end unless method_defined?(:delete_prefix)
 
@@ -3330,19 +3454,33 @@ class Numeric
   # directions: remainder keeps the sign of the dividend where modulo keeps the
   # sign of the divisor. The order the operands are asked about their sign is
   # the order MRI asks in, which is what the specs watch.
+  # (num_remainder.) The signs are asked with < and > (rb_num_negative_int_p and
+  # rb_num_positive_int_p), and a value that has neither cannot be compared with 0.
+  # A Float divisor that is infinite leaves the dividend as it is.
   def remainder(other)
     x = self
     unless other.is_a?(::Numeric)
-      x, other = other.coerce(self)
+      x, other = __ir_do_coerce__(other, true)
     end
 
     z = x % other
-    if z != 0 && ((x < 0 && other > 0) || (x > 0 && other < 0))
+    if z != 0 && ((__ir_sign_p__(x, :<) && __ir_sign_p__(other, :>)) ||
+                  (__ir_sign_p__(x, :>) && __ir_sign_p__(other, :<)))
+      return x if ::Float === other && other.infinite?
       z - other
     else
       z
     end
   end
+  alias __ir_num_remainder__ remainder
+
+  def __ir_sign_p__(v, op)
+    unless __ir_responds_to__(v, op)
+      ::Kernel.raise(::ArgumentError, "comparison of #{__ir_class_of__(v)} with 0 failed")
+    end
+    v.__send__(op, 0)
+  end
+  private :__ir_sign_p__
 
   # A number is already what a copy of it would be - Rational and Complex included, which
   # MRI counts among its special objects too.
@@ -3901,7 +4039,8 @@ class String
   def __undump_cp__(hex)
     ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless hex =~ /\A[0-9a-fA-F]+\z/
     cp = hex.to_i(16)
-    ::Kernel.raise(::RuntimeError, "invalid Unicode codepoint") if cp > 0x10ffff
+    # MRI's undump_after_backslash rejects surrogates as well as values past U+10FFFF.
+    ::Kernel.raise(::RuntimeError, "invalid Unicode codepoint") if cp > 0x10ffff || (0xd800..0xdfff).include?(cp)
     # pack("U") hands back an ASCII-8BIT string here; the bytes are UTF-8.
     ch = [cp].pack("U")
     ch.force_encoding(::Encoding::UTF_8) if ch.respond_to?(:force_encoding)
@@ -3912,6 +4051,8 @@ class String
   # Replaces every byte that is not part of a valid character with the given
   # replacement (the encoding's own replacement character by default).
   def scrub(replacement = nil, &block)
+    # MRI refuses the pair before it looks at the string, valid or not
+    ::Kernel.raise(::ArgumentError, "both of block and replacement given") if block && !replacement.nil?
     # String, not the receiver's class: since Ruby 3.0 only #dup, #clone and #+@ carry a
     # String subclass over to the result.
     return __ir_plain_copy__ if valid_encoding?
@@ -3937,7 +4078,7 @@ class String
     # The other multibyte encodings (EUC-JP, GB18030, Big5, ...) get the runs of bytes to
     # replace from C#, which finds them in the bytes the way MRI does: in GB18030 "\xA1\x39"
     # is one run although "\x39" alone is a valid character (see MutableString.GetScrubRuns).
-    runs = source.__send__(:__ir_scrub_runs__)
+    runs = __ir_wide_scrub_runs__(source) || source.__send__(:__ir_scrub_runs__)
     if runs
       pos = 0
       size = source.bytesize
@@ -3972,6 +4113,59 @@ class String
     flush.call
     out
   end unless method_defined?(:scrub)
+
+  # UTF-16 and UTF-32 are scrubbed a code unit at a time, as MRI's enc_strlen reads them:
+  # each lone surrogate, out-of-range unit or left-over byte is one replacement, and a
+  # high surrogate is a character only together with the low one after it. Answers the
+  # [offset, length] pairs of the bad runs, or nil for any other encoding.
+  def __ir_wide_scrub_runs__(source)
+    enc = source.encoding
+    big = enc == ::Encoding::UTF_16BE || enc == ::Encoding::UTF_32BE
+    if enc == ::Encoding::UTF_16BE || enc == ::Encoding::UTF_16LE
+      unit = ->(i) { big ? (source.getbyte(i) << 8) | source.getbyte(i + 1) : (source.getbyte(i + 1) << 8) | source.getbyte(i) }
+      runs = []
+      size = source.bytesize
+      i = 0
+      while i < size
+        if i + 2 > size
+          runs << i << size - i
+          break
+        end
+        u = unit.(i)
+        if u >= 0xD800 && u <= 0xDBFF
+          if i + 4 <= size && (0xDC00..0xDFFF).cover?(unit.(i + 2))
+            i += 4
+          else
+            runs << i << 2
+            i += 2
+          end
+        elsif u >= 0xDC00 && u <= 0xDFFF
+          runs << i << 2
+          i += 2
+        else
+          i += 2
+        end
+      end
+      runs
+    elsif enc == ::Encoding::UTF_32BE || enc == ::Encoding::UTF_32LE
+      runs = []
+      size = source.bytesize
+      i = 0
+      while i < size
+        if i + 4 > size
+          runs << i << size - i
+          break
+        end
+        b = (0..3).map { |k| source.getbyte(i + k) }
+        b.reverse! unless big
+        u = (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+        runs << i << 4 if u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)
+        i += 4
+      end
+      runs
+    end
+  end
+  private :__ir_wide_scrub_runs__
 
   # The replacement character of the encoding: U+FFFD where there is one, "?" elsewhere.
   def __ir_scrub_default__
@@ -4202,6 +4396,7 @@ class String
   # has no clusters to find, so MRI's answer there is one element per
   # character.
   def __ir_grapheme_clusters__
+    return __ir_broken_grapheme_clusters__ if encoding == ::Encoding::UTF_8 && !valid_encoding?
     return chars unless valid_encoding? && UNICODE_ENCODINGS__.include?(encoding)
     source = (encoding == ::Encoding::UTF_8 || encoding == ::Encoding::US_ASCII) ? self : encode(::Encoding::UTF_8)
     result = []
@@ -4215,6 +4410,52 @@ class String
     result
   end
   private :__ir_grapheme_clusters__
+
+  # MRI segments a broken UTF-8 string with its grapheme regexp: each invalid byte is a
+  # cluster of its own, the valid runs between them cluster as usual, and a truncated
+  # character at the very end (MBCLEN_NEEDMORE) never matches, so it is left out.
+  def __ir_broken_grapheme_clusters__
+    bytes = self.bytes
+    n = bytes.size
+    (1..[3, n].min).each do |k|
+      lead = bytes[n - k]
+      need = if lead >= 0xc2 && lead <= 0xdf then 2
+             elsif lead >= 0xe0 && lead <= 0xef then 3
+             elsif lead >= 0xf0 && lead <= 0xf4 then 4
+             end
+      next unless need
+      if k < need && bytes[(n - k + 1)..].all? { |b| b >= 0x80 && b <= 0xbf } &&
+         (k < 2 || __ir_utf8_second_byte_ok__(lead, bytes[n - k + 1]))
+        n -= k
+      end
+      break
+    end
+    result = []
+    run = +""
+    byteslice(0, n).each_char do |c|
+      if c.valid_encoding?
+        run << c
+      else
+        result.concat(run.__send__(:__ir_grapheme_clusters__)) unless run.empty?
+        run = +""
+        result << c
+      end
+    end
+    result.concat(run.__send__(:__ir_grapheme_clusters__)) unless run.empty?
+    result
+  end
+  private :__ir_broken_grapheme_clusters__
+
+  def __ir_utf8_second_byte_ok__(lead, b)
+    case lead
+    when 0xe0 then b >= 0xa0
+    when 0xed then b <= 0x9f
+    when 0xf0 then b >= 0x90
+    when 0xf4 then b <= 0x8f
+    else true
+    end
+  end
+  private :__ir_utf8_second_byte_ok__
 
 end
 
@@ -4260,6 +4501,10 @@ class Numeric
   # which is the error the specs ask for.
   def __step_scan_args__(args, kw)
     to, unit = __step_extract_args__(args, kw)
+    # num_step_check_fix_args: "compatibility" - a nil step given positionally
+    if unit.nil? && args.size > 1 && !(kw && kw.key?(:by))
+      ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer")
+    end
     unit = 1 if unit.nil?
     ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
     # Ordering it against 0 is what rejects a step that cannot be compared at all:
@@ -4314,8 +4559,12 @@ end
 # Float has its own #fdiv (one method with #quo) and sign predicates in MRI; Integer has
 # Numeric's.
 class Float
+  # flo_quo calls #/ through num_funcall1, whose recursion guard turns `alias / quo` - #/
+  # calling itself - into a NameError ("1.0/2.0") rather than a SystemStackError.
   def fdiv(other)
     self / other
+  rescue ::SystemStackError
+    ::Kernel.raise(::NameError.new("#{inspect}/#{other.inspect}", :/))
   end
   alias :quo :fdiv
 
@@ -4714,7 +4963,8 @@ class Array
     unless value.is_a?(::Integer)
       ::Kernel.raise(::NoMethodError, "undefined method 'to_int' for #{value.inspect}")
     end
-    ::Kernel.raise(::RangeError, "random number too big #{value}") if value < 0 || value >= limit
+    ::Kernel.raise(::RangeError, "random number too small #{value}") if value < 0
+    ::Kernel.raise(::RangeError, "random number too big #{value}") if value >= limit
     value
   end
   private :__sample_index__
@@ -4856,10 +5106,14 @@ class Array
         other.to_ary
       elsif other.respond_to?(:each)
         collected = []
-        # several yielded values make one element, as Enumerator#next would pack them
-        other.each do |*element|
-          break if collected.size >= length
-          collected << (element.size <= 1 ? element[0] : element)
+        # several yielded values make one element, as Enumerator#next would pack them;
+        # MRI's take_i stops as soon as it has the receiver's length, without asking for one
+        # more (an Enumerator.produce is called exactly that many times)
+        if length > 0
+          other.each do |*element|
+            collected << (element.size <= 1 ? element[0] : element)
+            break if collected.size >= length
+          end
         end
         collected
       else
@@ -5422,6 +5676,8 @@ class Enumerator
     if from.is_a?(::Float) || to.is_a?(::Float)
       n = (to - from).to_f
       return 0 if n < 0
+      # ruby_float_step_size: an endless count is Infinity
+      return n if n.infinite?
       return (n + n * ::Float::EPSILON).floor + 1
     end
     stop = cmp == :> ? to : from
@@ -5457,7 +5713,20 @@ class Enumerator
   end
   private :__inspect_detail__
 
+  # An enumerator met again while it is being inspected is "#<Enumerator: ...>", as
+  # MRI's inspect_enumerator (rb_exec_recursive) has it: [e] inside e.
   def inspect
+    seen = (::Thread.current[:__ir_enumerator_inspect__] ||= {}.compare_by_identity)
+    return "#<#{self.class}: ...>" if seen.key?(self)
+    seen[self] = true
+    begin
+      __inspect_unguarded__
+    ensure
+      seen.delete(self)
+    end
+  end
+
+  def __inspect_unguarded__
     if (info = @__inspect__)
       return "#<#{self.class}: #{__inspect_detail__(*info)}>"
     end
@@ -5479,6 +5748,7 @@ class Enumerator
     return "#<#{self.class}: uninitialized>" if recv.nil? && meth == :each && args.empty?
     "#<#{self.class}: #{__inspect_detail__(recv, meth, args)}>"
   end
+  private :__inspect_unguarded__
   alias :to_s :inspect
 
   # --- external iteration ------------------------------------------------
@@ -5701,6 +5971,11 @@ class Enumerator
     end
     private :__chain__
 
+    def __mark_packed_pairs__
+      @__packed_pairs__ = true
+      self
+    end
+
     def __need_block__(name, block)
       return if block
       ::Kernel.raise(::ArgumentError, "tried to call lazy #{name} without a block")
@@ -5735,7 +6010,16 @@ class Enumerator
     def map(&block)
       __need_block__("map", block)
       source = self
-      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }.__set_inspect__(self, __callee__)
+      # each step answers the mapped value, which is what reaches a method enumerated
+      # through to_enum: lazy.to_enum(:take_while).map { ... } stops where the block says
+      packed = @__packed_pairs__
+      __chain__(size) do |y|
+        source.each do |*values|
+          value = packed && values.size == 1 ? block.call(*values[0]) : block.call(*values)
+          y << value
+          value
+        end
+      end.__set_inspect__(self, __callee__)
     end
     alias :collect :map
 
@@ -5752,7 +6036,8 @@ class Enumerator
           if array.is_a?(::Array)
             array.each { |item| y << item }
           elsif result.respond_to?(:each) && result.respond_to?(:force)
-            result.each { |item| y << item }
+            # the block answers the item, not the yielder, should the object keep it
+            result.each { |item| y << item; item }
           else
             y << result
           end
@@ -5833,7 +6118,8 @@ class Enumerator
       n = __to_int__(n)
       ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
       current = size
-      new_size = current.nil? ? n : (current < n ? current : n)
+      # an unknown size stays unknown: lazy.select {}.take(4).size is nil
+      new_size = current.nil? ? nil : (current < n ? current : n)
       return __chain__(0) { |y| } if n == 0
       source = self
       __chain__(new_size) do |y|
@@ -5908,18 +6194,28 @@ class Enumerator
           end
         end
       else
-        __chain__(size) do |y|
+        # one [value, index] pair, which a #map straight after takes as two arguments
+        # (MRI's packed memo), so a lambda of two parameters can be mapped over it
+        chain = __chain__(size) do |y|
           i = offset
           source.each do |*values|
             y << [values.size <= 1 ? values[0] : values, i]
             i += 1
           end
         end
+        chain.__mark_packed_pairs__
       end
     end
 
+    # Lazy only without a block; given one it runs the pipeline, as MRI's (which is
+    # Enumerator's) does, and answers what #each answers.
     def each_with_index(&block)
-      with_index(0, &block)
+      return with_index(0) unless block
+      i = 0
+      each do |*values|
+        block.call(__value__(values), i)
+        i += 1
+      end
     end
 
     def with_object(memo)
@@ -5949,7 +6245,7 @@ class Enumerator
         elsif other.respond_to?(:to_ary) && (converted = other.to_ary).is_a?(::Array)
           converted
         elsif other.respond_to?(:each)
-          other.to_enum(:each)
+          other
         else
           ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
         end
@@ -5957,10 +6253,13 @@ class Enumerator
 
       source = self
       __chain__(size) do |y|
+        # each run walks its own enumerators of the arguments, as MRI's lazy_zip does: a
+        # second pass starts them over, and two of the same object advance separately
+        enums = sources.map { |other| other.is_a?(::Array) ? other : other.to_enum(:each) }
         index = 0
         source.each do |*values|
           row = [values.size <= 1 ? values[0] : values]
-          sources.each do |other|
+          enums.each do |other|
             row << if other.is_a?(::Array)
                      other[index]
                    else
@@ -6082,8 +6381,12 @@ class Enumerator
     # The version of a method that Lazy overrides, from whichever ancestor defines it -
     # what `super' would reach. nil when Lazy does not override it at all.
     def __eager_method__(name)
+      # to_enum("with_index") names the method as a String just as well
+      name = name.to_sym if name.is_a?(::String)
       ancestors = ::Enumerator::Lazy.ancestors
       return nil unless ::Enumerator::Lazy.instance_methods(false).include?(name)
+      # Lazy's own is eager given a block, and Enumerator's would call Lazy#with_index
+      return nil if name == :each_with_index
       # Past Lazy itself (and whatever is prepended to it) to the eager definition.
       ancestors[(ancestors.index(::Enumerator::Lazy) + 1)..-1].each do |mod|
         return mod.instance_method(name) if mod.instance_methods(false).include?(name)
@@ -6163,7 +6466,11 @@ class Enumerator
     end
 
     def cycle(*args, &block)
-      return super(*args, &block) if block
+      if block
+        # eager with a block, and it answers nil (Enumerable#cycle)
+        super(*args, &block)
+        return nil
+      end
       enum = super(*args)
       to_enum(:cycle, *args) { enum.size }
     end
@@ -6216,7 +6523,8 @@ class Enumerator
       @__iterated__ = 0
       @__enums__.each do |enum|
         @__iterated__ += 1
-        enum.each { |*values| block.call(*values) }
+        # the block itself, as MRI's enum_chain_each hands it on: a lambda stays one
+        enum.each(&block)
       end
       self
     end
@@ -6257,8 +6565,12 @@ class Enumerator
     # MRI accepts anything here -- the arguments are only required to answer
     # #each_entry at the point #each actually walks them, which is what lets
     # Product wrap a plain Object that defines each_entry and nothing else.
-    def initialize(*enums)
+    def initialize(*enums, **options)
       __check_frozen__
+      # MRI takes keywords only to reject them
+      unless options.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{'s' if options.size > 1}: #{options.keys.map { |k| k.inspect }.join(', ')}")
+      end
       @__enums__ = enums
       self
     end
@@ -6303,21 +6615,23 @@ class Enumerator
 
     # nil for any size MRI cannot use (missing, non-Integer, NaN); zero short-circuits
     # even when another enumerable has an unknown size, and an infinite size carries.
+    #
+    # Past the zero check the sizes are taken in order, and the first unknown or infinite
+    # one decides: product("a".."c", 1..) is nil, product(1.., "a".."c") Infinity.
     def size
+      sizes = @__enums__.map { |enum| enum.respond_to?(:size) ? enum.size : nil }
+      return 0 if sizes.any? { |n| n.is_a?(::Integer) && n == 0 }
       total = 1
-      unknown = false
-      @__enums__.each do |enum|
-        n = enum.respond_to?(:size) ? enum.size : nil
+      sizes.each do |n|
         if n.is_a?(::Integer)
-          return 0 if n == 0
           total *= n
         elsif n.is_a?(::Float) && n.infinite?
-          total *= n
+          return total * n
         else
-          unknown = true
+          return nil
         end
       end
-      unknown ? nil : total
+      total
     end
 
     def rewind
@@ -6548,6 +6862,12 @@ class String
         ::Kernel.raise(::Encoding::CompatibilityError,
           "incompatible character encodings: #{encoding} and #{separator.encoding == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : separator.encoding}")
       end
+    end
+    # rb_str_enumerate_lines checks a separator that was given against a receiver that is
+    # not empty (rb_enc_check), whichever its encoding
+    if !args.empty? && !separator.nil? && !empty? && !::Encoding.compatible?(self, separator)
+      names = [encoding, separator.encoding].map { |e| e == ::Encoding::BINARY ? "BINARY (ASCII-8BIT)" : e.to_s }
+      ::Kernel.raise(::Encoding::CompatibilityError, "incompatible character encodings: #{names[0]} and #{names[1]}")
     end
 
     return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
@@ -7076,6 +7396,13 @@ class Enumerator
 
     # MRI ruby_float_step / num_step / range_step iteration, shared.
     def self.__step_each__(from, to, unit, excl, &block)
+      # arith_seq_each: a Complex step skips the Float loop, and an endless sequence just adds it
+      if to.nil? && ::Complex === unit
+        i = from
+        loop { yield i; i += unit }
+      end
+      # a beginless one fails where MRI works out its length, at `end - begin`
+      _ = to - from if from.nil? && !to.nil?
       desc = unit < 0
       if to.nil?
         inf = true
@@ -7164,7 +7491,11 @@ class Enumerator
     end
 
     def first(n = nil)
-      return __arith_each__ { |v| return v } if n.nil?
+      if n.nil?
+        return nil if @__begin__.nil?
+        __arith_each__ { |v| return v }
+        return nil
+      end
       ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
       return [] if n == 0
       result = []
@@ -8058,6 +8389,7 @@ module Math
     return x if x.nan?
     __dom__("log1p") if x < -1.0
     return -::Float::INFINITY if x == -1.0
+    return x if x == ::Float::INFINITY
     # log(1+x) loses every significant digit for tiny x; the identity
     # x*log1p(u)/u with u = (1+x)-1 keeps them.
     u = 1.0 + x
@@ -9175,10 +9507,17 @@ class SignalException
   # message: a number may be given a message alongside it, a name may not, and
   # anything that is neither is an ArgumentError. The CLR-backed class carries only
   # the message, so the number and the name it was built from are kept here.
-  def initialize(signal = (missing = true), message = (no_message = true))
-    if missing
+  # MRI's signal_exception_init takes (*args) and checks the count itself: no argument is
+  # "expected 1", too many "expected 1..2".
+  def initialize(*args)
+    if args.empty?
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1)")
+    elsif args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
+    signal = args[0]
+    no_message = args.size == 1
+    message = args[1]
 
     case signal
     when ::Integer
@@ -9251,6 +9590,9 @@ unless defined?(Random)
     private_class_method :__mt_class__
 
     def initialize(seed = Random.new_seed)
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
       # A seed is an Integer however it was given: Random.new(42.5) and Random.new(42)
       # are the same generator, and #seed answers 42 for both.
       unless seed.respond_to?(:to_int)
@@ -9285,52 +9627,23 @@ unless defined?(Random)
         @__mt__.state_equals(other.__send__(:__ir_hidden_ivar__, :@__mt__)) && seed == other.seed
     end
 
-    def rand(limit = nil)
-      case limit
-      when nil then @__mt__.genrand_real(true)
-      when ::Range then __rand_in_range__(limit)
-      when ::Float
-        unless limit > 0
-          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
-        end
-        @__mt__.genrand_real(true) * limit
-      else
-        n = limit.to_int
-        unless n > 0
-          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
-        end
-        __rand_below__(n)
-      end
+    # random_rand: rand_random, then check_random_number.
+    def rand(*args)
+      v = __ir_rand_random__(args)
+      __ir_check_random_number__(v, args)
     end
 
-    # An Integer uniformly in 0...n: limited_rand on n - 1.
-    def __rand_below__(n)
-      @__mt__.limited_rand(n - 1)
+    # The generator's own draws, which Formatter's rand_random is built on: a Float in
+    # [0, 1) (or [0, 1]) and an Integer in 0..limit (limited_rand).
+    def __ir_real__(excl)
+      @__mt__.genrand_real(excl)
     end
-    private :__rand_below__
+    private :__ir_real__
 
-    # MRI drives this entirely off `end - begin`, which is what makes it work for
-    # Time and for any object that answers #-, #+ and #to_int or #to_f. nil comes
-    # back for a range that cannot produce a value.
-    def __rand_in_range__(range)
-      first = range.begin
-      last = range.end
-      return nil if first.nil? || last.nil?
-
-      span = last - first
-      if !span.is_a?(::Float) && span.respond_to?(:to_int)
-        n = span.to_int
-        n += 1 unless range.exclude_end?
-        return nil if n <= 0
-        first + __rand_below__(n)
-      else
-        width = span.to_f
-        return nil if width < 0 || (width == 0 && range.exclude_end?)
-        # random_real: [0, 1) for an exclusive range, [0, 1] for an inclusive one.
-        first + @__mt__.genrand_real(range.exclude_end?) * width
-      end
+    def __ir_below__(limit)
+      @__mt__.limited_rand(limit)
     end
-    private :__rand_in_range__
+    private :__ir_below__
 
     def bytes(count)
       @__mt__.genrand_bytes(count.to_int).to_a.pack("C*")
@@ -9342,9 +9655,19 @@ unless defined?(Random)
     end
     private :marshal_dump
 
+    # rand_mt_load
     def marshal_load(data)
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
+      unless ::Array === data
+        ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(data)} (expected Array)")
+      end
+      ::Kernel.raise(::ArgumentError, "wrong dump data") unless (1..3).cover?(data.size)
       state, left, seed = data
-      @__seed__ = seed
+      left = ::Kernel.Integer(left)
+      ::Kernel.raise(::ArgumentError, "wrong value") if left <= 0 || left > 624
+      @__seed__ = seed.to_int
       @__mt__ = ::Random.__send__(:__mt_class__).new(0)
       @__mt__.set_state(state, left)
       self
@@ -9361,9 +9684,19 @@ unless defined?(Random)
     end
     private_class_method :__default__
 
-    def self.rand(limit = nil)
-      ::Random.__send__(:__default__).rand(limit)
+    def self.rand(*args)
+      ::Random.__send__(:__default__).rand(*args)
     end
+
+    # Random.random_number (Formatter's, on the class) draws from the default generator.
+    def self.__ir_real__(excl)
+      ::Random.__send__(:__default__).__send__(:__ir_real__, excl)
+    end
+
+    def self.__ir_below__(limit)
+      ::Random.__send__(:__default__).__send__(:__ir_below__, limit)
+    end
+    private_class_method :__ir_real__, :__ir_below__
 
     def self.bytes(count)
       ::Random.__send__(:__default__).bytes(count)
@@ -9380,6 +9713,189 @@ unless defined?(Random)
       previous
     end
   end
+end
+
+# Random::Formatter is random.c's: #random_number and #rand (rand_random_number) for anything
+# that mixes it in, drawing from a Random's generator or, for any other object, from its
+# #bytes. Random includes it and extends itself with it; random/formatter.rb adds the rest.
+class Random
+  module Formatter
+    def random_number(*args)
+      v = __ir_rand_random__(args)
+      if v.nil?
+        v = __ir_rand_random__([])
+      elsif v == false
+        __ir_invalid_argument__(args[0])
+      end
+      v
+    end
+    alias rand random_number
+
+    private
+
+    # rand_random: the number, nil for an argument that gives no range to draw from, or false
+    # for one that is not a number or a Range at all.
+    def __ir_rand_random__(args)
+      if args.size > 1
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+      end
+      return __ir_real__(true) if args.empty?
+      vmax = args[0]
+      return nil if vmax.nil?
+      unless ::Float === vmax
+        v = __ir_check_to_int__(vmax)
+        return __ir_rand_int__(v) unless v.nil?
+      end
+      v = __ir_check_to_float__(vmax)
+      unless v.nil?
+        max = __ir_float_value__(v)
+        return nil if max < 0.0
+        r = __ir_real__(true)
+        r *= max if max > 0.0
+        return r
+      end
+      __ir_rand_range__(vmax)
+    end
+
+    # rand_int (restrictive)
+    def __ir_rand_int__(n)
+      return nil if n <= 0
+      __ir_below__(n - 1)
+    end
+
+    # rand_range
+    def __ir_rand_range__(range)
+      return false unless ::Range === range
+      first = range.begin
+      last = range.end
+      excl = range.exclude_end?
+      ::Kernel.raise(::Errno::EDOM) if first.nil? || last.nil?
+      return false unless __ir_responds_to__(last, :-)
+      vmax = last - first
+
+      v = nil
+      if !(::Float === vmax) && !(n = __ir_check_to_int__(vmax)).nil?
+        max = n - (excl ? 1 : 0)
+        v = __ir_below__(max) if max >= 0
+      elsif !(f = __ir_check_to_float__(vmax)).nil?
+        scale = 1
+        max = f
+        mid = 0.5
+        if max.infinite?
+          min = __ir_float_value__(__ir_to_float__(first)) / 2.0
+          max = __ir_float_value__(__ir_to_float__(last)) / 2.0
+          scale = 2
+          mid = max + min
+          max -= min
+        elsif max.nan?
+          ::Kernel.raise(::Errno::EDOM)
+        end
+        if max > 0.0
+          r = __ir_real__(excl)
+          return ((r - 0.5) * max) * scale + mid if scale > 1
+          v = r * max
+        elsif max == 0.0 && !excl
+          v = 0.0
+        end
+      end
+
+      return nil if v.nil?
+      if ::Float === v
+        f = __ir_check_to_float__(first)
+        return v + f unless f.nil?
+      end
+      first + v
+    end
+
+    # check_random_number
+    def __ir_check_random_number__(v, args)
+      if v == false
+        ::Kernel.Integer(args[0]) if ::Integer === args[0] || __ir_responds_to__(args[0], :to_int)
+        if args[0].nil?
+          ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer")
+        end
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_message_type_name__(args[0])} into Integer")
+      elsif v.nil?
+        __ir_invalid_argument__(args[0])
+      end
+      v
+    end
+
+    def __ir_invalid_argument__(arg)
+      ::Kernel.raise(::ArgumentError, "invalid argument - #{arg}")
+    end
+
+    # rb_check_to_int and rb_check_to_float: nil when there is no such conversion
+    def __ir_check_to_int__(v)
+      return v if ::Integer === v
+      return nil unless __ir_responds_to__(v, :to_int)
+      r = v.to_int
+      return r if ::Integer === r || r.nil?
+      ::Kernel.raise(::TypeError, "can't convert #{v.class} to Integer (#{v.class}#to_int gives #{r.class})")
+    end
+
+    def __ir_check_to_float__(v)
+      return v if ::Float === v
+      return nil unless ::Numeric === v
+      v.to_f
+    end
+
+    def __ir_to_float__(v)
+      return v if ::Float === v
+      unless ::Numeric === v
+        ::Kernel.raise(::TypeError, "can't convert #{__ir_message_type_name__(v)} into Float")
+      end
+      v.to_f
+    end
+
+    # float_value: a non-finite Float is a domain error
+    def __ir_float_value__(x)
+      ::Kernel.raise(::Errno::EDOM) unless x.finite?
+      x
+    end
+
+    # random_real without a generator: two 32-bit words from #bytes (int_pair_to_real).
+    def __ir_real__(excl)
+      a, b = bytes(8).unpack("L<2")
+      if excl
+        ((a >> 5) * 67108864 + (b >> 6)) * (1.0 / 9007199254740992.0)
+      else
+        (((a << 32) | b) * ((1 << 53) + 1) >> 64).to_f / (1 << 53).to_f
+      end
+    end
+
+    # random_ulong_limited without a generator: masked words from #bytes, retried until the
+    # value is within 0..limit; a limit past 64 bits is drawn the same way, bytes at a time.
+    def __ir_below__(limit)
+      return 0 if limit == 0
+      w = limit.bit_length
+      if w <= 64
+        n = w > 32 ? 8 : 4
+        mask = (1 << w) - 1
+        full = (1 << (n * 8)) - 1
+        bits = rest = 0
+        loop do
+          if mask & ~rest != 0
+            bits = bytes(n).unpack1(n == 4 ? "L<" : "Q<")
+            rest = full
+          end
+          val = bits & mask
+          bits >>= w
+          rest >>= w
+          return val unless limit < val
+        end
+      end
+      count = (w + 7) / 8
+      mask = (1 << w) - 1
+      loop do
+        val = bytes(count).unpack("C*").each_with_index.sum { |byte, i| byte << (8 * i) } & mask
+        return val unless limit < val
+      end
+    end
+  end
+
+  include Formatter
+  extend Formatter
 end
 
 # nil converts to the zero of every numeric kind and to the empty Hash.
@@ -9442,7 +9958,11 @@ module Kernel
     # what Random.srand seeds.
     def rand(limit = nil)
       return ::Random.rand if limit.nil?
-      return ::Random.rand(limit) if limit.is_a?(::Range)
+      # rb_f_rand: a Range is rand_range's, nil for one with nothing to draw from
+      if limit.is_a?(::Range)
+        v = ::Random.__send__(:__default__).__send__(:__ir_rand_range__, limit)
+        return v unless v == false
+      end
 
       unless limit.respond_to?(:to_int)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{limit.class} into Integer")
@@ -10373,17 +10893,29 @@ class IO
 
       # "BOM|<encoding>" means "read the byte-order mark if there is one, and let it
       # name the encoding"; the mode parser underneath does not know the prefix.
+      # The prefix can come in the encoding: option as well as in the mode.
       bom = mode.is_a?(::String) && mode =~ /:\s*BOM\|/i
       mode = mode.sub(/BOM\|/i, "") if bom
+      if enc.is_a?(::String) && enc =~ /\ABOM\|/i
+        bom = true
+        enc = enc.sub(/\ABOM\|/i, "")
+      end
 
       result = ::File.open(name, mode) do |io|
         io.set_encoding(enc) if enc
         # "BOM|enc" means the mark names the encoding if there is one and enc does
         # otherwise, so the mark is read past either way - which is not what
         # #set_encoding_by_bom is for: that one refuses once an encoding is set.
+        # The internal encoding the mode asked for ("rb:BOM|UTF-8:UTF-8") stays.
         if bom
           from_bom = io.__ir_skip_bom__
-          io.set_encoding(from_bom) if from_bom
+          if from_bom
+            # an internal encoding equal to the external one reads back as nil, so it is
+            # taken from the mode string
+            to = io.internal_encoding
+            to ||= ::Encoding.find($1) if mode.is_a?(::String) && mode =~ /\A[^:]*:[^:]*:([^:]+)\z/
+            to && to != from_bom ? io.set_encoding(from_bom, to) : io.set_encoding(from_bom)
+          end
         end
         io.seek(offset) if offset && offset > 0
         length ? io.read(length) : io.read
@@ -10440,7 +10972,7 @@ class IO
     args.first(2).each do |name|
       next unless name.is_a?(::String)
       unless name.encoding.ascii_compatible?
-        ::Kernel.raise(::ArgumentError, "invalid name encoding (non ASCII)")
+        ::Kernel.raise(::ArgumentError, "invalid encoding name (non ASCII)")
       end
     end
     # Anything string-shaped names an encoding, and one name may carry both sides.
@@ -10574,19 +11106,22 @@ class IO
   # "\n") are for the way out only: MRI reads a stream opened with them as it is.
   def __decorate_newlines__(text, options, reading)
     newline = options[:newline]
+    # UTF-16 and UTF-32 text spells the newlines in its own code units
+    enc = text.encoding
+    if enc.ascii_compatible? || enc.dummy?
+      cr, lf, crlf = "\r", "\n", "\r\n"
+    else
+      cr, lf, crlf = "\r".encode(enc), "\n".encode(enc), "\r\n".encode(enc)
+    end
     if reading
       if options[:universal_newline] || newline == :universal
-        return text.gsub("\r\n", "\n").gsub("\r", "\n") if text.encoding.ascii_compatible?
-        # A wide encoding (UTF-16, UTF-32) has the two as characters, not as bytes.
-        cr = "\r".encode(text.encoding)
-        lf = "\n".encode(text.encoding)
-        return text.gsub(cr + lf, lf).gsub(cr, lf)
+        return text.gsub(crlf, lf).gsub(cr, lf)
       end
       return text
     end
-    return text.gsub("\n", "\r\n") if options[:crlf_newline] || newline == :crlf
-    return text.gsub("\n", "\r") if options[:cr_newline] || newline == :cr
-    return text.gsub("\r\n", "\n").gsub("\r", "\n") if options[:lf_newline] || newline == :lf
+    return text.gsub(lf, crlf) if options[:crlf_newline] || newline == :crlf
+    return text.gsub(lf, cr) if options[:cr_newline] || newline == :cr
+    return text.gsub(crlf, lf).gsub(cr, lf) if options[:lf_newline] || newline == :lf
     text
   end
   private :__decorate_newlines__
@@ -10642,11 +11177,43 @@ class IO
     options = __encode_options__
     text = __decorate_newlines__(text, options, false) if __decorated__(options, false)
     target = external_encoding
+    return __xml_encode_for_write__(text, target, options) if options[:xml]
     return text if target.nil? || target == ::Encoding::BINARY || text.encoding == target
     return text if text.ascii_only? && target.ascii_compatible?
-    text.encode(target, **options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) })
+    options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
+    if target.dummy?
+      # A stateful encoding (ISO-2022-JP) keeps its shift state from one write to the
+      # next, as MRI's writeconv does: the text goes to UTF-8 and through one converter
+      # the IO keeps, and IO#close writes what #finish owes (the closing ESC ( B).
+      ec = @__write_ec__
+      unless ec && ec.destination_encoding == target
+        ec = @__write_ec__ = ::Encoding::Converter.new(::Encoding::UTF_8, target, **options)
+      end
+      return ec.convert(text.encode(::Encoding::UTF_8, **options))
+    end
+    text.encode(target, **options)
   end
   private :__encode_for_write__
+
+  # xml: :attr puts quotes around everything the IO writes, so like a stateful encoding
+  # it needs one converter for the life of the IO (IO#close writes the closing quote).
+  def __xml_encode_for_write__(text, target, options)
+    options = options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) }
+    ec = @__write_ec__
+    unless ec
+      if target.nil? || target == ::Encoding::BINARY || target == ::Encoding::UTF_8
+        ec = ::Encoding::Converter.new("", "", **options)
+      else
+        ec = ::Encoding::Converter.new(::Encoding::UTF_8, target, **options)
+      end
+      @__write_ec__ = ec
+    end
+    unless ec.source_encoding.nil? && (target.nil? || target == ::Encoding::BINARY)
+      text = text.encode(::Encoding::UTF_8, **options.reject { |key, _| key == :xml })
+    end
+    ec.convert(text.b)
+  end
+  private :__xml_encode_for_write__
 
   # chomp: is a keyword, so a Hash sitting in the last positional slot is a
   # separator argument - a TypeError - and not options. MRI tolerates keywords it
@@ -10729,7 +11296,18 @@ class IO
         return to_enum(:foreach, name, *args, **options) { nil }
       end
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
-      ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
+      open_args = options[:open_args]
+      if open_args
+        # :open_args is the whole argument list of the open (MRI's open_key_args), and
+        # displaces every other open option
+        open_args = open_args.to_ary
+        open_opts = open_args.last.is_a?(::Hash) ? open_args.last : {}
+        open_pos = open_opts.equal?(open_args.last) ? open_args[0...-1] : open_args
+      else
+        open_pos = []
+        open_opts = options.reject { |k, _| k == :chomp }
+      end
+      ::File.open(name, *open_pos, **open_opts) do |io|
         io.each_line(*args, **chomp, &block)
       end
       # MRI's IO.foreach answers nil when it was given a block.
@@ -10786,6 +11364,9 @@ class IO
       end
       options = nil if options.empty?
       external, internal = args
+      if external.is_a?(::String) && !external.encoding.ascii_compatible?
+        ::Kernel.raise(::ArgumentError, "invalid encoding name (non ASCII)")
+      end
       if external.is_a?(::String) && external.include?(":")
         external, internal = external.split(":", 2)
       end
@@ -10799,7 +11380,10 @@ class IO
 
       read_end, write_end = __ir_pipe__
       if external
-        internal ? read_end.set_encoding(external, internal) : read_end.set_encoding(external)
+        # the conversion options (invalid:, undef:, replace:...) go with the encodings to
+        # the read end, which is where MRI's pipe_open applies them
+        conv = options ? options.reject { |k, _| k == :encoding || k == :external_encoding || k == :internal_encoding } : {}
+        internal ? read_end.set_encoding(external, internal, **conv) : read_end.set_encoding(external, **conv)
       end
 
       return [read_end, write_end] unless block_given?
@@ -12001,19 +12585,30 @@ class Range
   def bsearch(&block)
     b = self.begin
     e = self.end
-    integral = (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
-    numeric = (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
-    unless numeric
-      # MRI refuses before it would hand back an enumerator.
+    integral = (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer)) && !(b.nil? && e.nil?)
+    floating = b.is_a?(::Float) || e.is_a?(::Float)
+    unless integral || floating
+      # MRI refuses before it would hand back an enumerator: only Integer and Float ranges
+      # can be searched (a Rational one cannot).
       ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
     end
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    return to_enum(:bsearch) unless block
     if integral
-      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
+      # the built-in searches between two Fixnums only
+      if respond_to?(:__ir_bsearch__, true) && __int32__(b) && __int32__(e)
+        __ir_bsearch__(&block)
+      else
+        __bsearch_int__(block)
+      end
     else
       __bsearch_float__(block)
     end
   end
+
+  def __int32__(x)
+    ::Integer === x && x >= -2147483648 && x <= 2147483647
+  end
+  private :__int32__
 
   # Answers :found, true (go left, remember) or false (go right). MRI accepts any
   # Numeric from the block, not just an Integer, so a block that answers a Float
@@ -12160,49 +12755,99 @@ class Range
         return self
       end
     end
-    # Ruby 3.4: a step that is not a number is not converted up front; iterating adds it
-    # with #+ (so an object answering #coerce works), and without a block the Enumerator is
-    # built regardless.
-    unit = args.empty? ? 1 : n
-    numeric = b.is_a?(::Numeric) && (e.nil? || e.is_a?(::Numeric)) && unit.is_a?(::Numeric)
-
-    if b.nil?
-      unless e.is_a?(::Numeric) && unit.is_a?(::Numeric)
-        ::Kernel.raise(::ArgumentError, "#step for non-numeric beginless ranges is meaningless")
+    # range_step (3.4). A step that is not a number is not converted up front; iterating adds
+    # it with #+ (so an object answering #coerce works). A String or Symbol beginning keeps
+    # the old walk for an Integer step.
+    b_num = b.is_a?(::Numeric)
+    e_num = e.is_a?(::Numeric)
+    str_b = ::String === b ? b : (b.nil? || !__ir_responds_to__(b, :to_str) ? nil : b.to_str)
+    sym_b = ::Symbol === b ? b.to_s : nil
+    if args.empty?
+      unless b_num || str_b || sym_b || (b.nil? && e_num)
+        ::Kernel.raise(::ArgumentError, "step is required for non-numeric ranges")
       end
-      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
-      if block
-        ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
-      end
-      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
     end
-
-    ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
+    unit = args.empty? ? 1 : n
+    step_num = unit.is_a?(::Numeric)
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if step_num && b_num && unit == 0
 
     unless block
-      if numeric
+      if step_num && ((b_num && (e.nil? || e_num)) || (b.nil? && e_num))
         # inspected the way it was written: ((1..10).step) or ((1..10).step(2))
         return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, n.nil? ? :step : [:step, n])
+      end
+      if b.nil?
+        ::Kernel.raise(::ArgumentError, "#step for non-numeric beginless ranges is meaningless")
       end
       range = self
       return ::Enumerator.new { |y| range.step(*args) { |x| y << x } }.__set_inspect__(self, :step, args)
     end
 
-    if numeric
+    if b.nil?
+      ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
+    end
+
+    if b_num && step_num && (e.nil? || e_num) && (::Integer === b || ::Float === b || ::Float === e || ::Float === unit)
       ::Enumerator::ArithmeticSequence.__step_each__(b, e, unit, exclude_end?, &block)
-    elsif unit.is_a?(::Integer) && b.respond_to?(:succ)
-      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+    elsif (str_b || sym_b) && ::Integer === unit
       ::Kernel.raise(::ArgumentError, "step can't be negative") if unit < 0
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      walk = sym_b ? self : ::Range.new(str_b, e, exclude_end?)
       i = 0
-      each do |x|
+      walk.each do |x|
         block.call(x) if i % unit == 0
         i += 1
       end
-    else
-      __step_by_plus__(b, e, unit, &block)
+    elsif e.nil?
+      v = b
+      loop do
+        block.call(v)
+        v = v + unit
+      end
+    elsif b_num && step_num && __r_less__(unit, 0) < 0
+      # backwards, for consistency with ArithmeticSequence
+      v = b
+      if exclude_end?
+        while __r_less__(e, v) < 0
+          block.call(v)
+          v = v + unit
+        end
+      else
+        while (c = __r_less__(e, v)) <= 0
+          block.call(v)
+          break if c == 0
+          v = v + unit
+        end
+      end
+    elsif (dir = __r_less__(b, e)) == 0
+      block.call(b) unless exclude_end?
+    elsif dir == __r_less__(b, b + unit)
+      v = b
+      if exclude_end?
+        while __r_less__(v, e) == dir
+          block.call(v)
+          v = v + unit
+        end
+      else
+        while (c = __r_less__(v, e)) == dir || c == 0
+          block.call(v)
+          break if c == 0
+          v = v + unit
+        end
+      end
     end
     self
   end
+
+  # r_less: the sign of a <=> b, a failed comparison being an ArgumentError (rb_cmpint)
+  def __r_less__(a, b)
+    c = (a <=> b)
+    if c.nil?
+      ::Kernel.raise(::ArgumentError, "comparison of #{__ir_message_type_name__(a)} with #{__ir_message_type_name__(b)} failed")
+    end
+    c <=> 0
+  end
+  private :__r_less__
   private :__ir_range_step__
 
   def %(n)
@@ -12688,17 +13333,6 @@ class LoadError
   end unless method_defined?(:path)
 end
 
-class Random
-  # 2.0's Random#random_number: rand's behaviour, but a bare call always answers
-  # a Float and an out-of-range argument is an ArgumentError rather than nil.
-  def random_number(limit = nil)
-    limit.nil? ? rand : rand(limit)
-  end unless method_defined?(:random_number)
-
-  def self.random_number(limit = nil)
-    limit.nil? ? rand : rand(limit)
-  end unless respond_to?(:random_number)
-end
 
 # CRuby raises a class named for the errno whenever a non-blocking operation
 # would have had to wait, so that a rescue can tell "nothing yet" from a real
@@ -12795,8 +13429,22 @@ class Enumerator
   class Generator
     include ::Enumerable
 
-    def initialize(&block)
-      ::Kernel.raise(::ArgumentError, "no block given") unless block
+    # MRI's generator_initialize also takes the proc as an argument.
+    def initialize(*args, &block)
+      if args.size > 1
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+      end
+      unless args.empty?
+        block = args[0]
+        unless block.is_a?(::Proc)
+          ::Kernel.raise(::TypeError, "wrong argument type #{block.class} (expected Proc)")
+        end
+      end
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
+      end
+      # rb_block_proc's error
+      ::Kernel.raise(::LocalJumpError, "no block given") unless block
       @__block__ = block
     end
 

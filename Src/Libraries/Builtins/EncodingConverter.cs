@@ -290,6 +290,18 @@ namespace IronRuby.Builtins {
                 return RubyExceptions.ConversionPath(from, to);
             }
 
+            /// <summary>
+            /// The newline decorators exclude one another: MRI finds no converter that is both
+            /// universal_newline and crlf_newline.
+            /// </summary>
+            private static void RequireOneNewlineDecorator(ConversionStorage<MutableString>/*!*/ toStr,
+                object source, object destination, int flags) {
+                int newline = flags & (UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag);
+                if ((newline & (newline - 1)) != 0) {
+                    throw ConverterNotFound(EncodingName(toStr, source), EncodingName(toStr, destination), flags);
+                }
+            }
+
             private static string/*!*/ EncodingName(ConversionStorage<MutableString>/*!*/ toStr, object obj) {
                 var encoding = obj as RubyEncoding;
                 if (encoding != null) {
@@ -483,6 +495,27 @@ namespace IronRuby.Builtins {
 
             internal void InsertOutput(MutableString/*!*/ str) {
                 byte[] bytes;
+                if (EncodeStageDestination.IsDummy && str.Encoding != DestinationEncoding) {
+                    // MRI hands the text to a stateful destination's encoder (in its source
+                    // encoding), so it shares the encoder's shift state with the converted text
+                    // around it rather than opening and closing one of its own.
+                    string text = str.ToString();
+                    var buffer = new byte[16 + EncodeStageDestination.MaxBytesPerChar * (text.Length + 4)];
+                    int charsUsed, bytesUsed;
+                    bool completed;
+                    try {
+                        // checked on a fresh encoder first, so that a refusal leaves the shift state alone
+                        EncodeStageDestination.TranscodingEncoding.GetBytes(text);
+                    } catch (EncoderFallbackException e) {
+                        int codepoint = e.CharUnknownHigh != '\0' ?
+                            Char.ConvertToUtf32(e.CharUnknownHigh, e.CharUnknownLow) : e.CharUnknown;
+                        throw new UndefinedConversionError(UndefinedConversionMessage(codepoint));
+                    }
+                    _encoder.Convert(text.ToCharArray(), 0, text.Length, buffer, 0, buffer.Length, false,
+                        out charsUsed, out bytesUsed, out completed);
+                    _pendingOutput.InsertRange(0, Slice(buffer, 0, bytesUsed));
+                    return;
+                }
                 if (str.Encoding == DestinationEncoding) {
                     bytes = str.ToByteArray();
                 } else {
@@ -494,7 +527,11 @@ namespace IronRuby.Builtins {
                         throw new UndefinedConversionError(UndefinedConversionMessage(codepoint));
                     }
                 }
+                // the inserted bytes start in the initial shift state (MRI's
+                // rb_econv_insert_output finishes the last transcoder first)
+                byte[] reset = TakeEncoderReset();
                 _pendingOutput.InsertRange(0, bytes);
+                _pendingOutput.InsertRange(0, reset);
             }
 
             #endregion
@@ -527,7 +564,10 @@ namespace IronRuby.Builtins {
                     return "finished";
                 }
 
-                int limit = byteLimit.HasValue ? Math.Max(byteLimit.Value, 0) : Int32.MaxValue;
+                if (byteLimit.HasValue && byteLimit.Value < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative output_bytesize");
+                }
+                int limit = byteLimit.HasValue ? byteLimit.Value : Int32.MaxValue;
                 var written = new List<byte>();
 
                 byte[] sourceBytes = source != null ? source.ToByteArray() : EmptyBytes;
@@ -570,10 +610,29 @@ namespace IronRuby.Builtins {
                                 status = "incomplete_input";
                             } else if ((flags & PartialInputFlag) != 0) {
                                 status = "source_buffer_empty";
+                            } else if (!EmitEncoderReset(written, limit)) {
+                                status = "destination_buffer_full";
                             } else {
                                 status = "finished";
                             }
                             break;
+                        }
+
+                        // MRI's no-conversion converter copies straight from the source buffer
+                        // into the destination, so a full destination leaves the rest unread
+                        // rather than parked in the converter.
+                        if (_noConversion && written.Count >= limit) {
+                            status = "destination_buffer_full";
+                            break;
+                        }
+
+                        if (IsWideSource) {
+                            string wideStatus = ConvertWideByte(input[consumed++], chars, written, limit, flags);
+                            if (wideStatus != null) {
+                                status = wideStatus;
+                                break;
+                            }
+                            continue;
                         }
 
                         int unit = Math.Min(_sourceUnitSize, input.Length - consumed);
@@ -700,6 +759,11 @@ namespace IronRuby.Builtins {
                 // rewrite the destination buffer: content up to the offset plus what we produced
                 var converted = ApplyOutputDecorators(written.ToArray());
                 if (status == "finished") {
+                    if (_pendingCarriageReturn) {
+                        // a CR at the very end has nothing left to pair with: it is a newline
+                        _pendingCarriageReturn = false;
+                        converted = Concat(converted, new byte[] { (byte)'\n' });
+                    }
                     var tail = FinishDecorators();
                     if (tail.Length > 0) {
                         var whole = new byte[converted.Length + tail.Length];
@@ -732,7 +796,7 @@ namespace IronRuby.Builtins {
 
                     string escape = XmlEscape(codepoint);
                     if (escape != null) {
-                        if (!Emit(Encoding.ASCII.GetBytes(escape), written, limit)) {
+                        if (!EmitInserted(AsciiInDestination(escape), written, limit)) {
                             return "destination_buffer_full";
                         }
                         i += size;
@@ -743,11 +807,14 @@ namespace IronRuby.Builtins {
                     try {
                         bytes = EncodeCodepoint(chars, i, size);
                     } catch (EncoderFallbackException) {
+                        // the shift state the characters before this one left behind still has
+                        // to be closed before anything inserted in its place
+                        byte[] reset = TakeEncoderReset();
                         ResetEncoder();
 
                         int undefMode = _flags & UndefMaskFlag;
                         if (undefMode == UndefReplaceFlag) {
-                            if (!Emit(_replacementBytes, written, limit)) {
+                            if (!Emit(Concat(reset, _replacementBytes), written, limit)) {
                                 return "destination_buffer_full";
                             }
                             i += size;
@@ -755,7 +822,7 @@ namespace IronRuby.Builtins {
                         }
                         if (undefMode == UndefHexCharRefFlag) {
                             string reference = "&#x" + codepoint.ToString("X", CultureInfo.InvariantCulture) + ";";
-                            if (!Emit(Encoding.ASCII.GetBytes(reference), written, limit)) {
+                            if (!Emit(Concat(reset, Encoding.ASCII.GetBytes(reference)), written, limit)) {
                                 return "destination_buffer_full";
                             }
                             i += size;
@@ -772,6 +839,142 @@ namespace IronRuby.Builtins {
                     i += size;
                 }
                 return null;
+            }
+
+            private bool IsWideSource {
+                get {
+                    switch (DecodeStageSource.CodePage) {
+                        case RubyEncoding.CodePageUTF16LE:
+                        case RubyEncoding.CodePageUTF16BE:
+                        case RubyEncoding.CodePageUTF32LE:
+                        case RubyEncoding.CodePageUTF32BE:
+                            return !_noConversion;
+                        default:
+                            return false;
+                    }
+                }
+            }
+
+            /// <summary>
+            /// MRI's from_UTF_16BE/LE and from_UTF_32BE/LE transcoders, a byte at a time: answers
+            /// 0 while a character is still being read, the number of chars written to
+            /// <paramref name="chars"/> for a complete one, and -1 for an invalid sequence, with the
+            /// bytes in error and those to be read again. A lone low surrogate is one invalid
+            /// unit; a high surrogate followed by something other than a low one fails
+            /// on the first byte that rules it out (UTF-16BE) or on the unit (UTF-16LE), and the
+            /// bytes after the high surrogate are read again.
+            /// </summary>
+            private int DecodeWideByte(byte b, char[]/*!*/ chars, out byte[] errorBytes, out byte[] readAgain) {
+                errorBytes = readAgain = null;
+                _incomplete.Add(b);
+                var p = _incomplete;
+                int n = p.Count;
+                int cp = DecodeStageSource.CodePage;
+                if (cp == RubyEncoding.CodePageUTF32LE || cp == RubyEncoding.CodePageUTF32BE) {
+                    if (n < 4) {
+                        return 0;
+                    }
+                    long value = (cp == RubyEncoding.CodePageUTF32BE)
+                        ? ((long)p[0] << 24) | ((long)p[1] << 16) | ((long)p[2] << 8) | p[3]
+                        : ((long)p[3] << 24) | ((long)p[2] << 16) | ((long)p[1] << 8) | p[0];
+                    if (value > 0x10ffff || value >= 0xd800 && value <= 0xdfff) {
+                        errorBytes = p.ToArray();
+                        readAgain = EmptyBytes;
+                        p.Clear();
+                        return -1;
+                    }
+                    p.Clear();
+                    string s = Char.ConvertFromUtf32((int)value);
+                    s.CopyTo(0, chars, 0, s.Length);
+                    return s.Length;
+                }
+
+                bool big = cp == RubyEncoding.CodePageUTF16BE;
+                Func<int, int> unitAt = i => big ? (p[i] << 8) | p[i + 1] : (p[i + 1] << 8) | p[i];
+                switch (n) {
+                    case 1:
+                        return 0;
+
+                    case 2: {
+                            int u = unitAt(0);
+                            if (u >= 0xdc00 && u <= 0xdfff) {
+                                errorBytes = p.ToArray();
+                                readAgain = EmptyBytes;
+                                p.Clear();
+                                return -1;
+                            }
+                            if (u >= 0xd800 && u <= 0xdbff) {
+                                return 0;
+                            }
+                            p.Clear();
+                            chars[0] = (char)u;
+                            return 1;
+                        }
+
+                    case 3:
+                        if (big && (b < 0xdc || b > 0xdf)) {
+                            errorBytes = new[] { p[0], p[1] };
+                            readAgain = new[] { p[2] };
+                            p.Clear();
+                            return -1;
+                        }
+                        return 0;
+
+                    default: {
+                            int u2 = unitAt(2);
+                            if (u2 < 0xdc00 || u2 > 0xdfff) {
+                                errorBytes = new[] { p[0], p[1] };
+                                readAgain = new[] { p[2], p[3] };
+                                p.Clear();
+                                return -1;
+                            }
+                            chars[0] = (char)unitAt(0);
+                            chars[1] = (char)u2;
+                            p.Clear();
+                            return 2;
+                        }
+                }
+            }
+
+            /// <summary>
+            /// One byte of a UTF-16/32 source through the conversion. Returns null to go on, or the
+            /// status that ends the call.
+            /// </summary>
+            private string ConvertWideByte(byte b, char[]/*!*/ chars, List<byte>/*!*/ written, int limit, int flags) {
+                byte[] errorBytes, readAgain;
+                int produced = DecodeWideByte(b, chars, out errorBytes, out readAgain);
+                if (produced > 0) {
+                    string encodeStatus = EncodeChars(chars, produced, written, limit);
+                    if (encodeStatus != null) {
+                        return encodeStatus;
+                    }
+                    if ((flags & AfterOutputFlag) != 0 && written.Count > 0) {
+                        return "after_output";
+                    }
+                    return null;
+                }
+                if (produced == 0) {
+                    return null;
+                }
+
+                if ((_flags & InvalidMaskFlag) == InvalidReplaceFlag) {
+                    if (!Emit(_replacementBytes, written, limit)) {
+                        return "destination_buffer_full";
+                    }
+                    // the bytes after the error start over
+                    foreach (byte again in readAgain) {
+                        string againStatus = ConvertWideByte(again, chars, written, limit, flags);
+                        if (againStatus != null) {
+                            return againStatus;
+                        }
+                    }
+                    return null;
+                }
+
+                _putback.Clear();
+                _putback.AddRange(readAgain);
+                RecordInvalidByteSequence(errorBytes, readAgain, false);
+                return "invalid_byte_sequence";
             }
 
             private byte[]/*!*/ EncodeCodepoint(char[]/*!*/ chars, int index, int size) {
@@ -795,6 +998,42 @@ namespace IronRuby.Builtins {
             /// Moves <paramref name="bytes"/> into the output, parking the tail in _pendingOutput
             /// if the destination limit is reached. Returns false if the buffer filled up.
             /// </summary>
+            /// <summary>
+            /// Writes what the encoder owes to return a stateful (dummy) destination such as
+            /// ISO-2022-JP to its initial state - the ESC ( B that has to come before ASCII the
+            /// converter inserts itself (a replacement, a character reference, an XML escape) and
+            /// at the end of the conversion. MRI's transcoders do the same (iso2022jp_encoder's
+            /// finish, and the reset sequence rb_econv_insert_output asks for).
+            /// </summary>
+            private bool EmitEncoderReset(List<byte>/*!*/ written, int limit) {
+                byte[] reset = TakeEncoderReset();
+                return reset.Length == 0 || Emit(reset, written, limit);
+            }
+
+            /// <summary>Flushes the encoder, returning the bytes that bring it back to its initial state.</summary>
+            private byte[]/*!*/ TakeEncoderReset() {
+                if (!EncodeStageDestination.IsDummy) {
+                    return EmptyBytes;
+                }
+                var buffer = new byte[64];
+                int charsUsed, bytesUsed = 0;
+                bool completed;
+                try {
+                    _encoder.Convert(EmptyChars, 0, 0, buffer, 0, buffer.Length, true, out charsUsed, out bytesUsed, out completed);
+                } catch (ArgumentException) {
+                    // the Encoder an Encoding gets by default throws "Conversion buffer overflow"
+                    // when asked to convert nothing, having nothing to flush (an
+                    // EncoderFallbackException is an ArgumentException too)
+                    bytesUsed = 0;
+                }
+                return Slice(buffer, 0, bytesUsed);
+            }
+
+            /// <summary>Emits bytes the converter inserts itself, in the initial shift state.</summary>
+            private bool EmitInserted(byte[]/*!*/ bytes, List<byte>/*!*/ written, int limit) {
+                return Emit(Concat(TakeEncoderReset(), bytes), written, limit);
+            }
+
             private bool Emit(byte[]/*!*/ bytes, List<byte>/*!*/ written, int limit) {
                 int i = 0;
                 while (i < bytes.Length && written.Count < limit) {
@@ -818,6 +1057,16 @@ namespace IronRuby.Builtins {
                     pending.RemoveRange(0, i);
                 }
                 return pending.Count == 0;
+            }
+
+            private static byte[]/*!*/ Concat(byte[]/*!*/ first, byte[]/*!*/ second) {
+                if (first.Length == 0) {
+                    return second;
+                }
+                var result = new byte[first.Length + second.Length];
+                first.CopyTo(result, 0);
+                second.CopyTo(result, first.Length);
+                return result;
             }
 
             private static byte[]/*!*/ Slice(byte[]/*!*/ array, int start, int count) {
@@ -853,16 +1102,24 @@ namespace IronRuby.Builtins {
             /// converter finished without ever having converted anything writes both at once.
             /// </summary>
             private byte[]/*!*/ ApplyXmlDecorators(byte[]/*!*/ bytes) {
-                if (bytes.Length == 0 || (_flags & XmlAttrQuoteFlag) == 0 ||
-                    !DestinationEncoding.IsAsciiIdentity || _xmlQuoteOpened) {
+                if (bytes.Length == 0 || (_flags & XmlAttrQuoteFlag) == 0 || _xmlQuoteOpened) {
                     return bytes;
                 }
 
                 _xmlQuoteOpened = true;
-                var result = new byte[bytes.Length + 1];
-                result[0] = (byte)'"';
-                Array.Copy(bytes, 0, result, 1, bytes.Length);
-                return result;
+                return Concat(AsciiInDestination("\""), bytes);
+            }
+
+            /// <summary>
+            /// ASCII text the decorators write, in the destination encoding: MRI's escapers run on
+            /// the UTF-8 side of the conversion, so a UTF-16 destination gets "\0\"" and a
+            /// stateful one the ASCII bytes (in its initial state).
+            /// </summary>
+            private byte[]/*!*/ AsciiInDestination(string/*!*/ text) {
+                if (DestinationEncoding.IsAsciiIdentity || DestinationEncoding.IsDummy) {
+                    return Encoding.ASCII.GetBytes(text);
+                }
+                return DestinationEncoding.TranscodingEncoding.GetBytes(text);
             }
 
             /// <summary>
@@ -872,7 +1129,7 @@ namespace IronRuby.Builtins {
             /// reference the converter itself produced is not escaped a second time.
             /// </summary>
             private string XmlEscape(int codepoint) {
-                if ((_flags & (XmlTextFlag | XmlAttrContentFlag)) == 0 || !DestinationEncoding.IsAsciiIdentity) {
+                if ((_flags & (XmlTextFlag | XmlAttrContentFlag)) == 0) {
                     return null;
                 }
                 bool attribute = (_flags & XmlAttrContentFlag) != 0;
@@ -888,11 +1145,11 @@ namespace IronRuby.Builtins {
 
             /// <summary>The bytes a decorator still owes the output once the input is exhausted.</summary>
             private byte[]/*!*/ FinishDecorators() {
-                if ((_flags & XmlAttrQuoteFlag) == 0 || !DestinationEncoding.IsAsciiIdentity || _decoratorsFinished) {
+                if ((_flags & XmlAttrQuoteFlag) == 0 || _decoratorsFinished) {
                     return EmptyBytes;
                 }
                 _decoratorsFinished = true;
-                byte[] result = _xmlQuoteOpened ? new byte[] { (byte)'"' } : new byte[] { (byte)'"', (byte)'"' };
+                byte[] result = AsciiInDestination(_xmlQuoteOpened ? "\"" : "\"\"");
                 _xmlQuoteOpened = true;
                 return result;
             }
@@ -972,25 +1229,6 @@ namespace IronRuby.Builtins {
                     throw _lastError ?? RubyExceptions.CreateArgumentError("conversion failed");
                 }
 
-                // flush the encoder's shift state (e.g. the closing ESC ( B of ISO-2022-JP); only the
-                // stateful (dummy) encodings have one, and the Encoder an Encoding gets by default
-                // - most of RubyOnlyEncodings' - throws "Conversion buffer overflow" when asked to
-                // convert nothing, having nothing to flush
-                if (EncodeStageDestination.IsDummy) {
-                    var buffer = new byte[64];
-                    int charsUsed, bytesUsed = 0;
-                    bool completed;
-                    try {
-                        _encoder.Convert(EmptyChars, 0, 0, buffer, 0, buffer.Length, true, out charsUsed, out bytesUsed, out completed);
-                    } catch (ArgumentException) {
-                        bytesUsed = 0;
-                    }
-                    if (bytesUsed > 0) {
-                        destination.Append(buffer, 0, bytesUsed);
-                        destination.ForceEncoding(DestinationEncoding);
-                    }
-                }
-
                 var tail = FinishDecorators();
                 if (tail.Length > 0) {
                     destination.Append(tail);
@@ -1063,6 +1301,7 @@ namespace IronRuby.Builtins {
                 }
 
                 int flags = 0;
+                int newlineOption = -1;
                 foreach (var entry in hash) {
                     switch (KeyName(entry.Key)) {
                         case "invalid":
@@ -1119,10 +1358,10 @@ namespace IronRuby.Builtins {
 
                         case "newline":
                             switch (SymbolName(entry.Value)) {
-                                case "universal": flags |= UniversalNewlineFlag; break;
-                                case "crlf": flags |= CrlfNewlineFlag; break;
-                                case "cr": flags |= CrNewlineFlag; break;
-                                case "lf": flags |= UniversalNewlineFlag; break;
+                                case "universal": newlineOption = UniversalNewlineFlag; break;
+                                case "crlf": newlineOption = CrlfNewlineFlag; break;
+                                case "cr": newlineOption = CrNewlineFlag; break;
+                                case "lf": newlineOption = UniversalNewlineFlag; break;
                                 default:
                                     throw RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}",
                                         (object)SymbolName(entry.Value) ?? toHash.Context.Inspect(entry.Value));
@@ -1141,6 +1380,15 @@ namespace IronRuby.Builtins {
                             }
                             break;
                     }
+                }
+
+                // MRI's econv_opts: newline: wins over the *_newline: flags, with a warning
+                if (newlineOption >= 0) {
+                    const int newlineMask = UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag;
+                    if ((flags & newlineMask) != 0) {
+                        toHash.Context.ReportWarning(":newline option precedes other newline options", true);
+                    }
+                    flags = (flags & ~newlineMask) | newlineOption;
                 }
                 return flags;
             }
@@ -1166,6 +1414,7 @@ namespace IronRuby.Builtins {
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
+                RequireOneNewlineDecorator(toStr, source, destination, flags);
                 var path = ResolvePath(toStr, source, destination, flags, true);
 
                 var result = new RubyConverter(path, flags);
@@ -1182,6 +1431,7 @@ namespace IronRuby.Builtins {
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
+                RequireOneNewlineDecorator(toStr, source, destination, flags);
                 var path = ResolvePath(toStr, source, destination, flags, false);
                 return MakeConvPath(path, flags);
             }

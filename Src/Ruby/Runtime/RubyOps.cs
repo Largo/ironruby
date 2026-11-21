@@ -1203,6 +1203,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object YieldSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            // yield x, *[] passes one argument, which a proc auto-splats and a lambda takes as it is,
+            // exactly as yield x does: {|*, a|} gets nil for yield [], *nil, and lambda {|a,|} gets [].
+            if (splattee.Count == 0) {
+                return Yield1(arg1, procArg, self, blockParam);
+            }
             object result;
             var proc = blockParam.Proc;
             RequireLambdaArity(proc, 1 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg1);
@@ -1396,8 +1401,11 @@ namespace IronRuby.Runtime {
                 } else {
                     body.SetDefinedWithoutRefinements();
                 }
+                // Object's copy of the scope's method: a redefinition is warned about once, for the
+                // scope's - each host scope is a top level of its own, as a file is
                 SetMethod(scope.RubyContext, objectMethod =
-                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags)
+                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags),
+                    warnRedefinition: false
                 );
             }
 
@@ -1489,11 +1497,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method) {
+        private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method, bool warnRedefinition = true) {
             var owner = method.DeclaringModule;
 
             // Do not trigger the add-method event just yet, we need to assign the result into closure before executing any user code.
             // If the method being defined is "method_added" itself, we would call that method before the info gets assigned to the closure.
+            if (warnRedefinition) {
+                owner.WarnMethodRedefinition(method.DefinitionName, method.Document.FileName, method.SourceSpan.Start.Line);
+            }
             owner.SetMethodNoEvent(callerContext, method.DefinitionName, method);
 
             // expose RubyMethod in the scope (the method is bound to the main singleton instance):
@@ -4355,6 +4366,17 @@ namespace IronRuby.Runtime {
                 && expectedClass.Version.Method == expectedVersion;
         }
 
+        // MRI formats the expected module with %PRIsVALUE, i.e. its #to_s (an anonymous class with a
+        // singleton #to_s, as EnvUtil.labeled_class makes, shows that).
+        private static string/*!*/ SuperExpectedModuleName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            if (module.Name != null) {
+                return module.GetDisplayName(context, true).ToString();
+            }
+            var site = context.GetClassOf(module).ToStringSite;
+            var str = site.Target(site, module) as MutableString;
+            return str != null ? str.ToString() : module.GetDisplayName(context, true).ToString();
+        }
+
         // super call condition
         [Emitted]
         public static object GetSuperCallTarget(RubyScope/*!*/ scope, int targetId) {
@@ -4404,7 +4426,7 @@ namespace IronRuby.Runtime {
             var context = methodScope.RubyContext;
             if (!context.IsKindOf(currentSelf, declaringModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("self has wrong type to call super in this context: {0} (expected {1})",
-                    context.GetClassDisplayName(currentSelf), declaringModule.GetDisplayName(context, true)));
+                    context.GetClassDisplayName(currentSelf), SuperExpectedModuleName(context, declaringModule)));
             }
         }
 
@@ -4792,7 +4814,11 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw InvalidFloatValue(original != null ? original.ToByteArray() : Encoding.UTF8.GetBytes(value));
+            // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding
+            if (original != null) {
+                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(original).ToString());
+            }
+            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
         }
 
         private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
@@ -4973,20 +4999,58 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            int start = index;
             bool negative = false;
             if (str[index] == '+' || str[index] == '-') {
                 negative = (str[index] == '-');
                 index++;
             }
 
-            bool parsed = (index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X'))
+            bool hex = index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X');
+            bool parsed = hex
                 ? TryParseHexadecimalFloat(str, index + 2, end, out result)
                 : TryParseDecimalFloat(str, index, end, out result);
+
+            if (parsed && !hex && str.IndexOf('_', start, end - start) >= 0) {
+                string truncated = TruncateUnderscoredMantissa(str, start, end);
+                if (truncated != null) {
+                    return TryParseRubyFloat(truncated, out result);
+                }
+            }
 
             if (parsed && negative) {
                 result = -result;
             }
             return parsed;
+        }
+
+        // MRI's rb_cstr_to_dbl copies a number with underscores in it into a buffer of
+        // DBL_DIG * 4 characters before the exponent (sign and point included), dropping the
+        // rest of the mantissa: Float("1_1_..._1") with 10000 digits is 1.11...e+59, not
+        // Infinity. Null when nothing is dropped.
+        private static string TruncateUnderscoredMantissa(string/*!*/ str, int start, int end) {
+            const int MantissaLimit = 15 * 4;
+            var buffer = new StringBuilder(end - start);
+            int mantissaLength = 0;
+            bool inExponent = false, dropped = false;
+            for (int i = start; i < end; i++) {
+                char c = str[i];
+                if (c == '_') {
+                    continue;
+                }
+                if (!inExponent && (c == 'e' || c == 'E')) {
+                    inExponent = true;
+                }
+                if (inExponent) {
+                    buffer.Append(c);
+                } else if (mantissaLength < MantissaLimit) {
+                    buffer.Append(c);
+                    mantissaLength++;
+                } else {
+                    dropped = true;
+                }
+            }
+            return dropped ? buffer.ToString() : null;
         }
 
         private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
@@ -5078,8 +5142,9 @@ namespace IronRuby.Runtime {
             int scale = 0;
             if (index < end && str[index] == '.') {
                 index++;
+                // ruby_strtod takes "0x1." and "0x1.p+0": the point may end the digits, if any came before it
                 int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
-                if (fractionDigits <= 0) {
+                if (fractionDigits < 0 || (fractionDigits == 0 && integerDigits == 0)) {
                     return false;
                 }
                 scale = -4 * fractionDigits;
@@ -5107,6 +5172,22 @@ namespace IronRuby.Runtime {
             }
 
             long power = (long)exponent + scale;
+
+            // The mantissa is rounded to a double's 53 bits here, to nearest, ties to even (the
+            // BigInteger conversion truncates), and one too long for a double ("0x1f" and 268
+            // zeros) is no longer Infinity before it is scaled down.
+            long bitLength = (long)mantissa.GetBitLength();
+            if (bitLength > 53) {
+                int shift = (int)(bitLength - 53);
+                BigInteger dropped = mantissa & ((BigInteger.One << shift) - 1);
+                BigInteger half = BigInteger.One << (shift - 1);
+                mantissa >>= shift;
+                if (dropped > half || (dropped == half && !mantissa.IsEven)) {
+                    mantissa += 1;
+                }
+                power += shift;
+            }
+
             if (power > 99999) {
                 power = 99999;
             } else if (power < -99999) {
@@ -5142,7 +5223,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static Exception/*!*/ CreateNotSymbolNorStringError(RubyContext/*!*/ context, object obj) {
-            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToAsciiString());
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToString());
         }
 
         /// <summary>

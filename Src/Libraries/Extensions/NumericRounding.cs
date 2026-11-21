@@ -63,6 +63,10 @@ namespace IronRuby.Builtins {
                 } else {
                     var str = value as MutableString;
                     if (str != null) {
+                        // rb_num_get_rounding_option: rb_must_asciicompat
+                        if (!str.Encoding.IsAsciiIdentity) {
+                            throw RubyExceptions.CreateAsciiIncompatibleEncodingError(str.Encoding);
+                        }
                         mode = str.ToString();
                     }
                 }
