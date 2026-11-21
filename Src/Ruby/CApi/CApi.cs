@@ -88,7 +88,7 @@ namespace IronRuby.Runtime.CApi {
                     throw RubyExceptions.CreateLoadError("Init_" + name + " is not defined - " + path);
                 }
 
-                CallVoid(init, null);
+                CallInit(path, init);
             }
         }
 
@@ -334,9 +334,9 @@ namespace IronRuby.Runtime.CApi {
             ExceptionDispatchInfo.Capture(e).Throw();
         }
 
-        internal static VALUE CallMethod(IntPtr fn, int arity, VALUE self, int argc, VALUE* argv) {
+        internal static VALUE CallMethod(IntPtr fn, int arity, VALUE self, int argc, VALUE* argv, CCode code = null) {
             int raised;
-            var scope = EnterNative();
+            var scope = EnterNative(code);
             VALUE result;
             try {
                 result = _callMethod((void*)fn, arity, self, argc, argv, &raised);
@@ -349,9 +349,9 @@ namespace IronRuby.Runtime.CApi {
             return result;
         }
 
-        internal static void CallVoid(IntPtr fn, void* arg) {
+        internal static void CallVoid(IntPtr fn, void* arg, CCode code = null) {
             int raised;
-            var scope = EnterNative();
+            var scope = EnterNative(code);
             try {
                 _callVoid((void*)fn, arg, &raised);
             } finally {
@@ -362,9 +362,9 @@ namespace IronRuby.Runtime.CApi {
             }
         }
 
-        internal static VALUE CallFunc1(IntPtr fn, VALUE arg) {
+        internal static VALUE CallFunc1(IntPtr fn, VALUE arg, CCode code = null) {
             int raised;
-            var scope = EnterNative();
+            var scope = EnterNative(code);
             VALUE result;
             try {
                 result = _callFunc1((void*)fn, arg, &raised);
@@ -377,9 +377,9 @@ namespace IronRuby.Runtime.CApi {
             return result;
         }
 
-        internal static VALUE CallBlock(IntPtr fn, VALUE yielded, VALUE data, int argc, VALUE* argv, VALUE blockArg) {
+        internal static VALUE CallBlock(IntPtr fn, VALUE yielded, VALUE data, int argc, VALUE* argv, VALUE blockArg, CCode code = null) {
             int raised;
-            var scope = EnterNative();
+            var scope = EnterNative(code);
             VALUE result;
             try {
                 result = _callBlock((void*)fn, yielded, data, argc, argv, blockArg, &raised);

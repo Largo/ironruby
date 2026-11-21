@@ -174,6 +174,7 @@ namespace IronRuby.Runtime.CApi {
             public IntPtr Getter, Setter;
             public bool ReadOnly;
             public bool Virtual;
+            public CCode Code;
 
             public override object GetValue(RubyContext/*!*/ context, RubyScope scope) {
                 if (Getter == IntPtr.Zero) {
@@ -182,7 +183,7 @@ namespace IronRuby.Runtime.CApi {
                     return Var != null ? FromValue(*Var) : Virtual ? (object)false : null;
                 }
                 int raised;
-                var depth = EnterNative();
+                var depth = EnterNative(Code);
                 VALUE result;
                 try {
                     result = _callGvarGet((void*)Getter, Intern("$" + Name), Var, &raised);
@@ -206,7 +207,7 @@ namespace IronRuby.Runtime.CApi {
                     return;
                 }
                 int raised;
-                var depth = EnterNative();
+                var depth = EnterNative(Code);
                 try {
                     _callGvarSet((void*)Setter, ToValue(value), Intern("$" + Name), Var, &raised);
                 } finally {
@@ -227,7 +228,8 @@ namespace IronRuby.Runtime.CApi {
             if (n.StartsWith("$", StringComparison.Ordinal)) {
                 n = n.Substring(1);
             }
-            _context.DefineGlobalVariable(n, new CGlobalVariable { Name = n, Var = var, Getter = getter, Setter = setter, ReadOnly = readOnly, Virtual = isVirtual });
+            _context.DefineGlobalVariable(n, new CGlobalVariable { Name = n, Var = var, Getter = getter, Setter = setter, ReadOnly = readOnly, Virtual = isVirtual,
+                Code = CurrentCode() });
         }
 
         internal static void rb_define_variable(byte* name, VALUE* var) {

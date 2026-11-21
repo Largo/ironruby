@@ -28,11 +28,14 @@ namespace IronRuby.Runtime.CApi {
         internal readonly int Arity;
         internal readonly string Name;
         internal RubyModule Owner;
+        // its extension, and whether it runs under the extension's lock (CApi.Locks.cs)
+        internal readonly CCode Code;
 
         internal CMethod(IntPtr function, int arity, string name) {
             Function = function;
             Arity = arity;
             Name = name;
+            Code = CApi.CurrentCode();
         }
 
         /// <summary>
@@ -118,14 +121,14 @@ namespace IronRuby.Runtime.CApi {
                 VALUE result;
                 if (method.Arity == -2) {
                     VALUE array = ToValue(new RubyArray(args));
-                    result = CallMethod(method.Function, -2, selfValue, 1, &array);
+                    result = CallMethod(method.Function, -2, selfValue, 1, &array, method.Code);
                 } else {
                     int argc = args.Length;
                     VALUE* argv = stackalloc VALUE[Math.Max(argc, 1)];
                     for (int i = 0; i < argc; i++) {
                         argv[i] = ToValue(args[i]);
                     }
-                    result = CallMethod(method.Function, method.Arity, selfValue, argc, argv);
+                    result = CallMethod(method.Function, method.Arity, selfValue, argc, argv, method.Code);
                     for (int i = 0; i < argc; i++) {
                         SyncRawFreeze(argv[i]);
                     }
@@ -223,8 +226,9 @@ namespace IronRuby.Runtime.CApi {
                 throw RubyExceptions.CreateTypeError("allocator for a module");
             }
             _allocFuncs.AddOrUpdate(cls, new StrongBox<IntPtr>(func));
+            var code = CurrentCode();
             cls.SetCAllocator(c => {
-                object obj = FromValue(CallFunc1(func, ToValue(c)));
+                object obj = FromValue(CallFunc1(func, ToValue(c), code));
                 if (obj == null || !ReferenceEquals(_context.GetClassOf(obj).GetNonSingletonClass(), c) && !(obj is DataObject)) {
                     throw RubyExceptions.CreateTypeError(String.Format("wrong instance allocation"));
                 }
@@ -272,7 +276,7 @@ namespace IronRuby.Runtime.CApi {
             if (cls == null) {
                 throw RubyExceptions.CreateTypeError("wrong argument type (expected Class)");
             }
-            var obj = new DataObject(cls.GetNonSingletonClass(), typed != 0);
+            var obj = new DataObject(cls.GetNonSingletonClass(), typed != 0, CurrentCode());
             VALUE value = ToValue(obj);
             if (klass == 0) {
                 rb_obj_hide(value);
@@ -307,7 +311,12 @@ namespace IronRuby.Runtime.CApi {
                 // Kernel#binding would capture the frame of the C method's caller
                 throw RubyExceptions.CreateRuntimeError("Can't create Binding from C level function");
             }
-            return site.Target(site, scope, target, block, new RubyArray(args));
+            var released = ReleaseForRuby();
+            try {
+                return site.Target(site, scope, target, block, new RubyArray(args));
+            } finally {
+                Reacquire(released);
+            }
         }
 
         private static bool IsKernelBinding(object target) {
@@ -473,7 +482,14 @@ namespace IronRuby.Runtime.CApi {
                 throw RubyExceptions.NoBlockGiven();
             }
             object result;
-            if (bfc.Yield(args, out result)) {
+            bool broke;
+            var released = ReleaseForRuby();
+            try {
+                broke = bfc.Yield(args, out result);
+            } finally {
+                Reacquire(released);
+            }
+            if (broke) {
                 throw new CBlockBreak(bfc, result);
             }
             return ToValue(result);
@@ -493,6 +509,7 @@ namespace IronRuby.Runtime.CApi {
         /// ifunc blocks are.
         /// </summary>
         private static Proc/*!*/ MakeBlock(IntPtr fn, VALUE data2) {
+            var code = CurrentCode();
             var dispatcher = new BlockDispatcherUnsplatProcN(0,
                 BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1),
                 null, 0);
@@ -506,7 +523,7 @@ namespace IronRuby.Runtime.CApi {
                     VALUE yielded = argc > 0 ? argv[0] : Qnil;
                     _cBlockDepth++;
                     try {
-                        return FromValue(CallBlock(fn, yielded, data2, argc, argv, ToValue(blockArg)));
+                        return FromValue(CallBlock(fn, yielded, data2, argc, argv, ToValue(blockArg), code));
                     } catch (CIterBreak b) {
                         return selfBlock.Break(b.ReturnValue);
                     } finally {

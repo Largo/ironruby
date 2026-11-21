@@ -95,6 +95,26 @@ Dir.mktmpdir("capi-selftest") do |dir|
   check.("shareable? of a mutable string", m.shareable?(+"u"), false)
   check.("std_streams", m.std_streams.map(&:object_id), [$stdin, $stdout, $stderr].map(&:object_id))
 
+  # Code an extension has not declared thread-safe runs on one thread at a time (CRuby's GVL,
+  # IronRuby's extension lock), and Ruby code it calls - here waiting for another thread that
+  # calls the same extension - does not hold it
+  check.("not thread-safe: one thread at a time",
+    4.times.map { Thread.new { m::Unsafe.exclusive(20_000_000) } }.map(&:value).uniq, [false])
+  q = Queue.new
+  waiter = Thread.new { m::Unsafe.yield_nil { q.pop } }
+  sleep 0.1
+  # bounded: were the lock held in rb_yield, the feeder could not get in to feed the waiter
+  feeder = Thread.new { m::Unsafe.yield_nil { q << :fed } }
+  fed = feeder.join(10) && waiter.join(10) && waiter.value
+  [feeder, waiter].each(&:kill)
+  check.("lock let go while C runs Ruby", fed, :fed)
+  check.("lock kept after a nested rb_thread_call_with_gvl",
+    4.times.map { Thread.new { m::Unsafe.nested_exclusive(20_000_000) } }.map(&:value).uniq, [false])
+  waiter = Thread.new { m::Unsafe.wait_in_nested_region(5000) }
+  sleep 0.1
+  Thread.new { m::Unsafe.feed }.join(10)
+  check.("lock let go by a region after a region nested in it", waiter.join(10) && waiter.value, true)
+
   # IRONRUBY_NATIVE_GEMS: a gem's compiled extension in place of IronRuby's own
   if defined?(Gem.ironruby_native_extension_for)
     gem_home = File.join(dir, "gems-home")

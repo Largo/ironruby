@@ -95,6 +95,14 @@ step with the object (`CApi.Mirrors.cs`): written back when C calls into Ruby or
 refreshed when Ruby changed the object. A mirror stays allocated for the object's lifetime, so
 a pointer C kept stays valid memory. `rb_str_new_static` adopts the extension's own buffer.
 
+**Threads.** IronRuby has no GVL, so C code runs on several threads at once. Most extensions
+assume it cannot (a cache, a static buffer, a struct in a shared object), so each extension has
+a lock its C functions run under (`CApi.Locks.cs`), as TruffleRuby does. A function needs none
+if it was defined after `rb_ext_thread_safe(true)` or `rb_ext_ractor_safe(true)`; those run in
+parallel. The lock is let go while C calls Ruby (`rb_funcall`, `rb_yield`...) and in
+`rb_thread_call_without_gvl`, and a thread holds one extension's lock at most, so two
+extensions calling each other cannot deadlock. `IRONRUBY_CEXT_LOCK=0` turns the locks off.
+
 ## Limits of this first version
 
 - **Handles are never freed**: every object C has seen stays alive for the process. Next:
