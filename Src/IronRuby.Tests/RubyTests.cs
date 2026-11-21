@@ -1370,6 +1370,8 @@ namespace IronRuby.Tests {
                 String_InitializeKeywords1,
                 String_ToIntAsciiIncompatible1,
                 String_UndumpUnicodeEncoding1,
+                String_OrdWide1,
+                Integer_ChrMultibyte1,
                 Marshal_RangeRecord1,
                 Marshal_LoadedClasses1,
                 Time_NewDstStdZone1,
