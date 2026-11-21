@@ -685,7 +685,15 @@ namespace IronRuby.Compiler.Ast {
                 }
                 return true;
             }
-            public override bool Enter(MethodCall/*!*/ node) { Calls++; return true; }
+            // the walker visits a call's target and arguments, not its block: the calls of `&expr' count too
+            public override bool Enter(MethodCall/*!*/ node) {
+                Calls++;
+                var blockPass = node.Block as BlockReference;
+                if (blockPass != null) {
+                    blockPass.Expression.Walk(this);
+                }
+                return true;
+            }
             public override bool Enter(ArrayItemAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(AttributeAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(SuperCall/*!*/ node) { Calls++; return true; }
