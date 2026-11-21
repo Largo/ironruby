@@ -541,6 +541,12 @@ namespace IronRuby.Compiler.Ast {
         internal static readonly bool LightMultipleAssignmentEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MASGN") != "0";
 
         /// <summary>
+        /// IR_LIGHT_SUPER=0 keeps every method with a `super' (`super', `super(a)', `super(&b)') out of light frames (see
+        /// IsScopeFree, SuperScopeMethods and LightFrameRewriter.LightSuperCall).
+        /// </summary>
+        internal static readonly bool LightSuperEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_SUPER") != "0";
+
+        /// <summary>
         /// IR_LIGHT_REGEX=0 keeps every method with a regex literal (`s.match?(/x/)', `/a#{x}/') out of light frames;
         /// IR_LIGHT_REGEX=all also lets in one whose literal goes to a method that sets $~ (see IsScopeFree).
         /// </summary>
@@ -675,7 +681,7 @@ namespace IronRuby.Compiler.Ast {
             if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 return false;
             }
-            if (IsLargeWithMultipleAssignment()) {
+            if (IsLargeWithMultipleAssignment() || HasScopeReadingSuper()) {
                 return false;
             }
             return FirstNotScopeFree(false) == null || LightBlocksEnabled && FirstNotScopeFree(true) == null;
@@ -698,6 +704,28 @@ namespace IronRuby.Compiler.Ast {
             }
             var counter = WalkCalls();
             return counter.HasMultipleAssignment && counter.Calls > MaxMultipleAssignmentCalls;
+        }
+
+        // The names of the library methods of Kernel, BasicObject, Module, Enumerable, String, Symbol and Regexp that read their
+        // caller's scope (binding, block_given?, respond_to?'s visibility, $~...). A `super' in a method of one of these names
+        // most likely reaches one, and a light frame would then make its scope on every call, after the light site has
+        // answered RubyOps.LightScopeRequired: `def respond_to?(m, p = false) = m == :x || super' took 1,489 instructions a
+        // call as one, 1,360 with its scope made at entry. Not method_missing: BasicObject's raises, and a Ruby one gains.
+        private static readonly HashSet<string>/*!*/ SuperScopeMethods = new HashSet<string> {
+            "respond_to?", "binding", "block_given?", "iterator?", "local_variables", "eval", "instance_eval", "class_eval",
+            "module_eval", "send", "__send__", "public_send", "method", "public_method", "singleton_class",
+            "define_singleton_method", "__method__", "__callee__", "require", "load", "autoload", "autoload?", "print", "gets",
+            "trace_var", "include", "private", "public", "protected", "module_function", "define_method", "attr", "attr_accessor",
+            "attr_reader", "attr_writer", "const_get", "const_set", "const_source_location", "instance_method",
+            "public_instance_method", "nesting", "using", "used_modules", "used_refinements", "map", "collect", "inject",
+            "reduce", "grep", "grep_v", "=~", "!~", "===", "~", "match", "last_match", "gsub", "gsub!", "sub", "sub!", "scan",
+            "split", "index", "rindex", "byteindex", "byterindex", "slice", "slice!", "start_with?", "end_with?", "partition",
+            "rpartition",
+        };
+
+        // A method named like one of SuperScopeMethods whose body calls `super' keeps its scope.
+        private bool HasScopeReadingSuper() {
+            return LightSuperEnabled && SuperScopeMethods.Contains(_name) && WalkCalls().HasSuperCall;
         }
 
         // The most calls a light frame may make and still keep its locals in CLR variables (ScopeBuilder.TryUseRegisterLocals).
@@ -727,6 +755,7 @@ namespace IronRuby.Compiler.Ast {
         private sealed class CallCounter : Walker {
             internal int Calls;
             internal bool HasMultipleAssignment;
+            internal bool HasSuperCall;
 
             // the walker visits only the left side of a multiple assignment: the calls of the right side count too
             public override bool Enter(ParallelAssignmentExpression/*!*/ node) {
@@ -747,7 +776,7 @@ namespace IronRuby.Compiler.Ast {
             }
             public override bool Enter(ArrayItemAccess/*!*/ node) { Calls++; return true; }
             public override bool Enter(AttributeAccess/*!*/ node) { Calls++; return true; }
-            public override bool Enter(SuperCall/*!*/ node) { Calls++; return true; }
+            public override bool Enter(SuperCall/*!*/ node) { Calls++; HasSuperCall = true; return true; }
             public override bool Enter(YieldCall/*!*/ node) { Calls++; return true; }
             public override bool Enter(BlockDefinition/*!*/ node) { return false; }
             public override bool Enter(MethodDefinition/*!*/ node) { return false; }
@@ -796,6 +825,9 @@ namespace IronRuby.Compiler.Ast {
             }
             if (IsLargeWithMultipleAssignment()) {
                 return "multiple assignment in a body of more than " + MaxMultipleAssignmentCalls + " calls";
+            }
+            if (HasScopeReadingSuper()) {
+                return "super in " + _name + " (the library method reads its caller's scope)";
             }
             return IsLightFrameCandidate() ? null : "parameters";
         }
@@ -1017,6 +1049,26 @@ namespace IronRuby.Compiler.Ast {
                 if (splat != null) {
                     return (LightSplatEnabled || why != null && Refuse(why, node.GetType().Name + " (IR_LIGHT_SPLAT=0)")) && IsScopeFree(splat.Argument, blockLiterals, why);
                 }
+                // `super', `super(a, *r)', `super(&b)': the site is given the module and the name the body was compiled for,
+                // which is what it read from the scope, and self (LightFrameRewriter.LightScopeCall); a parameterless super
+                // passes the parameters, which are locals, and the method's block, which the frame then converts as a method's
+                // (LightFrame.NamesBlock). Not one with a literal block, whose Proc would need the scope as its parent.
+                var superCall = node as SuperCall;
+                if (superCall != null) {
+                    if (!LightSuperEnabled) {
+                        return Refuse(why, "SuperCall (IR_LIGHT_SUPER=0)");
+                    }
+                    if (superCall.Block != null) {
+                        var superBlock = superCall.Block as BlockReference;
+                        if (superBlock == null || !LightBlockPassEnabled) {
+                            return Refuse(why, superBlock == null ? "super with a literal block" : "super passing a block (IR_LIGHT_BLOCK_PASS=0)");
+                        }
+                        if (!IsScopeFree(superBlock.Expression, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    return AreScopeFree(superCall.Arguments, blockLiterals, why);
+                }
                 // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
@@ -1174,7 +1226,8 @@ namespace IronRuby.Compiler.Ast {
             light.Callee = scope.DefineHiddenVariable("#callee", typeof(string));
             light.Name = AstUtils.Constant(_name);
             light._blockParameter = blockParameter;
-            light.NamesBlock = _parameters.Block != null;
+            // super hands the method's block on as `&b' would (SuperCall.TransformReadCore)
+            light.NamesBlock = _parameters.Block != null || gen.CurrentMethod.HasSuperCall;
 
             var shape = Ast.Constant(new MethodFrameShape((string[])names.Value, visibleParameterCountAndSignatureFlags, _name));
             Func<MethodInfo, MSA.Expression, MSA.Expression> make = (method, locals) => method.OpCall(new AstExpressions {
@@ -1201,7 +1254,9 @@ namespace IronRuby.Compiler.Ast {
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard) {
                 BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
-                BlockParameter = LightBlockGivenEnabled ? blockParameter : null
+                BlockParameter = LightBlockGivenEnabled ? blockParameter : null,
+                SuperModule = LightSuperEnabled ? ConstantValue(declaringModule) as RubyModule : null,
+                SuperName = _name
             };
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
@@ -1213,6 +1268,15 @@ namespace IronRuby.Compiler.Ast {
             statements = rewritten;
             light.MakesCalls = rewriter.MakesCalls || gen.CurrentMethod.HasHashCallingKeys;
             return light;
+        }
+
+        // The value of a constant expression, under its conversions (ExactConstant), or null.
+        private static object ConstantValue(MSA.Expression/*!*/ node) {
+            while (node.NodeType == MSA.ExpressionType.Convert) {
+                node = ((MSA.UnaryExpression)node).Operand;
+            }
+            var constant = node as MSA.ConstantExpression;
+            return (constant != null) ? constant.Value : null;
         }
 
         /// <summary>
@@ -1251,6 +1315,12 @@ namespace IronRuby.Compiler.Ast {
             // The method's block parameter, in a method's frame: what `block_given?' asks about (see LightScopeCall). Null in
             // a block's frame, which has the method's block only through its scope.
             internal MSA.Expression BlockParameter;
+
+            // The module the method's body is compiled for and the name it was defined under, in a method's frame: what a
+            // `super' of the body looks the method up by (see LightScopeCall). Null in a block's frame, whose super finds the
+            // method from its scope, and where light super sites are off (IR_LIGHT_SUPER=0).
+            internal RubyModule SuperModule;
+            internal string SuperName;
 
             internal LightFrameRewriter(MSA.ParameterExpression/*!*/ scope, MSA.Expression/*!*/ lazyScope, MSA.Expression/*!*/ rfc,
                 MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ inLoop, bool lazyUses) {
@@ -1453,6 +1523,10 @@ namespace IronRuby.Compiler.Ast {
             /// method's. Returns null for any other dynamic expression.
             /// </summary>
             private MSA.Expression LightScopeCall(Microsoft.Scripting.Ast.LightDynamicExpression/*!*/ node) {
+                var superAction = node.Binder as SuperCallAction;
+                if (superAction != null) {
+                    return LightSuperCall(node, superAction);
+                }
                 var action = node.Binder as RubyCallAction;
                 if (!LightCallsEnabled || action == null || action.Context == null) {
                     return null;
@@ -1474,7 +1548,32 @@ namespace IronRuby.Compiler.Ast {
 
                 var lightAction = RubyCallAction.Make(action.Context, action.MethodName,
                     new RubyCallSignature(signature.ArgumentCount, signature.Flags | RubyCallFlags.HasLightScope));
+                return MakeLightCall(reduced, action, lightAction, DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature));
+            }
 
+            /// <summary>
+            /// `super' in the method's own body, as a call that does not need the scope (see LightScopeCall): what the site read
+            /// from the scope - the module the method was defined in, the name it was defined under, its self - is the body's
+            /// module and name, which its light site is made with (SuperCallAction.MakeLight), and the site's own self. The
+            /// block it passes is the method's, or `&b' (IsScopeFree takes no literal block). Returns null for a site it cannot take.
+            /// </summary>
+            private MSA.Expression LightSuperCall(Microsoft.Scripting.Ast.LightDynamicExpression/*!*/ node, SuperCallAction/*!*/ action) {
+                var signature = action.Signature;
+                if (!LightCallsEnabled || SuperModule == null || _rfc == null || action.Context == null || !signature.HasScope ||
+                    !signature.HasBlock || signature.ResolveOnly || signature.HasLightScope) {
+                    return null;
+                }
+                var reduced = node.Reduce() as MSA.DynamicExpression;
+                if (reduced == null || reduced.Type != typeof(object) || reduced.Arguments.Count < 2 || !IsScope(reduced.Arguments[0])) {
+                    return null;
+                }
+                return MakeLightCall(reduced, action, action.MakeLight(SuperModule, SuperName), false);
+            }
+
+            // The call through the light site, then through the ordinary one with the scope made on demand if the light site's
+            // rule answered RubyOps.LightScopeRequired, both with the same evaluated arguments (see LightScopeCall).
+            private MSA.Expression/*!*/ MakeLightCall(MSA.DynamicExpression/*!*/ reduced, RubyMetaBinder/*!*/ action, RubyMetaBinder/*!*/ lightAction,
+                bool blockGiven) {
                 int count = reduced.Arguments.Count;
                 var temps = new MSA.ParameterExpression[count];
                 var body = new AstExpressions();
@@ -1494,7 +1593,6 @@ namespace IronRuby.Compiler.Ast {
                 MakesCalls = true;
                 body.Add(Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), lightArgs)));
                 MSA.Expression needsScope = Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired));
-                bool blockGiven = DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature);
                 if (blockGiven && BlockParameter == null) {
                     // a block's frame has the method's block only through its scope: the call, as for any rule that reads it
                     needsScope = Ast.OrElse(needsScope, Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightBlockGiven)));
