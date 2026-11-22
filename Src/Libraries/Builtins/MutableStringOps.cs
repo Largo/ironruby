@@ -1986,7 +1986,9 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateArgumentError("zero width padding");
                 }
             }
-            return width - GetCharacterLength(self);
+            // in a long: "a".center(-2**31) wrapped around to a pad of two billion characters
+            long count = (long)width - GetCharacterLength(self);
+            return count <= 0 ? 0 : (int)count;
         }
 
         /// <summary>
