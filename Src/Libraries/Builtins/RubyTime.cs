@@ -279,6 +279,7 @@ namespace IronRuby.Builtins {
             _zoneKind = other._zoneKind;
             _fixedOffset = other._fixedOffset;
             _zoneObject = other._zoneObject;
+            _zoneDst = other._zoneDst;
             _localOffset = other._localOffset;
             _localZoneName = other._localZoneName;
             _localDst = other._localDst;
@@ -443,7 +444,15 @@ namespace IronRuby.Builtins {
         }
 
         public bool IsDaylightSavingTime {
-            get { return _zoneKind == RubyTimeZoneKind.Local && _localDst; }
+            get { return (_zoneKind == RubyTimeZoneKind.Local && _localDst) || (_zoneObject != null && _zoneDst); }
+        }
+
+        // What the timezone object's #dst? said about this time (see RubyTimeOps.AskZoneDst).
+        private bool _zoneDst;
+
+        internal bool ZoneDst {
+            get { return _zoneDst; }
+            set { _zoneDst = value; }
         }
 
         /// <summary>The instant, in UTC.</summary>

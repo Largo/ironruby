@@ -421,7 +421,22 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("utc_offset out of range");
             }
 
-            return instant.WithZone(RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds), zoneObject);
+            var result = instant.WithZone(RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds), zoneObject);
+            result.ZoneDst = AskZoneDst(context, zoneObject, new RubyTime(localSeconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero));
+            return result;
+        }
+
+        private static CallSite<Func<CallSite, object, object, object>> _dstSite;
+
+        /// <summary>
+        /// MRI's zone_set_dst: a Time with a timezone object is dst? when the zone's #dst?, given the
+        /// wall-clock reading, says so - and not when the zone has no #dst?.
+        /// </summary>
+        private static bool AskZoneDst(RubyContext/*!*/ context, object/*!*/ zoneObject, RubyTime/*!*/ wallClock) {
+            if (!RespondTo(context, zoneObject, "dst?")) {
+                return false;
+            }
+            return Protocols.IsTrue(Invoke(context, ref _dstSite, "dst?", zoneObject, wallClock));
         }
 
         #endregion
@@ -910,6 +925,7 @@ namespace IronRuby.Builtins {
 
             var result = new RubyTime(utcSeconds, fraction, RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds));
             result.ZoneObject = zoneObject;
+            result.ZoneDst = AskZoneDst(context, zoneObject, asUtc);
             return result;
         }
 
@@ -973,6 +989,7 @@ namespace IronRuby.Builtins {
                 instant = new RubyTime(other.Seconds, other.Subsec, other.ZoneKind,
                     other.ZoneKind == RubyTimeZoneKind.FixedOffset ? other.UtcOffsetExact : ExactNum.Zero);
                 instant.ZoneObject = other.ZoneObject;
+                instant.ZoneDst = other.ZoneDst;
             } else {
                 instant = RubyTime.FromExactSeconds(seconds, kind, offset);
                 if (zoneObject != null) {
@@ -1177,6 +1194,8 @@ namespace IronRuby.Builtins {
                 }
                 if (found != null) {
                     result.ZoneObject = found;
+                    result.ZoneDst = AskZoneDst(context, found,
+                        new RubyTime(result.Seconds + result.UtcOffsetSeconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero));
                 }
             }
             return result;
@@ -1342,6 +1361,7 @@ namespace IronRuby.Builtins {
             var time = RubyTime.FromExactSeconds(result, self.ZoneKind,
                 self.ZoneKind == RubyTimeZoneKind.FixedOffset ? self.UtcOffsetExact : ExactNum.Zero);
             time.ZoneObject = self.ZoneObject;
+            time.ZoneDst = self.ZoneDst;
             return time;
         }
 
@@ -1662,6 +1682,7 @@ namespace IronRuby.Builtins {
             var time = RubyTime.FromExactSeconds(result, self.ZoneKind,
                 self.ZoneKind == RubyTimeZoneKind.FixedOffset ? self.UtcOffsetExact : ExactNum.Zero);
             time.ZoneObject = self.ZoneObject;
+            time.ZoneDst = self.ZoneDst;
             time.InheritLocalZone(self);
             return time;
         }
