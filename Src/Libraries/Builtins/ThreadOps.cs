@@ -881,21 +881,27 @@ namespace IronRuby.Builtins {
         /// Float conversion the other values do.
         /// </summary>
         [RubyMethod("join")]
-        public static Thread Join(RubyContext/*!*/ context, Thread/*!*/ self, object timeout) {
+        public static Thread Join(ConversionStorage<double>/*!*/ floatConversion, RubyContext/*!*/ context, Thread/*!*/ self, object timeout) {
             if (timeout == null) {
                 return Join(context, self);
             }
-            // MRI's time-interval conversion, not Float(): a String is a TypeError here rather
-            // than the ArgumentError that Float("bar") would raise.
+            // MRI's rb_num2dbl, not Float(): any Integer (2**62 is a long here) or Float as it is, a String,
+            // true or false a TypeError rather than the ArgumentError that Float("bar") would raise, and
+            // anything else - a Rational, an object with #to_f - through #to_f.
             double seconds;
             if (timeout is int) {
                 seconds = (int)timeout;
             } else if (timeout is double) {
                 seconds = (double)timeout;
+            } else if (timeout is long) {
+                seconds = (long)timeout;
             } else if (timeout is System.Numerics.BigInteger) {
                 seconds = (double)(System.Numerics.BigInteger)timeout;
+            } else if (timeout is MutableString || timeout is bool) {
+                throw RubyExceptions.CreateTypeError("no implicit conversion to float from {0}",
+                    timeout is bool ? ((bool)timeout ? "true" : "false") : "string");
             } else {
-                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(timeout), "Float");
+                seconds = Protocols.CastToFloat(floatConversion, timeout);
             }
             return Join(context, self, seconds);
         }
@@ -916,8 +922,10 @@ namespace IronRuby.Builtins {
             RequireOtherThread(context, self);
 
             if (!(self.ThreadState == ThreadState.AbortRequested || self.ThreadState == ThreadState.Aborted)) {
+                // a negative limit, -Float::INFINITY included, does not wait at all (MRI's thread_join
+                // with a limit of 0); one past what a wait can take is no limit
                 double ms = seconds * 1000;
-                int timeout = (ms < Int32.MinValue || ms > Int32.MaxValue) ? Timeout.Infinite : (int)ms;
+                int timeout = (ms <= 0 || Double.IsNaN(ms)) ? 0 : ms > Int32.MaxValue ? Timeout.Infinite : (int)ms;
                 bool joined = JoinWithSafePoints(self, timeout);
                 if (!joined) {
                     return null;
