@@ -1089,8 +1089,6 @@ namespace IronRuby.Builtins {
         #endregion
         #region raise, fail
 
-        private static CallSite<Func<CallSite, object, object>> _exceptionSite;
-
         private static void RaiseAsyncException(RubyContext/*!*/ context, Thread thread, Exception exception) {
             // MRI delivers the interrupt to the thread's running fiber, and each fiber here is a
             // CLR thread of its own.
@@ -1131,7 +1129,7 @@ namespace IronRuby.Builtins {
                 // rethrow semantics, preserves the backtrace associated with the exception:
                 RubyUtils.ParkAsyncException(thread, exception, e => {
                     // MRI raises exception.exception in the target thread
-                    var site = RubyUtils.GetCallSite(ref _exceptionSite, context, "exception", 0);
+                    var site = context.GetOrCreateSendSite<Func<CallSite, object, object>>("exception", RubyCallSignature.WithImplicitSelf(0));
                     return site.Target(site, e) as Exception;
                 });
             }

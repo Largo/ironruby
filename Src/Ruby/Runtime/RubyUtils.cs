@@ -198,8 +198,6 @@ namespace IronRuby.Runtime {
         }
 
         
-        private static CallSite<Func<CallSite, object, object>> _InstanceVariablesToInspectSite;
-
         /// <summary>
         /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
         /// array of names from a private #instance_variables_to_inspect. A name that the object
@@ -228,7 +226,9 @@ namespace IronRuby.Runtime {
                 return vars;
             }
 
-            var site = GetCallSite(ref _InstanceVariablesToInspectSite, context, "instance_variables_to_inspect", 0);
+            // the runtime's own site: a static one would stay bound to the first runtime
+            var site = context.GetOrCreateSendSite<Func<CallSite, object, object>>(
+                "instance_variables_to_inspect", RubyCallSignature.WithImplicitSelf(0));
             object names = site.Target(site, obj);
             if (names == null) {
                 return vars;
