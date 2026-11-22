@@ -216,6 +216,103 @@ namespace IronRuby.Builtins {
 
         private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
+        /// <summary>
+        /// The prelude lists the redirections in the order the options hash gave them, but a
+        /// dup2 whose source is another redirection's target has to run before that target is
+        /// overwritten: { r1 => w0, w0 => r1 } swaps two descriptors, and done in hash order
+        /// both end up the same pipe end. This is MRI's run_exec_dup2: a pair goes once no
+        /// pending pair still reads its target, and a cycle is broken by copying one source to
+        /// a spare descriptor first. MRI's order follows: the plain dup2s, then the closes, the
+        /// opens (MRI opens those in the parent, so a path is relative to its directory), the
+        /// [:child, fd] dup2s, which name descriptors as the redirections left them (the
+        /// prelude marks them with a fourth element), and chdir last.
+        /// </summary>
+        private static RubyArray OrderActions(RubyArray actions) {
+            if (actions == null) {
+                return null;
+            }
+
+            var pending = new List<int[]>();
+            var used = new HashSet<int>();
+            var closes = new RubyArray();
+            var opens = new RubyArray();
+            var children = new RubyArray();
+            var chdirs = new RubyArray();
+            foreach (var item in actions) {
+                var action = (RubyArray)item;
+                switch (ToInt(action[0])) {
+                    case ActionDup2:
+                        if (action.Count > 3) {
+                            children.Add(action);
+                        } else {
+                            pending.Add(new[] { ToInt(action[1]), ToInt(action[2]) });
+                        }
+                        used.Add(ToInt(action[1]));
+                        used.Add(ToInt(action[2]));
+                        break;
+                    case ActionClose:
+                        closes.Add(action);
+                        used.Add(ToInt(action[1]));
+                        break;
+                    case ActionChdir:
+                        chdirs.Add(action);
+                        break;
+                    default:
+                        opens.Add(action);
+                        used.Add(ToInt(action[1]));
+                        break;
+                }
+            }
+
+            var result = new RubyArray();
+            int spare = -1;
+            while (pending.Count > 0) {
+                int ready = pending.FindIndex(pair =>
+                    pair[0] == pair[1] || !pending.Exists(other => other != pair && other[1] == pair[0]));
+
+                if (ready < 0) {
+                    // Every target left is still somebody's source: a cycle. Copy one source
+                    // aside and let its readers take the copy, which frees its own slot.
+                    if (spare < 0) {
+                        spare = SpareDescriptor(used);
+                    }
+                    int source = pending[0][1];
+                    result.Add(new RubyArray { ActionDup2, spare, source });
+                    foreach (var pair in pending) {
+                        if (pair[1] == source) {
+                            pair[1] = spare;
+                        }
+                    }
+                    continue;
+                }
+
+                int[] next = pending[ready];
+                pending.RemoveAt(ready);
+                result.Add(new RubyArray { ActionDup2, next[0], next[1] });
+            }
+            if (spare >= 0) {
+                result.Add(new RubyArray { ActionClose, spare });
+            }
+
+            result.AddRange(closes);
+            result.AddRange(opens);
+            result.AddRange(children);
+            result.AddRange(chdirs);
+            return result;
+        }
+
+        /// <summary>
+        /// A descriptor that is closed in this process and named by no redirection, so that
+        /// the child (which starts with this process's table) can use it for a moment.
+        /// </summary>
+        private static int SpareDescriptor(HashSet<int>/*!*/ used) {
+            for (int fd = 3; ; fd++) {
+                if (!used.Contains(fd) && LibcVariadic.Fcntl(fd, F_GETFD, 0) < 0) {
+                    return fd;
+                }
+            }
+        }
+
         private static int ApplyActions(IntPtr fileActions, NativeStrings/*!*/ strings, RubyArray actions) {
             if (actions == null) {
                 return 0;
@@ -339,6 +436,7 @@ namespace IronRuby.Builtins {
                 SysFileActionsInit(fileActions);
                 SysSpawnAttrInit(attributes);
 
+                actions = OrderActions(actions);
                 int error = ApplyActions(fileActions, strings, actions);
                 if (error != 0) {
                     return error;
@@ -418,6 +516,7 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(WindowsSpawn.Exec(context, file, argv, envp, actions));
             }
 
+            actions = OrderActions(actions);
             var strings = new NativeStrings();
             try {
                 IntPtr path = strings.Allocate(file);

@@ -8833,13 +8833,18 @@ module Process
     when :close
       [[SPAWN_CLOSE, fd]]
     when Integer
-      [[SPAWN_DUP2, fd, __spawn_native_fd__(value)]]
+      # A descriptor that is not open is MRI's dup2 failing in the child: EBADF.
+      native = __native_fd__(value)
+      raise Errno::EBADF, (value == fd ? "fcntl(F_GETFD)" : "dup2") if native < 0
+      [[SPAWN_DUP2, fd, native]]
     when String, Symbol
       path = __check_spawn_string__(value.to_s, "path name")
       [[SPAWN_OPEN, fd, path, __spawn_open_flags__(nil, fd), 0o644]]
     when Array
       if value[0] == :child
-        deferred << [SPAWN_DUP2, fd, __spawn_key_fds__(value[1]).first]
+        # The fourth element tells __spawn__ that the source is the child's descriptor as the
+        # other redirections leave it, so it is not ordered with them (MRI's dup2_child).
+        deferred << [SPAWN_DUP2, fd, __spawn_key_fds__(value[1]).first, true]
         []
       else
         path = value[0]
@@ -8862,6 +8867,7 @@ module Process
 
   def self.__spawn_actions__(options)
     actions = []
+    copies = []
     deferred = []
 
     if (dir = options[:chdir])
@@ -8881,12 +8887,14 @@ module Process
         else
           # [:out, :err] => "file" opens the file once and points both descriptors at
           # it; opening it twice would give them separate offsets, so whichever wrote
-          # second would overwrite the other.
-          actions << [SPAWN_DUP2, fd, first]
+          # second would overwrite the other. The copy is of the child's descriptor once
+          # the redirection is done, so it is marked to run after the others.
+          copies << (value == :close ? [SPAWN_CLOSE, fd] : [SPAWN_DUP2, fd, first, true])
         end
       end
     end
 
+    actions.concat(copies)
     actions.concat(deferred)
     actions
   end
