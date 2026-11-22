@@ -66,18 +66,26 @@ namespace IronRuby.Builtins {
             if (options == null) {
                 return null;
             }
+            // It is the only keyword: MRI's dir_initialize refuses any other ([Bug #8060]).
+            RubyEncoding result = null;
+            var unknown = new List<string>();
             foreach (var entry in options) {
                 var key = (entry.Key as RubySymbol);
-                if (key != null && key.ToString() == "encoding" && entry.Value != null) {
-                    var given = entry.Value as RubyEncoding;
-                    if (given != null) {
-                        return given;
+                if (key == null || key.ToString() != "encoding") {
+                    unknown.Add(context.Inspect(entry.Key).ToString());
+                } else if (entry.Value != null) {
+                    result = entry.Value as RubyEncoding;
+                    if (result == null) {
+                        var name = entry.Value as MutableString;
+                        result = context.GetRubyEncoding(name ?? MutableString.Create(context.Inspect(entry.Value)));
                     }
-                    var name = entry.Value as MutableString;
-                    return context.GetRubyEncoding(name ?? MutableString.Create(context.Inspect(entry.Value)));
                 }
             }
-            return null;
+            if (unknown.Count > 0) {
+                throw RubyExceptions.CreateArgumentError(
+                    (unknown.Count == 1 ? "unknown keyword: " : "unknown keywords: ") + String.Join(", ", unknown));
+            }
+            return result;
         }
 
         [RubyConstructor]
@@ -127,7 +135,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("chdir", RubyMethodAttributes.PublicSingleton)]
         public static object ChangeDirectory(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dir) {
             var d = Protocols.CastToPath(toPath, dir);
-            return ChangeDirectory(self.Context.Platform, self.Context.DecodePath(d), d, block);
+            return ChangeDirectory(self.Context, self.Context.DecodePath(d), d, block);
         }
 
         /// <summary>
@@ -135,30 +143,123 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("chdir", RubyMethodAttributes.PublicSingleton)]
         public static object ChangeDirectory(BlockParam block, RubyClass/*!*/ self) {
-            string defaultDirectory = RubyUtils.GetHomeDirectory(self.Context.Platform);
+            // MRI's dir_s_chdir: HOME, then LOGDIR, and nothing else. On Windows MRI has set HOME
+            // at startup if it was missing, so the profile directory stands in for it there.
+            var pal = self.Context.Platform;
+            string defaultDirectory = RubyEnvironment.GetVariable(pal, "HOME") ?? RubyEnvironment.GetVariable(pal, "LOGDIR");
+            if (defaultDirectory == null && Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                defaultDirectory = RubyUtils.GetHomeDirectory(pal);
+            }
             if (defaultDirectory == null) {
-                throw RubyExceptions.CreateArgumentError("HOME / USERPROFILE not set");
+                throw RubyExceptions.CreateArgumentError("HOME/LOGDIR not set");
             }
 
-            return ChangeDirectory(self.Context.Platform, defaultDirectory, self.Context.EncodePath(defaultDirectory), block);
+            return ChangeDirectory(self.Context, defaultDirectory, self.Context.EncodePath(defaultDirectory), block);
         }
 
-        private static object ChangeDirectory(PlatformAdaptationLayer/*!*/ pal, string/*!*/ strDir, MutableString/*!*/ dir, BlockParam block) {
-            if (block == null) {
+        private static object ChangeDirectory(RubyContext/*!*/ context, string/*!*/ strDir, MutableString/*!*/ dir, BlockParam block) {
+            var pal = context.Platform;
+            if (!ChdirAloneBlock(context, block != null)) {
                 SetCurrentDirectory(pal, strDir);
                 return 0;
             }
 
             string current = pal.CurrentDirectory;
+            SetCurrentDirectory(pal, strDir);
+            ChdirEnter(context);
             try {
-                SetCurrentDirectory(pal, strDir);
                 object result;
                 block.Yield(dir, out result);
                 return result;
             } finally {
+                ChdirLeave(context);
                 SetCurrentDirectory(pal, current);
             }
         }
+
+        #region chdir blocks
+
+        // MRI's chdir_lock: the working directory is the process's, so while one thread is in a
+        // chdir block another thread's chdir is an error, and a plain chdir inside the block is
+        // a warning. The process is shared by every runtime in it, but a runtime only knows its
+        // own threads, so each keeps its own.
+        private sealed class ChdirLock {
+            public readonly object Sync = new object();
+            public System.Threading.Thread Thread;
+            public int Blocking;
+            public string Path;
+            public int Line;
+        }
+
+        private static ChdirLock/*!*/ GetChdirLock(RubyContext/*!*/ context) {
+            return (ChdirLock)context.GetOrCreateLibraryData(typeof(ChdirLock), () => new ChdirLock());
+        }
+
+        /// <summary>
+        /// MRI's chdir_alone_block_p: whether this chdir is a block of its own, after refusing it
+        /// in a thread other than the one whose block is running, and warning about a chdir
+        /// without a block inside one.
+        /// </summary>
+        private static bool ChdirAloneBlock(RubyContext/*!*/ context, bool blockGiven) {
+            var chdirLock = GetChdirLock(context);
+            string path;
+            int line;
+            lock (chdirLock.Sync) {
+                if (chdirLock.Blocking == 0) {
+                    return blockGiven;
+                }
+                if (chdirLock.Thread != System.Threading.Thread.CurrentThread) {
+                    throw RubyExceptions.CreateRuntimeError("conflicting chdir during another chdir block");
+                }
+                if (blockGiven) {
+                    return true;
+                }
+                path = chdirLock.Path;
+                line = chdirLock.Line;
+            }
+            context.ReportWarning(path != null
+                ? String.Format("conflicting chdir during another chdir block\n{0}:{1}: note: previous chdir was here", path, line)
+                : "conflicting chdir during another chdir block");
+            return false;
+        }
+
+        private static void ChdirEnter(RubyContext/*!*/ context) {
+            var chdirLock = GetChdirLock(context);
+            string path = null;
+            int line = 0;
+            bool outermost;
+            lock (chdirLock.Sync) {
+                outermost = chdirLock.Blocking == 0;
+            }
+            // The outermost block's place is named in the warnings; finding it may walk the stack,
+            // which is not done holding the lock.
+            if (outermost && !RubyUtils.TryGetCallerSourceLocation(context, out path, out line)) {
+                path = null;
+            }
+            lock (chdirLock.Sync) {
+                if (chdirLock.Blocking == 0) {
+                    chdirLock.Path = path;
+                    chdirLock.Line = line;
+                }
+                chdirLock.Blocking++;
+                if (chdirLock.Thread == null) {
+                    chdirLock.Thread = System.Threading.Thread.CurrentThread;
+                }
+            }
+        }
+
+        private static void ChdirLeave(RubyContext/*!*/ context) {
+            var chdirLock = GetChdirLock(context);
+            lock (chdirLock.Sync) {
+                if (--chdirLock.Blocking == 0) {
+                    chdirLock.Thread = null;
+                    chdirLock.Path = null;
+                    chdirLock.Line = 0;
+                }
+            }
+        }
+
+        #endregion
 
         // On Windows these four are MRI's rb_f_notimplement stubs (no chroot, fchdir, dirfd or
         // fdopendir there): NotImplementedError, and #respond_to? denies them.
@@ -193,6 +294,8 @@ namespace IronRuby.Builtins {
                 throw Unimplemented("fchdir");
             }
 
+            ChdirAloneBlock(self.Context, block != null);
+
             var pal = self.Context.Platform;
             string current = block != null ? pal.CurrentDirectory : null;
 
@@ -219,11 +322,13 @@ namespace IronRuby.Builtins {
                 return 0;
             }
 
+            ChdirEnter(self.Context);
             try {
                 object result;
                 block.Yield(out result);
                 return result;
             } finally {
+                ChdirLeave(self.Context);
                 if (savedFd >= 0 && Posix.FChDir(savedFd, out errno) == 0) {
                     try {
                         SyncCurrentDirectory(pal);
@@ -385,8 +490,11 @@ namespace IronRuby.Builtins {
             // Dir.glob (but not Dir.[]) also accepts an Array of patterns; the results are
             // concatenated in pattern order.
             var all = new List<MutableString>();
-            foreach (var p in patterns) {
-                all.AddRange(IronRuby.Builtins.Glob.GetMatches(context, ToGlobPattern(toPath, p, false), options.Flags, options.Base, options.Sort));
+            // A pattern's #to_path may change the Array under us, so the length is read anew
+            // for every element, as MRI's dir_globs does.
+            for (int i = 0; i < patterns.Count; i++) {
+                var p = ToGlobPattern(toPath, patterns[i], false);
+                all.AddRange(IronRuby.Builtins.Glob.GetMatches(context, p, options.Flags, options.Base, options.Sort));
             }
             return all;
         }
@@ -497,7 +605,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
             [Keywords, Optional]IDictionary<object, object> options) {
-            return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
+            return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
         }
 
         #endregion

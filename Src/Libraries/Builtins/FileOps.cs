@@ -621,7 +621,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("basename", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ BaseName(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self,
             object path, [DefaultProtocol, NotNull, Optional]MutableString suffix) {
-            return BaseName(Protocols.CastToPath(toPath, path), suffix);
+            var strPath = Protocols.CastToPath(toPath, path);
+            // MRI's check_path_encoding: the suffix is looked for among the path's bytes, so it
+            // has to be ASCII-compatible as the path does.
+            if (suffix != null && !suffix.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError(String.Format("path name must be ASCII-compatible ({0}): \"{1}\"",
+                    suffix.Encoding.Name, suffix.ToStringWithEscapedInvalidCharacters(suffix.Encoding)));
+            }
+            return BaseName(strPath, suffix);
         }
 
         private static MutableString/*!*/ BaseName(MutableString/*!*/ path, MutableString suffix) {
@@ -906,14 +913,17 @@ namespace IronRuby.Builtins {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
             RequireUsablePathEncoding(context, pathStr);
 
-            string result = RubyUtils.ExpandPath(
-                context.Platform,
-                ExpandTilde(context, DecodePathLike(context, pathStr)),
-                (basePath == null)
-                    ? null
-                    : ExpandTilde(context, DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr)),
-                false
-            );
+            // The base is converted whatever the path, but it is only expanded - "~name" looked
+            // up - when the path needs it: MRI's expand_path ignores it beside an absolute path.
+            string expanded = ExpandTilde(context, DecodePathLike(context, pathStr));
+            string expandedBase = null;
+            if (basePath != null) {
+                string decodedBase = DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr);
+                if (!RubyUtils.IsAbsolutePath(expanded)) {
+                    expandedBase = ExpandTilde(context, decodedBase);
+                }
+            }
+            string result = RubyUtils.ExpandPath(context.Platform, expanded, expandedBase, false);
 
             return EncodePathLike(context, result, pathStr);
         }
@@ -1797,10 +1807,22 @@ namespace IronRuby.Builtins {
             return RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false);
         }
 
-        [RubyMethod("lstat")]
         [RubyMethod("stat")]
         public static FileSystemInfo Stat(RubyFile/*!*/ self) {
             return RubyStatOps.Create(self);
+        }
+
+        /// <summary>
+        /// MRI's rb_file_lstat: lstat(2) of the path the File was opened with, so a File opened
+        /// through a symbolic link describes the link. A File with no path is fstat'd.
+        /// </summary>
+        [RubyMethod("lstat")]
+        public static FileSystemInfo LStat(RubyFile/*!*/ self) {
+            self.RequireOpen();
+            if (self.Path == null) {
+                return RubyStatOps.Create(self);
+            }
+            return RubyStatOps.Create(self.Context, self.Path, false);
         }
 
         [RubyMethod("birthtime")]
@@ -1821,7 +1843,13 @@ namespace IronRuby.Builtins {
             return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
         }
         [RubyMethod("inspect")]
-        public static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
+        public static MutableString/*!*/ Inspect(RubyIO/*!*/ self) {
+            // an IO reopened to a File is a File that is not a RubyFile
+            var file = self as RubyFile;
+            return file != null ? Inspect(file) : RubyIOOps.Inspect(self);
+        }
+
+        private static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
             var result = MutableString.CreateMutable(self.Context.GetPathEncoding()).
                 Append("#<").
                 Append(self.Context.GetClassOf(self).GetName(self.Context)).
@@ -1839,7 +1867,16 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("path")]
         [RubyMethod("to_path")]
-        public static MutableString GetPath(RubyFile/*!*/ self) {
+        public static MutableString GetPath(RubyIO/*!*/ self) {
+            // An IO reopened to a File becomes a File without being a RubyFile: its path is the
+            // one the IO keeps.
+            if (!(self is RubyFile)) {
+                return RubyIOOps.GetIOPath(self);
+            }
+            return GetPath((RubyFile)self);
+        }
+
+        private static MutableString GetPath(RubyFile/*!*/ self) {
             self.RequireInitialized();
             if (self.Path == null) {
                 return null;

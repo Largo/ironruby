@@ -115,10 +115,12 @@ namespace IronRuby.Builtins {
         }
 
         public IOInfo AddModeAndEncoding(RubyContext/*!*/ context, MutableString/*!*/ modeAndEncoding) {
-            IOInfo info = Parse(context, modeAndEncoding);
+            // MRI refuses a second mode before it reads it: File.open(f, "w", mode: "rw+") is
+            // "mode specified twice", not the "invalid access mode" the second one would be.
             if (_mode.HasValue) {
                 throw RubyExceptions.CreateArgumentError("mode specified twice");
             }
+            IOInfo info = Parse(context, modeAndEncoding);
 
             if (!HasEncoding) {
                 return info;

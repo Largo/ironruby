@@ -147,7 +147,13 @@ namespace IronRuby.Hosting {
         [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
         private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint mode);
 
+        // MRI on Windows (rb_w32_sysinit) makes up HOME when it is missing, from USERPROFILE and
+        // friends; on other systems it leaves the environment alone, and Dir.chdir without an
+        // argument is then "HOME/LOGDIR not set".
         private static void SetHomeEnvironmentVariable() {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) {
+                return;
+            }
             PlatformAdaptationLayer platform = PlatformAdaptationLayer.Default;
             string homeDir = RubyUtils.GetHomeDirectory(platform);
             platform.SetEnvironmentVariable("HOME", homeDir);

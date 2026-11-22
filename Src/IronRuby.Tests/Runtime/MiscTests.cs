@@ -1462,6 +1462,8 @@ require 'tmpdir'
 require 'fileutils'
 root = File.join(Dir.tmpdir, ""ir-chdir-#{Process.pid}"")
 FileUtils.mkdir_p(File.join(root, 'a', 'a', 'a'))
+# a chdir without a block inside a chdir block warns, as in CRuby
+$VERBOSE = nil
 Dir.chdir(File.join(root, 'a', 'a')) do
   Dir.chdir('..')
   p File.basename(File.dirname(Dir.pwd)) == File.basename(root)

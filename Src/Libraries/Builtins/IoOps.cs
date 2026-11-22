@@ -206,6 +206,16 @@ namespace IronRuby.Builtins {
 
             Stream stream = GetDescriptorStream(io.Context, descriptor);
 
+            // So does one IronRuby opened, when no mode is given: MRI asks fcntl(F_GETFL), and
+            // IO.new(IO.sysopen(path, "w")) or IO.new(1) is for writing. The stream says what the
+            // descriptor was opened for.
+            if (known && !info.HasMode && stream != null) {
+                IOMode access = stream.CanRead
+                    ? (stream.CanWrite ? IOMode.ReadWrite : IOMode.ReadOnly)
+                    : (stream.CanWrite ? IOMode.WriteOnly : IOMode.ReadOnly);
+                mode = (mode & ~IOMode.ReadWriteMask) | access;
+            }
+
             // A mode the caller spelled out has to agree with what the descriptor was opened
             // for; MRI answers EINVAL when it does not. Only for a descriptor IronRuby opened -
             // an adopted one has just told us its mode and cannot disagree with itself.
@@ -218,6 +228,16 @@ namespace IronRuby.Builtins {
             io.Mode = mode;
             io.SetStream(stream);
             io.SetFileDescriptor(descriptor);
+
+            // MRI's IO.new runs rb_maygvl_fd_fix_cloexec: a descriptor above the standard three
+            // that this process was handed, or made with fcntl(F_DUPFD), is close-on-exec from
+            // now on, as every descriptor Ruby opens is.
+            if (!known) {
+                int native = io.KernelDescriptor;
+                if (native > 2) {
+                    RubyProcess.SetCloseOnExec(native);
+                }
+            }
 
             if (info.HasEncoding) {
                 io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
@@ -363,29 +383,88 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        private static readonly string IOPathVariable = RubyUtils.GetCoreStateInstanceVariableName("@__io_path__");
+
+        /// <summary>
+        /// MRI's fptr->pathv for an IO that is not a RubyFile: what IO.new(fd, path:) was told,
+        /// "<STDIN>" and the like for the standard streams, the path an IO was reopened to.
+        /// </summary>
+        internal static MutableString GetIOPath(RubyIO/*!*/ io) {
+            var file = io as RubyFile;
+            if (file != null) {
+                return file.Path != null ? io.Context.EncodePath(file.Path) : null;
+            }
+            object path;
+            io.Context.TryGetInstanceVariable(io, IOPathVariable, out path);
+            return path as MutableString;
+        }
+
+        private static void SetIOPath(RubyIO/*!*/ io, MutableString path) {
+            object old;
+            if (path != null) {
+                io.Context.SetInstanceVariable(io, IOPathVariable, path);
+            } else {
+                io.Context.TryRemoveInstanceVariable(io, IOPathVariable, out old);
+            }
+        }
+
         // A reopened IO answers the other one's path, as MRI copies it with the descriptor.
-        // MRI also gives it the other one's class, which leaves its singleton class behind.
+        // MRI also gives it the other one's class, which leaves its singleton class behind,
+        // and the other one's encodings and conversion options (io_reopen copies fptr->encs).
         private static void CopyPath(RubyIO/*!*/ self, RubyIO/*!*/ source) {
             self.Context.ReplaceClrObjectClass(self, self.Context.GetClassOf(source));
+            self.CopyEncodingsFrom(source);
+            self.ConversionOptions = source.ConversionOptions;
+            // and its binary mode: the prelude's IO#binmode records it in this hidden variable
+            string binmode = RubyUtils.GetCoreStateInstanceVariableName("@__binmode__");
+            object sourceBinmode;
+            if (self.Context.TryGetInstanceVariable(source, binmode, out sourceBinmode)) {
+                self.Context.SetInstanceVariable(self, binmode, sourceBinmode);
+            } else {
+                self.Context.TryRemoveInstanceVariable(self, binmode, out sourceBinmode);
+            }
 
             var file = self as RubyFile;
             var sourceFile = source as RubyFile;
             if (file != null && sourceFile != null) {
                 file.Path = sourceFile.Path;
                 file.PathEncoding = sourceFile.PathEncoding;
+            } else if (file == null) {
+                SetIOPath(self, GetIOPath(source));
             }
         }
 
         [RubyMethod("reopen")]
         public static RubyIO/*!*/ Reopen(RespondToStorage/*!*/ respondToStorage,
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, ConversionStorage<MutableString>/*!*/ toPath,
-            RubyIO/*!*/ self, object path, [DefaultProtocol, Optional, NotNull]MutableString mode) {
+            ConversionStorage<int?>/*!*/ toInt, ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr,
+            RubyIO/*!*/ self, object path, [Optional]object mode, [Keywords, Optional]IDictionary<object, object> options) {
 
+            // An IO to reopen to is taken as it is: MRI ignores the options then.
             var source = TryToIO(respondToStorage, toIoStorage, self.Context, path);
             if (source != null) {
                 return Reopen(self, source);
             }
-            return Reopen(toPath, self, path, mode != null ? IOInfo.Parse(self.Context, mode) : new IOInfo(ReopenMode(self.Mode)));
+
+            // The mode is open(2) flags or a mode string, and the options are File.open's
+            // (encoding:, binmode:, mode: ..., [Feature #7103]); reopen(path, binmode: true) may
+            // come with them as the second argument.
+            object _ = Missing.Value;
+            Protocols.TryConvertToOptions(toHash, ref options, ref mode, ref _);
+            IOInfo info = new IOInfo();
+            if (mode != Missing.Value && mode != null) {
+                var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(self.Context));
+                int? flags = toIntSite.Target(toIntSite, mode);
+                info = flags.HasValue ? new IOInfo(IOModeNative.ToIOMode(flags.Value)) : IOInfo.Parse(self.Context, Protocols.CastToString(toStr, mode));
+            }
+            if (options != null) {
+                info = info.AddOptions(toStr, options);
+            }
+            if (!info.HasMode) {
+                info = new IOInfo(ReopenMode(self.Mode), info.ExternalEncoding, info.InternalEncoding);
+            }
+            return Reopen(toPath, self, path, info);
         }
 
         /// <summary>
@@ -403,21 +482,13 @@ namespace IronRuby.Builtins {
             return mode;
         }
 
-        [RubyMethod("reopen")]
-        public static RubyIO/*!*/ Reopen(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, ConversionStorage<MutableString>/*!*/ toPath,
-            RubyIO/*!*/ self, object path, int mode) {
-
-            var source = TryToIO(respondToStorage, toIoStorage, self.Context, path);
-            if (source != null) {
-                return Reopen(self, source);
-            }
-            return Reopen(toPath, self, path, new IOInfo(IOModeNative.ToIOMode(mode)));
-        }
-
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
+            // reopened by path, an IO answers that path (a File keeps its own)
+            if (!(io is RubyFile)) {
+                SetIOPath(io, path.Clone());
+            }
             if (io.Closed) {
                 // Reopening a closed stream with a path is how it is brought back to life, so
                 // this one needs a descriptor again rather than the IOError a read would get.
@@ -1491,28 +1562,19 @@ namespace IronRuby.Builtins {
             result.Append(self.Context.GetClassOf(self).GetName(self.Context));
             result.Append(':');
             if (self.Initialized) {
-                switch (self.ConsoleStreamType) {
-                    case ConsoleStreamType.Input: result.Append("<STDIN>"); break;
-                    case ConsoleStreamType.Output: result.Append("<STDOUT>"); break;
-                    case ConsoleStreamType.ErrorOutput: result.Append("<STDERR>"); break;
-                    case null: {
-                        // A stream that knows its path shows it; one that does not shows its
-                        // descriptor, which a closed stream no longer has.
-                        object path;
-                        self.Context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), out path);
-                        var pathString = path as MutableString;
-                        if (pathString != null) {
-                            result.Append(pathString);
-                            if (self.Closed) {
-                                result.Append(" (closed)");
-                            }
-                        } else if (self.Closed) {
-                            result.Append("(closed)");
-                        } else {
-                            result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
-                        }
-                        break;
+                // A stream that knows its path shows it - the standard streams know theirs as
+                // "<STDIN>" and so on, as MRI's fptr->pathv - and one that does not shows its
+                // descriptor, which a closed stream no longer has: IO.for_fd(0) is "fd 0".
+                var pathString = GetIOPath(self);
+                if (pathString != null) {
+                    result.Append(pathString);
+                    if (self.Closed) {
+                        result.Append(" (closed)");
                     }
+                } else if (self.Closed) {
+                    result.Append("(closed)");
+                } else {
+                    result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
                 }
             } else {
                 RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(self.Context, self));
@@ -2357,6 +2419,7 @@ namespace IronRuby.Builtins {
         private static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self,
             MutableString separator, int limit, bool chomp) {
             CheckLineLimit(limit, "readlines");
+            CheckSeparatorEncoding(context, self, separator);
             RubyArray result = new RubyArray();
 
             // no dynamic call, doesn't modify $_ scope variable:
@@ -2689,6 +2752,28 @@ namespace IronRuby.Builtins {
         /// MRI's io_read_encoding: the encoding of what the reads hand out, which is the
         /// internal one when the stream has one.
         /// </summary>
+        /// <summary>
+        /// MRI's prepare_getline_args: a separator has to be in the encoding the stream reads,
+        /// or be ASCII and the stream's encoding ASCII-compatible, or the line readers raise
+        /// "encoding mismatch: UTF-32LE IO with UTF-8 RS". The default "\n" is exempt: it is
+        /// looked for in the stream's encoding.
+        /// </summary>
+        private static void CheckSeparatorEncoding(RubyContext/*!*/ context, RubyIO/*!*/ self, MutableString separator) {
+            if (separator == null) {
+                return;
+            }
+            RubyEncoding io = ReadEncoding(self);
+            RubyEncoding rs = separator.Encoding;
+            if (io == rs || (separator.IsAscii() && (separator.IsEmpty || io.IsAsciiIdentity))) {
+                return;
+            }
+            if (ReferenceEquals(separator, context.InputSeparator) && separator.IsAscii() && separator.GetByteCount() == 1
+                && separator.GetByte(0) == (byte)'\n') {
+                return;
+            }
+            throw RubyExceptions.CreateArgumentError("encoding mismatch: {0} IO with {1} RS", io.Name, rs.Name);
+        }
+
         private static RubyEncoding/*!*/ ReadEncoding(RubyIO/*!*/ self) {
             return (self.Enc2 != null ? self.Enc : GetExternalEncoding(self)) ?? self.Context.DefaultExternalEncoding;
         }
@@ -3003,6 +3088,7 @@ namespace IronRuby.Builtins {
         private static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyScope/*!*/ scope, RubyIO/*!*/ self,
             MutableString separator, int limit, bool chomp) {
 
+            CheckSeparatorEncoding(scope.RubyContext, self, separator);
             bool converted;
             MutableString result = ReadLineOrParagraph(transcode, universal, self, IsUniversalNewline(universal, self), separator, limit, out converted);
             if (result != null) {
@@ -3328,6 +3414,7 @@ namespace IronRuby.Builtins {
         private static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, MutableString separator, int limit, bool chomp) {
             self.RequireReadable();
             CheckLineLimit(limit, "each_line");
+            CheckSeparatorEncoding(context, self, separator);
 
             bool universalNewline = IsUniversalNewline(universal, self);
             MutableString line;
@@ -3407,21 +3494,25 @@ namespace IronRuby.Builtins {
             CallSite<Func<CallSite, object, object, object, object>> readSite = null;
             bool readPartial = false;
             long restorePosition = -1;
+            RubyIO dstIO = null;
 
             try {
                 // Each side on its own: an IO (or what #to_io gives, as for a Tempfile) is read or
                 // written as that IO - a File is not reopened by its path, which used to truncate and
                 // overwrite a file opened only for reading - and anything else is a path or an object
                 // with #readpartial / #read / #write.
+                // MRI's copy_stream_body asks for #to_io only of what could name a file - an IO, a
+                // String or an object with #to_path (a Tempfile) - so a wrapper with #readpartial
+                // and #write is used through those even when it can also give its IO away.
                 var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
-                RubyIO srcIO = TryToIO(respondTo, toIoStorage, context, src, false);
+                RubyIO srcIO = MayNameFile(respondTo, src) ? TryToIO(respondTo, toIoStorage, context, src, false) : null;
                 if (srcIO != null) {
                     srcIO.RequireByteReadable();
                     srcStream = srcIO.GetReadableStream();
                 } else {
                     var srcPath = toPathSite.Target(toPathSite, src);
                     if (srcPath != null) {
-                        srcStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(srcPath), FileMode.Open, FileAccess.Read, FileShare.Read);
+                        srcStream = RubyFile.OpenFileStream(context, context.DecodePath(srcPath), IOMode.ReadOnly);
                         ownsSrc = true;
                     } else if (Protocols.RespondTo(respondTo, src, "readpartial")) {
                         // MRI prefers #readpartial, which signals the end with EOFError
@@ -3432,14 +3523,17 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                RubyIO dstIO = TryToIO(respondTo, toIoStorage, context, dst, false);
+                dstIO = MayNameFile(respondTo, dst) ? TryToIO(respondTo, toIoStorage, context, dst, false) : null;
                 if (dstIO != null) {
-                    dstStream = dstIO.GetWritableStream();
+                    // written through the IO, which gives back what it had read ahead and goes to
+                    // the end of a file opened for appending
+                    dstIO.GetWritableStream();
                 } else {
                     var dstPath = toPathSite.Target(toPathSite, dst);
                     if (dstPath != null) {
-                        // Create, not Truncate: MRI's copy_stream makes the destination when it is not there.
-                        dstStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(dstPath), FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
+                        // O_WRONLY|O_CREAT|O_TRUNC, as MRI opens a destination it is given by name.
+                        dstStream = RubyFile.OpenFileStream(context, context.DecodePath(dstPath),
+                            IOMode.WriteOnly | IOMode.CreateIfNotExists | IOMode.Truncate);
                         ownsDst = true;
                     } else {
                         writeSite = writeStorage.GetCallSite("write", 1);
@@ -3500,7 +3594,13 @@ namespace IronRuby.Builtins {
                         break;
                     }
 
-                    if (dstStream != null) {
+                    if (dstIO != null) {
+                        if (userBuffer != null) {
+                            dstIO.WriteRawBytes(userBuffer, 0, bytesRead);
+                        } else {
+                            dstIO.WriteRawBytes(buffer, 0, bytesRead);
+                        }
+                    } else if (dstStream != null) {
                         if (userBuffer != null) {
                             dstStream.Write(userBuffer, 0, bytesRead);
                         } else {
@@ -3528,10 +3628,14 @@ namespace IronRuby.Builtins {
                 }
                 if (ownsDst) {
                     dstStream.Dispose();
-                } else if (dstStream != null) {
-                    dstStream.Flush();
+                } else if (dstIO != null && !dstIO.Closed) {
+                    dstIO.Flush();
                 }
             }
+        }
+
+        private static bool MayNameFile(RespondToStorage/*!*/ respondTo, object obj) {
+            return obj is RubyIO || obj is MutableString || Protocols.RespondTo(respondTo, obj, "to_path");
         }
 
         #endregion

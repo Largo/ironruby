@@ -706,8 +706,27 @@ namespace IronRuby.Builtins {
             return WriteBytes(null, buffer, index, count);
         }
 
-        // TODO: transcoding
+        /// <summary>
+        /// Bytes as they are, whatever the newline mode: IO.copy_stream sets its destination to
+        /// binary mode first (io_ascii8bit_binmode). The read-ahead is given back and an
+        /// appending IO goes to the end, as for any write.
+        /// </summary>
+        public int WriteRawBytes(byte[]/*!*/ buffer, int index, int count) {
+            ContractUtils.RequiresNotNull(buffer, "buffer");
+            return WriteBytes(buffer, null, index, count, true);
+        }
+
+        public int WriteRawBytes(MutableString/*!*/ buffer, int index, int count) {
+            ContractUtils.RequiresNotNull(buffer, "buffer");
+            return WriteBytes(null, buffer, index, count, true);
+        }
+
         private int WriteBytes(byte[] bytes, MutableString str, int index, int count) {
+            return WriteBytes(bytes, str, index, count, PreserveEndOfLines);
+        }
+
+        // TODO: transcoding
+        private int WriteBytes(byte[] bytes, MutableString str, int index, int count, bool preserveEndOfLines) {
             var stream = GetWritableStream();
             UnreadPendingChars();
 
@@ -717,9 +736,9 @@ namespace IronRuby.Builtins {
 
             try {
                 if (bytes != null) {
-                    return stream.WriteBytes(bytes, index, count, PreserveEndOfLines);
+                    return stream.WriteBytes(bytes, index, count, preserveEndOfLines);
                 } else {
-                    return stream.WriteBytes(str, index, count, PreserveEndOfLines);
+                    return stream.WriteBytes(str, index, count, preserveEndOfLines);
                 }
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
