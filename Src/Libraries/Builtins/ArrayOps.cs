@@ -205,10 +205,10 @@ namespace IronRuby.Builtins {
         /// complaining that the number will not fit in a machine word.
         /// </summary>
         private static int CheckArraySize(BigInteger size) {
-            // ... but one that is no long at all is NUM2LONG's error, before its sign is looked at
-            if (size > Int64.MaxValue || size < Int64.MinValue) {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
-            }
+            // ... and so is one that is no long at all, although MRI's NUM2LONG refuses that one
+            // first ("bignum too big to convert into 'long'"): IronRuby's FIXNUM_MAX is a long's
+            // (rbconfig/sizeof.rb), and ruby/spec has Array.new(fixnum_max + 1) - 2**63 here, 2**62
+            // in MRI - raise ArgumentError (core/array/new_spec.rb, initialize_spec.rb).
             if (size.Sign < 0) {
                 throw RubyExceptions.CreateArgumentError("negative array size");
             }

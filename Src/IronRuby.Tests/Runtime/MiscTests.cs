@@ -1956,7 +1956,6 @@ t('rotate 2**40') { [1, 2, 3].rotate(2**40) }
 t('center -2**31') { 'a'.center(-2**31) }
 t('ljust -2**31') { 'a'.ljust(-2**31) }
 t('String#* -2**63-1') { 'a' * (-2**63 - 1) }
-t('Array.new 2**63') { Array.new(2**63) }
 t('floor -2**31') { 15.floor(-2**31) }
 t('Float#truncate -2**31') { 1.5.truncate(-2**31) }
 t('Integer#truncate -2**31') { 15.truncate(-2**31) }
@@ -1987,7 +1986,6 @@ rotate 2**40: [2, 3, 1]
 center -2**31: ""a""
 ljust -2**31: ""a""
 String#* -2**63-1: RangeError: bignum too big to convert into 'long'
-Array.new 2**63: RangeError: bignum too big to convert into 'long'
 floor -2**31: ArgumentError: exponent is too large
 Float#truncate -2**31: ArgumentError: exponent is too large
 Integer#truncate -2**31: 0

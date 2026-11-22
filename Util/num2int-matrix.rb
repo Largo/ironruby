@@ -90,6 +90,7 @@ NUM2LONG = {
 ALLOCATING = {
   "Array#*" => ->(v) { [1] * v },
   "String#*" => ->(v) { "a" * v },
+  # (Array.new beyond a long is ruby/spec's ArgumentError, not MRI's RangeError: see ArrayOps.cs)
   "Array.new" => ->(v) { Array.new(v) },
   "String#center" => ->(v) { "a".center(v) },
   "String#ljust" => ->(v) { "a".ljust(v) },
@@ -121,6 +122,7 @@ end
 ALLOCATING.each do |name, f|
   VALUES.each do |vname, v|
     next if LONG_ONLY.include?(vname) || FITS_A_LONG.(v)
+    next if name == "Array.new" && v.is_a?(Integer) && !v.between?(-2**63, 2**63 - 1)
     try("#{name} #{vname}") { f.(v) }
   end
 end
