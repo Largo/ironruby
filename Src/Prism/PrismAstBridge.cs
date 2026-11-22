@@ -639,8 +639,12 @@ namespace IronRuby.Prism {
                 case Pm.NilNode _: return Literal.Nil(span);
                 case Pm.SelfNode _: return new SelfReference(span);
 
-                case Pm.ParenthesesNode parens:
-                    return StatementsAsExpression(parens.Body, span);
+                case Pm.ParenthesesNode parens: {
+                    var inner = StatementsAsExpression(parens.Body, span);
+                    // `(self).m` is not a call with self as the receiver: MRI only lets a private method
+                    // be called on a bare `self`, so the parentheses have to survive the unwrapping.
+                    return inner is SelfReference ? new BlockExpression(MakeStatements(inner), span) : inner;
+                }
                 case Pm.StatementsNode statements:
                     return StatementsAsExpression(statements, span);
                 case Pm.ImplicitNode implicitNode:
