@@ -115,6 +115,10 @@ namespace IronRuby.Builtins {
             private readonly List<byte>/*!*/ _putback = new List<byte>();
             private readonly List<byte>/*!*/ _pendingOutput = new List<byte>();
 
+            // how many bytes at the front of _pendingOutput #insert_output put there: the next
+            // insertion goes after them but still before converted bytes parked behind them
+            private int _insertedCount;
+
             private MutableString/*!*/ _replacement;
             private byte[]/*!*/ _replacementBytes;
 
@@ -513,7 +517,7 @@ namespace IronRuby.Builtins {
                     }
                     _encoder.Convert(text.ToCharArray(), 0, text.Length, buffer, 0, buffer.Length, false,
                         out charsUsed, out bytesUsed, out completed);
-                    _pendingOutput.InsertRange(0, Slice(buffer, 0, bytesUsed));
+                    AddInserted(Slice(buffer, 0, bytesUsed));
                     return;
                 }
                 if (str.Encoding == DestinationEncoding) {
@@ -530,8 +534,17 @@ namespace IronRuby.Builtins {
                 // the inserted bytes start in the initial shift state (MRI's
                 // rb_econv_insert_output finishes the last transcoder first)
                 byte[] reset = TakeEncoderReset();
-                _pendingOutput.InsertRange(0, bytes);
-                _pendingOutput.InsertRange(0, reset);
+                AddInserted(Concat(reset, bytes));
+            }
+
+            /// <summary>
+            /// Inserted text comes out in the order it was inserted, ahead of converted bytes still
+            /// waiting for room in the destination (MRI's rb_econv_insert_output appends to the
+            /// last transcoder's output buffer, in front of what the transcoders have yet to write).
+            /// </summary>
+            private void AddInserted(byte[]/*!*/ bytes) {
+                _pendingOutput.InsertRange(_insertedCount, bytes);
+                _insertedCount += bytes.Length;
             }
 
             #endregion
@@ -560,36 +573,49 @@ namespace IronRuby.Builtins {
                 if (offset < 0) {
                     throw RubyExceptions.CreateArgumentError("negative output_byteoffset");
                 }
+                // MRI's econv_primitive_convert checks its arguments before it converts anything,
+                // so a finished converter still refuses a negative size
+                if (byteLimit.HasValue && byteLimit.Value < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative output_bytesize");
+                }
                 if (_finished) {
                     return "finished";
                 }
 
-                if (byteLimit.HasValue && byteLimit.Value < 0) {
-                    throw RubyExceptions.CreateArgumentError("negative output_bytesize");
-                }
                 int limit = byteLimit.HasValue ? byteLimit.Value : Int32.MaxValue;
                 var written = new List<byte>();
 
                 byte[] sourceBytes = source != null ? source.ToByteArray() : EmptyBytes;
-                int prefix = _putback.Count;
-                byte[] input;
-                if (prefix == 0) {
-                    input = sourceBytes;
-                } else {
-                    input = new byte[prefix + sourceBytes.Length];
-                    _putback.CopyTo(input, 0);
-                    Array.Copy(sourceBytes, 0, input, prefix, sourceBytes.Length);
-                    _putback.Clear();
-                }
+                int prefix = 0;
+                byte[] input = sourceBytes;
 
                 int consumed = 0;
                 var chars = new char[16];
                 string status = null;
 
+                // The :xml => :attr decorator's opening quote goes in front of text inserted
+                // with #insert_output as well.
+                if (_pendingOutput.Count != 0 && NeedsOpeningQuote) {
+                    var quote = AsciiInDestination("\"");
+                    _xmlQuoteOpened = true;
+                    _pendingOutput.InsertRange(0, quote);
+                    _insertedCount += quote.Length;
+                }
+
                 // whatever didn't fit last time goes out first
-                if (!Drain(_pendingOutput, written, limit)) {
+                if (!Drain(written, limit)) {
                     status = "destination_buffer_full";
                 } else {
+                    // The read-again bytes join the input only now: a call that cannot even drain
+                    // what it owes from the last one reads nothing, and they wait for the next.
+                    prefix = _putback.Count;
+                    if (prefix != 0) {
+                        input = new byte[prefix + sourceBytes.Length];
+                        _putback.CopyTo(input, 0);
+                        Array.Copy(sourceBytes, 0, input, prefix, sourceBytes.Length);
+                        _putback.Clear();
+                    }
+
                     while (true) {
                         if (consumed >= input.Length) {
                             if (_incomplete.Count != 0 && (flags & PartialInputFlag) == 0 &&
@@ -598,7 +624,7 @@ namespace IronRuby.Builtins {
                                 // sequence like any other, so :invalid => :replace covers it too
                                 // and the conversion finishes rather than stopping on it.
                                 ResetDecoder();
-                                if (!Emit(_replacementBytes, written, limit)) {
+                                if (!EmitInserted(_replacementBytes, written, limit) || !EmitFinish(written, limit)) {
                                     status = "destination_buffer_full";
                                     break;
                                 }
@@ -610,7 +636,7 @@ namespace IronRuby.Builtins {
                                 status = "incomplete_input";
                             } else if ((flags & PartialInputFlag) != 0) {
                                 status = "source_buffer_empty";
-                            } else if (!EmitEncoderReset(written, limit)) {
+                            } else if (!EmitFinish(written, limit)) {
                                 status = "destination_buffer_full";
                             } else {
                                 status = "finished";
@@ -757,21 +783,7 @@ namespace IronRuby.Builtins {
                 }
 
                 // rewrite the destination buffer: content up to the offset plus what we produced
-                var converted = ApplyOutputDecorators(written.ToArray());
-                if (status == "finished") {
-                    if (_pendingCarriageReturn) {
-                        // a CR at the very end has nothing left to pair with: it is a newline
-                        _pendingCarriageReturn = false;
-                        converted = Concat(converted, new byte[] { (byte)'\n' });
-                    }
-                    var tail = FinishDecorators();
-                    if (tail.Length > 0) {
-                        var whole = new byte[converted.Length + tail.Length];
-                        Array.Copy(converted, 0, whole, 0, converted.Length);
-                        Array.Copy(tail, 0, whole, converted.Length, tail.Length);
-                        converted = whole;
-                    }
-                }
+                var converted = written.ToArray();
                 destination.Clear();
                 if (offset > 0) {
                     destination.Append(existing, 0, offset);
@@ -829,6 +841,9 @@ namespace IronRuby.Builtins {
                             continue;
                         }
 
+                        // MRI stops with the shift sequence still owed rather than lost: the next
+                        // call writes it before whatever it converts.
+                        _pendingOutput.AddRange(reset);
                         RecordUndefinedConversion(codepoint, ErrorCharBytes(chars, i, size));
                         return "undefined_conversion";
                     }
@@ -958,13 +973,17 @@ namespace IronRuby.Builtins {
                 }
 
                 if ((_flags & InvalidMaskFlag) == InvalidReplaceFlag) {
+                    // The bytes after the error start over. Those this call does not get to are
+                    // already gone from the input, so they wait in the read-again buffer, which
+                    // the next call reads first (MRI keeps them in the transcoder's readagain).
                     if (!Emit(_replacementBytes, written, limit)) {
+                        _putback.AddRange(readAgain);
                         return "destination_buffer_full";
                     }
-                    // the bytes after the error start over
-                    foreach (byte again in readAgain) {
-                        string againStatus = ConvertWideByte(again, chars, written, limit, flags);
+                    for (int i = 0; i < readAgain.Length; i++) {
+                        string againStatus = ConvertWideByte(readAgain[i], chars, written, limit, flags);
                         if (againStatus != null) {
+                            _putback.AddRange(Slice(readAgain, i + 1, readAgain.Length - i - 1));
                             return againStatus;
                         }
                     }
@@ -994,10 +1013,6 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            /// <summary>
-            /// Moves <paramref name="bytes"/> into the output, parking the tail in _pendingOutput
-            /// if the destination limit is reached. Returns false if the buffer filled up.
-            /// </summary>
             /// <summary>
             /// Writes what the encoder owes to return a stateful (dummy) destination such as
             /// ISO-2022-JP to its initial state - the ESC ( B that has to come before ASCII the
@@ -1034,29 +1049,71 @@ namespace IronRuby.Builtins {
                 return Emit(Concat(TakeEncoderReset(), bytes), written, limit);
             }
 
+            /// <summary>
+            /// Converted bytes through the decorators and into the output. The decorated bytes
+            /// count against the destination limit, as MRI's decorators are transcoders of their
+            /// own with output buffers like any other.
+            /// </summary>
             private bool Emit(byte[]/*!*/ bytes, List<byte>/*!*/ written, int limit) {
+                return Put(ApplyOutputDecorators(bytes), written, limit);
+            }
+
+            /// <summary>
+            /// Moves <paramref name="bytes"/> into the output as they are, parking the tail in
+            /// _pendingOutput if the destination limit is reached. Returns false if the buffer
+            /// filled up.
+            /// </summary>
+            private bool Put(byte[]/*!*/ bytes, List<byte>/*!*/ written, int limit) {
                 int i = 0;
                 while (i < bytes.Length && written.Count < limit) {
                     written.Add(bytes[i++]);
                 }
                 if (i < bytes.Length) {
-                    for (int j = bytes.Length - 1; j >= i; j--) {
-                        _pendingOutput.Insert(0, bytes[j]);
-                    }
+                    _pendingOutput.AddRange(Slice(bytes, i, bytes.Length - i));
                     return false;
                 }
                 return true;
             }
 
-            private static bool Drain(List<byte>/*!*/ pending, List<byte>/*!*/ written, int limit) {
+            private bool Drain(List<byte>/*!*/ written, int limit) {
                 int i = 0;
-                while (i < pending.Count && written.Count < limit) {
-                    written.Add(pending[i++]);
+                while (i < _pendingOutput.Count && written.Count < limit) {
+                    written.Add(_pendingOutput[i++]);
                 }
                 if (i > 0) {
-                    pending.RemoveRange(0, i);
+                    _pendingOutput.RemoveRange(0, i);
+                    _insertedCount = Math.Max(_insertedCount - i, 0);
                 }
-                return pending.Count == 0;
+                return _pendingOutput.Count == 0;
+            }
+
+            /// <summary>
+            /// What a conversion owes the output once its input is exhausted: the newline a held CR
+            /// turns into, the sequence that returns a stateful destination to its initial state,
+            /// and the :xml => :attr decorator's closing quote (both quotes, if nothing came before
+            /// it). Each counts against the destination limit; what does not fit is parked and
+            /// the next call goes on from there.
+            /// </summary>
+            private bool EmitFinish(List<byte>/*!*/ written, int limit) {
+                if (_pendingCarriageReturn) {
+                    // a CR at the very end has nothing left to pair with: it is a newline
+                    _pendingCarriageReturn = false;
+                    if (!Put(new byte[] { (byte)'\n' }, written, limit)) {
+                        return false;
+                    }
+                }
+                if (!EmitEncoderReset(written, limit)) {
+                    return false;
+                }
+                if ((_flags & XmlAttrQuoteFlag) != 0 && !_decoratorsFinished) {
+                    _decoratorsFinished = true;
+                    byte[] quotes = AsciiInDestination(_xmlQuoteOpened ? "\"" : "\"\"");
+                    _xmlQuoteOpened = true;
+                    if (!Put(quotes, written, limit)) {
+                        return false;
+                    }
+                }
+                return true;
             }
 
             private static byte[]/*!*/ Concat(byte[]/*!*/ first, byte[]/*!*/ second) {
@@ -1102,12 +1159,16 @@ namespace IronRuby.Builtins {
             /// converter finished without ever having converted anything writes both at once.
             /// </summary>
             private byte[]/*!*/ ApplyXmlDecorators(byte[]/*!*/ bytes) {
-                if (bytes.Length == 0 || (_flags & XmlAttrQuoteFlag) == 0 || _xmlQuoteOpened) {
+                if (bytes.Length == 0 || !NeedsOpeningQuote) {
                     return bytes;
                 }
 
                 _xmlQuoteOpened = true;
                 return Concat(AsciiInDestination("\""), bytes);
+            }
+
+            private bool NeedsOpeningQuote {
+                get { return (_flags & XmlAttrQuoteFlag) != 0 && !_xmlQuoteOpened; }
             }
 
             /// <summary>
@@ -1141,17 +1202,6 @@ namespace IronRuby.Builtins {
                     case '\'': return attribute ? "&apos;" : null;
                     default: return null;
                 }
-            }
-
-            /// <summary>The bytes a decorator still owes the output once the input is exhausted.</summary>
-            private byte[]/*!*/ FinishDecorators() {
-                if ((_flags & XmlAttrQuoteFlag) == 0 || _decoratorsFinished) {
-                    return EmptyBytes;
-                }
-                _decoratorsFinished = true;
-                byte[] result = AsciiInDestination(_xmlQuoteOpened ? "\"" : "\"\"");
-                _xmlQuoteOpened = true;
-                return result;
             }
 
             private byte[]/*!*/ ApplyNewlineDecorators(byte[]/*!*/ bytes) {
@@ -1227,12 +1277,6 @@ namespace IronRuby.Builtins {
                 if (status != "finished") {
                     _finished = true;
                     throw _lastError ?? RubyExceptions.CreateArgumentError("conversion failed");
-                }
-
-                var tail = FinishDecorators();
-                if (tail.Length > 0) {
-                    destination.Append(tail);
-                    destination.ForceEncoding(DestinationEncoding);
                 }
 
                 _finished = true;
