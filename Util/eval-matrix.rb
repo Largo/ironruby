@@ -153,12 +153,13 @@ tp = TracePoint.new(:script_compiled) { n += 1 }
 tp.enable { 5.times { eval('1 + 1') } }
 puts "15. script_compiled: #{n}"
 
-# 16. threads evaluating the same and different texts at once
+# 16. threads evaluating the same and different texts at once (each its own sum: a top-level `s'
+# would be one variable for all four)
 r = 4.times.map do |t|
   Thread.new do
-    s = 0
-    500.times { |i| s += eval('i + t') + eval("#{i % 50} + 1") }
-    s
+    sum16 = 0
+    500.times { |i| sum16 += eval('i + t') + eval("#{i % 50} + 1") }
+    sum16
   end
 end.map(&:value)
 puts "16. threads: #{r.inspect}"
