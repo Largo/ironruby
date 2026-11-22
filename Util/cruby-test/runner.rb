@@ -21,6 +21,9 @@ $LOAD_PATH.unshift File.join(cruby, "test/lib")
 $LOAD_PATH.push File.expand_path("lib", __dir__)
 
 require 'test/unit'
+# CRuby's init.rb loads iseq_loader_checker, which requires tempfile before it reaches for
+# RubyVM, and so delegate: test_enum's test_sum uses SimpleDelegator without requiring it.
+require 'tempfile'
 
 # The leak checker reports file descriptors, threads and Tempfiles a test left behind. It only
 # prints, it fails no test, and it finds the owners with ObjectSpace.each_object(IO), which
