@@ -577,6 +577,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightKeywordsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORDS") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_RESCUE=0 keeps every method with `rescue', `else' or `ensure' (in its body or in a `begin'), a rescue modifier
+        /// or a `retry' out of light frames (see IsScopeFree, AreClausesScopeFree and LightFrameRewriter.VisitHandlingCall).
+        /// </summary>
+        internal static readonly bool LightRescueEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_RESCUE") != "0";
+
         // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
         // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
         // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
@@ -692,6 +698,10 @@ namespace IronRuby.Compiler.Ast {
         /// scope, so the body is scope-free if its statements are. The hash a call that passes no keywords gets is the
         /// runtime's (LightFrameRewriter.ScopeOperandIndex). Not taken: keywords beside a rest or post parameter, which the
         /// general lowering binds out of one splat by hand (KeywordsWithSplatLowering).
+        /// A body with rescue, else or ensure clauses, in the method's body or in a `begin', or with a rescue modifier or a
+        /// `retry', is one if its statements and clauses are (AreClausesScopeFree): $! is the runtime's, so the path that raises
+        /// nothing saves and restores it without a scope, and the path that catches an exception makes the scope on demand where
+        /// the exception is matched (LightFrameRewriter.VisitHandlingCall).
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
@@ -708,13 +718,24 @@ namespace IronRuby.Compiler.Ast {
                 }
             }
             var body = Body;
-            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
+            if (body == null || HasHandling(body) && !LightRescueEnabled) {
                 return false;
             }
             if (IsLargeWithMultipleAssignment() || HasScopeReadingSuper()) {
                 return false;
             }
-            return FirstNotScopeFree(false) == null || LightBlocksEnabled && FirstNotScopeFree(true) == null;
+            return IsBodyScopeFree(false) || LightBlocksEnabled && IsBodyScopeFree(true);
+        }
+
+        // A body with exception handling: rescue clauses, an else or an ensure clause. Wider than Body.HasExceptionHandling, which
+        // leaves out the rescue clauses of a body without statements (they have nothing to rescue and are not compiled).
+        private static bool HasHandling(Body/*!*/ body) {
+            return body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null;
+        }
+
+        // The body's statements and its rescue, else and ensure clauses are scope-free (blockLiterals: with literal blocks).
+        private bool IsBodyScopeFree(bool blockLiterals) {
+            return FirstNotScopeFree(blockLiterals) == null && AreClausesScopeFree(Body, blockLiterals, null);
         }
 
         // The most calls a body with a multiple assignment may make and still be a light frame. A light frame's lambda grows
@@ -777,12 +798,8 @@ namespace IronRuby.Compiler.Ast {
             foreach (var optional in _parameters.Optional) {
                 optional.Walk(counter);
             }
-            var statements = Body.Statements;
-            if (statements != null) {
-                foreach (var statement in statements) {
-                    statement.Walk(counter);
-                }
-            }
+            // the statements and the rescue, else and ensure clauses
+            Body.Walk(counter);
             return counter;
         }
 
@@ -862,14 +879,18 @@ namespace IronRuby.Compiler.Ast {
                 return "keyword parameters with a rest or post parameter";
             }
             var body = Body;
-            if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
-                return "rescue, else or ensure";
+            if (body == null || HasHandling(body) && !LightRescueEnabled) {
+                return "rescue, else or ensure (IR_LIGHT_RESCUE=0)";
             }
-            if (FirstNotScopeFree(false) != null) {
+            if (!IsBodyScopeFree(false)) {
                 var statement = FirstNotScopeFree(LightBlocksEnabled);
                 if (statement != null) {
                     return String.Format("{0} at line {1}: {2}", statement.GetType().Name, statement.Location.Start.Line,
                         WhyNotScopeFree(statement, LightBlocksEnabled));
+                }
+                var why = new StrongBox<string>();
+                if (!AreClausesScopeFree(body, LightBlocksEnabled, why)) {
+                    return "rescue, else or ensure clause: " + why.Value;
                 }
             }
             if (IsLargeWithMultipleAssignment()) {
@@ -898,7 +919,7 @@ namespace IronRuby.Compiler.Ast {
 
         // Some statement of a light-frame candidate is scope-free only with its literal blocks (see LightFrameRewriter.BlockLiterals).
         private bool HasLightBlockLiteral() {
-            return FirstNotScopeFree(false) != null;
+            return !IsBodyScopeFree(false);
         }
 
         // Declares keyword parameters, a `**rest' or `**nil'.
@@ -944,8 +965,53 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
+        // A statement of a block's body (BlockDefinition.IsLightCallBody): not one with exception handling, which the rewriter
+        // takes only in a method's frame (LightFrameRewriter.Handling).
         internal static bool IsScopeFree(Expression/*!*/ node) {
-            return IsScopeFree(node, false, null);
+            return IsScopeFree(node, false, null) && !HandlingFinder.Has(node);
+        }
+
+        // Finds a `begin' with rescue, else or ensure, a rescue modifier or a `retry' in a node, outside its blocks and definitions.
+        private sealed class HandlingFinder : Walker {
+            private bool _found;
+
+            internal static bool Has(Expression/*!*/ node) {
+                var finder = new HandlingFinder();
+                node.Walk(finder);
+                return finder._found;
+            }
+
+            public override bool Enter(Body/*!*/ node) { _found |= HasHandling(node); return !_found; }
+            public override bool Enter(RescueExpression/*!*/ node) { _found = true; return false; }
+            public override bool Enter(RetryStatement/*!*/ node) { _found = true; return false; }
+            public override bool Enter(BlockDefinition/*!*/ node) { return false; }
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
+        }
+
+        /// <summary>
+        /// The rescue, else and ensure clauses of a body, whose statements are the caller's to check: the classes of each rescue
+        /// clause, read and handed to RubyOps.CompareException; its target, a local or an instance variable, written from $!; and
+        /// the statements of each clause. What the exception handling itself does with the scope - $! saved and restored, the
+        /// exception matched and its backtrace captured - is the rewriter's (LightFrameRewriter.VisitHandlingCall): only the path
+        /// that raises makes the scope.
+        /// </summary>
+        private static bool AreClausesScopeFree(Body/*!*/ body, bool blockLiterals, StrongBox<string> why) {
+            if (body.RescueClauses != null) {
+                foreach (var clause in body.RescueClauses) {
+                    foreach (var type in clause.Types) {
+                        if (!IsScopeFree(type, blockLiterals, why)) {
+                            return false;
+                        }
+                    }
+                    if (clause.Target != null && !(clause.Target is LocalVariable || clause.Target is InstanceVariable)) {
+                        return Refuse(why, "rescue => " + clause.Target.GetType().Name);
+                    }
+                    if (!AreScopeFree(clause.Statements, blockLiterals, why)) {
+                        return false;
+                    }
+                }
+            }
+            return AreScopeFree(body.ElseStatements, blockLiterals, why) && AreScopeFree(body.EnsureStatements, blockLiterals, why);
         }
 
         // IR_LIGHT_FRAMES=why: names what IsScopeFree refused in the node. Every refusal of a sub-node is its parent's too and
@@ -1208,14 +1274,26 @@ namespace IronRuby.Compiler.Ast {
             if (yieldCall != null) {
                 return (yieldCall.Block == null || Refuse(why, "yield with a block")) && AreScopeFree(yieldCall.Arguments, blockLiterals, why);
             }
-            // `begin ... end' without rescue, else or ensure: its statements, compiled in place (Body.TransformRead); one with
-            // them sets and reads $! through the scope
+            // `begin ... end' without rescue, else or ensure: its statements, compiled in place (Body.TransformRead). One with
+            // them: its statements and clauses (AreClausesScopeFree), and the handling around them the rewriter takes.
             var begin = node as Body;
             if (begin != null) {
-                if (begin.RescueClauses != null || begin.ElseStatements != null || begin.EnsureStatements != null) {
-                    return Refuse(why, "Body with rescue, else or ensure");
+                if (HasHandling(begin)) {
+                    return (LightRescueEnabled || Refuse(why, "Body with rescue, else or ensure (IR_LIGHT_RESCUE=0)")) &&
+                        AreScopeFree(begin.Statements, blockLiterals, why) && AreClausesScopeFree(begin, blockLiterals, why);
                 }
                 return (LightBeginEnabled || Refuse(why, "Body (IR_LIGHT_BEGIN=0)")) && AreScopeFree(begin.Statements, blockLiterals, why);
+            }
+            // `x rescue y': a Body with a bare rescue clause (RescueExpression.ToBody)
+            var modifier = node as RescueExpression;
+            if (modifier != null) {
+                return (LightRescueEnabled || Refuse(why, "RescueExpression (IR_LIGHT_RESCUE=0)")) &&
+                    IsScopeFree(modifier.GuardedExpression, blockLiterals, why) && IsScopeFree(modifier.RescueClauseStatement, blockLiterals, why);
+            }
+            // `retry' in a rescue clause: a jump to the label at the head of the body, after a store to a hidden variable
+            // (RetryStatement.TransformRetry). The parser refuses one outside a rescue clause, and IsScopeFree walks no block's body.
+            if (node is RetryStatement) {
+                return LightRescueEnabled || Refuse(why, "RetryStatement (IR_LIGHT_RESCUE=0)");
             }
             // `(yield self; self)', the body of an endless def written with several statements
             var block = node as BlockExpression;
@@ -1356,7 +1434,8 @@ namespace IronRuby.Compiler.Ast {
                 BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
                 BlockParameter = LightBlockGivenEnabled ? blockParameter : null,
                 SuperModule = LightSuperEnabled ? ConstantValue(declaringModule) as RubyModule : null,
-                SuperName = _name
+                SuperName = _name,
+                Handling = LightRescueEnabled
             };
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
@@ -1427,6 +1506,10 @@ namespace IronRuby.Compiler.Ast {
             internal RubyModule SuperModule;
             internal string SuperName;
 
+            // A method's frame, whose body may have exception handling (IsScopeFree, IR_LIGHT_RESCUE): its helpers are given the
+            // scope they need (see VisitHandlingCall). Not a block's frame, whose body has none (MethodDefinition.IsScopeFree).
+            internal bool Handling;
+
             // The OSR sites handed the declaring scope (see VisitMethodCall): marked as in a light frame once the body is one.
             internal readonly List<IronRuby.Runtime.Osr.OsrLoopSite>/*!*/ OsrSites = new List<IronRuby.Runtime.Osr.OsrLoopSite>();
 
@@ -1494,7 +1577,81 @@ namespace IronRuby.Compiler.Ast {
                 return node;
             }
 
+            // The scope a helper of a body's exception handling (Body.TransformExceptionHandling, RescueClause) needs, by its name.
+            private enum HandlingScope {
+                // only the runtime: $! is the runtime's (RubyContext.CurrentException), not the scope's
+                Context,
+                // the frame's own: CanRescue captures the backtrace from it (its interpreted frame) and tests a LocalJumpError
+                // against its flow-control frame, CompareException hands it to a TracePoint's :rescue and to a refined `==='
+                Lazy,
+                // the scope if one was made, or null: RescuePassUnwinder, a CLR filter, tests a LocalJumpError against it, and none
+                // can be meant for a frame that has made no scope - its blocks and evals would have made it
+                Raw,
+                // LeaveRescue clears the flag EnterRescue set (for `retry' in an eval), on the scope if one was made
+                LeaveRescue,
+            }
+
+            private static readonly Dictionary<string, HandlingScope>/*!*/ HandlingScopes = new Dictionary<string, HandlingScope> {
+                { nameof(RubyOps.GetCurrentException), HandlingScope.Context },
+                { nameof(RubyOps.SetCurrentException), HandlingScope.Context },
+                { nameof(RubyOps.GetCurrentExceptionForRescueTarget), HandlingScope.Context },
+                { nameof(RubyOps.RescuePassMayTest), HandlingScope.Context },
+                { nameof(RubyOps.RescueSiteCannotMatch), HandlingScope.Context },
+                { nameof(RubyOps.RescueDefaultCannotMatch), HandlingScope.Context },
+                { nameof(RubyOps.RescuePassCommit), HandlingScope.Context },
+                { nameof(RubyOps.SetCauseLeavingEnsure), HandlingScope.Context },
+                { nameof(RubyOps.RescuePassUnwinder), HandlingScope.Raw },
+                { nameof(RubyOps.LeaveRescue), HandlingScope.LeaveRescue },
+                { nameof(RubyOps.EnterRescue), HandlingScope.Lazy },
+                { nameof(RubyOps.CanRescue), HandlingScope.Lazy },
+                { nameof(RubyOps.CanRescueDeferTrace), HandlingScope.Lazy },
+                { nameof(RubyOps.CanRescueAfterClauses), HandlingScope.Lazy },
+                { nameof(RubyOps.SetCauseLeavingInterpretedEnsure), HandlingScope.Lazy },
+                { nameof(RubyOps.CompareException), HandlingScope.Lazy },
+                { nameof(RubyOps.CompareSplattedExceptions), HandlingScope.Lazy },
+                { nameof(RubyOps.CompareDefaultException), HandlingScope.Lazy },
+            };
+
+            /// <summary>
+            /// A helper of the body's exception handling, given the scope it needs (HandlingScope): the path that raises nothing
+            /// saves and restores $!, which is the runtime's, and so makes no scope; the path that catches an exception makes it
+            /// on demand where the exception is matched - the frame then pays for the scope it would have made at its entry.
+            /// The CLR filters that let an exception through uncaught (RescuePass*, SetCauseLeavingEnsure) read only the runtime.
+            /// Null for any other call.
+            /// </summary>
+            private MSA.Expression VisitHandlingCall(MSA.MethodCallExpression/*!*/ node) {
+                HandlingScope use;
+                if (node.Object != null || node.Method.DeclaringType != typeof(RubyOps) || !HandlingScopes.TryGetValue(node.Method.Name, out use)) {
+                    return null;
+                }
+                int index = -1;
+                for (int i = 0; i < node.Arguments.Count; i++) {
+                    if (IsScope(node.Arguments[i])) {
+                        index = i;
+                        break;
+                    }
+                }
+                if (index < 0) {
+                    return null;
+                }
+                if (use == HandlingScope.LeaveRescue) {
+                    return Ast.IfThen(Ast.NotEqual(_scope, AstUtils.Constant(null, _scope.Type)), Ast.Call(node.Method, _scope));
+                }
+                var scope = (use == HandlingScope.Context) ? _declaringScope : (use == HandlingScope.Raw) ? _scope : _lazyScope;
+                var arguments = new MSA.Expression[node.Arguments.Count];
+                for (int i = 0; i < arguments.Length; i++) {
+                    arguments[i] = (i == index) ? AstUtils.Convert(scope, node.Method.GetParameters()[i].ParameterType) : Visit(node.Arguments[i]);
+                }
+                return Ast.Call(node.Method, arguments);
+            }
+
             protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
+                if (Handling) {
+                    var handling = VisitHandlingCall(node);
+                    if (handling != null) {
+                        return handling;
+                    }
+                }
                 // (a block's body, BlockDefinition.TransformLightCalls, has no flow-control frame of its own: _rfc is null)
                 if (_rfc != null && node.Method == Methods.MethodYield && node.Arguments.Count == 3 && node.Arguments[0] == _scope) {
                     // the raw scope variable, which is null unless a hook made the scope
@@ -1603,6 +1760,21 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (node is EnterInterpretedFrameExpression || node is SourceLineMarker) {
                     return node;
+                }
+                if (Handling) {
+                    // the exception handling's own nodes (Body.TransformExceptionHandling): their scope operands are the helpers'
+                    // (VisitHandlingCall), but for the ensure guard's, which is handed to PassEnsure, CanRescue and EnterPassedEnsure
+                    // only once an exception is leaving the statements
+                    if (node is CompiledFrameDepthExpression) {
+                        return node;
+                    }
+                    if (node is RubyFilterExpression || node is Microsoft.Scripting.Ast.FinallyFlowControlExpression) {
+                        return base.VisitExtension(node);
+                    }
+                    var guard = node as EnsureGuardExpression;
+                    if (guard != null) {
+                        return guard.Update(Visit(guard.Body), IsScope(guard.Scope) ? _lazyScope : Visit(guard.Scope));
+                    }
                 }
                 var dynamic = node as Microsoft.Scripting.Ast.LightDynamicExpression;
                 if (dynamic != null) {

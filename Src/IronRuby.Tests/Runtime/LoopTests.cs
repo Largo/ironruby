@@ -868,7 +868,7 @@ p IronRuby.jit_census(['/no/such/census.rb']).map { |m| m.key?(:error) }
 [""Point#add"", 4, true, nil, ""compiles"", nil, nil, ""Int""]
 [""Point#each"", 5, true, nil, ""never"", ""parameters"", ""uses its block"", nil]
 [""Point#log"", 6, true, nil, ""never"", ""parameters"", ""rest parameter"", nil]
-[""Point#safe"", 7, false, ""rescue, else or ensure"", ""never"", ""screen"", ""Body"", nil]
+[""Point#safe"", 7, true, nil, ""never"", ""screen"", ""Body"", nil]
 [""Point#dist"", 12, true, nil, ""maybe"", ""emit"", ""call: x/0"", nil]
 [""Point.zero"", 13, true, nil, ""compiles"", nil, nil, """"]
 [""Object#top"", 15, true, nil, ""never"", ""screen"", ""MethodCall puts (self)"", nil]
