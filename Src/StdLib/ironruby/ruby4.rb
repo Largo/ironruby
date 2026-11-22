@@ -8939,6 +8939,17 @@ module Process
 
     actions.concat(copies)
     actions.concat(deferred)
+
+    # MRI closes in the child after its dup2s, and a close(2) that fails there fails the
+    # spawn or the exec: `1000 => :close` with no descriptor 1000 is EBADF. posix_spawn's
+    # close action ignores that failure, so it is found here, where a descriptor some dup2
+    # makes is open by the time its close runs.
+    targets = actions.select { |action| action[0] == SPAWN_DUP2 }.map { |action| action[1] }
+    actions.each do |action|
+      next unless action[0] == SPAWN_CLOSE
+      fd = action[1]
+      raise Errno::EBADF, "close" if !targets.include?(fd) && __native_fd__(fd) < 0
+    end
     actions
   end
 
