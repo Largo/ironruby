@@ -223,6 +223,10 @@ namespace IronRuby.Builtins {
         }
 
         private static int ToInt32(BigInteger value) {
+            // rb_num2int goes through rb_num2long, which has its own message for a Bignum
+            if (value > Int64.MaxValue || value < Int64.MinValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
             if (value > Int32.MaxValue || value < Int32.MinValue) {
                 throw RubyExceptions.CreateRangeError(String.Format(CultureInfo.InvariantCulture,
                     "integer {0} too {1} to convert to 'int'", value, value.Sign < 0 ? "small" : "big"));
@@ -1010,7 +1014,9 @@ namespace IronRuby.Builtins {
             int minute = GetComponent(context, components, 4, 0);
 
             ExactNum second = (components.Length > 5 && components[5] != null) ? ToExactComponent(context, components[5]) : ExactNum.Zero;
-            if (components.Length > 6 && components[6] != null) {
+            // MRI's time_arg: only the 7-argument form has a usec; with 8 the seventh is the zone of
+            // a parsedate result (and the eighth its wday), and both are ignored.
+            if (components.Length == 7 && components[6] != null) {
                 ExactNum usec = ToExactComponent(context, components[6]);
                 if (usec.Sign < 0 || usec.CompareTo(ExactNum.FromInteger(RubyTime.MicrosecondsPerSecond)) >= 0) {
                     throw RubyExceptions.CreateArgumentError("subsecx out of range");
@@ -1018,6 +1024,9 @@ namespace IronRuby.Builtins {
                 // An explicit microsecond argument supersedes any fraction of the seconds argument.
                 second = ExactNum.FromInteger(second.Floor()) + usec / ExactNum.FromInteger(RubyTime.MicrosecondsPerSecond);
             }
+            // obj2ubits: the whole seconds are an int first, a RangeError beyond it, and only then
+            // checked against 0...60 (an ArgumentError)
+            ToInt32(second.Floor());
 
             return AssembleTime(context, year, month, day, hour, minute, second, kind, ExactNum.Zero, null, false, preferDst);
         }
