@@ -3205,7 +3205,7 @@ namespace IronRuby.Runtime {
             }
 
             var result = new StringBuilder();
-            bool unicode = encoding.IsUnicodeEncoding;
+            bool unicode = encoding.HasUnicodeCodePoints;
             var characters = str.GetCharacters();
             while (characters.MoveNext()) {
                 var c = characters.Current;
@@ -3216,7 +3216,9 @@ namespace IronRuby.Runtime {
                     continue;
                 }
 
-                int codepoint;
+                // long: a legacy character of four bytes with the high bit set (GB18030's
+                // 0x81308130, Emacs-Mule's 0x9CF0A0A0) is negative as an int, and lost its braces
+                long codepoint;
                 if (unicode) {
                     codepoint = c.Codepoint;
                 } else {

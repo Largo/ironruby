@@ -29,6 +29,8 @@ namespace IronRuby.Builtins {
         // HasNonAsciiEscape(_pattern) - the pattern is frozen, so it is worked out once: -1 not yet,
         // 0 none, 1 a byte escape, 2 a \u escape. Encoding and IsFixedEncoding ask on every match.
         private int _nonAsciiEscape = -1;
+        // HasPropertyEscape(_pattern, extended), worked out once in the same way: -1 not yet, 0, 1.
+        private int _hasProperty = -1;
         private RubyRegexOptions _options;
         private bool _hasGAnchor;
 
@@ -164,6 +166,7 @@ namespace IronRuby.Builtins {
 
             RequireSingleEncoding();
             TransformPattern(false);
+            RequireKnownProperties();
         }
 
         /// <summary>
@@ -822,16 +825,17 @@ namespace IronRuby.Builtins {
                         return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
                     }
 
-                    // a \p{...} property means characters of the source's encoding: MRI's
-                    // rb_reg_preprocess fixes the encoding for it (has_property)
-                    if (PatternHasProperty()) {
+                    // A character property pins the encoding the source was written in (MRI's
+                    // rb_reg_preprocess, has_property): /\p{Alpha}/ is UTF-8 in a UTF-8 file.
+                    if (PatternHasProperty) {
                         return _pattern.Encoding;
                     }
 
                     return RubyEncoding.Ascii;
                 }
 
-                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _) && !PatternHasProperty()) {
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _) &&
+                    !PatternHasProperty) {
                     return RubyEncoding.Ascii;
                 }
 
@@ -959,43 +963,6 @@ namespace IronRuby.Builtins {
         /// written with byte escapes would silently lose its encoding when unioned with a plain
         /// ASCII string.
         /// </summary>
-        // -1 until PatternHasProperty has looked, then 0 or 1
-        private int _hasProperty = -1;
-
-        /// <summary>
-        /// Whether the pattern names a character property, \p{...}, \P{...} or \p{^...}, outside a
-        /// comment. MRI fixes the regexp to its source's encoding for one, ASCII only as the
-        /// source is: /\p{Alpha}/ is a fixed UTF-8 regexp in a UTF-8 file.
-        /// </summary>
-        private bool PatternHasProperty() {
-            int cached = _hasProperty;
-            if (cached < 0) {
-                cached = FindProperty(_pattern.ConvertToString(), (_options & RubyRegexOptions.Extended) != 0) ? 1 : 0;
-                _hasProperty = cached;
-            }
-            return cached != 0;
-        }
-
-        private static bool FindProperty(string/*!*/ source, bool extended) {
-            if (source.IndexOf("{", StringComparison.Ordinal) < 0) {
-                return false;
-            }
-            var groups = new Stack<bool>();
-            int classDepth = 0;
-            int i = 0;
-            while (i < source.Length) {
-                if (source[i] != '\\') {
-                    i = SkipNonEscape(source, i, ref extended, groups, ref classDepth);
-                    continue;
-                }
-                if (i + 2 < source.Length && (source[i + 1] == 'p' || source[i + 1] == 'P') && source[i + 2] == '{') {
-                    return true;
-                }
-                i += 2;
-            }
-            return false;
-        }
-
         private bool PatternHasNonAsciiEscape(out bool isUnicode) {
             int cached = _nonAsciiEscape;
             if (cached < 0) {
@@ -1004,6 +971,160 @@ namespace IronRuby.Builtins {
             }
             isUnicode = cached == 2;
             return cached != 0;
+        }
+
+        private bool PatternHasProperty {
+            get {
+                int cached = _hasProperty;
+                if (cached < 0) {
+                    cached = HasPropertyEscape(_pattern, (_options & RubyRegexOptions.Extended) != 0) ? 1 : 0;
+                    _hasProperty = cached;
+                }
+                return cached != 0;
+            }
+        }
+
+        /// <summary>
+        /// Whether the pattern names a character property (\p{...}, \P{...}) outside a comment,
+        /// which MRI's unescape_nonascii notes as has_property: such a regexp keeps the encoding
+        /// of its source even when that source is ASCII only. A (?#...) comment, and a # comment
+        /// in extended mode outside a character class, do not count.
+        /// </summary>
+        public static bool HasPropertyEscape(MutableString/*!*/ pattern, bool extended) {
+            return PropertyNames(pattern, extended).GetEnumerator().MoveNext();
+        }
+
+        /// <summary>
+        /// The names of the character properties the pattern uses (HasPropertyEscape), as written
+        /// between the braces, a leading ^ left out; "" for a \p with no braces.
+        /// </summary>
+        private static IEnumerable<string>/*!*/ PropertyNames(MutableString/*!*/ pattern, bool extended) {
+            int length = pattern.GetCharCount();
+            int inClass = 0;
+            var groups = new Stack<int>();
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+                if (c == '\\') {
+                    if (i + 1 < length) {
+                        char next = pattern.GetChar(i + 1);
+                        if (next == 'p' || next == 'P') {
+                            var name = new StringBuilder();
+                            int j = i + 2;
+                            if (j < length && pattern.GetChar(j) == '{') {
+                                j++;
+                                if (j < length && pattern.GetChar(j) == '^') {
+                                    j++;
+                                }
+                                while (j < length && pattern.GetChar(j) != '}') {
+                                    name.Append(pattern.GetChar(j++));
+                                }
+                            }
+                            yield return name.ToString();
+                        }
+                    }
+                    // the escaped character is not looked at again
+                    i++;
+                } else if (c == '[') {
+                    inClass++;
+                } else if (c == ']') {
+                    if (inClass > 0) {
+                        inClass--;
+                    }
+                } else if (c == '#' && extended && inClass == 0) {
+                    while (i < length && pattern.GetChar(i) != '\n') {
+                        i++;
+                    }
+                } else if (c == '(' && inClass == 0) {
+                    if (i + 2 < length && pattern.GetChar(i + 1) == '?' && pattern.GetChar(i + 2) == '#') {
+                        // a comment runs to the first ')' that is not escaped
+                        for (i += 3; i < length && pattern.GetChar(i) != ')'; i++) {
+                            if (pattern.GetChar(i) == '\\') {
+                                i++;
+                            }
+                        }
+                        continue;
+                    }
+                    // As MRI's unescape_nonascii: (?x) and (?-x) (the options a, d, u, i and m may
+                    // stand with x) turn extended mode on or off for the rest of the pattern, or of
+                    // the (?x:...) group around them; (?x:...) and (?-x:...) only inside their own
+                    // group, when they change it. Any other group leaves the mode alone, its end
+                    // included: -1 on the stack.
+                    int restore = -1;
+                    if (i + 1 < length && pattern.GetChar(i + 1) == '?') {
+                        bool on = true, inner = extended;
+                        int j = i + 2;
+                        for (; j < length; j++) {
+                            char option = pattern.GetChar(j);
+                            if (option == '-') {
+                                on = false;
+                            } else if (option == 'x') {
+                                inner = on;
+                            } else if ("imadu".IndexOf(option) < 0) {
+                                break;
+                            }
+                        }
+                        if (j < length && pattern.GetChar(j) == ')') {
+                            // (?x): no group to come back from
+                            extended = inner;
+                            i = j;
+                            continue;
+                        }
+                        if (j < length && pattern.GetChar(j) == ':' && inner != extended) {
+                            restore = extended ? 1 : 0;
+                            extended = inner;
+                            i = j;
+                        }
+                    }
+                    groups.Push(restore);
+                } else if (c == ')' && inClass == 0) {
+                    if (groups.Count > 0) {
+                        int restore = groups.Pop();
+                        if (restore >= 0) {
+                            extended = restore == 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // The property names Onigmo knows in an encoding without Unicode's tables
+        // (onigenc_minimum_property_name_to_ctype): the POSIX classes, Word and ASCII.
+        private static readonly HashSet<string>/*!*/ _minimumPropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Alnum", "Alpha", "Blank", "Cntrl", "Digit", "Graph", "Lower", "Print", "Punct", "Space", "Upper", "XDigit",
+            "Word", "ASCII",
+        };
+
+        // The Japanese encodings also know these scripts (enc/euc_jp.c and enc/shift_jis.c's
+        // property_name_to_ctype), as do their replicas.
+        private static readonly HashSet<string>/*!*/ _japanesePropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Hiragana", "Katakana", "Han", "Latin", "Greek", "Cyrillic",
+        };
+
+        private static readonly HashSet<string>/*!*/ _japaneseEncodings = new HashSet<string>(StringComparer.Ordinal) {
+            "EUC-JP", "eucJP-ms", "CP51932", "EUC-JIS-2004", "Shift_JIS", "Windows-31J", "MacJapanese",
+            "SJIS-DoCoMo", "SJIS-KDDI", "SJIS-SoftBank",
+        };
+
+        /// <summary>
+        /// A regexp in an encoding without Unicode's tables knows only a few property names, and
+        /// Onigmo refuses the rest when it compiles: Regexp.new('\p{L}'.encode('US-ASCII')) is
+        /// "invalid character property name {L}". The transformer, which does not know the
+        /// encoding, accepts every name Onigmo's Unicode tables have.
+        /// </summary>
+        private void RequireKnownProperties() {
+            if (!PatternHasProperty) {
+                return;
+            }
+            var encoding = Encoding;
+            if (encoding.HasUnicodeCodePoints) {
+                return;
+            }
+            bool japanese = _japaneseEncodings.Contains(encoding.Name);
+            foreach (string name in PropertyNames(_pattern, (_options & RubyRegexOptions.Extended) != 0)) {
+                if (!_minimumPropertyNames.Contains(name) && !(japanese && _japanesePropertyNames.Contains(name))) {
+                    throw new RegexpError("invalid character property name {" + name + "}: " + Inspect().ToString());
+                }
+            }
         }
 
         public static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
@@ -1093,11 +1214,13 @@ namespace IronRuby.Builtins {
                     // pins the encoding only once the pattern really compiles to non-ASCII bytes,
                     // which it does for a byte escape as much as for a literal non-ASCII character.
                     bool isUnicode;
-                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode) || PatternHasProperty();
+                    // (Marshal keeps MRI's FIXEDENCODING bit for a /n regexp it was set on.)
+                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode) || PatternHasProperty ||
+                        (_options & RubyRegexOptions.FixedEncoding) != 0;
                 }
 
                 return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
-                    || Encoding != RubyEncoding.Ascii || PatternHasProperty();
+                    || Encoding != RubyEncoding.Ascii || PatternHasProperty;
             }
         }
 
@@ -1648,7 +1771,7 @@ namespace IronRuby.Builtins {
         /// US-ASCII, and a UTF-16 regexp's is UTF-16 from its "(?-mix:" on.
         /// </summary>
         public MutableString/*!*/ ToMutableString() {
-            return AppendTo(MutableString.CreateMutable(Encoding));
+            return InRegexEncoding(AppendTo(MutableString.CreateMutable(RubyEncoding.Binary)));
         }
 
         public MutableString/*!*/ Inspect() {
@@ -1676,7 +1799,18 @@ namespace IronRuby.Builtins {
             if ((_options & RubyRegexOptions.FIXED) != 0) {
                 result.Append('n');
             }
-            return result;
+            return InRegexEncoding(result);
+        }
+
+        // MRI's rb_reg_to_s and rb_reg_inspect copy the regexp's encoding to the text: /x/.to_s
+        // is US-ASCII and /\p{L}/.to_s UTF-8, which is what keeps /#{/\p{L}/}/ UTF-8. Text with
+        // non-ASCII characters already carries the pattern's encoding.
+        private MutableString/*!*/ InRegexEncoding(MutableString/*!*/ text) {
+            var encoding = Encoding;
+            if (encoding.IsAsciiIdentity && text.Encoding != encoding && text.IsAscii()) {
+                text.ForceEncoding(encoding);
+            }
+            return text;
         }
 
         public MutableString/*!*/ AppendTo(MutableString/*!*/ result) {

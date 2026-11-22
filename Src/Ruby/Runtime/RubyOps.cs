@@ -3307,65 +3307,104 @@ namespace IronRuby.Runtime {
         }
         
         /// <summary>
-        /// MRI's rb_reg_preprocess_dregexp: each piece of an interpolated regexp has to be valid in
-        /// its own encoding (or it is an ArgumentError, even when the pieces would make a valid
-        /// string together), and the pieces that tie the regexp to an encoding - by a character
-        /// outside ASCII, or an escape of one - have to agree on which.
+        /// The part of MRI's rb_reg_preprocess_dregexp that InDynamicRegexEncoding leaves out: each
+        /// piece of an interpolated regexp has to be valid in its own encoding, escapes included, or
+        /// it is an ArgumentError even when the pieces would make a valid string together
+        /// (/#{'\xc2'}#{'\xa1'}/).
         /// </summary>
-        private static void CheckDynamicRegexParts(MutableString part1, MutableString part2) {
-            RubyEncoding fixedEncoding = null;
-            CheckDynamicRegexPart(part1, ref fixedEncoding);
-            CheckDynamicRegexPart(part2, ref fixedEncoding);
-        }
-
-        private static void CheckDynamicRegexParts(MutableString/*!*/[]/*!*/ parts) {
-            RubyEncoding fixedEncoding = null;
+        private static void CheckDynamicRegexParts(RubyRegexOptions options, params MutableString[]/*!*/ parts) {
             foreach (var part in parts) {
-                CheckDynamicRegexPart(part, ref fixedEncoding);
+                if (part != null) {
+                    RubyRegex.GetFixedEncoding(part);
+                }
             }
-        }
-
-        private static void CheckDynamicRegexPart(MutableString part, ref RubyEncoding fixedEncoding) {
-            if (part == null) {
-                return;
-            }
-            RubyEncoding encoding = RubyRegex.GetFixedEncoding(part);
-            if (encoding == null) {
-                return;
-            }
-            if (fixedEncoding != null && fixedEncoding != encoding) {
-                throw new RegexpError("encoding mismatch in dynamic regexp : " + fixedEncoding.Name + " and " + encoding.Name);
-            }
-            fixedEncoding = encoding;
+            DynamicRegexEncoding(options, parts);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexM(MutableString str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(str1, null); return new RubyRegex(CreateMutableStringM(str1, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(options, str1); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringM(str1, encoding), options, str1), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(MutableString.Create(str1, encoding), str2); return new RubyRegex(CreateMutableStringLM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(options, MutableString.Create(str1, encoding), str2); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringLM(str1, str2, encoding), options,
+                MutableString.Create(str1, encoding), str2), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexML(MutableString str1, string/*!*/ str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(str1, MutableString.Create(str2, encoding)); return new RubyRegex(CreateMutableStringML(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(options, str1, MutableString.Create(str2, encoding)); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringML(str1, str2, encoding), options,
+                str1, MutableString.Create(str2, encoding)), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(str1, str2); return new RubyRegex(CreateMutableStringMM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(options, str1, str2); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringMM(str1, str2, encoding), options, str1, str2), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
+        }
+
+        /// <summary>
+        /// MRI's rb_reg_preprocess_dregexp: each fragment of an interpolated regexp, the literal ones
+        /// in the encoding of the source, is read in its own encoding, and one with non-ASCII text, a
+        /// character property or a \u escape (UTF-8) fixes the regexp's: /#{'\p{Alpha}'.encode('US-ASCII')}/
+        /// is US-ASCII, /#{x}\p{N}/ in a UTF-8 file UTF-8, whatever the concatenation came to. Two
+        /// fragments fixing different encodings are an error. With an encoding option (/n /u /e /s)
+        /// the option decides.
+        /// </summary>
+        private static MutableString/*!*/ InDynamicRegexEncoding(MutableString/*!*/ pattern, RubyRegexOptions options,
+            params MutableString[]/*!*/ fragments) {
+            RubyEncoding fixedEncoding = DynamicRegexEncoding(options, fragments);
+            if (fixedEncoding != null && pattern.Encoding != fixedEncoding && pattern.IsAscii()) {
+                // the concatenation may be one of the interpolated strings itself
+                pattern = pattern.Clone();
+                pattern.ForceEncoding(fixedEncoding);
+            }
+            return pattern;
+        }
+
+        /// <summary>
+        /// The encoding the fragments of an interpolated regexp fix it to (InDynamicRegexEncoding),
+        /// null for none. It is asked before the fragments are joined, as MRI asks: fragments in two
+        /// encodings are an "encoding mismatch in dynamic regexp", not the concatenation's
+        /// Encoding::CompatibilityError.
+        /// </summary>
+        private static RubyEncoding DynamicRegexEncoding(RubyRegexOptions options, params MutableString[]/*!*/ fragments) {
+            if ((options & RubyRegexOptions.EncodingMask) != 0) {
+                return null;
+            }
+            bool extended = (options & RubyRegexOptions.Extended) != 0;
+            RubyEncoding fixedEncoding = null;
+            foreach (var fragment in fragments) {
+                if (fragment == null) {
+                    continue;
+                }
+                RubyEncoding encoding;
+                bool isUnicode;
+                if (!fragment.IsAscii()) {
+                    encoding = fragment.Encoding;
+                } else if (RubyRegex.HasNonAsciiEscape(fragment, out isUnicode)) {
+                    encoding = isUnicode ? RubyEncoding.UTF8 : fragment.Encoding;
+                } else if (RubyRegex.HasPropertyEscape(fragment, extended)) {
+                    encoding = fragment.Encoding;
+                } else {
+                    continue;
+                }
+                if (fixedEncoding != null && fixedEncoding != encoding) {
+                    throw new RegexpError(RubyExceptions.FormatMessage("encoding mismatch in dynamic regexp : {0} and {1}",
+                        fixedEncoding.Name, encoding.Name));
+                }
+                fixedEncoding = encoding;
+            }
+            return fixedEncoding;
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexN(MutableString[]/*!*/ strings, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(strings); return new RubyRegex(CreateMutableStringN(strings), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(options, strings); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringN(strings), options, strings), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
@@ -3985,8 +4024,9 @@ namespace IronRuby.Runtime {
                 if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
                     return !IsDeepOrOverflow(exception);
                 }
+                // A light frame that has made no scope passes null (MethodDefinition.LightFrameRewriter): no jump can be meant for it.
                 LocalJumpError lje = exception as LocalJumpError;
-                return lje != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
+                return lje != null && scope != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
             } catch (Exception) {
                 // catch it (see RescuePassMayTest)
                 return false;

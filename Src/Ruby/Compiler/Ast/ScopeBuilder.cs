@@ -530,8 +530,12 @@ namespace IronRuby.Compiler.Ast {
                 if (node is TraceLineExpression || node is TraceReturnExpression || node is CompiledFrameExpression || node is Microsoft.Scripting.Ast.LightDynamicExpression) {
                     return base.VisitExtension(node);
                 }
-                if (node is SourceLineMarker || node is EnterInterpretedFrameExpression) {
+                if (node is SourceLineMarker || node is EnterInterpretedFrameExpression || node is CompiledFrameDepthExpression) {
                     return node;
+                }
+                // a light frame's exception handling (MethodDefinition.LightFrameRewriter.Handling)
+                if (node is RubyFilterExpression || node is EnsureGuardExpression || node is Microsoft.Scripting.Ast.FinallyFlowControlExpression) {
+                    return base.VisitExtension(node);
                 }
                 Failed = true;
                 return node;

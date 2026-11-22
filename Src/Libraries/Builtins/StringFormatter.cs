@@ -1479,9 +1479,11 @@ namespace IronRuby.Builtins {
                 // complaint from one that never offered a conversion at all, and MRI
                 // words the two differently. The exception the conversion site raises
                 // does not always say which it was, so ask the object.
+                // true and false go through #to_int like any object (a TrueClass#to_int is
+                // called), but rb_num2long names them, not their classes, when there is none.
                 throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
                     ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
-                    : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
+                    : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", RubyExceptions.MessageTypeName(className));
             }
         }
 

@@ -3316,7 +3316,8 @@ namespace IronRuby.Builtins {
                 int escapePlaceholder;
                 var str = ToStringWithEscapedInvalidCharacters(encoding, (escape & Escape.Octal) != 0, out escapePlaceholder);
 
-                if (encoding == RubyEncoding.UTF8) {
+                // CESU-8 and UTF-8's carrier variants have Unicode's characters too
+                if (encoding == RubyEncoding.UTF8 || (encoding.HasUnicodeCodePoints && encoding.IsAsciiIdentity)) {
                     AppendUnicodeRepresentation(result, str, escape, quote, escapePlaceholder);
                 } else {
                     AppendStringRepresentation(result, str, escape, quote, escapePlaceholder);

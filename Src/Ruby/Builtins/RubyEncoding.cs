@@ -825,15 +825,46 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// The encoding String#encode and Encoding::Converter read and write this one's bytes with:
         /// StrictEncoding, but for stateless-ISO-2022-JP and its KDDI variant, whose strings are held
-        /// by their Emacs-Mule shape while MRI transcodes only their JIS X 0208 characters.
+        /// by their Emacs-Mule shape while MRI transcodes only their JIS X 0208 characters, and for
+        /// UTF8-MAC, whose strings are UTF-8 while its converters decompose and compose
+        /// (Utf8MacTranscodingEncoding).
         /// </summary>
         public Encoding/*!*/ TranscodingEncoding {
             get {
                 if (CodePage == CodePageStatelessISO2022JP || CodePage == CodePageStatelessISO2022JPKDDI) {
                     return _transcodingEncoding ?? (_transcodingEncoding = new StatelessIso2022JpEncoding(CodePage, Name));
                 }
+                if (CodePage == CodePageUTF8Mac) {
+                    return _transcodingEncoding ?? (_transcodingEncoding = new Utf8MacTranscodingEncoding());
+                }
                 return _strictEncoding;
             }
+        }
+
+        /// <summary>
+        /// Finishes text a transcoder read from this encoding with TranscodingEncoding's decoder,
+        /// which hands back each character as soon as it is complete: UTF8-MAC composes the
+        /// characters it decomposed (MRI's from_utf8_mac), which needs the one after each.
+        /// </summary>
+        public string/*!*/ FinishTranscodingDecode(string/*!*/ text) {
+            return (CodePage == CodePageUTF8Mac) ? Utf8MacTables.Compose(text) : text;
+        }
+
+        /// <summary>
+        /// Whether String#inspect writes a valid character of this encoding (an ASCII compatible
+        /// one without Unicode's tables) as itself when it answers in the same encoding, as MRI's
+        /// rb_enc_isprint says (InspectPrintable).
+        /// </summary>
+        public bool IsInspectPrintable(byte[]/*!*/ character) {
+            return InspectPrintable.IsPrintable(this, character);
+        }
+
+        /// <summary>
+        /// What Encoding::Converter passes the characters it decodes from this encoding through,
+        /// or null for nothing: UTF8-MAC composes them (FinishTranscodingDecode, over a stream).
+        /// </summary>
+        public Utf8MacComposer CreateTranscodingComposer() {
+            return (CodePage == CodePageUTF8Mac) ? new Utf8MacComposer() : null;
         }
 
         /// <summary>
@@ -1078,6 +1109,17 @@ namespace IronRuby.Builtins {
                 }
                 return false;
             }
+        }
+
+        /// <summary>
+        /// MRI's rb_enc_unicode_p: whether the encoding's code points are Unicode's - the Unicode
+        /// encodings and the ones that are UTF-8 under another name or shape (UTF-8's carrier
+        /// variants, CESU-8), whose characters #ord, #codepoints and #inspect answer as Unicode
+        /// code points: "\xE3\x81\x82" in CESU-8 is 0x3042, not 0xE38182. IsUnicodeEncoding
+        /// is narrower, and also decides what transcodes how, so this is a property of its own.
+        /// </summary>
+        public bool HasUnicodeCodePoints {
+            get { return HasUnicodeCaseMapping; }
         }
 
         /// <summary>

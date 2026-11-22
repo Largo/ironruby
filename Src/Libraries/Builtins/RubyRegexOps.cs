@@ -423,7 +423,10 @@ namespace IronRuby.Builtins {
             if (!self.IsInitialized) {
                 throw RubyExceptions.CreateTypeError("uninitialized Regexp");
             }
-            return InternalToPublicOptions(self.Options);
+            // FIXEDENCODING is set on any regexp whose encoding is pinned, by a modifier or by its
+            // source: /\u3042/, /\xc2\xa1/n and /\p{L}/ have it as much as /x/u.
+            int result = InternalToPublicOptions(self.Options);
+            return self.IsFixedEncoding ? result | FIXEDENCODING : result;
         }
 
         [RubyMethod("encoding")]
@@ -834,9 +837,9 @@ namespace IronRuby.Builtins {
                 RubyEncoding encoding;
                 var regex = part as RubyRegex;
                 if (regex != null) {
-                    // MRI asks rb_reg_fixed_encoding_p: /\p{Alpha}/ and /abc/u are tied to an
-                    // encoding although their sources are ASCII only
-                    encoding = IsAsciiOnly(regex.Pattern) && !regex.IsFixedEncoding ? null : regex.Encoding;
+                    // rb_reg_fixed_encoding_p: a regexp has a say when its encoding is pinned, by a
+                    // modifier or by its source (non-ASCII text, a \u escape, a \p property)
+                    encoding = regex.IsFixedEncoding ? regex.Encoding : null;
                 } else {
                     var str = (MutableString)part;
                     encoding = IsAsciiOnly(str) ? null : str.Encoding;

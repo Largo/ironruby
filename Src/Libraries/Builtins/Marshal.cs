@@ -1577,6 +1577,7 @@ namespace IronRuby.Builtins {
                 // record for a Ruby 1.8 one unless an encoding is among them: an "I" wrapper that only carries
                 // other instance variables (@note) does not make it a 1.9 record.
                 bool hasEncoding = false;
+                RubyEncoding encoding = null;
                 if (wrapped) {
                     var ivars = new List<KeyValuePair<string, object>>();
                     int count = ReadInt32();
@@ -1586,7 +1587,11 @@ namespace IronRuby.Builtins {
                         for (int i = 0; i < count; i++) {
                             string name = ReadIdentifier();
                             object value = ReadAnObject(false);
-                            hasEncoding |= ParseEncodingIVar(name, value) != null;
+                            RubyEncoding parsed = ParseEncodingIVar(name, value);
+                            if (parsed != null) {
+                                hasEncoding = true;
+                                encoding = parsed;
+                            }
                             ivars.Add(new KeyValuePair<string, object>(name, value));
                         }
                     } finally {
@@ -1609,6 +1614,12 @@ namespace IronRuby.Builtins {
                     flags |= RubyRegexOptions.FIXED;
                 }
 
+                // The encoding goes on the pattern before the regexp is made, not only afterwards with the
+                // other instance variables: which property names a regexp may use depends on it
+                // (/\p{L}/ is only a regexp in a Unicode encoding).
+                if (encoding != null) {
+                    pattern.ForceEncoding(encoding);
+                }
                 return new RubyRegex(pattern, flags);
             }
 
