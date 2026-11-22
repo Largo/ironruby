@@ -65,6 +65,7 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         private int _readTimeout = Timeout.Infinite;
         private int _writeTimeout = Timeout.Infinite;
+        private readonly object _writeLock = new object();
 
         public override bool CanTimeout {
             get { return true; }
@@ -120,18 +121,34 @@ namespace IronRuby.StandardLibrary.Sockets {
         // IO::TimeoutError.
         public override void Write(byte[] buffer, int offset, int count) {
             if (_socket.Blocking) {
-                if (_writeTimeout == Timeout.Infinite) {
-                    RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
-                    return;
-                }
-                int saved = _socket.SendTimeout;
-                _socket.SendTimeout = Math.Max(_writeTimeout, 1);
-                try {
-                    RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
-                } catch (SocketException e) when (e.SocketErrorCode == SocketError.TimedOut) {
-                    throw new TimeoutException();
-                } finally {
-                    _socket.SendTimeout = saved;
+                // IO#timeout is the socket's SendTimeout for the write, which is the whole socket's:
+                // writes take turns, as MRI's do under the IO's write_lock, so that one write's
+                // restore cannot leave another's limit behind. A send that runs out of time after
+                // some of the bytes went out returns the short count, so the rest is sent again
+                // within what is left of the limit.
+                lock (_writeLock) {
+                    var deadline = (_writeTimeout == Timeout.Infinite) ? null : Stopwatch.StartNew();
+                    int saved = _socket.SendTimeout;
+                    try {
+                        while (count > 0) {
+                            if (deadline != null) {
+                                long remaining = _writeTimeout - deadline.ElapsedMilliseconds;
+                                if (remaining <= 0) {
+                                    throw new TimeoutException();
+                                }
+                                _socket.SendTimeout = (int)remaining;
+                            }
+                            int sent = RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
+                            offset += sent;
+                            count -= sent;
+                        }
+                    } catch (SocketException e) when (deadline != null && e.SocketErrorCode == SocketError.TimedOut) {
+                        throw new TimeoutException();
+                    } finally {
+                        if (deadline != null) {
+                            _socket.SendTimeout = saved;
+                        }
+                    }
                 }
                 return;
             }
