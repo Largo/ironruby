@@ -1372,6 +1372,16 @@ namespace IronRuby.Runtime {
                 scope.RubyContext.NoteMethodUsingBlock(body.Name);
             }
 
+            // Whether the host scope already has its own copy of the method, which warns about the
+            // redefinition itself; otherwise the one replaced is Object's (from a file or another scope).
+            bool scopeHadMethod = false;
+            if (hostedTopLevel) {
+                using (scope.RubyContext.ClassHierarchyLocker()) {
+                    RubyMemberInfo existing;
+                    scopeHadMethod = instanceOwner.TryGetDefinedMethod(body.Name, out existing) && existing != null && !existing.IsUndefined;
+                }
+            }
+
             if (instanceOwner != null) {
                 var definitionScope = DefinitionScope(scope, instanceOwner);
                 if (scope.RubyContext.HasRefinements) {
@@ -1402,10 +1412,11 @@ namespace IronRuby.Runtime {
                     body.SetDefinedWithoutRefinements();
                 }
                 // Object's copy of the scope's method: a redefinition is warned about once, for the
-                // scope's - each host scope is a top level of its own, as a file is
+                // scope's - each host scope is a top level of its own, as a file is. When the scope had
+                // no copy, the method replaced is Object's, and CRuby warns about that one.
                 SetMethod(scope.RubyContext, objectMethod =
                     new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags),
-                    warnRedefinition: false
+                    warnRedefinition: !scopeHadMethod
                 );
             }
 
