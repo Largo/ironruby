@@ -620,7 +620,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("basename", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ BaseName(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self,
             object path, [DefaultProtocol, NotNull, Optional]MutableString suffix) {
-            return BaseName(Protocols.CastToPath(toPath, path), suffix);
+            var strPath = Protocols.CastToPath(toPath, path);
+            // MRI's check_path_encoding: the suffix is looked for among the path's bytes, so it
+            // has to be ASCII-compatible as the path does.
+            if (suffix != null && !suffix.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError(String.Format("path name must be ASCII-compatible ({0}): \"{1}\"",
+                    suffix.Encoding.Name, suffix.ToStringWithEscapedInvalidCharacters(suffix.Encoding)));
+            }
+            return BaseName(strPath, suffix);
         }
 
         private static MutableString/*!*/ BaseName(MutableString/*!*/ path, MutableString suffix) {
