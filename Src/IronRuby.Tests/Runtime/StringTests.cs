@@ -1079,7 +1079,7 @@ p [X.new([0x9c, 0xf0, 0xa0, 0xa0].pack('C*').force_encoding('Emacs-Mule'))].insp
 verbose, $VERBOSE = $VERBOSE, nil
 Encoding.default_internal = 'CESU-8'
 $VERBOSE = verbose
-['e38182', '7f', 'eda08062ff', 'eda0bdedb880'].each do |h|
+['e38182', '7f', 'eda08062ff', 'eda0bdedb880', 'efbfbfff'].each do |h|
   i = [h].pack('H*').force_encoding('CESU-8').inspect
   p [i.encoding, i.b]
 end
@@ -1090,6 +1090,7 @@ end
 [#<Encoding:CESU-8>, ""\""\\u007F\""""]
 [#<Encoding:CESU-8>, ""\""\\xED\\xA0\\x80b\\xFF\""""]
 [#<Encoding:CESU-8>, ""\""\xED\xA0\xBD\xED\xB8\x80\""""]
+[#<Encoding:CESU-8>, ""\""\\uFFFF\\xFF\""""]
 ");
         }
 

@@ -2238,6 +2238,10 @@ namespace IronRuby.Builtins {
                 if (self.Encoding != resultEncoding) {
                     return InspectForeignEncoding(self, resultEncoding);
                 }
+                // Read as characters first: an invalid byte is then an escape of its own (see
+                // EscapingEncoding). From the bytes, AppendRepresentation marks one with U+FFFF,
+                // and a valid U+FFFF in the string ("\xEF\xBF\xBF") came out as a backslash.
+                self.PrepareForCharacterRead();
                 return MutableString.Create(self.AppendRepresentation(new StringBuilder().Append('"'), null,
                     MutableString.Escape.Special, '"').Append('"').ToString(), resultEncoding);
             }
