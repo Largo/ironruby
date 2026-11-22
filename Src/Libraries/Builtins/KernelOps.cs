@@ -3218,15 +3218,21 @@ namespace IronRuby.Builtins {
                 inspectedArgs[i] = Protocols.ConvertToString(tosConversion, inspect.Target(inspect, args[i]));
             }
 
-            // no dynamic dispatch to "puts":
-            foreach (var arg in inspectedArgs) {
-                PrintOps.Puts(writeStorage, writeStorage.Context.StandardOutput, arg);
-            }
+            // no dynamic dispatch to "puts"; and no interrupt check in the writes, which MRI makes
+            // under rb_uninterruptible (see RubyIOOps.Write):
+            RubyIOOps._uninterruptibleWrites++;
+            try {
+                foreach (var arg in inspectedArgs) {
+                    PrintOps.Puts(writeStorage, writeStorage.Context.StandardOutput, arg);
+                }
 
-            // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at once
-            var stdout = writeStorage.Context.StandardOutput as RubyIO;
-            if (args.Length > 0 && stdout != null) {
-                RubyIOOps.Flush(stdout);
+                // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at once
+                var stdout = writeStorage.Context.StandardOutput as RubyIO;
+                if (args.Length > 0 && stdout != null) {
+                    RubyIOOps.Flush(stdout);
+                }
+            } finally {
+                RubyIOOps._uninterruptibleWrites--;
             }
 
             if (args.Length == 0) {

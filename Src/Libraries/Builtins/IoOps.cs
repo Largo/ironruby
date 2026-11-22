@@ -1854,12 +1854,26 @@ namespace IronRuby.Builtins {
             return site.Target(site, self, val) as MutableString ?? val;
         }
 
+        /// <summary>
+        /// Non-zero while Kernel#p writes on this thread: MRI's rb_p writes under rb_uninterruptible,
+        /// so a buffered write there is no interrupt check.
+        /// </summary>
+        [ThreadStatic]
+        internal static int _uninterruptibleWrites;
+
         private static int Write(RubyIO/*!*/ self, MutableString/*!*/ val, bool signalOnPipeError) {
             // MRI's write of an empty string makes no syscall at all and answers 0, even on a
             // pipe whose reader is gone. Flushing here instead manufactures EPIPE - which is
             // what Open3.capture3 ("git --version", no stdin data) used to hit on its i.write "".
             if (val.IsEmpty) {
                 return 0;
+            }
+
+            // MRI's io_binwrite checks for interrupts before it writes anything, as a blocking call
+            // does (rb_thread_check_ints): an exception Thread.handle_interrupt(... => :on_blocking)
+            // holds back is raised there, before the bytes go out. syswrite makes no such check.
+            if (signalOnPipeError && _uninterruptibleWrites == 0) {
+                RubyUtils.CheckAsyncException(true);
             }
 
             try {

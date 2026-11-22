@@ -616,7 +616,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static object GetElement(ConversionStorage<IntegerValue>/*!*/ integerConversion, IList/*!*/ self, object index) {
+        public static object GetElement(ConversionStorage<IntegerValue>/*!*/ integerConversion, RangeValuesStorage/*!*/ rangeValues,
+            ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ self, object index) {
             if (index is int) {
                 return GetElement(self, (int)index);
             }
@@ -624,6 +625,12 @@ namespace IronRuby.Builtins {
             // a redefined Float#to_int - and one outside a long is a RangeError.
             if (index is double) {
                 return GetElement(self, (double)index);
+            }
+            // rb_ary_aref1 asks rb_range_beg_len first: an object with #begin, #end and
+            // #exclude_end? indexes as the Range it describes.
+            Range range = rangeValues.TryConvert(index);
+            if (range != null) {
+                return GetElements(fixnumCast, allocateStorage, self, range);
             }
             return GetElement(self, Protocols.CastToInteger(integerConversion, index));
         }
@@ -695,7 +702,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("at")]
         public static object At(ConversionStorage<IntegerValue>/*!*/ integerConversion, IList/*!*/ self, object index) {
-            return GetElement(integerConversion, self, index);
+            if (index is int) {
+                return GetElement(self, (int)index);
+            }
+            if (index is double) {
+                return GetElement(self, (double)index);
+            }
+            return GetElement(self, Protocols.CastToInteger(integerConversion, index));
         }
 
         #endregion
@@ -741,8 +754,22 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static object SetElement(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object index, object value) {
+        public static object SetElement(ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<int>/*!*/ fixnumCast,
+            RangeValuesStorage/*!*/ rangeValues, IList/*!*/ self, object index, object value) {
             RequireNotFrozen(self);
+            if (!(index is int)) {
+                // rb_ary_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
+                // describes, and one reaching before the first element is reported by its #inspect.
+                Range range = rangeValues.TryConvert(index);
+                if (range != null) {
+                    if (range.Begin is int && (int)range.Begin + self.Count < 0) {
+                        throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
+                    }
+                    int start, count;
+                    RangeToStartAndCount(fixnumCast, range, self.Count, out start, out count);
+                    return SetElement(arrayTryCast, self, start, count, value);
+                }
+            }
             int i = CastIndex(fixnumCast, index);
             RubyArray array = self as RubyArray;
             return array != null ? SetElement(array, i, value) : SetElement(self, i, value);
@@ -2002,57 +2029,14 @@ namespace IronRuby.Builtins {
 
         #region values_at
 
-        /// <summary>
-        /// rb_range_values refuses an Enumerator::ArithmeticSequence before asking for #begin and
-        /// #end, so (0..2).step(2) is an index that does not convert. The class is the prelude's.
-        /// </summary>
-        private static bool IsArithmeticSequence(RubyContext/*!*/ context, object value) {
-            if (!(value is Enumerator)) {
-                return false;
-            }
-            for (RubyClass cls = context.GetClassOf(value); cls != null; cls = cls.SuperClass) {
-                if (cls.Name == "Enumerator::ArithmeticSequence") {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// rb_range_values: an object that is not an Integer but has #begin, #end and #exclude_end?
-        /// stands for the Range they describe. Null for anything else.
-        /// </summary>
-        private static Range RangeLike(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage, object value) {
-
-            if (value == null || value is int || value is long || value is System.Numerics.BigInteger || value is bool ||
-                !Protocols.RespondTo(respondToStorage, value, "begin") ||
-                !Protocols.RespondTo(respondToStorage, value, "end") ||
-                !Protocols.RespondTo(respondToStorage, value, "exclude_end?") ||
-                IsArithmeticSequence(respondToStorage.Context, value)) {
-                return null;
-            }
-            var beginSite = beginStorage.GetCallSite("begin", 0);
-            var endSite = endStorage.GetCallSite("end", 0);
-            var excludeEndSite = excludeEndStorage.GetCallSite("exclude_end?", 0);
-            object begin = beginSite.Target(beginSite, value);
-            object end = endSite.Target(endSite, value);
-            return Range.CreateValidated(begin, end, RubyOps.IsTrue(excludeEndSite.Target(excludeEndSite, value)));
-        }
-
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast,
-            UnaryOpStorage/*!*/ allocateStorage, RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage,
+            UnaryOpStorage/*!*/ allocateStorage, RangeValuesStorage/*!*/ rangeValues,
             IList/*!*/ self, params object[]/*!*/ values) {
             RubyArray result = new RubyArray();
 
             for (int i = 0; i < values.Length; i++) {
-                Range range = values[i] as Range ?? RangeLike(respondToStorage, beginStorage, endStorage, excludeEndStorage, values[i]);
+                Range range = rangeValues.TryConvert(values[i]);
                 if (range != null) {
                     // MRI asks for the range with errors on: a range reaching past the end of
                     // the array is padded with nil out to its full length (values_at(0..9) on a

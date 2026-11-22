@@ -311,8 +311,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static MutableString GetChar(RubySymbol/*!*/ self, [DefaultProtocol]int index) {
-            return MutableStringOps.GetChar(self.String, index);
+        public static MutableString GetChar(ConversionStorage<int>/*!*/ fixnumCast, RangeValuesStorage/*!*/ rangeValues,
+            RubySymbol/*!*/ self, object index) {
+            return MutableStringOps.GetChar(fixnumCast, rangeValues, self.String, index);
         }
 
         [RubyMethod("[]")]

@@ -194,6 +194,49 @@ Thread.handle_interrupt(RuntimeError => :never) {
         }
 
         /// <summary>
+        /// A buffered IO write is an interrupt check, as MRI's io_binwrite makes one before it writes
+        /// (rb_thread_check_ints): an exception Thread.handle_interrupt(... => :on_blocking) holds back
+        /// is raised there and nothing is written. IO#syswrite makes no check, and Kernel#p writes under
+        /// rb_uninterruptible (CRuby's TestThread#test_handle_interrupt_and_io and _and_p).
+        /// </summary>
+        public void Thread_HandleInterruptIoWrite1() {
+            TestOutput(@"
+require 'ruby4'
+r, w = IO.pipe
+def check(label)
+  ready = Thread::Queue.new
+  $go = false
+  t = Thread.new {
+    Thread.current.report_on_exception = false
+    Thread.handle_interrupt(RuntimeError => :on_blocking) {
+      ready << true
+      Thread.pass until $go
+      yield
+    }
+  }
+  ready.pop
+  t.raise RuntimeError, label
+  $go = true
+  t.join
+rescue RuntimeError => e
+  e.message
+end
+p check(""write"") { w.write ""write "" }
+p check(""puts"") { w.puts ""puts"" }
+p check(""syswrite"") { w.syswrite ""syswrite "" }
+p check(""p"") { o = $stdout; $stdout = w; p :p; $stdout = o }
+w.close
+p r.read
+", @"
+""write""
+""puts""
+""syswrite""
+""p""
+""syswrite :p\n""
+");
+        }
+
+        /// <summary>
         /// Thread#raise reaches the fiber the thread is running, wherever its fibers are in a switch.
         /// Every fiber is a CLR thread of its own; the interrupt used to be routed to the fiber that
         /// had last woken up, so in the window around a resume (or the end of a fiber) it went to the
