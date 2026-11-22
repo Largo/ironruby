@@ -11439,6 +11439,15 @@ class IO
 
   def readpartial(maxlen, outbuf = nil)
     maxlen = ::Kernel.Integer(maxlen)
+    # MRI's StringValue: readpartial takes no keywords, so readpartial(1, exception: false)
+    # hands it a Hash for the buffer, which is a TypeError.
+    unless outbuf.nil? || ::String === outbuf
+      converted = ::String.try_convert(outbuf)
+      unless converted
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(outbuf)} into String")
+      end
+      outbuf = converted
+    end
     ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
     if maxlen == 0
       # Even a zero-length readpartial looks at the stream, so a closed one is an error.
