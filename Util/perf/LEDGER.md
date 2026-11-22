@@ -1193,6 +1193,52 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lrescue (/perf-step, 2026-11-22) - a method with `rescue`, `else` or `ensure` in a light
+  frame; the scope is made only when a handler is entered** (`IR_LIGHT_RESCUE=0` turns it off) -
+  census only, not gated. Gap 22. Two commits.
+  The refusal assumed the handler needed the scope; it needs far less. `$!` is saved, set and
+  restored through the runtime (`GetCurrentException`, `SetCurrentException`, the `=> e` target),
+  and the CLR first-pass filters (`RescuePassMayTest`, `RescueSiteCannotMatch`,
+  `RescueDefaultCannotMatch`, `RescuePassCommit`, `SetCauseLeavingEnsure`) read only the
+  runtime too: they get the declaring scope. What reads the frame's own scope runs only once an
+  exception is being matched or caught (`CanRescue*` capture the trace from its interpreted
+  frame, `CompareException` reports to TracePoint and asks about refinements, `EnterRescue` sets
+  `InRescue` for `EvalRetry`, the ensure guard reads `FlowControlScope`): they get the scope made
+  on demand. `RescuePassUnwinder` gets the scope if one was made and is now null-safe;
+  `LeaveRescue` runs only if one was. `retry` is a jump to a label before the try. The rewriter
+  maps the helpers by name (`LightFrameRewriter.VisitHandlingCall`) and now looks into the
+  filter, ensure-guard and finally-flow nodes, which also lets in methods with a literal block
+  whose body has a `begin`/`rescue` (the block keeps its own scope and its helpers).
+  - Let in: `rescue` with no class, one, several, `*CONST`, a class in a local; `=> local` and
+    `=> @ivar`; `else`; `ensure`; `retry`; the rescue modifier; the same inside a `begin`. Still
+    refused: `rescue =>` another target (none in the corpus), a clause holding a construct refused
+    elsewhere (`$!` 9, `defined?` 4...; reported as "rescue, else or ensure clause: ..."), and a
+    `begin`/`rescue` as a statement of a block's own body (blocks keep their scope).
+  - Light frames 87.4% -> 91.1% (24,791 -> 25,846), light blocks and JIT unchanged (Src/StdLib +
+    AWFY, 28,337 methods; 1,055 moved up, none down): 862 refused first for the handler, 193
+    with a literal block that holds one. `Kernel#loop`, `JSON.dump`, `Pathname#initialize`,
+    `Pathname#unlink`, `Etc.passwd`, `Rational.__convert__`, `Complex#to_r`.
+  - Measured (`ab.rb -i`, instructions a call, switch off -> on, `Util/bench/rescue-shapes.rb`):
+    rescue not entered 1,279 -> 1,023 (0.80), `ensure` 0.86, `=> e` 0.83, `else` 0.84, a
+    `begin`/`rescue` in the body 0.83, the modifier 0.81, rescue entered once in a hundred calls
+    0.90, `loop` left by a break 0.94, `loop` ended by StopIteration 0.98 (the raise is the
+    cost); three controls 0.98-1.01. Not timed.
+  - Checked: `Util/rescue-light-matrix.rb` (new, about 75 probes) prints CRuby 4.0's output on
+    the baseline and on the candidate as built, with the switch off, with `IR_LIGHT_FRAMES=0`,
+    with `-X:NoJIT -X:NoOSR` and with `-X:NoJITCalls`; twenty older matrices the same on both
+    builds. A second probe written for the merge (an inner ensure that writes a local before the
+    outer handler reads it through `binding`; `local_variable_set` and `eval` assigning in a
+    handler and the local read after; a binding taken before the raise; retry; nested rescue and
+    `cause`; next, return and throw through ensure; `=> @ivar`; yield in a handler; backtrace and
+    caller labels; a redefinition half way; a caller that is itself in a rescue; a million deep;
+    four threads; Thread#raise into `loop`) prints CRuby's as built, with the switch off, with
+    light frames off, with parked scopes off and with the JIT off; fourteen of its nineteen
+    methods run light.
+  - Not covered: an ensure-only body's first-pass filter makes the scope inside the filter, so a
+    raise through it allocates one (and with a parking slot takes a parked scope it does not
+    return). Found on the baseline, not fixed: TracePoint's `:rescue` reports the raise's line
+    where CRuby reports the rescue clause's.
+
 - **Gate of 2026-11-22 for perf/lkw**: the branch at its ledger commit against master at
   d7730f1b, Release net10.0: **PASS**. IronRuby.Tests 1,294 executed and PASSED on both trees.
   34 matrices in five modes (the switches-off mode with `IR_LIGHT_KEYWORDS=0` too): 170 same, 0
