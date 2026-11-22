@@ -11520,6 +11520,18 @@ class IO
         end
       end
 
+      # MRI's rb_io_s_pipe: binmode: true makes both ends binmode?, and without an encoding
+      # argument both read and write bytes (rb_io_ascii8bit_binmode).
+      if options && options[:binmode]
+        if args[0].nil?
+          read_end.binmode
+          write_end.binmode
+        else
+          read_end.__send__(:__ir_set_hidden_ivar__, :@__binmode__, true)
+          write_end.__send__(:__ir_set_hidden_ivar__, :@__binmode__, true)
+        end
+      end
+
       return [read_end, write_end] unless block_given?
       begin
         yield(read_end, write_end)
