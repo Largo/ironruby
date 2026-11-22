@@ -1915,6 +1915,90 @@ true
         }
     
         /// <summary>
+        /// The C integer conversions core methods read their arguments with, and their errors, as
+        /// MRI words them: NUM2INT names an Integer that is still a long ("integer 2147483648 too big
+        /// to convert to 'int'"), whether it was given, a Float truncated to it, or what #to_int
+        /// gave (that one used to come out as "Integer (Parameter 'bignum too big...')"); a Float
+        /// with no long is printed with "%-.10g" ("1e+20", "Inf", not "1E+20" or "Infinity").
+        /// NUM2LONG's counts (Array#sample, #cycle, #rotate) truncate a Float themselves, and
+        /// true and false are named by value. Util/num2int-matrix.rb compares many more with CRuby.
+        /// </summary>
+        public void Integer_CConversions1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = yield
+  puts ""#{l}: #{v.inspect}""
+rescue => e
+  puts ""#{l}: #{e.class}: #{e.message}""
+end
+big = Object.new
+def big.to_int = 2**40
+t('%*d 2**31') { '%*d' % [2**31, 1] }
+t('%*d 2.0**31') { '%*d' % [2.0**31, 1] }
+t('%*d 1e20') { '%*d' % [1e20, 1] }
+t('%*d Inf') { '%*d' % [Float::INFINITY, 1] }
+t('%*d to_int') { '%*d' % [big, 1] }
+t('%*d 2**64') { '%*d' % [2**64, 1] }
+t('round -2.0**31-1') { 1.5.round(-2.0**31 - 1) }
+t('round NaN') { 15.round(Float::NAN) }
+t('to_s to_int') { o = Object.new; def o.to_int = 16; 255.to_s(o) }
+t('to_s 2**40') { 255.to_s(2**40) }
+t('flatten 1.5e19') { [[1]].flatten(1.5e19) }
+t('sample 2**63') { [1].sample(2**63) }
+t('sample NaN') { [1].sample(Float::NAN) }
+t('sample 1e20') { [1].sample(1e20) }
+t('cycle -1e20') { [1].cycle(-1e20) { } }
+t('rotate 1e20') { [1, 2].rotate(1e20) }
+t('rotate 2.9') { [1, 2, 3].rotate(2.9) }
+t('rotate! -1') { [1, 2, 3].rotate!(-1) }
+t('rotate 2**40') { [1, 2, 3].rotate(2**40) }
+t('center -2**31') { 'a'.center(-2**31) }
+t('ljust -2**31') { 'a'.ljust(-2**31) }
+t('String#* -2**63-1') { 'a' * (-2**63 - 1) }
+t('Array.new 2**63') { Array.new(2**63) }
+t('floor -2**31') { 15.floor(-2**31) }
+t('Float#truncate -2**31') { 1.5.truncate(-2**31) }
+t('Integer#truncate -2**31') { 15.truncate(-2**31) }
+t('round -2**31') { 15.round(-2**31) }
+t('rand true') { Random.rand(true) }
+t('ldexp false') { Math.ldexp(1.0, false) }
+t('sample true') { [1].sample(true) }
+", @"
+%*d 2**31: RangeError: integer 2147483648 too big to convert to 'int'
+%*d 2.0**31: RangeError: integer 2147483648 too big to convert to 'int'
+%*d 1e20: RangeError: float 1e+20 out of range of integer
+%*d Inf: RangeError: float Inf out of range of integer
+%*d to_int: RangeError: integer 1099511627776 too big to convert to 'int'
+%*d 2**64: RangeError: bignum too big to convert into 'long'
+round -2.0**31-1: RangeError: integer -2147483649 too small to convert to 'int'
+round NaN: RangeError: float NaN out of range of integer
+to_s to_int: ""ff""
+to_s 2**40: RangeError: integer 1099511627776 too big to convert to 'int'
+flatten 1.5e19: RangeError: float 1.5e+19 out of range of integer
+sample 2**63: RangeError: bignum too big to convert into 'long'
+sample NaN: RangeError: float NaN out of range of integer
+sample 1e20: RangeError: float 1e+20 out of range of integer
+cycle -1e20: RangeError: float -1e+20 out of range of integer
+rotate 1e20: RangeError: float 1e+20 out of range of integer
+rotate 2.9: [3, 1, 2]
+rotate! -1: [3, 1, 2]
+rotate 2**40: [2, 3, 1]
+center -2**31: ""a""
+ljust -2**31: ""a""
+String#* -2**63-1: RangeError: bignum too big to convert into 'long'
+Array.new 2**63: RangeError: bignum too big to convert into 'long'
+floor -2**31: ArgumentError: exponent is too large
+Float#truncate -2**31: ArgumentError: exponent is too large
+Integer#truncate -2**31: 0
+round -2**31: 0
+rand true: TypeError: no implicit conversion of true into Integer
+ldexp false: TypeError: no implicit conversion of false into Integer
+sample true: TypeError: no implicit conversion of true into Integer
+");
+        }
+
+        /// <summary>
         /// %c writes the bytes of an Integer in the encoding of the format, as MRI's
         /// rb_str_format does with rb_enc_codelen and rb_enc_mbcput: only a number the encoding
         /// has no width for is an "invalid character", and one that has a character's width but
