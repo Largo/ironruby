@@ -879,10 +879,30 @@ namespace IronRuby.Builtins {
             _methodsState = module._methodsState;
             if (module._methods != null) {
                 _methods = new Dictionary<string, RubyMemberInfo>(module._methods.Count);
+                Dictionary<RubyScope, RubyScope> rewrittenScopes = null;
                 foreach (var method in module._methods) {
                     // the undefined/hidden markers are shared singletons, not copied (Integer.dup copies undef'd .new):
-                    _methods[method.Key] = (method.Value.IsUndefined || method.Value.IsHidden || method.Value.IsInteropMember) ?
-                        method.Value : method.Value.Copy(method.Value.Flags, this);
+                    if (method.Value.IsUndefined || method.Value.IsHidden || method.Value.IsInteropMember) {
+                        _methods[method.Key] = method.Value;
+                        continue;
+                    }
+
+                    // A method written in the body of the module being copied looks its constants up in the copy, as
+                    // CRuby's rb_vm_rewrite_cref makes it do: the copy gets the same scope with the copy in place of
+                    // the original module ([Bug #15877]). Methods written elsewhere (in a block, in another module's
+                    // body, the singleton methods of a `def self.m') keep the scope they were written in.
+                    var rubyMethod = method.Value as RubyMethodInfo;
+                    var moduleScope = (rubyMethod != null) ? rubyMethod.DeclaringScope as RubyModuleScope : null;
+                    if (moduleScope != null && moduleScope.Module == module) {
+                        rewrittenScopes ??= new Dictionary<RubyScope, RubyScope>();
+                        RubyScope scope;
+                        if (!rewrittenScopes.TryGetValue(moduleScope, out scope)) {
+                            rewrittenScopes[moduleScope] = scope = moduleScope.CopyFor(this);
+                        }
+                        _methods[method.Key] = rubyMethod.CopyWithScope(scope, this);
+                    } else {
+                        _methods[method.Key] = method.Value.Copy(method.Value.Flags, this);
+                    }
                 }
             } else {
                 _methods = null;

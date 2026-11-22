@@ -155,5 +155,36 @@ p m.dup.singleton_class.instance_variables, c.dup.singleton_class.instance_varia
 []
 ");
         }
+
+        /// <summary>
+        /// A method of a cloned class or module looks its constants up in the clone, which CRuby's clone
+        /// arranges by rewriting the method's cref ([Bug #15877]).
+        /// </summary>
+        public void CloneConstantLookup1() {
+            TestOutput(@"
+class C
+  def foo; TEST; end
+  def bar; defined?(TEST) ? TEST : :none; end
+end
+C1 = C.clone
+C2 = C.clone
+class C1; TEST = :c1; end
+class C2; TEST = :c2; end
+p C1.new.foo, C2.new.foo, C1.new.bar, C.new.bar
+module M
+  def foo; TEST; end
+end
+M1 = M.dup
+M1.const_set(:TEST, :m1)
+o = Object.new.extend(M1)
+p o.foo
+", @"
+:c1
+:c2
+:c1
+:none
+:m1
+");
+        }
     }
 }
