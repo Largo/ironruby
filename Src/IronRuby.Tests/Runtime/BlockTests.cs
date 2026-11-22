@@ -1430,6 +1430,34 @@ y14 { |x,y,*z,&w| p [x,y,z] }
 
 
         /// <summary>
+        /// yield *[x] passes the one argument x exactly as yield x does: a lambda takes an Array x
+        /// whole rather than having it taken apart over its parameters.
+        /// </summary>
+        public void Scenario_RubyProcYieldArgs5() {
+            TestOutput(@"
+def y1; yield(*[[1, 2]]); end
+def y2(a); yield(*a); end
+p y1(&->(a) { a })
+p y1(&->(a, b = 0) { [a, b] })
+p y1(&->(a, *b) { [a, b] })
+p y1(&->(*a) { a })
+p y2([[1, 2]], &->(a, *b) { [a, b] })
+p y1 { |a, b = 0| [a, b] }
+p((y1(&->(a, b) { }) rescue $!.message))
+p y2([1, 2], &->(a, b) { [a, b] })
+", @"
+[1, 2]
+[[1, 2], 0]
+[[1, 2], []]
+[[1, 2]]
+[[1, 2], []]
+[1, 2]
+""wrong number of arguments (given 1, expected 2)""
+[1, 2]
+");
+        }
+
+        /// <summary>
         /// RHS is list, LHS is not simple, but contains splatting.
         /// </summary>
         public void Scenario_RubyBlockArgs3() {
@@ -1574,6 +1602,36 @@ nil
 ");
         }
         
+        /// <summary>
+        /// A name inside a destructured block parameter |(a, b)| is a parameter of the block and
+        /// shadows an outer local of that name, as any other parameter does.
+        /// </summary>
+        public void Scenario_RubyBlockArgs7() {
+            TestOutput(@"
+_ = 1; [[2]].each { |(_)| }; p _
+a = 1; [[2]].each { |(a)| }; p a
+b = 1; [[2, 3]].each { |(b, c)| p c }; p b
+f = 1; [[1, 2]].each { |x, (f)| p x }; p f
+g = 1; [[2, 3]].each { |(_, g)| p g }; p g
+p [[1, [2, 3]]].map { |a, (b, c)| [a, b, c] }
+def m((x, y)) = [x, y]
+x = 9
+p m([1, 2]), x
+", @"
+1
+1
+3
+1
+1
+1
+3
+1
+[[1, 2, 3]]
+[1, 2]
+9
+");
+        }
+
         public void RubyProcs1() {
             AssertOutput(delegate() {
                 CompilerTest(@"

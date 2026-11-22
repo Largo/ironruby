@@ -1189,6 +1189,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object YieldSplat0(IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            // yield *[x] passes one argument, exactly as yield x does: a proc auto-splats an Array x
+            // and a lambda takes it whole, so ->(a, b = 0) {} gets [x, 0] rather than x taken apart.
+            // A ruby2_keywords Hash is keywords again once splatted, which only InvokeSplat knows.
+            if (splattee.Count == 1 && !(splattee[0] is Hash h && (h.IsRuby2KeywordsHash || h.IsKeywordArguments))) {
+                return Yield1(splattee[0], procArg, self, blockParam);
+            }
             object result;
             var proc = blockParam.Proc;
             RequireLambdaArity(proc, 0 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : null);
@@ -1722,6 +1728,16 @@ namespace IronRuby.Runtime {
 
         private static RubyClass/*!*/ ToSuperClass(RubyContext/*!*/ ec, object superClassObject) {
             return (superClassObject != null) ? RubyClass.CheckInheritable(ec, superClassObject) : ec.ObjectClass;
+        }
+
+        /// <summary>
+        /// The superclass written after `class X &lt;`, checked before the class is looked up or made
+        /// (vm_find_or_create_class_by_id). The Define*Class helpers take null for "none written",
+        /// so `class X &lt; nil` must be refused here, where nil still means the value nil.
+        /// </summary>
+        [Emitted]
+        public static RubyClass/*!*/ CheckSuperClass(RubyScope/*!*/ scope, object superClassObject) {
+            return RubyClass.CheckInheritable(scope.RubyContext, superClassObject);
         }
 
         #endregion
@@ -4377,15 +4393,6 @@ namespace IronRuby.Runtime {
                 && expectedClass.Version.Method == expectedVersion;
         }
 
-        // MRI formats the expected module with %PRIsVALUE, i.e. its #to_s (an anonymous class with a
-        // singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's own #to_s is
-        // used too, so the name is only the fallback for a #to_s that returns no String.
-        private static string/*!*/ SuperExpectedModuleName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
-            var site = context.GetClassOf(module).ToStringSite;
-            var str = site.Target(site, module) as MutableString;
-            return str != null ? str.ToString() : module.GetDisplayName(context, true).ToString();
-        }
-
         // super call condition
         [Emitted]
         public static object GetSuperCallTarget(RubyScope/*!*/ scope, int targetId) {
@@ -4435,7 +4442,7 @@ namespace IronRuby.Runtime {
             var context = methodScope.RubyContext;
             if (!context.IsKindOf(currentSelf, declaringModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("self has wrong type to call super in this context: {0} (expected {1})",
-                    context.GetClassDisplayName(currentSelf), SuperExpectedModuleName(context, declaringModule)));
+                    context.GetClassDisplayName(currentSelf), context.GetModuleMessageName(declaringModule)));
             }
         }
 

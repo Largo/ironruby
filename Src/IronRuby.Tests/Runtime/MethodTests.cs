@@ -1216,6 +1216,33 @@ p(s.instance_eval {
 ");
         }
 
+        /// <summary>
+        /// Only a bare `self` may receive a private call: `(self).m` names the same object but is
+        /// an ordinary receiver, and raises NoMethodError as in MRI.
+        /// </summary>
+        public void Visibility7() {
+            TestOutput(@"
+class C
+  def run
+    r = []
+    r << (self.mv rescue :err)
+    r << ((self).mv rescue :err)
+    r << (begin; (self).x = 1; rescue NoMethodError; :err; end)
+    r << ((self)[0] rescue :err)
+    r << (self[0] rescue :err)
+    r
+  end
+  private
+  def mv = 1
+  def x=(v); end
+  def [](i) = :idx
+end
+p C.new.run
+", @"
+[1, :err, :err, :err, :idx]
+");
+        }
+
         public void ModuleFunctionVisibility1() {
             TestOutput(@"
 module M

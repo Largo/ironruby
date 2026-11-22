@@ -1346,22 +1346,39 @@ namespace IronRuby.Builtins {
             }
 
             var hash = args[args.Length - 1] as Hash;
-            if (hash == null || hash.Count != 1 || !hash.IsKeywordArguments) {
+            if (hash == null || !hash.IsKeywordArguments) {
                 return false;
             }
 
+            // MRI's extract_raise_options: `cause:` is taken out of the keywords and any others are
+            // left to the exception's #initialize as one positional Hash (raise E, "k" => 1, cause: c).
+            // The call site made the hash for this call, so it is changed in place.
+            bool hasCause = false;
             foreach (var entry in hash) {
                 var key = entry.Key as RubySymbol;
-                if (key == null || key.ToString() != "cause") {
-                    return false;
+                if (key != null && key.ToString() == "cause") {
+                    cause = entry.Value;
+                    hasCause = true;
+                    break;
                 }
-                cause = entry.Value;
+            }
+            if (hasCause) {
+                foreach (var key in new List<object>(hash.Keys)) {
+                    var symbol = key as RubySymbol;
+                    if (symbol != null && symbol.ToString() == "cause") {
+                        hash.Remove(key);
+                    }
+                }
             }
 
-            var rest = new object[args.Length - 1];
-            Array.Copy(args, rest, rest.Length);
-            args = rest;
-            return true;
+            if (hash.Count == 0) {
+                var rest = new object[args.Length - 1];
+                Array.Copy(args, rest, rest.Length);
+                args = rest;
+            } else {
+                hash.IsKeywordArguments = false;
+            }
+            return hasCause;
         }
 
         private static void SetCause(RubyContext/*!*/ context, Exception/*!*/ exception, bool hasCause, object cause) {

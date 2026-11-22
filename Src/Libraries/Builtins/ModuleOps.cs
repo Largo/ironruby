@@ -204,6 +204,9 @@ namespace IronRuby.Builtins {
             if (block == null) {
                 throw RubyExceptions.CreateArgumentError("no block given");
             }
+            if (!block.IsLiteralBlock) {
+                throw RubyExceptions.CreateArgumentError("can't pass a Proc as a block to Module#refine");
+            }
 
             RubyModule refinement = self.GetOrCreateRefinement(refinedModule);
 
@@ -221,9 +224,20 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("using", RubyMethodAttributes.PrivateInstance)]
         public static RubyModule/*!*/ Using(RubyScope/*!*/ scope, RubyModule/*!*/ self, object module) {
-            // MRI refuses it anywhere inside a method body, blocks and module bodies included
-            if (scope.GetInnerMostMethodScope() != null) {
-                throw RubyExceptions.CreateRuntimeError("Module#using is not permitted in methods");
+            // MRI refuses it inside a method body and the blocks in it (a module_eval or Module.new
+            // block included), but a class body opened in a method (`class << self`) is a frame of
+            // its own and may use it
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                if (s.Kind == ScopeKind.Method || s.Kind == ScopeKind.BlockMethod) {
+                    throw RubyExceptions.CreateRuntimeError("Module#using is not permitted in methods");
+                }
+                if (s.Kind == ScopeKind.Module || s.Kind == ScopeKind.TopLevel) {
+                    break;
+                }
+            }
+            // and only on the module whose body (or module_eval block) is running
+            if (!ReferenceEquals(scope.SelfObject, self)) {
+                throw RubyExceptions.CreateRuntimeError("Module#using is not called on self");
             }
             ActivateRefinements(scope, module);
             return self;

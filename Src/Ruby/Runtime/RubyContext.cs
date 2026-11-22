@@ -2498,6 +2498,16 @@ namespace IronRuby.Runtime {
             return GetClassDisplayName(obj);
         }
 
+        /// <summary>
+        /// A module as MRI writes it into a message with %PRIsVALUE: by its own #to_s (an anonymous
+        /// class with a singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's
+        /// own #to_s is used too; one that returns no String gives the default #&lt;Class:0x...&gt;, as
+        /// string interpolation would.
+        /// </summary>
+        public string/*!*/ GetModuleMessageName(RubyModule/*!*/ module) {
+            return StringConversionSite.Target(StringConversionSite, module).ToString();
+        }
+
         private string/*!*/ GetClassName(object obj, bool display) {
             // doesn't create a RubyClass for .NET types
 
@@ -3093,6 +3103,14 @@ namespace IronRuby.Runtime {
                         // the singleton class's own instance variables go too, as in rb_singleton_class_clone
                         CopyInstanceData(singleton, singletonDup, false);
 
+                        // and so does a singleton class of the singleton class that holds methods
+                        // (o.singleton_class.singleton_class.define_method), which
+                        // rb_singleton_class_clone_and_attach clones along with it
+                        var meta = singleton.ImmediateClass;
+                        if (meta.IsSingletonClass && !meta.IsDummySingletonClass && ReferenceEquals(meta.SingletonClassOf, singleton)) {
+                            singletonDup.GetOrCreateSingletonClass().InitializeMembersFrom(meta);
+                        }
+
                         SetInstanceSingletonOfNoLock(target, ref targetData, singletonDup);
                     }
                 }
@@ -3482,12 +3500,41 @@ namespace IronRuby.Runtime {
             return _currentException = e;
         }
 
-        internal RubyArray GetCurrentExceptionBacktrace() {
-            // Under certain circumstances MRI invokes "backtrace" method, but it is quite unstable (crashes sometimes).
-            // Therefore we don't call the method and return the backtrace immediately.
+        /// <summary>
+        /// $@ is MRI's rb_get_backtrace($!): the stored backtrace unless the exception's class
+        /// overrides #backtrace, in which case whatever that answers, checked as rb_check_backtrace
+        /// does (nil, a String, or an Array of Strings).
+        /// </summary>
+        internal object GetCurrentExceptionBacktrace() {
             Exception e = _currentException;
-            return (e != null) ? RubyExceptionData.GetInstance(e).Backtrace : null;
+            if (e == null) {
+                return null;
+            }
+
+            var method = GetClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo && method.DeclaringModule == ExceptionClass) {
+                return RubyExceptionData.GetInstance(e).Backtrace;
+            }
+
+            if (_backtraceSite == null) {
+                System.Threading.Interlocked.CompareExchange(ref _backtraceSite,
+                    CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "backtrace", 0)), null);
+            }
+            object backtrace = _backtraceSite.Target(_backtraceSite, e);
+            if (backtrace == null) {
+                return null;
+            }
+            if (backtrace is MutableString) {
+                return RubyArray.Create(backtrace);
+            }
+            var array = backtrace as RubyArray;
+            if (array == null || !CollectionUtils.TrueForAll(array, (item) => item is MutableString)) {
+                throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
+            }
+            return array;
         }
+
+        private CallSite<Func<CallSite, object, object>> _backtraceSite;
 
         internal RubyArray SetCurrentExceptionBacktrace(object value) {
             // first check availability of the current exception:
@@ -5180,7 +5227,9 @@ namespace IronRuby.Runtime {
             if (Tokenizer.TryParseEncodingHeader(reader, out encodingName, out line)) {
                 // A name Ruby does not know is as wrong as an encoding the comment itself could not
                 // be written in (UTF-16LE): MRI reports both as an ArgumentError, worded so.
-                var rubyEncoding = FindRubyEncoding(encodingName);
+                // "external", "locale" and the like are names Encoding.find resolves, not encodings:
+                // the parser does not know them (rb_enc_find_index there fails the same way).
+                var rubyEncoding = RubyEncoding.FindByName(encodingName);
                 if (rubyEncoding == null || !rubyEncoding.IsAsciiIdentity) {
                     throw new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
                 }

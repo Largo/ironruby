@@ -119,7 +119,7 @@ module Kernel
     unless defined
       # MRI names a class or module here by its #name, anything else by its #inspect.
       receiver = (::Module === self && self.name) || inspect
-      ::Kernel.raise(::NameError, "undefined singleton method '#{name}' for '#{receiver}'")
+      ::Kernel.raise(::NameError.new("undefined singleton method '#{name}' for '#{receiver}'", name, receiver: self))
     end
     method(name)
   end unless method_defined?(:singleton_method)
@@ -5028,8 +5028,11 @@ class Array
   # block_given? per element made it 4.7x MRI), and each pair through rb_check_array_type,
   # which is Array.try_convert - an Array is taken as it is, without asking its #to_ary; a
   # #to_ary that answers something else is that method's TypeError. The index moves with
-  # #succ (see Array#sum).
-  def to_h
+  # #succ (see Array#sum). The block gets each element through rb_yield_force_blockarg, so a
+  # lambda's two parameters take a pair apart as a plain block's do (&->(k, v) { }); that path
+  # is the C# __yield_force_blockarg__, and only a lambda takes it.
+  def to_h(&block)
+    return __to_h_force_blockarg__(&block) if block && block.lambda?
     result = {}
     given = block_given?
     i = 0
@@ -5043,6 +5046,20 @@ class Array
     end
     result
   end
+
+  def __to_h_force_blockarg__(&block)
+    result = {}
+    i = 0
+    while i < __ary_size__
+      element = __yield_force_blockarg__(__ary_at__(i), &block)
+      pair = ::Array === element ? element : ::Array.try_convert(element)
+      __to_h_pair_error__(element, pair, i) unless pair && pair.size == 2
+      result[pair[0]] = pair[1]
+      i = i.succ
+    end
+    result
+  end
+  private :__to_h_force_blockarg__
 
   def __to_h_pair_error__(element, pair, index)
     unless pair

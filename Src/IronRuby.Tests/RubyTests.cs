@@ -327,6 +327,7 @@ namespace IronRuby.Tests {
                 Scenario_RubyProcYieldArgs2,
                 Scenario_RubyProcYieldArgs3,
                 Scenario_RubyProcYieldArgs4,
+                Scenario_RubyProcYieldArgs5,
                 Scenario_RubyProcCallArgs1,
                 Scenario_RubyProcCallArgs2A,
                 Scenario_RubyProcCallArgs2B,
@@ -337,6 +338,7 @@ namespace IronRuby.Tests {
                 Scenario_RubyBlockArgs4B,
                 Scenario_RubyBlockArgs5,
                 Scenario_RubyBlockArgs6,
+                Scenario_RubyBlockArgs7,
                 Proc_RhsAndBlockArguments1,
                 Block_ProcParams1,
 
@@ -856,6 +858,7 @@ namespace IronRuby.Tests {
                 Visibility4,
                 Visibility5,
                 Visibility6,
+                Visibility7,
                 VisibilityCaching1,
                 VisibilityCaching2,
                 DefineMethodVisibility1,

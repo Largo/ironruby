@@ -222,6 +222,12 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// The method a Method#to_proc proc calls, whose #parameters the proc reports when the
+        /// method has no Ruby signature to give the dispatcher (a library method).
+        /// </summary>
+        public IronRuby.Builtins.RubyMethod WrappedMethod { get; internal set; }
+
+        /// <summary>
         /// The array the block's rest parameter is about to be given. See
         /// <see cref="RubyOps.NormalizeRestArgument(RubyArray, bool)"/>.
         /// </summary>

@@ -639,8 +639,12 @@ namespace IronRuby.Prism {
                 case Pm.NilNode _: return Literal.Nil(span);
                 case Pm.SelfNode _: return new SelfReference(span);
 
-                case Pm.ParenthesesNode parens:
-                    return StatementsAsExpression(parens.Body, span);
+                case Pm.ParenthesesNode parens: {
+                    var inner = StatementsAsExpression(parens.Body, span);
+                    // `(self).m` is not a call with self as the receiver: MRI only lets a private method
+                    // be called on a bare `self`, so the parentheses have to survive the unwrapping.
+                    return inner is SelfReference ? new BlockExpression(MakeStatements(inner), span) : inner;
+                }
                 case Pm.StatementsNode statements:
                     return StatementsAsExpression(statements, span);
                 case Pm.ImplicitNode implicitNode:
@@ -1829,7 +1833,13 @@ namespace IronRuby.Prism {
                 case Pm.LocalVariableTargetNode local:
                     return CurrentScope.ResolveOrAddVariable(local.Name, span);
                 case Pm.RequiredParameterNode requiredParam:
-                    return CurrentScope.ResolveOrAddVariable(requiredParam.Name, span);
+                    // a name inside a destructured parameter |(a, b)| is a parameter of the block like
+                    // any other, and shadows an outer local of that name rather than assigning it; a
+                    // lowered signature (LowerGeneralParameters) binds the ones it has defined already
+                    LocalVariable parameter;
+                    return CurrentScope.TryGetValue(requiredParam.Name, out parameter)
+                        ? parameter
+                        : CurrentScope.AddVariable(requiredParam.Name, span);
                 case Pm.InstanceVariableTargetNode ivar:
                     return new InstanceVariable(IvarName(ivar.Name), span);
                 case Pm.GlobalVariableTargetNode gvar:
