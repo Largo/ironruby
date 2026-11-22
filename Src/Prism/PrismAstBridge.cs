@@ -712,20 +712,24 @@ namespace IronRuby.Prism {
                 case Pm.EmbeddedStatementsNode embedded:
                     return StatementsAsExpression(embedded.Statements, span);
 
-                case Pm.RegularExpressionNode regex:
+                case Pm.RegularExpressionNode regex: {
                     WarnRegexp(regex.Unescaped, span);
+                    var encoding = RegexLiteralEncoding(regex);
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, _encoding), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, encoding), encoding, span) },
                         RegexOptions(regex), false, span);
-                case Pm.MatchLastLineNode matchLast:
+                }
+                case Pm.MatchLastLineNode matchLast: {
                     WarnRegexp(matchLast.Unescaped, span);
+                    var encoding = RegexLiteralEncoding(matchLast);
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, _encoding), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, encoding), encoding, span) },
                         RegexOptions(matchLast), true, span);
+                }
                 case Pm.InterpolatedRegularExpressionNode interpRegex:
-                    return new RegularExpression(StringParts(interpRegex.Parts), RegexOptions(interpRegex), span);
+                    return new RegularExpression(RegexParts(interpRegex.Parts, RegexOptions(interpRegex)), RegexOptions(interpRegex), span);
                 case Pm.InterpolatedMatchLastLineNode interpMatchLast:
-                    return new RegularExpression(StringParts(interpMatchLast.Parts), RegexOptions(interpMatchLast), true, span);
+                    return new RegularExpression(RegexParts(interpMatchLast.Parts, RegexOptions(interpMatchLast)), RegexOptions(interpMatchLast), true, span);
 
                 case Pm.CallNode call: return Call(call, span);
 
@@ -1266,6 +1270,61 @@ namespace IronRuby.Prism {
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// The parts of an interpolated regexp. An interpolation that is itself a plain string
+        /// literal (/a#{"b"}/) is folded into the literal text around it, as MRI's compiler does:
+        /// a regexp left with literal parts only is then built once, like /ab/, and a pattern
+        /// Onigmo rejects is a SyntaxError rather than a RegexpError. (An empty /a#{ }/ stays an
+        /// interpolation of nil, in MRI too.)
+        /// </summary>
+        private List<Expression>/*!*/ RegexParts(Pm.PmNode/*!*/[]/*!*/ parts, RubyRegexOptions options) {
+            var result = new List<Expression>();
+            foreach (var part in parts) {
+                if (part is Pm.StringNode fragment) {
+                    CheckRegexFragment(fragment, options);
+                }
+                if (part is Pm.EmbeddedStatementsNode embedded) {
+                    var body = (embedded.Statements as Pm.StatementsNode)?.Body;
+                    if (body != null && body.Length == 1 && body[0] is Pm.StringNode str) {
+                        result.Add(new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), Span(str)));
+                        continue;
+                    }
+                }
+                result.AddRange(StringParts(new[] { part }));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// MRI's compiler checks each piece of literal text of an interpolated regexp on its own
+        /// (parse_regexp_string_part): /\xc2#{ }\xa1/u is a SyntaxError although /\xc2\xa1/u is
+        /// fine. Text without escapes or non-ASCII characters has nothing to check.
+        /// </summary>
+        private void CheckRegexFragment(Pm.StringNode/*!*/ fragment, RubyRegexOptions options) {
+            if (_errorSink == null) {
+                return;
+            }
+            byte[] bytes = fragment.Unescaped;
+            if (Array.IndexOf(bytes, (byte)'\\') < 0 && Array.TrueForAll(bytes, b => b < 0x80)) {
+                return;
+            }
+            var encoding = LiteralEncoding(fragment);
+            try {
+                RubyRegex.CheckLiteralFragment(MutableString.CreateBinary(bytes, encoding), options);
+            } catch (RegexpError e) {
+                _errorSink.Add(_sourceUnit, e.Message, Span(fragment), 0, Severity.FatalError);
+            }
+        }
+
+        /// <summary>
+        /// The encoding of a regexp literal's text: binary when prism says a \x escape above 0x7f
+        /// forces it (/\x80/ in a US-ASCII file), the source encoding otherwise. MRI's
+        /// parse_regexp_encoding; a /u, /e, /s or /n option is the regexp options' business.
+        /// </summary>
+        private RubyEncoding/*!*/ RegexLiteralEncoding(Pm.PmNode/*!*/ node) {
+            return HasFlag(node, Pm.RegularExpressionFlags.ForcedBinaryEncoding) ? RubyEncoding.Binary : _encoding;
         }
 
         private ConstructedSymbol Symbol(Pm.PmNode/*!*/ node) {
