@@ -222,8 +222,10 @@ namespace IronRuby.Builtins {
 
             BigInteger value = self.IsFixnum ? (BigInteger)self.Fixnum : self.Bignum;
             if (value.Sign < 0 || value > UInt32.MaxValue) {
-                if (self.IsFixnum) {
-                    throw RubyExceptions.CreateRangeError("{0} out of char range", self.Fixnum);
+                // "bignum" is what MRI calls a number that is no Fixnum there, one beyond 62 bits:
+                // 2**32 is named.
+                if (self.IsFixnum || value >= -(BigInteger.One << 62) && value < (BigInteger.One << 62)) {
+                    throw RubyExceptions.CreateRangeError("{0} out of char range", value);
                 }
                 throw RubyExceptions.CreateRangeError("bignum out of char range");
             }
@@ -254,8 +256,25 @@ namespace IronRuby.Builtins {
             return ToChr(encoding, resultEncoding, (uint)codepoint);
         }
 
+        /// <summary>
+        /// The character of a %c directive. MRI's rb_str_format puts the bytes of the number
+        /// (rb_enc_mbcput) without asking whether they are a character of the encoding, which
+        /// rb_enc_uint_chr does: "%c" % 0x100 is "\x01\x00" in EUC-KR, where 0x100.chr("EUC-KR")
+        /// is an invalid codepoint. So the shapes of the multibyte encodings are not consulted.
+        /// </summary>
+        internal static MutableString/*!*/ ToFormatChr(RubyEncoding/*!*/ encoding, int codepoint) {
+            if (codepoint < 0) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            }
+            return ToChr(encoding, encoding, (uint)codepoint, false);
+        }
+
         /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
         internal static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
+            return ToChr(encoding, resultEncoding, codepoint, true);
+        }
+
+        private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint, bool checkShape) {
             switch (encoding.CodePage) {
                 case RubyEncoding.CodePageUTF16BE:
                 case RubyEncoding.CodePageUTF16LE:
@@ -268,13 +287,73 @@ namespace IronRuby.Builtins {
                     }
                     return MutableString.CreateMutable(Tokenizer.UnicodeCodePointToString((int)codepoint), resultEncoding);
 
-                case RubyEncoding.CodePageUTF7:
-                case RubyEncoding.CodePageUTF8:
                 case RubyEncoding.CodePageUTF32BE:
                 case RubyEncoding.CodePageUTF32LE:
+                    // A UTF-32 character is four bytes whatever the number, so one that is too
+                    // large is an invalid codepoint, not one out of range. MRI compares the
+                    // number as a signed one, though: from 0x80000000 up it passes for a small
+                    // one, and comes out as its four bytes.
+                    if (codepoint >= 0x80000000) {
+                        bool bigEndian = encoding.CodePage == RubyEncoding.CodePageUTF32BE;
+                        var raw = new byte[4];
+                        for (int i = 0; i < 4; i++) {
+                            raw[bigEndian ? i : 3 - i] = (byte)(codepoint >> (8 * (3 - i)));
+                        }
+                        return MutableString.CreateBinary(raw, resultEncoding);
+                    }
+                    if (codepoint > 0x10ffff || codepoint >= 0xd800 && codepoint <= 0xdfff) {
+                        throw InvalidCodePoint(encoding, codepoint);
+                    }
+                    return MutableString.CreateMutable(Tokenizer.UnicodeCodePointToString((int)codepoint), resultEncoding);
+
+                case RubyEncoding.CodePageEmacsMule:
+                case RubyEncoding.CodePageStatelessISO2022JP:
+                case RubyEncoding.CodePageStatelessISO2022JPKDDI:
+                    if (!checkShape) {
+                        goto default;
+                    }
+                    // enc/emacs_mule.c, which stateless-ISO-2022-JP is a replica of: a lead byte
+                    // of 0x81-0x8F begins two bytes, 0x90-0x9B three, 0x9C-0x9D four, and the
+                    // bytes after it are 0xA0-0xFF - but the second byte of a private charset
+                    // names it, and is 0xE0-0xEF after 0x9A and 0x9B, 0xF0-0xF4 after 0x9C and
+                    // 0xF5-0xFE after 0x9D. Nothing else above 0x7F is a character.
+                    if (codepoint <= 0x7f) {
+                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
+                    } else {
+                        int count = (codepoint <= 0xff) ? 1 : (codepoint <= 0xffff) ? 2 : (codepoint <= 0xffffff) ? 3 : 4;
+                        var mule = new byte[count];
+                        for (int i = 0; i < count; i++) {
+                            mule[i] = (byte)(codepoint >> (8 * (count - 1 - i)));
+                        }
+                        int lead = mule[0];
+                        bool valid = count == ((lead >= 0x81 && lead <= 0x8f) ? 2 : (lead >= 0x90 && lead <= 0x9b) ? 3 : (lead == 0x9c || lead == 0x9d) ? 4 : 0);
+                        for (int i = 1; valid && i < count; i++) {
+                            valid = mule[i] >= 0xa0;
+                        }
+                        if (valid && lead >= 0x9a) {
+                            int second = mule[1];
+                            valid = (lead <= 0x9b) ? second >= 0xe0 && second <= 0xef :
+                                (lead == 0x9c) ? second >= 0xf0 && second <= 0xf4 : second >= 0xf5 && second <= 0xfe;
+                        }
+                        if (!valid) {
+                            throw InvalidCodePoint(encoding, codepoint);
+                        }
+                        return MutableString.CreateBinary(mule, resultEncoding);
+                    }
+
+                case RubyEncoding.CodePageUTF7:
+                case RubyEncoding.CodePageUTF8:
+                case RubyEncoding.CodePageUTF8Mac:
+                case RubyEncoding.CodePageUTF8DoCoMo:
+                case RubyEncoding.CodePageUTF8KDDI:
+                case RubyEncoding.CodePageUTF8SoftBank:
                 case RubyEncoding.CodePageCESU8:
                     // Lone surrogates are not code points; letting them through produced a
                     // System.Text.EncoderFallbackException out of the encoder later on.
+                    // The two largest numbers are Oniguruma's invalid code units, a byte each.
+                    if (codepoint >= 0xfffffffe) {
+                        throw InvalidCodePoint(encoding, codepoint);
+                    }
                     if (codepoint > 0x10ffff) {
                         throw OutOfCharRange(codepoint);
                     }
@@ -321,7 +400,7 @@ namespace IronRuby.Builtins {
                     if (codepoint > 0xff && codepoint <= 0xffff) {
                         uint lead = codepoint >> 8, trail = codepoint & 0xff;
                         if (lead >= 0xa1 && lead <= 0xfe && trail >= 0xa1 && trail <= 0xfe ||
-                            lead == 0x8e && trail >= 0xa1 && trail <= 0xdf) {
+                            lead == 0x8e && trail >= 0xa1 && trail <= 0xfe) {
                             return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
                         }
                     }
@@ -336,30 +415,32 @@ namespace IronRuby.Builtins {
                     }
                     throw InvalidCodePoint(encoding, codepoint);
 
-                case 54936: // GB18030
-                    // Onigmo's gb18030_code_to_mbc writes the code point's significant bytes as
-                    // they are, and rb_enc_uint_chr then rejects anything that is not one valid
-                    // character: ASCII, a two byte lead/trail pair or a four byte
-                    // lead/digit/lead/digit sequence.
-                    if (codepoint <= 0x7f) {
-                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
-                    }
-                    if (codepoint > 0xff && codepoint <= 0xffff) {
-                        uint lead = codepoint >> 8, trail = codepoint & 0xff;
-                        if (lead >= 0x81 && lead <= 0xfe && trail >= 0x40 && trail <= 0xfe && trail != 0x7f) {
-                            return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
-                        }
-                    }
-                    if (codepoint > 0xffffff) {
-                        byte b1 = (byte)(codepoint >> 24), b2 = (byte)(codepoint >> 16), b3 = (byte)(codepoint >> 8), b4 = (byte)codepoint;
-                        if (b1 >= 0x81 && b1 <= 0xfe && b2 >= 0x30 && b2 <= 0x39 &&
-                            b3 >= 0x81 && b3 <= 0xfe && b4 >= 0x30 && b4 <= 0x39) {
-                            return MutableString.CreateBinary(new[] { b1, b2, b3, b4 }, resultEncoding);
-                        }
-                    }
-                    throw InvalidCodePoint(encoding, codepoint);
-
                 default:
+                    // A multibyte encoding whose shape is known: the bytes of the number - as many
+                    // as it has, which is what MRI's code_to_mbclen answers for these - are the
+                    // character if they are exactly one well formed sequence. One that is longer
+                    // than the encoding's longest character is out of range, anything else that
+                    // is not a character is an invalid codepoint: 0x80 and 0x100 in EUC-KR,
+                    // 0x10000 in GB18030. A well formed sequence the table has no character for
+                    // is a character all the same.
+                    if (codepoint > 0x7f && checkShape) {
+                        int count = (codepoint <= 0xff) ? 1 : (codepoint <= 0xffff) ? 2 : (codepoint <= 0xffffff) ? 3 : 4;
+                        var bytes = new byte[count];
+                        for (int i = 0; i < count; i++) {
+                            bytes[i] = (byte)(codepoint >> (8 * (count - 1 - i)));
+                        }
+                        int maxLength;
+                        int length = encoding.GetPreciseCharacterLength(bytes, count, out maxLength);
+                        if (maxLength > 0) {
+                            if (count > maxLength) {
+                                throw OutOfCharRange(codepoint);
+                            }
+                            if (length != count) {
+                                throw InvalidCodePoint(encoding, codepoint);
+                            }
+                            return MutableString.CreateBinary(bytes, resultEncoding);
+                        }
+                    }
                     if (codepoint <= 0xff) {
                         return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
                     }

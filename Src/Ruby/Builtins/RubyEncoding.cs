@@ -665,6 +665,18 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// MRI's rb_enc_precise_mbclen, for the multibyte encodings that are neither Unicode nor
+        /// single byte: the length of the well formed character <paramref name="bytes"/> begin
+        /// with, 0 if it is cut short, negative if there is none. <paramref name="maxLength"/>
+        /// is the longest character of the encoding (MRI's rb_enc_mbmaxlen), and 0 for an
+        /// encoding this does not cover. A well formed sequence is a character whether or not
+        /// the encoding's table has one for it.
+        /// </summary>
+        public int GetPreciseCharacterLength(byte[]/*!*/ bytes, int count, out int maxLength) {
+            return RubyOnlyEncodings.PreciseLength(StrictEncoding, bytes, count, out maxLength);
+        }
+
+        /// <summary>
         /// The smallest number of bytes a character of this encoding occupies. It is 1 for
         /// everything but UTF-16 and UTF-32, whose code units are 2 and 4 bytes wide; a run of
         /// bytes that decodes to nothing still counts as one character per unit there, which is

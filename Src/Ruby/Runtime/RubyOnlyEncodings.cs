@@ -178,6 +178,27 @@ namespace IronRuby.Runtime {
         /// That is decided on the bytes, not on characters: "\xA1\x39" is one run in GB18030
         /// even though "\x39" alone is a valid character.
         /// </summary>
+        /// <summary>
+        /// MRI's rb_enc_precise_mbclen for the multibyte encodings whose shape is known here: the
+        /// length of the well formed character the bytes begin with, 0 if they are the beginning
+        /// of one that is cut short, negative if they begin none. <paramref name="maxLength"/> is
+        /// the encoding's longest character, and 0 - with a result of 0 - for an encoding this
+        /// does not cover (the Unicode ones and the single byte ones).
+        /// </summary>
+        internal static int PreciseLength(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count, out int maxLength) {
+            var multiByte = encoding as MultiByteEncoding;
+            if (multiByte != null) {
+                maxLength = multiByte.MaxLength;
+                return multiByte.PreciseLength(bytes, 0, count);
+            }
+            if (encoding.CodePage == 54936) {
+                maxLength = 4;
+                return ScanGb18030(bytes, 0, count);
+            }
+            maxLength = 0;
+            return 0;
+        }
+
         internal static System.Collections.Generic.List<int> FindScrubRuns(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count) {
             var multiByte = encoding as MultiByteEncoding;
             int maxLength;
@@ -225,6 +246,9 @@ namespace IronRuby.Runtime {
         // 0x80-0xFE, or a four byte sequence of 0x30-0x39, 0x81-0xFE, 0x30-0x39. The length of
         // the sequence at index, 0 if it is cut short, or -1 if it is not one.
         private static int ScanGb18030(byte[]/*!*/ bytes, int index, int end) {
+            if (index >= end) {
+                return 0;
+            }
             byte b = bytes[index];
             if (b < 0x80) {
                 return 1;
@@ -1565,10 +1589,26 @@ namespace IronRuby.Runtime {
             if (lead >= 0x81 && lead <= 0x8f) {
                 return 2;
             }
-            if (lead >= 0x90 && lead <= 0x99) {
+            if (lead >= 0x90 && lead <= 0x9b) {
                 return 3;
             }
+            if (lead == 0x9c || lead == 0x9d) {
+                return 4;
+            }
             return 0;
+        }
+
+        // The second byte of a private charset names it (enc/emacs_mule.c): 0xE0-0xEF after
+        // 0x9A and 0x9B, 0xF0-0xF4 after 0x9C, 0xF5-0xFE after 0x9D. Integer#chr builds these
+        // characters (Integer.ToChr), so they have to be valid here too.
+        private static bool IsCharsetByte(byte lead, byte second) {
+            switch (lead) {
+                case 0x9a:
+                case 0x9b: return second >= 0xe0 && second <= 0xef;
+                case 0x9c: return second >= 0xf0 && second <= 0xf4;
+                case 0x9d: return second >= 0xf5 && second <= 0xfe;
+                default: return true;
+            }
         }
 
         /// <summary>The index of the first byte that is not part of a well formed sequence, or -1.</summary>
@@ -1585,6 +1625,9 @@ namespace IronRuby.Runtime {
                     if (bytes[i + j] < 0xa0) {
                         return i;
                     }
+                }
+                if (length > 2 && !IsCharsetByte(bytes[i], bytes[i + 1])) {
+                    return i;
                 }
                 i += length;
             }

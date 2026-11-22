@@ -554,19 +554,21 @@ namespace IronRuby.Runtime.CApi {
             args.AddRange(FromValues(argc, argv));
             var sizeArgs = new RubyArray(FromValues(argc, argv));
             object enumerator = null;
+            var code = CurrentCode();
             var size = Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>((b, self, unused, rest) => {
                 VALUE* sizeArgv = stackalloc VALUE[2];
                 sizeArgv[0] = ToValue(sizeArgs);
                 sizeArgv[1] = ToValue(enumerator);
-                return FromValue(CallMethod((IntPtr)func, 2, recv, 2, sizeArgv));
+                return FromValue(CallMethod((IntPtr)func, 2, recv, 2, sizeArgv, code));
             }));
             enumerator = Send(FromValue(recv), "enum_for", size, args.ToArray());
             return ToValue(enumerator);
         }
 
         internal static void rb_set_end_proc(IntPtr func, VALUE arg) {
+            var code = CurrentCode();
             Send(_context.KernelModule, "at_exit", Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>(
-                (b, self, unused, args) => { CallVoid(func, (void*)arg); return null; })));
+                (b, self, unused, args) => { CallVoid(func, (void*)arg, code); return null; })));
         }
 
         #endregion
@@ -941,8 +943,9 @@ namespace IronRuby.Runtime.CApi {
         }
 
         internal static VALUE rb_thread_create(IntPtr f, void* g) {
+            var code = CurrentCode();
             var body = Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>(
-                (b, self, unused, args) => FromValue(CallFunc1(f, (VALUE)g))));
+                (b, self, unused, args) => FromValue(CallFunc1(f, (VALUE)g, code))));
             return ToValue(Send(Constant("Thread"), "new", body));
         }
 

@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace IronRuby.Runtime.CApi {
     internal static unsafe partial class CApi {
-        internal const int FunctionCount = 574;
+        internal const int FunctionCount = 577;
 
         internal static void FillFunctionTable(IntPtr* table) {
             table[0] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_builtin_type;
@@ -508,80 +508,83 @@ namespace IronRuby.Runtime.CApi {
             table[497] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong*, ulong*, int>)&Entry_rb_frame_method_id_and_class;
             table[498] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, void*, void*, int>)&Entry_rb_ir_blocking_begin;
             table[499] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void>)&Entry_rb_ir_blocking_end;
-            table[500] = (IntPtr)(delegate* unmanaged[Cdecl]<long, CLong, ulong>)&Entry_rb_time_new;
-            table[501] = (IntPtr)(delegate* unmanaged[Cdecl]<long, CLong, ulong>)&Entry_rb_time_nano_new;
-            table[502] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, int, ulong>)&Entry_rb_time_timespec_new;
-            table[503] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_interval;
-            table[504] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_timeval;
-            table[505] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeSpec>)&Entry_rb_time_timespec;
-            table[506] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, void>)&Entry_rb_timespec_now;
-            table[507] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_get;
-            table[508] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_cvar_set;
-            table[509] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_defined;
-            table[510] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_cv_get;
-            table[511] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_cv_set;
-            table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_define_class_variable;
-            table[513] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_hash_new_capa;
-            table[514] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash;
-            table[515] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_delete_if;
-            table[516] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_freeze;
-            table[517] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_fiber_new;
-            table[518] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_resume;
-            table[519] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_fiber_yield;
-            table[520] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_fiber_current;
-            table[521] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fiber_alive_p;
-            table[522] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_raise;
-            table[523] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_proc_call_kw;
-            table[524] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_proc_call_with_block_kw;
-            table[525] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, IntPtr, ulong, ulong>)&Entry_rb_catch;
-            table[526] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_variable;
-            table[527] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_readonly_variable;
-            table[528] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void*, void*, void>)&Entry_rb_define_hooked_variable;
-            table[529] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, void*, void>)&Entry_rb_define_virtual_variable;
-            table[530] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
-            table[531] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_ir_data_new;
-            table[532] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_allocate_builtin;
-            table[533] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_apply;
-            table[534] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_utf8_str_new;
-            table[535] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_utf8_str_new_cstr;
-            table[536] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_Hash;
-            table[537] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_Rational;
-            table[538] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_Complex;
-            table[539] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_backref_set;
-            table[540] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_lastline_get;
-            table[541] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_lastline_set;
-            table[542] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_define_finalizer;
-            table[543] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_undefine_finalizer;
-            table[544] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*, int>)&Entry_rb_arithmetic_sequence_extract;
-            table[545] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong*, CLong*, CLong*, CLong, int, ulong>)&Entry_rb_arithmetic_sequence_beg_len_step;
-            table[546] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_gc_latest_gc_info;
-            table[547] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, uint, IntPtr, void*, ulong>)&Entry_rb_tracepoint_new;
-            table[548] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_tracepoint_enable;
-            table[549] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_tracepoint_disable;
-            table[550] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_tracepoint_enabled_p;
-            table[551] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*>)&Entry_rb_tracearg_from_tracepoint;
-            table[552] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, uint>)&Entry_rb_tracearg_event_flag;
-            table[553] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_event;
-            table[554] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_lineno;
-            table[555] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_path;
-            table[556] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_parameters;
-            table[557] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_method_id;
-            table[558] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_callee_id;
-            table[559] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_defined_class;
-            table[560] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_binding;
-            table[561] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_self;
-            table[562] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_return_value;
-            table[563] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_raised_exception;
-            table[564] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_eval_script;
-            table[565] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_instruction_sequence;
-            table[566] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void*, ulong>)&Entry_rb_debug_inspector_open;
-            table[567] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_debug_inspector_backtrace_locations;
-            table[568] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_self_get;
-            table[569] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_class_get;
-            table[570] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_binding_get;
-            table[571] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_iseq_get;
-            table[572] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_depth;
-            table[573] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_debug_inspector_current_depth;
+            table[500] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_ir_with_gvl_begin;
+            table[501] = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&Entry_rb_ir_with_gvl_end;
+            table[502] = (IntPtr)(delegate* unmanaged[Cdecl]<int, void>)&Entry_rb_ir_ext_thread_safe;
+            table[503] = (IntPtr)(delegate* unmanaged[Cdecl]<long, CLong, ulong>)&Entry_rb_time_new;
+            table[504] = (IntPtr)(delegate* unmanaged[Cdecl]<long, CLong, ulong>)&Entry_rb_time_nano_new;
+            table[505] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, int, ulong>)&Entry_rb_time_timespec_new;
+            table[506] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_interval;
+            table[507] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeVal>)&Entry_rb_time_timeval;
+            table[508] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, TimeSpec>)&Entry_rb_time_timespec;
+            table[509] = (IntPtr)(delegate* unmanaged[Cdecl]<TimeSpec*, void>)&Entry_rb_timespec_now;
+            table[510] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_get;
+            table[511] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, void>)&Entry_rb_cvar_set;
+            table[512] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_cvar_defined;
+            table[513] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong>)&Entry_rb_cv_get;
+            table[514] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_cv_set;
+            table[515] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, byte*, ulong, void>)&Entry_rb_define_class_variable;
+            table[516] = (IntPtr)(delegate* unmanaged[Cdecl]<CLong, ulong>)&Entry_rb_hash_new_capa;
+            table[517] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash;
+            table[518] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_delete_if;
+            table[519] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_hash_freeze;
+            table[520] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, ulong, ulong>)&Entry_rb_fiber_new;
+            table[521] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_resume;
+            table[522] = (IntPtr)(delegate* unmanaged[Cdecl]<int, ulong*, ulong>)&Entry_rb_fiber_yield;
+            table[523] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_fiber_current;
+            table[524] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_fiber_alive_p;
+            table[525] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong>)&Entry_rb_fiber_raise;
+            table[526] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, int, ulong>)&Entry_rb_proc_call_kw;
+            table[527] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong*, ulong, int, ulong>)&Entry_rb_proc_call_with_block_kw;
+            table[528] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, IntPtr, ulong, ulong>)&Entry_rb_catch;
+            table[529] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_variable;
+            table[530] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void>)&Entry_rb_define_readonly_variable;
+            table[531] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong*, void*, void*, void>)&Entry_rb_define_hooked_variable;
+            table[532] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, void*, void*, void>)&Entry_rb_define_virtual_variable;
+            table[533] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_ident_hash_new;
+            table[534] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, int, ulong>)&Entry_rb_ir_data_new;
+            table[535] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_ir_allocate_builtin;
+            table[536] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong, ulong>)&Entry_rb_apply;
+            table[537] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, CLong, ulong>)&Entry_rb_utf8_str_new;
+            table[538] = (IntPtr)(delegate* unmanaged[Cdecl]<byte*, ulong>)&Entry_rb_utf8_str_new_cstr;
+            table[539] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_Hash;
+            table[540] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_Rational;
+            table[541] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_Complex;
+            table[542] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_backref_set;
+            table[543] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_lastline_get;
+            table[544] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void>)&Entry_rb_lastline_set;
+            table[545] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong, ulong>)&Entry_rb_define_finalizer;
+            table[546] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_undefine_finalizer;
+            table[547] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*, int>)&Entry_rb_arithmetic_sequence_extract;
+            table[548] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, CLong*, CLong*, CLong*, CLong, int, ulong>)&Entry_rb_arithmetic_sequence_beg_len_step;
+            table[549] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_gc_latest_gc_info;
+            table[550] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, uint, IntPtr, void*, ulong>)&Entry_rb_tracepoint_new;
+            table[551] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_tracepoint_enable;
+            table[552] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_tracepoint_disable;
+            table[553] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, ulong>)&Entry_rb_tracepoint_enabled_p;
+            table[554] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong, void*>)&Entry_rb_tracearg_from_tracepoint;
+            table[555] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, uint>)&Entry_rb_tracearg_event_flag;
+            table[556] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_event;
+            table[557] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_lineno;
+            table[558] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_path;
+            table[559] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_parameters;
+            table[560] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_method_id;
+            table[561] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_callee_id;
+            table[562] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_defined_class;
+            table[563] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_binding;
+            table[564] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_self;
+            table[565] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_return_value;
+            table[566] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_raised_exception;
+            table[567] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_eval_script;
+            table[568] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_tracearg_instruction_sequence;
+            table[569] = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void*, ulong>)&Entry_rb_debug_inspector_open;
+            table[570] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, ulong>)&Entry_rb_debug_inspector_backtrace_locations;
+            table[571] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_self_get;
+            table[572] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_class_get;
+            table[573] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_binding_get;
+            table[574] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_iseq_get;
+            table[575] = (IntPtr)(delegate* unmanaged[Cdecl]<void*, CLong, ulong>)&Entry_rb_debug_inspector_frame_depth;
+            table[576] = (IntPtr)(delegate* unmanaged[Cdecl]<ulong>)&Entry_rb_debug_inspector_current_depth;
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -7076,6 +7079,45 @@ namespace IronRuby.Runtime.CApi {
             var frame = EnterManaged();
             try {
                 rb_ir_blocking_end(token);
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_ir_with_gvl_begin() {
+            var frame = EnterManaged();
+            try {
+                rb_ir_with_gvl_begin();
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_ir_with_gvl_end() {
+            var frame = EnterManaged();
+            try {
+                rb_ir_with_gvl_end();
+            } catch (Exception e) {
+                SetPending(e);
+                return;
+            } finally {
+                LeaveManaged(frame);
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static void Entry_rb_ir_ext_thread_safe(int flag) {
+            var frame = EnterManaged();
+            try {
+                rb_ir_ext_thread_safe(flag);
             } catch (Exception e) {
                 SetPending(e);
                 return;

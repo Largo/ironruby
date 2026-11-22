@@ -16,9 +16,13 @@ namespace IronRuby.Runtime.CApi {
     public sealed class DataObject : RubyObject, IMemorySized {
         internal readonly bool Typed;
 
-        internal DataObject(RubyClass/*!*/ cls, bool typed)
+        // the extension code that wrapped it, which its type's dsize runs as (CApi.Locks.cs)
+        internal readonly CCode/*!*/ Code;
+
+        internal DataObject(RubyClass/*!*/ cls, bool typed, CCode/*!*/ code)
             : base(cls) {
             Typed = typed;
+            Code = code;
         }
 
         // what the type's dsize function says (rb_objspace_data_type_memsize); untyped data has none
@@ -33,7 +37,7 @@ namespace IronRuby.Runtime.CApi {
         protected override RubyObject/*!*/ CreateInstance() {
             RubyClass cls = ImmediateClass.NominalClass;
             var allocator = cls.CAllocator;
-            return allocator != null ? (RubyObject)allocator(cls) : new DataObject(cls, Typed);
+            return allocator != null ? (RubyObject)allocator(cls) : new DataObject(cls, Typed, Code);
         }
     }
 }

@@ -77,3 +77,24 @@ try('chr 2 args') { 65.chr(Encoding::UTF_8, Encoding::UTF_8) }
 try('class of result') { 65.chr.class }
 try('frozen?') { 65.chr.frozen? }
 try('not equal') { 82.chr.equal?(82.chr) }
+
+# Every encoding that is not a dummy: MRI's rb_enc_uint_chr takes the bytes of the number, as
+# many as the encoding's code_to_mbclen says, and accepts them when they are exactly one well
+# formed character (rb_enc_precise_mbclen) - "invalid codepoint" when they are not, "out of
+# char range" when the number is wider than the encoding's longest character. String#<< and
+# #concat with an Integer go the same way.
+puts "== every encoding: chr, <<, concat =="
+WIDE = [0x41, 0x7f, 0x80, 0x81, 0xa0, 0xa1, 0xdf, 0xe0, 0xfe, 0xff, 0x100, 0x4142, 0x8130, 0x8140, 0x817f, 0x8180, 0x81fe, 0x81ff, 0x8040,
+        0x8ea1, 0x8ee0, 0xa1a1, 0xa140, 0xd800, 0xdfff, 0xe000, 0xfe40, 0xfefe, 0xff40, 0xffff,
+        0x10000, 0x10ffff, 0x110000, 0x813081, 0x8ea1a1, 0x8fa1a1, 0x8fa1a0, 0xffffff, 0x90a1a1, 0x90a0ff, 0x99ffff, 0x9aa0a1, 0x9ba19f, 0x9ca0a1, 0x9ea0a0,
+        0x1000000, 0x7fffffff, 0x80000000, 0x9ca0a1a2, 0x9da0a0a0, 0x9dffff9f, 0x9ae0a0, 0x9befff, 0x9bf0a0, 0x9adfa0, 0x9cf0a0a0, 0x9cf4ffff, 0x9cf5a0a0, 0x9df5a0a0, 0x9dfeffff, 0x9dffa0a0, 0xfffffffd, 0xfffffffe, 0x9ea0a0a0, 0x90a0a0a0, 0x81308130, 0x81308140, 0x81308039, 0x8130fe39, 0x8130ff30, 0x813a8130, 0x80308130, 0x84318130, 0x84328130,
+        0x8ea1a1a1, 0x8eb0fefe, 0x8eb1a1a1, 0x8ea0a1a1, 0x8fa1a1a1, 0xa1a1a1a1, 0xd8000000, 0xe3329a35, 0xfe39fe39, 0xff308130, 0xffffffff,
+        0x100000000, BIG, -1]
+Encoding.list.reject(&:dummy?).sort_by(&:name).each do |enc|
+  WIDE.each do |n|
+    try("#{n.to_s(16)}.chr(#{enc.name})") { n.chr(enc) }
+    try("#{enc.name} << #{n.to_s(16)}") { (+"").force_encoding(enc) << n }
+  end
+  try("#{enc.name} concat") { (+"").force_encoding(enc).concat(0x41, 0x8ea1a1a1, 0x41) }
+  try("#{enc.name} US-ASCII << 0x80") { enc.name == "US-ASCII" ? ((+"").force_encoding(enc) << 0x80) : nil }
+end

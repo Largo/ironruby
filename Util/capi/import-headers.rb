@@ -85,6 +85,7 @@ File.write(File.join(dst, 'ruby/internal/ironruby.h'), <<~'C')
    * These are not API: an extension uses the CRuby macros, which work on IronRuby as written.
    */
   #define IRONRUBY 1
+  #include "ruby/internal/stdbool.h"
 
   #ifdef __cplusplus
   extern "C" {
@@ -116,6 +117,11 @@ File.write(File.join(dst, 'ruby/internal/ironruby.h'), <<~'C')
   /* CRuby's own, declared here too because encoding.h's inline functions now call them */
   int rb_enc_get_index(VALUE obj);
   void rb_enc_set_index(VALUE obj, int encindex);
+  /* TruffleRuby's, which IronRuby shares: with true, the methods and other functions the extension
+   * defines after it may run on several threads at once; otherwise each runs under the extension's
+   * lock (there is no GVL to keep them apart). rb_ext_ractor_safe(true) says as much. */
+  void rb_ext_thread_safe(bool flag);
+  #define HAVE_RB_EXT_THREAD_SAFE 1
   #ifdef __cplusplus
   }
   #endif

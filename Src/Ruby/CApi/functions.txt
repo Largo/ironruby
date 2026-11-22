@@ -511,6 +511,9 @@ void rb_set_end_proc(void (*func)(VALUE arg), VALUE arg);
 int rb_frame_method_id_and_class(ID *idp, VALUE *klassp);
 int rb_ir_blocking_begin(void *ubf, void *data2, void *thread);
 void rb_ir_blocking_end(int token);
+void rb_ir_with_gvl_begin(void);
+void rb_ir_with_gvl_end(void);
+void rb_ir_ext_thread_safe(int flag);
 
 # Third batch: Time, class variables, global variables, fibers.
 VALUE rb_time_new(time_t sec, long usec);

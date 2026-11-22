@@ -33,9 +33,10 @@ namespace IronRuby.Runtime.CApi {
             if (_callTracepoint == null) {
                 _callTracepoint = (delegate* unmanaged[Cdecl]<void*, VALUE, void*, int*, void>)ShimExport("rb_ir_call_tracepoint");
             }
+            var code = CurrentCode();
             var handler = Proc.Create(_context, 0, new Func<BlockParam, object, object[], RubyArray, object>((b, self, unused, args) => {
                 int raised;
-                var depth = EnterNative();
+                var depth = EnterNative(code);
                 try {
                     _callTracepoint((void*)func, ToValue(args.Count > 0 ? args[0] : null), data, &raised);
                 } finally {
@@ -225,7 +226,8 @@ namespace IronRuby.Runtime.CApi {
             }
             int raised;
             nuint size;
-            var depth = EnterNative();
+            // ObjectSpace.memsize_of runs in Ruby: dsize runs under the lock of the extension whose object it is
+            var depth = EnterNative(obj.Code);
             try {
                 size = _typedDataMemsize(ToValue(obj), &raised);
             } finally {
