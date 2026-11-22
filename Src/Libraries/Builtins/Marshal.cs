@@ -956,6 +956,12 @@ namespace IronRuby.Builtins {
                             } else if (obj is Exception) {
                                 WriteException((Exception)obj, instanceNames);
                             } else {
+                                // A Queue or a ConditionVariable gets here only when its class has no #marshal_dump
+                                // (Queue's own says "can't dump"), such as a Queue.dup that removed it: a Ruby class
+                                // as far as the class chain says, backed by C data all the same ([Bug #9674]).
+                                if (obj is IronRuby.StandardLibrary.Threading.RubyQueue || obj is IronRuby.StandardLibrary.Threading.RubyConditionVariable) {
+                                    throw RubyExceptions.CreateTypeError("no _dump_data is defined for class {0}", _context.GetClassDisplayName(obj));
+                                }
                                 RequireDumpableAsObject(theClass);
                                 WriteObject(obj);
                                 if (isSet) {
