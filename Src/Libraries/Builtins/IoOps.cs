@@ -2586,7 +2586,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static MutableString ReadLineOrParagraph(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self,
             bool universalNewline, MutableString separator, int limit, out bool converted) {
-            converted = self.HasPendingChars || (self.Enc2 != null && self.Enc2.MinBytesPerChar > 1);
+            // A byte limit counts the bytes of the converted text, too: "r:iso-8859-1:utf-8" with a
+            // limit of 2 reads one "é", which is two bytes once converted, not the two "é"s two
+            // bytes of the file hold; a UTF-32LE internal encoding makes every character four.
+            converted = self.HasPendingChars || (self.Enc2 != null && (self.Enc2.MinBytesPerChar > 1 || limit >= 0));
             if (converted) {
                 return ReadLineFromPendingChars(transcode, universal, self, separator, limit);
             }
