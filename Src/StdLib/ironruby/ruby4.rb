@@ -4665,6 +4665,12 @@ class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 class << Dir
   # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
   def home(user = nil)
+    # MRI converts the name with to_str, and an empty one is the current user, as nil is.
+    unless user.nil?
+      raise TypeError, "no implicit conversion of #{user.class} into String" unless user.respond_to?(:to_str)
+      user = user.to_str
+      user = nil if user.empty?
+    end
     if user.nil?
       dir = ENV['HOME']
       if dir.nil? && File::ALT_SEPARATOR
@@ -4690,7 +4696,6 @@ class << Dir
       return File::ALT_SEPARATOR ? dir.tr("\\", "/") : dir.dup
     end
 
-    raise TypeError, "no implicit conversion of #{user.class} into String" unless user.is_a?(String)
     require 'etc'
     pw = (Etc.getpwnam(user) rescue nil)
     raise ArgumentError, "user #{user} doesn't exist" unless pw
