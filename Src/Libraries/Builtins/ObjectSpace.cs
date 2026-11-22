@@ -164,7 +164,17 @@ namespace IronRuby.Builtins {
                         _pending.Dequeue();
                         RubyUtils.SafePointRequestDone();
                     }
-                    invoker.RunOnMainThread();
+
+                    // MRI runs finalizers with the thread's pending interrupts masked
+                    // (rb_gc_set_pending_interrupt): a signal's Interrupt or a Thread#raise that
+                    // arrives meanwhile is raised in the code the finalizer interrupted, not
+                    // swallowed as an exception in the finalizer ([Bug #10595]).
+                    int hold = RubyUtils.HoldInterrupts();
+                    try {
+                        invoker.RunOnMainThread();
+                    } finally {
+                        RubyUtils.ReleaseInterrupts(hold);
+                    }
                 }
             } finally {
                 _draining = false;
