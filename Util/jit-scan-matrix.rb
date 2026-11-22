@@ -785,7 +785,7 @@ def jz_run_row(label, v)
   r1 = (z.sp_run rescue $!.class)
   z2 = JzRun.new(v)
   r2 = (z2.sp_run_if rescue $!.class)
-  t('opening run then a deopt: ' + label) { [r1, z.instance_variables, z.k = nil, r2, z2.instance_variables, z2.a] }
+  t('opening run then a deopt: ' + label) { [r1, z.instance_variables, z.k, r2, z2.instance_variables, z2.a] }
 end
 class JzRun; attr_accessor :k; end
 jz_run_row('an Array', [1, 2, 3])
