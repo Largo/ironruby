@@ -659,7 +659,7 @@ namespace IronRuby.Prism {
                             if (IsSplattedKeywordHash(element)) {
                                 var temp = NewTemp(plain, elementSpan, out var assignment);
                                 items.Add(new SplattedArgument(new ConditionalExpression(
-                                    new MethodCall(assignment, "empty?", null, elementSpan),
+                                    HashEmptyTest(assignment, elementSpan),
                                     new ArrayConstructor(new Arguments(new Expression[0]), elementSpan),
                                     new ArrayConstructor(new Arguments(new Expression[] { temp }), elementSpan),
                                     elementSpan)));
@@ -2534,13 +2534,14 @@ namespace IronRuby.Prism {
             } else if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
                 // `def m(**nil)` accepts no keywords at all, which is only detectable by
                 // looking at the trailing hash - so it takes one, just to refuse it
-                // (a lambda is as strict as a method about this; a plain block is not)
-                if ((isMethod || !autoSplat) && optional.Count == 0 && unsplat == null) {
+                // (a lambda is as strict as a method about this; a plain block is not).
+                // A method takes its arguments apart by hand (LowerGeneralParameters), so that
+                // the keywords are refused before the arity is checked, as MRI's
+                // setup_parameters_complex does: def m(a, **nil); m(1, 2, k: 1) is "no keywords
+                // accepted", where the lowered signature's own arity check would say "given 3".
+                // A lambda refuses them before its arity check anyway (RubyOps.RequireLambdaArity).
+                if (!isMethod && !autoSplat && optional.Count == 0 && unsplat == null) {
                     prologue = RefuseKeywords(optional, mandatory, span);
-                    if (isMethod) {
-                        // `super` must not forward the hash taken only to be refused
-                        _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
-                    }
                 } else if (isMethod || !autoSplat) {
                     // with optional or rest positionals the hash would land among them
                     // (`def merge(*enums, **nil)`), so take the arguments apart by hand like a
@@ -2649,6 +2650,14 @@ namespace IronRuby.Prism {
                 statements.Add(popKeywords);
             }
 
+            // `**nil` refuses the keywords before anything else looks at the arguments: MRI's
+            // setup_parameters_complex raises "no keywords accepted" ahead of the arity check
+            // and of any optional parameter's default.
+            bool refusesKeywords = node.KeywordRest is Pm.NoKeywordsParameterNode;
+            if (refusesKeywords) {
+                statements.Add(RefuseKeywordHash(kwVar, span));
+            }
+
             // The lowered signature is a single splat, so nothing checks how many
             // positional arguments actually arrived - a method or lambda has to do it
             // itself, after the keyword hash was taken off the end. Without this a Hash
@@ -2688,8 +2697,10 @@ namespace IronRuby.Prism {
                 statements.Add(AssignNext(post, args, span));
             }
 
-            foreach (var statement in BindKeywordsFrom(node, kwVar, isMethod)) {
-                statements.Add(statement);
+            if (!refusesKeywords) {
+                foreach (var statement in BindKeywordsFrom(node, kwVar, isMethod)) {
+                    statements.Add(statement);
+                }
             }
 
             prologue = statements;
@@ -2797,7 +2808,7 @@ namespace IronRuby.Prism {
 
             if (!acceptsKeywords) {
                 checks.Add(new UnlessExpression(
-                    new MethodCall(kwVar, "empty?", null, span),
+                    HashEmptyTest(kwVar, span),
                     new Statements(RaiseError("ArgumentError", "no keywords accepted", span)), null, span));
             }
 
@@ -2848,12 +2859,7 @@ namespace IronRuby.Prism {
         private List<Expression>/*!*/ BindKeywordsFrom(Pm.ParametersNode/*!*/ node, LocalVariable/*!*/ kwVar, bool isMethod) {
             var span = Span(node);
             if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
-                // `**nil`: MRI says "no keywords accepted" rather than naming the keywords
-                return new List<Expression> {
-                    new UnlessExpression(
-                        new MethodCall(kwVar, "empty?", null, span),
-                        new Statements(RaiseError("ArgumentError", "no keywords accepted", span)), null, span)
-                };
+                return new List<Expression> { RefuseKeywordHash(kwVar, span) };
             }
             var prologue = new List<Expression>();
             var names = new List<string>();
@@ -2946,6 +2952,22 @@ namespace IronRuby.Prism {
             }
             result.AddRange(prologue);
             return result;
+        }
+
+        /// <summary>
+        /// True for a Hash with no entries, without calling #empty?, which a program may redefine
+        /// and MRI does not call: `[**h]` (newarraykwsplat) and `**nil` (vm_args.c) look at the
+        /// table itself. It is the keyword match for no names and no **rest.
+        /// </summary>
+        private Expression/*!*/ HashEmptyTest(Expression/*!*/ hash, SourceSpan span) {
+            return KeywordParameterRead.Match(hash, new string[0], 0, false, _encoding, span);
+        }
+
+        // `**nil`: MRI says "no keywords accepted" rather than naming the keywords
+        private Expression/*!*/ RefuseKeywordHash(LocalVariable/*!*/ kwVar, SourceSpan span) {
+            return new UnlessExpression(
+                HashEmptyTest(kwVar, span),
+                new Statements(RaiseError("ArgumentError", "no keywords accepted", span)), null, span);
         }
 
         private Expression/*!*/ SymbolArray(List<string>/*!*/ names, SourceSpan span) {
