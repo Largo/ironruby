@@ -119,7 +119,7 @@ module Kernel
     unless defined
       # MRI names a class or module here by its #name, anything else by its #inspect.
       receiver = (::Module === self && self.name) || inspect
-      ::Kernel.raise(::NameError, "undefined singleton method '#{name}' for '#{receiver}'")
+      ::Kernel.raise(::NameError.new("undefined singleton method '#{name}' for '#{receiver}'", name, receiver: self))
     end
     method(name)
   end unless method_defined?(:singleton_method)
