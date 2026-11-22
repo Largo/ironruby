@@ -745,9 +745,17 @@ namespace IronRuby.Builtins {
                 return name;
             }
 
+            // A name the internal encoding has no characters for stays as it is, as MRI's
+            // rb_str_conv_enc leaves a string it cannot convert: _<U+1F60E>.erb under EUC-KR.
             var internalEncoding = context.DefaultInternalEncoding;
             if (internalEncoding != null && internalEncoding != name.Encoding) {
-                return MutableString.Create(name.ConvertToString(), internalEncoding);
+                string text = name.ConvertToString();
+                try {
+                    internalEncoding.StrictEncoding.GetByteCount(text);
+                } catch (System.Text.EncoderFallbackException) {
+                    return name;
+                }
+                return MutableString.Create(text, internalEncoding);
             }
 
             return name;
