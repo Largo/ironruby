@@ -46,6 +46,13 @@ namespace IronRuby.Builtins {
         /// </summary>
         private readonly string _methodMissingName;
 
+        /// <summary>
+        /// The module the method reads as looked up on, when that is not the receiver's class:
+        /// UnboundMethod#bind of a method a module owns makes a Method of that module, which
+        /// #inspect then shows as Mod#name rather than Cls(Mod)#name (Bug #22321).
+        /// </summary>
+        public RubyModule LookupModule { get; set; }
+
         public bool IsMethodMissing {
             get { return _methodMissingName != null; }
         }
@@ -85,6 +92,7 @@ namespace IronRuby.Builtins {
 
         object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
             var result = new RubyMethod(_target, _info, _name, _methodMissingName);
+            result.LookupModule = LookupModule;
             context.CopyInstanceData(this, result, copySingletonMembers);
             return result;
         }

@@ -111,9 +111,14 @@ namespace IronRuby.Builtins {
                 );
             }
             
-            return self._isMethodMissing
-                ? RubyMethod.CreateMethodMissing(target, self._info, self._name)
-                : new RubyMethod(target, self._info, self._name);
+            if (self._isMethodMissing) {
+                return RubyMethod.CreateMethodMissing(target, self._info, self._name);
+            }
+            var result = new RubyMethod(target, self._info, self._name);
+            if (!constraint.IsClass) {
+                result.LookupModule = constraint;
+            }
+            return result;
         }
 
         /// <summary>
@@ -225,13 +230,13 @@ namespace IronRuby.Builtins {
                 var targetSingleton = targetModule as RubyClass;
                 var targetAttached = (targetSingleton != null && targetSingleton.IsSingletonClass) ? targetSingleton.SingletonClassOf as RubyModule : null;
                 if (attachedModule != null && targetAttached != null && !ReferenceEquals(targetAttached, attachedModule)) {
-                    result.Append(targetAttached.GetDisplayName(context, false));
+                    result.Append(InspectModule(context, targetAttached));
                     result.Append('(');
-                    result.Append(attachedModule.GetDisplayName(context, false));
+                    result.Append(InspectModule(context, attachedModule));
                     result.Append(')');
                 } else {
                     result.Append(attachedModule != null
-                        ? attachedModule.GetDisplayName(context, false)
+                        ? InspectModule(context, attachedModule)
                         : context.Inspect(attached));
                 }
                 result.Append('.');
@@ -242,10 +247,10 @@ namespace IronRuby.Builtins {
                     origin = context.GetClassOf(originSingleton.SingletonClassOf);
                 }
 
-                result.Append(origin.GetDisplayName(context, false));
+                result.Append(InspectModule(context, origin));
                 if (!ReferenceEquals(origin, declaringModule)) {
                     result.Append('(');
-                    result.Append(declaringModule.GetDisplayName(context, false));
+                    result.Append(InspectModule(context, declaringModule));
                     result.Append(')');
                 }
                 result.Append('#');
@@ -276,6 +281,19 @@ namespace IronRuby.Builtins {
 
             result.Append('>');
             return result; 
+        }
+
+        // method_inspect writes each module with rb_inspect, so an anonymous one that says what it is
+        // (EnvUtil.labeled_class) is shown by what it says rather than as #<Class:0x...>.
+        private static MutableString/*!*/ InspectModule(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            if (module.Name == null && !module.IsSingletonClass) {
+                try {
+                    return context.Inspect(module);
+                } catch (Exception) {
+                    // the name it would have had
+                }
+            }
+            return module.GetDisplayName(context, false);
         }
 
         [RubyMethod("of")]
