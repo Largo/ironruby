@@ -562,6 +562,15 @@ class << ARGF_CLASS
   alias_method :inspect, :name
 end
 
+# CRuby's ARGF is native data Marshal cannot write; this one is a Ruby object, which
+# Marshal.dump wrote as an instance of a class no load could find.
+ARGF_CLASS.class_eval do
+  def marshal_dump
+    ::Kernel.raise(::TypeError, "no _dump_data is defined for class #{self.class}")
+  end
+  private :marshal_dump
+end
+
 Object.send(:remove_const, :ARGF) if Object.const_defined?(:ARGF, false)
 ARGF = ARGF_CLASS.new
 ARGF.send(:replace_argv!, ARGV)

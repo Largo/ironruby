@@ -119,6 +119,7 @@ namespace IronRuby.Builtins {
         // (true => UTF-8, false => US-ASCII); everything else is spelled out by name under
         // ":encoding". ASCII-8BIT is represented by the absence of both.
         internal const string EncodingShortIVarName = "E";
+        internal const string Ruby2KeywordsIVarName = "K";
         // MRI's ARG_ENCODING_NONE option bit in a regexp record (/n)
         internal const int NoEncodingFlag = 0x20;
         internal const string EncodingIVarName = "encoding";
@@ -348,9 +349,15 @@ namespace IronRuby.Builtins {
             private void WriteArray(RubyArray/*!*/ value, RubyClass/*!*/ theClass) {
                 WriteSubclassData(value, theClass, typeof(RubyArray));
                 _writer.Write((byte)'[');
-                WriteInt32(value.Count);
-                foreach (object obj in value) {
-                    WriteAnObject(obj);
+                // A _dump or marshal_dump the elements call may change the array; MRI checks its
+                // length after each element.
+                int count = value.Count;
+                WriteInt32(count);
+                for (int i = 0; i < value.Count; i++) {
+                    WriteAnObject(value[i]);
+                    if (value.Count != count) {
+                        throw RubyExceptions.CreateRuntimeError("array modified during dump");
+                    }
                 }
             }
 
@@ -369,9 +376,18 @@ namespace IronRuby.Builtins {
                 char typeFlag = (value.DefaultValue != null) ? '}' : '{';
                 _writer.Write((byte)typeFlag);
                 WriteInt32(value.Count);
-                foreach (KeyValuePair<object, object> pair in value) {
-                    WriteAnObject(pair.Key);
-                    WriteAnObject(pair.Value);
+                // Walked as Hash#each walks it, which is what MRI's rb_hash_foreach amounts to: a
+                // _dump that adds a key meanwhile gets "can't add a new key into hash during iteration".
+                value.BeginIteration();
+                try {
+                    int index = 0;
+                    object key, entryValue;
+                    while (value.TryGetNextEntry(ref index, out key, out entryValue)) {
+                        WriteAnObject(CustomStringDictionary.ObjToNull(key));
+                        WriteAnObject(entryValue);
+                    }
+                } finally {
+                    value.EndIteration();
                 }
                 if (value.DefaultValue != null) {
                     WriteAnObject(value.DefaultValue);
@@ -422,6 +438,19 @@ namespace IronRuby.Builtins {
             private static readonly byte[]/*!*/ _encodingIVarNameBytes = Encoding.ASCII.GetBytes(EncodingIVarName);
 
             private void WriteEncodingIVar(RubyEncoding/*!*/ encoding) {
+                // MRI's w_encoding gives the encoding's value a level of its own, so that the depth
+                // limit that lets a string through lets its encoding through too
+                // (Marshal.dump of a non-ASCII string with a limit of 1, [ruby-core:24100]).
+                if (_recursionLimit >= 0) {
+                    _recursionLimit++;
+                }
+                WriteEncodingIVarValue(encoding);
+                if (_recursionLimit > 0) {
+                    _recursionLimit--;
+                }
+            }
+
+            private void WriteEncodingIVarValue(RubyEncoding/*!*/ encoding) {
                 if (encoding == RubyEncoding.UTF8) {
                     WriteSymbol(EncodingShortIVarName, _encodingShortIVarNameBytes, RubyEncoding.Binary);
                     WriteAnObject(true);
@@ -682,12 +711,32 @@ namespace IronRuby.Builtins {
 
             private void WriteIVars(object/*!*/ obj, string[]/*!*/ names, RubyEncoding encoding) {
                 bool writeEncoding = NeedsEncodingIVar(encoding);
-                WriteInt32(names.Length + (writeEncoding ? 1 : 0));
+                bool ruby2Keywords = IsRuby2KeywordsHash(obj);
+                WriteInt32(names.Length + (writeEncoding ? 1 : 0) + (ruby2Keywords ? 1 : 0));
                 if (writeEncoding) {
                     WriteEncodingIVar(encoding);
                 }
+                if (ruby2Keywords) {
+                    // MRI's w_ivar: the flag of a Hash.ruby2_keywords_hash, as a pseudo instance
+                    // variable "K" after the encoding, one level up as the encoding is.
+                    WriteSymbol(Ruby2KeywordsIVarName, _ruby2KeywordsIVarNameBytes, RubyEncoding.Binary);
+                    if (_recursionLimit >= 0) {
+                        _recursionLimit++;
+                    }
+                    WriteAnObject(true);
+                    if (_recursionLimit > 0) {
+                        _recursionLimit--;
+                    }
+                }
                 WriteIVarPairs(obj, names);
             }
+
+            private static bool IsRuby2KeywordsHash(object obj) {
+                Hash hash = obj as Hash;
+                return hash != null && hash.IsRuby2KeywordsHash;
+            }
+
+            private static readonly byte[]/*!*/ _ruby2KeywordsIVarNameBytes = Encoding.ASCII.GetBytes(Ruby2KeywordsIVarName);
 
             /// <summary>
             /// A Set: MRI 4.0 writes its table as the "@hash" instance variable the Set of set.rb had, which
@@ -701,14 +750,19 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteIVarPairs(object/*!*/ obj, string[]/*!*/ names) {
-                var identifierEncoding = _context.GetIdentifierEncoding();
-                foreach (string name in names) {
-                    object value;
-                    if (!_context.TryGetInstanceVariable(obj, name, out value)) {
-                        value = null;
+                // The values are taken before any is written, as MRI's rb_ivar_foreach_buffered takes
+                // them: a marshal_dump one of them runs may remove another, which is still written
+                // with the value it had ([Bug #15968]).
+                object[] values = new object[names.Length];
+                for (int i = 0; i < names.Length; i++) {
+                    if (!_context.TryGetInstanceVariable(obj, names[i], out values[i])) {
+                        values[i] = null;
                     }
-                    WriteSymbol(name, identifierEncoding);
-                    WriteAnObject(value);
+                }
+                var identifierEncoding = _context.GetIdentifierEncoding();
+                for (int i = 0; i < names.Length; i++) {
+                    WriteSymbol(names[i], identifierEncoding);
+                    WriteAnObject(values[i]);
                 }
             }
 
@@ -747,6 +801,23 @@ namespace IronRuby.Builtins {
 
             private void WriteExtendedModules(RubyClass/*!*/ theClass) {
                 if (theClass.IsSingletonClass) {
+                    // MRI's w_extended walks the singleton's ancestors: the modules prepended to it come
+                    // first, then the singleton's origin, written as the object's class ([Bug #8041]), then
+                    // the extended ones.
+                    var prepends = theClass.GetPrepends();
+                    if (prepends.Length > 0) {
+                        foreach (var prepended in prepends) {
+                            if (prepended.Name == null) {
+                                throw RubyExceptions.CreateTypeError("can't dump anonymous class {0}",
+                                    prepended.GetDisplayName(_context, false)
+                                );
+                            }
+                            _writer.Write((byte)'e');
+                            WriteModuleName(prepended);
+                        }
+                        _writer.Write((byte)'e');
+                        WriteModuleName(theClass.GetNonSingletonClass());
+                    }
                     foreach (var mixin in theClass.GetMixins()) {
                         _writer.Write((byte)'e');
                         // MRI reaches an extended module through its iclass and reports an
@@ -919,7 +990,7 @@ namespace IronRuby.Builtins {
                             }
 
                             bool writeInstanceData = !isObjectRecord && !(obj is RubyModule) &&
-                                (instanceNames.Length > 0 || NeedsEncodingIVar(encoding));
+                                (instanceNames.Length > 0 || NeedsEncodingIVar(encoding) || IsRuby2KeywordsHash(obj));
 
                             if (writeInstanceData) {
                                 _writer.Write((byte)'I');
@@ -1194,6 +1265,9 @@ namespace IronRuby.Builtins {
                     sign = 0;
                 }
                 int words = ReadInt32();
+                if (words < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative length");
+                }
                 int dwords_lo = words / 2;
                 int dwords_hi = (words + 1) / 2;
                 uint[] bits = new uint[dwords_hi];
@@ -1468,8 +1542,11 @@ namespace IronRuby.Builtins {
             private Symbol/*!*/ ReadEncodedSymbol(bool symbol) {
                 int count = ReadInt32();
                 byte[] data = ReadBytes(count);
+                // MRI's r_symreal enters the bytes in the symbol table before it reads the instance
+                // variables, so that a link among them to this very symbol finds it ([Bug #10991]).
                 int slot = _symbols.Count;
-                _symbols[slot] = null;
+                // (Made a symbol only if such a link asks for one.)
+                _symbols[slot] = new Symbol(Context.GetIdentifierEncoding().Encoding.GetString(data, 0, data.Length), null);
 
                 RubyEncoding encoding = RubyEncoding.Binary;
                 int ivarCount = ReadInt32();
@@ -1604,6 +1681,17 @@ namespace IronRuby.Builtins {
             /// subclass's instance variables there).
             /// </summary>
             private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
+                return ReadRange(theClass, count, objectRef, false);
+            }
+
+            // MRI's Range is a struct of begin, end and excl, which an 'S' record has to name in that
+            // order (GH-6832: a Range dumped by a program that had redefined Range as a Struct).
+            private static readonly string[]/*!*/ RangeMembers = new[] { "begin", "end", "excl" };
+
+            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef, bool asStruct) {
+                if (asStruct && count != RangeMembers.Length) {
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", theClass.Name);
+                }
                 var range = (Range)RubyUtils.CreateObject(theClass);
                 if (objectRef >= 0) {
                     _objects[objectRef] = range;
@@ -1612,6 +1700,9 @@ namespace IronRuby.Builtins {
                 bool excludeEnd = false, exclGiven = false;
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
+                    if (asStruct && name != RangeMembers[i]) {
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, RangeMembers[i]);
+                    }
                     object value = ReadAnObject(false);
                     switch (name) {
                         case "begin": rangeBegin = value; break;
@@ -1710,11 +1801,16 @@ namespace IronRuby.Builtins {
                 if (theClass == null) {
                     return ReadString();
                 }
+                CheckLoad(theClass);
+                return _sites.Load.Target(_sites.Load, theClass, ReadString());
+            }
+
+            // r_object checks for _load before it reads the string, with or without instance variables.
+            private void CheckLoad(RubyClass/*!*/ theClass) {
                 if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
                         theClass.GetDisplayName(Context, false).ToString());
                 }
-                return _sites.Load.Target(_sites.Load, theClass, ReadString());
             }
 
             // MRI's TYPE_DATA: an object wrapping native data, rebuilt by #_load_data from the
@@ -1754,7 +1850,20 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("instance of {0} needs to have method 'marshal_load'",
                         Context.GetClassOf(obj).GetDisplayName(Context, false).ToString());
                 }
-                _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, ReadAnObject(false));
+                object data = ReadAnObject(false);
+                _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, data);
+
+                // MRI's r_copy_ivar: the instance variables the dumped data carried, and which
+                // #marshal_load did not set itself, go onto the object - a FrozenError if
+                // #marshal_load froze it ([Bug #8276]).
+                if (data != null && Context.HasInstanceVariables(data)) {
+                    foreach (string name in Context.GetInstanceVariableNames(data)) {
+                        object value, existing;
+                        if (!Context.TryGetInstanceVariable(obj, name, out existing) && Context.TryGetInstanceVariable(data, name, out value)) {
+                            Context.SetInstanceVariable(obj, name, value);
+                        }
+                    }
+                }
                 return obj;
             }
 
@@ -1767,11 +1876,22 @@ namespace IronRuby.Builtins {
                 return ReadClassOrModule(typeFlag, Context.GetIdentifierEncoding().Encoding.GetString(name, 0, name.Length));
             }
 
-            private object/*!*/ ReadClassOrModule(int typeFlag, string/*!*/ name) {
+            // MRI's rb_path_to_class: a name that is not defined is an ArgumentError, one that is
+            // defined as something other than a class or module (C3 = nil) a TypeError.
+            private RubyModule/*!*/ ResolvePath(string/*!*/ name) {
                 RubyModule result;
-                if (!Context.TryGetModule(_globalScope, name, out result)) {
+                bool notModule;
+                if (!Context.TryGetModule(_globalScope, name, out result, out notModule)) {
+                    if (notModule) {
+                        throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", name);
+                    }
                     throw RubyExceptions.CreateArgumentError("undefined class/module {0}", name);
                 }
+                return result;
+            }
+
+            private object/*!*/ ReadClassOrModule(int typeFlag, string/*!*/ name) {
+                RubyModule result = ResolvePath(name);
 
                 bool isClass = result is RubyClass;
                 if (isClass && typeFlag == 'm') {
@@ -1784,13 +1904,24 @@ namespace IronRuby.Builtins {
             }
 
             private object/*!*/ ReadStruct(int objectRef) {
-                object instance = UnmarshalNewObject();
+                RubyClass theClass = ReadType();
+                if (theClass.IsSubclassOf(Context.GetClass(typeof(Range)))) {
+                    return ReadRange(theClass, ReadInt32(), objectRef, true);
+                }
+
+                // Data shares the Struct record, so which of the two this is can only be told from
+                // the class that was named in it. Anything else is not a struct at all, which MRI's
+                // rb_struct_s_members says before the object is made ([ruby-dev:31709]).
+                bool isStruct = theClass.IsSubclassOf(Context.GetClass(typeof(RubyStruct)));
+                if (!isStruct && GetDataMembers(theClass) == null) {
+                    throw RubyExceptions.CreateTypeError("class {0} not a struct", theClass.Name);
+                }
+
+                object instance = RubyUtils.CreateObject(theClass);
                 if (objectRef >= 0) {
                     _objects[objectRef] = instance;
                 }
 
-                // Data shares the Struct record, so which of the two this is can only be told from
-                // the class that was named in it.
                 if (!(instance is RubyStruct)) {
                     return ReadData(instance);
                 }
@@ -1806,7 +1937,6 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     if (name != names[i]) {
-                        RubyClass theClass = Context.GetClassOf(obj);
                         throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, names[i]);
                     }
                     obj[i] = ReadAnObject(false);
@@ -1861,6 +1991,9 @@ namespace IronRuby.Builtins {
                     // and _load is handed them along with it - that is how Time gets its zone and
                     // its offset back.
                     RubyClass theClass = ReadLoadableType();
+                    if (theClass != null) {
+                        CheckLoad(theClass);
+                    }
                     MutableString data = ReadString();
 
                     // The object itself is entered in the link table only once those instance
@@ -1905,6 +2038,21 @@ namespace IronRuby.Builtins {
 
             private void ReadIVars(object obj) {
                 int count = ReadInt32();
+                // A dump does not get to set the instance variables of a class or module it names: the
+                // one thing that may follow its name is the name's encoding (MRI's r_encname, then
+                // prohibit_ivar), and the error comes before anything is set.
+                RubyModule module = obj as RubyModule;
+                if (module != null) {
+                    for (int i = 0; i < count; i++) {
+                        string name = ReadIdentifier();
+                        object value = ReadAnObject(false);
+                        if (ParseEncodingIVar(name, value) == null) {
+                            throw RubyExceptions.CreateTypeError("can't override instance variable of {0} '{1}'",
+                                module.IsClass ? "class" : "module", module.GetDisplayName(Context, false).ToString());
+                        }
+                    }
+                    return;
+                }
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     object value = ReadAnObject(false);
@@ -1916,6 +2064,14 @@ namespace IronRuby.Builtins {
                 RubyEncoding encoding = ParseEncodingIVar(name, value);
                 if (encoding != null) {
                     ForceMarshalEncoding(obj, encoding);
+                } else if (name == Ruby2KeywordsIVarName) {
+                    // MRI's r_ivar: the flag Hash.ruby2_keywords_hash leaves, whatever its value
+                    Hash hash = obj as Hash;
+                    if (hash == null) {
+                        throw RubyExceptions.CreateArgumentError("ruby2_keywords flag is given but {0} is not a Hash",
+                            ((obj as MutableString) ?? RubyUtils.ObjectToMutableString(Context, obj)).ToString());
+                    }
+                    hash.IsRuby2KeywordsHash = true;
                 } else {
                     Context.SetInstanceVariable(obj, name, value);
                 }
@@ -1923,8 +2079,23 @@ namespace IronRuby.Builtins {
 
             private object/*!*/ ReadExtended(int objectRef) {
                 string extensionName = ReadIdentifier();
-                RubyModule module = ReadClassOrModule('m', extensionName) as RubyModule;
+                RubyModule module = ResolvePath(extensionName);
                 int typeFlag = _reader.ReadByte();
+
+                // A class among the 'e' records is the singleton's origin (see WriteExtendedModules): the
+                // modules named before it were prepended to the singleton, not extended. It has to be the
+                // object's own class.
+                RubyClass originClass = module as RubyClass;
+                if (originClass != null) {
+                    object instance = ReadAnObject(typeFlag, objectRef);
+                    RubyClass actual = Context.GetClassOf(instance);
+                    if (actual != originClass) {
+                        throw RubyExceptions.CreateArgumentError("prepended class {0} differs from class {1}",
+                            extensionName, actual.GetDisplayName(Context, false).ToString());
+                    }
+                    _prependedBelow = true;
+                    return instance;
+                }
 
                 // MRI extends a user-marshaled object as soon as it is allocated, so that its
                 // #marshal_load already sees the module (see ReadUsingMarshalLoad).
@@ -1932,11 +2103,23 @@ namespace IronRuby.Builtins {
                     _pendingExtension = module;
                 }
                 object obj = ReadAnObject(typeFlag, objectRef);
-                if (typeFlag != 'U') {
+
+                // Only the 'e' record right inside this one says whether the origin marker is
+                // further in; anything else read meanwhile may have left the flag set.
+                bool prepend = typeFlag == 'e' && _prependedBelow;
+                if (prepend) {
+                    RubyUtils.RequireDefinableSingleton(obj);
+                    Context.GetOrCreateSingletonClass(obj).PrependModules(module);
+                } else if (typeFlag != 'U') {
                     ModuleOps.ExtendObject(module, obj);
                 }
+                _prependedBelow = prepend;
                 return obj;
             }
+
+            // Set by the 'e' record of an object's class, and passed out through the 'e' records
+            // around it: those name modules prepended to the object's singleton class.
+            private bool _prependedBelow;
 
             private RubyModule _pendingExtension;
 
@@ -2217,8 +2400,11 @@ namespace IronRuby.Builtins {
             /// variables or a singleton class is its own object.
             /// </summary>
             private MutableString/*!*/ Deduplicate(MutableString/*!*/ str) {
-                // only a plain String joins the table; an instance of a subclass keeps its class
-                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)) {
+                // only a plain String joins the table; an instance of a subclass keeps its class, and
+                // one an 'e' record extended its singleton class (rb_fstring only freezes a string
+                // that is not bare)
+                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)
+                    || Context.GetImmediateClassOf(str).IsSingletonClass) {
                     return str;
                 }
 
@@ -2227,12 +2413,7 @@ namespace IronRuby.Builtins {
 
             private object/*!*/ ReadOldModule() {
                 // Marshal format 4.6 and earlier wrote classes and modules with a single "M" tag.
-                string name = ReadString().ToString();
-                RubyModule result;
-                if (!Context.TryGetModule(_globalScope, name, out result)) {
-                    throw RubyExceptions.CreateArgumentError("undefined class/module {0}", name);
-                }
-                return result;
+                return ResolvePath(ReadString().ToString());
             }
 
             internal object Load() {

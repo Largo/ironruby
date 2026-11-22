@@ -548,6 +548,7 @@ namespace IronRuby.Tests {
                 Hooks3,
                 MethodLookupCacheFull1,
                 Hooks4,
+                TraceVar_AssignInHandler1,
 
                 ClrFields1,
                 ClrFields2,
@@ -1027,6 +1028,7 @@ namespace IronRuby.Tests {
                 Marshal_LoadFloat1,
                 Marshal_SetIVars1,
                 Marshal_NameError1,
+                Marshal_LoadChecks1,
                 Integer_SqrtPowDigits1,
                 Prelude_DataStructErrors1,
                 Prelude_AliasNames1,

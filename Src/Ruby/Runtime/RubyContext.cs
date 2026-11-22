@@ -2636,6 +2636,17 @@ namespace IronRuby.Runtime {
 
         // thread-safe:
         public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result) {
+            bool notModule;
+            return TryGetModule(autoloadScope, moduleName, out result, out notModule);
+        }
+
+        /// <summary>
+        /// <paramref name="notModule"/> tells the two failures of MRI's rb_path_to_class apart: a name
+        /// that is defined but is not a class or module (a TypeError there) from one that is not
+        /// defined (an ArgumentError).
+        /// </summary>
+        public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result, out bool notModule) {
+            notModule = false;
             using (ClassHierarchyLocker()) {
                 result = _objectClass;
                 int pos = 0;
@@ -2655,6 +2666,7 @@ namespace IronRuby.Runtime {
                     }
                     result = tmp.Value as RubyModule;
                     if (result == null) {
+                        notModule = true;
                         return false;
                     } else if (pos2 < 0) {
                         return true;
@@ -3446,16 +3458,41 @@ namespace IronRuby.Runtime {
                 handlers = registered.ToArray();
             }
 
-            foreach (var handler in handlers) {
-                var command = handler as GlobalVariableTraceCommand;
-                if (command != null) {
-                    RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
-                } else {
-                    var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
-                    site.Target(site, handler, value);
+            // MRI's rb_gvar_set does not fire a variable's handlers while they are already running
+            // (gvar's block_trace), so that a handler may assign the variable it traces
+            // (trace_var(:$x) { $x *= 2 }) without recursing forever. MRI's flag is the variable's;
+            // without a GVL another thread's assignment should still fire, so here it is the thread's.
+            var running = _runningGlobalVariableTraces;
+            if (running == null) {
+                _runningGlobalVariableTraces = running = new List<KeyValuePair<RubyContext, string>>();
+            }
+            var entry = new KeyValuePair<RubyContext, string>(this, name);
+            if (running.Contains(entry)) {
+                return;
+            }
+
+            running.Add(entry);
+            try {
+                foreach (var handler in handlers) {
+                    var command = handler as GlobalVariableTraceCommand;
+                    if (command != null) {
+                        RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
+                    } else {
+                        var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
+                        site.Target(site, handler, value);
+                    }
                 }
+            } finally {
+                running.Remove(entry);
             }
         }
+
+        /// <summary>
+        /// The globals whose trace_var handlers this thread is running, with their runtime (several
+        /// runtimes can share a process and a thread).
+        /// </summary>
+        [ThreadStatic]
+        private static List<KeyValuePair<RubyContext, string>> _runningGlobalVariableTraces;
 
         #endregion
 
