@@ -1456,7 +1456,8 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < pattern.Length; i++) {
                 char c = pattern[i];
                 if (c == '\\') {
-                    if (i + 1 == pattern.Length || !IsMetaCharacter(pattern[i + 1])) {
+                    // a meta character or a whitespace character, as Escape writes them
+                    if (i + 1 == pattern.Length || !(IsMetaCharacter(pattern[i + 1]) || Char.IsWhiteSpace(pattern[i + 1]))) {
                         return -1;
                     }
                     i++;
