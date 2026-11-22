@@ -153,6 +153,7 @@ namespace IronRuby.Builtins {
             _cachedRegex = null;
             _cachedAstralRegex = null;
             _nonAsciiEscape = -1;
+            _hasProperty = -1;
 
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
@@ -821,10 +822,16 @@ namespace IronRuby.Builtins {
                         return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
                     }
 
+                    // a \p{...} property means characters of the source's encoding: MRI's
+                    // rb_reg_preprocess fixes the encoding for it (has_property)
+                    if (PatternHasProperty()) {
+                        return _pattern.Encoding;
+                    }
+
                     return RubyEncoding.Ascii;
                 }
 
-                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _)) {
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _) && !PatternHasProperty()) {
                     return RubyEncoding.Ascii;
                 }
 
@@ -952,6 +959,43 @@ namespace IronRuby.Builtins {
         /// written with byte escapes would silently lose its encoding when unioned with a plain
         /// ASCII string.
         /// </summary>
+        // -1 until PatternHasProperty has looked, then 0 or 1
+        private int _hasProperty = -1;
+
+        /// <summary>
+        /// Whether the pattern names a character property, \p{...}, \P{...} or \p{^...}, outside a
+        /// comment. MRI fixes the regexp to its source's encoding for one, ASCII only as the
+        /// source is: /\p{Alpha}/ is a fixed UTF-8 regexp in a UTF-8 file.
+        /// </summary>
+        private bool PatternHasProperty() {
+            int cached = _hasProperty;
+            if (cached < 0) {
+                cached = FindProperty(_pattern.ConvertToString(), (_options & RubyRegexOptions.Extended) != 0) ? 1 : 0;
+                _hasProperty = cached;
+            }
+            return cached != 0;
+        }
+
+        private static bool FindProperty(string/*!*/ source, bool extended) {
+            if (source.IndexOf("{", StringComparison.Ordinal) < 0) {
+                return false;
+            }
+            var groups = new Stack<bool>();
+            int classDepth = 0;
+            int i = 0;
+            while (i < source.Length) {
+                if (source[i] != '\\') {
+                    i = SkipNonEscape(source, i, ref extended, groups, ref classDepth);
+                    continue;
+                }
+                if (i + 2 < source.Length && (source[i + 1] == 'p' || source[i + 1] == 'P') && source[i + 2] == '{') {
+                    return true;
+                }
+                i += 2;
+            }
+            return false;
+        }
+
         private bool PatternHasNonAsciiEscape(out bool isUnicode) {
             int cached = _nonAsciiEscape;
             if (cached < 0) {
@@ -1049,11 +1093,11 @@ namespace IronRuby.Builtins {
                     // pins the encoding only once the pattern really compiles to non-ASCII bytes,
                     // which it does for a byte escape as much as for a literal non-ASCII character.
                     bool isUnicode;
-                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode);
+                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode) || PatternHasProperty();
                 }
 
                 return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
-                    || Encoding != RubyEncoding.Ascii;
+                    || Encoding != RubyEncoding.Ascii || PatternHasProperty();
             }
         }
 
