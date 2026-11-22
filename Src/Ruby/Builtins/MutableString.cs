@@ -135,6 +135,11 @@ namespace IronRuby.Builtins {
         // so nothing beyond the bit has to be remembered.
         private const uint IsChilledSymbolStringFlag = 1 << 13;
 
+        // In MRI's fstring table (RubyOps.InternFrozenString), or one of the frozen strings the
+        // runtime hands out from a static (nil.to_s, Symbol#name): MRI refuses such a string a
+        // singleton class ("can't define singleton"), which it gives any other frozen String.
+        private const uint IsInternedFlag = 1 << 15;
+
         private const uint MutationGuardFlags =
             IsFrozenFlag | CopyOnWriteFlag | IsChilledFlag | IsTemporarilyLockedFlag;
 
@@ -148,7 +153,7 @@ namespace IronRuby.Builtins {
         
         // The instance is frozen so that it can be shared, but it should not be used in places where
         // it will be accessible from user code as the user code could try to mutate it.
-        public static readonly MutableString FrozenEmpty = CreateEmpty().Freeze();
+        public static readonly MutableString FrozenEmpty = CreateEmpty().FreezeInterned();
 
         #region Constructors
 
@@ -1196,6 +1201,19 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ Freeze() {
             _flags |= IsFrozenFlag;
             return this;
+        }
+
+        /// <summary>
+        /// Freezes the string and marks it interned: it is shared - by the fstring table, or by a
+        /// static every runtime reads - and so can have no singleton class (see IsInternedFlag).
+        /// </summary>
+        public MutableString/*!*/ FreezeInterned() {
+            _flags |= IsFrozenFlag | IsInternedFlag;
+            return this;
+        }
+
+        public bool IsInterned {
+            get { return (_flags & IsInternedFlag) != 0; }
         }
 
         public void RequireNotFrozen() {

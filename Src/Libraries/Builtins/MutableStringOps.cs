@@ -1776,7 +1776,12 @@ namespace IronRuby.Builtins {
         // frozen string literals and "literal".freeze come from, so -str can answer the very
         // object a literal evaluates to.
         [RubyMethod("__ir_fstring__", RubyMethodAttributes.PrivateInstance)]
-        public static MutableString/*!*/ InternFrozen(MutableString/*!*/ self) {
+        public static MutableString/*!*/ InternFrozen(RubyContext/*!*/ context, MutableString/*!*/ self) {
+            // A frozen string with a singleton class is not bare: MRI's rb_fstring answers it
+            // as it is, without putting it in the table (where it would be refused one).
+            if (self.IsFrozen && context.GetImmediateClassOf(self).IsSingletonClass) {
+                return self;
+            }
             return RubyOps.InternFrozenString(self.IsFrozen ? self : self.Clone());
         }
 

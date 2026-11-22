@@ -106,7 +106,7 @@ namespace IronRuby.Builtins {
         /// a spec checks that two calls hand back the very same one.
         /// </summary>
         // US-ASCII, as MRI's nil.to_s is
-        private static readonly MutableString/*!*/ _EmptyString = MutableString.Create(String.Empty, RubyEncoding.Ascii).Freeze();
+        private static readonly MutableString/*!*/ _EmptyString = MutableString.Create(String.Empty, RubyEncoding.Ascii).FreezeInterned();
 
         [RubyMethodAttribute("to_s")]
         public static MutableString/*!*/ ToString(object self) {

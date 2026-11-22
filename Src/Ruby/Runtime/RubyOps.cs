@@ -3364,7 +3364,7 @@ namespace IronRuby.Runtime {
         }
 
         private static MutableString/*!*/ InternFrozenStringLiteral(MutableString/*!*/ str) {
-            return _frozenStringLiterals.GetOrAdd(str.Freeze(), str);
+            return _frozenStringLiterals.GetOrAdd(str.FreezeInterned(), str);
         }
 
         /// <summary>
