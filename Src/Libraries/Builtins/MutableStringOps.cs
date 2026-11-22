@@ -122,7 +122,7 @@ namespace IronRuby.Builtins {
         internal static bool NormalizeSubstringRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int begin, out int count) {
             // Ruby 2.6/2.7 beginless and endless ranges: a missing bound is the
             // start resp. the end of the string, and an open end is never exclusive.
-            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            begin = (range.Begin == null) ? 0 : IListOps.CastToRangeComponent(fixnumCast, range.Begin);
 
             begin = IListOps.NormalizeIndex(length, begin);
             if (begin < 0 || begin > length) {
@@ -135,7 +135,7 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            int end = IListOps.NormalizeIndex(length, Protocols.CastToFixnum(fixnumCast, range.End));
+            int end = IListOps.NormalizeIndex(length, IListOps.CastToRangeComponent(fixnumCast, range.End));
 
             count = range.ExcludeEnd ? end - begin : end - begin + 1;
             return true;

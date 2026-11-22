@@ -78,12 +78,32 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        /// <summary>
+        /// MRI reads the ends of a range with NUM2LONG: an Integer that fits in a long is an end
+        /// however far past the list it lies, and only a larger one is a RangeError. A list is
+        /// shorter than an int, so such an end is clamped to the int range: m[1..2**63-1] is
+        /// everything from the first group on.
+        /// </summary>
+        internal static int CastToRangeComponent(ConversionStorage<int>/*!*/ fixnumCast, object value) {
+            if (value is long) {
+                long wide = (long)value;
+                return (wide < Int32.MinValue) ? Int32.MinValue : (wide > Int32.MaxValue - 1) ? Int32.MaxValue - 1 : (int)wide;
+            }
+            if (value is System.Numerics.BigInteger) {
+                var big = (System.Numerics.BigInteger)value;
+                if (big >= Int64.MinValue && big <= Int64.MaxValue) {
+                    return (big.Sign < 0) ? Int32.MinValue : Int32.MaxValue - 1;
+                }
+            }
+            return Protocols.CastToFixnum(fixnumCast, value);
+        }
+
         internal static bool NormalizeRange(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range, out int begin, out int count) {
             // A beginless range starts at 0 and an endless one runs to the end; both
             // endpoints became nil-able in 2.6/2.7 and used to raise TypeError here.
-            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            begin = (range.Begin == null) ? 0 : CastToRangeComponent(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int end = endless ? listCount : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = endless ? listCount : CastToRangeComponent(fixnumCast, range.End);
 
             begin = NormalizeIndex(listCount, begin);
 
