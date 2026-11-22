@@ -1898,17 +1898,36 @@ namespace IronRuby.Builtins {
         /// is unavailable) File::Stat keeps using bare FileInfo/DirectoryInfo
         /// and the legacy approximations below.
         /// </summary>
-        internal sealed class StatInfo : FileSystemInfo {
-            internal readonly Posix.StatData Data;
+        public sealed class StatInfo : FileSystemInfo {
+            // Not readonly: File::Stat.allocate makes one with neither, which #initialize or
+            // #initialize_copy fills in later, as MRI's stat_memsize/rb_stat_init_copy do.
+            internal Posix.StatData Data;
 
             // Off Unix there is no statx result to hold, so the FileInfo/DirectoryInfo the
             // old implementation used rides along instead. File::Stat is this class either
             // way, which is what makes File.stat(...).instance_of?(File::Stat) true.
-            internal readonly FileSystemInfo Legacy;
+            internal FileSystemInfo Legacy;
 
             // Off Unix: an lstat of a symbolic link (or junction), which the BCL object cannot say
             // by itself - File.symlink? and File.lstat(...).symlink? read it.
             internal bool IsLink;
+
+            /// <summary>File::Stat.allocate: a stat of nothing yet, which every reader refuses.</summary>
+            public StatInfo() {
+                OriginalPath = FullPath = "";
+            }
+
+            internal bool IsInitialized {
+                get { return Data != null || Legacy != null; }
+            }
+
+            internal void CopyFrom(StatInfo/*!*/ other) {
+                Data = other.Data;
+                Legacy = other.Legacy;
+                IsLink = other.IsLink;
+                OriginalPath = other.OriginalPath;
+                FullPath = other.FullPath;
+            }
 
             internal StatInfo(string/*!*/ path, Posix.StatData/*!*/ data) {
                 Data = data;
@@ -2114,18 +2133,54 @@ namespace IronRuby.Builtins {
 
             private static Posix.StatData D(FileSystemInfo/*!*/ self) {
                 var si = self as StatInfo;
-                return si != null ? si.Data : null;
+                return si != null ? Initialized(si).Data : null;
             }
 
             /// <summary>The System.IO object behind an off-Unix File::Stat, if there is one.</summary>
             private static FileSystemInfo L(FileSystemInfo self) {
                 var si = self as StatInfo;
-                return si != null ? si.Legacy : self;
+                return si != null ? Initialized(si).Legacy : self;
+            }
+
+            // MRI's get_stat: a File::Stat that File::Stat.allocate made and nothing filled in.
+            private static StatInfo/*!*/ Initialized(StatInfo/*!*/ self) {
+                if (!self.IsInitialized) {
+                    throw RubyExceptions.CreateTypeError("uninitialized File::Stat");
+                }
+                return self;
             }
 
             [RubyConstructor]
             public static FileSystemInfo/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
                 return Create(self.Context, Protocols.CastToPath(toPath, path));
+            }
+
+            // Only reached by an instance File::Stat.allocate made (File::Stat.new is the
+            // constructor above); MRI's rb_stat_init stats the path into it.
+            [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+            public static StatInfo/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, StatInfo/*!*/ self, object path) {
+                RubyContext context = toPath.Context;
+                FileSystemInfo info = Create(context, Protocols.CastToPath(toPath, path));
+                var stat = info as StatInfo ?? new StatInfo(info);
+                self.CopyFrom(stat);
+                return self;
+            }
+
+            // MRI's rb_stat_init_copy: the copy answers what the original does.
+            [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+            public static StatInfo/*!*/ InitializeCopy(RubyContext/*!*/ context, StatInfo/*!*/ self, object other) {
+                if (ReferenceEquals(self, other)) {
+                    return self;
+                }
+                if (context.IsObjectFrozen(self)) {
+                    throw RubyExceptions.CreateObjectFrozenError(context, self);
+                }
+                var source = other as StatInfo;
+                if (source == null || context.GetClassOf(other) != context.GetClassOf(self)) {
+                    throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+                }
+                self.CopyFrom(source);
+                return self;
             }
 
             [RubyMethod("<=>")]
@@ -2538,6 +2593,10 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, FileSystemInfo/*!*/ self) {
+               var si = self as StatInfo;
+               if (si != null && !si.IsInitialized) {
+                   return MutableString.CreateAscii("#<" + context.GetClassName(self) + ": uninitialized>");
+               }
                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture,
                     "#<File::Stat dev={0}, ino={1}, mode={2}, nlink={3}, uid={4}, gid={5}, rdev={6}, size={7}, blksize={8}, blocks={9}, atime={10}, mtime={11}, ctime={12}>",
                     FormatDev(DeviceId(self)),
