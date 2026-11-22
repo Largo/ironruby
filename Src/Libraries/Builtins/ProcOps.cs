@@ -341,7 +341,8 @@ namespace IronRuby.Builtins {
 
             RequireCallable(respondTo, other);
             return Proc.CreateNative(respondTo.Context, self.Kind, (blockParam, s, args, unsplat, procArg) => {
-                object intermediate = self.Call(procArg, unsplat.ToArray());
+                // the keywords the composition was called with go on to the function applied first
+                object intermediate = self.Call(procArg, RubyOps.RestoreRuby2Keywords(unsplat.ToArray()));
                 var site = callStorage.GetCallSite("call", 1);
                 return site.Target(site, other, intermediate);
             });
@@ -358,7 +359,7 @@ namespace IronRuby.Builtins {
                 // the block goes to whichever function is applied first, which for << is `other'
                 var splatSite = splatStorage.GetCallSite("call",
                     new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
-                object intermediate = splatSite.Target(splatSite, other, procArg, unsplat);
+                object intermediate = splatSite.Target(splatSite, other, procArg, (RubyArray)RubyOps.SplatRuby2Keywords(unsplat));
                 // through #call, so a lambda's arity is checked against the one value it gets
                 var site = callStorage.GetCallSite("call", 1);
                 return site.Target(site, self, intermediate);

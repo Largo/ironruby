@@ -618,6 +618,10 @@ namespace IronRuby.Builtins {
                 BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1), body);
             result.Kind = kind;
             result.Dispatcher.ParameterSignature = NativeProcSignature;
+            // Keywords the proc is called with reach the body as a marked Hash, which the body can
+            // pass on as keywords (RubyOps.RestoreRuby2Keywords), as MRI's C procs pass the
+            // keywords they were called with on (RB_PASS_CALLED_KEYWORDS).
+            result.Dispatcher.Ruby2Keywords = true;
             return result;
         }
 
