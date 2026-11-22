@@ -66,18 +66,26 @@ namespace IronRuby.Builtins {
             if (options == null) {
                 return null;
             }
+            // It is the only keyword: MRI's dir_initialize refuses any other ([Bug #8060]).
+            RubyEncoding result = null;
+            var unknown = new List<string>();
             foreach (var entry in options) {
                 var key = (entry.Key as RubySymbol);
-                if (key != null && key.ToString() == "encoding" && entry.Value != null) {
-                    var given = entry.Value as RubyEncoding;
-                    if (given != null) {
-                        return given;
+                if (key == null || key.ToString() != "encoding") {
+                    unknown.Add(context.Inspect(entry.Key).ToString());
+                } else if (entry.Value != null) {
+                    result = entry.Value as RubyEncoding;
+                    if (result == null) {
+                        var name = entry.Value as MutableString;
+                        result = context.GetRubyEncoding(name ?? MutableString.Create(context.Inspect(entry.Value)));
                     }
-                    var name = entry.Value as MutableString;
-                    return context.GetRubyEncoding(name ?? MutableString.Create(context.Inspect(entry.Value)));
                 }
             }
-            return null;
+            if (unknown.Count > 0) {
+                throw RubyExceptions.CreateArgumentError(
+                    (unknown.Count == 1 ? "unknown keyword: " : "unknown keywords: ") + String.Join(", ", unknown));
+            }
+            return result;
         }
 
         [RubyConstructor]
@@ -594,7 +602,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
             [Keywords, Optional]IDictionary<object, object> options) {
-            return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
+            return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
         }
 
         #endregion
