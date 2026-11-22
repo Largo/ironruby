@@ -169,7 +169,19 @@ ARGF_CLASS = Class.new do
          when 2 then 1
          end
     return args if at.nil? || args[at].nil?
-    limit = args[at].to_int
+    # rb_to_int: a TypeError when there is no #to_int (a Symbol), and a private one is called
+    limit = args[at]
+    unless ::Integer === limit
+      unless __ir_responds_to__(limit, :to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(limit)} into Integer")
+      end
+      converted = limit.__send__(:to_int)
+      unless ::Integer === converted
+        ::Kernel.raise(::TypeError,
+          "can't convert #{limit.class} to Integer (#{limit.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
+      end
+      limit = converted
+    end
     raise ::ArgumentError, "invalid limit: 0 for #{name}" if limit == 0
     args = args.dup
     args[at] = limit

@@ -9705,7 +9705,8 @@ unless defined?(Random)
       unless __ir_responds_to__(v, :to_int)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(v)} into Integer")
       end
-      r = v.to_int
+      # __send__: an implicit conversion calls a private #to_int too, as rb_check_funcall does
+      r = v.__send__(:to_int)
       return r if ::Integer === r
       ::Kernel.raise(::TypeError, "can't convert #{v.class} to Integer (#{v.class}#to_int gives #{r.class})")
     end
@@ -11344,7 +11345,8 @@ class IO
         unless __ir_responds_to__(v, :to_ary)
           ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(v)} into Array")
         end
-        r = v.to_ary
+        # __send__: an implicit conversion calls a private #to_ary too, as rb_check_funcall does
+        r = v.__send__(:to_ary)
         unless ::Array === r
           ::Kernel.raise(::TypeError, "can't convert #{v.class} to Array (#{v.class}#to_ary gives #{r.class})")
         end
