@@ -568,5 +568,31 @@ p [1, [2, [x, x], 5]].join
 ""12335""
 ");
         }
+
+        /// <summary>
+        /// Array#join separates the elements of nested arrays, empty ones included, and starts in US-ASCII when the
+        /// first element is an array, taking another encoding only from a string that is not ASCII (MRI's
+        /// ary_join_1_ary and rb_str_buf_append; CRuby's TestArray#test_join).
+        /// </summary>
+        public void Array_JoinNested1() {
+            TestOutput(@"
+p [[], 1].join('-')
+p [[[]], [], 1, [2, []]].join('-')
+p [nil, 1, nil].join('-')
+u = ''.force_encoding('UTF-8')
+p [[], u, nil].join.encoding
+p [[], ""\u3042"", nil].join.encoding
+p [nil, u].join.encoding
+p [u, [1]].join.encoding
+", @"
+""-1""
+""--1-2-""
+""-1-""
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+");
+        }
     }
 }

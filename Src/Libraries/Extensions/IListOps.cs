@@ -2043,22 +2043,32 @@ namespace IronRuby.Builtins {
 
         #region join, to_s, inspect
         
-        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, List<MutableString/*!*/>/*!*/ parts, 
-            ref bool? isBinary, ref Dictionary<object, bool> seen) {
+        // nil.to_s, which is US-ASCII; it is only ever appended to the result, never handed out.
+        private static readonly MutableString/*!*/ NilJoinString = MutableString.CreateEmpty(RubyEncoding.Ascii).Freeze();
+
+        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, MutableString separator,
+            List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
             // the length is read again on every step, as MRI's ary_join_1 does: a #to_str or #to_ary
             // may change the array
             for (int i = 0; i < list.Count; i++) {
-                JoinItem(conversions, list, list[i], parts, ref isBinary, ref seen);
+                if (i > 0 && separator != null) {
+                    parts.Add(separator);
+                }
+                JoinItem(conversions, list, list[i], separator, parts, ref isBinary, ref seen);
             }
         }
 
-        private static void JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, List<MutableString/*!*/>/*!*/ parts,
-            ref bool? isBinary, ref Dictionary<object, bool> seen) {
+        /// <summary>
+        /// Adds the strings <paramref name="item"/> joins to, separators included, to <paramref name="parts"/>.
+        /// Returns true if the item was an array (or converted to one) and false if it became a string.
+        /// </summary>
+        private static bool JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, MutableString separator,
+            List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
             {
                 if (item == null) {
-                    parts.Add(null);
-                    return;
+                    parts.Add(NilJoinString);
+                    return false;
                 }
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
@@ -2075,15 +2085,16 @@ namespace IronRuby.Builtins {
                     }
 
                     seen.Add(item, true);
-                    JoinRecursive(conversions, listItem, parts, ref isBinary, ref seen);
+                    JoinRecursive(conversions, listItem, separator, parts, ref isBinary, ref seen);
                     seen.Remove(item);
-                    return;
+                    return true;
                 }
 
                 // try to_str first, then to_s:
                 MutableString strItem = conversions.ToStr.Target(conversions.ToStr, item) ?? conversions.ToS.Target(conversions.ToS, item);
                 parts.Add(strItem);
                 isBinary = isBinary.HasValue ? (isBinary | strItem.IsBinary) : strItem.IsBinary;
+                return false;
             }
         }
 
@@ -2108,59 +2119,47 @@ namespace IronRuby.Builtins {
                 }
                 break;
             }
+
+            // The separators go in between the elements of every array joined, nested ones included,
+            // and an empty nested array still has its neighbours separated ([[], 1].join("-") is "-1").
+            bool firstIsArray = false;
             int index = 0;
             for (; index < scanned && index < self.Count; index++) {
                 var str = self[index] as MutableString;
                 if (str == null) {
                     break;
                 }
-                JoinItem(conversions, self, str, parts, ref isBinary, ref seen);
+                if (index > 0 && separator != null) {
+                    parts.Add(separator);
+                }
+                JoinItem(conversions, self, str, separator, parts, ref isBinary, ref seen);
             }
             for (; index < self.Count; index++) {
-                JoinItem(conversions, self, self[index], parts, ref isBinary, ref seen);
-            }
-            if (parts.Count == 0) {
-                return MutableString.CreateEmpty(RubyEncoding.Ascii);
+                if (index > 0 && separator != null) {
+                    parts.Add(separator);
+                }
+                bool isArray = JoinItem(conversions, self, self[index], separator, parts, ref isBinary, ref seen);
+                if (index == 0) {
+                    firstIsArray = isArray;
+                }
             }
 
-            if (separator != null && separator.IsBinary != isBinary && !separator.IsAscii()) {
-                isBinary = true;
-            }
+            // The result takes the encoding of the first element when that is a string (or became one),
+            // and is US-ASCII when it is an array (MRI's ary_join_1_ary clears ary_join_1's "first").
+            // Everything after is appended the way rb_str_buf_append does it, so an empty or ASCII-only
+            // string leaves the encoding alone and the first one that is not ASCII brings its own:
+            // [[], "".force_encoding("UTF-8")].join is US-ASCII, [[], "\u3042"].join UTF-8.
+            RubyEncoding encoding = (parts.Count == 0 || firstIsArray) ? RubyEncoding.Ascii : parts[0].Encoding;
 
-            // calculate length:
-            // The result starts out in the first string's encoding, and the separator is appended
-            // to that, as in MRI: an incompatible pair is reported in that order.
-            MutableString any = null;
-            int length = (separator != null) ? (isBinary.HasValue && isBinary.Value ? separator.GetByteCount() : separator.GetCharCount()) * (parts.Count - 1) : 0;
+            int length = 0;
+            bool binary = isBinary.HasValue && isBinary.Value;
             for (int i = 0, n = parts.Count; i < n; i++) {
-                var part = parts[i];
-                if (part != null) {
-                    length += (isBinary.HasValue && isBinary.Value) ? part.GetByteCount() : part.GetCharCount();
-                    if (any == null) {
-                        any = part;
-                    }
-                }
-            }
-            any ??= separator;
-
-            if (any == null) {
-                return MutableString.CreateEmpty(RubyEncoding.Ascii);
+                length += binary ? parts[i].GetByteCount() : parts[i].GetCharCount();
             }
 
-            var result = isBinary.HasValue && isBinary.Value ? 
-                MutableString.CreateBinary(length, any.Encoding) :
-                MutableString.CreateMutable(length, any.Encoding);
-
+            var result = binary ? MutableString.CreateBinary(length, encoding) : MutableString.CreateMutable(length, encoding);
             for (int i = 0, n = parts.Count; i < n; i++) {
-                var part = parts[i];
-
-                if (separator != null && i > 0) {
-                    result.Append(separator);
-                }
-
-                if (part != null) {
-                    result.Append(part);
-                }
+                result.Append(parts[i]);
             }
 
             return result;
