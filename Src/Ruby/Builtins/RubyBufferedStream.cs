@@ -707,24 +707,22 @@ namespace IronRuby.Builtins {
         /// why a limit of 2 can return three bytes.
         /// </summary>
         private static bool EndsWithIncompleteCharacter(RubyEncoding/*!*/ encoding, MutableString/*!*/ str) {
-            // Only UTF-8 is self-synchronising in a way we can read off the bytes; in a
-            // single-byte encoding every byte is a character of its own anyway.
-            if (encoding.StrictEncoding.CodePage != 65001) {
-                return false;
-            }
+            int start, count;
+            byte[] bytes = str.GetByteArray(out start, out count);
+            return encoding.EndsInsideCharacter(bytes, start, count);
+        }
 
-            int count = str.GetByteCount();
-            int head = count - 1;
-            while (head >= 0 && count - head < 4 && (str.GetByte(head) & 0xC0) == 0x80) {
-                head--;
-            }
-            if (head < 0) {
-                return false;
-            }
-
-            int lead = str.GetByte(head);
-            int length = (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : 1;
-            return count - head < length;
+        /// <summary>
+        /// Whether the line read so far ends with the separator, and the separator begins a
+        /// character of the line (MRI's rb_io_getline_0 checks rb_enc_left_char_head): in
+        /// EUC-JP the bytes "\xA4\xA4" also turn up as the second half of one character and the
+        /// first half of the next.
+        /// </summary>
+        private static bool EndsWithSeparator(MutableString/*!*/ str, byte[]/*!*/ sep, RubyEncoding/*!*/ encoding) {
+            int start, count;
+            byte[] bytes = str.GetByteArray(out start, out count);
+            return new ReadOnlySpan<byte>(bytes, start, count).EndsWith(sep) &&
+                encoding.IsCharacterBoundary(bytes, start, count, count - sep.Length);
         }
 
         public MutableString ReadLine(MutableString/*!*/ separator, RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
@@ -749,6 +747,11 @@ namespace IronRuby.Builtins {
                 // A separator that ends past the searched bytes may start up to sep.Length - 1 bytes before their end.
                 int from = Math.Max(0, searched - (sep.Length - 1));
                 int index = new ReadOnlySpan<byte>(_buffer, _bufferStart + from, window - from).IndexOf(sep);
+                while (index >= 0 && !encoding.IsCharacterBoundary(_buffer, _bufferStart, window, from + index)) {
+                    // the separator's bytes straddle two characters: look again past them
+                    int next = new ReadOnlySpan<byte>(_buffer, _bufferStart + from + index + 1, window - from - index - 1).IndexOf(sep);
+                    index = (next >= 0) ? index + 1 + next : -1;
+                }
                 if (index >= 0) {
                     int length = from + index + sep.Length;
                     return ConsumeLine(encoding, length, length, false);
@@ -765,7 +768,7 @@ namespace IronRuby.Builtins {
                             break;
                         }
                         result.Append((byte)b);
-                        if (EndsWith(result, sep)) {
+                        if (EndsWithSeparator(result, sep, encoding)) {
                             break;
                         }
                     }
@@ -797,7 +800,7 @@ namespace IronRuby.Builtins {
             do {
                 result.Append((byte)b);
 
-                if (b == sep[sep.Length - 1] && EndsWith(result, sep)) {
+                if (b == sep[sep.Length - 1] && EndsWithSeparator(result, sep, encoding)) {
                     break;
                 }
 
@@ -814,12 +817,6 @@ namespace IronRuby.Builtins {
             } while (b != -1);
 
             return result;
-        }
-
-        private static bool EndsWith(MutableString/*!*/ str, byte[]/*!*/ suffix) {
-            int start, count;
-            byte[] bytes = str.GetByteArray(out start, out count);
-            return new ReadOnlySpan<byte>(bytes, start, count).EndsWith(suffix);
         }
 
         public override bool CanRead {

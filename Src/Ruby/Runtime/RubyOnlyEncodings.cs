@@ -199,6 +199,21 @@ namespace IronRuby.Runtime {
             return 0;
         }
 
+        /// <summary>
+        /// PreciseLength for the character at <paramref name="index"/> of bytes that end at
+        /// <paramref name="end"/>; Int32.MinValue for an encoding this does not cover.
+        /// </summary>
+        internal static int PreciseLengthAt(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int index, int end) {
+            var multiByte = encoding as MultiByteEncoding;
+            if (multiByte != null) {
+                return multiByte.PreciseLength(bytes, index, end);
+            }
+            if (encoding.CodePage == 54936) {
+                return ScanGb18030(bytes, index, end);
+            }
+            return Int32.MinValue;
+        }
+
         internal static System.Collections.Generic.List<int> FindScrubRuns(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count) {
             var multiByte = encoding as MultiByteEncoding;
             int maxLength;

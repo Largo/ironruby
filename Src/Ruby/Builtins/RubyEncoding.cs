@@ -677,6 +677,67 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Whether bytes[start, start + count) stop part way through a character, read from the
+        /// start a character at a time as MRI's rb_enc_precise_mbclen does (a byte that begins
+        /// no character counts as one). The line readers stretch a byte limit that lands there.
+        /// Only UTF-8 and the multibyte encodings whose shape is known here can end inside a
+        /// character; in a single byte encoding every byte is one.
+        /// </summary>
+        public bool EndsInsideCharacter(byte[]/*!*/ bytes, int start, int count) {
+            if (count <= 0) {
+                return false;
+            }
+            if (StrictEncoding.CodePage == 65001) {
+                // UTF-8 synchronises itself: only the last character needs looking at
+                int head = start + count - 1;
+                while (head >= start && start + count - head < 4 && (bytes[head] & 0xC0) == 0x80) {
+                    head--;
+                }
+                if (head < start) {
+                    return false;
+                }
+                int lead = bytes[head];
+                int length = (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : 1;
+                return start + count - head < length;
+            }
+
+            int end = start + count;
+            int p = start;
+            while (p < end) {
+                int length = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, p, end);
+                if (length == Int32.MinValue) {
+                    return false;
+                }
+                if (length == 0) {
+                    return true;
+                }
+                p += (length > 0) ? length : 1;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="offset"/> bytes into bytes[start, start + count) a character
+        /// begins (MRI's rb_enc_left_char_head(s, p, e, enc) == p). In EUC-JP or Shift_JIS the
+        /// bytes of a separator can be found straddling two characters, which is no separator.
+        /// UTF-8 and the single byte encodings answer true: a well formed separator cannot
+        /// begin inside one of their characters.
+        /// </summary>
+        public bool IsCharacterBoundary(byte[]/*!*/ bytes, int start, int count, int offset) {
+            int end = start + count;
+            int target = start + offset;
+            int p = start;
+            while (p < target) {
+                int length = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, p, end);
+                if (length == Int32.MinValue) {
+                    return true;
+                }
+                p += (length > 0) ? length : 1;
+            }
+            return p == target;
+        }
+
+        /// <summary>
         /// The smallest number of bytes a character of this encoding occupies. It is 1 for
         /// everything but UTF-16 and UTF-32, whose code units are 2 and 4 bytes wide; a run of
         /// bytes that decodes to nothing still counts as one character per unit there, which is
