@@ -2501,7 +2501,37 @@ namespace IronRuby.Builtins {
             if (converted) {
                 return ReadLineFromPendingChars(transcode, universal, self, separator, limit);
             }
+            separator = SeparatorToRead(self, separator);
             return universalNewline ? ReadLineUniversal(self, separator, limit) : self.ReadLineOrParagraph(separator, limit);
+        }
+
+        /// <summary>
+        /// The separator as the bytes to look for in what the stream reads. MRI's
+        /// prepare_getline_args refuses a separator that is not ASCII in an encoding other than
+        /// the one the stream reads in, and MRI looks for it in the converted text; the lines are
+        /// converted here only once read, so the separator is looked for in the external encoding
+        /// instead: "\xFF" in ISO-8859-1 is "\xC3\xBF" in a UTF-8 file read as ISO-8859-1.
+        /// </summary>
+        private static MutableString SeparatorToRead(RubyIO/*!*/ self, MutableString separator) {
+            if (separator == null || separator.IsEmpty) {
+                return separator;
+            }
+            RubyEncoding readEncoding = ReadEncoding(self);
+            bool ascii = separator.IsAscii();
+            if (separator.Encoding != readEncoding && (!ascii || !readEncoding.IsAsciiIdentity) &&
+                !ReferenceEquals(separator, self.Context.InputSeparator)) {
+                throw RubyExceptions.CreateArgumentError("encoding mismatch: {0} IO with {1} RS",
+                    readEncoding.Name, separator.Encoding.Name);
+            }
+            if (ascii || self.Enc2 == null || self.Enc2.IsDummy || !self.Enc2.IsAsciiIdentity) {
+                return separator;
+            }
+            try {
+                return MutableString.CreateBinary(self.Enc2.StrictEncoding.GetBytes(separator.ConvertToString()), self.Enc2);
+            } catch (ArgumentException) {
+                // not a character of the external encoding: no line of the stream can end with it
+                return separator;
+            }
         }
 
         /// <summary>
