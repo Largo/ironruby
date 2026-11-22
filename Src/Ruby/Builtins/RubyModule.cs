@@ -2299,9 +2299,8 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The warnings MRI's rb_method_entry_make gives when `def', define_method, attr_* or alias
-        /// (re)defines a method here: "redefining 'object_id' may cause serious problems" whenever
-        /// warnings are on, and under $VERBOSE "method redefined; discarding old foo", pointing
+        /// The warning MRI's rb_method_entry_make gives when `def', define_method, attr_* or alias
+        /// (re)defines a method here under $VERBOSE: "method redefined; discarding old foo", pointing
         /// at the previous definition, when this module's own entry is replaced. An entry that was
         /// aliased (alias_count), is itself an alias, or is undefined or a super forwarder
         /// (ZSUPER) discards nothing worth warning about. Called before the new entry is stored,
@@ -2315,12 +2314,8 @@ namespace IronRuby.Builtins {
                 return;
             }
 
-            // only over a method the module has (a BasicObject subclass has no object_id)
-            if ((name == "object_id" || name == "__id__" || name == "__send__") &&
-                ResolveMethod(name, VisibilityContext.AllVisible).Found) {
-                _context.ReportWarning("redefining '" + name + "' may cause serious problems");
-            }
-
+            // "redefining 'object_id' may cause serious problems" is WarnIfRedefiningCoreMethodNoLock's,
+            // given where every entry is stored
             if (!(_context.Verbose is bool verbose && verbose)) {
                 return;
             }
@@ -2628,19 +2623,24 @@ namespace IronRuby.Builtins {
         }
 
         private void WarnIfCoreMethod(string/*!*/ what, string/*!*/ name, bool includeInitialize) {
-            if (name == "object_id" || name == "__send__" || includeInitialize && name == Symbols.Initialize) {
+            if (IsCoreMethodName(name) || includeInitialize && name == Symbols.Initialize) {
                 Context.ReportWarning(String.Format("{0} '{1}' may cause serious problems", what, name));
             }
         }
 
+        // MRI's object_id, __id__ and __send__ (rb_method_entry_make, rb_undef, rb_remove_method_id)
+        private static bool IsCoreMethodName(string/*!*/ name) {
+            return name == "object_id" || name == "__id__" || name == "__send__";
+        }
+
         /// <summary>
-        /// MRI's rb_method_entry_make: a new entry for object_id or __send__ that is not a C function
+        /// MRI's rb_method_entry_make: a new entry for object_id, __id__ or __send__ that is not a C function
         /// (a def, define_method, alias, attr_reader, visibility change, undef) warns when the class
         /// already has the method, defined or undefined, itself or from an ancestor. An alias is never
         /// a C function there, though here it shares the aliased method's info.
         /// </summary>
         private void WarnIfRedefiningCoreMethodNoLock(string/*!*/ name, RubyMemberInfo/*!*/ method) {
-            if ((name != "object_id" && name != "__send__") || method.IsHidden
+            if (!IsCoreMethodName(name) || method.IsHidden
                 || method.AliasOwner == null && (method is RubyMethodGroupBase || method is RubyCustomMethodInfo)) {
                 return;
             }

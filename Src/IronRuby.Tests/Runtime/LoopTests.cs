@@ -417,6 +417,8 @@ p [acc[0] % 99 == 0, acc[0] > 0]
         /// </summary>
         public void JitRunningLoopRedefined1() {
             TestOutput(@"
+# the redefinitions warn under -w, as in CRuby (""method redefined; discarding old size""); this is about the loops
+$VERBOSE = false
 def after_a_while(flag)
   Thread.new { |; t0|
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
