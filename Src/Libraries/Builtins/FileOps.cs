@@ -912,14 +912,17 @@ namespace IronRuby.Builtins {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
             RequireUsablePathEncoding(context, pathStr);
 
-            string result = RubyUtils.ExpandPath(
-                context.Platform,
-                ExpandTilde(context, DecodePathLike(context, pathStr)),
-                (basePath == null)
-                    ? null
-                    : ExpandTilde(context, DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr)),
-                false
-            );
+            // The base is converted whatever the path, but it is only expanded - "~name" looked
+            // up - when the path needs it: MRI's expand_path ignores it beside an absolute path.
+            string expanded = ExpandTilde(context, DecodePathLike(context, pathStr));
+            string expandedBase = null;
+            if (basePath != null) {
+                string decodedBase = DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr);
+                if (!RubyUtils.IsAbsolutePath(expanded)) {
+                    expandedBase = ExpandTilde(context, decodedBase);
+                }
+            }
+            string result = RubyUtils.ExpandPath(context.Platform, expanded, expandedBase, false);
 
             return EncodePathLike(context, result, pathStr);
         }
