@@ -301,24 +301,25 @@ namespace IronRuby.Builtins {
         #region chmod, chown, lchmod, lchown, umask
 
         [RubyMethod("chmod")]
-        public static object Chmod(RubyFile/*!*/ self, [DefaultProtocol]int permission) {
+        public static object Chmod(RubyIO/*!*/ self, [DefaultProtocol]int permission) {
             self.RequireInitialized();
             if (Posix.IsAvailable) {
                 int fd = GetNativeFileDescriptor(self);
                 int errno;
                 if (fd >= 0) {
                     if (Posix.FChmod(fd, permission, out errno) != 0) {
-                        throw Posix.Error(errno, self.Path, self.Context);
+                        throw Posix.Error(errno, FilePathOf(self), self.Context);
                     }
                     return 0;
                 }
             }
-            if (self.Path == null) {
+            string path = FilePathOf(self);
+            if (path == null) {
                 // Without fchmod there is nothing to change a pathless File through; MRI's
                 // rb_file_chmod answers nil then, rather than raising.
                 return null;
             }
-            Chmod(self.Path, permission);
+            Chmod(path, permission);
             return 0;
         }
 
@@ -384,7 +385,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("chown")]
-        public static int ChangeOwner(RubyContext/*!*/ context, RubyFile/*!*/ self, object owner, object group) {
+        public static int ChangeOwner(RubyContext/*!*/ context, RubyIO/*!*/ self, object owner, object group) {
             self.RequireInitialized();
             int uid = ToUidGid(context, owner, true);
             int gid = ToUidGid(context, group, false);
@@ -394,7 +395,7 @@ namespace IronRuby.Builtins {
                 int errno;
                 if (fd >= 0) {
                     if (Posix.FChown(fd, uid, gid, out errno) != 0) {
-                        throw Posix.Error(errno, self.Path, context);
+                        throw Posix.Error(errno, FilePathOf(self), context);
                     }
                 }
             }
@@ -521,11 +522,12 @@ namespace IronRuby.Builtins {
 
         // The size is an off_t: a file of 4 GiB and more is an ordinary thing to ask for.
         [RubyMethod("truncate")]
-        public static int Truncate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyFile/*!*/ self, object length) {
+        public static int Truncate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyIO/*!*/ self, object length) {
             long size = Protocols.CastToInteger(integerConversion, length).ToInt64();
             self.RequireWritable();
             if (size < 0) {
-                throw self.Path != null ? RubyExceptions.CreateEINVAL("Invalid argument - {0}", self.Path) : RubyExceptions.CreateEINVAL();
+                string path = FilePathOf(self);
+                throw path != null ? RubyExceptions.CreateEINVAL("Invalid argument - {0}", path) : RubyExceptions.CreateEINVAL();
             }
 
             // ftruncate(2) leaves the file offset alone; Stream.SetLength pulls it back
@@ -1217,7 +1219,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("flock")]
-        public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
+        public static object FileLock(RubyIO/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
             if (OperatingSystem.IsWindows()) {
                 return WindowsFileLock(self, operation);
@@ -1243,7 +1245,7 @@ namespace IronRuby.Builtins {
                     return 0;
                 }
                 if (errno != Posix.EWouldBlock) {
-                    throw Posix.Error(errno, self.Path, self.Context);
+                    throw Posix.Error(errno, FilePathOf(self), self.Context);
                 }
                 if (nonBlocking) {
                     // LOCK_NB on a locked file reports "would block" rather than raising
@@ -1380,7 +1382,7 @@ namespace IronRuby.Builtins {
         /// writes, so without it `gem install` of any gem with an executable failed.
         /// </summary>
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-        private static object WindowsFileLock(RubyFile/*!*/ self, int operation) {
+        private static object WindowsFileLock(RubyIO/*!*/ self, int operation) {
             var fs = self.GetStream().BaseStream as FileStream;
             if (fs == null) {
                 throw RubyExceptions.CreateEBADF();
@@ -1394,7 +1396,7 @@ namespace IronRuby.Builtins {
                     int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
                     // Unlocking a file that is not locked is not an error for flock(2).
                     if (error != ERROR_NOT_LOCKED) {
-                        throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                        throw RubyExceptions.CreateEINVAL("{0}", FilePathOf(self));
                     }
                 }
                 return 0;
@@ -1404,7 +1406,7 @@ namespace IronRuby.Builtins {
             if ((operation & Posix.LOCK_EX) != 0) {
                 flags |= LOCKFILE_EXCLUSIVE_LOCK;
             } else if ((operation & Posix.LOCK_SH) == 0) {
-                throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                throw RubyExceptions.CreateEINVAL("{0}", FilePathOf(self));
             }
 
             while (true) {
@@ -1414,7 +1416,7 @@ namespace IronRuby.Builtins {
                 }
                 int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
                 if (error != ERROR_LOCK_VIOLATION && error != ERROR_IO_PENDING) {
-                    throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                    throw RubyExceptions.CreateEINVAL("{0}", FilePathOf(self));
                 }
                 if ((operation & Posix.LOCK_NB) != 0) {
                     return false;
@@ -1666,7 +1668,7 @@ namespace IronRuby.Builtins {
         #region atime, ctime, mtime, utime
 
         [RubyMethod("atime")]
-        public static RubyTime AccessTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime AccessTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.AccessTime(RubyStatOps.Create(self));
         }
 
@@ -1677,7 +1679,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("ctime")]
-        public static RubyTime CreateTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime CreateTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.CreateTime(RubyStatOps.Create(self));
         }
 
@@ -1688,7 +1690,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("mtime")]
-        public static RubyTime ModifiedTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime ModifiedTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.ModifiedTime(RubyStatOps.Create(self));
         }
 
@@ -1808,7 +1810,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("stat")]
-        public static FileSystemInfo Stat(RubyFile/*!*/ self) {
+        public static FileSystemInfo Stat(RubyIO/*!*/ self) {
             return RubyStatOps.Create(self);
         }
 
@@ -1817,16 +1819,17 @@ namespace IronRuby.Builtins {
         /// through a symbolic link describes the link. A File with no path is fstat'd.
         /// </summary>
         [RubyMethod("lstat")]
-        public static FileSystemInfo LStat(RubyFile/*!*/ self) {
+        public static FileSystemInfo LStat(RubyIO/*!*/ self) {
             self.RequireOpen();
-            if (self.Path == null) {
+            string path = FilePathOf(self);
+            if (path == null) {
                 return RubyStatOps.Create(self);
             }
-            return RubyStatOps.Create(self.Context, self.Path, false);
+            return RubyStatOps.Create(self.Context, path, false);
         }
 
         [RubyMethod("birthtime")]
-        public static RubyTime BirthTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime BirthTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.BirthTime(RubyStatOps.Create(self));
         }
 
@@ -1836,11 +1839,11 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("size")]
-        public static object FileSize(RubyFile/*!*/ self) {
+        public static object FileSize(RubyIO/*!*/ self) {
             // fstat the descriptor rather than the path: the size of a file that has
             // since been unlinked is still readable, and a closed File raises IOError.
             self.RequireOpen();
-            return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
+            return RubyStatOps.Size(RubyStatOps.Create(self));
         }
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyIO/*!*/ self) {
@@ -1874,6 +1877,21 @@ namespace IronRuby.Builtins {
                 return RubyIOOps.GetIOPath(self);
             }
             return GetPath((RubyFile)self);
+        }
+
+        /// <summary>
+        /// The path a File's methods name in their errors and lstat: an IO reopened to a File
+        /// takes that File's class without becoming a RubyFile (the CLR object cannot change
+        /// type), and MRI's File methods work on it all the same, through the descriptor and
+        /// the path it keeps.
+        /// </summary>
+        private static string FilePathOf(RubyIO/*!*/ self) {
+            var file = self as RubyFile;
+            if (file != null) {
+                return file.Path;
+            }
+            MutableString path = RubyIOOps.GetIOPath(self);
+            return (path != null) ? self.Context.DecodePath(path) : null;
         }
 
         private static MutableString GetPath(RubyFile/*!*/ self) {
