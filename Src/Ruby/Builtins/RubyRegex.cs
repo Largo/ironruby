@@ -46,6 +46,17 @@ namespace IronRuby.Builtins {
         private Regex _cachedAstralRegex;
         private TimeSpan _cachedAstralTimeout;
 
+        // The same pattern translated for a match Onigmo makes with its ASCII-8BIT or US-ASCII
+        // ctype table (UsesAsciiCtype) - above all a BINARY subject with bytes above 0x7F, which
+        // has no letters, punctuation or case pairs there, where .NET sees U+0080-U+00FF (see
+        // RegexpTransformer.Transform(..., asciiCtype)).
+        private Regex _cachedBinaryRegex;
+        private TimeSpan _cachedBinaryTimeout;
+        // Set once that translation has turned out to be the plain one - the pattern has no
+        // property, POSIX class, \b, \R or /i Latin-1 letter - so that such a subject keeps
+        // matching with _cachedRegex, which is compiled once it has been used enough.
+        private bool _binaryIsPlain;
+
         // The same CLR regex forced to start where the search starts, for the scanning operations
         // that only ever look at the current position (StringScanner#scan, #skip, #check, #match?).
         // Cached against the regex it was derived from, so it follows _cachedRegex's own lifetime.
@@ -154,6 +165,8 @@ namespace IronRuby.Builtins {
             _options = options & ~RubyRegexOptions.Once;
             _cachedRegex = null;
             _cachedAstralRegex = null;
+            _cachedBinaryRegex = null;
+            _binaryIsPlain = false;
             _nonAsciiEscape = -1;
             _hasProperty = -1;
 
@@ -241,7 +254,62 @@ namespace IronRuby.Builtins {
             // O(1): matching has just validated the input, which works the flags out
             astral = input.HasSurrogatePairs();
 
-            return astral ? TransformAstralPattern() : TransformPattern(countUse);
+            if (astral) {
+                return TransformAstralPattern();
+            }
+            if (UsesAsciiCtype(input)) {
+                return TransformBinaryPattern(countUse);
+            }
+            return TransformPattern(countUse);
+        }
+
+        /// <summary>
+        /// Whether MRI would match <paramref name="input"/> with Onigmo's ASCII-8BIT or US-ASCII
+        /// ctype table. rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the
+        /// subject's encoding, and a fixed one for its own (the subject is then in that encoding
+        /// or ASCII only). Two cases differ from the plain translation: a BINARY subject with
+        /// bytes above 0x7F (a US-ASCII subject that got here is ASCII), and a BINARY or US-ASCII
+        /// regexp with a property, whose \p{Punct} is [[:punct:]] even on ASCII text. Any other
+        /// fixed BINARY or US-ASCII regexp matches ASCII text as the plain translation does.
+        /// </summary>
+        private bool UsesAsciiCtype(MutableString/*!*/ input) {
+            if (input.Encoding == RubyEncoding.Binary && !input.IsAscii()) {
+                return true;
+            }
+            if (PatternHasProperty) {
+                RubyEncoding encoding = Encoding;
+                return encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii;
+            }
+            return false;
+        }
+
+        private Regex/*!*/ TransformBinaryPattern(bool countUse) {
+            TimeSpan timeout = EffectiveTimeout;
+            if (_binaryIsPlain) {
+                return TransformPattern(countUse);
+            }
+            if (_cachedBinaryRegex != null && timeout == _cachedBinaryTimeout) {
+                return _cachedBinaryRegex;
+            }
+
+            // the plain translation first: it validates the pattern and sets _hasGAnchor
+            Regex plain = TransformPattern(false);
+            Regex result;
+            try {
+                bool hasGAnchor, applied;
+                string translated = RegexpTransformer.Transform(GetClrPatternSource(), _options, out hasGAnchor, false, true, out applied);
+                if (!applied) {
+                    _binaryIsPlain = true;
+                    return plain;
+                }
+                result = new Regex(translated, plain.Options, timeout);
+            } catch (Exception) {
+                result = plain;
+            }
+
+            _cachedBinaryTimeout = timeout;
+            _cachedBinaryRegex = result;
+            return result;
         }
 
         private Regex/*!*/ TransformAstralPattern() {

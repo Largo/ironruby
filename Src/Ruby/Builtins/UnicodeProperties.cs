@@ -228,6 +228,19 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        /// <summary>
+        /// Whether, of each Latin-1 letter pair U+00C0-U+00DE / U+00E0-U+00FE (but the
+        /// multiplication and division signs), <paramref name="ranges"/> holds both or neither.
+        /// </summary>
+        internal static bool IsLatin1CaseClosed(int[]/*!*/ ranges) {
+            for (int c = 0xc0; c <= 0xde; c++) {
+                if (c != 0xd7 && Contains(ranges, c, c) != Contains(ranges, c + 0x20, c + 0x20)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         internal static bool Equals(int[]/*!*/ a, int[]/*!*/ b) {
             if (a.Length != b.Length) {
                 return false;

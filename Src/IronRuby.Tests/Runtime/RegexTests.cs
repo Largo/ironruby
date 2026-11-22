@@ -667,6 +667,61 @@ fragment: [16, #<Encoding:US-ASCII>, true]
 fragments: [RegexpError, ""encoding mismatch in dynamic regexp : US-ASCII and UTF-8""]
 ");
         }
+
+        /// <summary>
+        /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
+        /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
+        /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET
+        /// sees U+0080-U+00FF. ISO-8859-1 and UTF-8 subjects keep their own letters, and a BINARY
+        /// regexp's \p{Punct} is [[:punct:]] even on ASCII text.
+        /// </summary>
+        public void Regex_BinaryCtype1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+s = ""a\xE9b\xFF c\xC9"".b
+t('property /n') { ""\xff"".b =~ /\p{Alpha}/n }
+t('posix') { ""\xff"".b =~ Regexp.new('[[:alpha:]]'.b) }
+t('word') { ""\xff"".b =~ Regexp.new('\p{Word}'.b) }
+t('lower') { ""\xff"".b =~ Regexp.new('\p{Lower}'.b) }
+t('negated') { [""\xff"".b =~ /[[:^alpha:]]/, ""\xff"".b =~ /\P{Alpha}/n] }
+t('\w') { [""\xff"".b =~ /\w/n, ""\xff"".b =~ /(?u)\w/] }
+t('punct') { [""$"".b =~ Regexp.new('\p{Punct}'.b), ""$\xff"".b =~ /[[:punct:]]+/, ""\xab"".b =~ /[[:punct:]]/] }
+t('\b') { [s.scan(/\b./), s.split(/\b/)] }
+t('\R') { [""\x85"".b =~ /\R/, ""\r\n\x85"".b[/\R+/]] }
+t('scan') { s.scan(/[[:alpha:]]+/) }
+t('gsub') { s.gsub(/\p{^Alpha}/n, '.') }
+t('/i literal') { [""\xC9"".b =~ /\xE9/in, ""\xC9"".b =~ Regexp.new(""\xE9"".b, Regexp::IGNORECASE), ""\xE9"".b =~ /\xE9/in] }
+t('/i class') { [""\xC9"".b =~ /[\xE0-\xEF]/in, ""\xC9"".b =~ /[^\xE9]/in, ""A\xE9"".b =~ /[^a]/in, ""A\xE9"".b =~ /a/in] }
+t('/i posix') { s.scan(/[[:upper:]]+/i) }
+t('(?i)') { ""\xC9a"".b =~ /(?i:\xE9)|(?i)A/n }
+t('one regexp') { re = /[[:alpha:]]/; [re.match?(""\u00e9""), re.match?(""\xE9"".b), re.match?(""\u00e9""), re.match?(""\xE9"".dup.force_encoding(""ISO-8859-1""))] }
+t('iso-8859-1') { [""\xE9"".dup.force_encoding(""ISO-8859-1"") =~ /[[:alpha:]]/, ""\xC9"".dup.force_encoding(""ISO-8859-1"") =~ Regexp.new(""\xE9"".dup.force_encoding(""ISO-8859-1""), Regexp::IGNORECASE)] }
+t('utf-8') { [""\u00e9"" =~ /\p{Alpha}/, ""\u00e9"" =~ /\b/] }
+", @"
+property /n: nil
+posix: nil
+word: nil
+lower: nil
+negated: [0, 0]
+\w: [nil, nil]
+punct: [0, 0, nil]
+\b: [[""a"", ""\xE9"", ""b"", ""\xFF"", ""c"", ""\xC9""], [""a"", ""\xE9"", ""b"", ""\xFF "", ""c"", ""\xC9""]]
+\R: [nil, ""\r\n""]
+scan: [""a"", ""b"", ""c""]
+gsub: ""a.b..c.""
+/i literal: [nil, nil, 0]
+/i class: [nil, 0, 1, 0]
+/i posix: [""a"", ""b"", ""c""]
+(?i): 1
+one regexp: [true, false, true, true]
+iso-8859-1: [0, 0]
+utf-8: [0, 0]
+");
+        }
     }
 }
 
