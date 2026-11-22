@@ -3912,8 +3912,9 @@ namespace IronRuby.Runtime {
                 if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
                     return !IsDeepOrOverflow(exception);
                 }
+                // A light frame that has made no scope passes null (MethodDefinition.LightFrameRewriter): no jump can be meant for it.
                 LocalJumpError lje = exception as LocalJumpError;
-                return lje != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
+                return lje != null && scope != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
             } catch (Exception) {
                 // catch it (see RescuePassMayTest)
                 return false;
