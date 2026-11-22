@@ -56,6 +56,7 @@ namespace IronRuby.Runtime {
         internal EscapingEncoding(Encoding/*!*/ inner)
             : base(inner.CodePage) {
             _inner = inner;
+            _maxSequenceLength = (inner is CesuEncoding) ? 6 : 4;
         }
 
         internal static bool IsEscapedByte(char c) {
@@ -63,10 +64,11 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// The longest character any encoding used here produces: CESU-8's surrogate pairs are six
-        /// bytes.
+        /// The longest character the inner encoding has: 4 bytes, but 6 for CESU-8's surrogate
+        /// pairs. Each byte that begins no character costs one failed decode per length tried,
+        /// so the other encodings do not try the two that only CESU-8 needs.
         /// </summary>
-        private const int MaxSequenceLength = 6;
+        private readonly int _maxSequenceLength;
 
         #region Decoding
 
@@ -75,7 +77,7 @@ namespace IronRuby.Runtime {
         /// bytes there do not begin one.
         /// </summary>
         private int SequenceLength(byte[]/*!*/ bytes, int index, int limit) {
-            for (int length = 1; length <= MaxSequenceLength && index + length <= limit; length++) {
+            for (int length = 1; length <= _maxSequenceLength && index + length <= limit; length++) {
                 try {
                     _inner.GetCharCount(bytes, index, length);
                     return length;
