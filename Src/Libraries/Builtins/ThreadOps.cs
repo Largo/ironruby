@@ -1340,6 +1340,8 @@ namespace IronRuby.Builtins {
             // a Ractor's main thread runs this instead of yielding StartRoutine, in a group of its own
             internal Func<object> Body;
             internal ThreadGroup Group;
+            // the creator's Thread.handle_interrupt masks, which the thread starts with
+            internal object InterruptMasks;
         }
 
         /// <summary>
@@ -1396,7 +1398,8 @@ namespace IronRuby.Builtins {
                 context.ThreadTerminator = CreateThreadTerminator(context);
             }
             s.Creator = Thread.CurrentThread;
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, s.Group ?? group, s.Creator, s.Body)),
+            s.InterruptMasks = RubyUtils.CaptureInterruptMasks();
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, s.Group ?? group, s.Creator, s.Body, s.InterruptMasks)),
                 RubyUtils.ThreadStackSize);
             if (subclass != null) {
                 context.AdoptClrObject(result, subclass);
@@ -1478,11 +1481,13 @@ namespace IronRuby.Builtins {
         }
 
         private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam startRoutine, object[] args, ThreadGroup group,
-            Thread creator, Func<object> body) {
+            Thread creator, Func<object> body, object interruptMasks) {
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.CreatedFromRuby = true;
 
             info.Group = group;
+            // before anything can be delivered, a Thread#raise that came before the thread ran included
+            RubyUtils.InheritInterruptMasks(interruptMasks);
 
             try {
                 // Thread#kill / Thread#raise may have been called before the thread got a chance to run.
