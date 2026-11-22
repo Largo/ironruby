@@ -1063,6 +1063,37 @@ stateless: [""92a4a2"", 1, 9610402, ""92a4a3""]
         }
 
         /// <summary>
+        /// #inspect of a string in CESU-8 where the result is CESU-8 too passes its printable
+        /// characters through, as UTF-8's; a legacy character of four bytes with the high bit set
+        /// is still one braced escape (\x{81308130}).
+        /// </summary>
+        public void String_InspectUnicodeCarriers1() {
+            TestOutput(@"
+require 'ruby4'
+class X
+  def initialize(s) = @s = s
+  def inspect = @s
+end
+p [X.new([0x81, 0x30, 0x81, 0x30].pack('C*').force_encoding('GB18030'))].inspect
+p [X.new([0x9c, 0xf0, 0xa0, 0xa0].pack('C*').force_encoding('Emacs-Mule'))].inspect
+verbose, $VERBOSE = $VERBOSE, nil
+Encoding.default_internal = 'CESU-8'
+$VERBOSE = verbose
+['e38182', '7f', 'eda08062ff', 'eda0bdedb880'].each do |h|
+  i = [h].pack('H*').force_encoding('CESU-8').inspect
+  p [i.encoding, i.b]
+end
+", @"
+""[\\x{81308130}]""
+""[\\x{9CF0A0A0}]""
+[#<Encoding:CESU-8>, ""\""\xE3\x81\x82\""""]
+[#<Encoding:CESU-8>, ""\""\\u007F\""""]
+[#<Encoding:CESU-8>, ""\""\\xED\\xA0\\x80b\\xFF\""""]
+[#<Encoding:CESU-8>, ""\""\xED\xA0\xBD\xED\xB8\x80\""""]
+");
+        }
+
+        /// <summary>
         /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
         /// messages), the encoding of the format says how long the character of the number is, "invalid character"
         /// when it has no length for it, and that many bytes of the number are put without asking whether they are a

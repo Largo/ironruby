@@ -1985,12 +1985,14 @@ namespace IronRuby.Runtime {
 
         private int DecodeAll(byte[]/*!*/ bytes, int index, int count, char[] chars, int charIndex) {
             int consumed;
-            return DecodeAll(bytes, index, count, chars, charIndex, true, out consumed);
+            return DecodeAll(bytes, index, count, chars, charIndex, true, null, out consumed);
         }
 
         // With flush false a character cut short at the end is left alone, and consumed says
-        // where it starts.
-        private int DecodeAll(byte[]/*!*/ bytes, int index, int count, char[] chars, int charIndex, bool flush, out int consumed) {
+        // where it starts. A fallback the decoder was given (the escaping one #inspect uses)
+        // takes the bytes that form no character.
+        private int DecodeAll(byte[]/*!*/ bytes, int index, int count, char[] chars, int charIndex, bool flush,
+            DecoderFallbackBuffer fallbackBuffer, out int consumed) {
             int limit = index + count;
             int i = index, j = charIndex;
             while (i < limit) {
@@ -1999,6 +2001,15 @@ namespace IronRuby.Runtime {
                     break;
                 }
                 if (length <= 0) {
+                    if (fallbackBuffer != null && fallbackBuffer.Fallback(new[] { bytes[i] }, i - index)) {
+                        while (fallbackBuffer.Remaining > 0) {
+                            char c = fallbackBuffer.GetNextChar();
+                            if (chars != null) chars[j] = c;
+                            j++;
+                        }
+                        i++;
+                        continue;
+                    }
                     if (_throwOnError) {
                         throw Undecodable(bytes, i);
                     }
@@ -2051,7 +2062,7 @@ namespace IronRuby.Runtime {
             public override int GetCharCount(byte[]/*!*/ bytes, int index, int count, bool flush) {
                 byte[] input = Join(bytes, index, count);
                 int consumed;
-                return _encoding.DecodeAll(input, 0, input.Length, null, 0, flush, out consumed);
+                return _encoding.DecodeAll(input, 0, input.Length, null, 0, flush, (Fallback != null) ? FallbackBuffer : null, out consumed);
             }
 
             public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
@@ -2061,7 +2072,7 @@ namespace IronRuby.Runtime {
             public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex, bool flush) {
                 byte[] input = Join(bytes, byteIndex, byteCount);
                 int consumed;
-                int written = _encoding.DecodeAll(input, 0, input.Length, chars, charIndex, flush, out consumed);
+                int written = _encoding.DecodeAll(input, 0, input.Length, chars, charIndex, flush, (Fallback != null) ? FallbackBuffer : null, out consumed);
                 _pending = new byte[input.Length - consumed];
                 Array.Copy(input, consumed, _pending, 0, _pending.Length);
                 return written;

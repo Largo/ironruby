@@ -2230,13 +2230,19 @@ namespace IronRuby.Builtins {
                 resultEncoding = RubyEncoding.Ascii;
             }
 
-            if (!self.IsAscii() && self.Encoding != resultEncoding) {
-                return InspectForeignEncoding(self, resultEncoding);
-            }
-
             // CESU-8 and UTF-8's carrier variants spell even their ASCII control characters as
             // Unicode's, as UTF-8 does: "\x7F".force_encoding("CESU-8").inspect is "\u007F".
+            // Where the result is in the string's own encoding, its printable characters pass
+            // through as UTF-8's do.
             if (self.Encoding.HasUnicodeCodePoints && self.Encoding != RubyEncoding.UTF8 && self.Encoding.IsAsciiIdentity) {
+                if (self.Encoding != resultEncoding) {
+                    return InspectForeignEncoding(self, resultEncoding);
+                }
+                return MutableString.Create(self.AppendRepresentation(new StringBuilder().Append('"'), null,
+                    MutableString.Escape.Special, '"').Append('"').ToString(), resultEncoding);
+            }
+
+            if (!self.IsAscii() && self.Encoding != resultEncoding) {
                 return InspectForeignEncoding(self, resultEncoding);
             }
 
