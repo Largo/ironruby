@@ -5227,7 +5227,9 @@ namespace IronRuby.Runtime {
             if (Tokenizer.TryParseEncodingHeader(reader, out encodingName, out line)) {
                 // A name Ruby does not know is as wrong as an encoding the comment itself could not
                 // be written in (UTF-16LE): MRI reports both as an ArgumentError, worded so.
-                var rubyEncoding = FindRubyEncoding(encodingName);
+                // "external", "locale" and the like are names Encoding.find resolves, not encodings:
+                // the parser does not know them (rb_enc_find_index there fails the same way).
+                var rubyEncoding = RubyEncoding.FindByName(encodingName);
                 if (rubyEncoding == null || !rubyEncoding.IsAsciiIdentity) {
                     throw new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
                 }
