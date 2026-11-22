@@ -3629,7 +3629,7 @@ E = Data.define(:a, :b)
 require 'ruby4'
 p 1.then, 1.yield_self, 1.method(:yield_self).name, 1.method(:yield_self).original_name
 p Kernel.instance_method(:then) == Kernel.instance_method(:yield_self), Kernel.instance_method(:then).parameters
-p [1, 2, 3].rfind, [1, 2, 3].rfind(nil), [1, 2, 3].rfind(1, 2), [1, 2, 3].rfind(-> { 9 }) { false }
+p [1, 2, 3].rfind, [1, 2, 3].rfind(nil), ([1, 2, 3].rfind(1, 2) rescue $!), [1, 2, 3].rfind(-> { 9 }) { false }
 p (1..2).collect_concat, (1..2).flat_map
 p [3].lazy.filter { 1 }, [3].lazy.find_all { 1 }, [3].lazy.select { 1 }
 p [3].lazy.collect { 1 }, [3].lazy.map { 1 }, [3].lazy.collect_concat { [1] }
@@ -3644,7 +3644,7 @@ true
 []
 #<Enumerator: [1, 2, 3]:rfind>
 #<Enumerator: [1, 2, 3]:rfind(nil)>
-#<Enumerator: [1, 2, 3]:rfind(1, 2)>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
 9
 #<Enumerator: 1..2:collect_concat>
 #<Enumerator: 1..2:flat_map>
