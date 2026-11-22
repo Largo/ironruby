@@ -3376,21 +3376,25 @@ namespace IronRuby.Builtins {
             CallSite<Func<CallSite, object, object, object, object>> readSite = null;
             bool readPartial = false;
             long restorePosition = -1;
+            RubyIO dstIO = null;
 
             try {
                 // Each side on its own: an IO (or what #to_io gives, as for a Tempfile) is read or
                 // written as that IO - a File is not reopened by its path, which used to truncate and
                 // overwrite a file opened only for reading - and anything else is a path or an object
                 // with #readpartial / #read / #write.
+                // MRI's copy_stream_body asks for #to_io only of what could name a file - an IO, a
+                // String or an object with #to_path (a Tempfile) - so a wrapper with #readpartial
+                // and #write is used through those even when it can also give its IO away.
                 var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
-                RubyIO srcIO = TryToIO(respondTo, toIoStorage, context, src, false);
+                RubyIO srcIO = MayNameFile(respondTo, src) ? TryToIO(respondTo, toIoStorage, context, src, false) : null;
                 if (srcIO != null) {
                     srcIO.RequireByteReadable();
                     srcStream = srcIO.GetReadableStream();
                 } else {
                     var srcPath = toPathSite.Target(toPathSite, src);
                     if (srcPath != null) {
-                        srcStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(srcPath), FileMode.Open, FileAccess.Read, FileShare.Read);
+                        srcStream = RubyFile.OpenFileStream(context, context.DecodePath(srcPath), IOMode.ReadOnly);
                         ownsSrc = true;
                     } else if (Protocols.RespondTo(respondTo, src, "readpartial")) {
                         // MRI prefers #readpartial, which signals the end with EOFError
@@ -3401,14 +3405,17 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                RubyIO dstIO = TryToIO(respondTo, toIoStorage, context, dst, false);
+                dstIO = MayNameFile(respondTo, dst) ? TryToIO(respondTo, toIoStorage, context, dst, false) : null;
                 if (dstIO != null) {
-                    dstStream = dstIO.GetWritableStream();
+                    // written through the IO, which gives back what it had read ahead and goes to
+                    // the end of a file opened for appending
+                    dstIO.GetWritableStream();
                 } else {
                     var dstPath = toPathSite.Target(toPathSite, dst);
                     if (dstPath != null) {
-                        // Create, not Truncate: MRI's copy_stream makes the destination when it is not there.
-                        dstStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(dstPath), FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
+                        // O_WRONLY|O_CREAT|O_TRUNC, as MRI opens a destination it is given by name.
+                        dstStream = RubyFile.OpenFileStream(context, context.DecodePath(dstPath),
+                            IOMode.WriteOnly | IOMode.CreateIfNotExists | IOMode.Truncate);
                         ownsDst = true;
                     } else {
                         writeSite = writeStorage.GetCallSite("write", 1);
@@ -3469,7 +3476,13 @@ namespace IronRuby.Builtins {
                         break;
                     }
 
-                    if (dstStream != null) {
+                    if (dstIO != null) {
+                        if (userBuffer != null) {
+                            dstIO.WriteRawBytes(userBuffer, 0, bytesRead);
+                        } else {
+                            dstIO.WriteRawBytes(buffer, 0, bytesRead);
+                        }
+                    } else if (dstStream != null) {
                         if (userBuffer != null) {
                             dstStream.Write(userBuffer, 0, bytesRead);
                         } else {
@@ -3497,10 +3510,14 @@ namespace IronRuby.Builtins {
                 }
                 if (ownsDst) {
                     dstStream.Dispose();
-                } else if (dstStream != null) {
-                    dstStream.Flush();
+                } else if (dstIO != null && !dstIO.Closed) {
+                    dstIO.Flush();
                 }
             }
+        }
+
+        private static bool MayNameFile(RespondToStorage/*!*/ respondTo, object obj) {
+            return obj is RubyIO || obj is MutableString || Protocols.RespondTo(respondTo, obj, "to_path");
         }
 
         #endregion

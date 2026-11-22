@@ -871,6 +871,47 @@ us-ascii: [RangeError, ""invalid codepoint 0xE9 in US-ASCII""]
         }
 
         /// <summary>
+        /// A seek from the current position, or a write, after a read gives the whole read buffer back to the file,
+        /// what #ungetc put in front of it included (MRI's io_unread), so it lands where #pos said the stream was. A
+        /// buffer reaching back past the start of the file is not given back. IO.copy_stream writes through its
+        /// destination IO the same way, and to the end of a file opened for appending.
+        /// </summary>
+        public void Io_UnreadPushedBack1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, 'f')
+def t(f, mode = 'w+b')
+  File.open(f, mode) { |io| io.write ""abcd\n""; io.rewind; yield io; io.rewind; p io.read }
+end
+t(f) { |io| io.read(3); io.ungetc 'c'; io.write 'Z' }
+t(f) { |io| io.read(3); io.ungetc 'xy'; io.seek(0, IO::SEEK_CUR); p io.pos }
+t(f) { |io| io.read; io.ungetc 'c'; io.write 'Z' }
+t(f) { |io| io.ungetc 'xy'; io.write 'Z' }
+t(f) { |io| io.read(2); io.ungetc 'q'; io.seek(1, IO::SEEK_CUR); p io.read(1) }
+r, w = IO.pipe
+w << 'xyz'; w.close
+t(f) { |io| io.read(3); io.ungetc 'c'; IO.copy_stream(r, io) }
+g = File.join(dir, 'g')
+File.write(g, 'foo')
+File.write(f, 'preface')
+File.open(f, 'ab') { |io| IO.copy_stream(g, io) }
+p File.read(f)
+", @"
+""abZd\n""
+1
+""abcd\n""
+""abcdZ""
+""Zbcd\n""
+""c""
+""abcd\n""
+""abxyz""
+""prefacefoo""
+");
+        }
+
+        /// <summary>
         /// The line readers of a stream that converts from a wide encoding (UTF-16, UTF-32) look for the separator in
         /// the text they converted, as MRI's do: the byte of a "\n" is half of that character there, or part of
         /// another one (U+0A00, U+010A), and a line cut at it could not be converted - #gets on a UTF-16 file raised
