@@ -1226,6 +1226,35 @@ namespace IronRuby.Builtins {
             return (((((((uint)data[start + 3] << 8) + (uint)data[start + 2]) << 8) + (uint)data[start + 1]) << 8) + (uint)data[start + 0]);
         }
 
+        /// <summary>
+        /// Ruby 1.9.1 wrote the nanoseconds beyond the microsecond as "submicro": two bytes of BCD
+        /// digits, hundreds and tens in the first, units in the high half of the second. MRI's
+        /// time_mload still reads it when there is no nano_num, and stops at the first nibble
+        /// that is not a digit.
+        /// </summary>
+        private static ExactNum ReadSubmicro(RubyContext/*!*/ context, MutableString/*!*/ time) {
+            object value;
+            MutableString submicro;
+            if (!context.TryGetInstanceVariable(time, "submicro", out value) || (submicro = value as MutableString) == null) {
+                return ExactNum.Zero;
+            }
+            byte[] bytes = submicro.ConvertToBytes();
+            int[] scale = { 100, 10, 1 };
+            int nsec = 0;
+            for (int i = 0; i < 3; i++) {
+                int b = i / 2;
+                if (b >= bytes.Length) {
+                    break;
+                }
+                int digit = (i % 2 == 0) ? bytes[b] >> 4 : bytes[b] & 0xf;
+                if (digit >= 10) {
+                    return ExactNum.Zero;
+                }
+                nsec += digit * scale[i];
+            }
+            return ExactNum.Make(nsec, RubyTime.NanosecondsPerSecond);
+        }
+
         [RubyMethod("_load", RubyMethodAttributes.PrivateSingleton)]
         public static RubyTime/*!*/ Load(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]MutableString/*!*/ time) {
             byte[] data = time.ConvertToBytes();
@@ -1253,6 +1282,8 @@ namespace IronRuby.Builtins {
                     // The remainder is in nanoseconds; the time itself counts seconds.
                     extraSubsec = ExactNum.Make(num, den * 1000000000);
                 }
+            } else {
+                extraSubsec = ReadSubmicro(context, time);
             }
 
             if ((data[3] & 0x80) == 0) {
@@ -1268,6 +1299,12 @@ namespace IronRuby.Builtins {
                 bool isUtc = (data[3] & 0x40) != 0;
                 int year = 1900 + (int)((dword1 >> 14) & 0xffff);
                 int month = 1 + (int)((dword1 >> 10) & 0x0f);
+                // the four bits hold 0...15; MRI's time_mload carries a month past December into
+                // the next year (and a dump of Time.utc(2022, 4, 1) by Ruby 3.1 has one)
+                if (month > 12) {
+                    month -= 12;
+                    year++;
+                }
                 int day = (int)((dword1 >> 5) & 0x01f);
                 int hour = (int)(dword1 & 0x01f);
 
