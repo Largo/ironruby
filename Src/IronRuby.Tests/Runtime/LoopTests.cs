@@ -391,10 +391,18 @@ p (1..3).map {
   d = th.value
   d == 0 || d == 1
 }
-def fl(flags, acc, n); n.times { |i| f = flags[0]; f.times { |j| acc[0] = acc[0] + j + 1 } }; end
-5.times { fl([2], [0], 2000) }
-flags = [0]; acc = [0]
-th = Thread.new { sleep 0.03; Integer.class_eval { remove_method :times; def times; yield 98; self; end }; flags[0] = 1 }
+# flags[1] is the loop's progress: the thread redefines once the loop has run a while, not after a fixed sleep
+# that a fast loop could outlast (every inner call would then be 0.times and acc[0] stay 0); it waits at most 10 s
+def fl(flags, acc, n); n.times { |i| f = flags[0]; flags[1] = i; f.times { |j| acc[0] = acc[0] + j + 1 } }; end
+5.times { fl([2, 0], [0], 2000) }
+flags = [0, 0]; acc = [0]
+th = Thread.new do
+  t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  Thread.pass while flags[1] < 100_000 && Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 10
+  Integer.class_eval { remove_method :times; def times; yield 98; self; end }
+ensure
+  flags[0] = 1
+end
 fl(flags, acc, 30_000_000)
 th.join
 p [acc[0] % 99 == 0, acc[0] > 0]
