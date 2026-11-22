@@ -1392,6 +1392,12 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ Defined(Pm.PmNode/*!*/ value, SourceSpan span) {
+            // Nested literals (defined?([[[...x...]]])) recurse through here and ElementsDefined
+            // rather than through Expr (see StackGuard).
+            if (!StackGuard.IsSufficient) {
+                return StackGuard.RunOnFreshStack(() => Defined(value, span));
+            }
+
             var node = Unparen(value);
 
             switch (node) {
@@ -1425,6 +1431,12 @@ namespace IronRuby.Prism {
                 // ... and so is a hash literal: every key and value, and what ** splats
                 case Pm.HashNode hash:
                     return DefinedAs(ElementsDefined(hash.Elements, span), "expression", span);
+
+                // A call with a literal block is an "expression" whatever its receiver, arguments
+                // or method (prism_compile's defined_expr: BLOCK_P gives DEFINED_EXPR before it
+                // looks at anything else): defined?(nosuch(undefined_name) { }) is "expression".
+                case Pm.CallNode blockCall when blockCall.Block is Pm.BlockNode:
+                    return FrozenString("expression", span);
 
                 // A call is defined only if its arguments are (CRuby's defined_expr checks each
                 // one, splatted or keyword, before the method): `f(undefined_local)` is nil. A
