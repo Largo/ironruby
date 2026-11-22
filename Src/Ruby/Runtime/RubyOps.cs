@@ -4378,11 +4378,9 @@ namespace IronRuby.Runtime {
         }
 
         // MRI formats the expected module with %PRIsVALUE, i.e. its #to_s (an anonymous class with a
-        // singleton #to_s, as EnvUtil.labeled_class makes, shows that).
+        // singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's own #to_s is
+        // used too, so the name is only the fallback for a #to_s that returns no String.
         private static string/*!*/ SuperExpectedModuleName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
-            if (module.Name != null) {
-                return module.GetDisplayName(context, true).ToString();
-            }
             var site = context.GetClassOf(module).ToStringSite;
             var str = site.Target(site, module) as MutableString;
             return str != null ? str.ToString() : module.GetDisplayName(context, true).ToString();
