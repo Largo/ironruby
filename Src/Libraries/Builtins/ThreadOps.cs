@@ -1114,9 +1114,16 @@ namespace IronRuby.Builtins {
             Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, false);
 
             // Inside a fiber the current Ruby thread is the fiber's owner; raising on it means
-            // raising here, not nudging the thread the fiber was started from.
+            // raising here, not nudging the thread the fiber was started from. MRI's rb_threadptr_raise
+            // queues the exception on the current thread as on any other and checks for interrupts at once,
+            // so a Thread.handle_interrupt mask holds it back here too: until the next blocking operation
+            // under :on_blocking, until the mask is gone under :never.
             if (self == RubyUtils.CurrentRubyThread) {
-                throw e;
+                if (RubyUtils.GetInterruptTiming(e) == RubyUtils.InterruptImmediate) {
+                    throw e;
+                }
+                RubyUtils.ParkAsyncException(Thread.CurrentThread, e);
+                return;
             }
 
             RaiseAsyncException(context, self, e);
