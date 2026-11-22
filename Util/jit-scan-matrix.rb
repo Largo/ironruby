@@ -194,13 +194,17 @@ def jd_threads(jp)
       j += 1
     end
   end
-  50_000.times do
-    c = jp.read
-    bad << c unless c.nil? || (c.size == 1 && (JD_TEXT + alt).include?(c))
-    jp.index = -1 if c.nil?
+  begin
+    50_000.times do
+      c = jp.read
+      bad << c unless c.nil? || (c.size == 1 && (JD_TEXT + alt).include?(c))
+      jp.index = -1 if c.nil?
+    end
+  ensure
+    # also when read raised: the writer must not run on through the rows after this one
+    stop = true
+    th.join
   end
-  stop = true
-  th.join
   bad.uniq.first(3)
 end
 jp = jd_class.new(JD_TEXT.dup)
