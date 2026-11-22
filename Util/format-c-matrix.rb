@@ -72,6 +72,11 @@ try("ascii bytes EUC-KR then %s") { format("%c%s".dup.force_encoding("EUC-KR"), 
   o.define_singleton_method(:to_int) { n }
   try("to_int #{n}") { "%c" % [o] }
 end
+# #to_int is called once: the Integer named is the first it gave.
+calls = 0
+twice = Object.new
+twice.define_singleton_method(:to_int) { calls += 1; calls == 1 ? 2**31 : 2**32 }
+try("to_int once") { ["%c" % [twice], calls] rescue [$!.message, calls] }
 [Float::INFINITY, -Float::INFINITY, Float::NAN, 1e19, -1e19, 9.3e18, 3e9, -3e9, 2147483647.9, -2147483648.9, 1.5e300].each do |f|
   try("float #{f}") { "%c" % f }
 end

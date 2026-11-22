@@ -40,7 +40,7 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, object, object>> _new;
         private CallSite<Func<CallSite, object, object>> _numerator;
         private CallSite<Func<CallSite, object, object>> _denominator;
-        private CallSite<Func<CallSite, object, object>> _toInt;
+        private CallSite<Func<CallSite, object, IntegerValue>> _toInt;
 
         [Emitted]
         public StringFormatterSiteStorage(RubyContext/*!*/ context) : base(context) {
@@ -56,9 +56,12 @@ namespace IronRuby.Builtins {
             return site.Target(site, value);
         }
 
-        /// <summary>Dynamic <c>value.to_int</c>.</summary>
-        public object ToInt(object value) {
-            var site = RubyUtils.GetCallSite(ref _toInt, Context, "to_int", 0);
+        /// <summary>
+        /// The implicit Integer conversion (#to_int) without narrowing the result to an int, so
+        /// that a caller can range-check the Integer #to_int gave - calling it once.
+        /// </summary>
+        public IntegerValue ConvertToIntegerValue(object value) {
+            var site = RubyUtils.GetCallSite(ref _toInt, ConvertToIntAction.Make(Context));
             return site.Target(site, value);
         }
 
@@ -1447,19 +1450,13 @@ namespace IronRuby.Builtins {
                 return (int)truncated;
             }
             try {
-                return _siteStorage.CastToFixnum(value);
-            } catch (ArgumentOutOfRangeException) {
-                // #to_int gave an Integer that does not fit: the same RangeError as for a number
-                // given directly. The conversion does not hand the Integer out, so it is asked
-                // for once more.
-                object converted = (value is int || value is BigInteger || value is double) ? null : _siteStorage.ToInt(value);
-                if (converted is BigInteger) {
-                    throw IntegerOutOfIntRange((BigInteger)converted);
+                // #to_int is called once, and an Integer it gives that does not fit is the same
+                // RangeError as the number given directly, naming that Integer.
+                IntegerValue integer = _siteStorage.ConvertToIntegerValue(value);
+                if (integer.IsFixnum) {
+                    return integer.Fixnum;
                 }
-                if (converted is long) {
-                    throw IntegerOutOfIntRange((long)converted);
-                }
-                throw;
+                throw IntegerOutOfIntRange(integer.Bignum);
             } catch (InvalidOperationException e) {
                 string className = _context.GetClassDisplayName(value);
                 // An object that has #to_int and gave back something else is a different
