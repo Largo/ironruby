@@ -2783,6 +2783,12 @@ namespace IronRuby.Builtins {
 
             var settings = TranscodeSettings.Parse(toStr.Context, toHash, options, to);
 
+            if (toEncoding == Missing.Value && from != to) {
+                // MRI's str_transcode0: #encode without a target converts to default_internal and
+                // replaces what does not convert rather than raising
+                settings.ReplaceInvalid = settings.ReplaceUndefined = true;
+            }
+
             if (from == to && !settings.ReplaceInvalid && settings.XmlMode == 0 && settings.Newline == 0) {
                 // Nothing to do, and in particular nothing to validate: MRI does not check the
                 // bytes when the source and target encodings are the same.
