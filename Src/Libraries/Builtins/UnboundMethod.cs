@@ -104,6 +104,10 @@ namespace IronRuby.Builtins {
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
             RubyModule constraint = self._info.DeclaringModule ?? self._targetConstraint;
+            // a refinement's method binds to what the refinement refines (Feature #14223)
+            if (constraint.IsRefinement && constraint.RefinedModule != null) {
+                constraint = constraint.RefinedModule;
+            }
 
             if (constraint.IsClass && !context.IsKindOf(target, constraint)) {
                 throw RubyExceptions.CreateTypeError(
