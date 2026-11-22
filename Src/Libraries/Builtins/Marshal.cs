@@ -2400,8 +2400,11 @@ namespace IronRuby.Builtins {
             /// variables or a singleton class is its own object.
             /// </summary>
             private MutableString/*!*/ Deduplicate(MutableString/*!*/ str) {
-                // only a plain String joins the table; an instance of a subclass keeps its class
-                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)) {
+                // only a plain String joins the table; an instance of a subclass keeps its class, and
+                // one an 'e' record extended its singleton class (rb_fstring only freezes a string
+                // that is not bare)
+                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)
+                    || Context.GetImmediateClassOf(str).IsSingletonClass) {
                     return str;
                 }
 
