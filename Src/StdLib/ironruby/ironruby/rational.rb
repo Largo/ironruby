@@ -1050,11 +1050,15 @@ class Numeric
     return fdiv(other) if ::Float === other
     x = self
     unless ::Rational === x
-      # rb_convert_type: no #to_r at all is "can't convert X into Rational"
-      unless __ir_responds_to__(self, :to_r)
+      # rb_convert_type: no #to_r at all is "can't convert X into Rational". It asks as
+      # rb_check_funcall does, so a #to_r that only method_missing answers is called too,
+      # and only the NoMethodError for this very #to_r means there is none.
+      x = begin
+        self.to_r
+      rescue ::NoMethodError => e
+        ::Kernel.raise unless e.name == :to_r && e.receiver.equal?(self) && !__ir_responds_to__(self, :to_r)
         ::Kernel.raise(::TypeError, "can't convert #{__ir_coerce_name__(self)} into Rational")
       end
-      x = to_r
       unless ::Rational === x
         ::Kernel.raise(::TypeError,
           "can't convert #{self.class} to Rational (#{self.class}#to_r gives #{__ir_conversion_result_name__(x)})")

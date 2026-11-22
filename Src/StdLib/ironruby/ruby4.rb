@@ -2132,12 +2132,14 @@ class String
 
   # MRI's deleted_prefix_length skips the encoding check for a broken prefix when both
   # sides are ASCII compatible: it compares the bytes and removes them only if they end
-  # on a character boundary of the receiver.
+  # on a character boundary of the receiver. A valid receiver cannot start with broken
+  # bytes, so it keeps them ("\xFFx".b.delete_prefix("\xFF") is "\xFFx").
   def delete_prefix(prefix)
     prefix = __affix__(prefix)
     if !prefix.valid_encoding? && encoding.ascii_compatible? && prefix.encoding.ascii_compatible?
       n = prefix.bytesize
       return dup if n == 0 || n > bytesize || byteslice(0, n).b != prefix.b
+      return dup if valid_encoding?
       at = 0
       each_char { |c| break if at >= n; at += c.bytesize }
       return at == n ? byteslice(n, bytesize - n) : dup
@@ -4568,12 +4570,22 @@ end
 # Float has its own #fdiv (one method with #quo) and sign predicates in MRI; Integer has
 # Numeric's.
 class Float
-  # flo_quo calls #/ through num_funcall1, whose recursion guard turns `alias / quo` - #/
-  # calling itself - into a NameError ("1.0/2.0") rather than a SystemStackError.
+  # flo_quo calls #/ through num_funcall1, whose recursion guard (rb_exec_recursive_paired
+  # on the pair of operands) turns `alias / quo` - #/ calling itself - into a NameError
+  # ("1.0/2.0"). The guard is per thread and only for that pair, so a SystemStackError
+  # that a program's own #/ raises goes on as it is.
   def fdiv(other)
-    self / other
-  rescue ::SystemStackError
-    ::Kernel.raise(::NameError.new("#{inspect}/#{other.inspect}", :/))
+    stack = (::Thread.current[:__ir_float_quo__] ||= [])
+    float = ::Float === other
+    if stack.any? { |x, y| eql?(x) && (float ? other.eql?(y) : other.equal?(y)) }
+      ::Kernel.raise(::NameError.new("#{inspect}/#{other.inspect}", :/))
+    end
+    stack.push([self, other])
+    begin
+      self / other
+    ensure
+      stack.pop
+    end
   end
   alias :quo :fdiv
 
@@ -9684,7 +9696,8 @@ unless defined?(Random)
     end
     private :marshal_dump
 
-    # rand_mt_load
+    # rand_mt_load: a short dump leaves left at 1 and the seed at 0, and both are
+    # converted implicitly (NUM2ULONG, rb_to_int), so "5" or nil is a TypeError.
     def marshal_load(data)
       if frozen?
         ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
@@ -9693,15 +9706,29 @@ unless defined?(Random)
         ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(data)} (expected Array)")
       end
       ::Kernel.raise(::ArgumentError, "wrong dump data") unless (1..3).cover?(data.size)
-      state, left, seed = data
-      left = ::Kernel.Integer(left)
+      state = data[0]
+      left = data.size >= 2 ? data[1] : 1
+      seed = data.size >= 3 ? data[2] : 0
+      left = __ir_to_int__(left)
       ::Kernel.raise(::ArgumentError, "wrong value") if left <= 0 || left > 624
-      @__seed__ = seed.to_int
+      @__seed__ = __ir_to_int__(seed)
       @__mt__ = ::Random.__send__(:__mt_class__).new(0)
       @__mt__.set_state(state, left)
       self
     end
     private :marshal_load
+
+    # rb_to_int: #to_int, and a TypeError when there is none or it answers no Integer.
+    def __ir_to_int__(v)
+      return v if ::Integer === v
+      unless __ir_responds_to__(v, :to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(v)} into Integer")
+      end
+      r = v.to_int
+      return r if ::Integer === r
+      ::Kernel.raise(::TypeError, "can't convert #{v.class} to Integer (#{v.class}#to_int gives #{r.class})")
+    end
+    private :__ir_to_int__
 
     # fill_random_seed: 128 bits of entropy.
     def self.new_seed
