@@ -570,6 +570,34 @@ p [1, [2, [x, x], 5]].join
         }
 
         /// <summary>
+        /// A range endpoint that fits a long but not an int is a position past the end of any list (MRI's
+        /// rb_range_beg_len reads it with NUM2LONG), not a RangeError; CRuby's TestArray#test_range_with_len_max_end.
+        /// </summary>
+        public void Array_RangeLongEnd1() {
+            TestOutput(@"
+max = 2**63 - 1
+a = [1, 2]
+p a[0..max], a[-1..max], a[max..], a[-max..1]
+b = [1, 2, 3]; b[1..max] = 9; p b
+b = [1, 2, 3]; p b.slice!(1..max), b
+p(([1, 2].fill(0, 0..max) rescue $!))
+p(([1, 2].values_at(0..max) rescue $!))
+p((a[0..2**64] rescue $!))
+", @"
+[1, 2]
+[2]
+nil
+nil
+[1, 9]
+[2, 3]
+[1]
+#<ArgumentError: argument too big>
+#<IndexError: index 9223372036854775806 too big>
+#<RangeError: bignum too big to convert into 'long'>
+");
+        }
+
+        /// <summary>
         /// Array#join separates the elements of nested arrays, empty ones included, and starts in US-ASCII when the
         /// first element is an array, taking another encoding only from a string that is not ASCII (MRI's
         /// ary_join_1_ary and rb_str_buf_append; CRuby's TestArray#test_join).

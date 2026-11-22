@@ -78,12 +78,36 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        /// <summary>
+        /// MRI's rb_range_beg_len reads the endpoints with NUM2LONG, so an Integer that fits a long but not
+        /// an int is a position no list reaches rather than an error: a[0..2**63 - 1] is all of a. Such an
+        /// endpoint is clamped to the int range; one past a long is still a RangeError.
+        /// </summary>
+        private static int CastToRangeEndpoint(ConversionStorage<int>/*!*/ fixnumCast, object value) {
+            long l = CastToLongRangeEndpoint(fixnumCast, value);
+            return l > Int32.MaxValue ? Int32.MaxValue : l < Int32.MinValue ? Int32.MinValue : (int)l;
+        }
+
+        private static long CastToLongRangeEndpoint(ConversionStorage<int>/*!*/ fixnumCast, object value) {
+            if (value is long) {
+                return (long)value;
+            }
+            if (value is System.Numerics.BigInteger) {
+                var big = (System.Numerics.BigInteger)value;
+                if (big > Int64.MaxValue || big < Int64.MinValue) {
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                }
+                return (long)big;
+            }
+            return Protocols.CastToFixnum(fixnumCast, value);
+        }
+
         internal static bool NormalizeRange(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range, out int begin, out int count) {
             // A beginless range starts at 0 and an endless one runs to the end; both
             // endpoints became nil-able in 2.6/2.7 and used to raise TypeError here.
-            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            begin = (range.Begin == null) ? 0 : CastToRangeEndpoint(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int end = endless ? listCount : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = endless ? listCount : CastToRangeEndpoint(fixnumCast, range.End);
 
             begin = NormalizeIndex(listCount, begin);
 
@@ -96,10 +120,9 @@ namespace IronRuby.Builtins {
                 end = NormalizeIndex(listCount, end);
             }
 
-            count = (range.ExcludeEnd && !endless) ? end - begin : end - begin + 1;
-            if (endless) {
-                count = listCount - begin;
-            }
+            // in a long: an end of Int32.MaxValue would overflow the count
+            long longCount = (range.ExcludeEnd && !endless) ? (long)end - begin : (long)end - begin + 1;
+            count = endless ? listCount - begin : (int)Math.Max(Math.Min(longCount, Int32.MaxValue), Int32.MinValue);
             return true;
         }
 
@@ -111,16 +134,17 @@ namespace IronRuby.Builtins {
         internal static void NormalizeRangeNoClamp(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range,
             out int begin, out int count) {
 
+            // in longs, as MRI's are: the endpoints may be anything a long holds (see CastToRangeEndpoint)
             object rawBegin = range.Begin;
-            begin = (rawBegin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, rawBegin);
+            long longBegin = (rawBegin == null) ? 0 : CastToLongRangeEndpoint(fixnumCast, rawBegin);
             bool endless = range.End == null;
-            int end = endless ? -1 : Protocols.CastToFixnum(fixnumCast, range.End);
+            long end = endless ? -1 : CastToLongRangeEndpoint(fixnumCast, range.End);
             bool excludeEnd = range.ExcludeEnd && !endless;
 
-            int originalBegin = begin;
-            if (begin < 0) {
-                begin += listCount;
-                if (begin < 0) {
+            long originalBegin = longBegin;
+            if (longBegin < 0) {
+                longBegin += listCount;
+                if (longBegin < 0) {
                     throw RubyExceptions.CreateRangeError("{0}{1}{2} out of range",
                         originalBegin, excludeEnd ? "..." : "..", endless ? "" : end.ToString(CultureInfo.InvariantCulture));
                 }
@@ -129,14 +153,20 @@ namespace IronRuby.Builtins {
             if (end < 0) {
                 end += listCount;
             }
-            if (!excludeEnd) {
+            if (!excludeEnd && end < Int64.MaxValue) {
                 end++;
             }
 
-            count = end - begin;
-            if (count < 0) {
-                count = 0;
+            long longCount = Math.Max(end - longBegin, 0);
+
+            // The answer is padded with nil to the range's full length; one longer than an array
+            // may be is MRI's rb_ary_store error rather than an allocation that never ends.
+            if (longCount >= MaxArraySize) {
+                throw RubyExceptions.CreateIndexError("index {0} too big", longCount - 1);
             }
+
+            begin = (int)longBegin;
+            count = (int)longCount;
         }
 
         private static bool InRangeNormalized(IList/*!*/ list, ref int index) {
@@ -813,9 +843,9 @@ namespace IronRuby.Builtins {
         }
 
         private static void RangeToStartAndCount(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int start, out int count) {
-            start = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            start = (range.Begin == null) ? 0 : CastToRangeEndpoint(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int end = endless ? length : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = endless ? length : CastToRangeEndpoint(fixnumCast, range.End);
 
             int originalStart = start;
             start = start < 0 ? start + length : start;
@@ -831,7 +861,7 @@ namespace IronRuby.Builtins {
             }
 
             end = end < 0 ? end + length : end;
-            count = Math.Max(range.ExcludeEnd ? end - start : end - start + 1, 0);
+            count = (int)Math.Min(Math.Max(range.ExcludeEnd ? (long)end - start : (long)end - start + 1, 0), Int32.MaxValue);
         }
 
         #endregion
@@ -1520,7 +1550,7 @@ namespace IronRuby.Builtins {
             // start + length overflowed Int32 and produced a negative bound, after which the
             // loop below appended one element at a time until the process died. MRI reports
             // "argument too big" for a size it cannot represent; the CLR's is Int32.MaxValue.
-            if (length > 0 && (long)start + length > MaxArraySize) {
+            if (length >= 0 && (start >= MaxArraySize || length > MaxArraySize - start)) {
                 throw RubyExceptions.CreateArgumentError("argument too big");
             }
 
@@ -1553,9 +1583,9 @@ namespace IronRuby.Builtins {
         private static void FillRange(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, Range/*!*/ range,
             out int begin, out int length) {
 
-            int rawBegin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            int rawBegin = (range.Begin == null) ? 0 : CastToRangeEndpoint(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int rawEnd = endless ? self.Count - 1 : Protocols.CastToFixnum(fixnumCast, range.End);
+            int rawEnd = endless ? self.Count - 1 : CastToRangeEndpoint(fixnumCast, range.End);
 
             begin = NormalizeIndex(self, rawBegin);
             if (begin < 0) {
@@ -1563,9 +1593,10 @@ namespace IronRuby.Builtins {
             }
 
             int end = endless ? self.Count - 1 : NormalizeIndex(self, rawEnd);
+            // an end clamped to Int32.MaxValue makes a length that Fill reports as "argument too big"
             length = endless
                 ? Math.Max(0, self.Count - begin)
-                : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
+                : (int)Math.Min(Math.Max(0, (long)end - begin + (range.ExcludeEnd ? 0 : 1)), Int32.MaxValue);
         }
 
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start) {
