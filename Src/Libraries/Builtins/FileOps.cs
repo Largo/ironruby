@@ -1803,10 +1803,22 @@ namespace IronRuby.Builtins {
             return RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false);
         }
 
-        [RubyMethod("lstat")]
         [RubyMethod("stat")]
         public static FileSystemInfo Stat(RubyFile/*!*/ self) {
             return RubyStatOps.Create(self);
+        }
+
+        /// <summary>
+        /// MRI's rb_file_lstat: lstat(2) of the path the File was opened with, so a File opened
+        /// through a symbolic link describes the link. A File with no path is fstat'd.
+        /// </summary>
+        [RubyMethod("lstat")]
+        public static FileSystemInfo LStat(RubyFile/*!*/ self) {
+            self.RequireOpen();
+            if (self.Path == null) {
+                return RubyStatOps.Create(self);
+            }
+            return RubyStatOps.Create(self.Context, self.Path, false);
         }
 
         [RubyMethod("birthtime")]
