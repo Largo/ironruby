@@ -205,6 +205,16 @@ namespace IronRuby.Builtins {
 
             Stream stream = GetDescriptorStream(io.Context, descriptor);
 
+            // So does one IronRuby opened, when no mode is given: MRI asks fcntl(F_GETFL), and
+            // IO.new(IO.sysopen(path, "w")) or IO.new(1) is for writing. The stream says what the
+            // descriptor was opened for.
+            if (known && !info.HasMode && stream != null) {
+                IOMode access = stream.CanRead
+                    ? (stream.CanWrite ? IOMode.ReadWrite : IOMode.ReadOnly)
+                    : (stream.CanWrite ? IOMode.WriteOnly : IOMode.ReadOnly);
+                mode = (mode & ~IOMode.ReadWriteMask) | access;
+            }
+
             // A mode the caller spelled out has to agree with what the descriptor was opened
             // for; MRI answers EINVAL when it does not. Only for a descriptor IronRuby opened -
             // an adopted one has just told us its mode and cannot disagree with itself.
@@ -217,6 +227,16 @@ namespace IronRuby.Builtins {
             io.Mode = mode;
             io.SetStream(stream);
             io.SetFileDescriptor(descriptor);
+
+            // MRI's IO.new runs rb_maygvl_fd_fix_cloexec: a descriptor above the standard three
+            // that this process was handed, or made with fcntl(F_DUPFD), is close-on-exec from
+            // now on, as every descriptor Ruby opens is.
+            if (!known) {
+                int native = io.KernelDescriptor;
+                if (native > 2) {
+                    RubyProcess.SetCloseOnExec(native);
+                }
+            }
 
             if (info.HasEncoding) {
                 io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
