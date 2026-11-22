@@ -7,7 +7,12 @@ module Bug
   module File
     module Fs
       def self.__mount__(path)
-        mounts = ::File.read("/proc/self/mounts").lines.map(&:split) rescue (return nil)
+        # the kernel writes a space, tab, newline or backslash in a mount point as \040 and so on
+        mounts = ::File.read("/proc/self/mounts").lines.map do |line|
+          fields = line.split
+          fields[1] = fields[1].gsub(/\\([0-7]{3})/) { $1.to_i(8).chr }
+          fields
+        end rescue (return nil)
         path = ::File.realpath(path)
         mounts.select { |_, dir, *| path == dir || path.start_with?(dir.end_with?("/") ? dir : "#{dir}/") }
               .max_by { |_, dir, *| dir.size }

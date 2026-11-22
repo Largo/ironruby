@@ -12,7 +12,12 @@ set -u
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cruby=$(cd "$1" && pwd); out=$2; shift 2
 mkdir -p "$out"; out=$(cd "$out" && pwd)
-if [ $# -eq 0 ]; then set -- "$cruby"/test/ruby/test_*.rb; fi
+if [ $# -eq 0 ]; then
+  set -- "$cruby"/test/ruby/test_*.rb
+else
+  # each file runs in a directory of its own, so a relative path has to be made absolute here
+  for f; do shift; set -- "$@" "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")"; done
+fi
 export root cruby out TIMEOUT=${TIMEOUT:-600}
 run_one() {
   name=$(basename "$1" .rb)
