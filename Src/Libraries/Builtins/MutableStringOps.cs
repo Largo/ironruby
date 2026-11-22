@@ -1095,7 +1095,24 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static MutableString GetChar(MutableString/*!*/ self, [DefaultProtocol]int index) {
+        public static MutableString GetChar(ConversionStorage<int>/*!*/ fixnumCast, RangeValuesStorage/*!*/ rangeValues,
+            MutableString/*!*/ self, object index) {
+            int i;
+            if (index is int) {
+                i = (int)index;
+            } else {
+                // rb_str_aref asks rb_range_beg_len before it converts the index: an object with
+                // #begin, #end and #exclude_end? stands for the Range it describes.
+                Range range = rangeValues.TryConvert(index);
+                if (range != null) {
+                    return GetSubstring(fixnumCast, self, range);
+                }
+                i = Protocols.CastToFixnum(fixnumCast, index);
+            }
+            return GetChar(self, i);
+        }
+
+        public static MutableString GetChar(MutableString/*!*/ self, int index) {
             return InExclusiveRangeNormalized(GetCharacterLength(self), ref index) ? GetCharacterSlice(self, index, 1) : null;
         }
 
@@ -1401,9 +1418,33 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
-            [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+        public static MutableString/*!*/ ReplaceCharacter(ConversionStorage<int>/*!*/ fixnumCast, ConversionStorage<MutableString>/*!*/ stringCast,
+            RangeValuesStorage/*!*/ rangeValues, MutableString/*!*/ self, object index, object value) {
 
+            // The replacement is untyped so that a Regexp index still picks its own overload; it is
+            // converted after the index, as rb_str_aset does.
+
+            if (!(index is int)) {
+                // rb_str_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
+                // describes, and one starting outside the string is reported by its #inspect.
+                Range range = rangeValues.TryConvert(index);
+                if (range != null) {
+                    if (range.Begin is int) {
+                        int length = GetCharacterLength(self);
+                        int begin = (int)range.Begin < 0 ? (int)range.Begin + length : (int)range.Begin;
+                        if (begin < 0 || begin > length) {
+                            throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
+                        }
+                    }
+                    return ReplaceSubstring(fixnumCast, self, range, Protocols.CastToString(stringCast, value));
+                }
+            }
+            int i = index is int ? (int)index : Protocols.CastToFixnum(fixnumCast, index);
+            return ReplaceCharacter(self, i, Protocols.CastToString(stringCast, value));
+        }
+
+        [RubyMethod("[]=")]
+        public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self, int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
             // MRI's rb_str_update checks the encodings (rb_enc_check) before the index.
             self.RequireCompatibleEncoding(value);
 

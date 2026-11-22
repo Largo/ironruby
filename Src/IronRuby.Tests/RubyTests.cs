@@ -1351,6 +1351,7 @@ namespace IronRuby.Tests {
                 Array_JoinRecursive1,
                 Array_JoinNested1,
                 Array_RangeLongEnd1,
+                Array_DuckRangeIndex1,
                 Array_HashRecursiveElement1,
                 String_DumpNonUnicode1,
                 IO_PutsRecursiveToAry1,
