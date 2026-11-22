@@ -127,6 +127,7 @@ namespace IronRuby.Builtins {
         private static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
         private const int F_GETFD = 1;
         private const int F_SETFD = 2;
+        private static readonly int F_DUPFD_CLOEXEC = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 67 : 1030;
         private const int FD_CLOEXEC = 1;
         private const int X_OK = 1;
         private const int EINTR = 4;
@@ -227,7 +228,7 @@ namespace IronRuby.Builtins {
         /// [:child, fd] dup2s, which name descriptors as the redirections left them (the
         /// prelude marks them with a fourth element), and chdir last.
         /// </summary>
-        private static RubyArray OrderActions(RubyArray actions) {
+        private static RubyArray OrderActions(RubyArray actions, bool inProcess) {
             if (actions == null) {
                 return null;
             }
@@ -273,11 +274,22 @@ namespace IronRuby.Builtins {
                 if (ready < 0) {
                     // Every target left is still somebody's source: a cycle. Copy one source
                     // aside and let its readers take the copy, which frees its own slot.
-                    if (spare < 0) {
-                        spare = SpareDescriptor(used);
-                    }
                     int source = pending[0][1];
-                    result.Add(new RubyArray { ActionDup2, spare, source });
+                    if (spare < 0 && inProcess) {
+                        // __exec__ runs the actions in this process, where another thread could
+                        // open a descriptor that was free a moment ago; MRI's dup allocates the
+                        // copy and makes it in one step, and so does F_DUPFD here, above every
+                        // descriptor the actions name.
+                        spare = LibcVariadic.Fcntl(source, F_DUPFD_CLOEXEC, MaxOf(used) + 1);
+                        if (spare < 0) {
+                            throw RubyExceptions.CreateEBADF();
+                        }
+                    } else {
+                        if (spare < 0) {
+                            spare = SpareDescriptor(used);
+                        }
+                        result.Add(new RubyArray { ActionDup2, spare, source });
+                    }
                     foreach (var pair in pending) {
                         if (pair[1] == source) {
                             pair[1] = spare;
@@ -299,6 +311,14 @@ namespace IronRuby.Builtins {
             result.AddRange(children);
             result.AddRange(chdirs);
             return result;
+        }
+
+        private static int MaxOf(HashSet<int>/*!*/ values) {
+            int max = 2;
+            foreach (int value in values) {
+                max = Math.Max(max, value);
+            }
+            return max;
         }
 
         /// <summary>
@@ -436,7 +456,7 @@ namespace IronRuby.Builtins {
                 SysFileActionsInit(fileActions);
                 SysSpawnAttrInit(attributes);
 
-                actions = OrderActions(actions);
+                actions = OrderActions(actions, false);
                 int error = ApplyActions(fileActions, strings, actions);
                 if (error != 0) {
                     return error;
@@ -516,7 +536,7 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(WindowsSpawn.Exec(context, file, argv, envp, actions));
             }
 
-            actions = OrderActions(actions);
+            actions = OrderActions(actions, true);
             var strings = new NativeStrings();
             try {
                 IntPtr path = strings.Allocate(file);

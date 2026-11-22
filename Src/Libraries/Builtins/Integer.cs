@@ -860,15 +860,17 @@ namespace IronRuby.Builtins {
             if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
                 // read before the lookups: a change that races with them leaves the state stale, not wrong
                 int version = RubyModule.GlobalMethodVersion;
-                bool basic = IsLibraryMethod(context, "<") && IsLibraryMethod(context, "succ");
+                bool basic = IsLibraryMethod(context, "<", "LessThan") && IsLibraryMethod(context, "succ", "Next");
                 _timesOps = state = new TimesOpsState(context, version, basic);
             }
             return state.Basic;
         }
 
-        private static bool IsLibraryMethod(RubyContext/*!*/ context, string/*!*/ name) {
+        // The code behind it, not only its owner: alias_method :<, :> keeps the owner.
+        private static bool IsLibraryMethod(RubyContext/*!*/ context, string/*!*/ name, string/*!*/ clrName) {
             var lookup = context.IntegerClass.ResolveMethod(name, VisibilityContext.AllVisible);
-            return lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass;
+            return lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass &&
+                Array.TrueForAll(lookup.Info.GetMembers(), m => m.Name == clrName);
         }
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {

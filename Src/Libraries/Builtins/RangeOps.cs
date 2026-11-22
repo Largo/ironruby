@@ -681,6 +681,7 @@ namespace IronRuby.Builtins {
 
         public class EachStorage : ComparisonStorage {
             private CallSite<Func<CallSite, object, MutableString>> _stringCast;
+            private CallSite<Func<CallSite, object, MutableString>> _tryStringCast;
             private CallSite<BinaryOp> _equalsSite;    // ==
             private CallSite<UnaryOp> _succSite;       // succ
             private CallSite<BinaryOp> _respondToSite; // respond_to?
@@ -690,6 +691,11 @@ namespace IronRuby.Builtins {
 
             public CallSite<Func<CallSite, object, MutableString>>/*!*/ StringCastSite {
                 get { return RubyUtils.GetCallSite(ref _stringCast, ConvertToStrAction.Make(Context)); }
+            }
+
+            // rb_check_string_type: nil when there is no #to_str or it gives nil
+            public CallSite<Func<CallSite, object, MutableString>>/*!*/ TryStringCastSite {
+                get { return RubyUtils.GetCallSite(ref _tryStringCast, TryConvertToStrAction.Make(Context)); }
             }
 
             public CallSite<BinaryOp>/*!*/ RespondToSite {
@@ -703,6 +709,11 @@ namespace IronRuby.Builtins {
             public CallSite<UnaryOp>/*!*/ SuccSite {
                 get { return RubyUtils.GetCallSite(ref _succSite, Context, "succ", 0); }
             }
+        }
+
+        private static MutableString TryCastToString(EachStorage/*!*/ storage, object value) {
+            var site = storage.TryStringCastSite;
+            return site.Target(site, value);
         }
 
         [RubyMethod("each")]
@@ -842,6 +853,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("each")]
         [BlockNotKept]
         public static object Each(EachStorage/*!*/ storage, [NotNull]BlockParam/*!*/ block, Range/*!*/ self) {
+            MutableString str;
             if (self.End == null) {
                 return StepEndless(storage, block, self, self.Begin, 1);
             } else if (self.Begin is int && self.End is int) {
@@ -856,10 +868,11 @@ namespace IronRuby.Builtins {
                 return StepString(storage, block, self, (MutableString)self.Begin, end, 1);
             } else if (self.Begin is RubySymbol && self.End is RubySymbol) {
                 return StepSymbol(storage, block, self, (RubySymbol)self.Begin, (RubySymbol)self.End, 1);
-            } else if (self.Begin != null && !(self.Begin is int) && Protocols.RespondTo(storage.RespondToSite, storage.Context, self.Begin, "to_str")) {
-                // range_each: rb_check_string_type(beg) - anything that converts to a String walks as one
+            } else if (self.Begin != null && !(self.Begin is int) && (str = TryCastToString(storage, self.Begin)) != null) {
+                // range_each: rb_check_string_type(beg) - anything that converts to a String walks as
+                // one; a #to_str that gives nil leaves it an object. The end goes through StringValue.
                 var cast = storage.StringCastSite;
-                return StepString(storage, block, self, cast.Target(cast, self.Begin), cast.Target(cast, self.End), 1);
+                return StepString(storage, block, self, str, cast.Target(cast, self.End), 1);
             } else {
                 return StepObject(storage, block, self, self.Begin, self.End, 1);
             }
@@ -1038,10 +1051,8 @@ namespace IronRuby.Builtins {
             }
 
             // range_each: a beginning that converts with #to_str walks as that String (rb_str_upto_endless_each)
-            if (begin != null && !(begin is MutableString) && !(begin is RubySymbol) &&
-                Protocols.RespondTo(storage.RespondToSite, storage.Context, begin, "to_str")) {
-                var cast = storage.StringCastSite;
-                begin = cast.Target(cast, begin);
+            if (begin != null && !(begin is MutableString) && !(begin is RubySymbol)) {
+                begin = TryCastToString(storage, begin) ?? begin;
             }
 
             CheckBegin(storage, begin);

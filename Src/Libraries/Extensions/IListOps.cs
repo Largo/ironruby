@@ -255,7 +255,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static IList/*!*/ Replace(ConversionStorage<IList>/*!*/ arrayCast, IList/*!*/ self, object other) {
             RequireNotFrozen(self);
-            return Replace(self, Protocols.CastToArray(arrayCast, other));
+            IList list = Protocols.CastToArray(arrayCast, other);
+            if (list == null) {
+                // nil is the one argument the cast lets through; it would empty the array first
+                throw RubyExceptions.CreateImplicitConversionError("nil", "Array");
+            }
+            return Replace(self, list);
         }
 
         public static IList/*!*/ Replace(IList/*!*/ self, [NotNull]IList/*!*/ other) {
@@ -1958,6 +1963,22 @@ namespace IronRuby.Builtins {
         #region values_at
 
         /// <summary>
+        /// rb_range_values refuses an Enumerator::ArithmeticSequence before asking for #begin and
+        /// #end, so (0..2).step(2) is an index that does not convert. The class is the prelude's.
+        /// </summary>
+        private static bool IsArithmeticSequence(RubyContext/*!*/ context, object value) {
+            if (!(value is Enumerator)) {
+                return false;
+            }
+            for (RubyClass cls = context.GetClassOf(value); cls != null; cls = cls.SuperClass) {
+                if (cls.Name == "Enumerator::ArithmeticSequence") {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
         /// rb_range_values: an object that is not an Integer but has #begin, #end and #exclude_end?
         /// stands for the Range they describe. Null for anything else.
         /// </summary>
@@ -1969,7 +1990,8 @@ namespace IronRuby.Builtins {
             if (value == null || value is int || value is long || value is System.Numerics.BigInteger || value is bool ||
                 !Protocols.RespondTo(respondToStorage, value, "begin") ||
                 !Protocols.RespondTo(respondToStorage, value, "end") ||
-                !Protocols.RespondTo(respondToStorage, value, "exclude_end?")) {
+                !Protocols.RespondTo(respondToStorage, value, "exclude_end?") ||
+                IsArithmeticSequence(respondToStorage.Context, value)) {
                 return null;
             }
             var beginSite = beginStorage.GetCallSite("begin", 0);

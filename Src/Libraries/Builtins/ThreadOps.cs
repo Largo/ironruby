@@ -1025,6 +1025,14 @@ namespace IronRuby.Builtins {
             RubyThreadInfo ownerInfo = RubyThreadInfo.FromThread(thread);
             Thread owner = thread;
 
+            // rb_threadptr_raise does nothing to a dead thread. Parked, the exception would keep
+            // the thread's safe point requested for good and pending_interrupt? true. A thread
+            // still running its ensure clauses after a kill is not dead yet.
+            RubyThreadStatus ownerStatus = GetStatus(owner);
+            if (ownerStatus == RubyThreadStatus.Completed || ownerStatus == RubyThreadStatus.Aborted) {
+                return;
+            }
+
             RubyThreadInfo info;
             RubyThreadStatus status;
             using (new RubyUtils.UninterruptedLock(ownerInfo.FiberSwitchLock)) {

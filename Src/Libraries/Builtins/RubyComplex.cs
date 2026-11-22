@@ -187,6 +187,8 @@ namespace IronRuby.Builtins {
 
         private static volatile BasicOps _basicOps;
         private static readonly string[] _basicOpNames = new[] { "+", "-", "*" };
+        // the methods' code in all three classes; an alias of another operator keeps the owner
+        private static readonly string[] _basicOpClrNames = new[] { "Add", "Subtract", "Multiply" };
 
         private static int GetBasicOps(RubyContext/*!*/ context) {
             var ops = _basicOps;
@@ -198,7 +200,8 @@ namespace IronRuby.Builtins {
                 for (int c = 0; c < classes.Length; c++) {
                     for (int o = 0; o < _basicOpNames.Length; o++) {
                         var lookup = classes[c].ResolveMethod(_basicOpNames[o], VisibilityContext.AllVisible);
-                        if (lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == classes[c]) {
+                        if (lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == classes[c] &&
+                            Array.TrueForAll(lookup.Info.GetMembers(), m => m.Name == _basicOpClrNames[o])) {
                             flags |= 1 << (c * 3 + o);
                         }
                     }

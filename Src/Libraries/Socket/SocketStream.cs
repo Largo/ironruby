@@ -14,7 +14,9 @@
  * ***************************************************************************/
 
 using System;
+using System.Diagnostics;
 using System.Net.Sockets;
+using System.Threading;
 using System.IO;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
@@ -61,6 +63,25 @@ namespace IronRuby.StandardLibrary.Sockets {
         public override void Flush() {
         }
 
+        private int _readTimeout = Timeout.Infinite;
+        private int _writeTimeout = Timeout.Infinite;
+
+        public override bool CanTimeout {
+            get { return true; }
+        }
+
+        // Reads wait for readability under IO#timeout before they start (RubyBufferedStream), so
+        // only the write needs to know it.
+        public override int ReadTimeout {
+            get { return _readTimeout; }
+            set { _readTimeout = value; }
+        }
+
+        public override int WriteTimeout {
+            get { return _writeTimeout; }
+            set { _writeTimeout = value; }
+        }
+
         public override long Length {
             get {
                 throw new InvalidOperationException();
@@ -93,11 +114,28 @@ namespace IronRuby.StandardLibrary.Sockets {
         // says how much, or EAGAIN when nothing fits, and MRI then waits for the socket to be writable
         // (rb_io_maybe_wait_writable) and goes on. A single Send here returned a short count that was
         // dropped: the rest of the String never went out, and an EAGAIN came out as a SocketError.
+        //
+        // IO#timeout bounds the whole write (RubyIO.ApplyTimeout sets WriteTimeout here), and
+        // running out of it is a TimeoutException, which the buffered stream reports as
+        // IO::TimeoutError.
         public override void Write(byte[] buffer, int offset, int count) {
             if (_socket.Blocking) {
-                RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
+                if (_writeTimeout == Timeout.Infinite) {
+                    RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
+                    return;
+                }
+                int saved = _socket.SendTimeout;
+                _socket.SendTimeout = Math.Max(_writeTimeout, 1);
+                try {
+                    RubyBasicSocket.Blocking<int>(() => _socket.Send(buffer, offset, count, SocketFlags.None));
+                } catch (SocketException e) when (e.SocketErrorCode == SocketError.TimedOut) {
+                    throw new TimeoutException();
+                } finally {
+                    _socket.SendTimeout = saved;
+                }
                 return;
             }
+            var clock = (_writeTimeout == Timeout.Infinite) ? null : Stopwatch.StartNew();
             while (count > 0) {
                 SocketError error;
                 int sent = _socket.Send(buffer, offset, count, SocketFlags.None, out error);
@@ -106,6 +144,9 @@ namespace IronRuby.StandardLibrary.Sockets {
                     RubyBasicSocket.Blocking<int>(() => {
                         while (!_socket.Poll(RubyBasicSocket.PollSliceMicroseconds, SelectMode.SelectWrite)) {
                             IronRuby.Runtime.RubyUtils.CheckAsyncException();
+                            if (clock != null && clock.ElapsedMilliseconds >= _writeTimeout) {
+                                throw new TimeoutException();
+                            }
                         }
                         return 0;
                     });

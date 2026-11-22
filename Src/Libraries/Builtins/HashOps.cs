@@ -423,7 +423,13 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ Replace(ConversionStorage<IDictionary<object, object>>/*!*/ toHash, Hash/*!*/ self, object other) {
             self.RequireNotFrozen();
             var site = toHash.GetSite(ConvertToHashAction.Make(toHash.Context));
-            return Replace(toHash.Context, self, site.Target(site, other));
+            var hash = site.Target(site, other);
+            if (hash == null) {
+                // nil is the one argument the conversion site lets through; it would empty the
+                // hash before failing
+                throw RubyExceptions.CreateImplicitConversionError("nil", "Hash");
+            }
+            return Replace(toHash.Context, self, hash);
         }
 
         public static Hash/*!*/ Replace(RubyContext/*!*/ context, Hash/*!*/ self, [NotNull]IDictionary<object,object>/*!*/ other) {

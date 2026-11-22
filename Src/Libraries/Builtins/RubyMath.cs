@@ -77,7 +77,9 @@ namespace IronRuby.Builtins {
                 // read before the lookup: a change that races with it leaves the state stale, not wrong
                 int version = RubyModule.GlobalMethodVersion;
                 var lookup = context.IntegerClass.ResolveMethod("to_f", VisibilityContext.AllVisible);
-                bool basic = lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass;
+                // an alias of another library method (alias_method :to_f, :to_i) has the owner but not the code
+                bool basic = lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass &&
+                    Array.TrueForAll(lookup.Info.GetMembers(), m => m.Name == "ToFloat");
                 _toFState = state = new ToFState(context, version, basic);
             }
             return state.Basic;
