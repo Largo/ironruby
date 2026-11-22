@@ -1842,7 +1842,13 @@ namespace IronRuby.Builtins {
             return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
         }
         [RubyMethod("inspect")]
-        public static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
+        public static MutableString/*!*/ Inspect(RubyIO/*!*/ self) {
+            // an IO reopened to a File is a File that is not a RubyFile
+            var file = self as RubyFile;
+            return file != null ? Inspect(file) : RubyIOOps.Inspect(self);
+        }
+
+        private static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
             var result = MutableString.CreateMutable(self.Context.GetPathEncoding()).
                 Append("#<").
                 Append(self.Context.GetClassOf(self).GetName(self.Context)).
@@ -1860,7 +1866,16 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("path")]
         [RubyMethod("to_path")]
-        public static MutableString GetPath(RubyFile/*!*/ self) {
+        public static MutableString GetPath(RubyIO/*!*/ self) {
+            // An IO reopened to a File becomes a File without being a RubyFile: its path is the
+            // one the IO keeps.
+            if (!(self is RubyFile)) {
+                return RubyIOOps.GetIOPath(self);
+            }
+            return GetPath((RubyFile)self);
+        }
+
+        private static MutableString GetPath(RubyFile/*!*/ self) {
             self.RequireInitialized();
             if (self.Path == null) {
                 return null;

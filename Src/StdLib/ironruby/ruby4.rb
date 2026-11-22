@@ -11741,15 +11741,15 @@ class IO
 
   # IO#path answers the path the stream was opened with - File overrides it with the
   # real one - and the standard streams answer the names MRI gives them. An IO built
-  # from a descriptor keeps whatever path: it was told about.
+  # from a descriptor keeps whatever path: it was told about, and IO.for_fd(0) none:
+  # the name belongs to the object, as MRI's fptr->pathv, not to the descriptor.
   def path
-    case fileno
-    when 0 then "<STDIN>"
-    when 1 then "<STDOUT>"
-    when 2 then "<STDERR>"
-    else @__io_path__
-    end
+    @__io_path__
   end unless method_defined?(:path)
+
+  { STDIN => "<STDIN>", STDOUT => "<STDOUT>", STDERR => "<STDERR>" }.each do |io, name|
+    io.__send__(:__ir_set_hidden_ivar__, :@__io_path__, name.freeze)
+  end
 
   alias :to_path :path unless method_defined?(:to_path)
 

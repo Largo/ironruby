@@ -382,6 +382,31 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        private static readonly string IOPathVariable = RubyUtils.GetCoreStateInstanceVariableName("@__io_path__");
+
+        /// <summary>
+        /// MRI's fptr->pathv for an IO that is not a RubyFile: what IO.new(fd, path:) was told,
+        /// "<STDIN>" and the like for the standard streams, the path an IO was reopened to.
+        /// </summary>
+        internal static MutableString GetIOPath(RubyIO/*!*/ io) {
+            var file = io as RubyFile;
+            if (file != null) {
+                return file.Path != null ? io.Context.EncodePath(file.Path) : null;
+            }
+            object path;
+            io.Context.TryGetInstanceVariable(io, IOPathVariable, out path);
+            return path as MutableString;
+        }
+
+        private static void SetIOPath(RubyIO/*!*/ io, MutableString path) {
+            object old;
+            if (path != null) {
+                io.Context.SetInstanceVariable(io, IOPathVariable, path);
+            } else {
+                io.Context.TryRemoveInstanceVariable(io, IOPathVariable, out old);
+            }
+        }
+
         // A reopened IO answers the other one's path, as MRI copies it with the descriptor.
         // MRI also gives it the other one's class, which leaves its singleton class behind,
         // and the other one's encodings and conversion options (io_reopen copies fptr->encs).
@@ -403,6 +428,8 @@ namespace IronRuby.Builtins {
             if (file != null && sourceFile != null) {
                 file.Path = sourceFile.Path;
                 file.PathEncoding = sourceFile.PathEncoding;
+            } else if (file == null) {
+                SetIOPath(self, GetIOPath(source));
             }
         }
 
@@ -457,6 +484,10 @@ namespace IronRuby.Builtins {
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
+            // reopened by path, an IO answers that path (a File keeps its own)
+            if (!(io is RubyFile)) {
+                SetIOPath(io, path.Clone());
+            }
             if (io.Closed) {
                 // Reopening a closed stream with a path is how it is brought back to life, so
                 // this one needs a descriptor again rather than the IOError a read would get.
@@ -1530,28 +1561,19 @@ namespace IronRuby.Builtins {
             result.Append(self.Context.GetClassOf(self).GetName(self.Context));
             result.Append(':');
             if (self.Initialized) {
-                switch (self.ConsoleStreamType) {
-                    case ConsoleStreamType.Input: result.Append("<STDIN>"); break;
-                    case ConsoleStreamType.Output: result.Append("<STDOUT>"); break;
-                    case ConsoleStreamType.ErrorOutput: result.Append("<STDERR>"); break;
-                    case null: {
-                        // A stream that knows its path shows it; one that does not shows its
-                        // descriptor, which a closed stream no longer has.
-                        object path;
-                        self.Context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__io_path__"), out path);
-                        var pathString = path as MutableString;
-                        if (pathString != null) {
-                            result.Append(pathString);
-                            if (self.Closed) {
-                                result.Append(" (closed)");
-                            }
-                        } else if (self.Closed) {
-                            result.Append("(closed)");
-                        } else {
-                            result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
-                        }
-                        break;
+                // A stream that knows its path shows it - the standard streams know theirs as
+                // "<STDIN>" and so on, as MRI's fptr->pathv - and one that does not shows its
+                // descriptor, which a closed stream no longer has: IO.for_fd(0) is "fd 0".
+                var pathString = GetIOPath(self);
+                if (pathString != null) {
+                    result.Append(pathString);
+                    if (self.Closed) {
+                        result.Append(" (closed)");
                     }
+                } else if (self.Closed) {
+                    result.Append("(closed)");
+                } else {
+                    result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
                 }
             } else {
                 RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(self.Context, self));
