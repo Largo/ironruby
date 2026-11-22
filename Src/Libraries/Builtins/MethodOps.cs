@@ -24,7 +24,12 @@ namespace IronRuby.Builtins {
     public static class MethodOps {
         [RubyMethod("==")]
         [RubyMethod("eql?")]
-        public static bool Equal(RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
+        public static bool Equal(RubyContext/*!*/ context, RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
+            // method_eq compares CLASS_OF first: a Method given a singleton method of its own is
+            // no longer equal to the one it was made like.
+            if (context.GetImmediateClassOf(self) != context.GetImmediateClassOf(other)) {
+                return false;
+            }
             // two method_missing-backed methods share one info, so only the name tells them apart
             return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info)
                 && (!self.IsMethodMissing || self.Name == other.Name);
