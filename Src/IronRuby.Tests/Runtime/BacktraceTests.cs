@@ -647,7 +647,7 @@ Dir.mktmpdir do |t|
     load File.join(t.b, dc, 'm.rb')
     p [LIB, M].map(&:encoding), [LIB, M].all?(&:valid_encoding?)
     p LIB.b.end_with?(""café/lib.rb"".b), M.b.include?(""café/m.rb:2"".b)
-    p File.expand_path('x', File.dirname(LIB)).end_with?(""café/x"")
+    p File.expand_path('x', File.dirname(LIB)).b.end_with?(""café/x"".b)
   ensure
     Encoding.default_external = old
   end
