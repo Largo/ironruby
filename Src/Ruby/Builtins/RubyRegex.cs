@@ -1533,22 +1533,30 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// The index of the ')' closing the group the pattern opens with, or -1. A '\' escapes
-        /// whatever follows it and parentheses inside a character class are literal.
+        /// whatever follows it and parentheses inside a character class are literal. Classes nest,
+        /// and a ']' straight after '[' or '[^' is a member of its class when another ']' follows
+        /// (Onigmo's fetch_token_in_cc): "(?i:[])]a)" is one group.
         /// </summary>
         private static int FindGroupEnd(MutableString/*!*/ pattern, int length) {
             int depth = 0;
-            bool inCharacterClass = false;
+            int classDepth = 0;
 
             for (int i = 0; i < length; i++) {
                 char c = pattern.GetChar(i);
                 if (c == '\\') {
                     i++;
-                } else if (inCharacterClass) {
-                    if (c == ']') {
-                        inCharacterClass = false;
-                    }
                 } else if (c == '[') {
-                    inCharacterClass = true;
+                    classDepth++;
+                    if (i + 1 < length && pattern.GetChar(i + 1) == '^') {
+                        i++;
+                    }
+                    if (i + 1 < length && pattern.GetChar(i + 1) == ']' && pattern.IndexOf(']', i + 2) >= 0) {
+                        i++;
+                    }
+                } else if (classDepth > 0) {
+                    if (c == ']') {
+                        classDepth--;
+                    }
                 } else if (c == '(') {
                     depth++;
                 } else if (c == ')') {
