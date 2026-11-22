@@ -95,10 +95,14 @@ namespace IronRuby.Builtins {
                 while (i < format.Length && format[i] >= '0' && format[i] <= '9') {
                     i++;
                 }
+                bool widthTooBig = false;
                 if (i > widthStart) {
                     int width;
                     if (Int32.TryParse(format.Substring(widthStart, i - widthStart), NumberStyles.None, CultureInfo.InvariantCulture, out width)) {
                         modifiers.Width = width;
+                    } else {
+                        // MRI: a width past INT_MAX makes the directive an unknown one
+                        widthTooBig = true;
                     }
                 }
 
@@ -124,6 +128,19 @@ namespace IronRuby.Builtins {
                 char directive = format[i];
                 i++;
 
+                if (widthTooBig) {
+                    result.Append(format.Substring(start, i - start));
+                    continue;
+                }
+
+                if (modifiers.Width > 0 && PadsToWidth(directive, modifiers) &&
+                    result.Length + 2L * modifiers.Width > SizeLimit(format.Length)) {
+                    // MRI's strftime grows its buffer to at most strftime_size_limit and raises
+                    // ERANGE, naming the format, rather than going on: "%2147483647d" would
+                    // otherwise ask for a 4 GB string.
+                    throw RubyExceptions.CreateErrno(context, RubyErrno.GetNumber("ERANGE"), format);
+                }
+
                 string piece = FormatDirective(context, time, directive, modifiers, modifiers.Width, depth);
                 if (piece == null) {
                     // Unknown directive: Ruby copies the whole thing through verbatim.
@@ -132,6 +149,29 @@ namespace IronRuby.Builtins {
                     result.Append(piece);
                 }
             }
+        }
+
+        /// <summary>
+        /// MRI's strftime_size_limit: 1 MiB of output for each byte of the format, 1 KiB at least.
+        /// </summary>
+        private static long SizeLimit(int formatLength) {
+            return Math.Max(1024L, formatLength * (1024L * 1024L));
+        }
+
+        /// <summary>
+        /// Whether the directive makes room for its width (MRI's NEEDS(precision)): a known one,
+        /// except that '-' turns the padding of a number or a name off. %N, %L, %z and the
+        /// compound directives take the width whatever the flags.
+        /// </summary>
+        private static bool PadsToWidth(char directive, Modifiers modifiers) {
+            if (modifiers.Colons > 0 && directive != 'z' ||
+                modifiers.Alt == 'E' && "cCxXyY".IndexOf(directive) < 0 || modifiers.Alt == 'O' && "deHImMSuUVwWy".IndexOf(directive) < 0) {
+                return false;
+            }
+            if ("NLzcDxFrRTXv".IndexOf(directive) >= 0) {
+                return true;
+            }
+            return modifiers.Pad != '-' && "%ntaAhbBpPCdeHkIljmMSuwyYGgVUWsZ".IndexOf(directive) >= 0;
         }
 
         private static string FormatDirective(RubyContext/*!*/ context, RubyTime/*!*/ time, char directive, Modifiers modifiers, int width, int depth) {
