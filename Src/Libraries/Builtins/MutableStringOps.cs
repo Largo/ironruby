@@ -4815,11 +4815,32 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// PreciseCharLength as succ needs it: MRI's rb_enc_precise_mbclen goes by the shape of the
+        /// bytes, so in EUC-JP "\xA2\xAF" is a character although the table has nothing for it,
+        /// and "\xA2\xAE".succ is "\xA2\xAF", not the next character the table knows.
+        /// </summary>
+        private static int SuccCharLength(RubyEncoding/*!*/ encoding, byte[]/*!*/ bytes, int start, int count) {
+            int maxLength;
+            byte[] window = start == 0 ? bytes : SliceBytes(bytes, start, count);
+            int length = encoding.GetPreciseCharacterLength(window, count, out maxLength);
+            if (maxLength > 0) {
+                return length < 0 ? -1 : length;
+            }
+            return PreciseCharLength(encoding.StrictEncoding, bytes, start, count);
+        }
+
+        private static byte[]/*!*/ SliceBytes(byte[]/*!*/ bytes, int start, int count) {
+            var result = new byte[count];
+            Array.Copy(bytes, start, result, 0, count);
+            return result;
+        }
+
+        /// <summary>
         /// MRI's enc_succ_char for an encoding whose characters are one byte or more: steps the
         /// bytes of the character as a big-endian number until they spell a valid character of
         /// the same length. Returns false when that wrapped around through all-zero bytes.
         /// </summary>
-        private static bool SuccCharacterBytes(Encoding/*!*/ strict, byte[]/*!*/ p, int start, int len) {
+        private static bool SuccCharacterBytes(RubyEncoding/*!*/ strict, byte[]/*!*/ p, int start, int len) {
             // the walk only ever goes up, so it ends; the cap is a guard against an encoding
             // whose decoder never accepts a character of this length
             for (int guard = 0; guard < (1 << 20); guard++) {
@@ -4831,7 +4852,7 @@ namespace IronRuby.Builtins {
                     return false;
                 }
                 p[start + i]++;
-                int l = PreciseCharLength(strict, p, start, len);
+                int l = SuccCharLength(strict, p, start, len);
                 if (l > 0) {
                     if (l == len) {
                         return true;
@@ -4842,7 +4863,7 @@ namespace IronRuby.Builtins {
                 } else if (l < 0 && i < len - 1) {
                     int len2;
                     for (len2 = len - 1; len2 > 0; len2--) {
-                        if (PreciseCharLength(strict, p, start, len2) >= 0) {
+                        if (SuccCharLength(strict, p, start, len2) >= 0) {
                             break;
                         }
                     }
@@ -4863,14 +4884,14 @@ namespace IronRuby.Builtins {
         /// "\xA2\xA1", and "\uFFFF" by "\x01\u0800".
         /// </summary>
         private static void SuccNonAlphaNumeric(MutableString/*!*/ self) {
-            var strict = self.Encoding.StrictEncoding;
+            var strict = self.Encoding;
             byte[] bytes = self.ToByteArray();
 
             var starts = new List<int>();
             var lengths = new List<int>();
             int pos = 0;
             while (pos < bytes.Length) {
-                int l = PreciseCharLength(strict, bytes, pos, bytes.Length - pos);
+                int l = SuccCharLength(strict, bytes, pos, bytes.Length - pos);
                 if (l > 0) {
                     starts.Add(pos);
                     lengths.Add(l);
@@ -4881,22 +4902,31 @@ namespace IronRuby.Builtins {
             }
 
             bool done = false;
+            // MRI's carry_pos: the "\x01" of a carry goes in front of the leftmost character that
+            // wrapped, after any invalid bytes before it ("\xFF\x7F".succ is "\xFF\x01\x00").
+            int carryPos = 0;
             for (int c = starts.Count - 1; c >= 0 && !done; c--) {
                 int start = starts[c], len = lengths[c];
                 if (SuccCharacterBytes(strict, bytes, start, len)) {
                     done = true;
-                } else if (PreciseCharLength(strict, bytes, start, len) != len) {
-                    // wrapped to \0...\0: search the next valid character
-                    SuccCharacterBytes(strict, bytes, start, len);
+                } else {
+                    if (SuccCharLength(strict, bytes, start, len) != len) {
+                        // wrapped to \0...\0: search the next valid character
+                        SuccCharacterBytes(strict, bytes, start, len);
+                    }
+                    carryPos = start;
                 }
             }
 
             var encoding = self.Encoding;
             self.Clear();
-            if (!done) {
+            if (done) {
+                self.Append(bytes);
+            } else {
+                self.Append(bytes, 0, carryPos);
                 self.Append((byte)1);
+                self.Append(bytes, carryPos, bytes.Length - carryPos);
             }
-            self.Append(bytes);
             self.ForceEncoding(encoding);
         }
 
