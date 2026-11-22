@@ -2298,7 +2298,7 @@ class File
   # the instance-level operations.  offset nil means truncate, an integer seeks
   # first and leaves the rest of the file intact, matching IO.write.
   def self.write(name, string, offset = nil, **opts)
-    open_args = opts[:open_args]
+    open_args = __ir_open_args__(opts)&.flatten(1)
     perm = nil
     if open_args
       # :open_args is the whole argument list for the open, and it displaces every
@@ -10899,7 +10899,7 @@ class IO
       ::Kernel.raise(::ArgumentError, "negative offset #{offset} given") if offset && offset < 0
       ::Kernel.raise(::ArgumentError, "negative length #{length} given") if length && length < 0
 
-      open_args = options && options[:open_args]
+      open_args = __ir_open_args__(options)&.flatten(1)
       if open_args
         extra = open_args.find { |a| a.is_a?(::Hash) } || {}
         mode = open_args.find { |a| a.is_a?(::String) || a.is_a?(::Integer) } || extra[:mode] || "r"
@@ -11310,10 +11310,40 @@ class IO
       end
       name = args.shift
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
-      ::File.open(name, **options.reject { |k, _| k == :chomp }) do |io|
+      if (open_args = __ir_open_args__(options))
+        open_pos, open_opts = open_args
+      else
+        open_pos = []
+        open_opts = options.reject { |k, _| k == :chomp }
+      end
+      ::File.open(name, *open_pos, **open_opts) do |io|
         io.readlines(*args, **chomp)
       end
     end
+
+    # MRI's open_key_args: a non-nil :open_args is the whole argument list of the open
+    # (rb_to_array_type, so false or "r" is a TypeError, and at most three of them) and
+    # displaces every other open option. Answers [positional, keywords], or nil when
+    # there is no :open_args.
+    def __ir_open_args__(options)
+      return nil if options.nil? || (v = options[:open_args]).nil?
+      unless ::Array === v
+        unless __ir_responds_to__(v, :to_ary)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(v)} into Array")
+        end
+        r = v.to_ary
+        unless ::Array === r
+          ::Kernel.raise(::TypeError, "can't convert #{v.class} to Array (#{v.class}#to_ary gives #{r.class})")
+        end
+        v = r
+      end
+      if v.size > 3
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{v.size}, expected 0..3)")
+      end
+      opts = v.last.is_a?(::Hash) ? v.last : {}
+      [opts.equal?(v.last) ? v[0...-1] : v, opts]
+    end
+    private :__ir_open_args__
 
     # IO.foreach itself is a built-in (IoOps.cs) that calls this with the separator and
     # limit in an Array and the keywords in a Hash, and then sees to its caller's $_.
@@ -11326,13 +11356,8 @@ class IO
         return to_enum(:foreach, name, *args, **options) { nil }
       end
       chomp = options.key?(:chomp) ? { chomp: options[:chomp] } : {}
-      open_args = options[:open_args]
-      if open_args
-        # :open_args is the whole argument list of the open (MRI's open_key_args), and
-        # displaces every other open option
-        open_args = open_args.to_ary
-        open_opts = open_args.last.is_a?(::Hash) ? open_args.last : {}
-        open_pos = open_opts.equal?(open_args.last) ? open_args[0...-1] : open_args
+      if (open_args = __ir_open_args__(options))
+        open_pos, open_opts = open_args
       else
         open_pos = []
         open_opts = options.reject { |k, _| k == :chomp }
@@ -11411,9 +11436,17 @@ class IO
       read_end, write_end = __ir_pipe__
       if external
         # the conversion options (invalid:, undef:, replace:...) go with the encodings to
-        # the read end, which is where MRI's pipe_open applies them
-        conv = options ? options.reject { |k, _| k == :encoding || k == :external_encoding || k == :internal_encoding } : {}
-        internal ? read_end.set_encoding(external, internal, **conv) : read_end.set_encoding(external, **conv)
+        # the read end, which is where MRI's pipe_open applies them. Options it rejects
+        # (newline: :bad) close both ends before the error goes on, as rb_io_pipe's
+        # rb_protect does, so that no descriptor is left to the GC.
+        begin
+          conv = options ? options.reject { |k, _| k == :encoding || k == :external_encoding || k == :internal_encoding } : {}
+          internal ? read_end.set_encoding(external, internal, **conv) : read_end.set_encoding(external, **conv)
+        rescue ::Exception
+          read_end.close unless read_end.closed?
+          write_end.close unless write_end.closed?
+          ::Kernel.raise
+        end
       end
 
       return [read_end, write_end] unless block_given?

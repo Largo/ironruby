@@ -159,19 +159,26 @@ ARGF_CLASS = Class.new do
 
   # MRI's rb_io_readlines and rb_io_each_line refuse a limit of 0, which would read empty lines
   # for ever; the arguments are read as extract_getline_args reads them: one is the separator
-  # unless it is not a String (or nil), two are the separator and the limit.
+  # unless it is not a String (or nil), two are the separator and the limit. The limit is
+  # converted here, once, and the arguments answered carry the Integer, so that the
+  # #gets of every line does not call its #to_int again (MRI converts it once a file).
   def __argf_check_limit__(args, name)
-    args = args[0...-1] if args.last.is_a?(::Hash)
-    limit = case args.size
-            when 1 then (args[0].nil? || args[0].respond_to?(:to_str)) ? nil : args[0]
-            when 2 then args[1]
-            end
-    raise ::ArgumentError, "invalid limit: 0 for #{name}" if !limit.nil? && limit.to_int == 0
+    n = args.last.is_a?(::Hash) ? args.size - 1 : args.size
+    at = case n
+         when 1 then (args[0].nil? || args[0].respond_to?(:to_str)) ? nil : 0
+         when 2 then 1
+         end
+    return args if at.nil? || args[at].nil?
+    limit = args[at].to_int
+    raise ::ArgumentError, "invalid limit: 0 for #{name}" if limit == 0
+    args = args.dup
+    args[at] = limit
+    args
   end
   private :__argf_check_limit__
 
   def readlines(*args)
-    __argf_check_limit__(args, "readlines")
+    args = __argf_check_limit__(args, "readlines")
     result = []
     while (line = gets(*args))
       result << line
@@ -182,7 +189,7 @@ ARGF_CLASS = Class.new do
 
   def each_line(*args)
     return to_enum(__callee__, *args) unless block_given?
-    __argf_check_limit__(args, "each_line")
+    args = __argf_check_limit__(args, "each_line")
     while (line = gets(*args))
       yield line
     end
