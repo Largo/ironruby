@@ -27,9 +27,11 @@ namespace IronRuby.StandardLibrary.Threading {
     /// Thread::ConditionVariable. Built on the same per-thread sleep signal as Thread.stop, exactly like
     /// MRI: that is what makes Thread#run and Thread#wakeup end a #wait (a Monitor condition could not
     /// be woken that way), and it gives #signal the FIFO order the specs require. The old implementation
-    /// used an AutoResetEvent plus a 1ms sleep per waiter in #broadcast and lost wakeups.
+    /// used an AutoResetEvent plus a 1ms sleep per waiter in #broadcast and lost wakeups. Like Queue,
+    /// it has no #initialize_copy ([Bug #9440]).
     /// </summary>
     [RubyClass("ConditionVariable", DefineIn = typeof(ThreadOps))]
+    [UndefineMethod("initialize_copy")]
     public class RubyConditionVariable {
 
         /// <summary>MRI's #&lt;Thread::ConditionVariable:0x...&gt;, rather than the CLR type name.</summary>

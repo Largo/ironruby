@@ -1698,12 +1698,14 @@ class Array
     index && self[index]
   end unless method_defined?(:bsearch)
 
-  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args).
+  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args). The
+  # arguments are counted first, as rb_scan_args counts them: rfind(1, 2) without a block is an
+  # ArgumentError, not an Enumerator.
   def rfind(*args, &block)
-    return to_enum(:rfind, *args) unless block
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
+    return to_enum(:rfind, *args) unless block
     ifnone = args[0]
     index = size - 1
     while index >= 0
@@ -5121,31 +5123,46 @@ class Array
   # receiver's size) or any object with #each.
   alias :__zip_arrays__ :zip
 
+  # MRI's take_items: the argument is converted with rb_check_array_type and walked with
+  # rb_check_block_call, both of which reach a #to_ary or an #each that only method_missing
+  # answers, and call a private #each. With an empty receiver nothing is asked for #each.
   def zip(*others, &block)
     length = size
     converted = others.map do |other|
       if other.is_a?(Array)
         other
-      elsif other.respond_to?(:to_ary)
-        other.to_ary
-      elsif other.respond_to?(:each)
-        collected = []
-        # several yielded values make one element, as Enumerator#next would pack them;
-        # MRI's take_i stops as soon as it has the receiver's length, without asking for one
-        # more (an Enumerator.produce is called exactly that many times)
-        if length > 0
-          other.each do |*element|
-            collected << (element.size <= 1 ? element[0] : element)
-            break if collected.size >= length
+      elsif (array = ::Array.try_convert(other))
+        array
+      elsif length == 0
+        []
+      else
+        if other.respond_to?(:each, true)
+          __zip_take__(other, length)
+        else
+          begin
+            __zip_take__(other, length)
+          rescue ::NoMethodError => e
+            ::Kernel.raise if e.name != :each || !e.receiver.equal?(other)
+            ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
           end
         end
-        collected
-      else
-        raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
     end
     __zip_arrays__(*converted, &block)
   end
+
+  def __zip_take__(other, length)
+    collected = []
+    # several yielded values make one element, as Enumerator#next would pack them;
+    # MRI's take_i stops as soon as it has the receiver's length, without asking for one
+    # more (an Enumerator.produce is called exactly that many times)
+    other.__send__(:each) do |*element|
+      collected << (element.size <= 1 ? element[0] : element)
+      break if collected.size >= length
+    end
+    collected
+  end
+  private :__zip_take__
 
   private :__zip_arrays__
 end

@@ -568,5 +568,77 @@ p [1, [2, [x, x], 5]].join
 ""12335""
 ");
         }
+
+        /// <summary>
+        /// Array#hash marks every element whose #hash it calls, as MRI's rb_hash does: a Struct whose #hash hashes
+        /// an array holding another Struct that points back recursed until the stack overflowed ([Bug #9151]).
+        /// </summary>
+        public void Array_HashRecursiveElement1() {
+            TestOutput(@"
+s = Struct.new(:x) { def hash; [x, ''].hash; end }
+a = s.new; b = s.new; a.x = b; b.x = a
+p a.hash == b.hash
+h = {}; h[[a, 'hello']] = 1; h[[b, 'world']] = 2; p h.size
+o = Object.new; p [o, o].hash == [o, o].hash
+", @"
+true
+2
+true
+");
+        }
+
+        /// <summary>
+        /// A range endpoint that fits a long but not an int is a position past the end of any list (MRI's
+        /// rb_range_beg_len reads it with NUM2LONG), not a RangeError; CRuby's TestArray#test_range_with_len_max_end.
+        /// </summary>
+        public void Array_RangeLongEnd1() {
+            TestOutput(@"
+max = 2**63 - 1
+a = [1, 2]
+p a[0..max], a[-1..max], a[max..], a[-max..1]
+b = [1, 2, 3]; b[1..max] = 9; p b
+b = [1, 2, 3]; p b.slice!(1..max), b
+p(([1, 2].fill(0, 0..max) rescue $!))
+p(([1, 2].values_at(0..max) rescue $!))
+p((a[0..2**64] rescue $!))
+", @"
+[1, 2]
+[2]
+nil
+nil
+[1, 9]
+[2, 3]
+[1]
+#<ArgumentError: argument too big>
+#<IndexError: index 9223372036854775806 too big>
+#<RangeError: bignum too big to convert into 'long'>
+");
+        }
+
+        /// <summary>
+        /// Array#join separates the elements of nested arrays, empty ones included, and starts in US-ASCII when the
+        /// first element is an array, taking another encoding only from a string that is not ASCII (MRI's
+        /// ary_join_1_ary and rb_str_buf_append; CRuby's TestArray#test_join).
+        /// </summary>
+        public void Array_JoinNested1() {
+            TestOutput(@"
+p [[], 1].join('-')
+p [[[]], [], 1, [2, []]].join('-')
+p [nil, 1, nil].join('-')
+u = ''.force_encoding('UTF-8')
+p [[], u, nil].join.encoding
+p [[], ""\u3042"", nil].join.encoding
+p [nil, u].join.encoding
+p [u, [1]].join.encoding
+", @"
+""-1""
+""--1-2-""
+""-1-""
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+");
+        }
     }
 }

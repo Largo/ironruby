@@ -157,6 +157,43 @@ reached
         }
 
         /// <summary>
+        /// A thread starts with the Thread.handle_interrupt masks of the thread that created it, as MRI's
+        /// thread_create_core copies them: a Thread#raise at a thread made inside a :never block waits for
+        /// the thread to ask for it (CRuby's TestThread#test_handle_interrupted?).
+        /// </summary>
+        public void Thread_HandleInterruptInherited1() {
+            TestOutput(@"
+require 'ruby4'
+q = Thread::Queue.new
+Thread.handle_interrupt(RuntimeError => :never) {
+  done = false
+  th = Thread.new {
+    q.push :started
+    begin
+      begin
+        Thread.pass until done
+      rescue
+        q.push :early
+      end
+      begin
+        Thread.handle_interrupt(Object => :immediate) {} if Thread.pending_interrupt?
+      rescue RuntimeError
+        q.push :deferred
+      end
+    end
+  }
+  q.pop
+  th.raise
+  done = true
+  th.join
+  p q.pop
+}
+", @"
+:deferred
+");
+        }
+
+        /// <summary>
         /// Thread#raise reaches the fiber the thread is running, wherever its fibers are in a switch.
         /// Every fiber is a CLR thread of its own; the interrupt used to be routed to the fiber that
         /// had last woken up, so in the window around a resume (or the end of a fiber) it went to the

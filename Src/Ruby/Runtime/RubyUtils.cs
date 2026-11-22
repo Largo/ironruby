@@ -2367,6 +2367,23 @@ namespace IronRuby.Runtime {
             masks.Add(new InterruptMask { Classes = classes, Timings = timings });
         }
 
+        /// <summary>
+        /// The current thread's masks, for a thread it creates to start with: MRI's thread_create_core
+        /// copies the creator's mask stack, so a thread made inside Thread.handle_interrupt(X => :never)
+        /// defers an X raised at it as its creator would. Null when there is none.
+        /// </summary>
+        public static object CaptureInterruptMasks() {
+            var masks = _interruptMasks;
+            return (masks == null || masks.Count == 0) ? null : masks.ToArray();
+        }
+
+        /// <summary>Gives the current (new) thread the masks <see cref="CaptureInterruptMasks"/> took.</summary>
+        public static void InheritInterruptMasks(object masks) {
+            if (masks != null) {
+                _interruptMasks = new List<InterruptMask>((InterruptMask[])masks);
+            }
+        }
+
         public static void PopInterruptMask() {
             var masks = _interruptMasks;
             if (masks != null && masks.Count > 0) {
