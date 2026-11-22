@@ -915,6 +915,11 @@ namespace IronRuby.Builtins {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
             RequireUsablePathEncoding(context, pathStr);
 
+            if (!IsWindows) {
+                MutableString basePathStr = (basePath != null) ? Protocols.CastToPath(toPath, basePath) : null;
+                return ExpandPathBytes(context, pathStr, basePathStr, true);
+            }
+
             // The base is converted whatever the path, but it is only expanded - "~name" looked
             // up - when the path needs it: MRI's expand_path ignores it beside an absolute path.
             string expanded = ExpandTilde(context, DecodePathLike(context, pathStr));
@@ -928,6 +933,73 @@ namespace IronRuby.Builtins {
             string result = RubyUtils.ExpandPath(context.Platform, expanded, expandedBase, false);
 
             return EncodePathLike(context, result, pathStr);
+        }
+
+        /// <summary>
+        /// MRI's rb_file_expand_path_internal off Windows. A path is bytes there: what it holds
+        /// is kept byte for byte, whatever its encoding, and only the pieces that come from the
+        /// system - the working directory, a home directory - are the filesystem's. The result's
+        /// encoding is MRI's too: the path's beside a root, the filesystem's after a "~", and
+        /// fs_enc_check of the directory and the path otherwise (incompatible ones raise).
+        /// Decoding the path to a .NET string and encoding the result in the filesystem encoding
+        /// gave a Windows-1251 path back as UTF-8 bytes still labelled Windows-1251.
+        /// </summary>
+        private static MutableString/*!*/ ExpandPathBytes(RubyContext/*!*/ context, MutableString/*!*/ path,
+            MutableString basePath, bool expandHome) {
+
+            string bytes = BytesAsChars(path);
+            RubyEncoding encoding;
+            if (expandHome && bytes.Length > 0 && bytes[0] == '~') {
+                int slash = bytes.IndexOf('/');
+                string head = (slash < 0) ? bytes : bytes.Substring(0, slash);
+                string user = DecodePathLike(context, MutableString.CreateBinary(CharsAsBytes(head), path.Encoding));
+                MutableString home = context.EncodePath(ExpandTilde(context, user));
+                bytes = BytesAsChars(home) + ((slash < 0) ? "" : bytes.Substring(slash));
+                encoding = home.Encoding;
+            } else if (bytes.Length > 0 && bytes[0] == '/') {
+                encoding = PathEncodingCheck(MutableString.CreateAscii("/"), path);
+            } else if (basePath != null) {
+                MutableString directory = ExpandPathBytes(context, basePath, null, expandHome);
+                encoding = PathEncodingCheck(directory, path);
+                bytes = BytesAsChars(directory) + "/" + bytes;
+            } else {
+                // MRI's append_fspath: the working directory is the filesystem's, and is converted
+                // to the path's encoding when that is what the two come to.
+                string cwd = context.Platform.CurrentDirectory;
+                MutableString directory = context.EncodePath(cwd);
+                encoding = path.Encoding;
+                if (encoding != directory.Encoding) {
+                    encoding = PathEncodingCheck(path, directory);
+                    if (encoding != directory.Encoding && !directory.IsAscii()) {
+                        try {
+                            directory = MutableString.Create(cwd, encoding).CheckEncoding();
+                        } catch (EncoderFallbackException) {
+                            // rb_str_conv_enc gives the string back as it was when it cannot
+                        }
+                    }
+                }
+                bytes = BytesAsChars(directory) + "/" + bytes;
+            }
+
+            string result = RubyUtils.ExpandPath(context.Platform, bytes, null, false);
+            return MutableString.CreateBinary(CharsAsBytes(result), encoding);
+        }
+
+        private static string/*!*/ BytesAsChars(MutableString/*!*/ str) {
+            int count = str.GetByteCount();
+            var chars = new char[count];
+            for (int i = 0; i < count; i++) {
+                chars[i] = (char)str.GetByte(i);
+            }
+            return new String(chars);
+        }
+
+        private static byte[]/*!*/ CharsAsBytes(string/*!*/ str) {
+            var bytes = new byte[str.Length];
+            for (int i = 0; i < str.Length; i++) {
+                bytes[i] = (byte)str[i];
+            }
+            return bytes;
         }
 
         /// <summary>
@@ -1081,6 +1153,11 @@ namespace IronRuby.Builtins {
             var context = self.Context;
 
             MutableString pathStr = Protocols.CastToPath(toPath, path);
+            if (!IsWindows) {
+                MutableString basePathStr = (basePath != null) ? Protocols.CastToPath(toPath, basePath) : null;
+                return ExpandPathBytes(context, pathStr, basePathStr, false);
+            }
+
             string result = RubyUtils.ExpandPath(
                 context.Platform,
                 context.DecodePath(pathStr),
