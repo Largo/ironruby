@@ -1231,7 +1231,12 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < list.Count; i++) {
                 var s = list[i] as MutableString;
                 if (s != null) {
-                    Protocols.CheckPath(s);
+                    try {
+                        Protocols.CheckPath(s);
+                    } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
+                        // rb_file_join reports a NUL as a plain string problem (StringValueCStr).
+                        throw RubyExceptions.CreateArgumentError("string contains null byte");
+                    }
                 }
             }
 
