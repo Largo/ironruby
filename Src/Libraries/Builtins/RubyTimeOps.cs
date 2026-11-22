@@ -64,7 +64,26 @@ namespace IronRuby.Builtins {
         }
 
         private static bool RespondTo(RubyContext/*!*/ context, object obj, string/*!*/ name) {
-            return context.ResolveMethod(obj, name, VisibilityContext.AllVisible).Found;
+            if (context.ResolveMethod(obj, name, VisibilityContext.AllVisible).Found) {
+                return true;
+            }
+            // MRI's rb_check_funcall and rb_respond_to ask #respond_to?, and so see a method an
+            // object answers through method_missing and respond_to_missing? (a SimpleDelegator).
+            var site = RubyUtils.GetCallSite(ref _respondToSite, context, "respond_to?", 2);
+            return Protocols.IsTrue(site.Target(site, obj, context.EncodeIdentifier(name), true));
+        }
+
+        private static CallSite<Func<CallSite, object, object, object, object>> _respondToSite;
+        private static CallSite<Func<CallSite, object, object>> _toSSite;
+
+        /// <summary>
+        /// num_exact_fail's "can't convert X into an exact number": X is the class of the value as
+        /// %PRIsVALUE prints it, through #to_s, so that a class with a name of its own shows it.
+        /// </summary>
+        private static Exception/*!*/ MakeExactNumberError(RubyContext/*!*/ context, object value) {
+            object name = Invoke(context, ref _toSSite, "to_s", context.GetClassOf(value));
+            return RubyExceptions.CreateTypeError("can't convert {0} into an exact number",
+                name is MutableString ? name.ToString() : context.GetClassName(value));
         }
 
         // MRI's time.c makes these Rationals itself (quov, rb_rational_new) rather than calling
@@ -165,7 +184,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            throw RubyExceptions.CreateTypeError("can't convert {0} into an exact number", context.GetClassName(value));
+            throw MakeExactNumberError(context, value);
         }
 
         /// <summary>
