@@ -271,7 +271,10 @@ namespace IronRuby.Builtins {
 
             // MRI looks constants up in the receiver's class if it has no singleton class yet
             RubyClass immediate = scope.RubyContext.GetImmediateClassOf(self);
-            RubyClass singleton = scope.RubyContext.GetOrCreateSingletonClass(self);
+            // An Integer or a Symbol has none to make: the code runs in the dummy singleton in front of
+            // the class, as a block given to #instance_eval does (RubyUtils.EvaluateInSingleton), and a
+            // `def' in it raises "can't define singleton", as in MRI.
+            RubyClass singleton = RubyUtils.GetOrCreateEvalSingletonClass(scope.RubyContext, self);
             return RubyUtils.Evaluate(code, scope, self, singleton, immediate.IsSingletonClass ? null : immediate, file, line);
         }
 

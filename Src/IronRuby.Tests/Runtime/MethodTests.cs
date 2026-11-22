@@ -983,7 +983,7 @@ class A
   
   alias_method :xxx, :foo           # should find foo
 end
-"), @"
+", 0, 1), @"
 #<UnboundMethod: M#foo(bar)() Visibility1.rb:8>
 ");
         }

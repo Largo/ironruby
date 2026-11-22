@@ -341,10 +341,12 @@ namespace IronRuby.Builtins {
             if (key == null) {
                 throw new ArgumentNullException("key");
             }
-            Entry[] entries = _entries;
-            if (entries != null) {
+            if (_entries != null) {
                 IEqualityComparer<object> comparer = _comparer;
                 int hashCode = comparer.GetHashCode(key);
+                // the key's #hash may have grown this very hash (ar2st_object), so the entries
+                // are read after it
+                Entry[] entries = _entries;
                 int[] buckets = _buckets ?? LinkPendingBuckets();
                 int i = buckets[(int)FastMod((uint)hashCode, (uint)buckets.Length, _fastModMultiplier)] - 1;
                 int collisions = 0;
@@ -533,44 +535,7 @@ namespace IronRuby.Builtins {
                 ref Entry found = ref entries[i];
                 if (found.HashCode == hashCode && comparer.Equals(found.Key, key)) {
                     value = found.Value;
-                    if (last < 0) {
-                        _buckets[BucketIndex(hashCode)] = found.Next + 1;
-                    } else {
-                        entries[last].Next = found.Next;
-                    }
-                    found.HashCode = 0;
-                    found.Next = TombstoneNext;
-                    found.Key = null;
-                    found.Value = null;
-                    _liveCount--;
-                    _version++;
-                    _stamp++;
-                    // Removing the newest entry needs no tombstone at all; dropping it (and any
-                    // tombstones it was sitting on) keeps push/pop patterns from growing the
-                    // entry array. Removing the oldest one moves the enumeration start instead,
-                    // which is the Hash#shift case.
-                    if (i == _count - 1) {
-                        int n = i;
-                        while (n > _start && entries[n - 1].Next == TombstoneNext) {
-                            n--;
-                        }
-                        _count = n;
-                    } else if (i == _start) {
-                        int n = i + 1;
-                        while (n < _count && entries[n].Next == TombstoneNext) {
-                            n++;
-                        }
-                        _start = n;
-                    }
-                    if (_liveCount == 0) {
-                        // Nothing is linked into a bucket any more, so the whole entry array is
-                        // free again: a hash emptied by repeated #delete or #shift starts over
-                        // rather than keeping a run of tombstones in front of it forever.
-                        _count = 0;
-                        _start = 0;
-                    } else if (_start > _count) {
-                        _start = _count;
-                    }
+                    RemoveFound(ref found, i, last);
                     return true;
                 }
                 last = i;
@@ -581,6 +546,72 @@ namespace IronRuby.Builtins {
             }
             value = null;
             return false;
+        }
+
+        /// <summary>
+        /// Unlinks the entry at <paramref name="i"/>, which follows entry <paramref name="last"/>
+        /// in its bucket chain (or heads it when that is -1), leaving a tombstone.
+        /// </summary>
+        private void RemoveFound(ref Entry found, int i, int last) {
+            Entry[] entries = _entries;
+            int hashCode = found.HashCode;
+            if (last < 0) {
+                _buckets[BucketIndex(hashCode)] = found.Next + 1;
+            } else {
+                entries[last].Next = found.Next;
+            }
+            found.HashCode = 0;
+            found.Next = TombstoneNext;
+            found.Key = null;
+            found.Value = null;
+            _liveCount--;
+            _version++;
+            _stamp++;
+            // Removing the newest entry needs no tombstone at all; dropping it (and any
+            // tombstones it was sitting on) keeps push/pop patterns from growing the
+            // entry array. Removing the oldest one moves the enumeration start instead,
+            // which is the Hash#shift case.
+            if (i == _count - 1) {
+                int n = i;
+                while (n > _start && entries[n - 1].Next == TombstoneNext) {
+                    n--;
+                }
+                _count = n;
+            } else if (i == _start) {
+                int n = i + 1;
+                while (n < _count && entries[n].Next == TombstoneNext) {
+                    n++;
+                }
+                _start = n;
+            }
+            if (_liveCount == 0) {
+                // Nothing is linked into a bucket any more, so the whole entry array is
+                // free again: a hash emptied by repeated #delete or #shift starts over
+                // rather than keeping a run of tombstones in front of it forever.
+                _count = 0;
+                _start = 0;
+            } else if (_start > _count) {
+                _start = _count;
+            }
+        }
+
+        /// <summary>
+        /// Removes the live entry at <paramref name="index"/> (as <see cref="TryGetNextEntry"/>
+        /// numbers them, less one) by its stored hash code, without asking the key for #hash or
+        /// #eql?. Hash#select and #reject drop the pairs they do not keep from a copy this way.
+        /// </summary>
+        public void RemoveEntryAt(int index) {
+            if (_buckets == null) {
+                LinkPendingBuckets();
+            }
+            Entry[] entries = _entries;
+            int last = -1;
+            int i = _buckets[BucketIndex(entries[index].HashCode)] - 1;
+            while (i != index) {
+                last = i;
+                i = entries[i].Next;
+            }
+            RemoveFound(ref entries[i], i, last);
         }
 
         /// <summary>

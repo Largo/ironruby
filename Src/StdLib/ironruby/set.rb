@@ -281,6 +281,30 @@ class Set
   end
   private :__do_with_enum__
 
+  # An empty set of the receiver's class for the results of &, flatten, collect! and
+  # classify. Core Set's (set_s_alloc) is allocated, not made with #new, so that an
+  # #initialize that wants arguments is not called, and compares the way the receiver
+  # does. A subclass with Set::SubclassCompatible makes it with self.class.new, which
+  # compares the ordinary way.
+  def __new_like__ # :nodoc:
+    __core_set__? ? __alloc_like__ : self.class.new
+  end
+  private :__new_like__
+
+  # set_s_alloc and set_i_compare_by_identity, which core Set uses for every result it
+  # makes, a subclass's included (^ and divide).
+  def __alloc_like__ # :nodoc:
+    self.class.allocate.__send__(:__core_init__, @__hash__.compare_by_identity?)
+  end
+  private :__alloc_like__
+
+  def __core_init__(identity) # :nodoc:
+    @__hash__ = Hash.new(false)
+    @__hash__.compare_by_identity if identity
+    self
+  end
+  private :__core_init__
+
   # Ruby 4.0's core Set names itself, not its table, when frozen:
   # "can't modify frozen Set: Set[1]".
   def __check_frozen__ # :nodoc:
@@ -389,7 +413,7 @@ class Set
   # Returns a new set that is a copy of the set, flattening each
   # containing set recursively.
   def flatten
-    self.class.new.__flatten_merge__(self)
+    __new_like__.__flatten_merge__(self)
   end
 
   # Equivalent to Set#flatten, but replaces the receiver with the
@@ -602,7 +626,7 @@ class Set
   def collect!
     block_given? or return enum_for(__method__) { size }
     __check_frozen__
-    set = self.class.new
+    set = __new_like__
     each { |o| set << yield(o) }
     replace(set)
   end
@@ -680,14 +704,26 @@ class Set
   #     Set[1, 3, 5] & Set[3, 2, 1]             #=> #<Set: {3, 1}>
   #     Set['a', 'b', 'z'] & ['a', 'b', 'c']    #=> #<Set: {"a", "b"}>
   def &(enum)
-    n = self.class.new
+    n = __new_like__
     if enum.is_a?(Set)
       if enum.size > size
         each { |o| n.add(o) if enum.include?(o) }
       else
         enum.each { |o| n.add(o) if include?(o) }
       end
+    elsif __core_set__?
+      # the block returns the element, as core Set's set_intersection_block does: an
+      # enumerable's #each may look at what its block answers. Kept and called after
+      # #& has returned, it still adds to the result but answers nil, as MRI's does
+      # (test_set.rb's test_and).
+      done = false
+      begin
+        __do_with_enum__(enum) { |o| n.add(o) if include?(o); done ? nil : o }
+      ensure
+        done = true
+      end
     else
+      # Set::SubclassCompatible's block answers what its last expression does
       __do_with_enum__(enum) { |o| n.add(o) if include?(o) }
     end
     n
@@ -702,10 +738,18 @@ class Set
   #     Set[1, 'b', 'c'] ^ ['b', 'd']           #=> #<Set: {"d", 1, "c"}>
   #
   # Ruby 4.0 starts from a copy of the receiver, so the result keeps its class
-  # and compare_by_identity; the argument is deduplicated first.
+  # and compare_by_identity; the argument is deduplicated first (into a set that is
+  # allocated, not made with #new), the way the receiver compares. A subclass with
+  # Set::SubclassCompatible starts from self.class.new(enum) instead and adds the
+  # receiver's elements to it.
   def ^(enum)
+    unless __core_set__?
+      n = self.class.new(enum)
+      each { |o| n.add(o) unless n.delete?(o) }
+      return n
+    end
     n = dup
-    enum = Set.new(enum) unless enum.is_a?(Set)
+    enum = __alloc_like__.merge(enum) unless enum.is_a?(Set)
     enum.each { |o| n.add(o) unless n.delete?(o) }
     n
   end
@@ -786,63 +830,77 @@ class Set
   #                #    2002=>#<Set: {"f.rb"}>}
   #
   # Returns an enumerator if no block is given.
-  def classify # :yields: o
+  def classify(&block) # :yields: o
     block_given? or return enum_for(__method__) { size }
+    __classify__(__core_set__?, &block)
+  end
 
+  # set_i_classify's loop; #divide uses core Set's (allocated subsets) whatever the
+  # receiver's class.
+  def __classify__(core) # :nodoc:
     h = {}
 
     each { |i|
-      (h[yield(i)] ||= self.class.new).add(i)
+      (h[yield(i)] ||= core ? __alloc_like__ : self.class.new).add(i)
     }
 
     h
   end
+  private :__classify__
 
   # Divides the set into a set of subsets according to the commonality
   # defined by the given block.
   #
   # If the arity of the block is 2, elements o1 and o2 are in common
-  # if block.call(o1, o2) is true.  Otherwise, elements o1 and o2 are
-  # in common if block.call(o1) == block.call(o2).
+  # if both block.call(o1, o2) and block.call(o2, o1) are true.  Otherwise,
+  # elements o1 and o2 are in common if block.call(o1) == block.call(o2).
   #
   #     require 'set'
   #     numbers = Set[1, 3, 4, 6, 9, 10, 11]
   #     set = numbers.divide { |i,j| (i - j).abs == 1 }
-  #     set        #=> #<Set: {#<Set: {1}>,
-  #                #           #<Set: {11, 9, 10}>,
-  #                #           #<Set: {3, 4}>,
-  #                #           #<Set: {6}>}>
+  #     set        #=> Set[Set[1], Set[3, 4], Set[6], Set[9, 10, 11]]
   #
   # Returns an enumerator if no block is given.
+  #
+  # #divide stays core Set's in a subclass with Set::SubclassCompatible too: the subsets
+  # are allocated (no #initialize) and compare the way the receiver does, and the result
+  # is a plain Set.
   def divide(&func)
     func or return enum_for(__method__) { size }
 
     if func.arity == 2
-      require 'tsort'
-
-      class << dig = {}         # :nodoc:
-        include TSort
-
-        alias tsort_each_node each_key
-        def tsort_each_child(node, &block)
-          fetch(node).each(&block)
+      # set_divide_arity2: a union-find over the positions of the elements (not the
+      # elements themselves, which an identity set may hold several equal ones of),
+      # joining i and j when the block relates them both ways. Ruby 4.0 no longer asks
+      # the block to relate an element to itself.
+      items = to_a.freeze
+      parents = Array.new(items.size) { |i| i }
+      root = lambda do |i|
+        i = parents[i] while parents[i] != i
+        i
+      end
+      (0...items.size - 1).each do |i|
+        (i + 1...items.size).each do |j|
+          if func.call(items[i], items[j]) && func.call(items[j], items[i])
+            ri = root.(i)
+            rj = root.(j)
+            parents[rj] = ri if ri != rj
+          end
         end
       end
 
-      # Ruby 4.0 no longer asks the block to relate an element to itself.
-      elements = to_a
-      elements.each_with_index { |u, i|
-        dig[u] = a = []
-        elements.each_with_index { |v, j| i != j && func.call(u, v) and a << v }
-      }
-
       set = Set.new()
-      dig.each_strongly_connected_component { |css|
-        set.add(self.class.new(css))
-      }
+      subsets = {}
+      items.each_with_index do |v, i|
+        unless (subset = subsets[root.(i)])
+          subset = subsets[root.(i)] = __alloc_like__
+          set.add(subset)
+        end
+        subset.add(v)
+      end
       set
     else
-      Set.new(classify(&func).values)
+      Set.new(__classify__(true, &func).values)
     end
   end
 
@@ -904,14 +962,26 @@ class Set
   end
 
   def __core_set__? # :nodoc:
-    instance_of?(::Set) || is_a?(CoreSet)
+    !is_a?(SubclassCompatible)
   end
   private :__core_set__?
 
   # In Ruby 4.0 a direct subclass of the core Set is given Set::SubclassCompatible, the
   # behaviour of the pure-Ruby Set before it, while a subclass of CoreSet keeps the core
-  # behaviour. IronRuby's Set is that pure-Ruby Set, so only #inspect tells them apart.
+  # behaviour. IronRuby's Set is that pure-Ruby Set, so the module holds no methods: it
+  # marks the subclasses whose results (&, ^, flatten, collect!, classify) are made with
+  # self.class.new and #inspect is "#<MySet: {1, 2}>", and it shows in their ancestors.
   class CoreSet < Set; end
+
+  module SubclassCompatible; end
+  private_constant :SubclassCompatible
+
+  # set_s_inherited, defined after CoreSet so that CoreSet does not get the module
+  def self.inherited(subclass)
+    super
+    subclass.include(SubclassCompatible) if equal?(::Set)
+  end
+  private_class_method :inherited
 end
 
 module Enumerable

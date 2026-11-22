@@ -43,6 +43,9 @@ namespace IronRuby.Builtins {
         private int _groupDepth;
         private int _absentDepth;
 
+        // The index of the ']' a character class starts with, which is a literal member of it (ParseCharacterGroup).
+        private int _leadingBracketIndex = -1;
+
         /// <summary>
         /// Which repertoire \w \d \s and the POSIX bracket classes range over, selected by the
         /// (?a) (?d) (?u) inline modifiers. .NET has no equivalent flag, so the expansions have to
@@ -406,15 +409,25 @@ namespace IronRuby.Builtins {
 
         private static Dictionary<string, int>/*!*/ CountGroupNames(string/*!*/ pattern) {
             var result = new Dictionary<string, int>();
-            bool inCharacterClass = false;
+            int classDepth = 0;
             for (int i = 0; i < pattern.Length; i++) {
                 char c = pattern[i];
                 if (c == '\\') {
                     i++;
-                } else if (inCharacterClass) {
-                    inCharacterClass = c != ']';
                 } else if (c == '[') {
-                    inCharacterClass = true;
+                    // a class, or one nested in a class; a ']' straight after '[' or '[^' is a member of it
+                    // when another ']' follows (ParseCharacterGroup): [ ](?<x>] is no group
+                    classDepth++;
+                    if (i + 1 < pattern.Length && pattern[i + 1] == '^') {
+                        i++;
+                    }
+                    if (i + 1 < pattern.Length && pattern[i + 1] == ']' && pattern.IndexOf(']', i + 2) >= 0) {
+                        i++;
+                    }
+                } else if (classDepth > 0) {
+                    if (c == ']') {
+                        classDepth--;
+                    }
                 } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
                     char d = pattern[i + 2];
                     char terminator;
@@ -545,7 +558,10 @@ namespace IronRuby.Builtins {
         }
 
         private static string/*!*/ Escape(int c) {
-            return IsMetaCharacter(c) ? "\\" + (char)c : ((char)c).ToString();
+            // Any whitespace is escaped too: the CLR's x mode skips every Char.IsWhiteSpace
+            // character, so a literal \f, \v or U+00A0 (from an escape or Regexp.quote) would vanish,
+            // where Onigmo keeps all of them.
+            return IsMetaCharacter(c) || Char.IsWhiteSpace((char)c) ? "\\" + (char)c : ((char)c).ToString();
         }
 
         private static bool IsMetaCharacter(int c) {
@@ -1453,7 +1469,8 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < pattern.Length; i++) {
                 char c = pattern[i];
                 if (c == '\\') {
-                    if (i + 1 == pattern.Length || !IsMetaCharacter(pattern[i + 1])) {
+                    // a meta character or a whitespace character, as Escape writes them
+                    if (i + 1 == pattern.Length || !(IsMetaCharacter(pattern[i + 1]) || Char.IsWhiteSpace(pattern[i + 1]))) {
                         return -1;
                     }
                     i++;
@@ -2697,6 +2714,15 @@ namespace IronRuby.Builtins {
 
             bool positive = !Read('^');
 
+            // Onigmo (fetch_token_in_cc) reads a ']' straight after '[' or '[^' as a literal member
+            // when another ']' follows to close the class: [ ]a] (without the space) is ']' or 'a'.
+            // It is an ordinary character there, so it may start a range ([ ]-a] is ']' to 'a') and
+            // belongs to the first operand of an intersection ([ ]a&&a] is only 'a'); ParseCharacter
+            // reads it.
+            if (Peek() == ']' && _rubyPattern.IndexOf(']', _index + 1) >= 0) {
+                _leadingBracketIndex = _index;
+            }
+
             var result = ParseCharacterGroupIntersections();
             if (!positive) {
                 result = result.Complement();
@@ -2713,7 +2739,7 @@ namespace IronRuby.Builtins {
         private CharacterSet/*!*/ ParseCharacterGroupIntersections() {
             CharacterSet result = null;
             int c;
-            while ((c = Peek()) != -1 && c != ']') {
+            while ((c = Peek()) != -1 && (c != ']' || _index == _leadingBracketIndex)) {
                 // eats &&
                 var set = ParseCharacterGroupUnion();
 
@@ -2817,6 +2843,11 @@ namespace IronRuby.Builtins {
                     throw MakeError("premature end of char-class");
 
                 case ']':
+                    if (_index - 1 == _leadingBracketIndex) {
+                        // the literal ']' that opens the class (ParseCharacterGroup)
+                        mayStartRange = true;
+                        return CharacterSet.MakeCharacter(']', @"\]");
+                    }
                     Back();
                     mayStartRange = false;
                     return null;

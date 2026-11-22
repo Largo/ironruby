@@ -83,8 +83,8 @@ s = 'hello world'.dup; mds = []; s.scan(/o(.)/) { mds << $~ }; s.clear; mds.each
             TestCorrectPatternTranslation(@"\_", @"_");
             // An octal escape is decoded to the character it denotes, the same way \x is.
             TestCorrectPatternTranslation(@"abc\0\01\011", "abc\u0000\u0001\\\t");
-            TestCorrectPatternTranslation(@"\n\t\r\f\v\a\e\b\A\B\Z\z", "\\\n\\\t\\\r\f\v\a\u001B\\b\\A\\B\\Z\\z");
-            TestCorrectPatternTranslation(@"[\n\t\r\f\v\a\e\b\A\B\Z\z]", "[\\\n\\\t\\\r\f\v\a\u001B\bABZz]");
+            TestCorrectPatternTranslation(@"\n\t\r\f\v\a\e\b\A\B\Z\z", "\\\n\\\t\\\r\\\f\\\v\a\u001B\\b\\A\\B\\Z\\z");
+            TestCorrectPatternTranslation(@"[\n\t\r\f\v\a\e\b\A\B\Z\z]", "[\\\n\\\t\\\r\\\f\\\v\a\u001B\bABZz]");
             TestCorrectPatternTranslation(@"\G", RubyRegexOptions.NONE, @"\G", true);
             
             // meta-characters

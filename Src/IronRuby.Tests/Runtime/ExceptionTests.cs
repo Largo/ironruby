@@ -779,7 +779,7 @@ StandardError.===
 rescued
 StandardError.===
 not a StandardError
-");
+", 0, 1);
         }
 
         public void ExceptionMapping1() {

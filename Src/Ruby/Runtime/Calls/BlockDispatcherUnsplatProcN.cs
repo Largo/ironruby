@@ -89,7 +89,13 @@ namespace IronRuby.Runtime.Calls {
         private object InvokeInternal(BlockParam/*!*/ param, object self, Proc procArg, object[]/*!*/ args) {
             // TODO: optimize
             if (args.Length < _parameterCount) {
+                // A parameter the caller left out gets nil if it is mandatory and the "use the default"
+                // sentinel if it is optional, as in BlockDispatcherUnsplatN.
+                int supplied = args.Length;
                 Array.Resize(ref args, _parameterCount);
+                for (int i = supplied; i < args.Length; i++) {
+                    args[i] = MissingArg(i);
+                }
                 return _block(param, self, args, Rest(RubyOps.MakeArray0()), procArg);
             } else if (args.Length == _parameterCount) {
                 return _block(param, self, args, Rest(RubyOps.MakeArray0()), procArg);
@@ -165,6 +171,11 @@ namespace IronRuby.Runtime.Calls {
             int nextArg, nextItem;
             CreateArgumentsFromSplattee(_parameterCount, out nextArg, out nextItem, ref args, splattee);
 
+            // parameters neither the arguments nor the splatted items reached (see InvokeInternal):
+            for (int i = nextArg; i < _parameterCount; i++) {
+                args[i] = MissingArg(i);
+            }
+
             var array = new RubyArray();
 
             // remaining args:
@@ -175,6 +186,12 @@ namespace IronRuby.Runtime.Calls {
             // remaining items:
             while (nextItem < splattee.Count) {
                 array.Add(splattee[nextItem++]);
+            }
+
+            // the arguments past the parameters went to the rest array: the block gets its parameters
+            // only, as InvokeInternal gives them (a native block, the one of a symbol proc, relies on it)
+            if (args.Length > _parameterCount) {
+                Array.Resize(ref args, _parameterCount);
             }
 
             return _block(param, self, args, Rest(array), procArg);

@@ -111,33 +111,35 @@ namespace IronRuby.Runtime.Calls {
             return array;
         }
 
+        // A block with a &blk parameter takes this dispatcher whatever its parameter count, so a call can
+        // pass more arguments than it has parameters ({|a, b, &c|}.call(1, 2, 3)): the extra ones are dropped.
         protected object[]/*!*/ MakeArray(object arg1) {
             var array = NewArgs();
-            array[0] = arg1;
+            if (array.Length > 0) array[0] = arg1;
             return array;
         }
 
         protected object[]/*!*/ MakeArray(object arg1, object arg2) {
             var array = NewArgs();
-            array[0] = arg1;
-            array[1] = arg2;
+            if (array.Length > 0) array[0] = arg1;
+            if (array.Length > 1) array[1] = arg2;
             return array;
         }
 
         protected object[]/*!*/ MakeArray(object arg1, object arg2, object arg3) {
             var array = NewArgs();
-            array[0] = arg1;
-            array[1] = arg2;
-            array[2] = arg3;
+            if (array.Length > 0) array[0] = arg1;
+            if (array.Length > 1) array[1] = arg2;
+            if (array.Length > 2) array[2] = arg3;
             return array;
         }
 
         protected object[]/*!*/ MakeArray(object arg1, object arg2, object arg3, object arg4) {
             var array = NewArgs();
-            array[0] = arg1;
-            array[1] = arg2;
-            array[2] = arg3;
-            array[3] = arg4;
+            if (array.Length > 0) array[0] = arg1;
+            if (array.Length > 1) array[1] = arg2;
+            if (array.Length > 2) array[2] = arg3;
+            if (array.Length > 3) array[3] = arg4;
             return array;
         }
     }

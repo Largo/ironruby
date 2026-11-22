@@ -287,7 +287,9 @@ p [(t.value rescue $!.message), rescued]
         /// The other order is C: a Thread#raise that comes in behind a parked Thread#kill must not
         /// replace it either (MRI takes the kill first and drops what is queued behind it); it did,
         /// and the masked raise then left the thread running for ever. C repeats, as a thread may take
-        /// the kill before the raise arrives.
+        /// the kill before the raise arrives: then the raise is delivered while the thread unwinds, at
+        /// the end of the mask, and the thread dies of it, as MRI's does when the killing thread is
+        /// switched out between the two calls. Either way the thread ends.
         /// </summary>
         public void Thread_KillBehindRaise1() {
             TestOutput(@"
@@ -330,7 +332,7 @@ t.raise 'held back'
 t.kill
 b = t.join(5) ? :killed : :still_running
 
-# C: kill, then raise; the raise must not replace the kill
+# C: kill, then raise; the raise must not replace the kill, which ends the thread one way or the other
 c = 20.times.map do
   ready = false
   t = Thread.new do
@@ -343,7 +345,11 @@ c = 20.times.map do
   Thread.pass until ready
   t.kill
   t.raise 'behind the kill'
-  t.join(5) ? :killed : (t.kill; :still_running)
+  begin
+    t.join(5) ? :killed : (t.kill; :still_running)
+  rescue RuntimeError
+    :killed
+  end
 end.uniq
 p [a, b, ensured, c]
 ", @"

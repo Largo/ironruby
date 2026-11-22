@@ -381,7 +381,7 @@ namespace IronRuby.Compiler.Ast {
                 );
             }
 
-            // A body with keyword parameters is never a light frame (IsLightFrameCandidate).
+            // A light frame records its keyword signature with the names of its scope made on demand (TransformLightFrame).
             MSA.Expression variableNames = null;
             if (light == null) {
                 variableNames = scope.GetVariableNamesExpression();
@@ -571,6 +571,12 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightOsrEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_OSR") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_KEYWORDS=0 keeps every method with keyword parameters, a `**rest' or `**nil' out of light frames (see
+        /// IsLightFrameCandidate).
+        /// </summary>
+        internal static readonly bool LightKeywordsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORDS") != "0";
+
         // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
         // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
         // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
@@ -679,7 +685,13 @@ namespace IronRuby.Compiler.Ast {
         /// Global variables need the scope.
         /// A rest parameter (`def log(*messages)') is a local like the others: the caller's rule makes its Array, and a scope
         /// made on demand is told of it as a scope made at entry is (RubyMethodScope.HasUnsplatFlag). Parameters after it
-        /// and keywords are not taken. A splatted argument (`inner(*args)') is converted by a site that takes no scope.
+        /// are not taken. A splatted argument (`inner(*args)') is converted by a site that takes no scope.
+        /// Keyword parameters (`def f(a, k: 1, j:, **o)', `**nil') are lowered onto a hidden optional parameter that holds the
+        /// call's keyword hash, and a prologue at the head of the body that checks it and binds each keyword to its local, the
+        /// defaults evaluated there in order (PrismAstBridge.LowerKeywords): locals, calls and runtime helpers that take no
+        /// scope, so the body is scope-free if its statements are. The hash a call that passes no keywords gets is the
+        /// runtime's (LightFrameRewriter.ScopeOperandIndex). Not taken: keywords beside a rest or post parameter, which the
+        /// general lowering binds out of one splat by hand (KeywordsWithSplatLowering).
         /// The transformed body is still checked (LightFrameRewriter); this is the cheap filter.
         /// </summary>
         private bool IsLightFrameCandidate() {
@@ -687,8 +699,7 @@ namespace IronRuby.Compiler.Ast {
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return false;
             }
-            var signature = _parameters.Signature;
-            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+            if (HasKeywordParameters && (!LightKeywordsEnabled || KeywordsWithSplatLowering)) {
                 return false;
             }
             foreach (var parameter in _parameters.Mandatory) {
@@ -844,9 +855,11 @@ namespace IronRuby.Compiler.Ast {
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return "optional, splat or post parameters";
             }
-            var signature = _parameters.Signature;
-            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
-                return "keyword parameters";
+            if (HasKeywordParameters && !LightKeywordsEnabled) {
+                return "keyword parameters (IR_LIGHT_KEYWORDS=0)";
+            }
+            if (HasKeywordParameters && KeywordsWithSplatLowering) {
+                return "keyword parameters with a rest or post parameter";
             }
             var body = Body;
             if (body == null || body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -888,16 +901,32 @@ namespace IronRuby.Compiler.Ast {
             return FirstNotScopeFree(false) != null;
         }
 
+        // Declares keyword parameters, a `**rest' or `**nil'.
+        private bool HasKeywordParameters {
+            get {
+                var signature = _parameters.Signature;
+                return signature != null && (signature.TakesKeywords || signature.RefusesKeywords);
+            }
+        }
+
+        // Keywords beside a rest or post parameter: the general lowering takes every argument in one splat and binds the
+        // positionals out of it by hand (PrismAstBridge.LowerGeneralParameters), with helpers IsScopeFree does not take.
+        private bool KeywordsWithSplatLowering {
+            get { return _parameters.Unsplat != null || _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length; }
+        }
+
         /// <summary>
-        /// Optional parameters a light frame takes: locals whose defaults are scope-free (`def initialize(size = 0)'), not followed
-        /// by keywords. Their initialization is rewritten with the body (see TransformLightFrame), and runs in the same order.
+        /// Optional parameters a light frame takes: locals whose defaults are scope-free (`def initialize(size = 0)'), and the
+        /// hidden one keyword parameters are lowered onto. With keywords after optional positionals, the keyword hash of a
+        /// call that left an optional out is moved into place before the defaults run (Parameters.KeywordsAfterOptionals),
+        /// between locals. Their initialization is rewritten with the body (see TransformLightFrame), and runs in the same order.
         /// </summary>
         private bool AreLightOptionals() {
             var optional = _parameters.Optional;
             if (optional.Length == 0) {
                 return true;
             }
-            if (!LightOptionalsEnabled || _parameters.KeywordsAfterOptionals) {
+            if (!LightOptionalsEnabled || _parameters.KeywordsAfterOptionals && !LightKeywordsEnabled) {
                 return false;
             }
             foreach (var parameter in optional) {
@@ -980,6 +1009,17 @@ namespace IronRuby.Compiler.Ast {
             // a String literal is a constant, or a copy of one; a Symbol literal is a constant
             if (node is StringLiteral) {
                 return true;
+            }
+            // the keyword prologue's reads of the keyword hash (PrismAstBridge.BindKeywordsFrom): one runtime call each, that
+            // takes no scope, and a default evaluated in place when the keyword is absent
+            var keywordRead = node as KeywordParameterRead;
+            if (keywordRead != null) {
+                return IsScopeFree(keywordRead.Keywords, blockLiterals, why) &&
+                    (keywordRead.DefaultValue == null || IsScopeFree(keywordRead.DefaultValue, blockLiterals, why));
+            }
+            var keywordTest = node as KeywordArgumentsTest;
+            if (keywordTest != null) {
+                return IsScopeFree(keywordTest.Value, blockLiterals, why);
             }
             if (LightCallsEnabled) {
                 var array = node as ArrayConstructor;
@@ -1328,6 +1368,8 @@ namespace IronRuby.Compiler.Ast {
             foreach (var site in rewriter.OsrSites) {
                 site.InLightFrame = true;
             }
+            // `eval("super")' through the binding of a scope made on demand finds the keyword signature by its local names
+            SuperCall.RecordKeywordSignature((string[])names.Value, _parameters.Signature);
             statements = rewritten;
             light.MakesCalls = rewriter.MakesCalls || gen.CurrentMethod.HasHashCallingKeys;
             return light;
@@ -1423,6 +1465,11 @@ namespace IronRuby.Compiler.Ast {
                 if (LightKeywordHashEnabled && (method == Methods.MakeKeywordArgumentsHash || method == Methods.MakeKeywordArgumentsHash0 ||
                     method == Methods.MakeKeywordArgumentsHash1 || method == Methods.MakeKeywordArgumentsHash2 ||
                     method == Methods.MakeKeywordArgumentsHash3)) {
+                    return 0;
+                }
+                // the default of the hidden keyword parameter, the call passed no keywords: the runtime's shared empty hash, or a
+                // new one for a `**rest' to take over
+                if (LightKeywordsEnabled && (method == Methods.GetOmittedKeywordArguments || method == Methods.MakeOmittedKeywordArguments)) {
                     return 0;
                 }
                 return -1;

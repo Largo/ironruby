@@ -417,8 +417,22 @@ namespace IronRuby.Builtins {
             return self.ComparesByIdentity;
         }
         
+        // MRI's rb_hash_replace checks the receiver is not frozen before it converts the argument,
+        // so a frozen hash raises FrozenError even for an argument that is not a hash.
         [RubyMethod("replace")]
-        public static Hash/*!*/ Replace(RubyContext/*!*/ context, Hash/*!*/ self, [DefaultProtocol, NotNull]IDictionary<object,object>/*!*/ other) {
+        public static Hash/*!*/ Replace(ConversionStorage<IDictionary<object, object>>/*!*/ toHash, Hash/*!*/ self, object other) {
+            self.RequireNotFrozen();
+            var site = toHash.GetSite(ConvertToHashAction.Make(toHash.Context));
+            var hash = site.Target(site, other);
+            if (hash == null) {
+                // nil is the one argument the conversion site lets through; it would empty the
+                // hash before failing
+                throw RubyExceptions.CreateImplicitConversionError("nil", "Hash");
+            }
+            return Replace(toHash.Context, self, hash);
+        }
+
+        public static Hash/*!*/ Replace(RubyContext/*!*/ context, Hash/*!*/ self, [NotNull]IDictionary<object,object>/*!*/ other) {
             if (Object.ReferenceEquals(self, other)) {
                 self.RequireNotFrozen();
                 return self;

@@ -248,6 +248,21 @@ namespace IronRuby.Builtins {
         /// where there is no libc to poll with, the socket, the pipe or the disk file is asked
         /// itself - a disk file is always readable, as poll(2) says of a regular file.
         /// </summary>
+        /// <summary>
+        /// On Unix, whether the IO reads a descriptor through a stream that cannot read it without
+        /// waiting - standard input redirected from a pipe or a file, which .NET's own stream reads,
+        /// or a FileStream over a descriptor, as IO.new(0) is - and poll(2) says there is nothing to
+        /// read there now. #read_nonblock asks before such a read, which would otherwise wait.
+        /// </summary>
+        internal static bool IsQuietDescriptor(RubyIO/*!*/ io, System.IO.Stream/*!*/ baseStream) {
+            if (!_isUnix) {
+                return false;
+            }
+            int descriptor = (io.ConsoleStreamType == Microsoft.Scripting.Utils.ConsoleStreamType.Input) ? 0
+                : (baseStream is System.IO.FileStream) ? RubyIO.DescriptorOf(baseStream) : -1;
+            return descriptor >= 0 && !DescriptorStream.IsReadableNow(descriptor);
+        }
+
         internal static bool IsReadableNow(RubyIO/*!*/ io, System.IO.Stream/*!*/ baseStream) {
             if (_isUnix) {
                 return DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(baseStream));
