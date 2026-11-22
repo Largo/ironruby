@@ -801,6 +801,23 @@ namespace IronRuby.Builtins {
 
             private void WriteExtendedModules(RubyClass/*!*/ theClass) {
                 if (theClass.IsSingletonClass) {
+                    // MRI's w_extended walks the singleton's ancestors: the modules prepended to it come
+                    // first, then the singleton's origin, written as the object's class ([Bug #8041]), then
+                    // the extended ones.
+                    var prepends = theClass.GetPrepends();
+                    if (prepends.Length > 0) {
+                        foreach (var prepended in prepends) {
+                            if (prepended.Name == null) {
+                                throw RubyExceptions.CreateTypeError("can't dump anonymous class {0}",
+                                    prepended.GetDisplayName(_context, false)
+                                );
+                            }
+                            _writer.Write((byte)'e');
+                            WriteModuleName(prepended);
+                        }
+                        _writer.Write((byte)'e');
+                        WriteModuleName(theClass.GetNonSingletonClass());
+                    }
                     foreach (var mixin in theClass.GetMixins()) {
                         _writer.Write((byte)'e');
                         // MRI reaches an extended module through its iclass and reports an
@@ -2062,8 +2079,23 @@ namespace IronRuby.Builtins {
 
             private object/*!*/ ReadExtended(int objectRef) {
                 string extensionName = ReadIdentifier();
-                RubyModule module = ReadClassOrModule('m', extensionName) as RubyModule;
+                RubyModule module = ResolvePath(extensionName);
                 int typeFlag = _reader.ReadByte();
+
+                // A class among the 'e' records is the singleton's origin (see WriteExtendedModules): the
+                // modules named before it were prepended to the singleton, not extended. It has to be the
+                // object's own class.
+                RubyClass originClass = module as RubyClass;
+                if (originClass != null) {
+                    object instance = ReadAnObject(typeFlag, objectRef);
+                    RubyClass actual = Context.GetClassOf(instance);
+                    if (actual != originClass) {
+                        throw RubyExceptions.CreateArgumentError("prepended class {0} differs from class {1}",
+                            extensionName, actual.GetDisplayName(Context, false).ToString());
+                    }
+                    _prependedBelow = true;
+                    return instance;
+                }
 
                 // MRI extends a user-marshaled object as soon as it is allocated, so that its
                 // #marshal_load already sees the module (see ReadUsingMarshalLoad).
@@ -2071,11 +2103,23 @@ namespace IronRuby.Builtins {
                     _pendingExtension = module;
                 }
                 object obj = ReadAnObject(typeFlag, objectRef);
-                if (typeFlag != 'U') {
+
+                // Only the 'e' record right inside this one says whether the origin marker is
+                // further in; anything else read meanwhile may have left the flag set.
+                bool prepend = typeFlag == 'e' && _prependedBelow;
+                if (prepend) {
+                    RubyUtils.RequireDefinableSingleton(obj);
+                    Context.GetOrCreateSingletonClass(obj).PrependModules(module);
+                } else if (typeFlag != 'U') {
                     ModuleOps.ExtendObject(module, obj);
                 }
+                _prependedBelow = prepend;
                 return obj;
             }
+
+            // Set by the 'e' record of an object's class, and passed out through the 'e' records
+            // around it: those name modules prepended to the object's singleton class.
+            private bool _prependedBelow;
 
             private RubyModule _pendingExtension;
 
