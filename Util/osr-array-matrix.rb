@@ -589,7 +589,11 @@ t('running loop: String#length by prepend') {
 # A thread that loads a library beside a running loop: 10,000 methods defined one by one. The loop must
 # neither be retired for it nor spend its time compiling (OsrLoopSite.StaleRebuildSpacing), and it is
 # compiled again once the definitions stop (IR_OSR_VERBOSE=1: "specialized" after the last "stale").
+# The thread redefines methods that exist and have been called: a fresh name invalidates nothing, and
+# the loop's copy would never go stale.
 class RdLib; end
+rd_lib = RdLib.new
+10_000.times { |k| RdLib.class_eval("def m#{k}; -1; end"); rd_lib.__send__(:"m#{k}") }
 def rd_lib_loop(a, flag)
   c = 0; seen = 0; after = 0
   while after < 3_000_000
@@ -605,5 +609,5 @@ t('running loop: 10,000 methods defined beside it') {
   flag = [0]
   th = Thread.new { 10_000.times { |k| RdLib.class_eval("def m#{k}; #{k}; end") }; flag[0] = 1 }
   r = rd_lib_loop([1, 2], flag); th.join
-  [r, RdLib.new.m9999]
+  [r, rd_lib.m0, RdLib.new.m9999]
 }
