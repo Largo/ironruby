@@ -553,24 +553,27 @@ t('running loop: Array#size from a trap handler') {
   r
 }
 class RdStop < StandardError; end
-def rd_spin(a)
+# The loop the exception left is the one entered again: the same site, bounded the second time.
+def rd_spin(a, n)
   c = 0
-  while true
+  i = 0
+  while i < n
     c += a.size
+    i += 1
   end
+  c
 end
 t('running loop: Array#size from a rescue, the loop entered again') {
   main = Thread.current
   th = Thread.new { sleep 0.05; main.raise(RdStop) }
   begin
-    rd_spin([1, 2])
+    rd_spin([1, 2], 2**62)
   rescue RdStop
     Array.class_eval { alias_method :__rd_size, :size; def size = 0 }
   ensure
     th.join
   end
-  flag = [1]
-  r = rd_size([1, 2], flag)
+  r = rd_spin([1, 2], 5000)
   Array.class_eval { alias_method :size, :__rd_size; remove_method :__rd_size }
   r
 }
