@@ -3992,8 +3992,9 @@ Dir.mktmpdir do |d|
   File.write(bad, ""x = 1\n"" * 49 + ""x = )\n"")
   begin; load bad; rescue SyntaxError => e; p e.message.start_with?(""#{bad}:50: ""), e.path == bad; end
   File.write(bad, ""# encoding: bogus\np 1\n"")
-  begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment"", e.backtrace.grep(/Parse/); end
+  begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment\n> 1 | # encoding: bogus\n    |             ^~~~~\n  2 | p 1\n"", e.backtrace.grep(/Parse/); end
 end
+begin; eval(""# coding: foo\n"", nil, 'm.rb', 3); rescue ArgumentError => e; p e.message; end
 begin; eval(""1\n1 +"", nil, 'q.rb', 3); rescue SyntaxError => e; p e.message, e.path; end
 begin; eval(""1 +"", nil, 'z.rb', -5); rescue SyntaxError => e; p e.message; end
 ", @"
@@ -4001,6 +4002,7 @@ true
 true
 true
 []
+""m.rb:3: unknown or invalid encoding in the magic comment\n> 3 | # coding: foo\n    |           ^~~\n""
 ""q.rb:4: syntax errors found\n  3 | 1\n> 4 | 1 +\n    |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n    |    ^ unexpected end-of-input; expected an expression after the operator\n""
 ""q.rb""
 ""z.rb:-5: syntax errors found\n> -5 | 1 +\n     |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n     |    ^ unexpected end-of-input; expected an expression after the operator\n""
