@@ -1025,6 +1025,7 @@ namespace IronRuby.Tests {
                 Marshal_LoadFloat1,
                 Marshal_SetIVars1,
                 Marshal_NameError1,
+                Marshal_LoadChecks1,
                 Integer_SqrtPowDigits1,
                 Prelude_DataStructErrors1,
                 Prelude_AliasNames1,

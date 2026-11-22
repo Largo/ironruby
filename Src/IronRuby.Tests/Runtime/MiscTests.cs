@@ -1856,13 +1856,9 @@ rescue ZoneFailure => e
   p e.class
 end
 
-# 2000-16-01: the month is out of range
+# 2000-16-01: a month past December is carried into the next year, as time_mload does
 bad = [0x80000000 | (100 << 14) | (15 << 10) | (1 << 5), 0].pack('VV')
-begin
-  Time.send(:_load, bad)
-rescue TypeError => e
-  p e.message
-end
+p Time.send(:_load, bad).utc
 ", @"
 2000-01-01 12:00:00 +0100
 true
@@ -1872,7 +1868,7 @@ true
 ""XST""
 ""XST""
 ZoneFailure
-""marshaled time format differ""
+2001-04-01 00:00:00 UTC
 ");
         }
 
@@ -3537,6 +3533,47 @@ true
 []
 []
 nil
+");
+        }
+
+        /// <summary>
+        /// Marshal.load's checks on what a dump names, as MRI's r_object makes them: a constant that is not a class is a
+        /// TypeError, _load is looked for first, an 'S' record needs a Struct (Range's members are begin, end, excl), and a
+        /// class's instance variables are not set. The modules prepended to a singleton class, the ruby2_keywords flag
+        /// of a Hash, and an array a _dump empties are dumped as MRI dumps them. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Marshal_LoadChecks1() {
+            TestOutput(@"
+require 'ruby4'
+class C3; def _dump(s) = ""foo""; end
+m = Marshal.dump(C3.new)
+p((Marshal.load(m) rescue $!))
+Object.send(:remove_const, :C3); C3 = nil
+p((Marshal.load(m) rescue $!))
+S1 = Struct.new(:a); s = Marshal.dump(S1.new(1))
+Object.send(:remove_const, :S1); S1 = Class.new
+p((Marshal.load(s) rescue $!))
+p((Marshal.load(""\x04\bS:\nRange\b:\x06a0:\x06b0:\x06c0"") rescue $!))
+class K; end
+p((Marshal.load(""\x04\bIc\x06K\x06:\a@ai\x06"") rescue $!)); p K.instance_variables
+module Mod1; end
+o = Object.new; o.singleton_class.prepend(Mod1)
+d = Marshal.dump(o); p d
+l = Marshal.load(d); p l.singleton_class.ancestors.first(2) == [Mod1, l.singleton_class]
+h = Hash.ruby2_keywords_hash({k: 1}); p Hash.ruby2_keywords_hash?(Marshal.load(Marshal.dump(h)))
+a = []; x = Object.new; def x._dump(l) = ($a.clear; ""x""); $a = a; a << x << nil
+p((Marshal.dump(a) rescue $!))
+", @"
+#<TypeError: class C3 needs to have method '_load'>
+#<TypeError: C3 does not refer to class/module>
+#<TypeError: class S1 not a struct>
+#<TypeError: struct Range not compatible (:a for :begin)>
+#<TypeError: can't override instance variable of class 'K'>
+[]
+""\x04\be:\tMod1e:\vObjecto;\x06\x00""
+true
+true
+#<RuntimeError: array modified during dump>
 ");
         }
 
