@@ -397,6 +397,9 @@ namespace IronRuby.Builtins {
             // IDictionaryOps.IsPairYieldOptimizable, which reads the arity) and enum_yield forces them
             // on the block: {1 => 2}.find(&->(k, v) { }) takes the pair apart, unlike group_by's.
             Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // The item is packed before the block runs, as MRI's enum_yield packs it: the block
+                // gets that Array and may change it, which must not change how the yield is counted.
+                object item = PackValues(args);
                 object blockResult;
                 if (predicate.YieldEnumValues(args, out blockResult)) {
                     result = blockResult;
@@ -404,7 +407,6 @@ namespace IronRuby.Builtins {
                 }
 
                 if (Protocols.IsTrue(blockResult)) {
-                    object item = PackValues(args);
                     result = item;
                     return selfBlock.Break(item);
                 }
@@ -565,6 +567,8 @@ namespace IronRuby.Builtins {
             object result = resultArray;
 
             Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 object blockResult;
                 if (predicate.YieldEnumValues(args, out blockResult)) {
                     result = blockResult;
@@ -573,7 +577,7 @@ namespace IronRuby.Builtins {
 
                 // Check if the result is what we expect (use true to select, false to reject)
                 if (Protocols.IsTrue(blockResult) == acceptingValue) {
-                    resultArray.Add(PackValues(args));
+                    resultArray.Add(item);
                 }
                 return null;
             }));
@@ -612,13 +616,16 @@ namespace IronRuby.Builtins {
             RubyRegex regex = (action != null) ? pattern as RubyRegex : null;
 
             Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // MRI's grep_iter_i hands enum_yield the count #each yielded: a pattern's #=== gets
+                // the packed Array and may change it, which must not change how the action is called.
+                int count = args.Count;
                 object item = PackValues(args);
                 bool matches = (regex != null)
                     ? RegexpOps.CaseCompare(stringTryCast, scope, regex, item)
                     : RubyOps.IsTrue(site.Target(site, pattern, item));
 
                 if (matches == accepting) {
-                    if (action != null && action.YieldEnumValues(args, out item)) {
+                    if (action != null && (count > 1 ? action.YieldForceBlockArg(item, out item) : action.YieldEnumValues(args, out item))) {
                         result = item;
                         return selfBlock.PropagateFlow(action, item);
                     }
@@ -927,13 +934,14 @@ namespace IronRuby.Builtins {
             object result = pair;
 
             Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 object blockResult;
                 if (predicate.YieldEnumValues(args, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
 
-                object item = PackValues(args);
                 if (Protocols.IsTrue(blockResult)) {
                     trueSet.Add(item);
                 } else {
@@ -967,6 +975,8 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.NoBlockGiven();
                 }
 
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 object key;
                 if (keySelector.YieldEnumValues(args, out key)) {
                     keyValuePairs = null;
@@ -974,7 +984,7 @@ namespace IronRuby.Builtins {
                     return selfBlock.PropagateFlow(keySelector, key);
                 }
 
-                keyValuePairs.Add(new KeyValuePair<object, object>(key, PackValues(args)));
+                keyValuePairs.Add(new KeyValuePair<object, object>(key, item));
                 return null;
             }));
 
@@ -1272,6 +1282,8 @@ namespace IronRuby.Builtins {
             bool dropping = true;
             object result = resultArray; 
             Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 if (dropping) {
                     object blockResult;
                     if (predicate.YieldEnumValues(args, out blockResult)) {
@@ -1283,7 +1295,7 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!dropping) {
-                    resultArray.Add(PackValues(args));
+                    resultArray.Add(item);
                 }
 
                 return null;
