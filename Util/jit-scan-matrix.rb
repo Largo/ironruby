@@ -427,7 +427,7 @@ class JdRd
   def state = [@index, @log, @other.n, @arr[0], @current]
 end
 class JdBox; attr_accessor :n; def initialize = (@n = 0); end
-%i[c_arr].each do |m|
+%i[c_ivar c_attr c_arr].each do |m|
   r = JdRd.new("ab\ncd" * 4)
   200.times { |i| r.index = -1 if r.current.nil?; r.input = nil if i == 150; (r.send(m) rescue nil) }
   Kernel.p [m, r.state]
