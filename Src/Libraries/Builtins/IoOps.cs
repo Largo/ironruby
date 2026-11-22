@@ -262,8 +262,22 @@ namespace IronRuby.Builtins {
             // original and then reopening it back from the copy works - which is the whole
             // point of saving a stream before redirecting it. Sharing the table entry meant
             // the copy and the original were the same descriptor, so the save was a no-op.
-            int duplicated = RubyIO.TryDuplicateDescriptor(source);
-            if (duplicated >= 0) {
+            // IO.popen(cmd, "r+") reads one pipe and writes another. MRI's copy dups both (the
+            // write half is a second IO tied to the first), so that the copy can close_write;
+            // duplicating only the reading pipe made it a read-only IO that refused to.
+            int duplexRead, duplexWrite;
+            Stream duplex = RubyIO.TryDuplicateDuplex(source, out duplexRead, out duplexWrite);
+            int duplicated = (duplex != null) ? -1 : RubyIO.TryDuplicateDescriptor(source);
+            if (duplex != null) {
+                if (duplexRead >= 0) {
+                    RubyProcess.SetCloseOnExec(duplexRead);
+                }
+                if (duplexWrite >= 0) {
+                    RubyProcess.SetCloseOnExec(duplexWrite);
+                }
+                stream = duplex;
+                descriptor = self.Context.AllocateFileDescriptor(stream);
+            } else if (duplicated >= 0) {
                 // dup(2) hands back a descriptor without FD_CLOEXEC whatever the original had;
                 // MRI's #dup sets it, so a child never inherits a copy nobody meant to give it.
                 RubyProcess.SetCloseOnExec(duplicated);
