@@ -2819,7 +2819,10 @@ namespace IronRuby.Builtins {
                     // A range reaching past U+FFFF has non-BMP members, which CharacterSet emits
                     // as surrogate pairs. ActionView's token pattern is one of these:
                     // [0-9A-Za-z_\u0080-\u{10ffff}-].
-                    set = CharacterSet.MakeRange(low, high, (high < 0x10000) ? set.Text + "-" + rangeEnd.Text : null);
+                    // The bounds are spelled as code units: .NET reads [\--0] as '-', '-' and '0'
+                    // rather than as the range from '-' to '0' Onigmo makes of [--0].
+                    set = CharacterSet.MakeRange(low, high, (high < 0x10000) ?
+                        "\\u" + low.ToString("x4", System.Globalization.CultureInfo.InvariantCulture) + "-\\u" + high.ToString("x4", System.Globalization.CultureInfo.InvariantCulture) : null);
                 }
 
                 result = result.Union(set);
