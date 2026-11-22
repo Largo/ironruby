@@ -203,4 +203,12 @@ r = []
 3.times { r << A22.new.k << B22.new.k << A22.new.instance_eval('K rescue :ne', 'k.rb', 1) << A22.class_eval('K', 'k.rb', 1) << B22.class_eval('K', 'k.rb', 1) }
 puts "22. constants, one key: #{r.inspect}"
 
+# 23. a class body in eval'd text, hot: its frame in a backtrace, through an ensure, and a value out of it
+def m23r; raise ArgumentError; ensure; $z23 = 2; end
+def m23; eval "class ::C23\n begin\n  m23r\n ensure\n  $z23 = 1\n end\nend"; end
+def t23; m23; rescue => e; e.backtrace.first(3).map { |l| l[/:\d+:in '[^']*'/] }; end
+r = 300.times.map { t23 }
+v = 300.times.map { eval("class C23; [self, 1]; end") }
+puts "23. class body: #{r.uniq.inspect} #{r.size} #{v.uniq.inspect}"
+
 puts 'end'
