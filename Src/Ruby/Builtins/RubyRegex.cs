@@ -1592,9 +1592,21 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ Inspect() {
+            return Inspect(null);
+        }
+
+        /// <param name="resultEncoding">
+        /// The encoding the text is meant for, Encoding.default_internal or else default_external
+        /// (rb_reg_desc's resenc), or null to write the pattern's characters as they are.
+        /// </param>
+        public MutableString/*!*/ Inspect(RubyEncoding resultEncoding) {
             MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
             result.Append('/');
-            AppendEscapeForwardSlash(result, _pattern);
+            if (resultEncoding != null) {
+                AppendForResultEncoding(result, _pattern, Encoding, resultEncoding);
+            } else {
+                AppendEscapeForwardSlash(result, _pattern);
+            }
             result.Append('/');
             AppendOptionString(result, true);
             if ((_options & RubyRegexOptions.FIXED) != 0) {
@@ -1831,6 +1843,98 @@ namespace IronRuby.Builtins {
                 }
             }
             result.Append(pattern, runStart, end - runStart);
+        }
+
+        /// <summary>
+        /// MRI's rb_reg_expr_str as rb_reg_desc (Regexp#inspect) calls it, with the encoding the
+        /// result is meant for. The pattern is copied as it is only when it is valid, its ASCII
+        /// characters are all printable and none is a '/', and every other character is in that
+        /// encoding already. Otherwise every character is looked at, and a non-ASCII one is escaped
+        /// even when it is in the result's encoding: /あ\// inspects as "/\u3042\//" under UTF-8 too.
+        /// It is \uXXXX (\u{XXXXX}) in a Unicode regexp, and in any other \xNN or \x{NNNN}, the
+        /// code MRI reads off its bytes. An invalid byte is \xNN, a '/' "\/", an ASCII character
+        /// that is neither printable nor a space \xNN, and a backslash goes out together with the
+        /// character after it, whatever that is.
+        /// </summary>
+        private static void AppendForResultEncoding(MutableString/*!*/ result, MutableString/*!*/ pattern,
+            RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding) {
+
+            if (!NeedsEscapingFor(pattern, encoding, resultEncoding)) {
+                result.Append(pattern);
+                return;
+            }
+
+            bool unicode = encoding.HasUnicodeCodePoints;
+            bool afterBackslash = false;
+            var characters = pattern.GetCharacters();
+            while (characters.MoveNext()) {
+                var current = characters.Current;
+                if (afterBackslash) {
+                    result.Append(current.ToMutableString(pattern.Encoding));
+                    afterBackslash = false;
+                } else if (!current.IsValid) {
+                    foreach (byte b in current.Invalid) {
+                        AppendHexByte(result, b);
+                    }
+                } else if (current.Codepoint < 0x80) {
+                    int c = current.Codepoint;
+                    if (c == '\\') {
+                        result.Append('\\');
+                        afterBackslash = true;
+                    } else if (c == '/') {
+                        result.Append("\\/");
+                    } else if (c >= 0x20 && c < 0x7f || c >= '\t' && c <= '\r') {
+                        result.Append((char)c);
+                    } else {
+                        AppendHexByte(result, c);
+                    }
+                } else if (unicode) {
+                    // rb_str_buf_cat_escaped_char
+                    int c = current.Codepoint;
+                    result.Append(c < 0x10000 ? "\\u" + c.ToString("X4", System.Globalization.CultureInfo.InvariantCulture) :
+                        "\\u{" + c.ToString("X", System.Globalization.CultureInfo.InvariantCulture) + "}");
+                } else {
+                    // The code of a character of EUC-JP, Shift_JIS, GB18030... is its bytes read as
+                    // one big-endian number (mbc_to_code), and of a single byte encoding's the byte.
+                    long code = 0;
+                    foreach (byte b in current.ToMutableString(pattern.Encoding).ToByteArray()) {
+                        code = (code << 8) | b;
+                    }
+                    if (code < 0x100) {
+                        AppendHexByte(result, (int)code);
+                    } else {
+                        result.Append("\\x{").Append(code.ToString("X", System.Globalization.CultureInfo.InvariantCulture)).Append('}');
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// rb_reg_expr_str's first pass: whether the pattern can be copied as it is.
+        /// </summary>
+        private static bool NeedsEscapingFor(MutableString/*!*/ pattern, RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding) {
+            if (!encoding.IsAsciiIdentity || pattern.ContainsInvalidCharacters()) {
+                return true;
+            }
+            if (encoding != resultEncoding && !pattern.IsAscii()) {
+                return true;
+            }
+            return pattern.IndexOf('/') >= 0 || HasUnprintableAscii(pattern);
+        }
+
+        private static bool HasUnprintableAscii(MutableString/*!*/ pattern) {
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+                if (c < 0x20 || c == 0x7f) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static void AppendHexByte(MutableString/*!*/ result, int b) {
+            result.Append("\\x").Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
         }
 
         #endregion

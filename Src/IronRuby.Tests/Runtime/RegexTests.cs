@@ -667,6 +667,41 @@ fragment: [16, #<Encoding:US-ASCII>, true]
 fragments: [RegexpError, ""encoding mismatch in dynamic regexp : US-ASCII and UTF-8""]
 ");
         }
+
+        /// <summary>
+        /// Regexp#inspect writes for the default internal encoding, or else the default external one
+        /// (rb_reg_desc), as String#inspect does: under LANG=C, Regexp.new("\u3042").inspect is
+        /// "/\\u3042/", not the character. A pattern that has to be escaped at all - a '/' in it, or
+        /// an unprintable ASCII character - has every non-ASCII character escaped, even one the result
+        /// could hold: \uXXXX in a Unicode regexp, \x{NNNN} (its bytes) in EUC-JP, \xNN for a byte.
+        /// </summary>
+        public void Regex_InspectResultEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t(ext, int = nil)
+  Encoding.default_external = ext
+  Encoding.default_internal = int
+  rs = [Regexp.new(""\u3042""), Regexp.new(""\u3042/""), Regexp.new(""\u{1F600}\x01""), Regexp.new(""\\\u3042""),
+        Regexp.new(""\xA4\xA2/"".b.force_encoding(""EUC-JP"")), Regexp.new(""\xA4\xA2"".b.force_encoding(""EUC-JP"")),
+        Regexp.new(""\xE9"".b.force_encoding(""Windows-1252"")), Regexp.new(""a\x80"".b), Regexp.new(""\u3042"", Regexp::IGNORECASE)]
+  puts ""#{ext} #{int}: "" + rs.map { |r| s = r.inspect; s.ascii_only? ? s : ""<#{s.encoding} #{s.b.unpack1('H*')}>"" }.join(' ')
+ensure
+  Encoding.default_internal = nil
+  Encoding.default_external = 'UTF-8'
+end
+t('UTF-8')
+t('US-ASCII')
+t('EUC-JP')
+t('BINARY')
+t('US-ASCII', 'UTF-8')
+", @"
+UTF-8 : <UTF-8 2fe381822f> /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ /a\x80/ <UTF-8 2fe381822f69>
+US-ASCII : /\u3042/ /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ /a\x80/ /\u3042/i
+EUC-JP : /\u3042/ /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// <EUC-JP 2fa4a22f> /\xE9/ /a\x80/ /\u3042/i
+BINARY : /\u3042/ /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ <ASCII-8BIT 2f61802f> /\u3042/i
+US-ASCII UTF-8: <UTF-8 2fe381822f> /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ /a\x80/ <UTF-8 2fe381822f69>
+");
+        }
     }
 }
 
