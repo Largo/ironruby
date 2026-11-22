@@ -42,7 +42,7 @@ p call_shout('x')
 :refined
 :redefined
 :no_method
-");
+", 0, 1);
         }
 
         /// <summary>

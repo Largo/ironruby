@@ -157,7 +157,40 @@ ARGF_CLASS = Class.new do
   alias_method :readline, :__ir_argf_readline__
   public :gets, :readline
 
+  # MRI's rb_io_readlines and rb_io_each_line refuse a limit of 0, which would read empty lines
+  # for ever; the arguments are read as extract_getline_args reads them: one is the separator
+  # unless it is not a String (or nil), two are the separator and the limit. The limit is
+  # converted here, once, and the arguments answered carry the Integer, so that the
+  # #gets of every line does not call its #to_int again (MRI converts it once a file).
+  def __argf_check_limit__(args, name)
+    n = args.last.is_a?(::Hash) ? args.size - 1 : args.size
+    at = case n
+         when 1 then (args[0].nil? || args[0].respond_to?(:to_str)) ? nil : 0
+         when 2 then 1
+         end
+    return args if at.nil? || args[at].nil?
+    # rb_to_int: a TypeError when there is no #to_int (a Symbol), and a private one is called
+    limit = args[at]
+    unless ::Integer === limit
+      unless __ir_responds_to__(limit, :to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(limit)} into Integer")
+      end
+      converted = limit.__send__(:to_int)
+      unless ::Integer === converted
+        ::Kernel.raise(::TypeError,
+          "can't convert #{limit.class} to Integer (#{limit.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
+      end
+      limit = converted
+    end
+    raise ::ArgumentError, "invalid limit: 0 for #{name}" if limit == 0
+    args = args.dup
+    args[at] = limit
+    args
+  end
+  private :__argf_check_limit__
+
   def readlines(*args)
+    args = __argf_check_limit__(args, "readlines")
     result = []
     while (line = gets(*args))
       result << line
@@ -168,6 +201,7 @@ ARGF_CLASS = Class.new do
 
   def each_line(*args)
     return to_enum(__callee__, *args) unless block_given?
+    args = __argf_check_limit__(args, "each_line")
     while (line = gets(*args))
       yield line
     end

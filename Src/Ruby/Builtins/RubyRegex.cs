@@ -1437,6 +1437,14 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ AppendTo(MutableString/*!*/ result) {
+            return AppendTo(result, true);
+        }
+
+        /// <param name="escapeSlash">
+        /// False for Regexp.union, which MRI builds with rb_reg_str_with_term(re, -1): no terminator,
+        /// so a "/" in the pattern is not escaped.
+        /// </param>
+        public MutableString/*!*/ AppendTo(MutableString/*!*/ result, bool escapeSlash) {
             Assert.NotNull(result);
 
             // MRI hoists the options of a group that spans the whole pattern into the (?...) it
@@ -1452,7 +1460,11 @@ namespace IronRuby.Builtins {
             }
             AppendOptionString(result, options, false);
             result.Append(':');
-            AppendEscapeForwardSlash(result, pattern);
+            if (escapeSlash) {
+                AppendEscapeForwardSlash(result, pattern);
+            } else {
+                AppendPatternPiece(result, pattern, 0, pattern.GetCharCount());
+            }
             result.Append(')');
             return result;
         }
@@ -1465,10 +1477,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static bool TryHoistWholePatternGroup(ref MutableString/*!*/ pattern, ref RubyRegexOptions options) {
             int length = pattern.GetCharCount();
-            if (length < 4 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
-                return false;
-            }
-            if (FindGroupEnd(pattern, length) != length - 1) {
+            if (length < 3 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
                 return false;
             }
 
@@ -1505,7 +1514,15 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if (i >= length - 1 || pattern.GetChar(i) != ':') {
+            // A leading "(?opts)" sets the options for the rest of the pattern, and MRI's
+            // rb_reg_str_with_term folds it in the same way: /(?i)foo/ is "(?i-mx:foo)".
+            if (i > 2 && i < length && pattern.GetChar(i) == ')') {
+                options = hoisted;
+                pattern = pattern.GetSlice(i + 1, length - i - 1);
+                return true;
+            }
+
+            if (i >= length - 1 || pattern.GetChar(i) != ':' || FindGroupEnd(pattern, length) != length - 1) {
                 return false;
             }
 
@@ -1516,22 +1533,30 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// The index of the ')' closing the group the pattern opens with, or -1. A '\' escapes
-        /// whatever follows it and parentheses inside a character class are literal.
+        /// whatever follows it and parentheses inside a character class are literal. Classes nest,
+        /// and a ']' straight after '[' or '[^' is a member of its class when another ']' follows
+        /// (Onigmo's fetch_token_in_cc): "(?i:[])]a)" is one group.
         /// </summary>
         private static int FindGroupEnd(MutableString/*!*/ pattern, int length) {
             int depth = 0;
-            bool inCharacterClass = false;
+            int classDepth = 0;
 
             for (int i = 0; i < length; i++) {
                 char c = pattern.GetChar(i);
                 if (c == '\\') {
                     i++;
-                } else if (inCharacterClass) {
-                    if (c == ']') {
-                        inCharacterClass = false;
-                    }
                 } else if (c == '[') {
-                    inCharacterClass = true;
+                    classDepth++;
+                    if (i + 1 < length && pattern.GetChar(i + 1) == '^') {
+                        i++;
+                    }
+                    if (i + 1 < length && pattern.GetChar(i + 1) == ']' && pattern.IndexOf(']', i + 2) >= 0) {
+                        i++;
+                    }
+                } else if (classDepth > 0) {
+                    if (c == ']') {
+                        classDepth--;
+                    }
                 } else if (c == '(') {
                     depth++;
                 } else if (c == ')') {
@@ -1600,14 +1625,34 @@ namespace IronRuby.Builtins {
                 Debug.Assert(i < patternLength);
                 Debug.Assert(pattern.GetChar(i) == '/');
 
-                result.Append(pattern, first, i - first);
+                AppendPatternPiece(result, pattern, first, i - first);
                 result.Append('\\');
                 first = i; // include forward slash in the next append
                 i = SkipToUnescapedForwardSlash(pattern, patternLength, i + 1);
             }
 
-            result.Append(pattern, first, patternLength - first);
+            AppendPatternPiece(result, pattern, first, patternLength - first);
             return result;
+        }
+
+        // rb_reg_expr_str writes a character that is neither printable nor a space as \xHH, so a
+        // NUL or an ESC in the pattern shows as "\x00" or "\x1B" in #to_s and #inspect. A backslash
+        // and the character after it are copied as they are: "\\\e" (a backslash and an ESC) stays
+        // an escaped ESC, which compiles to the same pattern, where "\\\x1B" would not.
+        private static void AppendPatternPiece(MutableString/*!*/ result, MutableString/*!*/ pattern, int start, int count) {
+            int end = start + count;
+            int runStart = start;
+            for (int i = start; i < end; i++) {
+                char c = pattern.GetChar(i);
+                if (c == '\\' && i + 1 < end) {
+                    i++;
+                } else if (c < 0x20 && (c < '\t' || c > '\r') || c == 0x7f) {
+                    result.Append(pattern, runStart, i - runStart);
+                    result.Append("\\x").Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                    runStart = i + 1;
+                }
+            }
+            result.Append(pattern, runStart, end - runStart);
         }
 
         #endregion

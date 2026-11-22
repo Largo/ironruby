@@ -127,6 +127,7 @@ namespace IronRuby.Builtins {
         private static readonly int O_CLOEXEC = IOModeNative.CloseOnExec;
         private const int F_GETFD = 1;
         private const int F_SETFD = 2;
+        private static readonly int F_DUPFD_CLOEXEC = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 67 : 1030;
         private const int FD_CLOEXEC = 1;
         private const int X_OK = 1;
         private const int EINTR = 4;
@@ -215,6 +216,146 @@ namespace IronRuby.Builtins {
         private static extern int SysFileActionsAddInherit(IntPtr actions, int fd);
 
         private static readonly bool IsMac = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+
+        /// <summary>
+        /// The prelude lists the redirections in the order the options hash gave them, but a
+        /// dup2 whose source is another redirection's target has to run before that target is
+        /// overwritten: { r1 => w0, w0 => r1 } swaps two descriptors, and done in hash order
+        /// both end up the same pipe end. This is MRI's run_exec_dup2: a pair goes once no
+        /// pending pair still reads its target, and a cycle is broken by copying one source to
+        /// a spare descriptor first. MRI's order follows: the plain dup2s, then the closes, the
+        /// opens (MRI opens those in the parent, so a path is relative to its directory), the
+        /// [:child, fd] dup2s, which name descriptors as the redirections left them (the
+        /// prelude marks them with a fourth element), and chdir last.
+        /// </summary>
+        private static RubyArray OrderActions(RubyContext context, RubyArray actions, bool inProcess) {
+            if (actions == null) {
+                return null;
+            }
+
+            var pending = new List<int[]>();
+            var used = new HashSet<int>();
+            var closes = new RubyArray();
+            var opens = new RubyArray();
+            var children = new RubyArray();
+            var chdirs = new RubyArray();
+            foreach (var item in actions) {
+                var action = (RubyArray)item;
+                switch (ToInt(action[0])) {
+                    case ActionDup2:
+                        if (action.Count > 3) {
+                            children.Add(action);
+                        } else {
+                            pending.Add(new[] { ToInt(action[1]), ToInt(action[2]) });
+                        }
+                        used.Add(ToInt(action[1]));
+                        used.Add(ToInt(action[2]));
+                        break;
+                    case ActionClose:
+                        closes.Add(action);
+                        used.Add(ToInt(action[1]));
+                        break;
+                    case ActionChdir:
+                        chdirs.Add(action);
+                        break;
+                    default:
+                        opens.Add(action);
+                        used.Add(ToInt(action[1]));
+                        break;
+                }
+            }
+
+            var result = new RubyArray();
+            int spare = -1;
+            while (pending.Count > 0) {
+                int ready = pending.FindIndex(pair =>
+                    pair[0] == pair[1] || !pending.Exists(other => other != pair && other[1] == pair[0]));
+
+                if (ready < 0) {
+                    // Every target left is still somebody's source: a cycle. Copy one source
+                    // aside and let its readers take the copy, which frees its own slot.
+                    int source = pending[0][1];
+                    if (spare < 0 && inProcess) {
+                        // __exec__ runs the actions in this process, where another thread could
+                        // open a descriptor that was free a moment ago; MRI's dup allocates the
+                        // copy and makes it in one step, and so does F_DUPFD here, above every
+                        // descriptor the actions name.
+                        spare = LibcVariadic.Fcntl(source, F_DUPFD_CLOEXEC, MaxOf(used) + 1);
+                        if (spare < 0 && LastErrno() == EINVAL) {
+                            // the actions name the last descriptor RLIMIT_NOFILE allows, so there
+                            // is nothing above them: take the lowest free one, as MRI's dup does
+                            spare = LowSpareDescriptor(source, used);
+                        }
+                        if (spare < 0) {
+                            throw RubyExceptions.CreateErrno(context, LastErrno(), null);
+                        }
+                    } else {
+                        if (spare < 0) {
+                            spare = SpareDescriptor(used);
+                        }
+                        result.Add(new RubyArray { ActionDup2, spare, source });
+                    }
+                    foreach (var pair in pending) {
+                        if (pair[1] == source) {
+                            pair[1] = spare;
+                        }
+                    }
+                    continue;
+                }
+
+                int[] next = pending[ready];
+                pending.RemoveAt(ready);
+                result.Add(new RubyArray { ActionDup2, next[0], next[1] });
+            }
+            if (spare >= 0) {
+                result.Add(new RubyArray { ActionClose, spare });
+            }
+
+            result.AddRange(closes);
+            result.AddRange(opens);
+            result.AddRange(children);
+            result.AddRange(chdirs);
+            return result;
+        }
+
+        /// <summary>
+        /// A copy of <paramref name="source"/> in the lowest descriptor the actions do not name.
+        /// Each copy that lands on a named one is kept open until the search ends, so that the
+        /// next F_DUPFD goes past it and no other thread can take the one finally answered.
+        /// </summary>
+        private static int LowSpareDescriptor(int source, HashSet<int>/*!*/ used) {
+            var held = new List<int>();
+            int fd;
+            while ((fd = LibcVariadic.Fcntl(source, F_DUPFD_CLOEXEC, 3)) >= 0 && used.Contains(fd)) {
+                held.Add(fd);
+            }
+            int errno = Marshal.GetLastWin32Error();
+            foreach (int copy in held) {
+                SysClose(copy);
+            }
+            Marshal.SetLastPInvokeError(errno);
+            return fd;
+        }
+
+        private static int MaxOf(HashSet<int>/*!*/ values) {
+            int max = 2;
+            foreach (int value in values) {
+                max = Math.Max(max, value);
+            }
+            return max;
+        }
+
+        /// <summary>
+        /// A descriptor that is closed in this process and named by no redirection, so that
+        /// the child (which starts with this process's table) can use it for a moment.
+        /// </summary>
+        private static int SpareDescriptor(HashSet<int>/*!*/ used) {
+            for (int fd = 3; ; fd++) {
+                if (!used.Contains(fd) && LibcVariadic.Fcntl(fd, F_GETFD, 0) < 0) {
+                    return fd;
+                }
+            }
+        }
 
         private static int ApplyActions(IntPtr fileActions, NativeStrings/*!*/ strings, RubyArray actions) {
             if (actions == null) {
@@ -339,6 +480,7 @@ namespace IronRuby.Builtins {
                 SysFileActionsInit(fileActions);
                 SysSpawnAttrInit(attributes);
 
+                actions = OrderActions(null, actions, false);
                 int error = ApplyActions(fileActions, strings, actions);
                 if (error != 0) {
                     return error;
@@ -418,6 +560,7 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(WindowsSpawn.Exec(context, file, argv, envp, actions));
             }
 
+            actions = OrderActions(context, actions, true);
             var strings = new NativeStrings();
             try {
                 IntPtr path = strings.Allocate(file);

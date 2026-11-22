@@ -189,6 +189,12 @@ namespace IronRuby.Runtime.Calls {
                 array.Add(splattee[nextItem++]);
             }
 
+            // the arguments past the parameters went to the rest array: the block gets its parameters
+            // only, as InvokeInternal gives them (a native block, the one of a symbol proc, relies on it)
+            if (args.Length > _parameterCount) {
+                Array.Resize(ref args, _parameterCount);
+            }
+
             return _block(param, self, args, Rest(array));
         }
     }

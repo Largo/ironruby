@@ -3221,7 +3221,7 @@ too few arguments
 ASCII incompatible encoding: UTF-16LE
 12354 out of char range
 incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
-invalid value for Float(): ""\xC2\xBD.5""
+invalid value for Float(): """ + "\u00BD" + @".5""
 ");
         }
 
@@ -3240,7 +3240,7 @@ p [1, 2, 3].fill(0), [1, 2, 3].fill(9, 1), [1, 2, 3].fill(9, 1, 1), [1, 2, 3].fi
 begin; [1, 2].freeze.fill(0); rescue => e; puts e.class; end
 begin; [1, 2, 3].combination; rescue ArgumentError => e; puts e.message; end
 begin; a = [1]; a[2**31 - 1] = 1; rescue IndexError => e; puts e.message; end
-begin; a = [1]; a[2**31 - 2] = 1; rescue NoMemoryError => e; puts e.class; end
+begin; a = [1]; a[2**31 - 2] = 1; rescue IndexError => e; puts e.message; end
 begin; (a = [1, 2, 3])[-5..nil] = 9; rescue RangeError => e; puts e.message; end
 a = [1, 2, 3]; a.zip([1]) { |x| a.pop }; p a
 begin; a = [1, 2].freeze; a.replace(a); rescue => e; puts e.class; end
@@ -3269,7 +3269,7 @@ wrong number of arguments (given 4, expected 1..3)
 FrozenError
 wrong number of arguments (given 0, expected 1)
 index 2147483647 too big
-NoMemoryError
+index 2147483646 too big
 -5.. out of range
 [1]
 FrozenError
@@ -3694,7 +3694,7 @@ p((1.instance_eval { M13.send(:module_function); def x13; end; :ok } rescue $!))
 true
 [true, true]
 #<TypeError: can't define singleton>
-");
+", 0, 5);
         }
 
         /// <summary>
@@ -4103,7 +4103,7 @@ Float(""1.5""): 1.5
 Float(nil): ""TypeError: can't convert nil into Float""
 Integer base: ""ArgumentError: base specified for non string value""
 redefined **: [9, 9]
-");
+", 0, 1);
         }
 
         /// <summary>

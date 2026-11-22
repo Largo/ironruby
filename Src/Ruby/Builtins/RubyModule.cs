@@ -608,7 +608,9 @@ namespace IronRuby.Builtins {
             using (Context.ClassHierarchyLocker()) {
                 EnumerateConstants((module, constName, value) => {
                     var m = value as RubyModule;
-                    if (m != null && m != this && m.HasTemporaryName) {
+                    // an anonymous one too (set_temporary_name(nil) made N anonymous again; naming
+                    // M then names M::N, as MRI's set_sub_temporary_name does)
+                    if (m != null && m != this && !m.HasPermanentName) {
                         if (nested == null) {
                             nested = new List<KeyValuePair<string, RubyModule>>();
                         }
@@ -2232,6 +2234,12 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public void AddMethodAlias(string/*!*/ newName, string/*!*/ oldName) {
+            // `alias foo foo' discards nothing: the entry stays the same body (and, aliased, `def foo'
+            // after it does not warn either)
+            if (newName != oldName) {
+                WarnMethodRedefinition(newName);
+            }
+
             RubyMemberInfo method;
             using (Context.ClassHierarchyLocker()) {
                 // MRI: aliases a super-forwarder not the real method.
@@ -2268,6 +2276,7 @@ namespace IronRuby.Builtins {
                 // aliases: MRI reports the module the alias was written in and the name the body
                 // was originally given.  DeclaringModule stays put so that `super' inside the
                 // body keeps resolving from where the body lives.
+                method.IsAliased = true;
                 var alias = method.Copy(flags, method.DeclaringModule);
                 alias.AliasOwner = this;
                 alias.OriginalName = method.OriginalName ?? oldName;
@@ -2287,6 +2296,69 @@ namespace IronRuby.Builtins {
             // written with, exactly as an alias does
             defined.OriginalName = method.OriginalName ?? sourceName;
             SetMethodNoEventNoLock(callerContext, name, defined);
+        }
+
+        /// <summary>
+        /// The warning MRI's rb_method_entry_make gives when `def', define_method, attr_* or alias
+        /// (re)defines a method here under $VERBOSE: "method redefined; discarding old foo", pointing
+        /// at the previous definition, when this module's own entry is replaced. An entry that was
+        /// aliased (alias_count), is itself an alias, or is undefined or a super forwarder
+        /// (ZSUPER) discards nothing worth warning about. Called before the new entry is stored,
+        /// outside the class hierarchy lock: a warning runs Warning.warn, which may be Ruby code.
+        /// <paramref name="sourcePath"/> is the file the new definition is written in, when known;
+        /// with <paramref name="sourceLine"/> the warning points there - at the `def' - rather
+        /// than at the line the frame last reported.
+        /// </summary>
+        public void WarnMethodRedefinition(string/*!*/ name, string sourcePath = null, int sourceLine = 0) {
+            if (_context.Loader.IsLoadingCorePrelude || _context.Loader.IsIronRubyLibraryFile(sourcePath)) {
+                return;
+            }
+
+            // "redefining 'object_id' may cause serious problems" is WarnIfRedefiningCoreMethodNoLock's,
+            // given where every entry is stored
+            if (!(_context.Verbose is bool verbose && verbose)) {
+                return;
+            }
+
+            RubyMemberInfo existing;
+            using (_context.ClassHierarchyLocker()) {
+                if (_methods == null || !_methods.TryGetValue(name, out existing) || existing == null || existing.IsUndefined ||
+                    existing.IsSuperForwarder || existing.IsAliased || existing.AliasOwner != null) {
+                    return;
+                }
+            }
+
+            string file = null;
+            int line = 0;
+            if (existing is RubyMethodInfo rubyMethod) {
+                file = rubyMethod.Document.FileName;
+                line = rubyMethod.SourceSpan.Start.Line;
+            } else if (existing is RubyLambdaMethodInfo lambdaMethod) {
+                file = lambdaMethod.Lambda.Dispatcher.SourcePath;
+                line = lambdaMethod.Lambda.Dispatcher.SourceLine;
+            }
+
+            // A method the prelude or an IronRuby library file wrote in Ruby is a C method in
+            // MRI, or not there at all until the library that replaces it is loaded (pp.rb's
+            // Kernel#pretty_print): either way no Ruby code of CRuby's is being discarded. A C#
+            // method replaced by an alias, define_method or attr_*, which do not say where they
+            // are written, is most likely the prelude's doing (`require "ruby4"' outside the
+            // core prelude, as IronRuby.Tests do), so that is not warned about either.
+            if (RubyStackTraceBuilder.IsInternalFile(file) || _context.Loader.IsIronRubyLibraryFile(file) ||
+                sourcePath == null && existing is RubyLibraryMethodInfo) {
+                return;
+            }
+
+            if (sourcePath != null && sourceLine > 0) {
+                _context.ReportWarningAt(sourcePath, sourceLine, "method redefined; discarding old " + name);
+            } else {
+                _context.ReportWarning("method redefined; discarding old " + name, true);
+            }
+
+            // a C# method, as a C one, has no previous definition to point at
+            if (file != null) {
+                _context.ReportWarningAt(file, line, "previous definition of " + name + " was here");
+            }
         }
 
         // Module#module_function/private/protected/public:
@@ -2551,19 +2623,24 @@ namespace IronRuby.Builtins {
         }
 
         private void WarnIfCoreMethod(string/*!*/ what, string/*!*/ name, bool includeInitialize) {
-            if (name == "object_id" || name == "__send__" || includeInitialize && name == Symbols.Initialize) {
+            if (IsCoreMethodName(name) || includeInitialize && name == Symbols.Initialize) {
                 Context.ReportWarning(String.Format("{0} '{1}' may cause serious problems", what, name));
             }
         }
 
+        // MRI's object_id, __id__ and __send__ (rb_method_entry_make, rb_undef, rb_remove_method_id)
+        private static bool IsCoreMethodName(string/*!*/ name) {
+            return name == "object_id" || name == "__id__" || name == "__send__";
+        }
+
         /// <summary>
-        /// MRI's rb_method_entry_make: a new entry for object_id or __send__ that is not a C function
+        /// MRI's rb_method_entry_make: a new entry for object_id, __id__ or __send__ that is not a C function
         /// (a def, define_method, alias, attr_reader, visibility change, undef) warns when the class
         /// already has the method, defined or undefined, itself or from an ancestor. An alias is never
         /// a C function there, though here it shares the aliased method's info.
         /// </summary>
         private void WarnIfRedefiningCoreMethodNoLock(string/*!*/ name, RubyMemberInfo/*!*/ method) {
-            if ((name != "object_id" && name != "__send__") || method.IsHidden
+            if (!IsCoreMethodName(name) || method.IsHidden
                 || method.AliasOwner == null && (method is RubyMethodGroupBase || method is RubyCustomMethodInfo)) {
                 return;
             }
@@ -3399,7 +3476,14 @@ namespace IronRuby.Builtins {
                             }
                         }
                     } else if (singletonMethods) {
-                        if (!inherited && module != this || classOwned.Contains(module)) {
+                        if (!inherited) {
+                            // only the singleton class's own: a module prepended to it comes
+                            // first in the walk and is passed over (Bug #8044)
+                            if (seenSelf) {
+                                return true;
+                            }
+                            seenSelf = ReferenceEquals(module, this);
+                        } else if (classOwned.Contains(module)) {
                             return true;
                         }
                     } else {
@@ -3407,7 +3491,8 @@ namespace IronRuby.Builtins {
                     }
 
                 } else if (!visited.ContainsKey(name)) {
-                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this))) {
+                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this)) ||
+                        singletonMethods && !inherited && !ReferenceEquals(module, this)) {
                         // a prepended module's member: not this module's, and it must not hide
                         // the one this module defines under the same name
                         return false;

@@ -58,7 +58,9 @@ namespace IronRuby.Builtins {
         }
 
         // Enumerable#group_by over a plain list (see IsPlainList): the prelude's loop with the
-        // result Hash filled in directly, as MRI's group_by_i does.
+        // result Hash filled in directly, as MRI's group_by_i does. Array#each yields one value
+        // per element, so enum_yield yields it plainly: a lambda is not forced to take an Array
+        // element apart.
         [RubyMethod("__list_group_by__", RubyMethodAttributes.PrivateInstance)]
         public static object ListGroupBy(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, [NotNull]IList/*!*/ self) {
             var result = new Hash(context);
@@ -106,6 +108,16 @@ namespace IronRuby.Builtins {
             hash.RequireNotFrozen();
             hash[CustomStringDictionary.NullToObj(key)] = count;
             return count;
+        }
+
+        // The prelude's Enumerable methods yield an element with this when #each yielded other
+        // than one value (one goes to block.call as it is): MRI's enum_yield, see
+        // BlockParam.YieldEnumValues.
+        [RubyMethod("__enum_yield__", RubyMethodAttributes.PrivateInstance)]
+        public static object EnumYield([NotNull]BlockParam/*!*/ block, object self, [NotNull]IList/*!*/ values) {
+            object result;
+            block.YieldEnumValues(values, out result);
+            return result;
         }
 
         #endregion
@@ -256,6 +268,8 @@ namespace IronRuby.Builtins {
                     }
                     object item = array[i];
                     if (predicate != null) {
+                        // rb_ary_all_p and friends yield the element with a plain rb_yield: a
+                        // lambda takes an Array element whole
                         object blockResult;
                         if (predicate.Yield(item, out blockResult)) {
                             return blockResult;
@@ -378,9 +392,16 @@ namespace IronRuby.Builtins {
             [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
             object result = Missing.Value;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            // MRI's enum_find iterates with a block flagged IFUNC_YIELD_OPTIMIZABLE, whatever block it
+            // was given, so Hash#each yields key and value as two values (see
+            // IDictionaryOps.IsPairYieldOptimizable, which reads the arity) and enum_yield forces them
+            // on the block: {1 => 2}.find(&->(k, v) { }) takes the pair apart, unlike group_by's.
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // The item is packed before the block runs, as MRI's enum_yield packs it: the block
+                // gets that Array and may change it, which must not change how the yield is counted.
+                object item = PackValues(args);
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldEnumValues(args, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -391,7 +412,7 @@ namespace IronRuby.Builtins {
                 }
 
                 return null;
-            }));
+            }, -3));
 
             if (result == Missing.Value) {
                 if (ifNone == Missing.Value || ifNone == null) {
@@ -545,9 +566,11 @@ namespace IronRuby.Builtins {
             RubyArray resultArray = new RubyArray();
             object result = resultArray;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldEnumValues(args, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -592,13 +615,17 @@ namespace IronRuby.Builtins {
             // the block shares; without one it matches without touching $~.
             RubyRegex regex = (action != null) ? pattern as RubyRegex : null;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // MRI's grep_iter_i hands enum_yield the count #each yielded: a pattern's #=== gets
+                // the packed Array and may change it, which must not change how the action is called.
+                int count = args.Count;
+                object item = PackValues(args);
                 bool matches = (regex != null)
                     ? RegexpOps.CaseCompare(stringTryCast, scope, regex, item)
                     : RubyOps.IsTrue(site.Target(site, pattern, item));
 
                 if (matches == accepting) {
-                    if (action != null && action.Yield(item, out item)) {
+                    if (action != null && (count > 1 ? action.YieldForceBlockArg(item, out item) : action.YieldEnumValues(args, out item))) {
                         result = item;
                         return selfBlock.PropagateFlow(action, item);
                     }
@@ -906,9 +933,11 @@ namespace IronRuby.Builtins {
             pair.Add(falseSet);
             object result = pair;
 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldEnumValues(args, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -941,13 +970,15 @@ namespace IronRuby.Builtins {
             object result = null;
 
             // Collect the key, value pairs
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 if (keySelector == null) {
                     throw RubyExceptions.NoBlockGiven();
                 }
 
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 object key;
-                if (keySelector.Yield(item, out key)) {
+                if (keySelector.YieldEnumValues(args, out key)) {
                     keyValuePairs = null;
                     result = key;
                     return selfBlock.PropagateFlow(keySelector, key);
@@ -1000,8 +1031,9 @@ namespace IronRuby.Builtins {
                 index += 1;
 
                 if (block != null) {
+                    // MRI's enum_yield_array: a row of one column is yielded as that one value
                     object blockResult;
-                    if (block.Yield(array, out blockResult)) {
+                    if (block.YieldEnumValues(array, out blockResult)) {
                         result = blockResult;
                         return selfBlock.PropagateFlow(block, blockResult);
                     }
@@ -1165,8 +1197,14 @@ namespace IronRuby.Builtins {
             if (count < 0) {
                 throw RubyExceptions.CreateArgumentError("attempt to take negative size");
             }
+            // MRI allocates the result up front (rb_ary_new_capa) and so refuses a count no array
+            // can hold (here, past the CLR's longest array); a large count that can be held is not worth reserving before #each says
+            // how many elements there are.
+            if (count > Array.MaxLength) {
+                throw RubyExceptions.CreateArgumentError("array size too big");
+            }
 
-            var result = new RubyArray(count);
+            var result = new RubyArray(Math.Min(count, 1024));
             if (count == 0) {
                 return result;
             }
@@ -1243,10 +1281,12 @@ namespace IronRuby.Builtins {
 
             bool dropping = true;
             object result = resultArray; 
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                // Packed before the block runs, which may change the Array it is given (see Find).
+                object item = PackValues(args);
                 if (dropping) {
                     object blockResult;
-                    if (predicate.Yield(item, out blockResult)) {
+                    if (predicate.YieldEnumValues(args, out blockResult)) {
                         result = blockResult;
                         return selfBlock.PropagateFlow(predicate, blockResult);
                     }
@@ -1286,38 +1326,46 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            List<object> items = (iterations > 1) ? new List<object>() : null;
+            // the values of each yield, which the later rounds yield again as MRI's cycle_i and
+            // enum_yield_array do
+            List<RubyArray> items = (iterations > 1) ? new List<RubyArray>() : null;
 
             // call "each" only in the first iteration:
             object result = null;
-            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
-                if (block.Yield(item, out result)) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                if (items != null) {
+                    items.Add(args);
+                }
+                if (block.YieldEnumValues(args, out result)) {
                     iterations = -1;
                     return selfBlock.PropagateFlow(block, result);
                 }
-                if (items != null) {
-                    items.Add(item);
-                }
                 return null;
             }));
+
+            // the block jumped out of the first round
+            if (iterations < 0) {
+                return result;
+            }
 
             // An empty collection has nothing to cycle over: MRI returns nil immediately.
             // Without this the iterations == Int32.MaxValue branch below spins forever,
             // since the inner foreach never runs and never breaks out.
             if (items == null || items.Count == 0) {
-                return result;
+                return null;
             }
 
             // the rest of the iterations read from cached values:
             while (iterations == Int32.MaxValue || --iterations > 0) {
-                foreach (var item in items) {
-                    if (block.Yield(item, out result)) {
+                foreach (var values in items) {
+                    if (block.YieldEnumValues(values, out result)) {
                         return result;
                     }
                 }
             }
 
-            return result;
+            // enum_cycle answers nil, not what the block last returned
+            return null;
         }
 
         #endregion

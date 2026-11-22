@@ -1585,6 +1585,16 @@ namespace IronRuby.Runtime {
             return EvaluateBlock(block, self, self, args, out result) ? result : defaultReturnValue;
         }
 
+        /// <summary>
+        /// The class #instance_eval evaluates a String in: the receiver's singleton class, or, for an Integer
+        /// or a Symbol, which can have none, the dummy singleton in front of its class (as for a block, below).
+        /// </summary>
+        public static RubyClass/*!*/ GetOrCreateEvalSingletonClass(RubyContext/*!*/ context, object self) {
+            return HasSingletonClass(self)
+                ? context.GetOrCreateSingletonClass(self)
+                : context.GetImmediateClassOf(self).GetDummySingletonClass();
+        }
+
         public static object EvaluateInSingleton(object self, BlockParam/*!*/ block, object[] args) {
             // MRI runs the block against anything and only refuses a `def' inside it, so the
             // question here is what the runtime can make a singleton of at all - not what user
@@ -2308,6 +2318,18 @@ namespace IronRuby.Runtime {
         public static Func<bool> AsyncExceptionRedirectHook;
 
         /// <summary>The exception parked for a thread, left in place. Null when there is none.</summary>
+        /// <summary>
+        /// Whether a Thread#kill of the thread has not reached it yet: it is parked, or waits behind a
+        /// parked Thread#raise. Once the thread has taken it, it is unwinding (MRI's "aborting").
+        /// </summary>
+        public static bool IsKillPending(Thread/*!*/ thread) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Exception e;
+                return (_pendingAsyncExceptions.TryGetValue(thread, out e) && e is ThreadExitSignal) ||
+                    _killsBehindRaise.Contains(thread);
+            }
+        }
+
         public static Exception PeekPendingAsyncException(Thread/*!*/ thread) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 Exception e;

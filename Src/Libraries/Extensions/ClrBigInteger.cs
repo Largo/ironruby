@@ -719,10 +719,14 @@ namespace IronRuby.Builtins {
         /// -1234567890987654321.remainder(13731)      #=> -6966
         /// </example>
         /// <returns>Fixnum or Bignum</returns>
-        /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes remainder</remarks>
+        /// <remarks>
+        /// MRI's int_remainder hands any other divisor to num_remainder (Numeric#remainder in the
+        /// prelude, under its alias): the coerced dividend's % and its sign, not its #remainder.
+        /// </remarks>
         [RubyMethod("remainder")]
         public static object Remainder(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "remainder", self, other);
+            var site = binaryOpSite.GetCallSite("__ir_num_remainder__");
+            return site.Target(site, self, other);
         }
 
         #endregion
