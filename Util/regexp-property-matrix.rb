@@ -74,6 +74,19 @@ names = %w[Alpha alpha ALPHA Alnum Blank Cntrl Digit Graph Lower Print Punct Spa
   end
   puts "#{e} names: #{known.join(' ')}"
 end
+# which properties count: one in a comment does not, as MRI's unescape_nonascii reads them
+COMMENTED = [
+  ['(?ax)a # \p{L}', 0], ['(?ux)a # \p{L}', 0], ['(?-x:a)# \p{L}', Regexp::EXTENDED], ['(?x:a)# \p{L}', 0],
+  ['a(?#\)\p{L})b', 0], ["(a(?x) # \\p{L}\n)# \\p{L}", 0], ["(a(?-x) # \\p{L}\n)# \\p{N}", Regexp::EXTENDED],
+  ["a # [\\p{L}\nb", Regexp::EXTENDED], ['(?=a)# \p{L}', Regexp::EXTENDED], ['(?<n>a)# \p{L}', Regexp::EXTENDED],
+  ['\((?x)# \p{L}', 0], ["(?:a(?x) # \\p{L}\n)# \\p{L}", 0], ['(?i:(?x)a)# \p{L}', 0], ['(?x:(?-x)a)# \p{L}', 0],
+  ["(?x:(?-x:a)# \\p{L}\n)", 0], ["(?x:a # \\p{L}\n)b", 0],
+]
+COMMENTED.each do |source, options|
+  t("commented #{source.inspect} #{options}") { d(Regexp.new(source.encode("US-ASCII"), options)) }
+  t("commented utf-8 #{source.inspect} #{options}") { d(Regexp.new(source, options)) }
+end
+
 t("error L") { Regexp.new('\p{L}'.encode('US-ASCII')) }
 t("error Hangul") { Regexp.new('a\P{Hangul}b'.encode('EUC-JP')) }
 t("error ^L") { Regexp.new('[\p{^L}]'.encode('ISO-8859-1')) }

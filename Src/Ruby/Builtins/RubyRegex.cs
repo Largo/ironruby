@@ -822,6 +822,7 @@ namespace IronRuby.Builtins {
         private static IEnumerable<string>/*!*/ PropertyNames(MutableString/*!*/ pattern, bool extended) {
             int length = pattern.GetCharCount();
             int inClass = 0;
+            var groups = new Stack<int>();
             for (int i = 0; i < length; i++) {
                 char c = pattern.GetChar(i);
                 if (c == '\\') {
@@ -854,26 +855,53 @@ namespace IronRuby.Builtins {
                     while (i < length && pattern.GetChar(i) != '\n') {
                         i++;
                     }
-                } else if (c == '(' && inClass == 0 && i + 2 < length && pattern.GetChar(i + 1) == '?') {
-                    if (pattern.GetChar(i + 2) == '#') {
-                        // a comment runs to the first ')'; a backslash in it escapes nothing
-                        while (i < length && pattern.GetChar(i) != ')') {
-                            i++;
+                } else if (c == '(' && inClass == 0) {
+                    if (i + 2 < length && pattern.GetChar(i + 1) == '?' && pattern.GetChar(i + 2) == '#') {
+                        // a comment runs to the first ')' that is not escaped
+                        for (i += 3; i < length && pattern.GetChar(i) != ')'; i++) {
+                            if (pattern.GetChar(i) == '\\') {
+                                i++;
+                            }
                         }
-                    } else {
-                        // (?x) and (?x:...) turn extended mode on, (?-x) off; for the rest of the
-                        // pattern here, where MRI scopes a group's to its group - close enough for
-                        // deciding whether a \p sits in a comment.
-                        bool on = true;
-                        for (int j = i + 2; j < length; j++) {
+                        continue;
+                    }
+                    // As MRI's unescape_nonascii: (?x) and (?-x) (the options a, d, u, i and m may
+                    // stand with x) turn extended mode on or off for the rest of the pattern, or of
+                    // the (?x:...) group around them; (?x:...) and (?-x:...) only inside their own
+                    // group, when they change it. Any other group leaves the mode alone, its end
+                    // included: -1 on the stack.
+                    int restore = -1;
+                    if (i + 1 < length && pattern.GetChar(i + 1) == '?') {
+                        bool on = true, inner = extended;
+                        int j = i + 2;
+                        for (; j < length; j++) {
                             char option = pattern.GetChar(j);
                             if (option == '-') {
                                 on = false;
                             } else if (option == 'x') {
-                                extended = on;
-                            } else if (option != 'i' && option != 'm') {
+                                inner = on;
+                            } else if ("imadu".IndexOf(option) < 0) {
                                 break;
                             }
+                        }
+                        if (j < length && pattern.GetChar(j) == ')') {
+                            // (?x): no group to come back from
+                            extended = inner;
+                            i = j;
+                            continue;
+                        }
+                        if (j < length && pattern.GetChar(j) == ':' && inner != extended) {
+                            restore = extended ? 1 : 0;
+                            extended = inner;
+                            i = j;
+                        }
+                    }
+                    groups.Push(restore);
+                } else if (c == ')' && inClass == 0) {
+                    if (groups.Count > 0) {
+                        int restore = groups.Pop();
+                        if (restore >= 0) {
+                            extended = restore == 1;
                         }
                     }
                 }
