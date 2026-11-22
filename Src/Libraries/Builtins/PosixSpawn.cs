@@ -228,7 +228,7 @@ namespace IronRuby.Builtins {
         /// [:child, fd] dup2s, which name descriptors as the redirections left them (the
         /// prelude marks them with a fourth element), and chdir last.
         /// </summary>
-        private static RubyArray OrderActions(RubyArray actions, bool inProcess) {
+        private static RubyArray OrderActions(RubyContext context, RubyArray actions, bool inProcess) {
             if (actions == null) {
                 return null;
             }
@@ -281,8 +281,13 @@ namespace IronRuby.Builtins {
                         // copy and makes it in one step, and so does F_DUPFD here, above every
                         // descriptor the actions name.
                         spare = LibcVariadic.Fcntl(source, F_DUPFD_CLOEXEC, MaxOf(used) + 1);
+                        if (spare < 0 && LastErrno() == EINVAL) {
+                            // the actions name the last descriptor RLIMIT_NOFILE allows, so there
+                            // is nothing above them: take the lowest free one, as MRI's dup does
+                            spare = LowSpareDescriptor(source, used);
+                        }
                         if (spare < 0) {
-                            throw RubyExceptions.CreateEBADF();
+                            throw RubyExceptions.CreateErrno(context, LastErrno(), null);
                         }
                     } else {
                         if (spare < 0) {
@@ -311,6 +316,25 @@ namespace IronRuby.Builtins {
             result.AddRange(children);
             result.AddRange(chdirs);
             return result;
+        }
+
+        /// <summary>
+        /// A copy of <paramref name="source"/> in the lowest descriptor the actions do not name.
+        /// Each copy that lands on a named one is kept open until the search ends, so that the
+        /// next F_DUPFD goes past it and no other thread can take the one finally answered.
+        /// </summary>
+        private static int LowSpareDescriptor(int source, HashSet<int>/*!*/ used) {
+            var held = new List<int>();
+            int fd;
+            while ((fd = LibcVariadic.Fcntl(source, F_DUPFD_CLOEXEC, 3)) >= 0 && used.Contains(fd)) {
+                held.Add(fd);
+            }
+            int errno = Marshal.GetLastWin32Error();
+            foreach (int copy in held) {
+                SysClose(copy);
+            }
+            Marshal.SetLastPInvokeError(errno);
+            return fd;
         }
 
         private static int MaxOf(HashSet<int>/*!*/ values) {
@@ -456,7 +480,7 @@ namespace IronRuby.Builtins {
                 SysFileActionsInit(fileActions);
                 SysSpawnAttrInit(attributes);
 
-                actions = OrderActions(actions, false);
+                actions = OrderActions(null, actions, false);
                 int error = ApplyActions(fileActions, strings, actions);
                 if (error != 0) {
                     return error;
@@ -536,7 +560,7 @@ namespace IronRuby.Builtins {
                 return ScriptingRuntimeHelpers.Int32ToObject(WindowsSpawn.Exec(context, file, argv, envp, actions));
             }
 
-            actions = OrderActions(actions, true);
+            actions = OrderActions(context, actions, true);
             var strings = new NativeStrings();
             try {
                 IntPtr path = strings.Allocate(file);
