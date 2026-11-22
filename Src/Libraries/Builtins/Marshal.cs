@@ -1710,11 +1710,16 @@ namespace IronRuby.Builtins {
                 if (theClass == null) {
                     return ReadString();
                 }
+                CheckLoad(theClass);
+                return _sites.Load.Target(_sites.Load, theClass, ReadString());
+            }
+
+            // r_object checks for _load before it reads the string, with or without instance variables.
+            private void CheckLoad(RubyClass/*!*/ theClass) {
                 if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
                         theClass.GetDisplayName(Context, false).ToString());
                 }
-                return _sites.Load.Target(_sites.Load, theClass, ReadString());
             }
 
             // MRI's TYPE_DATA: an object wrapping native data, rebuilt by #_load_data from the
@@ -1767,11 +1772,22 @@ namespace IronRuby.Builtins {
                 return ReadClassOrModule(typeFlag, Context.GetIdentifierEncoding().Encoding.GetString(name, 0, name.Length));
             }
 
-            private object/*!*/ ReadClassOrModule(int typeFlag, string/*!*/ name) {
+            // MRI's rb_path_to_class: a name that is not defined is an ArgumentError, one that is
+            // defined as something other than a class or module (C3 = nil) a TypeError.
+            private RubyModule/*!*/ ResolvePath(string/*!*/ name) {
                 RubyModule result;
-                if (!Context.TryGetModule(_globalScope, name, out result)) {
+                bool notModule;
+                if (!Context.TryGetModule(_globalScope, name, out result, out notModule)) {
+                    if (notModule) {
+                        throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", name);
+                    }
                     throw RubyExceptions.CreateArgumentError("undefined class/module {0}", name);
                 }
+                return result;
+            }
+
+            private object/*!*/ ReadClassOrModule(int typeFlag, string/*!*/ name) {
+                RubyModule result = ResolvePath(name);
 
                 bool isClass = result is RubyClass;
                 if (isClass && typeFlag == 'm') {
@@ -1861,6 +1877,9 @@ namespace IronRuby.Builtins {
                     // and _load is handed them along with it - that is how Time gets its zone and
                     // its offset back.
                     RubyClass theClass = ReadLoadableType();
+                    if (theClass != null) {
+                        CheckLoad(theClass);
+                    }
                     MutableString data = ReadString();
 
                     // The object itself is entered in the link table only once those instance
@@ -2227,12 +2246,7 @@ namespace IronRuby.Builtins {
 
             private object/*!*/ ReadOldModule() {
                 // Marshal format 4.6 and earlier wrote classes and modules with a single "M" tag.
-                string name = ReadString().ToString();
-                RubyModule result;
-                if (!Context.TryGetModule(_globalScope, name, out result)) {
-                    throw RubyExceptions.CreateArgumentError("undefined class/module {0}", name);
-                }
-                return result;
+                return ResolvePath(ReadString().ToString());
             }
 
             internal object Load() {

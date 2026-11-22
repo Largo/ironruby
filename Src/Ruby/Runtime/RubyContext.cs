@@ -2626,6 +2626,17 @@ namespace IronRuby.Runtime {
 
         // thread-safe:
         public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result) {
+            bool notModule;
+            return TryGetModule(autoloadScope, moduleName, out result, out notModule);
+        }
+
+        /// <summary>
+        /// <paramref name="notModule"/> tells the two failures of MRI's rb_path_to_class apart: a name
+        /// that is defined but is not a class or module (a TypeError there) from one that is not
+        /// defined (an ArgumentError).
+        /// </summary>
+        public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result, out bool notModule) {
+            notModule = false;
             using (ClassHierarchyLocker()) {
                 result = _objectClass;
                 int pos = 0;
@@ -2645,6 +2656,7 @@ namespace IronRuby.Runtime {
                     }
                     result = tmp.Value as RubyModule;
                     if (result == null) {
+                        notModule = true;
                         return false;
                     } else if (pos2 < 0) {
                         return true;
