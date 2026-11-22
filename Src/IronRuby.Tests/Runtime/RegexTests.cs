@@ -667,6 +667,58 @@ fragment: [16, #<Encoding:US-ASCII>, true]
 fragments: [RegexpError, ""encoding mismatch in dynamic regexp : US-ASCII and UTF-8""]
 ");
         }
+
+        /// <summary>
+        /// A non-ASCII byte right after a backslash, in a single byte encoding, does not pin the
+        /// regexp to the source's encoding (MRI's unescape_nonascii copies it "as is"), so
+        /// Regexp.new("\\\xFF".b) is US-ASCII and not fixed; it is compiled again in the encoding of
+        /// a non-ASCII string it is matched against, and fails where the byte is no character.
+        /// Util/regexp-escaped-byte-matrix.rb has the rest.
+        /// </summary>
+        public void Regex_EscapedByteEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def d(r) = [r.encoding, r.source.encoding, r.fixed_encoding?, r.options]
+r = Regexp.new(""\\\xFF"".b)
+t('escaped byte') { d(r) + [r.inspect.encoding, r =~ ""a"", r =~ ""\xFF"".b] }
+t('preceded') { d(Regexp.new(""a\\\xFF"".b)) }
+t('escaped backslash') { d(Regexp.new(""\\\\\xFF"".b)) }
+t('unescaped byte') { d(Regexp.new(""\xFF"".b)) }
+t('two bytes') { d(Regexp.new(""\\\xA4\xA2"".b)) }
+t('latin-1') { d(Regexp.new(""\\\xFF"".b.force_encoding(""ISO-8859-1""))) }
+t('euc-jp') { d(Regexp.new(""\\\xA4\xA2"".b.force_encoding(""EUC-JP""))) }
+t('euc-jp invalid') { Regexp.new(""\\\xFF"".b.force_encoding(""EUC-JP"")) }
+t('utf-8 invalid') { Regexp.new(""\\\xFF"".b.force_encoding(""UTF-8""), Regexp::IGNORECASE).encoding }
+t('noencoding') { d(Regexp.new(""\\\xFF"".b, Regexp::NOENCODING)) }
+t('noencoding latin-1') { Regexp.new(""\\\xFF"".b.force_encoding(""ISO-8859-1""), Regexp::NOENCODING) }
+t('fixedencoding') { d(Regexp.new(""\\\xFF"".b, Regexp::FIXEDENCODING)) }
+t('match latin-1') { Regexp.new(""\\\xFF"".b) =~ ""\xFF"".b.force_encoding(""ISO-8859-1"") }
+t('match utf-8') { Regexp.new(""\\\xFF"".b) =~ ""\u00FF"" }
+t('source again') { Regexp.new(r.source) }
+t('interpolated') { /#{r}/ }
+", @"
+escaped byte: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 0, #<Encoding:US-ASCII>, nil, 0]
+preceded: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 0]
+escaped backslash: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+unescaped byte: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+two bytes: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+latin-1: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 0]
+euc-jp: [#<Encoding:EUC-JP>, #<Encoding:EUC-JP>, true, 16]
+euc-jp invalid: [RegexpError, ""invalid multibyte character: /\\\xFF/""]
+utf-8 invalid: [RegexpError, ""invalid multibyte character: /\\\xFF/i""]
+noencoding: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 32]
+noencoding latin-1: [RegexpError, ""/.../n has a non escaped non ASCII character in non ASCII-8BIT script: /\\\xFF/""]
+fixedencoding: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+match latin-1: 0
+match utf-8: [ArgumentError, ""regexp preprocess failed: invalid multibyte character""]
+source again: [RegexpError, ""invalid multibyte character: /\\\xFF/""]
+interpolated: [ArgumentError, ""invalid multibyte character""]
+");
+        }
     }
 }
 

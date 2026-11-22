@@ -3302,6 +3302,15 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static MutableString/*!*/ InDynamicRegexEncoding(MutableString/*!*/ pattern, RubyRegexOptions options,
             params MutableString[]/*!*/ fragments) {
+            if ((options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED) {
+                // rb_reg_preprocess_dregexp: /n reads each fragment as BINARY, which one in another
+                // encoding can only be when it is ASCII only (and the message names no pattern)
+                foreach (var fragment in fragments) {
+                    if (fragment != null && fragment.Encoding != RubyEncoding.Binary && !fragment.IsAscii()) {
+                        throw new RegexpError("/.../n has a non escaped non ASCII character in non ASCII-8BIT script");
+                    }
+                }
+            }
             if ((options & RubyRegexOptions.EncodingMask) != 0) {
                 return pattern;
             }
@@ -3311,9 +3320,15 @@ namespace IronRuby.Runtime {
                 if (fragment == null) {
                     continue;
                 }
+                // MRI's rb_reg_preprocess_dregexp reads each fragment in its own encoding: one that
+                // is not valid there is refused, and a non-ASCII byte right after a backslash in a
+                // single byte encoding does not pin it (RubyRegex.HasLiteralNonAscii).
+                if (fragment.Encoding != RubyEncoding.Binary && fragment.ContainsInvalidCharacters()) {
+                    throw RubyExceptions.CreateArgumentError("invalid multibyte character");
+                }
                 RubyEncoding encoding;
                 bool isUnicode;
-                if (!fragment.IsAscii()) {
+                if (RubyRegex.HasLiteralNonAscii(fragment)) {
                     encoding = fragment.Encoding;
                 } else if (RubyRegex.HasNonAsciiEscape(fragment, out isUnicode)) {
                     encoding = isUnicode ? RubyEncoding.UTF8 : fragment.Encoding;

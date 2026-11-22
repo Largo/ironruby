@@ -95,9 +95,10 @@ namespace IronRuby.Builtins {
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [Keywords, Optional]object keywords) {
 
-            RubyRegex.RequireValidPattern(pattern);
             double? timeout = TakeTimeout(self.Context, ref options, keywords);
-            return new RubyRegex(pattern, MakeOptions(self.Context, options, null)) { Timeout = timeout };
+            RubyRegexOptions regexOptions = MakeOptions(self.Context, options, null);
+            RubyRegex.RequireValidPattern(pattern, regexOptions);
+            return new RubyRegex(pattern, regexOptions) { Timeout = timeout };
         }
 
         [RubyConstructor]

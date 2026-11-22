@@ -17,6 +17,7 @@ using System;
 using System.Diagnostics;
 using Microsoft.Scripting.Utils;
 using System.Text;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
@@ -31,6 +32,8 @@ namespace IronRuby.Builtins {
         private int _nonAsciiEscape = -1;
         // HasPropertyEscape(_pattern, extended), worked out once in the same way: -1 not yet, 0, 1.
         private int _hasProperty = -1;
+        // HasLiteralNonAscii(_pattern), worked out once in the same way: -1 not yet, 0, 1.
+        private int _literalNonAscii = -1;
         private RubyRegexOptions _options;
         private bool _hasGAnchor;
 
@@ -156,7 +159,9 @@ namespace IronRuby.Builtins {
             _cachedAstralRegex = null;
             _nonAsciiEscape = -1;
             _hasProperty = -1;
+            _literalNonAscii = -1;
 
+            RequireBinaryCompatibleSource(pattern, options);
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
                 _pattern = MutableString.CreateBinary(pattern.ToByteArray(), encoding).Freeze();
@@ -216,6 +221,14 @@ namespace IronRuby.Builtins {
                 throw new EncodingCompatibilityError(
                     "incompatible encoding regexp match (" + patternEncoding.InspectName + " regexp with " + input.Encoding.InspectName + " string)"
                 );
+            }
+
+            // MRI's rb_reg_prepare_re compiles a regexp that is not fixed again in the encoding of
+            // a non-ASCII string it is matched against. A US-ASCII one can still hold bytes that are
+            // not ASCII (HasLiteralNonAscii), and that fails when they are not characters there.
+            if (patternEncoding == RubyEncoding.Ascii && input.Encoding != RubyEncoding.Binary && !_pattern.IsAscii() &&
+                !input.IsAscii() && MutableString.CreateBinary(_pattern.ToByteArray(), input.Encoding).ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("regexp preprocess failed: invalid multibyte character");
             }
         }
 
@@ -636,7 +649,7 @@ namespace IronRuby.Builtins {
                 }
 
                 var encodingOptions = _options & RubyRegexOptions.EncodingMask;
-                if (encodingOptions == RubyRegexOptions.NONE && _pattern.IsAscii()) {
+                if (encodingOptions == RubyRegexOptions.NONE && !PatternHasLiteralNonAscii) {
                     // é is six ASCII characters that compile to one UTF-8 character, so the
                     // regexp is UTF-8 even though its source is ASCII only. (A \xNN or octal escape
                     // above 7 bits without /n is "invalid multibyte escape" in MRI; we don't raise,
@@ -655,7 +668,7 @@ namespace IronRuby.Builtins {
                     return RubyEncoding.Ascii;
                 }
 
-                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _) &&
+                if (encodingOptions == RubyRegexOptions.FIXED && !PatternHasLiteralNonAscii && !PatternHasNonAsciiEscape(out _) &&
                     !PatternHasProperty) {
                     return RubyEncoding.Ascii;
                 }
@@ -792,6 +805,51 @@ namespace IronRuby.Builtins {
             }
             isUnicode = cached == 2;
             return cached != 0;
+        }
+
+        private bool PatternHasLiteralNonAscii {
+            get {
+                int cached = _literalNonAscii;
+                if (cached < 0) {
+                    cached = HasLiteralNonAscii(_pattern) ? 1 : 0;
+                    _literalNonAscii = cached;
+                }
+                return cached != 0;
+            }
+        }
+
+        /// <summary>
+        /// Whether the pattern holds a non-ASCII character that pins the regexp to the encoding of
+        /// its source: MRI's unescape_nonascii sets the encoding when it meets one. A character
+        /// right after a backslash only counts when it is longer than one byte (the backslash goes
+        /// with it); a single non-ASCII byte there - which a BINARY, ISO-8859-1 or other single
+        /// byte source can hold, and Shift_JIS's half-width katakana are - is copied "as is" and
+        /// leaves the encoding unset, so Regexp.new("\\\xFF".b) is US-ASCII and not fixed.
+        /// A comment counts like anything else, as unescape_nonascii reads it the same way.
+        /// </summary>
+        internal static bool HasLiteralNonAscii(MutableString/*!*/ pattern) {
+            if (pattern.IsAscii()) {
+                return false;
+            }
+            // rb_reg_preprocess: an ASCII incompatible source pins its encoding, whatever it holds
+            if (!pattern.Encoding.IsAsciiIdentity) {
+                return true;
+            }
+
+            System.Text.Encoding encoding = pattern.Encoding.Encoding;
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+                if (c == '\\' && i + 1 < length) {
+                    char escaped = pattern.GetChar(++i);
+                    if (escaped >= 0x80 && (Char.IsSurrogate(escaped) || encoding.GetByteCount(new[] { escaped }) != 1)) {
+                        return true;
+                    }
+                } else if (c >= 0x80) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private bool PatternHasProperty {
@@ -1036,7 +1094,7 @@ namespace IronRuby.Builtins {
                     // which it does for a byte escape as much as for a literal non-ASCII character.
                     bool isUnicode;
                     // (Marshal keeps MRI's FIXEDENCODING bit for a /n regexp it was set on.)
-                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode) || PatternHasProperty ||
+                    return PatternHasLiteralNonAscii || PatternHasNonAsciiEscape(out isUnicode) || PatternHasProperty ||
                         (_options & RubyRegexOptions.FixedEncoding) != 0;
                 }
 
@@ -1570,11 +1628,12 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// MRI's rb_reg_prepare_enc: a /n regexp that has not pinned an encoding still matches a
-        /// non-ASCII string of another encoding, byte by byte, and warns that it does.
+        /// non-ASCII string of another encoding, byte by byte, and warns that it does - once it has
+        /// refused a broken string, which it does first.
         /// </summary>
         public void WarnHistoricalBinaryMatch(RubyContext/*!*/ context, MutableString/*!*/ str) {
             if ((_options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED && !IsFixedEncoding &&
-                str.Encoding != RubyEncoding.Binary && str.Encoding.IsAsciiIdentity && !str.IsAscii()) {
+                str.Encoding != RubyEncoding.Binary && str.Encoding.IsAsciiIdentity && !str.IsAscii() && !str.ContainsInvalidCharacters()) {
                 context.ReportWarning(String.Format("historical binary regexp match /.../n against {0} string", str.Encoding.Name));
             }
         }
@@ -1608,7 +1667,9 @@ namespace IronRuby.Builtins {
         // non-ASCII characters already carries the pattern's encoding.
         private MutableString/*!*/ InRegexEncoding(MutableString/*!*/ text) {
             var encoding = Encoding;
-            if (encoding.IsAsciiIdentity && text.Encoding != encoding && text.IsAscii()) {
+            // A US-ASCII regexp can still hold bytes that are not (HasLiteralNonAscii), and MRI
+            // tags the text US-ASCII all the same.
+            if (encoding.IsAsciiIdentity && text.Encoding != encoding && (text.IsAscii() || encoding == RubyEncoding.Ascii)) {
                 text.ForceEncoding(encoding);
             }
             return text;
@@ -1855,6 +1916,147 @@ namespace IronRuby.Builtins {
             if (pattern.Encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters()) {
                 throw new RegexpError("invalid multibyte character: /" + EscapeNonAsciiBytes(pattern) + "/");
             }
+        }
+
+        /// <summary>
+        /// RequireValidPattern for a pattern Regexp.new or Marshal is about to make a regexp of with
+        /// these options. MRI's rb_reg_initialize_str looks at /n first, and its message ends in the
+        /// pattern's options (rb_reg_error_desc).
+        /// </summary>
+        public static void RequireValidPattern(MutableString/*!*/ pattern, RubyRegexOptions options) {
+            RequireBinaryCompatibleSource(pattern, options);
+            if (pattern.Encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters()) {
+                throw CreatePatternError("invalid multibyte character", pattern, options);
+            }
+        }
+
+        // MRI's rb_reg_initialize_str: /n reads the source as BINARY, which a source in another
+        // encoding can only be when it is ASCII only.
+        private static void RequireBinaryCompatibleSource(MutableString/*!*/ pattern, RubyRegexOptions options) {
+            if ((options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED && pattern.Encoding != RubyEncoding.Binary &&
+                !pattern.IsAscii()) {
+                throw CreatePatternError("/.../n has a non escaped non ASCII character in non ASCII-8BIT script", pattern, options);
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_enc_reg_error_desc: the error, then the pattern between slashes as
+        /// rb_reg_expr_str writes it, then the options m, i and x it has on (but no n), all in the
+        /// pattern's encoding. The text has to be bytes, not CLR characters: rb_reg_expr_str
+        /// copies a backslash and the character after it as they are, a byte that is not a
+        /// character included.
+        /// </summary>
+        private static RegexpError/*!*/ CreatePatternError(string/*!*/ error, MutableString/*!*/ pattern, RubyRegexOptions options) {
+            var optionText = MutableString.CreateMutable(RubyEncoding.Binary);
+            AppendOptionString(optionText, options, true);
+
+            var bytes = new List<byte>();
+            AppendAscii(bytes, error + ": /");
+            AppendPatternDescription(bytes, pattern);
+            AppendAscii(bytes, "/" + optionText.ToString());
+
+            var result = new RegexpError(error + ": /" + EscapeNonAsciiBytes(pattern) + "/" + optionText.ToString());
+            RubyExceptionData.GetInstance(result).Message = MutableString.CreateBinary(bytes.ToArray(), pattern.Encoding);
+            return result;
+        }
+
+        private static void AppendAscii(List<byte>/*!*/ bytes, string/*!*/ text) {
+            foreach (char c in text) {
+                bytes.Add((byte)c);
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_reg_expr_str for a pattern that has to be escaped, which a pattern with bytes
+        /// that are not characters always has to be: a backslash goes out with the character after
+        /// it as they are; a byte that begins no character as \xHH; any other character outside
+        /// ASCII as the escape for its code point (\uHHHH or \u{HHHHH} in a Unicode encoding,
+        /// \xHH or \x{HHHH} in another); "/" as "\/", and an ASCII control character other than
+        /// a space as \xHH.
+        ///
+        /// A pattern whose characters are all valid is written as it is when it holds no "/" or
+        /// control character and its encoding is the one the text is for (the default internal
+        /// or external encoding, taken to be UTF-8 here, as no context is at hand).
+        /// </summary>
+        private static void AppendPatternDescription(List<byte>/*!*/ result, MutableString/*!*/ pattern) {
+            RubyEncoding encoding = pattern.Encoding;
+            byte[] bytes = pattern.ToByteArray();
+
+            bool needEscape = encoding != RubyEncoding.UTF8 || pattern.ContainsInvalidCharacters();
+            for (int j = 0; j < bytes.Length && !needEscape; j++) {
+                needEscape = bytes[j] == '/' || bytes[j] < 0x80 && !IsPrintableAscii(bytes[j]);
+            }
+            if (!needEscape) {
+                result.AddRange(bytes);
+                return;
+            }
+
+            int i = 0;
+            while (i < bytes.Length) {
+                byte b = bytes[i];
+                if (b == '\\' && i + 1 < bytes.Length) {
+                    int length = Math.Max(CharacterLength(bytes, i + 1, encoding), 1);
+                    for (int j = 0; j <= length; j++) {
+                        result.Add(bytes[i + j]);
+                    }
+                    i += 1 + length;
+                } else if (b >= 0x80) {
+                    int length = CharacterLength(bytes, i, encoding);
+                    if (length < 0) {
+                        AppendAscii(result, String.Format(CultureInfo.InvariantCulture, "\\x{0:X2}", b));
+                        i++;
+                        continue;
+                    }
+                    int codepoint;
+                    if (encoding.IsUnicodeEncoding) {
+                        string decoded = encoding.StrictEncoding.GetString(bytes, i, length);
+                        codepoint = Char.ConvertToUtf32(decoded, 0);
+                        AppendAscii(result, String.Format(CultureInfo.InvariantCulture, codepoint < 0x10000 ? "\\u{0:X4}" : "\\u{{{0:X}}}", codepoint));
+                    } else {
+                        codepoint = 0;
+                        for (int j = 0; j < length; j++) {
+                            codepoint = (codepoint << 8) | bytes[i + j];
+                        }
+                        AppendAscii(result, String.Format(CultureInfo.InvariantCulture, codepoint < 0x100 ? "\\x{0:X2}" : "\\x{{{0:X}}}", codepoint));
+                    }
+                    i += length;
+                } else if (b == '/') {
+                    AppendAscii(result, "\\/");
+                    i++;
+                } else if (IsPrintableAscii(b) || b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r') {
+                    result.Add(b);
+                    i++;
+                } else {
+                    AppendAscii(result, String.Format(CultureInfo.InvariantCulture, "\\x{0:X2}", b));
+                    i++;
+                }
+            }
+        }
+
+        private static bool IsPrintableAscii(byte b) {
+            return b >= 0x20 && b < 0x7f;
+        }
+
+        /// <summary>
+        /// The length of the character the bytes have at <paramref name="start"/> in the encoding
+        /// (MRI's rb_enc_precise_mbclen), or -1 if they begin none.
+        /// </summary>
+        private static int CharacterLength(byte[]/*!*/ bytes, int start, RubyEncoding/*!*/ encoding) {
+            if (bytes[start] < 0x80 || encoding == RubyEncoding.Binary) {
+                return 1;
+            }
+            int max = Math.Min(bytes.Length - start, 4);
+            for (int length = 1; length <= max; length++) {
+                try {
+                    int count = encoding.StrictEncoding.GetCharCount(bytes, start, length);
+                    if (count == 1 || count == 2 && Char.IsHighSurrogate(encoding.StrictEncoding.GetString(bytes, start, length)[0])) {
+                        return length;
+                    }
+                } catch (DecoderFallbackException) {
+                    // not a character yet
+                }
+            }
+            return -1;
         }
 
         // For an error message about bytes that do not decode: ASCII as is, the rest as \xHH.
