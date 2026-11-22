@@ -1350,7 +1350,7 @@ namespace IronRuby.Builtins {
         }
 
         private static long NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
-            if (encoding.IsUnicodeEncoding || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
+            if (encoding.HasUnicodeCodePoints || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
                 return codepoint;
             }
             // four bytes with the first above 0x7F - GB18030's, EUC-TW's - do not fit an int:
@@ -2230,13 +2230,107 @@ namespace IronRuby.Builtins {
                 resultEncoding = RubyEncoding.Ascii;
             }
 
+            // CESU-8 and UTF-8's carrier variants spell even their ASCII control characters as
+            // Unicode's, as UTF-8 does: "\x7F".force_encoding("CESU-8").inspect is "\u007F".
+            // Where the result is in the string's own encoding, its printable characters pass
+            // through as UTF-8's do.
+            if (self.Encoding.HasUnicodeCodePoints && self.Encoding != RubyEncoding.UTF8 && self.Encoding.IsAsciiIdentity) {
+                if (self.Encoding != resultEncoding) {
+                    return InspectForeignEncoding(self, resultEncoding);
+                }
+                // Read as characters first: an invalid byte is then an escape of its own (see
+                // EscapingEncoding). From the bytes, AppendRepresentation marks one with U+FFFF,
+                // and a valid U+FFFF in the string ("\xEF\xBF\xBF") came out as a backslash.
+                self.PrepareForCharacterRead();
+                return MutableString.Create(self.AppendRepresentation(new StringBuilder().Append('"'), null,
+                    MutableString.Escape.Special, '"').Append('"').ToString(), resultEncoding);
+            }
+
             if (!self.IsAscii() && self.Encoding != resultEncoding) {
                 return InspectForeignEncoding(self, resultEncoding);
+            }
+
+            // In the encoding the result is in, one of the ASCII compatible encodings without
+            // Unicode's tables (EUC-JP, Shift_JIS, Windows-1252...), MRI writes a character it
+            // calls printable as itself: "\xA4\xA2" in EUC-JP inspects as its own two bytes.
+            if (!self.IsAscii() && resultEncoding != RubyEncoding.UTF8 && resultEncoding != RubyEncoding.Binary &&
+                !resultEncoding.IsDummy && !resultEncoding.HasUnicodeCodePoints) {
+                return InspectInOwnEncoding(self, resultEncoding);
             }
 
             // Note that "self" could be a subclass of MutableString, but the return value should
             // always be just a MutableString
             return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), resultEncoding);
+        }
+
+        /// <summary>
+        /// rb_str_inspect for a string in the encoding of the result, an ASCII compatible one
+        /// without Unicode's tables: ASCII as everywhere else, a printable character
+        /// (RubyEncoding.IsInspectPrintable) as its own bytes, an invalid byte as \xNN, and a
+        /// character that is valid but not printable as \xNN (one byte) or \x{NNNN}.
+        /// </summary>
+        private static MutableString/*!*/ InspectInOwnEncoding(MutableString/*!*/ self, RubyEncoding/*!*/ encoding) {
+            var output = new List<byte>(self.GetByteCount() + 8);
+            var text = new StringBuilder();
+            text.Append('"');
+
+            // '#' is escaped only when what follows it would start an interpolation (see
+            // InspectForeignEncoding), so it waits for the next character.
+            bool pendingHash = false;
+            var characters = self.GetCharacters();
+            while (characters.MoveNext()) {
+                var current = characters.Current;
+                bool isAscii = current.IsValid && current.Codepoint < 0x80;
+                if (pendingHash) {
+                    int next = isAscii ? current.Codepoint : -1;
+                    if (next == '{' || next == '$' || next == '@') {
+                        text.Append('\\');
+                    }
+                    text.Append('#');
+                    pendingHash = false;
+                }
+                if (isAscii) {
+                    if (current.Codepoint == '#') {
+                        pendingHash = true;
+                        continue;
+                    }
+                    MutableString.AppendCharRepresentation(text, current.Codepoint, -1, MutableString.Escape.Special, '"', -1);
+                    continue;
+                }
+                byte[] bytes = current.ToMutableString(encoding).ToByteArray();
+                // A byte the encoding has a place for but no Unicode character (0xA0 in TIS-620)
+                // comes out of the character walk as an escape, though it is a valid character.
+                bool valid = current.IsValid || !MutableString.CreateBinary(bytes, encoding).ContainsInvalidCharacters();
+                if (valid && encoding.IsInspectPrintable(bytes)) {
+                    AppendAscii(output, text);
+                    output.AddRange(bytes);
+                    continue;
+                }
+                if (!valid || bytes.Length == 1) {
+                    foreach (byte b in bytes) {
+                        AppendByteEscape(text, b);
+                    }
+                    continue;
+                }
+                text.Append("\\x{");
+                foreach (byte b in bytes) {
+                    text.Append(((int)b).ToString("X2", CultureInfo.InvariantCulture));
+                }
+                text.Append('}');
+            }
+            if (pendingHash) {
+                text.Append('#');
+            }
+            text.Append('"');
+            AppendAscii(output, text);
+            return MutableString.CreateBinary(output.ToArray(), encoding);
+        }
+
+        private static void AppendAscii(List<byte>/*!*/ output, StringBuilder/*!*/ text) {
+            for (int i = 0; i < text.Length; i++) {
+                output.Add((byte)text[i]);
+            }
+            text.Clear();
         }
 
         /// <summary>
@@ -2277,7 +2371,9 @@ namespace IronRuby.Builtins {
                         AppendByteEscape(result, b);
                     }
                 }
-            } else if (encoding.IsUnicodeEncoding) {
+            } else if (encoding.HasUnicodeCodePoints) {
+                // CESU-8 and UTF-8's carrier variants too: their characters are Unicode's, and
+                // rb_str_inspect spells them \uXXXX as it does UTF-8's.
                 string str = self.ToString();
                 int i = 0;
                 while (i < str.Length) {
@@ -2847,13 +2943,14 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// MRI's default replacement is U+FFFD when the target can hold it and "?" otherwise.
+            /// MRI's default replacement: U+FFFD or "?", as the conversion's last converter
+            /// inserts output in UTF-8 or not (RubyExceptions.ReplacesWithUnicode).
             /// </summary>
-            internal MutableString/*!*/ GetReplacement(RubyEncoding/*!*/ to) {
+            internal MutableString/*!*/ GetReplacement(RubyEncoding/*!*/ from, RubyEncoding/*!*/ to) {
                 if (Replacement != null) {
                     return Replacement;
                 }
-                return to.IsUnicodeEncoding
+                return RubyExceptions.ReplacesWithUnicode(from, to)
                     ? MutableString.Create("�", to)
                     : MutableString.CreateAscii("?");
             }
@@ -3092,7 +3189,7 @@ namespace IronRuby.Builtins {
                     throw CreateUndefinedConversionError(piece, from, to, binarySource);
                 }
 
-                result.Append(settings.GetReplacement(to).ConvertToString());
+                result.Append(settings.GetReplacement(from, to).ConvertToString());
             }
         }
 
@@ -3171,7 +3268,7 @@ namespace IronRuby.Builtins {
                 return raw.ToString();
             }
 
-            string replacement = settings.ReplaceInvalid ? settings.GetReplacement(to).ConvertToString() : null;
+            string replacement = settings.ReplaceInvalid ? settings.GetReplacement(from, to).ConvertToString() : null;
 
             // A dummy encoding is stateful or BOM-led: an escape sequence or a byte order mark
             // decides how the bytes after it are read, and .NET's stock decoder loses that when it
@@ -3222,7 +3319,7 @@ namespace IronRuby.Builtins {
                             throw RubyExceptions.CreateUndefinedConversionError(
                                 RubyExceptions.InspectTranscodingBytes(character), character, RubyExceptions.ConversionPath(from, to), 0);
                         }
-                        result.Append(settings.GetReplacement(to).ConvertToString());
+                        result.Append(settings.GetReplacement(from, to).ConvertToString());
                         continue;
                     }
 
@@ -3267,7 +3364,7 @@ namespace IronRuby.Builtins {
                 result.Append(replacement);
             }
 
-            return result.ToString();
+            return from.FinishTranscodingDecode(result.ToString());
         }
 
         /// <summary>
@@ -4656,15 +4753,28 @@ namespace IronRuby.Builtins {
         #region succ, succ!
 
         public static int GetIndexOfRightmostAlphaNumericCharacter(MutableString/*!*/ str, int index) {
-            bool unicode = str.Encoding.IsUnicodeEncoding;
+            bool unicode = str.Encoding.HasUnicodeCodePoints;
             // A binary string has no letters outside ASCII: "a\xFF".succ is "b\xFF", the
             // 0xFF byte is not a (Latin-1 letter) to be stepped.
             // Nor has a multibyte encoding other than Unicode: Onigmo's EUC-JP, Shift_JIS, GBK,
             // Big5... answer ALNUM for ASCII only, so "\xA1\xB4" in EUC-JP steps its bytes
             // rather than its (Lm) code point.
             bool binary = str.Encoding == RubyEncoding.Binary || (!unicode && str.Encoding.MaxBytesPerChar > 1);
+            bool mule = IsEmacsMuleShaped(str.Encoding);
             for (int i = index; i >= 0; --i) {
                 char c = str.GetChar(i);
+                if (mule && IsEmacsMuleMultibyte(str, i)) {
+                    return i;
+                }
+                // a character outside the BMP is a surrogate pair, classified as one code point
+                if (unicode && Char.IsLowSurrogate(c) && i > 0 && Char.IsHighSurrogate(str.GetChar(i - 1))) {
+                    int codepoint = Char.ConvertToUtf32(str.GetChar(i - 1), c);
+                    if (IsSuccDigit(codepoint) || IsSuccAlpha(codepoint)) {
+                        return i;
+                    }
+                    i--;
+                    continue;
+                }
                 if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : (!binary || c < 0x80) && Char.IsLetterOrDigit(c))
                     return i;
             }
@@ -4672,19 +4782,38 @@ namespace IronRuby.Builtins {
             return -1;
         }
 
-        private static bool IsSuccDigit(char c) {
-            return Char.IsDigit(c);
+        private static bool IsSuccDigit(int codepoint) {
+            return Rune.IsValid(codepoint) && Rune.IsDigit(new Rune(codepoint));
         }
 
         // Onigmo's ALPHA is Unicode's Alphabetic property: letters, letter numbers (Roman
         // numerals) and most spacing vowel signs.
-        private static bool IsSuccAlpha(char c) {
-            switch (Char.GetUnicodeCategory(c)) {
+        private static bool IsSuccAlpha(int codepoint) {
+            if (!Rune.IsValid(codepoint)) {
+                return false;
+            }
+            var rune = new Rune(codepoint);
+            switch (Rune.GetUnicodeCategory(rune)) {
                 case UnicodeCategory.LetterNumber:
                 case UnicodeCategory.SpacingCombiningMark:
-                    return c >= 0x80;
+                    return codepoint >= 0x80;
                 default:
-                    return Char.IsLetter(c);
+                    return Rune.IsLetter(rune);
+            }
+        }
+
+        // Puts the character newCodepoint where the one at start (one char, or a surrogate pair)
+        // was.
+        private static void ReplaceCodePoint(MutableString/*!*/ str, int start, int oldCodepoint, int newCodepoint) {
+            int oldLength = oldCodepoint > 0xffff ? 2 : 1;
+            string replacement = Char.ConvertFromUtf32(newCodepoint);
+            if (replacement.Length == oldLength) {
+                for (int i = 0; i < oldLength; i++) {
+                    str.SetChar(start + i, replacement[i]);
+                }
+            } else {
+                str.Remove(start, oldLength);
+                str.Insert(start, replacement);
             }
         }
 
@@ -4698,40 +4827,90 @@ namespace IronRuby.Builtins {
         /// "9".succ is "10".
         /// </summary>
         private static bool TryIncrementNonAsciiAlphaNumericChar(MutableString/*!*/ str, int index) {
-            char c = str.GetChar(index);
+            // index is the end of the character: a char, or the second half of a surrogate pair
+            // (U+10400.succ is U+10401)
+            int start = index;
+            int c = str.GetChar(index);
+            if (Char.IsLowSurrogate((char)c) && index > 0 && Char.IsHighSurrogate(str.GetChar(index - 1))) {
+                start = index - 1;
+                c = Char.ConvertToUtf32(str.GetChar(start), (char)c);
+            }
             bool digit = IsSuccDigit(c);
-            Func<char, bool> sameKind = digit ? (Func<char, bool>)IsSuccDigit : IsSuccAlpha;
+            Func<int, bool> sameKind = digit ? (Func<int, bool>)IsSuccDigit : IsSuccAlpha;
 
-            for (int step = 1; step <= 2 && c + step <= Char.MaxValue; step++) {
-                char next = (char)(c + step);
-                if (!Char.IsSurrogate(next) && sameKind(next)) {
-                    str.SetChar(index, next);
+            for (int step = 1; step <= 2; step++) {
+                int next = c + step;
+                if (sameKind(next)) {
+                    ReplaceCodePoint(str, start, c, next);
                     return true;
                 }
             }
 
-            char first = c;
-            while (first > 0x80 && sameKind((char)(first - 1))) {
+            int first = c;
+            while (first > 0x80 && sameKind(first - 1)) {
                 first--;
             }
             if (first == c) {
                 return false;
             }
 
-            str.SetChar(index, first);
-            int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, index - 1);
+            ReplaceCodePoint(str, start, c, first);
+            int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, start - 1);
             if (nextIndex == -1) {
-                str.Insert(index, digit ? (char)(first + 1) : first);
+                str.Insert(start, Char.ConvertFromUtf32(digit ? first + 1 : first));
             } else {
                 IncrementAlphaNumericChar(str, nextIndex);
             }
             return true;
         }
 
+        /// <summary>
+        /// Emacs-Mule and the stateless ISO-2022-JPs, which MRI makes its replicas: Onigmo's
+        /// emacs_mule.c answers ALPHA for every character of more than one byte.
+        /// </summary>
+        private static bool IsEmacsMuleShaped(RubyEncoding/*!*/ encoding) {
+            switch (encoding.CodePage) {
+                case RubyEncoding.CodePageEmacsMule:
+                case RubyEncoding.CodePageStatelessISO2022JP:
+                case RubyEncoding.CodePageStatelessISO2022JPKDDI:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // A character of two to four bytes is held as a surrogate pair (see EmacsMuleEncoding);
+        // index is that of its second half, the end of the character.
+        private static bool IsEmacsMuleMultibyte(MutableString/*!*/ str, int index) {
+            return index > 0 && Char.IsLowSurrogate(str.GetChar(index)) && Char.IsHighSurrogate(str.GetChar(index - 1));
+        }
+
+        /// <summary>
+        /// MRI's enc_succ_alnum_char for a multibyte character of the Emacs-Mule family: its bytes
+        /// step to the next character of the same length, and one that wraps tries once more
+        /// from zero (max_gaps), which finds the first character of that length - "\x8F\xFF".succ
+        /// is "\x81\xA0" - so nothing carries into the character to its left.
+        /// </summary>
+        private static void SuccEmacsMuleChar(MutableString/*!*/ str, int index) {
+            var encoding = str.Encoding;
+            var strict = encoding.StrictEncoding;
+            byte[] bytes = strict.GetBytes(new[] { str.GetChar(index - 1), str.GetChar(index) });
+            if (!SuccCharacterBytes(encoding, bytes, 0, bytes.Length)) {
+                SuccCharacterBytes(encoding, bytes, 0, bytes.Length);
+            }
+            char[] chars = strict.GetChars(bytes);
+            str.SetChar(index - 1, chars[0]);
+            str.SetChar(index, chars[1]);
+        }
+
         public static void IncrementAlphaNumericChar(MutableString/*!*/ str, int index) {
             while (true) {
                 char c = str.GetChar(index);
-                if (c >= 0x80 && str.Encoding.IsUnicodeEncoding && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
+                if (Char.IsLowSurrogate(c) && IsEmacsMuleShaped(str.Encoding) && IsEmacsMuleMultibyte(str, index)) {
+                    SuccEmacsMuleChar(str, index);
+                    return;
+                }
+                if (c >= 0x80 && str.Encoding.HasUnicodeCodePoints && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
                     return;
                 }
                 if (c != 'z' && c != 'Z' && c != '9') {
