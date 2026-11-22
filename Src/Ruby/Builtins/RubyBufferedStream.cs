@@ -223,7 +223,15 @@ namespace IronRuby.Builtins {
         public override long Seek(long pos, SeekOrigin origin) {
             if (origin == SeekOrigin.Current) {
                 if (_pushBackPreservesPosition) {
-                    pos -= ReadAheadCount;
+                    // MRI's io_unread gives the whole read buffer back to the file, what #ungetc
+                    // put in front of it included, so the position is the one #pos reports. A
+                    // buffer reaching back past the start of the file is not given back at all
+                    // (its lseek fails), and the position stays where the file is.
+                    long back = _bufferCount;
+                    if (_stream.CanSeek && _stream.Position < back) {
+                        back = 0;
+                    }
+                    pos -= back;
                 } else {
                     origin = SeekOrigin.Begin;
                     pos += Position;
@@ -246,7 +254,7 @@ namespace IronRuby.Builtins {
             // Unwind cached data. Seek already reckons "current" from the position reads have
             // reached rather than from the one the underlying stream is at, so this asks to stay
             // where it is - subtracting the read-ahead here would take it off twice.
-            if (ReadAheadCount > 0) {
+            if (ReadAheadCount > 0 || (_bufferCount > 0 && _pushBackPreservesPosition && _stream.CanSeek)) {
                 Seek(0, SeekOrigin.Current);
             }
 
