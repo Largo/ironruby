@@ -1668,7 +1668,14 @@ namespace IronRuby.Builtins {
         /// nil for a write-only one - which is what a plain "w" or "r+" gets.
         /// </summary>
         [RubyMethod("external_encoding")]
-        public static RubyEncoding GetExternalEncoding(RubyIO/*!*/ self) {
+        public static RubyEncoding ExternalEncoding(RubyIO/*!*/ self) {
+            // MRI's GetOpenFile: an IO with no stream at all (IO.allocate) has no encoding to
+            // report, though a closed one still has its own.
+            self.RequireInitialized();
+            return GetExternalEncoding(self);
+        }
+
+        internal static RubyEncoding GetExternalEncoding(RubyIO/*!*/ self) {
             if (self.Enc2 != null) {
                 return self.Enc2;
             }
@@ -1684,6 +1691,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("internal_encoding")]
         public static RubyEncoding GetInternalEncoding(RubyIO/*!*/ self) {
+            self.RequireInitialized();
             return self.Enc2 != null ? self.Enc : null;
         }
 
@@ -1838,6 +1846,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("write")]
         public static int Write(TranscodeStorage/*!*/ encodeForWrite, ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyIO/*!*/ self, params object[]/*!*/ args) {
+            self.RequireInitialized();
             int total = 0;
             foreach (object arg in args) {
                 var str = arg as MutableString;
@@ -1872,6 +1881,8 @@ namespace IronRuby.Builtins {
             // MRI's write of an empty string makes no syscall at all and answers 0, even on a
             // pipe whose reader is gone. Flushing here instead manufactures EPIPE - which is
             // what Open3.capture3 ("git --version", no stdin data) used to hit on its i.write "".
+            // It does look for a stream first (GetWriteIO): IO.allocate has none to write to.
+            self.RequireInitialized();
             if (val.IsEmpty) {
                 return 0;
             }
