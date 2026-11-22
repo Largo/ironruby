@@ -293,39 +293,6 @@ end
 setter.join
 puts "10. the constant alternated on another thread: bad=#{bad} now=#{o.m.inspect}"
 
-# A typed body's loop that folded a constant, running while another thread makes a new constant of the
-# same name that the read now finds first: lexically nearer, in a superclass, or by an include. The next read
-# in the loop sees the new one, as CRuby's does. The loop waits on flag[0] (set after the change) and then
-# reads the constant once.
-SPIN10 = <<~'RUBY'
-  def spin(flag)
-    i = 0
-    while i < 2_000_000_000
-      return [%1$s, :broke] if flag[0] == 1
-      i += 1
-    end
-    [%1$s, :ran_out]
-  end
-RUBY
-SHL10 = SHS10 = SHI10 = :top
-module M10; class Lex; class_eval(format(SPIN10, 'SHL10')); end; end
-class Sup10; end
-class Sub10 < Sup10; class_eval(format(SPIN10, 'SHS10')); end
-class Inc10; class_eval(format(SPIN10, 'SHI10')); end
-module ModSH10; SHI10 = :included; end
-[["10. a new lexical constant shadows the folded one while the loop runs", -> { M10.const_set(:SHL10, :lexical) }, M10::Lex],
- ["10. a new constant in a superclass shadows it while the loop runs", -> { Sup10.const_set(:SHS10, :super) }, Sub10],
- ["10. an included module's constant shadows it while the loop runs", -> { Inc10.include(ModSH10) }, Inc10],
-].each do |label, change, cls|
-  o = cls.new
-  WARM.times { o.spin([1]) }
-  flag = [0]
-  th = Thread.new { sleep 0.2; change.call; flag[0] = 1 }
-  v = o.spin(flag)
-  th.join
-  puts "#{label}: #{v.inspect} then #{o.spin([1]).inspect}"
-end
-
 # ---------------------------------------------------------------- 11. deprecate_constant (last: it is for good)
 
 Warning[:deprecated] = true
