@@ -1465,7 +1465,7 @@ namespace IronRuby.Builtins {
 
             int length = GetCharacterLength(self);
             int begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = (range.End == null) ? length : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = (range.End == null) ? length : IListOps.CastToRangeComponent(fixnumCast, range.End);
 
             int normalizedBegin = begin < 0 ? begin + length : begin;
 
@@ -1473,7 +1473,7 @@ namespace IronRuby.Builtins {
                 // MRI quotes the range as it was written, not as it was normalized - and an
                 // endless one without its missing end.
                 throw RubyExceptions.CreateRangeError("{0}{1}{2} out of range", begin,
-                    range.ExcludeEnd ? "..." : "..", (range.End == null) ? (object)"" : end);
+                    range.ExcludeEnd ? "..." : "..", range.End ?? "");
             }
 
             end = end < 0 ? end + length : end;
