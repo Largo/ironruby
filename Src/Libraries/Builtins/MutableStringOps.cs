@@ -6139,25 +6139,33 @@ namespace IronRuby.Builtins {
             MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            RubyArray values = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options), false, block == null);
+            int offset = GetUnpackOffset(fixnumCast, context, self, options);
             if (block == null) {
-                return values;
+                return RubyEncoder.Unpack(context, self, format, offset, false);
             }
 
-            // MRI's pack_unpack_internal yields each value instead of collecting them and answers
-            // nil. It reads the string as it goes and raises "string modified" once the block has
-            // changed its length (Bug #22315); the values here are read up front.
+            // MRI's pack_unpack_internal yields each value as it decodes it instead of collecting
+            // them, and answers nil. Its UNPACK_PUSH raises "string modified" once the block has
+            // changed the string's length (Bug #22315), and then "format string modified" once it
+            // has changed the format's.
             int length = self.GetByteCount();
-            foreach (object value in values) {
-                object blockResult;
+            int formatLength = format.GetByteCount();
+            object blockResult = null;
+            bool broke = false;
+            RubyEncoder.Unpack(context, self, format, offset, false, false, value => {
                 if (block.Yield(value, out blockResult)) {
-                    return blockResult;
+                    broke = true;
+                    return true;
                 }
                 if (self.GetByteCount() != length) {
                     throw RubyExceptions.CreateRuntimeError("string modified");
                 }
-            }
-            return null;
+                if (format.GetByteCount() != formatLength) {
+                    throw RubyExceptions.CreateRuntimeError("format string modified");
+                }
+                return false;
+            });
+            return broke ? blockResult : null;
         }
 
         [RubyMethod("unpack1")]

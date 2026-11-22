@@ -554,7 +554,10 @@ namespace IronRuby.Builtins {
             for (int k = ss; k < send; k++) {
                 result.Append(data.GetByte(k));
             }
-            index = send;
+            // The rest is in the value, but MRI leaves its cursor on the byte that stopped
+            // decoding, so the directives after this one read from there ("=Q=41".unpack("MC")
+            // is ["=Q=41", 81]).
+            index = s;
             return result;
         }
 
@@ -622,7 +625,8 @@ namespace IronRuby.Builtins {
         private static MutableString/*!*/ ReadUU(MutableString/*!*/ data, ref int position) {
             byte[] bytes = data.ToByteArray();
             int s = position, send = bytes.Length;
-            int capacity = (send - s) * 3 / 4;
+            // in long: three times the length of a string over 700 MB overflows an int
+            int capacity = (int)((long)(send - s) * 3 / 4);
             var buf = new byte[Math.Max(capacity, 0)];
             int ptr = 0, total = 0;
             while (s < send && bytes[s] > ' ' && bytes[s] < 'a') {
@@ -1245,6 +1249,10 @@ namespace IronRuby.Builtins {
                 _invalid = invalid;
             }
 
+            internal bool IsInvalid {
+                get { return _invalid; }
+            }
+
             internal void ThrowIfInvalid(string/*!*/ format, bool packing) {
                 if (_invalid) {
                     foreach (var _ in FormatDirective.Enumerate(format, packing)) {
@@ -1527,6 +1535,11 @@ namespace IronRuby.Builtins {
 
                     i += count;
                 }
+                // The directive MRI cannot read is reached through the same check as the others,
+                // so a format a conversion has resized fails on that first.
+                if (parsed.IsInvalid && format.GetByteCount() != formatLength) {
+                    throw RubyExceptions.CreateRuntimeError("format string modified");
+                }
                 parsed.ThrowIfInvalid(formatString, true);
                 stream.SetLength(stream.Position);
                 MutableString result = stream.String;
@@ -1655,8 +1668,26 @@ namespace IronRuby.Builtins {
         /// False for unpack with a block: MRI's PACK_ITEM_ADJUST fills in the nils of a directive that
         /// ran out of data only when it collects an array, so a block never sees them.
         /// </param>
+        /// <param name="yield">
+        /// String#unpack with a block: MRI's UNPACK_PUSH yields each value as soon as it is decoded,
+        /// so the block sees the values one by one while the string is still being read (and may
+        /// change the bytes ahead of the cursor). It answers true to stop decoding (a break from
+        /// the block); the array that comes back then holds nothing.
+        /// </param>
         public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset,
-            bool firstOnly, bool padWithNils = true) {
+            bool firstOnly, bool padWithNils = true, Func<object, bool> yield = null) {
+            try {
+                return UnpackDirectives(context, self, format, offset, firstOnly, padWithNils, yield);
+            } catch (UnpackStopped) {
+                return new RubyArray();
+            }
+        }
+
+        private sealed class UnpackStopped : Exception {
+        }
+
+        private static RubyArray/*!*/ UnpackDirectives(RubyContext/*!*/ context, MutableString/*!*/ self, MutableString/*!*/ format, int offset,
+            bool firstOnly, bool padWithNils, Func<object, bool> yield) {
             // pack_unpack_internal reads the format as ASCII (rb_must_asciicompat)
             if (!format.Encoding.IsAsciiIdentity) {
                 throw new EncodingCompatibilityError("ASCII incompatible encoding: " + format.Encoding.Name);
@@ -1667,6 +1698,14 @@ namespace IronRuby.Builtins {
             // out of a 4 MB message, say - allocate megabytes, and a decoder doing that per field
             // quadratic.
             RubyArray result = new RubyArray(firstOnly ? 1 : Math.Min(1 + self.Length / 2, 16));
+
+            void Push(object value) {
+                if (yield == null) {
+                    result.Add(value);
+                } else if (yield(value)) {
+                    throw new UnpackStopped();
+                }
+            }
 
             // TODO: encodings
             int position = offset;
@@ -1698,35 +1737,41 @@ namespace IronRuby.Builtins {
                         // comes back is binary whatever the string it came from was tagged as.
                         MutableString unpacked = ReadString(self, directive.Directive, directive.Count, ref position);
                         unpacked.ForceEncoding(RubyEncoding.Binary);
-                        result.Add(unpacked);
+                        Push(unpacked);
                         break;
 
                     case 'B':
                     case 'b':
-                        result.Add(ReadBits(self, directive.Count, ref position, directive.Directive == 'b'));
+                        Push(ReadBits(self, directive.Count, ref position, directive.Directive == 'b'));
+                        break;
+
+                    case 'P':
+                        // MRI's 'P' reads one pointer and its count is a length; with less than a
+                        // pointer's worth of bytes left there is nothing at all, not a nil.
+                        if (length - position >= IntPtr.Size) {
+                            Push(Dereference(context, self, ReadPointer(self, ref position), directive));
+                        }
                         break;
 
                     case 'p':
-                    case 'P':
-                        if (length - position < IntPtr.Size) {
-                            result.Add(null);
-                            position = length;
-                            break;
+                        // 'p' repeats, as many pointers as asked for and the string still holds.
+                        count = Math.Min(directive.Count ?? (length - position), (length - position) / IntPtr.Size);
+                        for (int j = 0; j < count; j++) {
+                            Push(Dereference(context, self, ReadPointer(self, ref position), directive));
                         }
-                        result.Add(Dereference(context, self, ReadPointer(self, ref position), directive));
                         break;
 
                     case 'c':
                         count = CalculateCounts(length - position, directive.Count, sizeof(sbyte), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add((int)unchecked((sbyte)self.GetByte(position++)));
+                            Push((int)unchecked((sbyte)self.GetByte(position++)));
                         }
                         break;
 
                     case 'C':
                         count = CalculateCounts(length - position, directive.Count, sizeof(byte), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add((int)self.GetByte(position++));
+                            Push((int)self.GetByte(position++));
                         }
                         break;
 
@@ -1734,21 +1779,21 @@ namespace IronRuby.Builtins {
                     case 'D':
                         count = CalculateCounts(length - position, directive.Count, sizeof(double), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ReadDouble(self, ref position, false));
+                            Push(ReadDouble(self, ref position, false));
                         }
                         break;
 
                     case 'e': // 4-byte little-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(float), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add((double)ReadSingle(self, ref position, !BitConverter.IsLittleEndian));
+                            Push((double)ReadSingle(self, ref position, !BitConverter.IsLittleEndian));
                         }
                         break;
 
                     case 'E': // 8-byte little-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(double), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ReadDouble(self, ref position, !BitConverter.IsLittleEndian));
+                            Push(ReadDouble(self, ref position, !BitConverter.IsLittleEndian));
                         }
                         break;
 
@@ -1756,21 +1801,21 @@ namespace IronRuby.Builtins {
                     case 'F':
                         count = CalculateCounts(length - position, directive.Count, sizeof(float), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add((double)ReadSingle(self, ref position, false));
+                            Push((double)ReadSingle(self, ref position, false));
                         }
                         break;
 
                     case 'g': // 4-byte big-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(float), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add((double)ReadSingle(self, ref position, BitConverter.IsLittleEndian));
+                            Push((double)ReadSingle(self, ref position, BitConverter.IsLittleEndian));
                         }
                         break;
 
                     case 'G': // 8-byte big-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(double), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ReadDouble(self, ref position, BitConverter.IsLittleEndian));
+                            Push(ReadDouble(self, ref position, BitConverter.IsLittleEndian));
                         }
                         break;
 
@@ -1778,7 +1823,7 @@ namespace IronRuby.Builtins {
                     case 'l': // signed 4-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(int), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(unchecked((int)ReadUInt32(self, ref position, directive.IsBigEndian)));
+                            Push(unchecked((int)ReadUInt32(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
@@ -1786,73 +1831,73 @@ namespace IronRuby.Builtins {
                     case 'L': // unsigned 4-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(uint), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(ReadUInt32(self, ref position, directive.IsBigEndian)));
+                            Push(Protocols.Normalize(ReadUInt32(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
                     case 'N': // unsigned 4-byte big-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(uint), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(ReadUInt32(self, ref position, BitConverter.IsLittleEndian)));
+                            Push(Protocols.Normalize(ReadUInt32(self, ref position, BitConverter.IsLittleEndian)));
                         }
                         break;
 
                     case 'n': // unsigned 2-byte big-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(ushort), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, BitConverter.IsLittleEndian)));
+                            Push(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, BitConverter.IsLittleEndian)));
                         }
                         break;
 
                     case 'v': // unsigned 2-byte little-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(ushort), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, !BitConverter.IsLittleEndian)));
+                            Push(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, !BitConverter.IsLittleEndian)));
                         }
                         break;
 
                     case 'V': // unsigned 4-byte little-endian
                         count = CalculateCounts(length - position, directive.Count, sizeof(uint), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(ReadUInt32(self, ref position, !BitConverter.IsLittleEndian)));
+                            Push(Protocols.Normalize(ReadUInt32(self, ref position, !BitConverter.IsLittleEndian)));
                         }
                         break;
 
                     case 'q': // signed 8-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(long), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(unchecked((long)ReadUInt64(self, ref position, directive.IsBigEndian))));
+                            Push(Protocols.Normalize(unchecked((long)ReadUInt64(self, ref position, directive.IsBigEndian))));
                         }
                         break;
 
                     case 'Q': // unsigned 8-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(ulong), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(ReadUInt64(self, ref position, directive.IsBigEndian)));
+                            Push(Protocols.Normalize(ReadUInt64(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
                     case 'm': // Base64
-                        result.Add(directive.Count == 0
+                        Push(directive.Count == 0
                             ? ReadStrictBase64(self, ref position)
                             : ReadBase64(self, ref position));
                         break;
 
                     case 'M': // quoted-printable, MIME encoding
-                        result.Add(ReadQuotedPrintable(self, ref position));
+                        Push(ReadQuotedPrintable(self, ref position));
                         break;
 
                     case 's': // signed 2-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(short), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(unchecked((short)ReadUInt16(self, ref position, directive.IsBigEndian))));
+                            Push(ScriptingRuntimeHelpers.Int32ToObject(unchecked((short)ReadUInt16(self, ref position, directive.IsBigEndian))));
                         }
                         break;
 
                     case 'S': // unsigned 2-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(ushort), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, directive.IsBigEndian)));
+                            Push(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
@@ -1863,7 +1908,7 @@ namespace IronRuby.Builtins {
                             if (cp == -1) {
                                 break;
                             }
-                            result.Add(cp);
+                            Push(cp);
                         }
                         break;
 
@@ -1875,12 +1920,12 @@ namespace IronRuby.Builtins {
                             if (value == null) {
                                 break;
                             }
-                            result.Add(value);
+                            Push(value);
                         }
                         break;
 
                     case 'u': // UU decoding                        
-                        result.Add(ReadUU(self, ref position));
+                        Push(ReadUU(self, ref position));
                         break;
 
                     case 'X':
@@ -1902,11 +1947,11 @@ namespace IronRuby.Builtins {
                     case 'h':
                     case 'H':
                         maxCount = (int)(length - position) * 2;
-                        result.Add(ToHex(self, ref position, Math.Min(directive.Count ?? maxCount, maxCount), directive.Directive == 'h'));
+                        Push(ToHex(self, ref position, Math.Min(directive.Count ?? maxCount, maxCount), directive.Directive == 'h'));
                         break;
                 }
                 for (int i = 0; padWithNils && i < nilCount; i++) {
-                    result.Add(null);
+                    Push(null);
                 }
                 if (firstOnly && result.Count > 0) {
                     return result;
