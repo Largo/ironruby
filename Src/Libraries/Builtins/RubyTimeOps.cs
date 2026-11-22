@@ -688,13 +688,17 @@ namespace IronRuby.Builtins {
             }
             year = ToInt32(BigInteger.Parse(text.Substring(pos, digits), CultureInfo.InvariantCulture));
             pos += digits;
+            bool hasTime = false;
 
             if (pos < end && text[pos] == '-') {
                 month = TwoDigits(text, ref pos, "mon");
                 if (pos < end && text[pos] == '-') {
                     day = TwoDigits(text, ref pos, "mday");
                 }
-                if (pos < end && (text[pos] == ' ' || text[pos] == 'T')) {
+                // a space or T introduces the time of day only when a digit follows; otherwise
+                // what follows is the zone (MRI: "2021-12-25 +09:00", or "2021-12-25+09:00")
+                if (pos + 1 < end && (text[pos] == ' ' || text[pos] == 'T') && IsAsciiDigit(text[pos + 1])) {
+                    hasTime = true;
                     int timePart = pos + 1;
                     hour = TwoDigits(text, ref pos, "hour");
                     if (pos < end && text[pos] == '.') {
@@ -727,10 +731,10 @@ namespace IronRuby.Builtins {
                     } else {
                         throw RubyExceptions.CreateArgumentError("missing min part: {0}", text.Substring(timePart, Math.Min(end, pos + 1) - timePart));
                     }
-                } else {
-                    // a date without a time of day is not a Time
-                    throw RubyExceptions.CreateArgumentError("no time information");
                 }
+            } else {
+                // only a year
+                hasTime = true;
             }
 
             if (pos < end && IsAsciiSpace(text[pos])) {
@@ -754,6 +758,11 @@ namespace IronRuby.Builtins {
                 if (pos < end) {
                     throw RubyExceptions.CreateArgumentError("can't parse at: {0}", text.Substring(pos));
                 }
+            }
+
+            // a date without a time of day or a zone is not a Time
+            if (!hasTime && zoneText == null) {
+                throw RubyExceptions.CreateArgumentError("no time information");
             }
         }
 
