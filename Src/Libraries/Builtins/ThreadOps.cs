@@ -1444,6 +1444,10 @@ namespace IronRuby.Builtins {
             }
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
+            // MRI's thread_create_core: a new thread joins its creator's group, which must be able to take it
+            if (group != null && context.IsObjectFrozen(group)) {
+                throw new ThreadError("can't start a new thread (frozen ThreadGroup)");
+            }
             ThreadStarter s = starter = new ThreadStarter();
             if (context.ThreadTerminator == null) {
                 context.ThreadTerminator = CreateThreadTerminator(context);
