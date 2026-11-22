@@ -48,6 +48,8 @@ namespace IronRuby.Builtins {
             internal const int UniversalNewlineFlag = 0x100;
             internal const int CrlfNewlineFlag = 0x1000;
             internal const int CrNewlineFlag = 0x2000;
+            internal const int LfNewlineFlag = 0x4000;
+            internal const int NewlineMask = UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag | LfNewlineFlag;
             internal const int XmlTextFlag = 0x8000;
             internal const int XmlAttrContentFlag = 0x10000;
             internal const int XmlAttrQuoteFlag = 0x100000;
@@ -83,6 +85,9 @@ namespace IronRuby.Builtins {
 
             [RubyConstant("CR_NEWLINE_DECORATOR")]
             public static readonly int CrNewlineDecorator = CrNewlineFlag;
+
+            [RubyConstant("LF_NEWLINE_DECORATOR")]
+            public static readonly int LfNewlineDecorator = LfNewlineFlag;
 
             [RubyConstant("XML_TEXT_DECORATOR")]
             public static readonly int XmlTextDecorator = XmlTextFlag;
@@ -135,7 +140,6 @@ namespace IronRuby.Builtins {
             // set once the :xml => :attr decorator has written its opening quote, and once it has
             // written the closing one
             private bool _xmlQuoteOpened, _decoratorsFinished;
-
             #endregion
 
             #region Construction
@@ -221,6 +225,7 @@ namespace IronRuby.Builtins {
                 if ((flags & UniversalNewlineFlag) != 0) { names.Add("universal_newline"); }
                 if ((flags & CrlfNewlineFlag) != 0) { names.Add("crlf_newline"); }
                 if ((flags & CrNewlineFlag) != 0) { names.Add("cr_newline"); }
+                if ((flags & LfNewlineFlag) != 0) { names.Add("lf_newline"); }
                 if ((flags & XmlTextFlag) != 0) { names.Add("xml_text"); }
                 if ((flags & XmlAttrContentFlag) != 0) { names.Add("xml_attr_content"); }
                 if ((flags & XmlAttrQuoteFlag) != 0) { names.Add("xml_attr_quote"); }
@@ -300,7 +305,7 @@ namespace IronRuby.Builtins {
             /// </summary>
             private static void RequireOneNewlineDecorator(ConversionStorage<MutableString>/*!*/ toStr,
                 object source, object destination, int flags) {
-                int newline = flags & (UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag);
+                int newline = flags & NewlineMask;
                 if ((newline & (newline - 1)) != 0) {
                     throw ConverterNotFound(EncodingName(toStr, source), EncodingName(toStr, destination), flags);
                 }
@@ -339,26 +344,27 @@ namespace IronRuby.Builtins {
                 }
 
                 // The escapers run before the newline decorators, and #convpath lists them in the
-                // order they run rather than in the order the options were given.
-                if ((flags & XmlTextFlag) != 0) {
-                    result.Add(MutableString.CreateAscii("xml_text_escape").Freeze());
-                }
-                if ((flags & XmlAttrContentFlag) != 0) {
-                    result.Add(MutableString.CreateAscii("xml_attr_content_escape").Freeze());
-                }
-                if ((flags & XmlAttrQuoteFlag) != 0) {
-                    result.Add(MutableString.CreateAscii("xml_attr_quote").Freeze());
-                }
-                if ((flags & UniversalNewlineFlag) != 0) {
-                    result.Add(MutableString.CreateAscii("universal_newline").Freeze());
-                }
-                if ((flags & CrlfNewlineFlag) != 0) {
-                    result.Add(MutableString.CreateAscii("crlf_newline").Freeze());
-                }
-                if ((flags & CrNewlineFlag) != 0) {
-                    result.Add(MutableString.CreateAscii("cr_newline").Freeze());
+                // order they run rather than in the order the options were given. MRI's
+                // rb_econv_decorate_at_last puts them on the UTF-8 side of a last leg into an
+                // encoding that is not ASCII compatible: [[UTF-8, UTF-16BE]] with
+                // universal_newline is ["universal_newline", [UTF-8, UTF-16BE]].
+                int at = (path != null && !path[path.Length - 1].IsAsciiIdentity) ? result.Count - 1 : result.Count;
+                foreach (string name in DecoratorPathNames(flags)) {
+                    result.Insert(at++, MutableString.CreateAscii(name).Freeze());
                 }
                 return result;
+            }
+
+            private static List<string>/*!*/ DecoratorPathNames(int flags) {
+                var names = new List<string>();
+                if ((flags & XmlTextFlag) != 0) { names.Add("xml_text_escape"); }
+                if ((flags & XmlAttrContentFlag) != 0) { names.Add("xml_attr_content_escape"); }
+                if ((flags & XmlAttrQuoteFlag) != 0) { names.Add("xml_attr_quote"); }
+                if ((flags & UniversalNewlineFlag) != 0) { names.Add("universal_newline"); }
+                if ((flags & CrlfNewlineFlag) != 0) { names.Add("crlf_newline"); }
+                if ((flags & CrNewlineFlag) != 0) { names.Add("cr_newline"); }
+                if ((flags & LfNewlineFlag) != 0) { names.Add("lf_newline"); }
+                return names;
             }
 
             internal RubyArray/*!*/ ConvPath() {
@@ -806,6 +812,27 @@ namespace IronRuby.Builtins {
                     int size = (Char.IsHighSurrogate(chars[i]) && i + 1 < count && Char.IsLowSurrogate(chars[i + 1])) ? 2 : 1;
                     int codepoint = size == 2 ? Char.ConvertToUtf32(chars[i], chars[i + 1]) : chars[i];
 
+                    if (NewlinesInCharacters) {
+                        bool consumed;
+                        string newline = TranslateNewline(codepoint, out consumed);
+                        if (newline.Length != 0 && !Emit(AsciiInDestination(newline), written, limit)) {
+                            if (consumed) {
+                                i += size;
+                                if (i < count) {
+                                    // the rest of the characters are still to be converted
+                                    _pendingOutput.AddRange(EncodeRemaining(chars, i, count));
+                                }
+                            } else {
+                                _pendingOutput.AddRange(EncodeRemaining(chars, i, count));
+                            }
+                            return "destination_buffer_full";
+                        }
+                        if (consumed) {
+                            i += size;
+                            continue;
+                        }
+                    }
+
                     string escape = XmlEscape(codepoint);
                     if (escape != null) {
                         if (!EmitInserted(AsciiInDestination(escape), written, limit)) {
@@ -854,6 +881,73 @@ namespace IronRuby.Builtins {
                     i += size;
                 }
                 return null;
+            }
+
+            /// <summary>
+            /// MRI runs the newline decorators on the UTF-8 side of a conversion into an
+            /// encoding that is not ASCII compatible (UTF-16, UTF-32): there they see the
+            /// characters, which is where they are applied here too, rather than to the bytes.
+            /// </summary>
+            private bool NewlinesInCharacters {
+                get { return (_flags & NewlineMask) != 0 && !DestinationEncoding.IsAsciiIdentity && !_noConversion; }
+            }
+
+            /// <summary>
+            /// What the newline decorator makes of a character: the ASCII text to write for it,
+            /// and whether that text replaces it (<paramref name="consumed"/>) or merely goes in
+            /// front of it - the LF a CR held back by universal_newline turns into, once the
+            /// character after it shows that it was no CRLF.
+            /// </summary>
+            private string/*!*/ TranslateNewline(int codepoint, out bool consumed) {
+                if ((_flags & (UniversalNewlineFlag | LfNewlineFlag)) != 0) {
+                    string held = "";
+                    if (_pendingCarriageReturn) {
+                        _pendingCarriageReturn = false;
+                        held = "\n";
+                        if (codepoint == '\n') {
+                            consumed = true;
+                            return held;
+                        }
+                    }
+                    if (codepoint == '\r') {
+                        _pendingCarriageReturn = true;
+                        consumed = true;
+                        return held;
+                    }
+                    consumed = false;
+                    return held;
+                }
+                if (codepoint == '\n') {
+                    consumed = true;
+                    return ((_flags & CrlfNewlineFlag) != 0) ? "\r\n" : "\r";
+                }
+                consumed = false;
+                return "";
+            }
+
+            /// <summary>
+            /// The characters a full destination left unconverted, encoded as they are, to wait
+            /// in _pendingOutput with the rest of what did not fit.
+            /// </summary>
+            private byte[]/*!*/ EncodeRemaining(char[]/*!*/ chars, int index, int count) {
+                var bytes = new List<byte>();
+                for (int i = index; i < count; i++) {
+                    int c = chars[i];
+                    if (c == '\n' || c == '\r') {
+                        bool consumed;
+                        string newline = TranslateNewline(c, out consumed);
+                        bytes.AddRange(AsciiInDestination(newline));
+                        if (consumed) {
+                            continue;
+                        }
+                    }
+                    try {
+                        bytes.AddRange(EncodeCodepoint(chars, i, 1));
+                    } catch (EncoderFallbackException) {
+                        bytes.AddRange(_replacementBytes);
+                    }
+                }
+                return bytes.ToArray();
             }
 
             private bool IsWideSource {
@@ -1098,7 +1192,7 @@ namespace IronRuby.Builtins {
                 if (_pendingCarriageReturn) {
                     // a CR at the very end has nothing left to pair with: it is a newline
                     _pendingCarriageReturn = false;
-                    if (!Put(new byte[] { (byte)'\n' }, written, limit)) {
+                    if (!Put(AsciiInDestination("\n"), written, limit)) {
                         return false;
                     }
                 }
@@ -1205,14 +1299,13 @@ namespace IronRuby.Builtins {
             }
 
             private byte[]/*!*/ ApplyNewlineDecorators(byte[]/*!*/ bytes) {
-                if ((_flags & (UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag)) == 0 ||
-                    !DestinationEncoding.IsAsciiIdentity) {
+                if ((_flags & NewlineMask) == 0 || !DestinationEncoding.IsAsciiIdentity) {
                     return bytes;
                 }
 
                 var result = new List<byte>(bytes.Length + 8);
                 foreach (byte b in bytes) {
-                    if ((_flags & UniversalNewlineFlag) != 0) {
+                    if ((_flags & (UniversalNewlineFlag | LfNewlineFlag)) != 0) {
                         if (_pendingCarriageReturn) {
                             _pendingCarriageReturn = false;
                             result.Add((byte)'\n');
@@ -1400,12 +1493,18 @@ namespace IronRuby.Builtins {
                             }
                             break;
 
+                        case "lf_newline":
+                            if (Protocols.IsTrue(entry.Value)) {
+                                flags |= LfNewlineFlag;
+                            }
+                            break;
+
                         case "newline":
                             switch (SymbolName(entry.Value)) {
                                 case "universal": newlineOption = UniversalNewlineFlag; break;
                                 case "crlf": newlineOption = CrlfNewlineFlag; break;
                                 case "cr": newlineOption = CrNewlineFlag; break;
-                                case "lf": newlineOption = UniversalNewlineFlag; break;
+                                case "lf": newlineOption = LfNewlineFlag; break;
                                 default:
                                     throw RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}",
                                         (object)SymbolName(entry.Value) ?? toHash.Context.Inspect(entry.Value));
@@ -1428,7 +1527,7 @@ namespace IronRuby.Builtins {
 
                 // MRI's econv_opts: newline: wins over the *_newline: flags, with a warning
                 if (newlineOption >= 0) {
-                    const int newlineMask = UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag;
+                    const int newlineMask = NewlineMask;
                     if ((flags & newlineMask) != 0) {
                         toHash.Context.ReportWarning(":newline option precedes other newline options", true);
                     }

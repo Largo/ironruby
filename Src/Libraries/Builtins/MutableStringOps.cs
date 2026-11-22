@@ -2827,13 +2827,14 @@ namespace IronRuby.Builtins {
             internal MutableString Replacement;
             internal object Fallback;
             internal int XmlMode;           // 0 none, 't' text, 'a' attr
-            internal int Newline;           // 0 none, 'u' universal, 'r' cr, 'c' crlf
+            internal int Newline;           // 0 none, 'u' universal, 'l' lf, 'r' cr, 'c' crlf
 
             /// <summary>The decorators, named and ordered as MRI's error messages list them.</summary>
             internal string/*!*/ DecoratorNames() {
                 var names = new List<string>();
                 switch (Newline) {
                     case 'u': names.Add("universal_newline"); break;
+                    case 'l': names.Add("lf_newline"); break;
                     case 'c': names.Add("crlf_newline"); break;
                     case 'r': names.Add("cr_newline"); break;
                 }
@@ -2920,7 +2921,7 @@ namespace IronRuby.Builtins {
                             } else if (nlName == "crlf") {
                                 result.Newline = 'c';
                             } else if (nlName == "lf") {
-                                result.Newline = 'u';
+                                result.Newline = 'l';
                             } else {
                                 throw RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}",
                                     (object)nlName ?? context.Inspect(entry.Value));
@@ -2937,6 +2938,12 @@ namespace IronRuby.Builtins {
 
                         case "crlf_newline":
                             if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'c'; }
+                            break;
+
+                        // MRI's lf_newline decorator: CRLF and CR become LF, as with
+                        // universal_newline, under a name of its own
+                        case "lf_newline":
+                            if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'l'; }
                             break;
                     }
                 }
