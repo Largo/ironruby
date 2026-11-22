@@ -345,35 +345,19 @@ module Enumerable
   end
   private :__enum_item__
 
-  # MRI yields an element to these blocks with rb_yield_force_blockarg: a lambda is called
-  # the way a plain block is, so one with several parameters takes an Array element apart
-  # (each_with_index.min_by(&->(x, i) { })). True when the block is such a lambda; the
-  # caller then splats Array elements into it.
-  def __enum_force_splat__?(block)
-    return false unless block.lambda?
-    parameters = block.parameters
-    # a Symbol's proc (group_by(&:itself)) is a lambda too, and takes the element whole
-    return false if parameters == [[:req], [:rest]]
-    positional = 0
-    rest = false
-    parameters.each do |kind, _|
-      case kind
-      when :req, :opt then positional += 1
-      when :rest then rest = true
-      end
-    end
-    positional >= 2 || (positional >= 1 && rest)
-  end
-  private :__enum_force_splat__?
+  # MRI yields an element to the blocks of each_entry, group_by, min_by, max_by, sort_by
+  # and zip with enum_yield: one value #each yielded goes to the block as it is (a lambda
+  # that wants two parameters refuses an Array), several go packed through
+  # rb_yield_force_blockarg, which binds even a lambda's parameters as a plain block's
+  # (each_with_index.min_by(&->(x, i) { })). The prelude calls block.call for the one value
+  # and __enum_yield__ (Enumerable.EnumYield) for the rest.
 
   # Extra arguments are passed straight through to #each, which is how a
   # receiver whose #each takes parameters gets to see them.
   def each_entry(*args, &block)
     return to_enum(:each_entry, *args) unless block
-    splat = __enum_force_splat__?(block)
     each(*args) do |*values|
-      item = __enum_item__(values)
-      splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+      values.size == 1 ? block.call(values[0]) : __enum_yield__(values, &block)
     end
     self
   end unless method_defined?(:each_entry)
@@ -489,10 +473,9 @@ module Enumerable
     # an Array is grouped in C#, see Enumerable.ListGroupBy
     return __list_group_by__(&block) if __plain_list__?
     result = {}
-    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+      key = values.size == 1 ? block.call(item) : __enum_yield__(values, &block)
       (result[key] ||= []) << item
     end
     result
@@ -533,10 +516,9 @@ module Enumerable
     best = nil
     best_key = nil
     found = false
-    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      key = splat && item.is_a?(Array) ? block.call(*item) : block.call(item)
+      key = values.size == 1 ? block.call(item) : __enum_yield__(values, &block)
       if found
         c = (key <=> best_key)
         if c.nil?
@@ -623,10 +605,9 @@ module Enumerable
     return __list_sort_by_key__(&block) if __plain_list__?
     decorated = []
     index = 0
-    splat = __enum_force_splat__?(block)
     each do |*values|
       item = __enum_item__(values)
-      decorated << [splat && item.is_a?(Array) ? block.call(*item) : block.call(item), index, item]
+      decorated << [values.size == 1 ? block.call(item) : __enum_yield__(values, &block), index, item]
       index += 1
       # the block #each was given answers nil, as MRI's does, should #each keep it and call it
       nil
@@ -1074,7 +1055,6 @@ module Enumerable
         end
       end
       result = block ? nil : []
-      splat = block && __enum_force_splat__?(block)
       index = 0
       each do |*values|
         row = [__enum_item__(values)]
@@ -1093,7 +1073,8 @@ module Enumerable
         end
         index += 1
         if block
-          splat ? block.call(*row) : block.call(row)
+          # MRI's enum_yield_array: a row of one column is yielded as that one value
+          row.size == 1 ? block.call(row[0]) : __enum_yield__(row, &block)
         else
           result << row
         end

@@ -381,23 +381,42 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// MRI's rb_yield_force_blockarg, which Enumerable yields an element with: a lambda is called
-        /// the way a plain block would be, so one that declares several parameters takes an Array
-        /// element apart (each_with_index.select(&amp;->(x, i) { })) instead of refusing it.
+        /// MRI's enum_yield (and enum_yield_array), which most of Enumerable yields an element with:
+        /// <paramref name="values"/> are the values one yield of #each passed. Several are packed
+        /// into an Array and yielded with <see cref="YieldForceBlockArg"/>, so a lambda takes them
+        /// apart (each_with_index.select(&amp;->(x, i) { })). A single value is yielded as it is, an
+        /// Array included: a lambda that wants two parameters refuses [[1, 2]].find(&amp;->(a, b) { })
+        /// with "given 1", as in MRI.
+        /// </summary>
+        public bool YieldEnumValues(IList/*!*/ values, out object blockResult) {
+            switch (values.Count) {
+                case 0: return Yield(out blockResult);
+                case 1: return Yield(values[0], out blockResult);
+                default: return YieldForceBlockArg(values as RubyArray ?? new RubyArray(values), out blockResult);
+            }
+        }
+
+        /// <summary>
+        /// MRI's rb_yield_force_blockarg: the one argument is bound the way a plain block binds it,
+        /// a lambda's parameters included - an Array is taken apart, a missing value is nil and an
+        /// extra one is dropped, where the lambda would raise ArgumentError. A Symbol's proc
+        /// (group_by(&amp;:itself)) takes the argument whole, and a Method's proc is still the method
+        /// called with one argument (in MRI both are not blocks the flag can apply to).
         /// </summary>
         public bool YieldForceBlockArg(object arg, out object blockResult) {
-            // a Symbol's proc (group_by(&:itself)) is a lambda as well, and takes the element whole
-            if (_proc.Kind == ProcKind.Lambda && _proc.SymbolName == null) {
-                var list = arg as IList;
-                var signature = _proc.Dispatcher.ParameterSignature;
-                if (list != null && signature != null && signature.AutoSplatsSingleArray) {
-                    return YieldSplat(list, out blockResult);
-                }
+            if (_proc.Kind == ProcKind.Lambda && _proc.SymbolName == null && !_proc.Dispatcher.WrapsMethod) {
+                return BlockJumped(blockResult = RubyOps.YieldForceBlockArg(arg, null, Self, this));
             }
             return Yield(arg, out blockResult);
         }
 
         public bool YieldSplat(IList/*!*/ args, out object blockResult) {
+            // One value is passed as `yield x` passes it: a lambda takes an Array whole rather than
+            // having it auto-splatted into its parameters ({1 => 2}.map(&->(a = nil, *t) { }) gets
+            // a = [1, 2], as in MRI).
+            if (args.Count == 1) {
+                return Yield(args[0], out blockResult);
+            }
             return BlockJumped(blockResult = RubyOps.YieldSplat0(args, null, Self, this));
         }
 
@@ -435,6 +454,21 @@ namespace IronRuby.Runtime {
     #region RubyOps
 
     public static partial class RubyOps {
+
+        /// <summary>
+        /// Yield1 without the lambda's arity check and with a plain block's binding (see
+        /// BlockParam.YieldForceBlockArg): the dispatcher takes an Array argument apart for a
+        /// block with several parameters, and pads or drops the rest, for a lambda as well.
+        /// </summary>
+        internal static object YieldForceBlockArg(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            object result;
+            try {
+                result = blockParam.Proc.Dispatcher.Invoke(blockParam, self, procArg, arg1);
+            } catch (EvalUnwinder evalUnwinder) {
+                result = blockParam.GetUnwinderResult(evalUnwinder);
+            }
+            return result;
+        }
 
         [Emitted]
         public static bool IsProcConverterTarget(BlockParam/*!*/ bfc, MethodUnwinder/*!*/ unwinder) {
