@@ -1193,8 +1193,25 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-22 for perf/lkw**: the branch at its ledger commit against master at
+  d7730f1b, Release net10.0: **PASS**. IronRuby.Tests 1,294 executed and PASSED on both trees.
+  34 matrices in five modes (the switches-off mode with `IR_LIGHT_KEYWORDS=0` too): 170 same, 0
+  differ. ruby/spec, all five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, six rounds, the order turned each round, ns a call, baseline -> candidate,
+  `Util/bench/keyword-shapes.rb`): a required keyword 176 -> 144 (0.82), an optional one given
+  184 -> 152 (0.83) and left out 144 -> 109 (0.76), two keywords 208 -> 176 (0.85), a keyword
+  after an optional 264 -> 208 (0.79), a small body 248 -> 216 (0.87), a default that reads a
+  parameter 168 -> 112 (0.67), `**rest` 272 -> 200 (0.74); a keyword after a positional 0.86
+  with overlapping rounds, alone 2,167 -> 2,022 instructions (0.93). The JIT-specialized keyword
+  method and the three controls 1.00, overlapping. Instructions a call 0.78-0.92 on the same
+  shapes. The regex, step, loop and super shapes overlap. micro-table: `str==` slower in both
+  orders again (1.14 and 1.12), and alone, eight rounds, 53.9 -> 53.6 ns: that line of the table
+  follows the shapes run before it, as in the last gate. AWFY, 12 iterations, both orders:
+  geomean 1.004 and 0.994 (new/base), every benchmark verified; the benchmarks define no method
+  with keywords. Start-up 1,195 and 1,209 ms.
+
 - **perf/lkw (/perf-step, 2026-11-22) - a method with keyword parameters in a light frame**
-  (`IR_LIGHT_KEYWORDS=0` turns it off) - census only, not gated. Three commits.
+  (`IR_LIGHT_KEYWORDS=0` turns it off) - census only when merged, gated on 2026-11-22 (first entry). Three commits.
   `IsLightFrameCandidate` refused any method with keywords, a `**rest` or `**nil` outright, the
   largest line of the census (1,257 methods). Nothing in their lowering needs the scope: the
   keywords arrive in a hidden optional parameter that holds the call's keyword hash, and a
