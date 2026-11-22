@@ -109,6 +109,10 @@ namespace IronRuby.Builtins {
             private int _sourceUnitSize;
 
             private Decoder/*!*/ _decoder;
+
+            // UTF8-MAC's composition (MRI's from_utf8_mac), which holds the last character decoded
+            // back for the one after it; null for any other source.
+            private readonly Utf8MacComposer _composer;
             private Encoder/*!*/ _encoder;
 
             private readonly List<byte>/*!*/ _incomplete = new List<byte>();
@@ -153,7 +157,8 @@ namespace IronRuby.Builtins {
                 _sourceUnitSize = GetUnitSize(path[0]);
                 _decoder = DecodeStageSource.TranscodingEncoding.GetDecoder();
                 _encoder = EncodeStageDestination.TranscodingEncoding.GetEncoder();
-                _replacement = DefaultReplacement(EncodeStageDestination);
+                _composer = _noConversion ? null : DecodeStageSource.CreateTranscodingComposer();
+                _replacement = DefaultReplacement(path);
                 _replacementBytes = EncodeReplacement(_replacement);
             }
 
@@ -177,13 +182,13 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// MRI's default replacement is U+FFFD for a Unicode destination and "?" for anything
-            /// else, and it is spelled in UTF-8 or US-ASCII respectively rather than in the
-            /// destination encoding - #replacement is a description of the replacement, not the
-            /// bytes the conversion will actually insert.
+            /// MRI's default replacement is U+FFFD where the last converter inserts output in UTF-8
+            /// (RubyExceptions.ReplacesWithUnicode) and "?" otherwise, and it is spelled in UTF-8 or
+            /// US-ASCII respectively rather than in the destination encoding - #replacement is a
+            /// description of the replacement, not the bytes the conversion will actually insert.
             /// </summary>
-            private static MutableString/*!*/ DefaultReplacement(RubyEncoding/*!*/ destination) {
-                return destination.IsUnicodeEncoding ?
+            private static MutableString/*!*/ DefaultReplacement(RubyEncoding/*!*/[]/*!*/ path) {
+                return RubyExceptions.ReplacesWithUnicode(path[0], path[path.Length - 1]) ?
                     MutableString.CreateMutable("�", RubyEncoding.UTF8) :
                     MutableString.CreateAscii("?");
             }
@@ -624,6 +629,11 @@ namespace IronRuby.Builtins {
                                 // sequence like any other, so :invalid => :replace covers it too
                                 // and the conversion finishes rather than stopping on it.
                                 ResetDecoder();
+                                string flushStatus = FlushComposer(written, limit);
+                                if (flushStatus != null) {
+                                    status = flushStatus;
+                                    break;
+                                }
                                 if (!EmitInserted(_replacementBytes, written, limit) || !EmitFinish(written, limit)) {
                                     status = "destination_buffer_full";
                                     break;
@@ -636,6 +646,8 @@ namespace IronRuby.Builtins {
                                 status = "incomplete_input";
                             } else if ((flags & PartialInputFlag) != 0) {
                                 status = "source_buffer_empty";
+                            } else if ((status = FlushComposer(written, limit)) != null) {
+                                // the character the composer held could not be written
                             } else if (!EmitFinish(written, limit)) {
                                 status = "destination_buffer_full";
                             } else {
@@ -706,6 +718,11 @@ namespace IronRuby.Builtins {
                                 // the putback buffer, because the conversion carries straight on
                                 // and they may well start a character of their own.
                                 consumed -= readAgain.Length;
+                                string flushStatus = FlushComposer(written, limit);
+                                if (flushStatus != null) {
+                                    status = flushStatus;
+                                    break;
+                                }
                                 if (!Emit(_replacementBytes, written, limit)) {
                                     status = "destination_buffer_full";
                                     break;
@@ -746,7 +763,13 @@ namespace IronRuby.Builtins {
                             break;
                         }
 
-                        string encodeStatus = EncodeChars(chars, charsUsed, written, limit);
+                        string encodeStatus;
+                        if (_composer != null) {
+                            string composed = _composer.Push(chars, charsUsed);
+                            encodeStatus = (composed.Length != 0) ? EncodeChars(composed.ToCharArray(), composed.Length, written, limit) : null;
+                        } else {
+                            encodeStatus = EncodeChars(chars, charsUsed, written, limit);
+                        }
                         if (encodeStatus != null) {
                             status = encodeStatus;
                             break;
@@ -1133,6 +1156,16 @@ namespace IronRuby.Builtins {
                 var result = new byte[count];
                 Array.Copy(array, start, result, 0, count);
                 return result;
+            }
+
+            // Writes out the character the UTF8-MAC composer holds, if there is one: at the end of
+            // the input, and before a replacement, which comes after it in MRI's single converter.
+            private string FlushComposer(List<byte>/*!*/ written, int limit) {
+                if (_composer == null) {
+                    return null;
+                }
+                string held = _composer.Flush();
+                return (held.Length != 0) ? EncodeChars(held.ToCharArray(), held.Length, written, limit) : null;
             }
 
             private void ResetDecoder() {

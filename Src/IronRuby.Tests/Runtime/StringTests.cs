@@ -1136,6 +1136,42 @@ end
         }
 
         /// <summary>
+        /// Converting to UTF8-MAC writes each character decomposed by Apple's table, and converting
+        /// from it composes pairs back (MRI's enc/trans/utf8_mac.c); a UTF8-MAC conversion's default
+        /// replacement is "?". Util/utf8-mac-matrix.rb has the rest.
+        /// </summary>
+        public void String_Utf8Mac1() {
+            TestOutput(@"
+def h(s) = s.unpack1('H*')
+['c3a9', 'e382ac', 'eab081', 'e284ab', 'e1ba9bcca3', 'c3bf', 'e0a598', 'ce90', 'f48fbfbf'].each do |x|
+  u = [x].pack('H*').force_encoding('UTF-8')
+  to = begin; h(u.encode('UTF8-MAC')); rescue => e; e.class; end
+  from = h(u.encode('UTF8-MAC').force_encoding('UTF8-MAC').encode('UTF-8')) rescue $!.class
+  puts ""#{x}: #{to} #{from}""
+end
+p h(['65cc81cc81', 'e18480e185a1e186a8', 'e0a495e0a4bc'].map { [_1].pack('H*') }.join.force_encoding('UTF8-MAC').encode('UTF-8'))
+ec = Encoding::Converter.new('UTF8-MAC', 'UTF-8')
+p [h(ec.convert('e')), h(ec.convert([0xcc, 0x81].pack('C*'))), h(ec.convert('x')), h(ec.finish)]
+p [Encoding::Converter.new('UTF-8', 'UTF8-MAC').replacement, Encoding::Converter.new('UTF-8', 'CESU-8').replacement.dump]
+p h(""e\xff"".dup.force_encoding('UTF8-MAC').encode('UTF-8', invalid: :replace))
+", @"
+c3a9: 65cc81 c3a9
+e382ac: e382abe38299 e382ac
+eab081: e18480e185a1e186a8 eab081
+e284ab: e284ab e284ab
+e1ba9bcca3: c5bfcc87cca3 e1ba9bcca3
+c3bf: 79cc88 c3bf
+e0a598: e0a495e0a4bc e0a495e0a4bc
+ce90: ce90 ce90
+f48fbfbf: Encoding::UndefinedConversionError Encoding::UndefinedConversionError
+""c3a9cc81eab081e0a495e0a4bc""
+["""", """", ""c3a9"", ""78""]
+[""?"", ""\""\\uFFFD\""""]
+""653f""
+");
+        }
+
+        /// <summary>
         /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
         /// messages), the encoding of the format says how long the character of the number is, "invalid character"
         /// when it has no length for it, and that many bytes of the number are put without asking whether they are a

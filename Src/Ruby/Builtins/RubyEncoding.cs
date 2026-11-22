@@ -719,15 +719,37 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// The encoding String#encode and Encoding::Converter read and write this one's bytes with:
         /// StrictEncoding, but for stateless-ISO-2022-JP and its KDDI variant, whose strings are held
-        /// by their Emacs-Mule shape while MRI transcodes only their JIS X 0208 characters.
+        /// by their Emacs-Mule shape while MRI transcodes only their JIS X 0208 characters, and for
+        /// UTF8-MAC, whose strings are UTF-8 while its converters decompose and compose
+        /// (Utf8MacTranscodingEncoding).
         /// </summary>
         public Encoding/*!*/ TranscodingEncoding {
             get {
                 if (CodePage == CodePageStatelessISO2022JP || CodePage == CodePageStatelessISO2022JPKDDI) {
                     return _transcodingEncoding ?? (_transcodingEncoding = new StatelessIso2022JpEncoding(CodePage, Name));
                 }
+                if (CodePage == CodePageUTF8Mac) {
+                    return _transcodingEncoding ?? (_transcodingEncoding = new Utf8MacTranscodingEncoding());
+                }
                 return _strictEncoding;
             }
+        }
+
+        /// <summary>
+        /// Finishes text a transcoder read from this encoding with TranscodingEncoding's decoder,
+        /// which hands back each character as soon as it is complete: UTF8-MAC composes the
+        /// characters it decomposed (MRI's from_utf8_mac), which needs the one after each.
+        /// </summary>
+        public string/*!*/ FinishTranscodingDecode(string/*!*/ text) {
+            return (CodePage == CodePageUTF8Mac) ? Utf8MacTables.Compose(text) : text;
+        }
+
+        /// <summary>
+        /// What Encoding::Converter passes the characters it decodes from this encoding through,
+        /// or null for nothing: UTF8-MAC composes them (FinishTranscodingDecode, over a stream).
+        /// </summary>
+        public Utf8MacComposer CreateTranscodingComposer() {
+            return (CodePage == CodePageUTF8Mac) ? new Utf8MacComposer() : null;
         }
 
         /// <summary>

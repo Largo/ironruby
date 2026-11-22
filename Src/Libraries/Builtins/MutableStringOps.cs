@@ -2865,13 +2865,14 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// MRI's default replacement is U+FFFD when the target can hold it and "?" otherwise.
+            /// MRI's default replacement: U+FFFD or "?", as the conversion's last converter
+            /// inserts output in UTF-8 or not (RubyExceptions.ReplacesWithUnicode).
             /// </summary>
-            internal MutableString/*!*/ GetReplacement(RubyEncoding/*!*/ to) {
+            internal MutableString/*!*/ GetReplacement(RubyEncoding/*!*/ from, RubyEncoding/*!*/ to) {
                 if (Replacement != null) {
                     return Replacement;
                 }
-                return to.IsUnicodeEncoding
+                return RubyExceptions.ReplacesWithUnicode(from, to)
                     ? MutableString.Create("�", to)
                     : MutableString.CreateAscii("?");
             }
@@ -3110,7 +3111,7 @@ namespace IronRuby.Builtins {
                     throw CreateUndefinedConversionError(piece, from, to, binarySource);
                 }
 
-                result.Append(settings.GetReplacement(to).ConvertToString());
+                result.Append(settings.GetReplacement(from, to).ConvertToString());
             }
         }
 
@@ -3189,7 +3190,7 @@ namespace IronRuby.Builtins {
                 return raw.ToString();
             }
 
-            string replacement = settings.ReplaceInvalid ? settings.GetReplacement(to).ConvertToString() : null;
+            string replacement = settings.ReplaceInvalid ? settings.GetReplacement(from, to).ConvertToString() : null;
 
             // A dummy encoding is stateful or BOM-led: an escape sequence or a byte order mark
             // decides how the bytes after it are read, and .NET's stock decoder loses that when it
@@ -3240,7 +3241,7 @@ namespace IronRuby.Builtins {
                             throw RubyExceptions.CreateUndefinedConversionError(
                                 RubyExceptions.InspectTranscodingBytes(character), character, RubyExceptions.ConversionPath(from, to), 0);
                         }
-                        result.Append(settings.GetReplacement(to).ConvertToString());
+                        result.Append(settings.GetReplacement(from, to).ConvertToString());
                         continue;
                     }
 
@@ -3285,7 +3286,7 @@ namespace IronRuby.Builtins {
                 result.Append(replacement);
             }
 
-            return result.ToString();
+            return from.FinishTranscodingDecode(result.ToString());
         }
 
         /// <summary>

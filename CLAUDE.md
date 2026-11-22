@@ -167,6 +167,7 @@ invalid definition is a build error (`IRGEN001`). To read what was generated, bu
 | `Src/Prism/Generated/*` | `cd Src/Prism && ruby generate.rb` | the pinned prism changes (CI regenerates them) |
 | `Src/Libraries/Builtins/InternalMethods.Generated.cs` | `Util/gen-internal-methods.rb` | |
 | `Src/Ruby/Builtins/UnicodeProperties.Generated.cs` | `Util/gen-unicode-properties.rb` | |
+| `Src/Ruby/Runtime/Utf8MacTables.Generated.cs` | `Util/gen-utf8-mac.rb` (with CRuby) | the oracle CRuby's UTF8-MAC converters change |
 | `*/AotSubclasses.Generated.cs` | `Util/aot/gen-subclasses.rb` | a library class is added |
 | `Src/Libraries/Rbs/RbsNodes.Generated.cs` | `Src/Libraries/Rbs/generate.rb` | |
 

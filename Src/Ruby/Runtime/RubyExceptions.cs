@@ -457,6 +457,38 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Whether MRI's default replacement for a conversion is U+FFFD rather than "?"
+        /// (make_replacement): U+FFFD when the encoding the conversion's last converter inserts
+        /// output in (rb_econv_encoding_to_insert_output) is UTF-8. That is the converter's
+        /// destination, but its source for one registered as an encoder: UTF-8 to UTF-16 and
+        /// UTF-32 (the byte order mark led ones too), UTF-8 to CESU-8 and UTF8-MAC to UTF-8. So
+        /// "\xFF" from UTF-8 to CESU-8 is replaced with U+FFFD, and from UTF8-MAC to UTF-8, from
+        /// UTF-8 to UTF8-MAC or to ISO-2022-JP with "?".
+        /// </summary>
+        public static bool ReplacesWithUnicode(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
+            var path = ConversionPath(source, destination);
+            RubyEncoding from = path[path.Length - 2], to = path[path.Length - 1];
+            bool encoder;
+            switch (to.CodePage) {
+                case RubyEncoding.CodePageUTF16BE:
+                case RubyEncoding.CodePageUTF16LE:
+                case RubyEncoding.CodePageUTF16:
+                case RubyEncoding.CodePageUTF32BE:
+                case RubyEncoding.CodePageUTF32LE:
+                case RubyEncoding.CodePageUTF32:
+                    encoder = true;
+                    break;
+                case RubyEncoding.CodePageCESU8:
+                    encoder = from == RubyEncoding.UTF8;
+                    break;
+                default:
+                    encoder = from.CodePage == RubyEncoding.CodePageUTF8Mac;
+                    break;
+            }
+            return (encoder ? from : to) == RubyEncoding.UTF8;
+        }
+
+        /// <summary>
         /// The encodings a conversion actually passes through. MRI's transcoder table has a direct
         /// converter between UTF-8 and nearly everything else and routes the rest through UTF-8, so
         /// a pair with UTF-8 at one end is one hop and any other pair is two.
