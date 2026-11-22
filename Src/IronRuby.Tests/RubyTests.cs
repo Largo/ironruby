@@ -1073,6 +1073,7 @@ namespace IronRuby.Tests {
                 Io_LineReaders2,
                 Io_LineReaders3,
                 Io_UngetcConverted1,
+                Io_GetsLongLineFromPipe1,
                 Io_UnreadPushedBack1,
                 Io_WideLineReaders1,
                 Io_Timeout1,

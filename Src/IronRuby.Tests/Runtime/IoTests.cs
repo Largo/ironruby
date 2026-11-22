@@ -876,6 +876,26 @@ us-ascii: [RangeError, ""invalid codepoint 0xE9 in US-ASCII""]
         /// buffer reaching back past the start of the file is not given back. IO.copy_stream writes through its
         /// destination IO the same way, and to the end of a file opened for appending.
         /// </summary>
+        /// <summary>
+        /// A line longer than the read buffer that reaches a pipe in two writes is one line: a
+        /// short read is not the end of the stream (test_io's test_gets_chomp_default_rs).
+        /// </summary>
+        public void Io_GetsLongLineFromPipe1() {
+            TestOutput(@"
+[8188, 20000].each do |n|
+  r, w = IO.pipe
+  t = Thread.new { w.write('a' * n); sleep 0.2; w.write(""\r\na\r\n""); w.close }
+  first = r.gets
+  p [first.size, first.end_with?(""\r\n""), r.gets(chomp: true), r.gets]
+  t.join
+  r.close
+end
+", @"
+[8190, true, ""a"", nil]
+[20002, true, ""a"", nil]
+");
+        }
+
         public void Io_UnreadPushedBack1() {
             TestOutput(@"
 require 'ruby4'

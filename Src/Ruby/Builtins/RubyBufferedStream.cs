@@ -655,23 +655,23 @@ namespace IronRuby.Builtins {
             bool bufferResized = false;
             int lf = Array.IndexOf(_buffer, LF, _bufferStart, _bufferCount);
             while (lf < 0) {
-                int s = _bufferCount;
-                LoadBuffer(_buffer.Length - _bufferCount);
-                Debug.Assert(_bufferStart == 0);
-
-                lf = Array.IndexOf(_buffer, LF, s, _bufferCount - s);
-                if (lf >= 0) {
-                    break;
+                if (_bufferCount == _buffer.Length) {
+                    Debug.Assert(_bufferStart == 0);
+                    Array.Resize(ref _buffer, _buffer.Length << 1);
+                    bufferResized = true;
                 }
 
-                // end of stream:
-                if (_bufferCount < _buffer.Length) {
+                // Only a read of nothing is the end of the stream. A pipe or a socket hands over
+                // what it has so far, so a short read used to end the line there: a line longer
+                // than the buffer that arrived in two writes came back as two lines.
+                int s = _bufferCount;
+                int loaded = LoadBuffer(_buffer.Length - _bufferCount);
+                Debug.Assert(_bufferStart == 0);
+                if (loaded == 0) {
                     return ConsumeLine(encoding, _bufferCount, _bufferCount, bufferResized);
                 }
 
-                Array.Resize(ref _buffer, _buffer.Length << 1);
-                bufferResized = true;
-                _bufferStart = 0;
+                lf = Array.IndexOf(_buffer, LF, s, _bufferCount - s);
             }
 
             int lineLength;
