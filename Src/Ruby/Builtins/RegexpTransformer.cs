@@ -1795,8 +1795,14 @@ namespace IronRuby.Builtins {
 
             if (value >= 10) {
                 // Not a group that exists, and too long to be a forward reference: Ruby re-reads
-                // the digits as an octal escape, so \10 is "\b".
+                // the digits as an octal escape, so \10 is "\b". An 8 or a 9 begins no octal
+                // escape: Onigmo's fetch_token takes it as itself, so \80 is "80".
                 _index = start;
+                if (firstDigit == '8' || firstDigit == '9') {
+                    Skip();
+                    AppendEscaped(firstDigit);
+                    return;
+                }
                 AppendEscaped(ParseSingleByteCharacterEscape(Read()));
                 return;
             }
