@@ -170,5 +170,45 @@ true
 [[:req]]
 ");
         }
+
+        /// <summary>
+        /// is_a?, kind_of? and instance_of? with nil or a value that is no module raise
+        /// TypeError "class or module required" (rb_obj_is_kind_of), not ArgumentNullException
+        /// or a conversion's "no implicit conversion of X into Module".
+        /// </summary>
+        public void Kernel_IsAModuleRequired1() {
+            TestOutput(@"
+[nil, 3, 'String', :Sym, Object.new].each do |k|
+  [:is_a?, :kind_of?, :instance_of?].each do |m|
+    begin
+      1.send(m, k)
+    rescue TypeError => e
+      puts ""#{m} #{k.class}: #{e.message}""
+    end
+  end
+end
+p 1.is_a?(Comparable), 1.kind_of?(Integer), 1.instance_of?(Integer), 1.instance_of?(Comparable)
+", @"
+is_a? NilClass: class or module required
+kind_of? NilClass: class or module required
+instance_of? NilClass: class or module required
+is_a? Integer: class or module required
+kind_of? Integer: class or module required
+instance_of? Integer: class or module required
+is_a? String: class or module required
+kind_of? String: class or module required
+instance_of? String: class or module required
+is_a? Symbol: class or module required
+kind_of? Symbol: class or module required
+instance_of? Symbol: class or module required
+is_a? Object: class or module required
+kind_of? Object: class or module required
+instance_of? Object: class or module required
+true
+true
+true
+false
+");
+        }
     }
 }

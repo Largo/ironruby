@@ -1753,16 +1753,26 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("is_a?")]
         [RubyMethod("kind_of?")]
-        public static bool IsKindOf(object self, RubyModule/*!*/ other) {
-            ContractUtils.RequiresNotNull(other, "other");
-            return other.Context.IsKindOf(self, other);
+        public static bool IsKindOf(object self, object other) {
+            var module = RequireModule(other);
+            return module.Context.IsKindOf(self, module);
         }
 
         // thread-safe:
         [RubyMethod("instance_of?")]
-        public static bool IsOfClass(object self, RubyModule/*!*/ other) {
-            ContractUtils.RequiresNotNull(other, "other");
-            return other.Context.GetClassOf(self) == other;
+        public static bool IsOfClass(object self, object other) {
+            var module = RequireModule(other);
+            return module.Context.GetClassOf(self) == module;
+        }
+
+        // rb_obj_is_kind_of and rb_obj_is_instance_of: an argument that is no class or module (nil
+        // included) is a TypeError of their own wording, not a failed implicit conversion to Module.
+        private static RubyModule/*!*/ RequireModule(object other) {
+            var module = other as RubyModule;
+            if (module == null) {
+                throw RubyExceptions.CreateTypeError("class or module required");
+            }
+            return module;
         }
 
         [RubyMethod("extend")]
