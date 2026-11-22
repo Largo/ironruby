@@ -80,6 +80,20 @@ namespace IronRuby.Compiler.Ast {
         }
 
         MSA.Expression/*!*/ StringConstructor.IFactory.CreateExpressionM(AstGenerator/*!*/ gen, MSAst.ExpressionCollectionBuilder/*!*/ args) {
+            // Literal parts only (/a#{"b"}c/, folded by the parser), merged into one constant: the regexp
+            // is as static as /abc/, built once and a SyntaxError if Onigmo rejects it, as MRI compiles it.
+            // The text gets the encoding CreateMutableStringM would give it.
+            if (args.Count == 1 && args.Expression0 is MSA.ConstantExpression constant && constant.Value is MutableString literal) {
+                var encoding = literal.Encoding;
+                var sourceEncoding = gen.Encoding;
+                if (encoding != sourceEncoding && sourceEncoding != RubyEncoding.Ascii && sourceEncoding.IsAsciiIdentity && literal.IsAscii()) {
+                    encoding = sourceEncoding;
+                }
+                return Methods.CreateRegexB.OpCall(
+                    Ast.Constant(literal.ToByteArray()), encoding.Expression, AstUtils.Constant(_options), AstUtils.Constant(new StrongBox<RubyRegex>(null))
+                );
+            }
+
             string suffix = new String('M', args.Count);
             args.Add(gen.Encoding.Expression);
             args.Add(AstUtils.Constant(_options));

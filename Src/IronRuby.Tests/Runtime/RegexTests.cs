@@ -620,6 +620,49 @@ RegexpError
             Assert(field.GetValue(d) == compiled);
             Assert(d.Match(input).GetGroupStart(1) == 10); // the last "tr"
         }
+
+        /// <summary>
+        /// The encoding of a regexp literal and MRI's preprocessing of its pieces: a \x escape above
+        /// 0x7f makes a US-ASCII file's literal binary, a literal interpolating only string literals
+        /// is built once and a SyntaxError if it is invalid, each literal piece of an interpolated
+        /// one must be valid alone, and the interpolated pieces must be valid and agree on an
+        /// encoding (rb_reg_preprocess_dregexp). A \u escape cannot meet bytes of another encoding.
+        /// </summary>
+        public void Regex_LiteralEncodings1() {
+            TestOutput(@"
+require 'ruby4'
+def t(code)
+  eval(code).encoding
+rescue SyntaxError, RegexpError, ArgumentError => e
+  e.class
+end
+p t(%Q{# encoding: US-ASCII\n/\\x80/})
+p t(%Q{/a\#{""\\x80""}/})
+p t(%Q{/\\xc2\#{ }\\xa1/u})
+p t(%Q{/\\xc2\\xa1\#{ }/u})
+s1, s2 = '\xc2', '\xa1'
+p((/#{s1}#{s2}/ rescue $!))
+x = ""\x80""
+p((/#{x}/ rescue $!))
+p((Regexp.new(""\xc2\xa1\\u{6666}"".b) rescue $!))
+p((Regexp.new(""\\u{6666}\\xc2\\xa1"".b) rescue $!))
+p 2.times.map { /a#{""b""}c/ }.uniq(&:object_id).size
+r = Regexp.new(""\xa4\xa2"".b.force_encoding(""EUC-JP""))
+s = ""\x82\xa0"".b.force_encoding(""Windows-31J"")
+p((/#{s}#{r}/ rescue $!))
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+SyntaxError
+SyntaxError
+#<Encoding:UTF-8>
+#<ArgumentError: too short escaped multibyte character>
+#<ArgumentError: invalid multibyte character>
+#<RegexpError: UTF-8 character in non UTF-8 regexp: /\xC2\xA1\u{6666}/>
+#<RegexpError: escaped non ASCII character in UTF-8 regexp: /\u{6666}\xc2\xa1/>
+1
+#<RegexpError: encoding mismatch in dynamic regexp : Windows-31J and EUC-JP>
+");
+        }
     }
 }
 

@@ -1285,11 +1285,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <summary>
         /// Whether the character at the index is a byte that is not valid in the string's encoding,
-        /// which EscapingEncoding holds as a lone low surrogate, U+DC80 plus the byte.
+        /// which EscapingEncoding holds as a lone low surrogate, U+DC00 plus the byte.
         /// </summary>
         private static bool IsEscapedByte(MutableString/*!*/ str, int index) {
             char c = str.GetChar(index);
-            return c >= '\uDC80' && c <= '\uDCFF' && (index == 0 || !Char.IsHighSurrogate(str.GetChar(index - 1)));
+            return c >= '\uDC00' && c <= '\uDCFF' && (index == 0 || !Char.IsHighSurrogate(str.GetChar(index - 1)));
         }
 
         [RubyMethod("ord")]
@@ -2064,6 +2064,84 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        private static bool IsWideUnicode(RubyEncoding/*!*/ encoding) {
+            switch (encoding.CodePage) {
+                case RubyEncoding.CodePageUTF16LE:
+                case RubyEncoding.CodePageUTF16BE:
+                case RubyEncoding.CodePageUTF32LE:
+                case RubyEncoding.CodePageUTF32BE:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// MRI's smart_chomp (and, with <paramref name="paragraph"/>, the loop chompped_length runs
+        /// for an empty separator) in UTF-16 and UTF-32, done on the bytes: a string of a broken
+        /// length is not a whole number of characters, and the newline MRI finds is the one at the
+        /// head of the character the last code unit's worth of bytes falls in. So "A" in UTF-16BE
+        /// is left as it is, and "\n\0x" in UTF-16LE (a newline and a stray byte) chomps to "".
+        /// </summary>
+        private static MutableString/*!*/ WideChomp(MutableString/*!*/ self, bool paragraph) {
+            byte[] bytes = self.ToByteArray();
+            RubyEncoding encoding = self.Encoding;
+            int unit = encoding.MinBytesPerChar;
+            int end = bytes.Length;
+            while (end >= unit) {
+                int head = WideLeftCharHead(bytes, end - unit, encoding);
+                bool newline = WideCodeAt(bytes, head, end, encoding) == '\n';
+                if (newline) {
+                    end = head;
+                } else if (paragraph) {
+                    break;
+                }
+                int previous = end - unit;
+                if (previous >= 0) {
+                    previous = WideLeftCharHead(bytes, previous, encoding);
+                    if (WideCodeAt(bytes, previous, end, encoding) == '\r' && (newline || !paragraph)) {
+                        end = previous;
+                    }
+                }
+                if (!paragraph) {
+                    break;
+                }
+            }
+
+            var result = self.CreateDerived();
+            result.Append(bytes, 0, end);
+            return result;
+        }
+
+        // Onigmo's left_adjust_char_head for UTF-16 and UTF-32: back to a code unit boundary, and
+        // in UTF-16 back over a high surrogate the unit there is the second half of.
+        private static int WideLeftCharHead(byte[]/*!*/ bytes, int position, RubyEncoding/*!*/ encoding) {
+            int unit = encoding.MinBytesPerChar;
+            position -= position % unit;
+            if (unit == 2 && position >= 2 && WideUnitAt(bytes, position, encoding) is int low && low >= 0xDC00 && low <= 0xDFFF) {
+                int high = WideUnitAt(bytes, position - 2, encoding);
+                if (high >= 0xD800 && high <= 0xDBFF) {
+                    position -= 2;
+                }
+            }
+            return position;
+        }
+
+        private static int WideUnitAt(byte[]/*!*/ bytes, int position, RubyEncoding/*!*/ encoding) {
+            bool bigEndian = encoding.IsBigEndianUnicode;
+            if (encoding.MinBytesPerChar == 2) {
+                return bigEndian ? (bytes[position] << 8) | bytes[position + 1] : (bytes[position + 1] << 8) | bytes[position];
+            }
+            return bigEndian
+                ? (bytes[position] << 24) | (bytes[position + 1] << 16) | (bytes[position + 2] << 8) | bytes[position + 3]
+                : (bytes[position + 3] << 24) | (bytes[position + 2] << 16) | (bytes[position + 1] << 8) | bytes[position];
+        }
+
+        // The code unit at position if a whole one fits before end, -1 if not.
+        private static int WideCodeAt(byte[]/*!*/ bytes, int position, int end, RubyEncoding/*!*/ encoding) {
+            return position + encoding.MinBytesPerChar <= end ? WideUnitAt(bytes, position, encoding) : -1;
+        }
+
         private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
                 return self.CloneDerived();
@@ -2071,7 +2149,7 @@ namespace IronRuby.Builtins {
 
             // Remove multiple trailing CR/LFs
             if (separator.IsEmpty) {
-                return ChompTrailingCarriageReturns(self, false);
+                return IsWideUnicode(self.Encoding) ? WideChomp(self, true) : ChompTrailingCarriageReturns(self, false);
             }
 
             // Remove single trailing CR/LFs
@@ -2082,6 +2160,9 @@ namespace IronRuby.Builtins {
                 separator.GetCharCount() == 1 && separator.GetChar(0) == '\n';
             if (!newline) {
                 self.RequireCompatibleEncoding(separator);
+            }
+            if (newline && IsWideUnicode(self.Encoding)) {
+                return WideChomp(self, false);
             }
             if (newline) {
                 if (length > 1 && result.GetChar(length - 2) == '\r' && result.GetChar(length - 1) == '\n') {

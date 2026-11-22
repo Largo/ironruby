@@ -3246,13 +3246,13 @@ namespace IronRuby.Runtime {
                 if (once) {
                     // Note that the user is responsible for thread synchronization
                     if (regexpCache.Value == null) {
-                        regexpCache.Value = CreateFrozen(createRegex);
+                        regexpCache.Value = CreateFrozen(createRegex, isLiteralWithoutSubstitutions);
                     }
                     return regexpCache.Value;
                 } else {
                     // In the future, we can consider caching the last Regexp. For some regexp literals 
                     // with substitution, the substition will be the same most of the time
-                    return CreateFrozen(createRegex);
+                    return CreateFrozen(createRegex, isLiteralWithoutSubstitutions);
                 }
             } catch (RegexpError e) {
                 if (isLiteralWithoutSubstitutions) {
@@ -3269,9 +3269,15 @@ namespace IronRuby.Runtime {
         /// MRI freezes a regexp literal, interpolated or not, but leaves Regexp.new unfrozen.
         /// Every literal is built through here, so this is the one place that has to do it.
         /// It does not intern them: /x/.equal?(/x/) is false in MRI too.
+        /// A literal whose bytes do not decode in its encoding (/#{"\x80"}/ in a UTF-8 file) is
+        /// refused when it is compiled, which comes out as a SyntaxError; the pieces of an
+        /// interpolated one have been checked by CheckDynamicRegexParts.
         /// </summary>
-        private static RubyRegex/*!*/ CreateFrozen(Func<RubyRegex> createRegex) {
+        private static RubyRegex/*!*/ CreateFrozen(Func<RubyRegex> createRegex, bool isLiteralWithoutSubstitutions) {
             var result = createRegex();
+            if (isLiteralWithoutSubstitutions) {
+                RubyRegex.RequireValidPattern(result.Pattern);
+            }
             result.Freeze();
             return result;
         }
@@ -3300,33 +3306,66 @@ namespace IronRuby.Runtime {
             return CreateRegexWorker(options, regexpCache, true, createRegex);
         }
         
+        /// <summary>
+        /// MRI's rb_reg_preprocess_dregexp: each piece of an interpolated regexp has to be valid in
+        /// its own encoding (or it is an ArgumentError, even when the pieces would make a valid
+        /// string together), and the pieces that tie the regexp to an encoding - by a character
+        /// outside ASCII, or an escape of one - have to agree on which.
+        /// </summary>
+        private static void CheckDynamicRegexParts(MutableString part1, MutableString part2) {
+            RubyEncoding fixedEncoding = null;
+            CheckDynamicRegexPart(part1, ref fixedEncoding);
+            CheckDynamicRegexPart(part2, ref fixedEncoding);
+        }
+
+        private static void CheckDynamicRegexParts(MutableString/*!*/[]/*!*/ parts) {
+            RubyEncoding fixedEncoding = null;
+            foreach (var part in parts) {
+                CheckDynamicRegexPart(part, ref fixedEncoding);
+            }
+        }
+
+        private static void CheckDynamicRegexPart(MutableString part, ref RubyEncoding fixedEncoding) {
+            if (part == null) {
+                return;
+            }
+            RubyEncoding encoding = RubyRegex.GetFixedEncoding(part);
+            if (encoding == null) {
+                return;
+            }
+            if (fixedEncoding != null && fixedEncoding != encoding) {
+                throw new RegexpError("encoding mismatch in dynamic regexp : " + fixedEncoding.Name + " and " + encoding.Name);
+            }
+            fixedEncoding = encoding;
+        }
+
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexM(MutableString str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringM(str1, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(str1, null); return new RubyRegex(CreateMutableStringM(str1, encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringLM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(MutableString.Create(str1, encoding), str2); return new RubyRegex(CreateMutableStringLM(str1, str2, encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexML(MutableString str1, string/*!*/ str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringML(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(str1, MutableString.Create(str2, encoding)); return new RubyRegex(CreateMutableStringML(str1, str2, encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringMM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(str1, str2); return new RubyRegex(CreateMutableStringMM(str1, str2, encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexN(MutableString[]/*!*/ strings, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringN(strings), options); };
+            Func<RubyRegex> createRegex = delegate { CheckDynamicRegexParts(strings); return new RubyRegex(CreateMutableStringN(strings), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 

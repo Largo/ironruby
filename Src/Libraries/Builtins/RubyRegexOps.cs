@@ -834,8 +834,9 @@ namespace IronRuby.Builtins {
                 RubyEncoding encoding;
                 var regex = part as RubyRegex;
                 if (regex != null) {
-                    encoding = IsAsciiOnly(regex.Pattern) && (regex.Options & RubyRegexOptions.FixedEncoding) == 0
-                        ? null : regex.Encoding;
+                    // MRI asks rb_reg_fixed_encoding_p: /\p{Alpha}/ and /abc/u are tied to an
+                    // encoding although their sources are ASCII only
+                    encoding = IsAsciiOnly(regex.Pattern) && !regex.IsFixedEncoding ? null : regex.Encoding;
                 } else {
                     var str = (MutableString)part;
                     encoding = IsAsciiOnly(str) ? null : str.Encoding;

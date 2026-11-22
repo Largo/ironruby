@@ -3194,9 +3194,9 @@ namespace IronRuby.Builtins {
             return inc;
         }
 
-        /// <summary>A lone low surrogate in U+DC80..U+DCFF stands for one undecodable byte.</summary>
+        /// <summary>A lone low surrogate in U+DC00..U+DCFF stands for one undecodable byte.</summary>
         private static bool IsEscapedByte(int c) {
-            return c >= EscapingEncoding.EscapeBase + 0x80 && c <= EscapingEncoding.EscapeBase + 0xFF;
+            return c >= EscapingEncoding.EscapeBase && c <= EscapingEncoding.EscapeBase + 0xFF;
         }
 
         /// <summary>\uXXXX up to U+FFFF, \u{XXXXXX} above it - MRI writes both in upper case.</summary>

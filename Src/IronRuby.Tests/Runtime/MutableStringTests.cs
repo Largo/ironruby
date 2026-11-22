@@ -2088,5 +2088,32 @@ puts checks, failures.size
 0
 ");
         }
+
+        /// <summary>
+        /// A UTF-16 or UTF-32 string of a broken length keeps its bytes through the character
+        /// representation (the odd byte is escaped as U+DC00 plus the byte, even below 0x80), and
+        /// #chomp works on the bytes as MRI's smart_chomp does.
+        /// </summary>
+        public void MutableString_WideBrokenLength1() {
+            TestOutput(@"
+require 'ruby4'
+%w[UTF-16BE UTF-16LE UTF-32LE].each do |enc|
+  s = ""A"".b.force_encoding(enc)
+  p [s.chomp.b, s.chomp("""").b, s.chomp!, s.reverse.b]
+end
+s = ""\n\x00x"".b.force_encoding(""UTF-16LE"")
+p s.chomp.b, s.lines.map(&:b)
+p ""a\x00\r\x00\n\x00"".b.force_encoding(""UTF-16LE"").chomp.b
+p ""a\x00\n\x00\n\x00\r\x00"".b.force_encoding(""UTF-16LE"").chomp("""").b
+", @"
+[""A"", ""A"", nil, ""A""]
+[""A"", ""A"", nil, ""A""]
+[""A"", ""A"", nil, ""A""]
+""""
+[""\n\x00"", ""x""]
+""a\x00""
+""a\x00\n\x00\n\x00\r\x00""
+");
+        }
     }
 }
