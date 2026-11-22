@@ -547,7 +547,8 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// Same as Sleep() but with a timeout; returns true if the full timeout elapsed.
+            /// Same as Sleep() but with a timeout (or Timeout.Infinite); returns false if the full timeout
+            /// elapsed (or an interrupt ended the sleep with nothing to deliver), true if it was woken.
             /// </summary>
             internal bool Sleep(int milliseconds) {
                 RubyUtils.CheckAsyncException();
@@ -558,18 +559,23 @@ namespace IronRuby.Builtins {
                     long deadline = Environment.TickCount64 + milliseconds;
                     while (true) {
                         _inManagedWait = true;
+                        bool woken;
                         try {
-                            if (!_runSignal.WaitOne(milliseconds)) {
-                                return true;
+                            woken = _runSignal.WaitOne(milliseconds);
+                            if (!woken) {
+                                return false;
                             }
                         } catch (ThreadInterruptedException) {
                             _inManagedWait = wasWaiting;
                             RubyUtils.TranslateThreadInterrupt();
+                            woken = false;
                         }
                         if (!WokenForMaskedInterrupt()) {
-                            return false;
+                            return woken;
                         }
-                        milliseconds = (int)Math.Max(0, deadline - Environment.TickCount64);
+                        if (milliseconds != Timeout.Infinite) {
+                            milliseconds = (int)Math.Max(0, deadline - Environment.TickCount64);
+                        }
                     }
                 } finally {
                     EndSleep(wasSleeping);
