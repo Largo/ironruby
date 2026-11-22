@@ -1,10 +1,10 @@
 # CRuby's test/ruby on IronRuby
 
 CRuby's own tests (`test/ruby/test_*.rb` of a ruby/ruby checkout at the release IronRuby
-follows, v4.0.9 here) run on IronRuby with CRuby's test-unit, next to ruby/spec.
+follows, v4.0.10 here) run on IronRuby with CRuby's test-unit, next to ruby/spec.
 
 ```sh
-git clone --depth 1 --branch v4.0.9 https://github.com/ruby/ruby ../cruby
+git clone --depth 1 --branch v4.0.10 https://github.com/ruby/ruby ../cruby
 ./ir.sh Util/cruby-test/runner.rb ../cruby -v ../cruby/test/ruby/test_array.rb      # one file
 ./ir.sh Util/cruby-test/runner.rb ../cruby -v -n test_flatten ../cruby/test/ruby/test_array.rb
 Util/cruby-test/sweep.sh ../cruby out            # every file, one process each
@@ -17,6 +17,10 @@ ruby Util/cruby-test/summary.rb out [baseline_out]
   format) for tests that hang or kill the process and cannot pass on IronRuby, so that the
   rest of their file is counted. It is not a list of known failures: a test that merely fails
   stays in.
+- `lib/` stands in for the `-test-` C extensions some files require (`-test-/string`,
+  `-test-/iter`, `-test-/integer`...): the Ruby-level parts are written in Ruby, and a method
+  that only makes sense in C raises NotImplementedError, so the file loads and the tests that
+  do not use it are counted.
 - `baseline.txt` is `summary.rb`'s output for the last full sweep.
 - `PACKAGES.md` cuts the failing files into work packages.
 

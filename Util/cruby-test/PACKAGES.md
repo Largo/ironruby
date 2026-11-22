@@ -15,8 +15,8 @@ test files one person (or agent) takes, in a build tree of their own.
    shared cause first: one missing method or wrong message often fails several tests.
 3. **Where a method lives:** `Src/Libraries/Builtins/*Ops.cs` *and* the prelude
    `Src/StdLib/ironruby/ruby4.rb`; the prelude wins. A `.rb` change needs no rebuild. A
-   `[RubyMethod]` signature or attribute change needs `./regen-initializers.sh`; check that the
-   generated diff holds only your change.
+   `[RubyMethod]` signature or attribute change needs only a build (the initializers are
+   generated during it).
 4. **Check each fix:** the reduced snippet against CRuby, the test file before and after
    (failures must go down and nothing else in the file may break), and the ruby/spec files of
    the methods touched (`./ir.sh -Imspec/lib mspec/bin/mspec-run spec/core/<class>/<method>_spec.rb`)
