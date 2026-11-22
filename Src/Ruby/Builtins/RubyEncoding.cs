@@ -717,6 +717,36 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// The length of the character at <paramref name="index"/> of bytes that end at
+        /// <paramref name="end"/>, or -1 if no well formed character begins there (MRI's
+        /// rb_enc_precise_mbclen, MBCLEN_CHARFOUND_P). Every byte is a character of a single
+        /// byte encoding; the Unicode encodings other than UTF-8 are not covered.
+        /// </summary>
+        public int GetCharacterLengthAt(byte[]/*!*/ bytes, int index, int end) {
+            if (index >= end) {
+                return -1;
+            }
+            if (StrictEncoding.CodePage == 65001) {
+                int lead = bytes[index];
+                int length = (lead < 0x80) ? 1 : (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : -1;
+                if (length <= 1 || index + length > end) {
+                    return (length == 1) ? 1 : -1;
+                }
+                try {
+                    new UTF8Encoding(false, true).GetCharCount(bytes, index, length);
+                    return length;
+                } catch (DecoderFallbackException) {
+                    return -1;
+                }
+            }
+            int result = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, index, end);
+            if (result == Int32.MinValue) {
+                return 1;
+            }
+            return (result > 0) ? result : -1;
+        }
+
+        /// <summary>
         /// Whether <paramref name="offset"/> bytes into bytes[start, start + count) a character
         /// begins (MRI's rb_enc_left_char_head(s, p, e, enc) == p). In EUC-JP or Shift_JIS the
         /// bytes of a separator can be found straddling two characters, which is no separator.

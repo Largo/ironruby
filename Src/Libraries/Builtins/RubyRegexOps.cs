@@ -415,7 +415,7 @@ namespace IronRuby.Builtins {
             if (!self.IsInitialized) {
                 return RubyUtils.ObjectToMutableString(context, self);
             }
-            return self.Inspect();
+            return self.Inspect(context.DefaultInternalEncoding ?? context.DefaultExternalEncoding);
         }
 
         [RubyMethod("options")]

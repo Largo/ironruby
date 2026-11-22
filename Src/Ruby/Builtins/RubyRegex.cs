@@ -1420,14 +1420,34 @@ namespace IronRuby.Builtins {
             return ToMutableString().ToString();
         }
 
+        /// <summary>
+        /// #to_s, in the regexp's encoding as MRI's rb_reg_str_with_term has it: /abc/.to_s is
+        /// US-ASCII, and a UTF-16 regexp's is UTF-16 from its "(?-mix:" on.
+        /// </summary>
         public MutableString/*!*/ ToMutableString() {
-            return AppendTo(MutableString.CreateMutable(RubyEncoding.Binary));
+            return AppendTo(MutableString.CreateMutable(Encoding));
         }
 
         public MutableString/*!*/ Inspect() {
-            MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
+            return Inspect(null);
+        }
+
+        /// <summary>
+        /// #inspect, which MRI's rb_reg_desc writes in the regexp's encoding (US-ASCII for one
+        /// that is not ASCII compatible). A character that is not ASCII is copied as it is only
+        /// when the regexp is in <paramref name="resultEncoding"/> (default_internal, or else
+        /// default_external): otherwise it is escaped, so that /\xF1/n shows its byte as "\xF1".
+        /// </summary>
+        public MutableString/*!*/ Inspect(RubyEncoding resultEncoding) {
+            RubyEncoding encoding = Encoding;
+            MutableString result = MutableString.CreateMutable(encoding.IsAsciiIdentity ? encoding : RubyEncoding.Ascii);
             result.Append('/');
-            AppendEscapeForwardSlash(result, _pattern);
+            if (resultEncoding != null && encoding.IsAsciiIdentity && !_pattern.IsAscii() &&
+                (encoding != resultEncoding || _pattern.ContainsInvalidCharacters())) {
+                result.Append(EscapeNonAscii(_pattern, encoding));
+            } else {
+                AppendEscapeForwardSlash(result, _pattern);
+            }
             result.Append('/');
             AppendOptionString(result, true);
             if ((_options & RubyRegexOptions.FIXED) != 0) {
@@ -1592,6 +1612,75 @@ namespace IronRuby.Builtins {
             }
 
             return count;
+        }
+
+        /// <summary>
+        /// The escaping half of MRI's rb_reg_expr_str: a byte that begins no character is \xHH,
+        /// another character that is not ASCII is \uHHHH (\u{H...} past the BMP) in a Unicode
+        /// encoding and \xHH or \x{H...} of its bytes in any other, a '/' gets a backslash, an
+        /// unprintable ASCII character that is no space is \xHH, and a backslash and the
+        /// character after it go through as they are.
+        /// </summary>
+        private static MutableString/*!*/ EscapeNonAscii(MutableString/*!*/ pattern, RubyEncoding/*!*/ encoding) {
+            byte[] bytes = pattern.ToByteArray();
+            var result = new List<byte>(bytes.Length + 16);
+            bool unicode = encoding.IsUnicodeEncoding;
+            int i = 0;
+            while (i < bytes.Length) {
+                byte b = bytes[i];
+                if (b == '\\' && i + 1 < bytes.Length) {
+                    int next = encoding.GetCharacterLengthAt(bytes, i + 1, bytes.Length);
+                    int n = 1 + Math.Max(next, 1);
+                    for (int j = 0; j < n; j++) {
+                        result.Add(bytes[i + j]);
+                    }
+                    i += n;
+                    continue;
+                }
+                if (b < 0x80) {
+                    if (b == '/') {
+                        result.Add((byte)'\\');
+                        result.Add(b);
+                    } else if (b < 0x20 && (b < '\t' || b > '\r') || b == 0x7f) {
+                        AppendAscii(result, "\\x" + b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                    } else {
+                        result.Add(b);
+                    }
+                    i++;
+                    continue;
+                }
+
+                int length = encoding.GetCharacterLengthAt(bytes, i, bytes.Length);
+                if (length <= 0) {
+                    AppendAscii(result, "\\x" + b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                    i++;
+                    continue;
+                }
+
+                int codepoint;
+                if (unicode) {
+                    codepoint = Char.ConvertToUtf32(System.Text.Encoding.UTF8.GetString(bytes, i, length), 0);
+                    AppendAscii(result, (codepoint < 0x10000)
+                        ? "\\u" + codepoint.ToString("X4", System.Globalization.CultureInfo.InvariantCulture)
+                        : "\\u{" + codepoint.ToString("X", System.Globalization.CultureInfo.InvariantCulture) + "}");
+                } else {
+                    codepoint = 0;
+                    for (int j = 0; j < length; j++) {
+                        codepoint = (codepoint << 8) | bytes[i + j];
+                    }
+                    AppendAscii(result, (codepoint < 0x100)
+                        ? "\\x" + codepoint.ToString("X2", System.Globalization.CultureInfo.InvariantCulture)
+                        : "\\x{" + codepoint.ToString("X", System.Globalization.CultureInfo.InvariantCulture) + "}");
+                }
+                i += length;
+            }
+            return MutableString.CreateBinary(result.ToArray(), encoding);
+        }
+
+        private static void AppendAscii(List<byte>/*!*/ bytes, string/*!*/ text) {
+            foreach (char c in text) {
+                bytes.Add((byte)c);
+            }
         }
 
         private static int SkipToUnescapedForwardSlash(MutableString/*!*/ pattern, int patternLength, int i) {
