@@ -990,6 +990,7 @@ t('width Shift_JIS') { format('%-3c|'.dup.force_encoding('Shift_JIS'), 0xa1) }
 t('then %s') { format('%c%s'.dup.force_encoding('Shift_JIS'), 0xa1, [0x3042].pack('U')) }
 t('then %s US-ASCII') { format('%c%s'.dup.force_encoding('US-ASCII'), 0xa1, [0x3042].pack('U')) }
 t('%s then %c') { format('%s%c'.dup.force_encoding('Shift_JIS'), [0x3042].pack('U'), 0xa1).unpack1('H*') }
+t('bytes kept') { [format('<%c>'.dup.force_encoding('EUC-JP'), 0x8fa2b7), format('<%c>'.dup.force_encoding('CESU-8'), 0xdc80)].map { _1.unpack1('H*') } }
 ", @"
 UTF-8 41: UTF-8 3c413e
 UTF-8 3042: UTF-8 3ce381823e
@@ -1046,6 +1047,7 @@ width Shift_JIS: Shift_JIS a120207c
 then %s: [Encoding::CompatibilityError, ""incompatible character encodings: Shift_JIS and UTF-8""]
 then %s US-ASCII: [Encoding::CompatibilityError, ""incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8""]
 %s then %c: US-ASCII 65333831383263326131
+bytes kept: [""3c8fa2b73e"", ""3cedb2803e""]
 ");
         }
     }

@@ -62,6 +62,11 @@ try("pieces Shift_JIS ==") { format(sjis["%c%c"], 0x4181, 0x40) == "A\x81\x40".d
 try("pieces EUC-KR chars") { format("%c%c%c".dup.force_encoding("EUC-KR"), 0xa1, 0xa1, 0x41).chars.map { |c| c.unpack1("H*") } }
 try("pieces UTF-8") { format("%c%c%c", 0xe3, 0x81, 0x82) }
 try("pieces UTF-8 surrogates") { s = format("%c%c", 0xd83d, 0xde00); [s.bytes, s.length, s.valid_encoding?] }
+# Bytes that the encoding decodes to a character that writes back otherwise.
+try("bytes kept EUC-JP 8fa2b7") { format("<%c>".dup.force_encoding("EUC-JP"), 0x8fa2b7) }
+try("bytes kept eucJP-ms 8fa2b7") { format("<%c>".dup.force_encoding("eucJP-ms"), 0x8fa2b7) }
+try("bytes kept CESU-8 dc80") { format("<%c>".dup.force_encoding("CESU-8"), 0xdc80) }
+try("bytes kept CESU-8 d800 dc00") { format("%c%c".dup.force_encoding("CESU-8"), 0xd800, 0xdc00) }
 # A %c whose bytes are ASCII ones settles nothing.
 try("ascii bytes Shift_JIS then %s") { format(sjis["%c%s"], 0x3042, "\u3042") }
 try("ascii bytes GB18030 then %s") { format("%c%s".dup.force_encoding("GB18030"), 0x4142, "\u3042") }

@@ -1520,7 +1520,16 @@ namespace IronRuby.Builtins {
                     if (_argEncoding == null && !(encoding.IsAsciiIdentity && Array.TrueForAll(bytes, b => b < 0x80))) {
                         _argEncoding = encoding;
                     }
-                    return encoding.EscapingEncoding.GetString(bytes);
+                    // Each byte is carried as itself (ASCII) or as the character the escaping
+                    // encoding writes back as exactly that byte, so the result is made of the
+                    // bytes put: decoding them here and encoding them again at the end is not
+                    // lossless - "\x8F\xA2\xB7" in EUC-JP reads as "~" and writes back as
+                    // "\x7E", and CESU-8's surrogates read as the escapes of other bytes.
+                    var carried = new char[bytes.Length];
+                    for (int i = 0; i < bytes.Length; i++) {
+                        carried[i] = (bytes[i] < 0x80) ? (char)bytes[i] : (char)(0xDC00 + bytes[i]);
+                    }
+                    return new String(carried);
                 }
             }
 
