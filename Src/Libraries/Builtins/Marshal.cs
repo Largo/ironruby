@@ -1222,6 +1222,9 @@ namespace IronRuby.Builtins {
                     sign = 0;
                 }
                 int words = ReadInt32();
+                if (words < 0) {
+                    throw RubyExceptions.CreateArgumentError("negative length");
+                }
                 int dwords_lo = words / 2;
                 int dwords_hi = (words + 1) / 2;
                 uint[] bits = new uint[dwords_hi];
