@@ -7940,6 +7940,22 @@ class << ENV
   end
   private :__env_str__
 
+  # MRI's get_env_cstr: a name or value goes to the C library as a C string, so one with a
+  # NUL in it, or in an encoding that is not ASCII-compatible, is refused before the
+  # environment is looked at -- by the readers as well as by the writers.
+  def __env_name__(object, what = "name")
+    string = __env_str__(object)
+    encoding = string.encoding
+    unless encoding.ascii_compatible?
+      ::Kernel.raise(::ArgumentError, "bad environment variable #{what}: ASCII incompatible encoding: #{encoding}")
+    end
+    if string.include?("\0")
+      ::Kernel.raise(::ArgumentError, "bad environment variable #{what}: contains null byte")
+    end
+    string
+  end
+  private :__env_name__
+
   # setenv(3) rejects a name that is empty or contains '='. The CLR reports that as its
   # own ArgumentException; MRI reports Errno::EINVAL naming the call.
   def __env_check_name__(name)
@@ -7957,13 +7973,13 @@ class << ENV
     private :__clr_fetch__
 
     def []=(name, value)
-      name = __env_str__(name)
+      name = __env_name__(name)
       if value.nil?
         # Deleting a name setenv(3) would have rejected is a no-op, not an error.
         __clr_store__(name, nil) unless name.empty? || name.include?("=")
         return nil
       end
-      value = __env_str__(value)
+      value = __env_name__(value, "value")
       __env_check_name__(name)
       __clr_store__(name, value)
       value
@@ -7973,14 +7989,24 @@ class << ENV
   end
 
   def [](name)
-    __clr_fetch__(__env_str__(name))
+    __clr_fetch__(__env_name__(name))
+  end
+
+  def key?(name)
+    !__clr_fetch__(__env_name__(name)).nil?
+  end
+  alias :has_key? :key?
+  alias :include? :key?
+
+  def values_at(*names)
+    names.map { |name| self[name] }
   end
 
   def fetch(name, *default)
     if default.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)")
     end
-    name = __env_str__(name)
+    name = __env_name__(name)
     if block_given? && !default.empty?
       ::Kernel.warn("warning: block supersedes default value argument")
     end
@@ -7994,7 +8020,7 @@ class << ENV
   end
 
   def delete(name)
-    name = __env_str__(name)
+    name = __env_name__(name)
     value = __clr_fetch__(name)
     if value.nil?
       return block_given? ? yield(name) : nil
@@ -8012,6 +8038,11 @@ class << ENV
 
   def dup
     ::Kernel.raise(::TypeError, "Cannot dup ENV, use ENV.to_h to get a copy of ENV as a hash")
+  end
+
+  # ENV is the process's environment, which no flag can make read-only.
+  def freeze
+    ::Kernel.raise(::TypeError, "cannot freeze ENV")
   end
 
   # MRI hands back an Enumerator rather than complaining about the missing block,
@@ -8093,8 +8124,8 @@ class << ENV
     end
 
     pairs = other.map do |key, value|
-      key = __env_str__(key)
-      value = __env_str__(value)
+      key = __env_name__(key)
+      value = __env_name__(value, "value")
       __env_check_name__(key)
       [key, value]
     end
@@ -8133,7 +8164,7 @@ class << ENV
   def slice(*keys)
     result = {}
     keys.each do |key|
-      name = __env_str__(key)
+      name = __env_name__(key)
       value = __clr_fetch__(name)
       result[key] = value unless value.nil?
     end
@@ -8146,7 +8177,7 @@ class << ENV
   end
 
   def assoc(key)
-    key = __env_str__(key)
+    key = __env_name__(key)
     value = __clr_fetch__(key)
     value.nil? ? nil : [key, value]
   end
