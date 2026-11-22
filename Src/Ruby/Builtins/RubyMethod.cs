@@ -155,6 +155,7 @@ namespace IronRuby.Builtins {
                 _procDispatcher.SetMethod(block);
                 _procDispatcher.ParameterSignature = _info.GetParameterSignature();
                 _procDispatcher.WrapsMethod = true;
+                _procDispatcher.WrappedMethod = this;
             }
 
             // A method binds its arguments strictly and `return` from it returns from the

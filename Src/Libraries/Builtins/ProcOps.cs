@@ -95,6 +95,10 @@ namespace IronRuby.Builtins {
             }
 
             var signature = self.Dispatcher.ParameterSignature;
+            if (signature == null && self.Dispatcher.WrappedMethod != null) {
+                // "".method(:empty?).to_proc says what the method says
+                return MethodOps.GetParameters(context, self.Dispatcher.WrappedMethod);
+            }
             if (signature == null) {
                 // a proc with no Ruby source behind it (Symbol#to_proc, a CLR method) takes
                 // whatever it is given
