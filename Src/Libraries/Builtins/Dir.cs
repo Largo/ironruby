@@ -490,8 +490,11 @@ namespace IronRuby.Builtins {
             // Dir.glob (but not Dir.[]) also accepts an Array of patterns; the results are
             // concatenated in pattern order.
             var all = new List<MutableString>();
-            foreach (var p in patterns) {
-                all.AddRange(IronRuby.Builtins.Glob.GetMatches(context, ToGlobPattern(toPath, p, false), options.Flags, options.Base, options.Sort));
+            // A pattern's #to_path may change the Array under us, so the length is read anew
+            // for every element, as MRI's dir_globs does.
+            for (int i = 0; i < patterns.Count; i++) {
+                var p = ToGlobPattern(toPath, patterns[i], false);
+                all.AddRange(IronRuby.Builtins.Glob.GetMatches(context, p, options.Flags, options.Base, options.Sort));
             }
             return all;
         }

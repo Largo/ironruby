@@ -1250,10 +1250,8 @@ namespace IronRuby.Builtins {
                     unescaped.Append(c);
                 }
 
-                if (inEscape) {
-                    unescaped.Append('\\');
-                }
-
+                // A backslash with nothing after it escapes nothing and goes, as in MRI's
+                // remove_backslashes: "a\\" names "a".
                 return unescaped.ToString();
             }
 
