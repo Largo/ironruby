@@ -3184,6 +3184,11 @@ namespace IronRuby.Builtins {
             int count = self.Count;
             RubyArray results = (block == null) ? new RubyArray(count) : null;
 
+            // rb_ary_zip yields the row's values one by one to a block whose arity is above 1 and
+            // the row as one Array otherwise: a lambda or a Method's proc of two parameters takes
+            // [[1, 2]].zip([3], &->(a, b) { }) as a = [1, 2], b = 3.
+            bool yieldValues = block != null && ProcOps.GetArity(block.Proc) > 1;
+
             // MRI re-reads the length on every step of the block form, so a block that shrinks the
             // receiver cuts the iteration short; the array form fixes it up front.
             for (int i = 0; i < (block != null ? self.Count : count); i++) {
@@ -3196,7 +3201,7 @@ namespace IronRuby.Builtins {
 
                 if (block != null) {
                     object blockResult;
-                    if (block.Yield(tuple, out blockResult)) {
+                    if (yieldValues ? block.YieldSplat(tuple, out blockResult) : block.Yield(tuple, out blockResult)) {
                         return blockResult;
                     }
                 } else {
