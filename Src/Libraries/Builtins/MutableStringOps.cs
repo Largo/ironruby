@@ -1224,10 +1224,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
-            if (regex.IsEmpty) {
-                return self.CreateDerived();
-            }
-
             MatchData match = RegexpOps.Match(scope, regex, self);
             if (match == null) {
                 return null;
