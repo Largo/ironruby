@@ -348,6 +348,8 @@ end
 [B6Public, B6Private, B6Module, RefinedHere::B6Refined, B6Missing].each do |c|
   o = c.new
   drive("6. #{c.name.split('::').last}") { |k, miss| [o.r_own(miss ? -1 : k)] }
+  # B6Public#raise counts its calls: one per scheduled probe, none skipped or repeated
+  puts "  B6Public#raise called #{o.instance_variable_get(:@calls).inspect} times" if c == B6Public
 end
 plain = B6Single.new
 single = B6Single.new
