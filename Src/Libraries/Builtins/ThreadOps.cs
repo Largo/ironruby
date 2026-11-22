@@ -940,9 +940,21 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// MRI's rb_thread_kill: killing the main thread - from itself or from any other - is exit(0) in the
+        /// thread that asks, a SystemExit that runs the ensure clauses and at_exit handlers and ends the
+        /// program with status 0, rather than the unwinding of a thread that nothing would report.
+        /// </summary>
         [RubyMethod("kill")]
         [RubyMethod("exit")]
         [RubyMethod("terminate")]
+        public static Thread Kill(RubyContext/*!*/ context, Thread/*!*/ self) {
+            if (ReferenceEquals(self, context.MainThread) && self.IsAlive && !RubyThreadInfo.FromThread(self).ExitRequested) {
+                throw new SystemExit(0, "exit");
+            }
+            return Kill(self);
+        }
+
         public static Thread Kill(Thread/*!*/ self) {
             RubyThreadInfo.RegisterCurrentThread();
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
@@ -1782,14 +1794,14 @@ namespace IronRuby.Builtins {
         #endregion
 
         [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
-        public static Thread/*!*/ KillThread(object self, [NotNull]Thread/*!*/ thread) {
-            return Kill(thread);
+        public static Thread/*!*/ KillThread(RubyContext/*!*/ context, object self, [NotNull]Thread/*!*/ thread) {
+            return Kill(context, thread);
         }
 
         /// <summary>Thread.exit / Thread.stop take no argument and act on the current thread.</summary>
         [RubyMethod("exit", RubyMethodAttributes.PublicSingleton)]
-        public static Thread/*!*/ ExitCurrentThread(object self) {
-            return Kill(Thread.CurrentThread);
+        public static Thread/*!*/ ExitCurrentThread(RubyContext/*!*/ context, object self) {
+            return Kill(context, Thread.CurrentThread);
         }
 
         /// <summary>
