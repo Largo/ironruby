@@ -262,8 +262,22 @@ namespace IronRuby.Builtins {
             // original and then reopening it back from the copy works - which is the whole
             // point of saving a stream before redirecting it. Sharing the table entry meant
             // the copy and the original were the same descriptor, so the save was a no-op.
-            int duplicated = RubyIO.TryDuplicateDescriptor(source);
-            if (duplicated >= 0) {
+            // IO.popen(cmd, "r+") reads one pipe and writes another. MRI's copy dups both (the
+            // write half is a second IO tied to the first), so that the copy can close_write;
+            // duplicating only the reading pipe made it a read-only IO that refused to.
+            int duplexRead, duplexWrite;
+            Stream duplex = RubyIO.TryDuplicateDuplex(source, out duplexRead, out duplexWrite);
+            int duplicated = (duplex != null) ? -1 : RubyIO.TryDuplicateDescriptor(source);
+            if (duplex != null) {
+                if (duplexRead >= 0) {
+                    RubyProcess.SetCloseOnExec(duplexRead);
+                }
+                if (duplexWrite >= 0) {
+                    RubyProcess.SetCloseOnExec(duplexWrite);
+                }
+                stream = duplex;
+                descriptor = self.Context.AllocateFileDescriptor(stream);
+            } else if (duplicated >= 0) {
                 // dup(2) hands back a descriptor without FD_CLOEXEC whatever the original had;
                 // MRI's #dup sets it, so a child never inherits a copy nobody meant to give it.
                 RubyProcess.SetCloseOnExec(duplicated);
@@ -1654,7 +1668,14 @@ namespace IronRuby.Builtins {
         /// nil for a write-only one - which is what a plain "w" or "r+" gets.
         /// </summary>
         [RubyMethod("external_encoding")]
-        public static RubyEncoding GetExternalEncoding(RubyIO/*!*/ self) {
+        public static RubyEncoding ExternalEncoding(RubyIO/*!*/ self) {
+            // MRI's GetOpenFile: an IO with no stream at all (IO.allocate) has no encoding to
+            // report, though a closed one still has its own.
+            self.RequireInitialized();
+            return GetExternalEncoding(self);
+        }
+
+        internal static RubyEncoding GetExternalEncoding(RubyIO/*!*/ self) {
             if (self.Enc2 != null) {
                 return self.Enc2;
             }
@@ -1670,6 +1691,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("internal_encoding")]
         public static RubyEncoding GetInternalEncoding(RubyIO/*!*/ self) {
+            self.RequireInitialized();
             return self.Enc2 != null ? self.Enc : null;
         }
 
@@ -1824,6 +1846,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("write")]
         public static int Write(TranscodeStorage/*!*/ encodeForWrite, ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyIO/*!*/ self, params object[]/*!*/ args) {
+            self.RequireInitialized();
             int total = 0;
             foreach (object arg in args) {
                 var str = arg as MutableString;
@@ -1865,6 +1888,8 @@ namespace IronRuby.Builtins {
             // MRI's write of an empty string makes no syscall at all and answers 0, even on a
             // pipe whose reader is gone. Flushing here instead manufactures EPIPE - which is
             // what Open3.capture3 ("git --version", no stdin data) used to hit on its i.write "".
+            // It does look for a stream first (GetWriteIO): IO.allocate has none to write to.
+            self.RequireInitialized();
             if (val.IsEmpty) {
                 return 0;
             }
@@ -2575,7 +2600,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static MutableString ReadLineOrParagraph(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyIO/*!*/ self,
             bool universalNewline, MutableString separator, int limit, out bool converted) {
-            converted = self.HasPendingChars || (self.Enc2 != null && self.Enc2.MinBytesPerChar > 1);
+            // A byte limit counts the bytes of the converted text, too: "r:iso-8859-1:utf-8" with a
+            // limit of 2 reads one "é", which is two bytes once converted, not the two "é"s two
+            // bytes of the file hold; a UTF-32LE internal encoding makes every character four.
+            converted = self.HasPendingChars || (self.Enc2 != null && (self.Enc2.MinBytesPerChar > 1 || limit >= 0));
             if (converted) {
                 return ReadLineFromPendingChars(transcode, universal, self, separator, limit);
             }
@@ -3263,7 +3291,19 @@ namespace IronRuby.Builtins {
         [RubyMethod("__ir_ungetc__", RubyMethodAttributes.PrivateInstance)]
         public static void SetPreviousByte(RubyIO/*!*/ self, [DefaultProtocol]int b) {
             self.RequireByteReadable();
+            self.RequirePushBackRoom(1);
             self.PushBack(unchecked((byte)b));
+        }
+
+        // #ungetbyte of a String: its bytes, all of them or none, as MRI's io_ungetbyte.
+        [RubyMethod("__ir_ungetbytes__", RubyMethodAttributes.PrivateInstance)]
+        public static void PushBackBytes(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ bytes) {
+            self.RequireByteReadable();
+            byte[] data = bytes.ToByteArray();
+            if (data.Length > 0) {
+                self.RequirePushBackRoom(data.Length);
+                PushBack(self, data, 0, data.Length);
+            }
         }
 
         // What IO#read (ruby4.rb) puts before the rest of the stream: the text in the character
@@ -3293,7 +3333,8 @@ namespace IronRuby.Builtins {
         private static void PushBackText(RubyIO/*!*/ self, byte[]/*!*/ bytes) {
             if (NeedsReadConversion(self)) {
                 self.PushBackChars(bytes, 0, bytes.Length);
-            } else {
+            } else if (bytes.Length > 0) {
+                self.RequirePushBackRoom(bytes.Length);
                 PushBack(self, bytes, 0, bytes.Length);
             }
         }

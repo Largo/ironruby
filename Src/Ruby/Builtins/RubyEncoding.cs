@@ -701,6 +701,21 @@ namespace IronRuby.Builtins {
                 return start + count - head < length;
             }
 
+            // The wide Unicode encodings go by code units: a UTF-32 character is four bytes, and
+            // a UTF-16 one is two, or four when the first unit is a high surrogate. Without this
+            // a byte limit on a UTF-32 #gets cut its characters in half.
+            int codePage = StrictEncoding.CodePage;
+            if (codePage == 12000 || codePage == 12001) {
+                return count % 4 != 0;
+            }
+            if (codePage == 1200 || codePage == 1201) {
+                if (count % 2 != 0) {
+                    return true;
+                }
+                int high = bytes[start + count - (codePage == 1200 ? 1 : 2)];
+                return high >= 0xD8 && high <= 0xDB;
+            }
+
             int end = start + count;
             int p = start;
             while (p < end) {

@@ -43,6 +43,13 @@ namespace IronRuby.Builtins {
 
         private bool _pushBackPreservesPosition;
 
+        // MRI's rbuf.capa: how many bytes the read buffer holds, unread and pushed back together.
+        // It is IO_RBUF_CAPA_MIN once anything was read, or the first #ungetc's length when that
+        // is longer and came first; 0 until then. Past it #ungetc raises, so that pushing back in
+        // a loop fails instead of growing the buffer forever.
+        private int _pushBackCapacity;
+        private const int MinPushBackCapacity = 8192;
+
         // Whether something was written since the last flush or seek. Writes go straight to the
         // underlying stream, but MRI would still hold them in its write buffer, and that is what
         // IO#syswrite and IO#sysseek warn about.
@@ -151,6 +158,9 @@ namespace IronRuby.Builtins {
             if (_buffer == null) {
                 Debug.Assert(_bufferCount == 0 && _bufferStart == 0);
                 _buffer = new byte[_defaultBufferSize];
+                if (_pushBackCapacity == 0) {
+                    _pushBackCapacity = MinPushBackCapacity;
+                }
             } else if (_bufferStart + _bufferCount + count > _buffer.Length) {
                 // shift left:
                 Buffer.BlockCopy(_buffer, _bufferStart, _buffer, 0, _bufferCount);
@@ -175,6 +185,19 @@ namespace IronRuby.Builtins {
         
         private int ReadAheadCount {
             get { return _bufferCount - _pushedBackCount; }
+        }
+
+        /// <summary>
+        /// MRI's io_ungetbyte: whether count more bytes fit in the read buffer beside those
+        /// already there; IOError "ungetbyte failed" if not.
+        /// </summary>
+        public void RequirePushBackRoom(int count) {
+            if (_pushBackCapacity == 0) {
+                _pushBackCapacity = Math.Max(count, MinPushBackCapacity);
+            }
+            if (_pushBackCapacity < _bufferCount + count) {
+                throw RubyExceptions.CreateIOError("ungetbyte failed");
+            }
         }
 
         public void PushBack(byte b) {
@@ -632,23 +655,23 @@ namespace IronRuby.Builtins {
             bool bufferResized = false;
             int lf = Array.IndexOf(_buffer, LF, _bufferStart, _bufferCount);
             while (lf < 0) {
-                int s = _bufferCount;
-                LoadBuffer(_buffer.Length - _bufferCount);
-                Debug.Assert(_bufferStart == 0);
-
-                lf = Array.IndexOf(_buffer, LF, s, _bufferCount - s);
-                if (lf >= 0) {
-                    break;
+                if (_bufferCount == _buffer.Length) {
+                    Debug.Assert(_bufferStart == 0);
+                    Array.Resize(ref _buffer, _buffer.Length << 1);
+                    bufferResized = true;
                 }
 
-                // end of stream:
-                if (_bufferCount < _buffer.Length) {
+                // Only a read of nothing is the end of the stream. A pipe or a socket hands over
+                // what it has so far, so a short read used to end the line there: a line longer
+                // than the buffer that arrived in two writes came back as two lines.
+                int s = _bufferCount;
+                int loaded = LoadBuffer(_buffer.Length - _bufferCount);
+                Debug.Assert(_bufferStart == 0);
+                if (loaded == 0) {
                     return ConsumeLine(encoding, _bufferCount, _bufferCount, bufferResized);
                 }
 
-                Array.Resize(ref _buffer, _buffer.Length << 1);
-                bufferResized = true;
-                _bufferStart = 0;
+                lf = Array.IndexOf(_buffer, LF, s, _bufferCount - s);
             }
 
             int lineLength;

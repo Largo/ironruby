@@ -974,6 +974,57 @@ namespace IronRuby.Builtins {
             return (descriptor < 0 || !_hasFileControl) ? -1 : sys_dup(descriptor);
         }
 
+        /// <summary>
+        /// dup(2) of both pipes of IO.popen(cmd, "r+"), so that a copy of it can close its
+        /// writing half as MRI's does (MRI's dup copies the tied write IO too). Answers null when
+        /// the IO is not such a pair, or when a half it still uses has no descriptor to
+        /// duplicate; the caller then falls back to duplicating the one descriptor. The new
+        /// descriptors are handed back so that the caller can make them close-on-exec.
+        /// </summary>
+        public static System.IO.Stream TryDuplicateDuplex(RubyIO/*!*/ io, out int readDescriptor, out int writeDescriptor) {
+            readDescriptor = writeDescriptor = -1;
+            var duplex = io.GetStream().BaseStream as DuplexStream;
+            if (duplex == null || !_hasFileControl) {
+                return null;
+            }
+
+            bool reads = io.Mode.CanRead() && duplex.Reader != null;
+            bool writes = io.Mode.CanWrite() && duplex.Writer != null;
+            int readSource = reads ? DescriptorOf(duplex.Reader.BaseStream) : -1;
+            int writeSource = writes ? DescriptorOf(duplex.Writer.BaseStream) : -1;
+            if ((reads && readSource < 0) || (writes && writeSource < 0) || (!reads && !writes)) {
+                return null;
+            }
+
+            if (reads) {
+                readDescriptor = sys_dup(readSource);
+                if (readDescriptor < 0) {
+                    return null;
+                }
+            }
+            if (writes) {
+                writeDescriptor = sys_dup(writeSource);
+                if (writeDescriptor < 0) {
+                    if (readDescriptor >= 0) {
+                        sys_close(readDescriptor);
+                        readDescriptor = -1;
+                    }
+                    return null;
+                }
+            }
+
+            StreamReader reader = reads ? new StreamReader(new DescriptorStream(readDescriptor, true, false, true)) : null;
+            StreamWriter writer = null;
+            if (writes) {
+                writer = new StreamWriter(new DescriptorStream(writeDescriptor, false, true, true));
+                writer.AutoFlush = duplex.Writer.AutoFlush;
+            }
+            return new DuplexStream(reader, writer);
+        }
+
+        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+        private static extern int sys_close(int fd);
+
         /// <summary>The operating system descriptor a stream reads and writes, or -1.</summary>
         public static int DescriptorOf(System.IO.Stream stream) {
             var known = stream as IDescriptorStream;
@@ -1181,11 +1232,19 @@ namespace IronRuby.Builtins {
                 throw new NotSupportedException();
             }
 
-            int fd = NativeDescriptor;
+            // The standard streams are console streams with no descriptor of their own to report,
+            // but the kernel's 0, 1 and 2 are theirs: STDOUT.fcntl(F_GETFL) let the CLR's
+            // NotSupportedException out.
+            int fd = KernelDescriptor;
             if (fd < 0) {
                 throw new NotSupportedException();
             }
-            int result = NativeFileControl(fd, commandId, arg);
+            int result = LibcVariadic.Fcntl(fd, commandId, arg);
+            if (result < 0) {
+                // what fcntl(2) said - EINVAL for an unknown command, EBADF, EAGAIN for a lock -
+                // rather than EBADF whatever it was, as MRI's rb_sys_fail does
+                throw RubyExceptions.CreateErrno(_context, Marshal.GetLastPInvokeError(), null);
+            }
             // The descriptor's own O_APPEND is the answer wherever the kernel has one, but a
             // stream IronRuby opened in append mode without telling the kernel (the CLR
             // positions an appending FileStream itself) still reports the flag it holds.
@@ -1298,6 +1357,11 @@ namespace IronRuby.Builtins {
 
         public void PushBack(byte b) {
             GetStream().PushBack(b);            
+        }
+
+        /// <summary>#ungetc and #ungetbyte refuse to grow the read buffer past its capacity.</summary>
+        public void RequirePushBackRoom(int count) {
+            GetStream().RequirePushBackRoom(count);
         }
 
         #endregion

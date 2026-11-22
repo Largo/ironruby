@@ -2232,6 +2232,7 @@ class File
 
   # File takes a permission argument between the mode and the options.
   def initialize(*args, **opts)
+    __ir_require_uninitialized__
     if args.size > 3
       ::Kernel.raise(::ArgumentError,
                      "wrong number of arguments (given #{args.size}, expected 1..3)")
@@ -11696,7 +11697,7 @@ class IO
         end
         byte = byte.to_str
       end
-      byte.bytes.reverse_each { |b| __ir_ungetc__(b) }
+      __ir_ungetbytes__(byte)
     end
     nil
   end unless method_defined?(:ungetbyte)
