@@ -4617,7 +4617,7 @@ namespace IronRuby.Runtime {
                 if (wide >= Int32.MinValue && wide <= Int32.MaxValue) {
                     return (int)wide;
                 }
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into {0}", targetType);
+                throw IntegerOutOfRange(targetType, wide);
             }
 
             if (obj is BigInteger bignum) {
@@ -4625,10 +4625,21 @@ namespace IronRuby.Runtime {
                 if (bignum.AsInt32(out fixnum)) {
                     return fixnum;
                 }
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into {0}", targetType);
+                throw IntegerOutOfRange(targetType, bignum);
             }
 
             throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
+        }
+
+        // An Integer #to_int gave that does not fit the target. For a Ruby Integer parameter that
+        // is NUM2INT's error, as for an Integer given directly. (The format has to be applied here:
+        // CreateRangeError(string, string) is the overload whose first argument names a parameter,
+        // and the message used to come out as "Integer (Parameter 'bignum too big...')".)
+        private static Exception/*!*/ IntegerOutOfRange(string/*!*/ targetType, BigInteger value) {
+            if (targetType == "Integer") {
+                return RubyExceptions.CreateIntegerOutOfIntRangeError(value);
+            }
+            return RubyExceptions.CreateRangeError(String.Format("bignum too big to convert into {0}", targetType));
         }
 
         [Emitted] // ProtocolConversionAction
@@ -5299,7 +5310,8 @@ namespace IronRuby.Runtime {
             if (bignum.AsInt32(out fixnum)) {
                 return fixnum;
             }
-            throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            // NUM2INT: an Integer that is still a long is named, one that is not is a bignum
+            throw RubyExceptions.CreateIntegerOutOfIntRangeError(bignum);
         }
 
         [Emitted] // Converter.ExplicitConvert
@@ -5309,16 +5321,17 @@ namespace IronRuby.Runtime {
             }
             // Same wording as the BigInteger case: which of the two CLR types happens to carry
             // the value is an implementation detail Ruby code must not be able to see.
-            throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            throw RubyExceptions.CreateIntegerOutOfIntRangeError(value);
         }
 
         [Emitted] // ConvertDoubleToFixnum
         public static int ConvertDoubleToFixnum(double value) {
-            try {
-                return checked((int)value);
-            } catch (OverflowException) {
-                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", value));
+            if (value > -2147483649.0 && value < 2147483648.0) {
+                return (int)value;
             }
+            // NUM2INT truncates to a long first: 2.0**31 is "integer 2147483648 too big to convert
+            // to 'int'", 1e20 is "float 1e+20 out of range of integer"
+            throw RubyExceptions.CreateFloatOutOfIntRangeError(value);
         }
 
         [Emitted] // ConvertToSAction

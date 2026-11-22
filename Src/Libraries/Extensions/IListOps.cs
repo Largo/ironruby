@@ -607,7 +607,7 @@ namespace IronRuby.Builtins {
 
         private static object GetElement(IList/*!*/ self, double index) {
             if (Double.IsNaN(index) || index >= 9.2233720368547758E18 || index < -9.2233720368547758E18) {
-                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", index));
+                throw RubyExceptions.CreateFloatOutOfIntegerRangeError(index);
             }
             long truncated = (long)index;
             return (truncated > Int32.MaxValue || truncated < Int32.MinValue) ? null : GetElement(self, (int)truncated);

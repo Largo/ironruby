@@ -739,6 +739,56 @@ namespace IronRuby.Runtime {
             return new ArgumentOutOfRangeException(paramName, FormatMessage(message, args));
         }
 
+        /// <summary>
+        /// MRI's rb_out_of_range: a Float that truncates to no C long, printed with "%-.10g"
+        /// ("float 1e+20 out of range of integer", "float Inf ...", "float NaN ...").
+        /// </summary>
+        public static Exception/*!*/ CreateFloatOutOfIntegerRangeError(double value) {
+            return CreateRangeError(String.Format("float {0} out of range of integer", FormatFloatG10(value)));
+        }
+
+        /// <summary>
+        /// NUM2INT's complaint about an Integer that is no C int: MRI's rb_out_of_int names it while
+        /// it is still a long ("integer 2147483648 too big to convert to 'int'"), and rb_num2long
+        /// refuses it before that when it is not ("bignum too big to convert into 'long'").
+        /// </summary>
+        public static Exception/*!*/ CreateIntegerOutOfIntRangeError(BigInteger value) {
+            if (value < Int64.MinValue || value > Int64.MaxValue) {
+                return CreateRangeError("bignum too big to convert into 'long'");
+            }
+            return CreateRangeError(String.Format("integer {0} too {1} to convert to 'int'", value, value.Sign < 0 ? "small" : "big"));
+        }
+
+        /// <summary>
+        /// The same for a Float, which NUM2INT truncates to a long first: one that has no long is
+        /// a Float out of range, one that has is the Integer it truncates to.
+        /// </summary>
+        public static Exception/*!*/ CreateFloatOutOfIntRangeError(double value) {
+            if (Double.IsNaN(value) || value >= 9223372036854775808.0 || value < -9223372036854775808.0) {
+                return CreateFloatOutOfIntegerRangeError(value);
+            }
+            return CreateIntegerOutOfIntRangeError(new BigInteger(Math.Truncate(value)));
+        }
+
+        /// <summary>C's "%.10g", as MRI prints a Float in a RangeError (no Ruby #inspect: 1e+20, Inf).</summary>
+        internal static string/*!*/ FormatFloatG10(double value) {
+            if (Double.IsNaN(value)) {
+                return "NaN";
+            }
+            if (Double.IsInfinity(value)) {
+                return value > 0 ? "Inf" : "-Inf";
+            }
+            // "G10" chooses between the two notations as %g does; only the exponent is spelled
+            // differently: "1E+20" and "1E-05" where C writes "1e+20" and "1e-05".
+            string text = value.ToString("G10", CultureInfo.InvariantCulture);
+            int e = text.IndexOf('E');
+            if (e < 0) {
+                return text;
+            }
+            string digits = text.Substring(e + 2);
+            return text.Substring(0, e) + "e" + text[e + 1] + (digits.Length < 2 ? "0" + digits : digits);
+        }
+
         public static Exception/*!*/ CreateLocalJumpError(string/*!*/ message, params object[] args) {
             return new LocalJumpError(FormatMessage(message, args));
         }

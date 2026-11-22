@@ -1445,23 +1445,23 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
             if (value is BigInteger) {
-                throw IntegerOutOfIntRange((BigInteger)value);
+                throw RubyExceptions.CreateIntegerOutOfIntRangeError((BigInteger)value);
             }
             if (value is long) {
                 long l = (long)value;
                 if (l < Int32.MinValue || l > Int32.MaxValue) {
-                    throw IntegerOutOfIntRange(l);
+                    throw RubyExceptions.CreateIntegerOutOfIntRangeError(l);
                 }
                 return (int)l;
             }
             if (value is double) {
                 double d = (double)value;
                 if (Double.IsNaN(d) || d >= 9223372036854775808.0 || d < -9223372036854775808.0) {
-                    throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", FormatFloatG10(d)));
+                    throw RubyExceptions.CreateFloatOutOfIntegerRangeError(d);
                 }
                 long truncated = (long)d;
                 if (truncated < Int32.MinValue || truncated > Int32.MaxValue) {
-                    throw IntegerOutOfIntRange(truncated);
+                    throw RubyExceptions.CreateIntegerOutOfIntRangeError(truncated);
                 }
                 return (int)truncated;
             }
@@ -1472,7 +1472,7 @@ namespace IronRuby.Builtins {
                 if (integer.IsFixnum) {
                     return integer.Fixnum;
                 }
-                throw IntegerOutOfIntRange(integer.Bignum);
+                throw RubyExceptions.CreateIntegerOutOfIntRangeError(integer.Bignum);
             } catch (InvalidOperationException e) {
                 string className = _context.GetClassDisplayName(value);
                 // An object that has #to_int and gave back something else is a different
@@ -1485,24 +1485,6 @@ namespace IronRuby.Builtins {
                     ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
                     : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", RubyExceptions.MessageTypeName(className));
             }
-        }
-
-        private static Exception/*!*/ IntegerOutOfIntRange(BigInteger value) {
-            if (value < Int64.MinValue || value > Int64.MaxValue) {
-                return RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
-            }
-            return RubyExceptions.CreateRangeError(String.Format("integer {0} too {1} to convert to 'int'", value, value.Sign < 0 ? "small" : "big"));
-        }
-
-        // MRI's rb_out_of_range prints the float with "%-.10g".
-        private static string/*!*/ FormatFloatG10(double d) {
-            if (Double.IsNaN(d)) {
-                return "NaN";
-            }
-            if (Double.IsInfinity(d)) {
-                return d > 0 ? "Inf" : "-Inf";
-            }
-            return d.ToString("0.#########e+00", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         /// <summary>
