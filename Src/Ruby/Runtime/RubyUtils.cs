@@ -1442,10 +1442,6 @@ namespace IronRuby.Runtime {
             return offset;
         }
 
-        private static SourceUnit/*!*/ CreateRubySourceUnit(RubyContext/*!*/ context, MutableString/*!*/ code, string path) {
-            return context.CreateSourceUnit(new BinaryContentProvider(code.ToByteArray()), path, code.Encoding.Encoding, SourceCodeKind.File);
-        }
-
         /// <summary>
         /// What `__FILE__' is inside an eval that was not told a file name: MRI names the place
         /// the eval was written, as "(eval at file:line)". A nested eval nests the same way,
@@ -1482,34 +1478,29 @@ namespace IronRuby.Runtime {
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
             options.EvalSourceEncoding = code.Encoding;
             string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
-            var source = CreateRubySourceUnit(context, code, (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path);
+            string sourcePath = (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path;
+            byte[] bytes = code.ToByteArray();
 
-            Expression<EvalEntryPointDelegate> lambda;
-            try {
-                lambda = context.ParseSourceCode<EvalEntryPointDelegate>(source, options, context.RuntimeErrorSink);
-            } catch (SyntaxError e) {
-                Utils.Log(e.Message, "EVAL_ERROR");
-                Utils.Log(new String('-', 50), "EVAL_ERROR");
-                Utils.Log(source.GetCode(), "EVAL_ERROR");
-                Utils.Log(new String('-', 50), "EVAL_ERROR");
+            // The same text evaluated again in the same place compiles to the same code (EvalCodeCache).
+            // Not kept: a frame with keyword parameters (its signature is an object of the method's) or in
+            // an isolated proc, and anything compiled while Coverage measures, which wants each compile.
+            EvalCodeCache.Key cacheKey = null;
+            EvalEntryPointDelegate compiled = null;
+            if (bytes.Length <= EvalCodeCache.MaxCodeLength && options.TopLevelParameterSignature == null &&
+                options.IsolatedLocalNames == null && context.Coverage == null) {
 
-                // MRI names the file and the line the error is on in front of the message, so
-                // that code which evaluated a string knows which string and where in it: the
-                // line the parser saw is not the one to name when eval started below line 1.
-                if (e.HasLineInfo && e.File != null) {
-                    // A SourceLocation cannot start before line 1, so a zero or negative starting
-                    // line was compiled from 1 and is put back here: eval with a line of -100
-                    // reports its first line as -100, which is what MRI does.
-                    int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
-                    string errorFile = e.File;
-                    DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(e.Description, errorFile, reportedLine);
-                }
-                throw;
+                object verbose = context.Verbose;
+                cacheKey = new EvalCodeCache.Key(bytes, code.Encoding, sourcePath, line, module != null,
+                    verbose == null ? 0 : (RubyOps.IsTrue(verbose) ? 2 : 1), options.EvalFrameBaseLabel, options.EvalFrameBlockLevels,
+                    options.TopLevelMethodName, options.TopLevelParameterNames, options.TopLevelHasUnsplatParameter, options.LocalNames,
+                    EvalConstantModules(targetScope, module, lexicalConstantModule));
+                compiled = (EvalEntryPointDelegate)context.EvalCodeCache.TryGet(cacheKey);
             }
-            Debug.Assert(lambda != null);
 
-            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context);
+            if (compiled == null) {
+                compiled = CompileEval(context, bytes, code, sourcePath, options, line, cacheKey);
+            }
+
             var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
 
             if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {
@@ -1537,6 +1528,65 @@ namespace IronRuby.Runtime {
             } finally {
                 attributesScope.MethodAttributes = attributes;
             }
+        }
+
+        // The modules a constant in the evaluated code is looked up in, innermost first, as
+        // RubyScope.TryResolveConstantNoLock walks them; a module eval adds the scope it makes.
+        private static object[]/*!*/ EvalConstantModules(RubyScope/*!*/ targetScope, RubyModule module, RubyModule lexicalConstantModule) {
+            var result = new List<object>();
+            if (module != null) {
+                result.Add(module);
+                result.Add(lexicalConstantModule ?? module);
+            }
+            for (RubyScope scope = targetScope; scope != null; scope = scope.Parent) {
+                RubyModule scopeModule = scope.Module;
+                if (scopeModule != null) {
+                    result.Add(scopeModule);
+                    result.Add(scope.LexicalConstantModule);
+                }
+            }
+            return result.ToArray();
+        }
+
+        private static EvalEntryPointDelegate/*!*/ CompileEval(RubyContext/*!*/ context, byte[]/*!*/ bytes, MutableString/*!*/ code,
+            string/*!*/ sourcePath, RubyCompilerOptions/*!*/ options, int line, EvalCodeCache.Key cacheKey) {
+
+            var source = context.CreateSourceUnit(new BinaryContentProvider(bytes), sourcePath, code.Encoding.Encoding, SourceCodeKind.File);
+
+            // A compile that gave a warning is not kept: MRI gives it at each eval. Another thread's
+            // warning in between only keeps this one out too.
+            int warnings = context.RuntimeErrorSink.WarningCount;
+
+            Expression<EvalEntryPointDelegate> lambda;
+            try {
+                lambda = context.ParseSourceCode<EvalEntryPointDelegate>(source, options, context.RuntimeErrorSink);
+            } catch (SyntaxError e) {
+                Utils.Log(e.Message, "EVAL_ERROR");
+                Utils.Log(new String('-', 50), "EVAL_ERROR");
+                Utils.Log(source.GetCode(), "EVAL_ERROR");
+                Utils.Log(new String('-', 50), "EVAL_ERROR");
+
+                // MRI names the file and the line the error is on in front of the message, so
+                // that code which evaluated a string knows which string and where in it: the
+                // line the parser saw is not the one to name when eval started below line 1.
+                if (e.HasLineInfo && e.File != null) {
+                    // A SourceLocation cannot start before line 1, so a zero or negative starting
+                    // line was compiled from 1 and is put back here: eval with a line of -100
+                    // reports its first line as -100, which is what MRI does.
+                    int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
+                    string errorFile = e.File;
+                    DecodeEvalLineOffset(ref errorFile);
+                    throw new SyntaxError(e.Description, errorFile, reportedLine);
+                }
+                throw;
+            }
+            Debug.Assert(lambda != null);
+
+            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context);
+            if (cacheKey != null && context.RuntimeErrorSink.WarningCount == warnings) {
+                context.EvalCodeCache.Add(cacheKey, compiled);
+            }
+            return compiled;
         }
 
         private static RubyModuleEvalScope/*!*/ CreateModuleEvalScope(RubyScope/*!*/ parent, object self, RubyModule/*!*/ module) {

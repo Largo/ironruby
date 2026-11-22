@@ -4131,37 +4131,48 @@ namespace IronRuby.Runtime {
             path = null;
             line = 0;
             try {
-                var backtrace = RubyExceptionData.CreateBacktrace(this, 0);
-                if (backtrace == null || backtrace.Count == 0) {
-                    return false;
-                }
-
-                // "file:line:in `method'", read from the right: a file name can hold colons of
-                // its own - an eval inside an eval is called "(eval at file:line)" - so the line
-                // number is the last thing before ":in", not the first thing after the path.
-                // A frame without a file (":0:in ..." - a library method, or a CLR frame when
-                // backtraces show them) is not where the code was written: the first one that
-                // names a file is.
-                foreach (var entry in backtrace) {
-                    string frame = entry.ToString();
-                    int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
-                    string head = (inIndex >= 0) ? frame.Substring(0, inIndex) : frame;
-
-                    int colon = head.LastIndexOf(':');
-                    if (colon <= 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
-                        continue;
-                    }
-
-                    path = head.Substring(0, colon);
+                // The frame is nearly always among the first few: making those alone is much cheaper on a
+                // deep stack (an eval without a file name asks this each time, see DefaultEvalFileName).
+                // They are the start of the whole backtrace, which is made only if none of them names a file.
+                if (TryGetSourceLocation(RubyExceptionData.CreateBacktrace(this, 0, 8), out path, out line)) {
                     return true;
                 }
-                line = 0;
-                return false;
+                return TryGetSourceLocation(RubyExceptionData.CreateBacktrace(this, 0), out path, out line);
             } catch (Exception) {
                 path = null;
                 line = 0;
                 return false;
             }
+        }
+
+        private static bool TryGetSourceLocation(RubyArray backtrace, out string path, out int line) {
+            path = null;
+            line = 0;
+            if (backtrace == null || backtrace.Count == 0) {
+                return false;
+            }
+
+            // "file:line:in `method'", read from the right: a file name can hold colons of
+            // its own - an eval inside an eval is called "(eval at file:line)" - so the line
+            // number is the last thing before ":in", not the first thing after the path.
+            // A frame without a file (":0:in ..." - a library method, or a CLR frame when
+            // backtraces show them) is not where the code was written: the first one that
+            // names a file is.
+            foreach (var entry in backtrace) {
+                string frame = entry.ToString();
+                int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
+                string head = (inIndex >= 0) ? frame.Substring(0, inIndex) : frame;
+
+                int colon = head.LastIndexOf(':');
+                if (colon <= 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
+                    continue;
+                }
+
+                path = head.Substring(0, colon);
+                return true;
+            }
+            line = 0;
+            return false;
         }
 
         #endregion
@@ -4386,6 +4397,13 @@ namespace IronRuby.Runtime {
         }
 
         private CoverageState _coverage;
+
+        private readonly EvalCodeCache/*!*/ _evalCodeCache = new EvalCodeCache();
+
+        /// <summary>The compiled code of the strings this runtime has evaluated (RubyUtils.Evaluate).</summary>
+        internal EvalCodeCache/*!*/ EvalCodeCache {
+            get { return _evalCodeCache; }
+        }
 
         /// <summary>
         /// The Coverage library's measurement, null unless it is set up. Code compiled while it
