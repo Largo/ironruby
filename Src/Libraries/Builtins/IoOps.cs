@@ -2376,6 +2376,7 @@ namespace IronRuby.Builtins {
         private static RubyArray/*!*/ ReadLines(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, RubyIO/*!*/ self,
             MutableString separator, int limit, bool chomp) {
             CheckLineLimit(limit, "readlines");
+            CheckSeparatorEncoding(context, self, separator);
             RubyArray result = new RubyArray();
 
             // no dynamic call, doesn't modify $_ scope variable:
@@ -2678,6 +2679,28 @@ namespace IronRuby.Builtins {
         /// MRI's io_read_encoding: the encoding of what the reads hand out, which is the
         /// internal one when the stream has one.
         /// </summary>
+        /// <summary>
+        /// MRI's prepare_getline_args: a separator has to be in the encoding the stream reads,
+        /// or be ASCII and the stream's encoding ASCII-compatible, or the line readers raise
+        /// "encoding mismatch: UTF-32LE IO with UTF-8 RS". The default "\n" is exempt: it is
+        /// looked for in the stream's encoding.
+        /// </summary>
+        private static void CheckSeparatorEncoding(RubyContext/*!*/ context, RubyIO/*!*/ self, MutableString separator) {
+            if (separator == null) {
+                return;
+            }
+            RubyEncoding io = ReadEncoding(self);
+            RubyEncoding rs = separator.Encoding;
+            if (io == rs || (separator.IsAscii() && (separator.IsEmpty || io.IsAsciiIdentity))) {
+                return;
+            }
+            if (ReferenceEquals(separator, context.InputSeparator) && separator.IsAscii() && separator.GetByteCount() == 1
+                && separator.GetByte(0) == (byte)'\n') {
+                return;
+            }
+            throw RubyExceptions.CreateArgumentError("encoding mismatch: {0} IO with {1} RS", io.Name, rs.Name);
+        }
+
         private static RubyEncoding/*!*/ ReadEncoding(RubyIO/*!*/ self) {
             return (self.Enc2 != null ? self.Enc : GetExternalEncoding(self)) ?? self.Context.DefaultExternalEncoding;
         }
@@ -2992,6 +3015,7 @@ namespace IronRuby.Builtins {
         private static MutableString Gets(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyScope/*!*/ scope, RubyIO/*!*/ self,
             MutableString separator, int limit, bool chomp) {
 
+            CheckSeparatorEncoding(scope.RubyContext, self, separator);
             bool converted;
             MutableString result = ReadLineOrParagraph(transcode, universal, self, IsUniversalNewline(universal, self), separator, limit, out converted);
             if (result != null) {
@@ -3317,6 +3341,7 @@ namespace IronRuby.Builtins {
         private static object Each(TranscodeStorage/*!*/ transcode, TranscodeStorage/*!*/ universal, RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, MutableString separator, int limit, bool chomp) {
             self.RequireReadable();
             CheckLineLimit(limit, "each_line");
+            CheckSeparatorEncoding(context, self, separator);
 
             bool universalNewline = IsUniversalNewline(universal, self);
             MutableString line;
