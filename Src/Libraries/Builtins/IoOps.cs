@@ -2144,6 +2144,11 @@ namespace IronRuby.Builtins {
                 if (buffered > 0 && !IoReadiness.IsReadableNow(io, stream.BaseStream)) {
                     return buffer;
                 }
+                // Nothing in hand and a descriptor with nothing to read: the EAGAIN of MRI's
+                // non-blocking read(2), not a read that waits for the writer.
+                if (buffered == 0 && IoReadiness.IsQuietDescriptor(io, stream.BaseStream)) {
+                    throw NonBlockingError(io.Context, true, "read would block");
+                }
                 int more = io.AppendBytes(buffer, count);
                 return (more == 0 && buffered == 0) ? null : buffer;
             }
