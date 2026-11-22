@@ -963,5 +963,335 @@ round trip: [2217845808, true]
 %c EUC-KR 0xa1a1: a1a1
 ");
         }
+
+        /// <summary>
+        /// CESU-8 (MRI's enc/cesu_8.c): a character outside the BMP is a surrogate pair in six
+        /// bytes, a lone surrogate is invalid, and the code points are Unicode's, as they are in
+        /// UTF-8's carrier variants. Util/cesu8-matrix.rb has the rest.
+        /// </summary>
+        public void String_Cesu8_1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def hex(s) = s.unpack1('H*')
+['e38182', 'eda0bdedb880', 'edb280', 'eda080', 'eda0', 'f09f9880', '7f', 'eda08061', '61eda080eda080'].each do |h|
+  s = [h].pack('H*').force_encoding('CESU-8')
+  t(h) { [s.valid_encoding?, s.length, s.chars.map { hex(_1) }, hex(s.scrub), s.inspect] }
+  t(""#{h} ord"") { [s.ord, s.codepoints, hex(s.succ)] }
+  t(""#{h} encode"") { hex(s.encode('UTF-8')) }
+end
+t('U+1F600') { c = ""\u{1f600}"".encode('CESU-8'); [hex(c), c.length, c.encode('UTF-8') == ""\u{1f600}""] }
+t('KDDI') { s = [0xe3, 0x81, 0x82].pack('C*').force_encoding('UTF8-KDDI'); [s.ord, s.inspect, hex(s.succ)] }
+", @"
+e38182: [true, 1, [""e38182""], ""e38182"", ""\""\\u3042\""""]
+e38182 ord: [12354, [12354], ""e38183""]
+e38182 encode: ""e38182""
+eda0bdedb880: [true, 1, [""eda0bdedb880""], ""eda0bdedb880"", ""\""\\u{1F600}\""""]
+eda0bdedb880 ord: [128512, [128512], ""eda0bdedb881""]
+eda0bdedb880 encode: ""f09f9880""
+edb280: [false, 3, [""ed"", ""b2"", ""80""], ""3f3f3f"", ""\""\\xED\\xB2\\x80\""""]
+edb280 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+edb280 encode: [Encoding::InvalidByteSequenceError, ""\""\\xED\"" followed by \""\\xB2\"" on CESU-8""]
+eda080: [false, 3, [""ed"", ""a0"", ""80""], ""3f"", ""\""\\xED\\xA0\\x80\""""]
+eda080 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+eda080 encode: [Encoding::InvalidByteSequenceError, ""incomplete \""\\xED\\xA0\\x80\"" on CESU-8""]
+eda0: [false, 2, [""ed"", ""a0""], ""3f"", ""\""\\xED\\xA0\""""]
+eda0 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+eda0 encode: [Encoding::InvalidByteSequenceError, ""incomplete \""\\xED\\xA0\"" on CESU-8""]
+f09f9880: [false, 4, [""f0"", ""9f"", ""98"", ""80""], ""3f3f3f3f"", ""\""\\xF0\\x9F\\x98\\x80\""""]
+f09f9880 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+f09f9880 encode: [Encoding::InvalidByteSequenceError, ""\""\\xF0\"" on CESU-8""]
+7f: [true, 1, [""7f""], ""7f"", ""\""\\u007F\""""]
+7f ord: [127, [127], ""0100""]
+7f encode: ""7f""
+eda08061: [false, 4, [""ed"", ""a0"", ""80"", ""61""], ""3f61"", ""\""\\xED\\xA0\\x80a\""""]
+eda08061 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+eda08061 encode: [Encoding::InvalidByteSequenceError, ""\""\\xED\\xA0\\x80\"" followed by \""a\"" on CESU-8""]
+61eda080eda080: [false, 7, [""61"", ""ed"", ""a0"", ""80"", ""ed"", ""a0"", ""80""], ""613f3f3f"", ""\""a\\xED\\xA0\\x80\\xED\\xA0\\x80\""""]
+61eda080eda080 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+61eda080eda080 encode: [Encoding::InvalidByteSequenceError, ""\""\\xED\\xA0\\x80\\xED\"" followed by \""\\xA0\"" on CESU-8""]
+U+1F600: [""eda0bdedb880"", 1, true]
+KDDI: [12354, ""\""\\u3042\"""", ""e38183""]
+");
+        }
+
+        /// <summary>
+        /// Emacs-Mule (MRI's enc/emacs_mule.c) reads characters of two to four bytes, numbered by
+        /// their bytes, and Onigmo calls each of them ALPHA, which #succ goes by.
+        /// Util/emacs-mule-matrix.rb has the rest.
+        /// </summary>
+        public void String_EmacsMule1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def hex(s) = s.unpack1('H*')
+%w[81a0 92a4a2 9ae0a0a0 9cf0a0a0 9cf5a0a0 92a4 4192a4a2814281a0 7a8fff 7a9dfeffff 4281a0].each do |h|
+  s = [h].pack('H*').force_encoding('Emacs-Mule')
+  t(h) { [s.valid_encoding?, s.length, s.chars.map { hex(_1) }, hex(s.scrub), s.inspect] }
+  t(""#{h} ord"") { [(s.ord rescue $!.class), hex(s.reverse), hex(s.succ)] }
+end
+t('stateless') { s = ""あ"".encode('EUC-JP').encode('stateless-ISO-2022-JP'); [hex(s), s.length, s.ord, hex(s.succ)] }
+", @"
+81a0: [true, 1, [""81a0""], ""81a0"", ""\""\\x{81A0}\""""]
+81a0 ord: [33184, ""81a0"", ""81a1""]
+92a4a2: [true, 1, [""92a4a2""], ""92a4a2"", ""\""\\x{92A4A2}\""""]
+92a4a2 ord: [9610402, ""92a4a2"", ""92a4a3""]
+9ae0a0a0: [false, 2, [""9ae0a0"", ""a0""], ""9ae0a03f"", ""\""\\x{9AE0A0}\\xA0\""""]
+9ae0a0a0 ord: [10150048, ""a09ae0a0"", ""9ae0a1a0""]
+9cf0a0a0: [true, 1, [""9cf0a0a0""], ""9cf0a0a0"", ""\""\\x{9CF0A0A0}\""""]
+9cf0a0a0 ord: [2633015456, ""9cf0a0a0"", ""9cf0a0a1""]
+9cf5a0a0: [false, 4, [""9c"", ""f5"", ""a0"", ""a0""], ""3f3f3f3f"", ""\""\\x9C\\xF5\\xA0\\xA0\""""]
+9cf5a0a0 ord: [ArgumentError, ""a0a0f59c"", ""019cf5a0a0""]
+92a4: [false, 2, [""92"", ""a4""], ""3f"", ""\""\\x92\\xA4\""""]
+92a4 ord: [ArgumentError, ""a492"", ""0192a4""]
+4192a4a2814281a0: [false, 5, [""41"", ""92a4a2"", ""81"", ""42"", ""81a0""], ""4192a4a23f4281a0"", ""\""A\\x{92A4A2}\\x81B\\x{81A0}\""""]
+4192a4a2814281a0 ord: [65, ""81a0428192a4a241"", ""4192a4a2814281a1""]
+7a8fff: [true, 2, [""7a"", ""8fff""], ""7a8fff"", ""\""z\\x{8FFF}\""""]
+7a8fff ord: [122, ""8fff7a"", ""7a81a0""]
+7a9dfeffff: [true, 2, [""7a"", ""9dfeffff""], ""7a9dfeffff"", ""\""z\\x{9DFEFFFF}\""""]
+7a9dfeffff ord: [122, ""9dfeffff7a"", ""7a9cf0a0a0""]
+4281a0: [true, 2, [""42"", ""81a0""], ""4281a0"", ""\""B\\x{81A0}\""""]
+4281a0 ord: [66, ""81a042"", ""4281a1""]
+stateless: [""92a4a2"", 1, 9610402, ""92a4a3""]
+");
+        }
+
+        /// <summary>
+        /// #inspect of a string in CESU-8 where the result is CESU-8 too passes its printable
+        /// characters through, as UTF-8's; a legacy character of four bytes with the high bit set
+        /// is still one braced escape (\x{81308130}).
+        /// </summary>
+        public void String_InspectUnicodeCarriers1() {
+            TestOutput(@"
+require 'ruby4'
+class X
+  def initialize(s) = @s = s
+  def inspect = @s
+end
+p [X.new([0x81, 0x30, 0x81, 0x30].pack('C*').force_encoding('GB18030'))].inspect
+p [X.new([0x9c, 0xf0, 0xa0, 0xa0].pack('C*').force_encoding('Emacs-Mule'))].inspect
+verbose, $VERBOSE = $VERBOSE, nil
+Encoding.default_internal = 'CESU-8'
+$VERBOSE = verbose
+['e38182', '7f', 'eda08062ff', 'eda0bdedb880', 'efbfbfff'].each do |h|
+  i = [h].pack('H*').force_encoding('CESU-8').inspect
+  p [i.encoding, i.b]
+end
+", @"
+""[\\x{81308130}]""
+""[\\x{9CF0A0A0}]""
+[#<Encoding:CESU-8>, ""\""\xE3\x81\x82\""""]
+[#<Encoding:CESU-8>, ""\""\\u007F\""""]
+[#<Encoding:CESU-8>, ""\""\\xED\\xA0\\x80b\\xFF\""""]
+[#<Encoding:CESU-8>, ""\""\xED\xA0\xBD\xED\xB8\x80\""""]
+[#<Encoding:CESU-8>, ""\""\\uFFFF\\xFF\""""]
+");
+        }
+
+        /// <summary>
+        /// #succ steps a letter or digit outside the BMP as one code point, in UTF-8 and CESU-8:
+        /// "\u{10400}!".succ is "\u{10401}!", as in CRuby, where it was "\u{10400}\"".
+        /// </summary>
+        public void String_SuccSupplementary1() {
+            TestOutput(@"
+def u(s) = s.unpack('U*').map { _1.to_s(16) }.join(',')
+[0x10400, 0x1044F, 0x104A9, 0x1D7D7, 0x1F600, 0x3042].each do |c|
+  ch = [c].pack('U')
+  [""#{ch}!"", ""z#{ch}"", ""#{ch}9"", ""9#{ch}""].each do |s|
+    puts ""#{u(s)}: #{u(s.succ)} #{u(s.encode('CESU-8').succ.encode('UTF-8'))}""
+  end
+end
+", @"
+10400,21: 10401,21 10401,21
+7a,10400: 7a,10401 7a,10401
+10400,39: 10401,30 10401,30
+39,10400: 39,10401 39,10401
+1044f,21: 10450,21 10450,21
+7a,1044f: 7a,10450 7a,10450
+1044f,39: 10450,30 10450,30
+39,1044f: 39,10450 39,10450
+104a9,21: 104a1,104a0,21 104a1,104a0,21
+7a,104a9: 61,61,104a0 61,61,104a0
+104a9,39: 104a1,104a0,30 104a1,104a0,30
+39,104a9: 31,30,104a0 31,30,104a0
+1d7d7,21: 1d7d8,21 1d7d8,21
+7a,1d7d7: 7a,1d7d8 7a,1d7d8
+1d7d7,39: 1d7d8,30 1d7d8,30
+39,1d7d7: 39,1d7d8 39,1d7d8
+1f600,21: 1f600,22 1f600,22
+7a,1f600: 61,61,1f600 61,61,1f600
+1f600,39: 1f600,31,30 1f600,31,30
+39,1f600: 31,30,1f600 31,30,1f600
+3042,21: 3043,21 3043,21
+7a,3042: 7a,3043 7a,3043
+3042,39: 3043,30 3043,30
+39,3042: 39,3043 39,3043
+");
+        }
+
+        /// <summary>
+        /// Converting to UTF8-MAC writes each character decomposed by Apple's table, and converting
+        /// from it composes pairs back (MRI's enc/trans/utf8_mac.c); a UTF8-MAC conversion's default
+        /// replacement is "?". Util/utf8-mac-matrix.rb has the rest.
+        /// </summary>
+        public void String_Utf8Mac1() {
+            TestOutput(@"
+def h(s) = s.unpack1('H*')
+['c3a9', 'e382ac', 'eab081', 'e284ab', 'e1ba9bcca3', 'c3bf', 'e0a598', 'ce90', 'f48fbfbf'].each do |x|
+  u = [x].pack('H*').force_encoding('UTF-8')
+  to = begin; h(u.encode('UTF8-MAC')); rescue => e; e.class; end
+  from = h(u.encode('UTF8-MAC').force_encoding('UTF8-MAC').encode('UTF-8')) rescue $!.class
+  puts ""#{x}: #{to} #{from}""
+end
+p h(['65cc81cc81', 'e18480e185a1e186a8', 'e0a495e0a4bc'].map { [_1].pack('H*') }.join.force_encoding('UTF8-MAC').encode('UTF-8'))
+ec = Encoding::Converter.new('UTF8-MAC', 'UTF-8')
+p [h(ec.convert('e')), h(ec.convert([0xcc, 0x81].pack('C*'))), h(ec.convert('x')), h(ec.finish)]
+p [Encoding::Converter.new('UTF-8', 'UTF8-MAC').replacement, Encoding::Converter.new('UTF-8', 'CESU-8').replacement.dump]
+p h(""e\xff"".dup.force_encoding('UTF8-MAC').encode('UTF-8', invalid: :replace))
+", @"
+c3a9: 65cc81 c3a9
+e382ac: e382abe38299 e382ac
+eab081: e18480e185a1e186a8 eab081
+e284ab: e284ab e284ab
+e1ba9bcca3: c5bfcc87cca3 e1ba9bcca3
+c3bf: 79cc88 c3bf
+e0a598: e0a495e0a4bc e0a495e0a4bc
+ce90: ce90 ce90
+f48fbfbf: Encoding::UndefinedConversionError Encoding::UndefinedConversionError
+""c3a9cc81eab081e0a495e0a4bc""
+["""", """", ""c3a9"", ""78""]
+[""?"", ""\""\\uFFFD\""""]
+""653f""
+");
+        }
+
+        /// <summary>
+        /// #inspect of a string in the encoding the result is in, one without Unicode's tables:
+        /// a character MRI's rb_enc_isprint calls printable is written as itself, the rest escaped.
+        /// Util/inspect-own-encoding-matrix.rb has the rest.
+        /// </summary>
+        public void String_InspectOwnEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def inspect_in(encoding, hex)
+  v, $VERBOSE = $VERBOSE, nil
+  Encoding.default_internal = encoding
+  $VERBOSE = v
+  i = [hex].pack('H*').force_encoding(encoding).inspect
+  ""#{i.encoding} #{i.b.unpack1('H*')}""
+ensure
+  v, $VERBOSE = $VERBOSE, nil
+  Encoding.default_internal = nil
+  $VERBOSE = v
+end
+[['EUC-JP', '61a4a20a7f23'], ['EUC-JP', 'adf4a4'], ['Shift_JIS', '82a0a1ff'], ['GBK', 'b0a180'], ['ISO-8859-1', '809fa0e9'],
+ ['Windows-1252', '808285'], ['IBM437', '80'], ['TIS-620', 'a0db'], ['EUC-JP', '237ba4a2']].each do |e, h|
+  puts ""#{e} #{h}: #{inspect_in(e, h)}""
+end
+", @"
+EUC-JP 61a4a20a7f23: EUC-JP 2261a4a25c6e5c7837462322
+EUC-JP adf4a4: EUC-JP 22adf45c78413422
+Shift_JIS 82a0a1ff: Shift_JIS 2282a0a15c78464622
+GBK b0a180: GBK 22b0a15c78383022
+ISO-8859-1 809fa0e9: ISO-8859-1 225c7838305c783946a0e922
+Windows-1252 808285: Windows-1252 22805c7838325c78383522
+IBM437 80: IBM437 225c78383022
+TIS-620 a0db: TIS-620 22a05c78444222
+EUC-JP 237ba4a2: EUC-JP 225c237ba4a222
+");
+        }
+
+        /// <summary>
+        /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
+        /// messages), the encoding of the format says how long the character of the number is, "invalid character"
+        /// when it has no length for it, and that many bytes of the number are put without asking whether they are a
+        /// well formed character - "\x80" in Shift_JIS, "\x01\x00" in EUC-KR, a surrogate's three bytes in UTF-8. A
+        /// single byte encoding refuses a number above 0xFF with a RangeError instead (Util/format-c-matrix.rb).
+        /// </summary>
+        public void Format_Char2() {
+            TestOutput(@"
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.is_a?(String) ? ""#{v.encoding} #{v.unpack1('H*')}"" : v.inspect}""
+end
+{ 'UTF-8' => [0x41, 0x3042, 0xd800, 0x10ffff, 0x110000], 'US-ASCII' => [0x7f, 0x80, 0x100], 'BINARY' => [0xff, 0x100],
+  'ISO-8859-1' => [0xe9, 0x100], 'Shift_JIS' => [0x80, 0x81, 0xa1, 0x100, 0x3042, 0x8140, 0x81fd, 0x10000],
+  'EUC-JP' => [0x80, 0x8140, 0x8ee0, 0xa1a1, 0x8fa1a1, 0x10000], 'EUC-KR' => [0x80, 0x100, 0xa1a1, 0x10000],
+  'GB18030' => [0x100, 0x10000, 0x7fffffff], 'EUC-TW' => [0x8ea1a1], 'Emacs-Mule' => [0x80, 0x8100, 0x10ffff, 0x7fffffff],
+  'CESU-8' => [0x10000], 'UTF8-MAC' => [0x3042] }.each do |e, list|
+  list.each { |n| t(""#{e} #{n.to_s(16)}"") { '<%c>'.dup.force_encoding(e) % n } }
+end
+[2**31, -2**31, -2**31 - 1, 2**64, -1, 65.9, 1e20, :a, 'xy', ''].each { |v| t(""arg #{v.inspect}"") { '%c' % [v] } }
+t('width') { '%3c|%-3c|' % [0x3042, 0x41] }
+t('width Shift_JIS') { format('%-3c|'.dup.force_encoding('Shift_JIS'), 0xa1) }
+t('then %s') { format('%c%s'.dup.force_encoding('Shift_JIS'), 0xa1, [0x3042].pack('U')) }
+t('then %s US-ASCII') { format('%c%s'.dup.force_encoding('US-ASCII'), 0xa1, [0x3042].pack('U')) }
+t('%s then %c') { format('%s%c'.dup.force_encoding('Shift_JIS'), [0x3042].pack('U'), 0xa1).unpack1('H*') }
+t('bytes kept') { [format('<%c>'.dup.force_encoding('EUC-JP'), 0x8fa2b7), format('<%c>'.dup.force_encoding('CESU-8'), 0xdc80)].map { _1.unpack1('H*') } }
+", @"
+UTF-8 41: UTF-8 3c413e
+UTF-8 3042: UTF-8 3ce381823e
+UTF-8 d800: UTF-8 3ceda0803e
+UTF-8 10ffff: UTF-8 3cf48fbfbf3e
+UTF-8 110000: [ArgumentError, ""invalid character""]
+US-ASCII 7f: US-ASCII 3c7f3e
+US-ASCII 80: ASCII-8BIT 3c803e
+US-ASCII 100: [RangeError, ""256 out of char range""]
+BINARY ff: ASCII-8BIT 3cff3e
+BINARY 100: [RangeError, ""256 out of char range""]
+ISO-8859-1 e9: ISO-8859-1 3ce93e
+ISO-8859-1 100: [RangeError, ""256 out of char range""]
+Shift_JIS 80: Shift_JIS 3c803e
+Shift_JIS 81: [ArgumentError, ""invalid character""]
+Shift_JIS a1: Shift_JIS 3ca13e
+Shift_JIS 100: [ArgumentError, ""invalid character""]
+Shift_JIS 3042: Shift_JIS 3c30423e
+Shift_JIS 8140: Shift_JIS 3c81403e
+Shift_JIS 81fd: [ArgumentError, ""invalid character""]
+Shift_JIS 10000: [ArgumentError, ""invalid character""]
+EUC-JP 80: [ArgumentError, ""invalid character""]
+EUC-JP 8140: [ArgumentError, ""invalid character""]
+EUC-JP 8ee0: EUC-JP 3c8ee03e
+EUC-JP a1a1: EUC-JP 3ca1a13e
+EUC-JP 8fa1a1: EUC-JP 3c8fa1a13e
+EUC-JP 10000: [ArgumentError, ""invalid character""]
+EUC-KR 80: EUC-KR 3c803e
+EUC-KR 100: EUC-KR 3c01003e
+EUC-KR a1a1: EUC-KR 3ca1a13e
+EUC-KR 10000: [ArgumentError, ""invalid character""]
+GB18030 100: GB18030 3c01003e
+GB18030 10000: GB18030 3c0100003e
+GB18030 7fffffff: GB18030 3c7fffffff3e
+EUC-TW 8ea1a1: EUC-TW 3c8ea1a13e
+Emacs-Mule 80: [ArgumentError, ""invalid character""]
+Emacs-Mule 8100: Emacs-Mule 3c81003e
+Emacs-Mule 10ffff: Emacs-Mule 3c10ff3e
+Emacs-Mule 7fffffff: Emacs-Mule 3c7fffff3e
+CESU-8 10000: CESU-8 3ceda080edb0803e
+UTF8-MAC 3042: UTF8-MAC 3ce381823e
+arg 2147483648: [RangeError, ""integer 2147483648 too big to convert to 'int'""]
+arg -2147483648: [ArgumentError, ""invalid character""]
+arg -2147483649: [RangeError, ""integer -2147483649 too small to convert to 'int'""]
+arg 18446744073709551616: [RangeError, ""bignum too big to convert into 'long'""]
+arg -1: [ArgumentError, ""invalid character""]
+arg 65.9: UTF-8 41
+arg 1.0e+20: [RangeError, ""float 1e+20 out of range of integer""]
+arg :a: [TypeError, ""no implicit conversion of Symbol into Integer""]
+arg ""xy"": UTF-8 78
+arg """": UTF-8 
+width: UTF-8 2020e381827c4120207c
+width Shift_JIS: Shift_JIS a120207c
+then %s: [Encoding::CompatibilityError, ""incompatible character encodings: Shift_JIS and UTF-8""]
+then %s US-ASCII: [Encoding::CompatibilityError, ""incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8""]
+%s then %c: US-ASCII 65333831383263326131
+bytes kept: [""3c8fa2b73e"", ""3cedb2803e""]
+");
+        }
     }
 }

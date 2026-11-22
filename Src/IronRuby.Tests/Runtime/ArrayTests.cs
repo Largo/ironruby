@@ -312,7 +312,7 @@ FrozenError
 ArgumentError
 TypeError
 [10, 9, 0, Infinity, 3, 1, 3]
-");
+", 0, 1);
         }
 
         /// <summary>

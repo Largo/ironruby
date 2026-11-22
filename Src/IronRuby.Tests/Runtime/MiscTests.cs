@@ -1915,6 +1915,87 @@ true
         }
     
         /// <summary>
+        /// %c writes the bytes of an Integer in the encoding of the format, as MRI's
+        /// rb_str_format does with rb_enc_codelen and rb_enc_mbcput: only a number the encoding
+        /// has no width for is an "invalid character", and one that has a character's width but
+        /// not its shape (0x80 in Shift_JIS or EUC-KR, a surrogate in UTF-8) goes into the result,
+        /// where Integer#chr would refuse it. The argument is a C int, with NUM2INT's errors.
+        /// Util/format-c-matrix.rb and format-c-bytes-matrix.rb compare every encoding with CRuby.
+        /// </summary>
+        public void Sprintf_CharacterBytes1() {
+            TestOutput(@"
+def t
+  s = yield
+  puts ""#{s.encoding} #{s.bytes.inspect} #{s.valid_encoding?}""
+rescue => e
+  puts ""#{e.class}: #{e.message}""
+end
+t { '%c'.encode('Shift_JIS') % 0x80 }
+t { '%c'.encode('Shift_JIS') % 0x3042 }
+t { '%c'.encode('Shift_JIS') % 0x8140 }
+t { '%c'.encode('Shift_JIS') % 0x81 }
+t { '%c'.encode('EUC-KR') % 0x80 }
+t { '%c'.encode('EUC-KR') % 0x10000 }
+t { '%c'.encode('EUC-JP') % 0x8fa1a1 }
+t { '%c'.encode('EUC-JP') % 0x3042 }
+t { '%c'.encode('GB18030') % 0x10000 }
+t { '%c'.encode('Emacs-Mule') % 0x10ffff }
+t { '%c'.encode('ISO-8859-1') % 0xff }
+t { '%c'.encode('ISO-8859-1') % 0x100 }
+t { '%c'.encode('US-ASCII') % 0x80 }
+t { '%c'.encode('US-ASCII') % 0x100 }
+t { '%c' % 0x3042 }
+t { '%c' % 0xd800 }
+t { '%c' % 0x110000 }
+t { '%c' % -1 }
+t { '<%3c|%-3c>'.encode('Shift_JIS') % [0x80, 0x8140] }
+t { '%c%s'.encode('Shift_JIS') % [0x3042, 0x3042.chr('UTF-8')] }
+t { '%c%s'.encode('Shift_JIS') % [0x80, 0x3042.chr('UTF-8')] }
+t { '%c' % 0x80000000 }
+t { '%c' % -0x80000001 }
+t { '%c' % 2**64 }
+t { '%c' % 1e20 }
+t { '%c' % 2.0**31 }
+t { '%c' % 65.9 }
+t { '%c' % true }
+t { '%c' % false }
+class TrueClass; def to_int = 65; end
+t { '%c' % true }
+", @"
+Shift_JIS [128] false
+Shift_JIS [48, 66] true
+Shift_JIS [129, 64] true
+ArgumentError: invalid character
+EUC-KR [128] false
+ArgumentError: invalid character
+EUC-JP [143, 161, 161] true
+ArgumentError: invalid character
+GB18030 [1, 0, 0] true
+Emacs-Mule [16, 255] false
+ISO-8859-1 [255] true
+RangeError: 256 out of char range
+ASCII-8BIT [128] true
+RangeError: 256 out of char range
+UTF-8 [227, 129, 130] true
+UTF-8 [237, 160, 128] false
+ArgumentError: invalid character
+ArgumentError: invalid character
+Shift_JIS [60, 32, 32, 128, 124, 129, 64, 32, 32, 62] false
+UTF-8 [48, 66, 227, 129, 130] true
+Encoding::CompatibilityError: incompatible character encodings: Shift_JIS and UTF-8
+RangeError: integer 2147483648 too big to convert to 'int'
+RangeError: integer -2147483649 too small to convert to 'int'
+RangeError: bignum too big to convert into 'long'
+RangeError: float 1e+20 out of range of integer
+RangeError: integer 2147483648 too big to convert to 'int'
+UTF-8 [65] true
+TypeError: no implicit conversion of true into Integer
+TypeError: no implicit conversion of false into Integer
+UTF-8 [65] true
+");
+        }
+
+        /// <summary>
         /// MRI's dtoa settles a rounding it cannot tell from a tie in double arithmetic by the
         /// parity of the last digit, whatever the exact binary value: "%.2f" % 2.675 is 2.68
         /// although the double is below 2.675, and "%.1f" % 99.45 is 99.4 although it is above.
@@ -3221,7 +3302,7 @@ too few arguments
 ASCII incompatible encoding: UTF-16LE
 12354 out of char range
 incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
-invalid value for Float(): ""\xC2\xBD.5""
+invalid value for Float(): """ + "\u00BD" + @".5""
 ");
         }
 
@@ -3240,7 +3321,7 @@ p [1, 2, 3].fill(0), [1, 2, 3].fill(9, 1), [1, 2, 3].fill(9, 1, 1), [1, 2, 3].fi
 begin; [1, 2].freeze.fill(0); rescue => e; puts e.class; end
 begin; [1, 2, 3].combination; rescue ArgumentError => e; puts e.message; end
 begin; a = [1]; a[2**31 - 1] = 1; rescue IndexError => e; puts e.message; end
-begin; a = [1]; a[2**31 - 2] = 1; rescue NoMemoryError => e; puts e.class; end
+begin; a = [1]; a[2**31 - 2] = 1; rescue IndexError => e; puts e.message; end
 begin; (a = [1, 2, 3])[-5..nil] = 9; rescue RangeError => e; puts e.message; end
 a = [1, 2, 3]; a.zip([1]) { |x| a.pop }; p a
 begin; a = [1, 2].freeze; a.replace(a); rescue => e; puts e.class; end
@@ -3269,7 +3350,7 @@ wrong number of arguments (given 4, expected 1..3)
 FrozenError
 wrong number of arguments (given 0, expected 1)
 index 2147483647 too big
-NoMemoryError
+index 2147483646 too big
 -5.. out of range
 [1]
 FrozenError
@@ -3694,7 +3775,7 @@ p((1.instance_eval { M13.send(:module_function); def x13; end; :ok } rescue $!))
 true
 [true, true]
 #<TypeError: can't define singleton>
-");
+", 0, 5);
         }
 
         /// <summary>
@@ -4103,7 +4184,7 @@ Float(""1.5""): 1.5
 Float(nil): ""TypeError: can't convert nil into Float""
 Integer base: ""ArgumentError: base specified for non string value""
 redefined **: [9, 9]
-");
+", 0, 1);
         }
 
         /// <summary>

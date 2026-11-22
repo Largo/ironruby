@@ -68,6 +68,22 @@ namespace IronRuby.Compiler.Ast {
             _frameDepth = frameDepth;
         }
 
+        internal MSA.Expression/*!*/ Body {
+            get { return _body; }
+        }
+
+        internal MSA.Expression/*!*/ Scope {
+            get { return _scope; }
+        }
+
+        /// <summary>
+        /// The guard with other statements and another scope: a light frame's, made on demand once an exception is leaving the
+        /// statements (MethodDefinition.LightFrameRewriter).
+        /// </summary>
+        internal EnsureGuardExpression/*!*/ Update(MSA.Expression/*!*/ body, MSA.Expression/*!*/ scope) {
+            return (body == _body && scope == _scope) ? this : new EnsureGuardExpression(body, scope, _thrown, _rethrow, _frameDepth);
+        }
+
         /// <summary>
         /// The guard as a DLR filter on CanRescue, which the DLR lowers to a catch: for the interpreter.
         /// </summary>

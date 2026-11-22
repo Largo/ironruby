@@ -89,13 +89,9 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotEmpty(_leftValues);
 
             if (_leftValues.Length == 1) {
-                // (...) = RHS is equivalent to ... = RHS:
-                CompoundLeftValue compound = _leftValues[0] as CompoundLeftValue;
-                if (compound != null) {
-                    return compound.TransformWrite(gen, rightValues);
-                }
-
-                if (!HasUnsplattedValue) {
+                // A lone nested target is a level of its own, not the same as its contents: in
+                // ((a, b)) = [1, 2] it takes the first item, so a is 1 and b nil, as in MRI.
+                if (!HasUnsplattedValue && !(_leftValues[0] is CompoundLeftValue)) {
                     return _leftValues[0].TransformWrite(gen, rightValues.TransformToArray(gen));
                 }
             }

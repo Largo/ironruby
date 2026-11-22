@@ -1203,6 +1203,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object YieldSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            // yield x, *[] passes one argument, which a proc auto-splats and a lambda takes as it is,
+            // exactly as yield x does: {|*, a|} gets nil for yield [], *nil, and lambda {|a,|} gets [].
+            if (splattee.Count == 0) {
+                return Yield1(arg1, procArg, self, blockParam);
+            }
             object result;
             var proc = blockParam.Proc;
             RequireLambdaArity(proc, 1 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg1);
@@ -1367,6 +1372,16 @@ namespace IronRuby.Runtime {
                 scope.RubyContext.NoteMethodUsingBlock(body.Name);
             }
 
+            // Whether the host scope already has its own copy of the method, which warns about the
+            // redefinition itself; otherwise the one replaced is Object's (from a file or another scope).
+            bool scopeHadMethod = false;
+            if (hostedTopLevel) {
+                using (scope.RubyContext.ClassHierarchyLocker()) {
+                    RubyMemberInfo existing;
+                    scopeHadMethod = instanceOwner.TryGetDefinedMethod(body.Name, out existing) && existing != null && !existing.IsUndefined;
+                }
+            }
+
             if (instanceOwner != null) {
                 var definitionScope = DefinitionScope(scope, instanceOwner);
                 if (scope.RubyContext.HasRefinements) {
@@ -1396,8 +1411,12 @@ namespace IronRuby.Runtime {
                 } else {
                     body.SetDefinedWithoutRefinements();
                 }
+                // Object's copy of the scope's method: a redefinition is warned about once, for the
+                // scope's - each host scope is a top level of its own, as a file is. When the scope had
+                // no copy, the method replaced is Object's, and CRuby warns about that one.
                 SetMethod(scope.RubyContext, objectMethod =
-                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags)
+                    new RubyMethodInfo(body, definitionScope, objectClass, instanceFlags),
+                    warnRedefinition: !scopeHadMethod
                 );
             }
 
@@ -1489,11 +1508,14 @@ namespace IronRuby.Runtime {
             return result;
         }
 
-        private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method) {
+        private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method, bool warnRedefinition = true) {
             var owner = method.DeclaringModule;
 
             // Do not trigger the add-method event just yet, we need to assign the result into closure before executing any user code.
             // If the method being defined is "method_added" itself, we would call that method before the info gets assigned to the closure.
+            if (warnRedefinition) {
+                owner.WarnMethodRedefinition(method.DefinitionName, method.Document.FileName, method.SourceSpan.Start.Line);
+            }
             owner.SetMethodNoEvent(callerContext, method.DefinitionName, method);
 
             // expose RubyMethod in the scope (the method is bound to the main singleton instance):
@@ -3246,31 +3268,77 @@ namespace IronRuby.Runtime {
         
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexM(MutableString str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringM(str1, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringM(str1, encoding), options, str1), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringLM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringLM(str1, str2, encoding), options,
+                MutableString.Create(str1, encoding), str2), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexML(MutableString str1, string/*!*/ str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringML(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringML(str1, str2, encoding), options,
+                str1, MutableString.Create(str2, encoding)), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringMM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringMM(str1, str2, encoding), options, str1, str2), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
+        }
+
+        /// <summary>
+        /// MRI's rb_reg_preprocess_dregexp: each fragment of an interpolated regexp, the literal ones
+        /// in the encoding of the source, is read in its own encoding, and one with non-ASCII text, a
+        /// character property or a \u escape (UTF-8) fixes the regexp's: /#{'\p{Alpha}'.encode('US-ASCII')}/
+        /// is US-ASCII, /#{x}\p{N}/ in a UTF-8 file UTF-8, whatever the concatenation came to. Two
+        /// fragments fixing different encodings are an error. With an encoding option (/n /u /e /s)
+        /// the option decides.
+        /// </summary>
+        private static MutableString/*!*/ InDynamicRegexEncoding(MutableString/*!*/ pattern, RubyRegexOptions options,
+            params MutableString[]/*!*/ fragments) {
+            if ((options & RubyRegexOptions.EncodingMask) != 0) {
+                return pattern;
+            }
+            bool extended = (options & RubyRegexOptions.Extended) != 0;
+            RubyEncoding fixedEncoding = null;
+            foreach (var fragment in fragments) {
+                if (fragment == null) {
+                    continue;
+                }
+                RubyEncoding encoding;
+                bool isUnicode;
+                if (!fragment.IsAscii()) {
+                    encoding = fragment.Encoding;
+                } else if (RubyRegex.HasNonAsciiEscape(fragment, out isUnicode)) {
+                    encoding = isUnicode ? RubyEncoding.UTF8 : fragment.Encoding;
+                } else if (RubyRegex.HasPropertyEscape(fragment, extended)) {
+                    encoding = fragment.Encoding;
+                } else {
+                    continue;
+                }
+                if (fixedEncoding != null && fixedEncoding != encoding) {
+                    throw new RegexpError(RubyExceptions.FormatMessage("encoding mismatch in dynamic regexp : {0} and {1}",
+                        fixedEncoding.Name, encoding.Name));
+                }
+                fixedEncoding = encoding;
+            }
+            if (fixedEncoding != null && pattern.Encoding != fixedEncoding && pattern.IsAscii()) {
+                // the concatenation may be one of the interpolated strings itself
+                pattern = pattern.Clone();
+                pattern.ForceEncoding(fixedEncoding);
+            }
+            return pattern;
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexN(MutableString[]/*!*/ strings, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringN(strings), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringN(strings), options, strings), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
@@ -3890,8 +3958,9 @@ namespace IronRuby.Runtime {
                 if (RubyUtils.IsReclaimingFiber || exception is StackUnwinder) {
                     return !IsDeepOrOverflow(exception);
                 }
+                // A light frame that has made no scope passes null (MethodDefinition.LightFrameRewriter): no jump can be meant for it.
                 LocalJumpError lje = exception as LocalJumpError;
-                return lje != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
+                return lje != null && scope != null && lje.SkipFrame == scope.FlowControlScope && !IsDeepOrOverflow(exception);
             } catch (Exception) {
                 // catch it (see RescuePassMayTest)
                 return false;
@@ -4355,6 +4424,15 @@ namespace IronRuby.Runtime {
                 && expectedClass.Version.Method == expectedVersion;
         }
 
+        // MRI formats the expected module with %PRIsVALUE, i.e. its #to_s (an anonymous class with a
+        // singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's own #to_s is
+        // used too, so the name is only the fallback for a #to_s that returns no String.
+        private static string/*!*/ SuperExpectedModuleName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            var site = context.GetClassOf(module).ToStringSite;
+            var str = site.Target(site, module) as MutableString;
+            return str != null ? str.ToString() : module.GetDisplayName(context, true).ToString();
+        }
+
         // super call condition
         [Emitted]
         public static object GetSuperCallTarget(RubyScope/*!*/ scope, int targetId) {
@@ -4404,7 +4482,7 @@ namespace IronRuby.Runtime {
             var context = methodScope.RubyContext;
             if (!context.IsKindOf(currentSelf, declaringModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("self has wrong type to call super in this context: {0} (expected {1})",
-                    context.GetClassDisplayName(currentSelf), declaringModule.GetDisplayName(context, true)));
+                    context.GetClassDisplayName(currentSelf), SuperExpectedModuleName(context, declaringModule)));
             }
         }
 
@@ -4792,7 +4870,12 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw InvalidFloatValue(original != null ? original.ToByteArray() : Encoding.UTF8.GetBytes(value));
+            // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding - of a new
+            // String made from its bytes (rb_enc_str_new_cstr), so a subclass's #inspect is not called
+            if (original != null) {
+                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(MutableString.Create(original)).ToString());
+            }
+            throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
         }
 
         private static readonly char[] _FloatWhitespace = { ' ', '\t', '\n', '\v', '\f', '\r' };
@@ -4973,20 +5056,95 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            int start = index;
             bool negative = false;
             if (str[index] == '+' || str[index] == '-') {
                 negative = (str[index] == '-');
                 index++;
             }
 
-            bool parsed = (index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X'))
+            bool hex = index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X');
+            bool parsed = hex
                 ? TryParseHexadecimalFloat(str, index + 2, end, out result)
                 : TryParseDecimalFloat(str, index, end, out result);
+
+            // MRI's strtod stops at an underscore or at trailing whitespace; rb_cstr_to_dbl then parses its own copy
+            if (parsed && (end < str.Length || str.IndexOf('_', start, end - start) >= 0)) {
+                return TryParseRubyFloat(CopyFloatBuffer(str, start, end), out result);
+            }
 
             if (parsed && negative) {
                 result = -result;
             }
             return parsed;
+        }
+
+        // When strtod stops short of the end of the string (at an underscore or at trailing
+        // whitespace), MRI's rb_cstr_to_dbl_raise copies the number, a valid one here, into a
+        // buffer of DBL_DIG * 4 + 10 characters and parses that instead. The copy squeezes the
+        // zeros that lead the number (after "0x" too) into one, takes out the underscores, and
+        // keeps no more than DBL_DIG * 4 characters, sign and point included, until it meets the
+        // exponent letter, which with its sign and the first of its leading zeros always goes in;
+        // the exponent's digits then fill the buffer up to its end. Float("1_1_..._1") with 10000
+        // digits is 1.11...e+59, not Infinity, and Float("0x0 ") is no number at all.
+        private static string/*!*/ CopyFloatBuffer(string/*!*/ str, int start, int end) {
+            const int InitialLimit = 15 * 4, BufferLimit = 15 * 4 + 10 - 1;
+            var buffer = new StringBuilder(BufferLimit + 4);
+            int p = start;
+
+            // where strtod stopped: the first underscore, or the end of the number
+            int parsedEnd = str.IndexOf('_', start, end - start);
+            if (parsedEnd < 0) {
+                parsedEnd = end;
+            }
+
+            char exponentLetter = 'e';
+            if (str[p] == '+' || str[p] == '-') {
+                buffer.Append(str[p++]);
+            }
+            if (p < end && str[p] == '0') {
+                buffer.Append('0');
+                p++;
+                if (p < end && (str[p] == 'x' || str[p] == 'X')) {
+                    buffer.Append('x');
+                    p++;
+                    exponentLetter = 'p';
+                }
+                while (p < end && str[p] == '0') {
+                    p++;
+                }
+            }
+
+            // what strtod parsed is copied as it is
+            while (p < parsedEnd && buffer.Length < InitialLimit) {
+                buffer.Append(str[p++]);
+            }
+
+            int limit = InitialLimit;
+            while (p < end) {
+                if (str[p] == '_') {
+                    p++;
+                }
+                char c = str[p++];
+                if (limit == InitialLimit && Char.ToLowerInvariant(c) == exponentLetter) {
+                    limit = BufferLimit;
+                    buffer.Append(c);
+                    if (p < end && (str[p] == '+' || str[p] == '-')) {
+                        buffer.Append(str[p++]);
+                    }
+                    if (p < end && str[p] == '0') {
+                        buffer.Append('0');
+                        while (p < end && str[p] == '0') {
+                            p++;
+                        }
+                    }
+                    continue;
+                }
+                if (buffer.Length < limit) {
+                    buffer.Append(c);
+                }
+            }
+            return buffer.ToString();
         }
 
         private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
@@ -5075,14 +5233,14 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            int scale = 0;
+            int fractionDigits = 0;
             if (index < end && str[index] == '.') {
                 index++;
-                int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
-                if (fractionDigits <= 0) {
+                // ruby_strtod takes "0x1.", "0x1.p+0" and even "0x." (zero): the point may end the digits
+                fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
+                if (fractionDigits < 0) {
                     return false;
                 }
-                scale = -4 * fractionDigits;
             } else if (integerDigits == 0) {
                 return false;
             }
@@ -5099,22 +5257,50 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            BigInteger mantissa = BigInteger.Zero;
-            for (int i = 0; i < length; i++) {
-                char c = digits[i];
-                int digit = (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
-                mantissa = mantissa * 16 + digit;
+            // ruby_strtod's hexadecimal branch (missing/dtoa.c) adds the digits up in a double, the first
+            // non-zero one weighing 1 and each next one a sixteenth of the one before, and scales the sum by
+            // 2**(4 * (integer digits - 1) + exponent) with ldexp. Every addition rounds, so a mantissa longer
+            // than a double's 53 bits is rounded twice, not to nearest as a whole: Float("0x1.000000000000081p0")
+            // is 1.0. MRI's results are matched, not the correctly rounded ones.
+            double sum = 0.0, weight = 1.0;
+            long power = -4;
+            int i = 0;
+            while (i < integerDigits && digits[i] == '0') {
+                i++;
+            }
+            for (; i < integerDigits; i++) {
+                sum += weight * HexadecimalDigitValue(digits[i]);
+                power += 4;
+                weight /= 16;
+            }
+            if (fractionDigits > 0) {
+                if (power < 0) {
+                    while (i < length && digits[i] == '0') {
+                        i++;
+                        power -= 4;
+                    }
+                }
+                for (; i < length; i++) {
+                    sum += weight * HexadecimalDigitValue(digits[i]);
+                    if ((weight /= 16) == 0.0) {
+                        break;
+                    }
+                }
             }
 
-            long power = (long)exponent + scale;
+            power += exponent;
             if (power > 99999) {
                 power = 99999;
             } else if (power < -99999) {
                 power = -99999;
             }
 
-            result = Math.ScaleB((double)mantissa, (int)power);
+            result = Math.ScaleB(sum, (int)power);
             return true;
+        }
+
+        private static int HexadecimalDigitValue(char c) {
+            return (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
         }
 
         #endregion
@@ -5142,7 +5328,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static Exception/*!*/ CreateNotSymbolNorStringError(RubyContext/*!*/ context, object obj) {
-            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToAsciiString());
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToString());
         }
 
         /// <summary>

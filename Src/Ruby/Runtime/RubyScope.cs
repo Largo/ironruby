@@ -884,12 +884,20 @@ namespace IronRuby.Runtime {
             RubyScope scope = this;
             do {
                 RubyModule result = scope.Module;
-                if (result != null && (!skipSingletons || !result.IsSingletonClass)) {
+                if (result != null && (!skipSingletons || !(result.IsSingletonClass || IsInstanceEval(scope)))) {
                     return result;
                 }
                 scope = scope.Parent;
             } while (scope != null);
             return fallbackModule;
+        }
+
+        // The scope of an #instance_eval'd String, whose self is the receiver rather than the module.
+        // MRI pushes its cref as a singleton one (eval_under), which vm_get_cvar_base walks past
+        // even where the module is no singleton class: nil.instance_eval("@@x") evaluates in
+        // NilClass and reads the caller's @@x, not NilClass's.
+        private static bool IsInstanceEval(RubyScope/*!*/ scope) {
+            return scope is RubyModuleEvalScope && !ReferenceEquals(scope.SelfObject, scope.Module);
         }
 
         /// <summary>

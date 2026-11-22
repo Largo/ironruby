@@ -29,6 +29,8 @@ namespace IronRuby.Builtins {
         // HasNonAsciiEscape(_pattern) - the pattern is frozen, so it is worked out once: -1 not yet,
         // 0 none, 1 a byte escape, 2 a \u escape. Encoding and IsFixedEncoding ask on every match.
         private int _nonAsciiEscape = -1;
+        // HasPropertyEscape(_pattern, extended), worked out once in the same way: -1 not yet, 0, 1.
+        private int _hasProperty = -1;
         private RubyRegexOptions _options;
         private bool _hasGAnchor;
 
@@ -153,6 +155,7 @@ namespace IronRuby.Builtins {
             _cachedRegex = null;
             _cachedAstralRegex = null;
             _nonAsciiEscape = -1;
+            _hasProperty = -1;
 
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
@@ -162,6 +165,7 @@ namespace IronRuby.Builtins {
             }
 
             TransformPattern(false);
+            RequireKnownProperties();
         }
 
         /// <summary>
@@ -642,10 +646,17 @@ namespace IronRuby.Builtins {
                         return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
                     }
 
+                    // A character property pins the encoding the source was written in (MRI's
+                    // rb_reg_preprocess, has_property): /\p{Alpha}/ is UTF-8 in a UTF-8 file.
+                    if (PatternHasProperty) {
+                        return _pattern.Encoding;
+                    }
+
                     return RubyEncoding.Ascii;
                 }
 
-                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _)) {
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _) &&
+                    !PatternHasProperty) {
                     return RubyEncoding.Ascii;
                 }
 
@@ -783,6 +794,160 @@ namespace IronRuby.Builtins {
             return cached != 0;
         }
 
+        private bool PatternHasProperty {
+            get {
+                int cached = _hasProperty;
+                if (cached < 0) {
+                    cached = HasPropertyEscape(_pattern, (_options & RubyRegexOptions.Extended) != 0) ? 1 : 0;
+                    _hasProperty = cached;
+                }
+                return cached != 0;
+            }
+        }
+
+        /// <summary>
+        /// Whether the pattern names a character property (\p{...}, \P{...}) outside a comment,
+        /// which MRI's unescape_nonascii notes as has_property: such a regexp keeps the encoding
+        /// of its source even when that source is ASCII only. A (?#...) comment, and a # comment
+        /// in extended mode outside a character class, do not count.
+        /// </summary>
+        public static bool HasPropertyEscape(MutableString/*!*/ pattern, bool extended) {
+            return PropertyNames(pattern, extended).GetEnumerator().MoveNext();
+        }
+
+        /// <summary>
+        /// The names of the character properties the pattern uses (HasPropertyEscape), as written
+        /// between the braces, a leading ^ left out; "" for a \p with no braces.
+        /// </summary>
+        private static IEnumerable<string>/*!*/ PropertyNames(MutableString/*!*/ pattern, bool extended) {
+            int length = pattern.GetCharCount();
+            int inClass = 0;
+            var groups = new Stack<int>();
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+                if (c == '\\') {
+                    if (i + 1 < length) {
+                        char next = pattern.GetChar(i + 1);
+                        if (next == 'p' || next == 'P') {
+                            var name = new StringBuilder();
+                            int j = i + 2;
+                            if (j < length && pattern.GetChar(j) == '{') {
+                                j++;
+                                if (j < length && pattern.GetChar(j) == '^') {
+                                    j++;
+                                }
+                                while (j < length && pattern.GetChar(j) != '}') {
+                                    name.Append(pattern.GetChar(j++));
+                                }
+                            }
+                            yield return name.ToString();
+                        }
+                    }
+                    // the escaped character is not looked at again
+                    i++;
+                } else if (c == '[') {
+                    inClass++;
+                } else if (c == ']') {
+                    if (inClass > 0) {
+                        inClass--;
+                    }
+                } else if (c == '#' && extended && inClass == 0) {
+                    while (i < length && pattern.GetChar(i) != '\n') {
+                        i++;
+                    }
+                } else if (c == '(' && inClass == 0) {
+                    if (i + 2 < length && pattern.GetChar(i + 1) == '?' && pattern.GetChar(i + 2) == '#') {
+                        // a comment runs to the first ')' that is not escaped
+                        for (i += 3; i < length && pattern.GetChar(i) != ')'; i++) {
+                            if (pattern.GetChar(i) == '\\') {
+                                i++;
+                            }
+                        }
+                        continue;
+                    }
+                    // As MRI's unescape_nonascii: (?x) and (?-x) (the options a, d, u, i and m may
+                    // stand with x) turn extended mode on or off for the rest of the pattern, or of
+                    // the (?x:...) group around them; (?x:...) and (?-x:...) only inside their own
+                    // group, when they change it. Any other group leaves the mode alone, its end
+                    // included: -1 on the stack.
+                    int restore = -1;
+                    if (i + 1 < length && pattern.GetChar(i + 1) == '?') {
+                        bool on = true, inner = extended;
+                        int j = i + 2;
+                        for (; j < length; j++) {
+                            char option = pattern.GetChar(j);
+                            if (option == '-') {
+                                on = false;
+                            } else if (option == 'x') {
+                                inner = on;
+                            } else if ("imadu".IndexOf(option) < 0) {
+                                break;
+                            }
+                        }
+                        if (j < length && pattern.GetChar(j) == ')') {
+                            // (?x): no group to come back from
+                            extended = inner;
+                            i = j;
+                            continue;
+                        }
+                        if (j < length && pattern.GetChar(j) == ':' && inner != extended) {
+                            restore = extended ? 1 : 0;
+                            extended = inner;
+                            i = j;
+                        }
+                    }
+                    groups.Push(restore);
+                } else if (c == ')' && inClass == 0) {
+                    if (groups.Count > 0) {
+                        int restore = groups.Pop();
+                        if (restore >= 0) {
+                            extended = restore == 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // The property names Onigmo knows in an encoding without Unicode's tables
+        // (onigenc_minimum_property_name_to_ctype): the POSIX classes, Word and ASCII.
+        private static readonly HashSet<string>/*!*/ _minimumPropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Alnum", "Alpha", "Blank", "Cntrl", "Digit", "Graph", "Lower", "Print", "Punct", "Space", "Upper", "XDigit",
+            "Word", "ASCII",
+        };
+
+        // The Japanese encodings also know these scripts (enc/euc_jp.c and enc/shift_jis.c's
+        // property_name_to_ctype), as do their replicas.
+        private static readonly HashSet<string>/*!*/ _japanesePropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Hiragana", "Katakana", "Han", "Latin", "Greek", "Cyrillic",
+        };
+
+        private static readonly HashSet<string>/*!*/ _japaneseEncodings = new HashSet<string>(StringComparer.Ordinal) {
+            "EUC-JP", "eucJP-ms", "CP51932", "EUC-JIS-2004", "Shift_JIS", "Windows-31J", "MacJapanese",
+            "SJIS-DoCoMo", "SJIS-KDDI", "SJIS-SoftBank",
+        };
+
+        /// <summary>
+        /// A regexp in an encoding without Unicode's tables knows only a few property names, and
+        /// Onigmo refuses the rest when it compiles: Regexp.new('\p{L}'.encode('US-ASCII')) is
+        /// "invalid character property name {L}". The transformer, which does not know the
+        /// encoding, accepts every name Onigmo's Unicode tables have.
+        /// </summary>
+        private void RequireKnownProperties() {
+            if (!PatternHasProperty) {
+                return;
+            }
+            var encoding = Encoding;
+            if (encoding.HasUnicodeCodePoints) {
+                return;
+            }
+            bool japanese = _japaneseEncodings.Contains(encoding.Name);
+            foreach (string name in PropertyNames(_pattern, (_options & RubyRegexOptions.Extended) != 0)) {
+                if (!_minimumPropertyNames.Contains(name) && !(japanese && _japanesePropertyNames.Contains(name))) {
+                    throw new RegexpError("invalid character property name {" + name + "}: " + Inspect().ToString());
+                }
+            }
+        }
+
         public static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
             bool isUnicode;
             return HasNonAsciiEscape(pattern, out isUnicode);
@@ -870,11 +1035,13 @@ namespace IronRuby.Builtins {
                     // pins the encoding only once the pattern really compiles to non-ASCII bytes,
                     // which it does for a byte escape as much as for a literal non-ASCII character.
                     bool isUnicode;
-                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode);
+                    // (Marshal keeps MRI's FIXEDENCODING bit for a /n regexp it was set on.)
+                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode) || PatternHasProperty ||
+                        (_options & RubyRegexOptions.FixedEncoding) != 0;
                 }
 
                 return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
-                    || Encoding != RubyEncoding.Ascii;
+                    || Encoding != RubyEncoding.Ascii || PatternHasProperty;
             }
         }
 
@@ -1421,7 +1588,7 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ ToMutableString() {
-            return AppendTo(MutableString.CreateMutable(RubyEncoding.Binary));
+            return InRegexEncoding(AppendTo(MutableString.CreateMutable(RubyEncoding.Binary)));
         }
 
         public MutableString/*!*/ Inspect() {
@@ -1433,10 +1600,29 @@ namespace IronRuby.Builtins {
             if ((_options & RubyRegexOptions.FIXED) != 0) {
                 result.Append('n');
             }
-            return result;
+            return InRegexEncoding(result);
+        }
+
+        // MRI's rb_reg_to_s and rb_reg_inspect copy the regexp's encoding to the text: /x/.to_s
+        // is US-ASCII and /\p{L}/.to_s UTF-8, which is what keeps /#{/\p{L}/}/ UTF-8. Text with
+        // non-ASCII characters already carries the pattern's encoding.
+        private MutableString/*!*/ InRegexEncoding(MutableString/*!*/ text) {
+            var encoding = Encoding;
+            if (encoding.IsAsciiIdentity && text.Encoding != encoding && text.IsAscii()) {
+                text.ForceEncoding(encoding);
+            }
+            return text;
         }
 
         public MutableString/*!*/ AppendTo(MutableString/*!*/ result) {
+            return AppendTo(result, true);
+        }
+
+        /// <param name="escapeSlash">
+        /// False for Regexp.union, which MRI builds with rb_reg_str_with_term(re, -1): no terminator,
+        /// so a "/" in the pattern is not escaped.
+        /// </param>
+        public MutableString/*!*/ AppendTo(MutableString/*!*/ result, bool escapeSlash) {
             Assert.NotNull(result);
 
             // MRI hoists the options of a group that spans the whole pattern into the (?...) it
@@ -1452,7 +1638,11 @@ namespace IronRuby.Builtins {
             }
             AppendOptionString(result, options, false);
             result.Append(':');
-            AppendEscapeForwardSlash(result, pattern);
+            if (escapeSlash) {
+                AppendEscapeForwardSlash(result, pattern);
+            } else {
+                AppendPatternPiece(result, pattern, 0, pattern.GetCharCount());
+            }
             result.Append(')');
             return result;
         }
@@ -1465,10 +1655,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static bool TryHoistWholePatternGroup(ref MutableString/*!*/ pattern, ref RubyRegexOptions options) {
             int length = pattern.GetCharCount();
-            if (length < 4 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
-                return false;
-            }
-            if (FindGroupEnd(pattern, length) != length - 1) {
+            if (length < 3 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
                 return false;
             }
 
@@ -1505,7 +1692,15 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if (i >= length - 1 || pattern.GetChar(i) != ':') {
+            // A leading "(?opts)" sets the options for the rest of the pattern, and MRI's
+            // rb_reg_str_with_term folds it in the same way: /(?i)foo/ is "(?i-mx:foo)".
+            if (i > 2 && i < length && pattern.GetChar(i) == ')') {
+                options = hoisted;
+                pattern = pattern.GetSlice(i + 1, length - i - 1);
+                return true;
+            }
+
+            if (i >= length - 1 || pattern.GetChar(i) != ':' || FindGroupEnd(pattern, length) != length - 1) {
                 return false;
             }
 
@@ -1516,22 +1711,30 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// The index of the ')' closing the group the pattern opens with, or -1. A '\' escapes
-        /// whatever follows it and parentheses inside a character class are literal.
+        /// whatever follows it and parentheses inside a character class are literal. Classes nest,
+        /// and a ']' straight after '[' or '[^' is a member of its class when another ']' follows
+        /// (Onigmo's fetch_token_in_cc): "(?i:[])]a)" is one group.
         /// </summary>
         private static int FindGroupEnd(MutableString/*!*/ pattern, int length) {
             int depth = 0;
-            bool inCharacterClass = false;
+            int classDepth = 0;
 
             for (int i = 0; i < length; i++) {
                 char c = pattern.GetChar(i);
                 if (c == '\\') {
                     i++;
-                } else if (inCharacterClass) {
-                    if (c == ']') {
-                        inCharacterClass = false;
-                    }
                 } else if (c == '[') {
-                    inCharacterClass = true;
+                    classDepth++;
+                    if (i + 1 < length && pattern.GetChar(i + 1) == '^') {
+                        i++;
+                    }
+                    if (i + 1 < length && pattern.GetChar(i + 1) == ']' && pattern.IndexOf(']', i + 2) >= 0) {
+                        i++;
+                    }
+                } else if (classDepth > 0) {
+                    if (c == ']') {
+                        classDepth--;
+                    }
                 } else if (c == '(') {
                     depth++;
                 } else if (c == ')') {
@@ -1600,14 +1803,34 @@ namespace IronRuby.Builtins {
                 Debug.Assert(i < patternLength);
                 Debug.Assert(pattern.GetChar(i) == '/');
 
-                result.Append(pattern, first, i - first);
+                AppendPatternPiece(result, pattern, first, i - first);
                 result.Append('\\');
                 first = i; // include forward slash in the next append
                 i = SkipToUnescapedForwardSlash(pattern, patternLength, i + 1);
             }
 
-            result.Append(pattern, first, patternLength - first);
+            AppendPatternPiece(result, pattern, first, patternLength - first);
             return result;
+        }
+
+        // rb_reg_expr_str writes a character that is neither printable nor a space as \xHH, so a
+        // NUL or an ESC in the pattern shows as "\x00" or "\x1B" in #to_s and #inspect. A backslash
+        // and the character after it are copied as they are: "\\\e" (a backslash and an ESC) stays
+        // an escaped ESC, which compiles to the same pattern, where "\\\x1B" would not.
+        private static void AppendPatternPiece(MutableString/*!*/ result, MutableString/*!*/ pattern, int start, int count) {
+            int end = start + count;
+            int runStart = start;
+            for (int i = start; i < end; i++) {
+                char c = pattern.GetChar(i);
+                if (c == '\\' && i + 1 < end) {
+                    i++;
+                } else if (c < 0x20 && (c < '\t' || c > '\r') || c == 0x7f) {
+                    result.Append(pattern, runStart, i - runStart);
+                    result.Append("\\x").Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                    runStart = i + 1;
+                }
+            }
+            result.Append(pattern, runStart, end - runStart);
         }
 
         #endregion

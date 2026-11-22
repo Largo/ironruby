@@ -2481,6 +2481,23 @@ namespace IronRuby.Runtime {
             return GetClassName(obj, true);
         }
 
+        /// <summary>
+        /// The class of <paramref name="obj"/> as MRI writes it into a message with PRIsVALUE:
+        /// by the class's #to_s, which an anonymous class may have been given
+        /// (EnvUtil.labeled_class). A named class is its name.
+        /// </summary>
+        public string/*!*/ GetClassMessageName(object obj) {
+            var cls = TryGetClassOfRubyObject(obj);
+            if (cls != null && cls.Name == null) {
+                try {
+                    return StringConversionSite.Target(StringConversionSite, cls).ToString();
+                } catch (Exception) {
+                    // as the name would read
+                }
+            }
+            return GetClassDisplayName(obj);
+        }
+
         private string/*!*/ GetClassName(object obj, bool display) {
             // doesn't create a RubyClass for .NET types
 
@@ -3158,7 +3175,7 @@ namespace IronRuby.Runtime {
             }
 
             var result = new StringBuilder();
-            bool unicode = encoding.IsUnicodeEncoding;
+            bool unicode = encoding.HasUnicodeCodePoints;
             var characters = str.GetCharacters();
             while (characters.MoveNext()) {
                 var c = characters.Current;
@@ -3169,7 +3186,9 @@ namespace IronRuby.Runtime {
                     continue;
                 }
 
-                int codepoint;
+                // long: a legacy character of four bytes with the high bit set (GB18030's
+                // 0x81308130, Emacs-Mule's 0x9CF0A0A0) is negative as an int, and lost its braces
+                long codepoint;
                 if (unicode) {
                     codepoint = c.Codepoint;
                 } else {

@@ -1510,6 +1510,14 @@ namespace IronRuby.Builtins {
                 }
                 return _encoding.CompareTo(other._encoding);
             } else {
+                // MRI compares bytes (rb_str_cmp's memcmp). Content held as characters orders the
+                // same only for UTF-8 (and for ASCII text anywhere); elsewhere the code points
+                // order differently from the bytes: "\xA1\xA1" sorts after "\x8E\xA1" in EUC-JP
+                // although U+3000 comes before U+FF61.
+                if (_encoding != RubyEncoding.UTF8 && !(IsAscii() && other.IsAscii())) {
+                    SwitchToBytes();
+                    other.SwitchToBytes();
+                }
                 return _content.OrdinalCompareTo(other._content);
             }
         }
@@ -3290,7 +3298,8 @@ namespace IronRuby.Builtins {
                 int escapePlaceholder;
                 var str = ToStringWithEscapedInvalidCharacters(encoding, (escape & Escape.Octal) != 0, out escapePlaceholder);
 
-                if (encoding == RubyEncoding.UTF8) {
+                // CESU-8 and UTF-8's carrier variants have Unicode's characters too
+                if (encoding == RubyEncoding.UTF8 || (encoding.HasUnicodeCodePoints && encoding.IsAsciiIdentity)) {
                     AppendUnicodeRepresentation(result, str, escape, quote, escapePlaceholder);
                 } else {
                     AppendStringRepresentation(result, str, escape, quote, escapePlaceholder);

@@ -187,10 +187,21 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("eql?")]
         public static bool Eql(BinaryOpStorage/*!*/ equals, object self, object other) {
-            if (equals.Context.GetClassOf(self) != equals.Context.GetClassOf(other)) {
+            // num_eql compares the built-in types (TYPE(x) != TYPE(y)), not the classes: an
+            // instance of a Rational subclass is eql? to the Rational it equals.
+            var context = equals.Context;
+            if (BuiltinClass(context, self) != BuiltinClass(context, other)) {
                 return false;
             }
             return Protocols.IsEqual(equals, self, other);
+        }
+
+        private static RubyClass/*!*/ BuiltinClass(RubyContext/*!*/ context, object obj) {
+            RubyClass cls = context.GetClassOf(obj);
+            while (cls.IsRubyClass && cls.SuperClass != null) {
+                cls = cls.SuperClass;
+            }
+            return cls;
         }
 
         #endregion

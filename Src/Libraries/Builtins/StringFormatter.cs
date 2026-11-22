@@ -40,6 +40,7 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, object, object>> _new;
         private CallSite<Func<CallSite, object, object>> _numerator;
         private CallSite<Func<CallSite, object, object>> _denominator;
+        private CallSite<Func<CallSite, object, IntegerValue>> _toInt;
 
         [Emitted]
         public StringFormatterSiteStorage(RubyContext/*!*/ context) : base(context) {
@@ -52,6 +53,15 @@ namespace IronRuby.Builtins {
 
         public object Denominator(object value) {
             var site = RubyUtils.GetCallSite(ref _denominator, Context, "denominator", 0);
+            return site.Target(site, value);
+        }
+
+        /// <summary>
+        /// The implicit Integer conversion (#to_int) without narrowing the result to an int, so
+        /// that a caller can range-check the Integer #to_int gave - calling it once.
+        /// </summary>
+        public IntegerValue ConvertToIntegerValue(object value) {
+            var site = RubyUtils.GetCallSite(ref _toInt, ConvertToIntAction.Make(Context));
             return site.Target(site, value);
         }
 
@@ -137,6 +147,9 @@ namespace IronRuby.Builtins {
         private readonly RubyEncoding/*!*/ _encoding;
         private readonly bool _formatIsAscii;
         private RubyEncoding _resultEncoding;
+
+        // Whether a %c put the bytes of a number that is not ASCII (FormatCodepoint).
+        private bool _charBytesPut;
         private RubyEncoding _argEncoding;
 
         private readonly StringFormatterSiteStorage/*!*/ _siteStorage;
@@ -199,7 +212,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            return MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
+            RubyEncoding encoding = _resultEncoding ?? _encoding;
+            if (_charBytesPut && encoding != null) {
+                // A %c put bytes that need not be characters by themselves - a lead byte, say,
+                // that the next directive's byte completes - so the result is its bytes, read
+                // as characters when it is asked for them, and not the pieces it was built of.
+                return MutableString.CreateBinary(encoding.EscapingEncoding.GetBytes(_buf.ToString()), encoding);
+            }
+            return MutableString.Create(_buf.ToString(), encoding);
         }
 
         #endregion
@@ -283,9 +303,16 @@ namespace IronRuby.Builtins {
                     if (widthSeen) {
                         throw RubyExceptions.CreateArgumentError("width given twice");
                     }
+                    if (precisionSeen) {
+                        throw RubyExceptions.CreateArgumentError("width after precision");
+                    }
                     widthSeen = true;
-                    int w = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex(), null));
+                    int w = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex("width"), null));
                     if (w < 0) {
+                        // MRI: -INT_MIN is still negative, and is "width too big"
+                        if (w == Int32.MinValue) {
+                            throw RubyExceptions.CreateArgumentError("width too big");
+                        }
                         _opts.LeftAdj = true;
                         w = -w;
                     }
@@ -302,7 +329,7 @@ namespace IronRuby.Builtins {
                     precisionSeen = true;
                     if (_index < _format.Length && _format[_index] == '*') {
                         _index++;
-                        int p = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex(), null));
+                        int p = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex("prec"), null));
                         _opts.Precision = (p < 0) ? UnspecifiedPrecision : p;
                     } else {
                         int p = 0;
@@ -337,12 +364,19 @@ namespace IronRuby.Builtins {
                         }
                         // numbered from here on: a "*" width in this directive may not be unnumbered
                         _useAbsolute = true;
-                        _opts.ArgIndex = int.Parse(digits, CultureInfo.InvariantCulture);
+                        int argIndex;
+                        if (!Int32.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out argIndex)) {
+                            throw RubyExceptions.CreateArgumentError("width too big");
+                        }
+                        _opts.ArgIndex = argIndex;
                         _index = end + 1;
                         argumentSeen = true;
                     } else {
                         if (widthSeen) {
                             throw RubyExceptions.CreateArgumentError("width given twice");
+                        }
+                        if (precisionSeen) {
+                            throw RubyExceptions.CreateArgumentError("width after precision");
                         }
                         widthSeen = true;
                         int width;
@@ -364,13 +398,13 @@ namespace IronRuby.Builtins {
                     }
                     string spelled = _format.Substring(_index, end - _index + 1); // with its brackets, as MRI quotes it
                     if (_opts.Name != null) {
-                        throw RubyExceptions.CreateArgumentError("named{0} after <{1}>", spelled, _opts.Name);
+                        throw NameError(RubyExceptions.FormatMessage("named{0} after <{1}>", spelled, _opts.Name));
                     }
                     if (_opts.ArgIndex.HasValue || (_useAbsolute.HasValue && _useAbsolute.Value)) {
-                        throw RubyExceptions.CreateArgumentError("named{0} after numbered", spelled);
+                        throw NameError(RubyExceptions.FormatMessage("named{0} after numbered", spelled));
                     }
                     if (_useAbsolute.HasValue) {
-                        throw RubyExceptions.CreateArgumentError("named{0} after unnumbered({1})", spelled, _relativeIndex.ToString());
+                        throw NameError(RubyExceptions.FormatMessage("named{0} after unnumbered({1})", spelled, _relativeIndex.ToString()));
                     }
                     _opts.Name = _format.Substring(_index + 1, end - _index - 1);
                     _opts.NameStyle = c;
@@ -409,14 +443,18 @@ namespace IronRuby.Builtins {
             WriteConversion(conversion);
         }
 
-        private int? TryReadStarArgumentIndex() {
+        // GETASTER: an argument number too big for an int is "width too big" or "prec too big"
+        private int? TryReadStarArgumentIndex(string/*!*/ what) {
             if (_index < _format.Length && _format[_index] >= '1' && _format[_index] <= '9') {
                 int end = _index;
                 while (end < _format.Length && _format[end] >= '0' && _format[end] <= '9') {
                     end++;
                 }
                 if (end < _format.Length && _format[end] == '$') {
-                    int result = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                    int result;
+                    if (!Int32.TryParse(_format.Substring(_index, end - _index), NumberStyles.None, CultureInfo.InvariantCulture, out result)) {
+                        throw RubyExceptions.CreateArgumentError("{0} too big", what);
+                    }
                     _index = end + 1;
                     return result;
                 }
@@ -485,11 +523,18 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateArgumentError("too few arguments");
         }
 
+        // MRI raises the errors that quote a name from the format in the format's encoding.
+        private Exception/*!*/ NameError(string/*!*/ message) {
+            var exception = RubyExceptions.CreateArgumentError(message);
+            RubyExceptionData.GetInstance(exception).Message = MutableString.Create(message, _encoding);
+            return exception;
+        }
+
         private object GetNamedData(string/*!*/ name) {
             if (_useAbsolute.HasValue) {
-                throw _useAbsolute.Value
-                    ? RubyExceptions.CreateArgumentError("named<{0}> after numbered", name)
-                    : RubyExceptions.CreateArgumentError("named<{0}> after unnumbered({1})", name, (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
+                throw NameError(_useAbsolute.Value
+                    ? RubyExceptions.FormatMessage("named<{0}> after numbered", name)
+                    : RubyExceptions.FormatMessage("named<{0}> after unnumbered({1})", name, (_relativeIndex == 0 ? 1 : _relativeIndex).ToString()));
             }
             _useNamed = true;
 
@@ -528,7 +573,7 @@ namespace IronRuby.Builtins {
             object keyErrorClass;
             if (_siteStorage != null && _context.ObjectClass.TryGetConstant(null, "KeyError", out keyErrorClass)) {
                 try {
-                    object instance = _siteStorage.New(keyErrorClass, MutableString.CreateMutable(message, RubyEncoding.UTF8));
+                    object instance = _siteStorage.New(keyErrorClass, MutableString.CreateMutable(message, _encoding));
                     Exception exception = instance as Exception;
                     if (exception != null) {
                         // KeyError#receiver and #key read these; see the KeyError
@@ -1230,9 +1275,6 @@ namespace IronRuby.Builtins {
             if (precision == UnspecifiedPrecision) {
                 precision = (type == 'a' || type == 'A') ? -1 : 6;
             }
-            if (precision > 1000) {
-                precision = 1000;
-            }
 
             string body;
             string prefix = "";
@@ -1293,9 +1335,6 @@ namespace IronRuby.Builtins {
             if (precision == UnspecifiedPrecision) {
                 precision = 6;
             }
-            if (precision > 1000) {
-                precision = 1000;
-            }
 
             bool negative = numerator.Sign < 0;
             numerator = BigInteger.Abs(numerator);
@@ -1332,9 +1371,6 @@ namespace IronRuby.Builtins {
             int precision = _opts.Precision;
             if (precision == UnspecifiedPrecision) {
                 precision = 6;
-            }
-            if (precision > 1000) {
-                precision = 1000;
             }
 
             string body = ClrInteger.ToRadixString(BigInteger.Abs(value), 10);
@@ -1378,29 +1414,7 @@ namespace IronRuby.Builtins {
                 }
                 TrackEncoding(str);
             } else {
-                if (value == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-                }
-
-                int codepoint;
-                if (value is int) {
-                    codepoint = (int)value;
-                } else {
-                    try {
-                        codepoint = _siteStorage.CastToFixnum(value);
-                    } catch (InvalidOperationException e) {
-                        string className = _context.GetClassDisplayName(value);
-                        // An object that has #to_int and gave back something else is a different
-                        // complaint from one that never offered a conversion at all, and MRI
-                        // words the two differently. The exception the conversion site raises
-                        // does not always say which it was, so ask the object.
-                        throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
-                            ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
-                            : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
-                    }
-                }
-
-                text = FormatCodepoint(codepoint);
+                text = FormatCodepoint(CharArgumentToInt(value));
             }
 
             // width counts characters, not UTF-16 code units
@@ -1416,44 +1430,129 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The character %c makes of an Integer. The code point is interpreted in the encoding of
-        /// the result, as MRI's rb_enc_mbcput does: in EUC-JP 0x8FABB1 is one character, not an
-        /// out of range Unicode code point.
+        /// MRI's NUM2INT, which %c reads its argument with: an Integer that fits an int, a Float
+        /// truncated to one, anything else through #to_int. A number that does not fit is a
+        /// RangeError that names it, unless it does not fit a long either.
+        /// </summary>
+        private int CharArgumentToInt(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            if (value == null) {
+                // MRI 4.0 says "no implicit conversion from nil to integer" here; ruby/spec pins
+                // this wording for every other engine (raise_consistent_error in
+                // core/kernel/shared/sprintf.rb), as it does for the conversion errors.
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
+            }
+            if (value is BigInteger) {
+                throw IntegerOutOfIntRange((BigInteger)value);
+            }
+            if (value is long) {
+                long l = (long)value;
+                if (l < Int32.MinValue || l > Int32.MaxValue) {
+                    throw IntegerOutOfIntRange(l);
+                }
+                return (int)l;
+            }
+            if (value is double) {
+                double d = (double)value;
+                if (Double.IsNaN(d) || d >= 9223372036854775808.0 || d < -9223372036854775808.0) {
+                    throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", FormatFloatG10(d)));
+                }
+                long truncated = (long)d;
+                if (truncated < Int32.MinValue || truncated > Int32.MaxValue) {
+                    throw IntegerOutOfIntRange(truncated);
+                }
+                return (int)truncated;
+            }
+            try {
+                // #to_int is called once, and an Integer it gives that does not fit is the same
+                // RangeError as the number given directly, naming that Integer.
+                IntegerValue integer = _siteStorage.ConvertToIntegerValue(value);
+                if (integer.IsFixnum) {
+                    return integer.Fixnum;
+                }
+                throw IntegerOutOfIntRange(integer.Bignum);
+            } catch (InvalidOperationException e) {
+                string className = _context.GetClassDisplayName(value);
+                // An object that has #to_int and gave back something else is a different
+                // complaint from one that never offered a conversion at all, and MRI
+                // words the two differently. The exception the conversion site raises
+                // does not always say which it was, so ask the object.
+                // true and false go through #to_int like any object (a TrueClass#to_int is
+                // called), but rb_num2long names them, not their classes, when there is none.
+                throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
+                    ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
+                    : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", RubyExceptions.MessageTypeName(className));
+            }
+        }
+
+        private static Exception/*!*/ IntegerOutOfIntRange(BigInteger value) {
+            if (value < Int64.MinValue || value > Int64.MaxValue) {
+                return RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
+            return RubyExceptions.CreateRangeError(String.Format("integer {0} too {1} to convert to 'int'", value, value.Sign < 0 ? "small" : "big"));
+        }
+
+        // MRI's rb_out_of_range prints the float with "%-.10g".
+        private static string/*!*/ FormatFloatG10(double d) {
+            if (Double.IsNaN(d)) {
+                return "NaN";
+            }
+            if (Double.IsInfinity(d)) {
+                return d > 0 ? "Inf" : "-Inf";
+            }
+            return d.ToString("0.#########e+00", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// The character %c makes of a number, in the encoding of the result: the bytes MRI puts
+        /// for it (Integer.ToFormatBytes), which need not be a well formed character of the
+        /// encoding - they are held as the encoding's escaping form reads them, and written
+        /// back as they are. A US-ASCII format given 0x80-0xFF becomes a binary result
+        /// (rb_ascii8bit_appendable_encoding_index).
         /// </summary>
         private string/*!*/ FormatCodepoint(int codepoint) {
-            RubyEncoding encoding = _resultEncoding ?? _encoding;
-            if (codepoint > 0x7F && encoding != null && !encoding.IsUnicodeEncoding && encoding.IsAsciiIdentity && encoding != RubyEncoding.Binary) {
-                if (encoding == RubyEncoding.Ascii) {
-                    // A US-ASCII format has no character above 0x7F, so MRI makes the result binary.
-                    if (codepoint > 0xFF) {
-                        throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
-                    }
-                    _resultEncoding = RubyEncoding.Binary;
-                    return ((char)codepoint).ToString();
-                }
-
-                MutableString character;
-                try {
-                    character = Integer.ToFormatChr(encoding, codepoint);
-                } catch (ArgumentOutOfRangeException e) {
-                    if (e.Message.StartsWith("invalid codepoint", StringComparison.Ordinal)) {
-                        throw RubyExceptions.CreateArgumentError("invalid character");
-                    }
-                    throw;
-                }
-                if (character.ContainsInvalidCharacters()) {
-                    throw RubyExceptions.CreateArgumentError("invalid character");
-                }
-                return character.ToString();
+            if (codepoint < 0) {
+                throw RubyExceptions.CreateArgumentError("invalid character");
             }
 
-            // a binary format has single-byte characters only (MRI: rb_enc_uint_chr)
-            if (encoding == RubyEncoding.Binary && codepoint > 0xFF) {
-                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            RubyEncoding encoding = _resultEncoding ?? _encoding;
+            if (encoding != null) {
+                bool known;
+                byte[] bytes = Integer.ToFormatBytes(encoding, (uint)codepoint, out known);
+                if (known) {
+                    if (bytes == null) {
+                        throw RubyExceptions.CreateArgumentError("invalid character");
+                    }
+                    if (codepoint < 0x80 && bytes.Length == 1) {
+                        return ((char)codepoint).ToString();
+                    }
+                    if (encoding == RubyEncoding.Ascii) {
+                        _resultEncoding = encoding = RubyEncoding.Binary;
+                    }
+                    // The result holds something that is not ASCII now, so its encoding is
+                    // settled as it is by an argument that is not (TrackEncoding) - unless the
+                    // bytes put are ASCII ones, as the "0B" of 0x3042 in Shift_JIS is.
+                    _charBytesPut = true;
+                    if (_argEncoding == null && !(encoding.IsAsciiIdentity && Array.TrueForAll(bytes, b => b < 0x80))) {
+                        _argEncoding = encoding;
+                    }
+                    // Each byte is carried as itself (ASCII) or as the character the escaping
+                    // encoding writes back as exactly that byte, so the result is made of the
+                    // bytes put: decoding them here and encoding them again at the end is not
+                    // lossless - "\x8F\xA2\xB7" in EUC-JP reads as "~" and writes back as
+                    // "\x7E", and CESU-8's surrogates read as the escapes of other bytes.
+                    var carried = new char[bytes.Length];
+                    for (int i = 0; i < bytes.Length; i++) {
+                        carried[i] = (bytes[i] < 0x80) ? (char)bytes[i] : (char)(0xDC00 + bytes[i]);
+                    }
+                    return new String(carried);
+                }
             }
 
             // MRI: rb_enc_codelen fails for a code point the encoding has no character for
-            if (codepoint < 0 || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+            if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
                 throw RubyExceptions.CreateArgumentError("invalid character");
             }
             string text = Char.ConvertFromUtf32(codepoint);

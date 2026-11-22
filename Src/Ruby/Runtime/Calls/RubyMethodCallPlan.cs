@@ -63,7 +63,7 @@ namespace IronRuby.Runtime.Calls {
             _mandatoryCount = parameters.Mandatory.Length;
             _optionalCount = parameters.Optional.Length;
             _hasRest = parameters.Unsplat != null;
-            _normalizesRest = _hasRest && method.KeepsTrailingHashInRest;
+            _normalizesRest = method.NormalizesRest;
             _clearsKeywords = !method.TakesOrRefusesKeywords;
         }
 

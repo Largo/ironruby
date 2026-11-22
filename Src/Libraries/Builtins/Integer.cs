@@ -257,24 +257,151 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The character of a %c directive. MRI's rb_str_format puts the bytes of the number
-        /// (rb_enc_mbcput) without asking whether they are a character of the encoding, which
-        /// rb_enc_uint_chr does: "%c" % 0x100 is "\x01\x00" in EUC-KR, where 0x100.chr("EUC-KR")
-        /// is an invalid codepoint. So the shapes of the multibyte encodings are not consulted.
+        /// The bytes of a %c directive: MRI's rb_str_format asks the encoding how long the
+        /// character of the number is (rb_enc_codelen, the encoding's code_to_mbclen) and puts
+        /// that many bytes (rb_enc_mbcput, its code_to_mbc) without asking whether they are a
+        /// well formed character, which rb_enc_uint_chr does: "%c" % 0x100 is "\x01\x00" in
+        /// EUC-KR, where 0x100.chr("EUC-KR") is an invalid codepoint. Null when the encoding has
+        /// no length for the number ("invalid character"); a single byte encoding has a length
+        /// for every number and refuses one above 0xFF when it puts it, with a RangeError. Null
+        /// in <paramref name="known"/> for an encoding whose family is not one of these.
         /// </summary>
-        internal static MutableString/*!*/ ToFormatChr(RubyEncoding/*!*/ encoding, int codepoint) {
-            if (codepoint < 0) {
-                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+        internal static byte[] ToFormatBytes(RubyEncoding/*!*/ encoding, uint code, out bool known) {
+            known = true;
+            switch (encoding.CodePage) {
+                case RubyEncoding.CodePageUTF8:
+                case RubyEncoding.CodePageUTF8Mac:
+                case RubyEncoding.CodePageUTF8DoCoMo:
+                case RubyEncoding.CodePageUTF8KDDI:
+                case RubyEncoding.CodePageUTF8SoftBank:
+                    // enc/utf_8.c: a surrogate has a length too, and comes out as three bytes
+                    if (code > 0x10ffff) {
+                        return null;
+                    }
+                    if (code < 0x80) {
+                        return new[] { (byte)code };
+                    }
+                    if (code < 0x800) {
+                        return new[] { (byte)(0xc0 | code >> 6), (byte)(0x80 | code & 0x3f) };
+                    }
+                    if (code < 0x10000) {
+                        return Utf8ThreeBytes(code);
+                    }
+                    return new[] { (byte)(0xf0 | code >> 18), (byte)(0x80 | code >> 12 & 0x3f), (byte)(0x80 | code >> 6 & 0x3f), (byte)(0x80 | code & 0x3f) };
+
+                case RubyEncoding.CodePageCESU8:
+                    // enc/cesu_8.c: a character outside the BMP is its two surrogates
+                    if (code > 0x10ffff) {
+                        return null;
+                    }
+                    if (code < 0x80) {
+                        return new[] { (byte)code };
+                    }
+                    if (code < 0x800) {
+                        return new[] { (byte)(0xc0 | code >> 6), (byte)(0x80 | code & 0x3f) };
+                    }
+                    if (code < 0x10000) {
+                        return Utf8ThreeBytes(code);
+                    } else {
+                        var pair = new byte[6];
+                        Utf8ThreeBytes(0xd800 + (code - 0x10000 >> 10)).CopyTo(pair, 0);
+                        Utf8ThreeBytes(0xdc00 + (code - 0x10000 & 0x3ff)).CopyTo(pair, 3);
+                        return pair;
+                    }
+
+                case RubyEncoding.CodePageSJIS:
+                case RubyEncoding.CodePageShiftJIS:
+                case RubyEncoding.CodePageSJISDoCoMo:
+                case RubyEncoding.CodePageSJISKDDI:
+                case RubyEncoding.CodePageSJISSoftBank:
+                case RubyEncoding.CodePageMacJapanese:
+                    // enc/shift_jis.h: one byte unless it is a lead byte; two when the low one
+                    // can follow a lead byte, whatever the high one is
+                    if (code < 0x100) {
+                        return (code >= 0x81 && code <= 0x9f || code >= 0xe0 && code <= 0xfc) ? null : new[] { (byte)code };
+                    }
+                    if (code <= 0xffff) {
+                        uint low = code & 0xff;
+                        return (low >= 0x40 && low <= 0xfc && low != 0x7f) ? new[] { (byte)(code >> 8), (byte)low } : null;
+                    }
+                    return null;
+
+                case RubyEncoding.CodePageEUCJP:
+                case RubyEncoding.CodePageEucJpMs:
+                case RubyEncoding.CodePageCP51932:
+                case RubyEncoding.CodePageEUCJIS2004:
+                    // enc/euc_jp.c: two or three bytes that all have their high bit set
+                    if (code < 0x80) {
+                        return new[] { (byte)code };
+                    }
+                    if ((code & 0xff808080) == 0x00808080) {
+                        return new[] { (byte)(code >> 16), (byte)(code >> 8), (byte)code };
+                    }
+                    if ((code & 0xffff8080) == 0x00008080) {
+                        return new[] { (byte)(code >> 8), (byte)code };
+                    }
+                    return null;
+
+                case RubyEncoding.CodePageEmacsMule:
+                case RubyEncoding.CodePageStatelessISO2022JP:
+                case RubyEncoding.CodePageStatelessISO2022JPKDDI:
+                    // enc/emacs_mule.c: the length is that of the highest byte that has its high
+                    // bit set, and the bytes put are the ones that are not zero, the lowest
+                    // always - which need not be as many
+                    if (code < 0x80) {
+                        return new[] { (byte)code };
+                    } else {
+                        int length = ((code & 0xff000000) >= 0x80000000) ? 4 : ((code & 0xff0000) >= 0x800000) ? 3 : ((code & 0xff00) >= 0x8000) ? 2 : 0;
+                        if (length == 0) {
+                            return null;
+                        }
+                        var mule = new byte[length];
+                        int count = 0;
+                        for (int shift = 24; shift >= 0 && count < length; shift -= 8) {
+                            byte b = (byte)(code >> shift);
+                            if (b != 0 || shift == 0) {
+                                mule[count++] = b;
+                            }
+                        }
+                        return mule;
+                    }
+
+                case 54936:
+                case RubyEncoding.CodePageEUCTW:
+                    // onigenc_mb4_code_to_mbclen: as many bytes as the number has
+                    if (code > 0xffffff) {
+                        return new[] { (byte)(code >> 24), (byte)(code >> 16), (byte)(code >> 8), (byte)code };
+                    }
+                    if (code > 0xffff) {
+                        return new[] { (byte)(code >> 16), (byte)(code >> 8), (byte)code };
+                    }
+                    return (code > 0xff) ? new[] { (byte)(code >> 8), (byte)code } : new[] { (byte)code };
             }
-            return ToChr(encoding, encoding, (uint)codepoint, false);
+
+            if (encoding.IsSingleByteCharacterSet || encoding.StrictEncoding.IsSingleByte) {
+                // onigenc_single_byte_code_to_mbc
+                if (code > 0xff) {
+                    throw OutOfCharRange(code);
+                }
+                return new[] { (byte)code };
+            }
+            if (encoding.IsDoubleByteCharacterSet) {
+                // onigenc_mb2_code_to_mbclen
+                if (code > 0xffff) {
+                    return null;
+                }
+                return (code > 0xff) ? new[] { (byte)(code >> 8), (byte)code } : new[] { (byte)code };
+            }
+            known = false;
+            return null;
+        }
+
+        private static byte[]/*!*/ Utf8ThreeBytes(uint code) {
+            return new[] { (byte)(0xe0 | code >> 12), (byte)(0x80 | code >> 6 & 0x3f), (byte)(0x80 | code & 0x3f) };
         }
 
         /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
         internal static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
-            return ToChr(encoding, resultEncoding, codepoint, true);
-        }
-
-        private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint, bool checkShape) {
             switch (encoding.CodePage) {
                 case RubyEncoding.CodePageUTF16BE:
                 case RubyEncoding.CodePageUTF16LE:
@@ -309,9 +436,6 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageEmacsMule:
                 case RubyEncoding.CodePageStatelessISO2022JP:
                 case RubyEncoding.CodePageStatelessISO2022JPKDDI:
-                    if (!checkShape) {
-                        goto default;
-                    }
                     // enc/emacs_mule.c, which stateless-ISO-2022-JP is a replica of: a lead byte
                     // of 0x81-0x8F begins two bytes, 0x90-0x9B three, 0x9C-0x9D four, and the
                     // bytes after it are 0xA0-0xFF - but the second byte of a private charset
@@ -423,7 +547,7 @@ namespace IronRuby.Builtins {
                     // is not a character is an invalid codepoint: 0x80 and 0x100 in EUC-KR,
                     // 0x10000 in GB18030. A well formed sequence the table has no character for
                     // is a character all the same.
-                    if (codepoint > 0x7f && checkShape) {
+                    if (codepoint > 0x7f) {
                         int count = (codepoint <= 0xff) ? 1 : (codepoint <= 0xffff) ? 2 : (codepoint <= 0xffffff) ? 3 : 4;
                         var bytes = new byte[count];
                         for (int i = 0; i < count; i++) {
@@ -830,8 +954,47 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [BlockNotKept]
-        public static object Times(BlockParam/*!*/ block, int self) {
-            return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
+        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam/*!*/ block, int self) {
+            if (block == null) {
+                return new Enumerator(self, "times");
+            }
+            // numeric.rb's Integer#times is `while i < self; yield i; i = i.succ; end`, whose
+            // `<` and `succ` are calls once either has been redefined (#times on a Bignum does the same)
+            return AreTimesOpsBasic(lessThanStorage.Context)
+                ? TimesImpl(block, self)
+                : TimesImpl(lessThanStorage, succStorage, block, self);
+        }
+
+        private sealed class TimesOpsState {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly int Version;
+            internal readonly bool Basic;
+
+            internal TimesOpsState(RubyContext/*!*/ context, int version, bool basic) {
+                Context = context;
+                Version = version;
+                Basic = basic;
+            }
+        }
+
+        private static volatile TimesOpsState _timesOps;
+
+        private static bool AreTimesOpsBasic(RubyContext/*!*/ context) {
+            var state = _timesOps;
+            if (state == null || state.Context != context || state.Version != RubyModule.GlobalMethodVersion) {
+                // read before the lookups: a change that races with them leaves the state stale, not wrong
+                int version = RubyModule.GlobalMethodVersion;
+                bool basic = IsLibraryMethod(context, "<", "LessThan") && IsLibraryMethod(context, "succ", "Next");
+                _timesOps = state = new TimesOpsState(context, version, basic);
+            }
+            return state.Basic;
+        }
+
+        // The code behind it, not only its owner: alias_method :<, :> keeps the owner.
+        private static bool IsLibraryMethod(RubyContext/*!*/ context, string/*!*/ name, string/*!*/ clrName) {
+            var lookup = context.IntegerClass.ResolveMethod(name, VisibilityContext.AllVisible);
+            return lookup.Found && lookup.Info is RubyLibraryMethodInfo && lookup.Info.DeclaringModule == context.IntegerClass &&
+                Array.TrueForAll(lookup.Info.GetMembers(), m => m.Name == clrName);
         }
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
@@ -860,18 +1023,18 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self</returns>
         /// <remarks>
-        /// Dynamically invokes "+" operator to find next item.
+        /// Dynamically invokes "succ" to find next item.
         /// Dynamically invokes "&lt;" operator to check if we have reached self - 1.
         /// </remarks>
         [RubyMethodAttribute("times")]
         [MethodImpl(MethodImplOptions.NoInlining)]
         [BlockNotKept]
-        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
-            return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
+        public static object Times(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam block, object/*!*/ self) {
+            return (block != null) ? TimesImpl(lessThanStorage, succStorage, block, self) : 
                 new Enumerator(self, "times");
         }
 
-        public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam/*!*/ block, object/*!*/ self) {
+        public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, UnaryOpStorage/*!*/ succStorage, BlockParam/*!*/ block, object/*!*/ self) {
             object i = 0;
             var lessThan = lessThanStorage.GetCallSite("<");
             while (RubyOps.IsTrue(lessThan.Target(lessThan, i, self))) {
@@ -880,8 +1043,8 @@ namespace IronRuby.Builtins {
                     return result;
                 }
 
-                var add = addStorage.GetCallSite("+");
-                i = add.Target(add, i, 1);
+                var succ = succStorage.GetCallSite("succ");
+                i = succ.Target(succ, i);
             }
             return self;
         }

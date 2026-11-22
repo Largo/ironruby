@@ -423,7 +423,10 @@ namespace IronRuby.Builtins {
             if (!self.IsInitialized) {
                 throw RubyExceptions.CreateTypeError("uninitialized Regexp");
             }
-            return InternalToPublicOptions(self.Options);
+            // FIXEDENCODING is set on any regexp whose encoding is pinned, by a modifier or by its
+            // source: /\u3042/, /\xc2\xa1/n and /\p{L}/ have it as much as /x/u.
+            int result = InternalToPublicOptions(self.Options);
+            return self.IsFixedEncoding ? result | FIXEDENCODING : result;
         }
 
         [RubyMethod("encoding")]
@@ -598,7 +601,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("~")]
         public static object ImplicitMatch(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope, RubyRegex/*!*/ self) {
-            return MatchIndex(scope, self, Protocols.CastToString(stringCast, scope.GetInnerMostClosureScope().LastInputLine));
+            // rb_reg_match2: anything but a String in $_ (nil, typically) clears $~ and answers
+            // nil, before the regexp itself is even looked at
+            var closureScope = scope.GetInnerMostClosureScope();
+            var line = closureScope.LastInputLine as MutableString;
+            if (line == null) {
+                closureScope.CurrentMatch = null;
+                return null;
+            }
+            return MatchIndex(scope, self, line);
         }
 
         [RubyMethod("source")]
@@ -787,7 +798,7 @@ namespace IronRuby.Builtins {
                         }
                         var regex = parts[i] as RubyRegex;
                         if (regex != null) {
-                            regex.AppendTo(source);
+                            regex.AppendTo(source, false);
                         } else {
                             source.Append(((MutableString)parts[i]).ToByteArray());
                         }
@@ -804,7 +815,7 @@ namespace IronRuby.Builtins {
 
                 var regex = parts[i] as RubyRegex;
                 if (regex != null) {
-                    regex.AppendTo(result);
+                    regex.AppendTo(result, false);
                 } else {
                     result.Append(RubyRegex.Escape((MutableString)parts[i]));
                 }
@@ -826,8 +837,9 @@ namespace IronRuby.Builtins {
                 RubyEncoding encoding;
                 var regex = part as RubyRegex;
                 if (regex != null) {
-                    encoding = IsAsciiOnly(regex.Pattern) && (regex.Options & RubyRegexOptions.FixedEncoding) == 0
-                        ? null : regex.Encoding;
+                    // rb_reg_fixed_encoding_p: a regexp has a say when its encoding is pinned, by a
+                    // modifier or by its source (non-ASCII text, a \u escape, a \p property)
+                    encoding = regex.IsFixedEncoding ? regex.Encoding : null;
                 } else {
                     var str = (MutableString)part;
                     encoding = IsAsciiOnly(str) ? null : str.Encoding;

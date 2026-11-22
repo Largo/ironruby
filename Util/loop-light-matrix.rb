@@ -611,7 +611,7 @@ def j_break_float_value(n)
   i = 0
   v = while i < n
     i += 1
-    break 1.5 if i == 3
+    break 1.5 if i == 3 && n % 2 == 1
     break if i == 5
   end
   v
@@ -711,7 +711,7 @@ t("jit: Integer loop, break")            { |i| j_int_break(i % 7) }
 t("jit: Float loop, break")              { |i| j_float_break(0.75 + (i % 5) * 1.5) }
 t("jit: break with a value")             { |i| j_break_value(i % 12) }
 t("jit: break as the method's value")    { |i| j_break_loop_value(i % 6 + 1) }
-t("jit: break 1.5, bare break, nil")     { |i| j_break_float_value(i % 7) }
+t("jit: break 1.5, bare break, nil")     { |i| [i % 7, j_break_float_value(i % 7)] }
 t("jit: next")                           { |i| j_next(i % 9) }
 t("jit: until, next")                    { |i| j_until_next(i % 9) }
 t("jit: nested, break and next")         { |i| j_nested(i % 11) }

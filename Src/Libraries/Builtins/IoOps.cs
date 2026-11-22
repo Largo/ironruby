@@ -1227,27 +1227,56 @@ namespace IronRuby.Builtins {
 
             // With #autoclose false the descriptor outlives the IO object - another IO may be
             // using it (IO.new(io.fileno) shares the stream).
+            // Either way MRI's fptr_finalize_flush finishes the write conversion first: the bytes
+            // that return a stateful encoding to its initial state belong to what was written.
             object autoclose;
-            if (self.Context.TryGetInstanceVariable(self, "@__autoclose", out autoclose) && autoclose is bool && !(bool)autoclose) {
-                self.CloseKeepingDescriptor();
-                return;
-            }
+            bool keepDescriptor = self.Context.TryGetInstanceVariable(self, "@__autoclose", out autoclose) &&
+                autoclose is bool && !(bool)autoclose;
             Exception flushError = null;
             try {
+                FinishWriteConversion(self);
                 // Writes currently go straight to the descriptor, so WritePending is only the
                 // state MRI uses for buffering warnings. Do not probe a pipe merely because it
                 // was written: that manufactures EPIPE after its reader has consumed the data.
                 // A failed explicit #flush is different; MRI retries it from #close.
-                if (self.GetStream().WriteFlushFailed) {
+                if (!keepDescriptor && self.GetStream().WriteFlushFailed) {
                     self.Flush();
                 }
             } catch (IOException e) {
                 flushError = TranslateWriteError(e, self);
             } finally {
-                self.Close();
+                if (keepDescriptor) {
+                    self.CloseKeepingDescriptor();
+                } else {
+                    self.Close();
+                }
             }
             if (flushError != null) {
                 throw flushError;
+            }
+        }
+
+        /// <summary>
+        /// A write converter to a stateful encoding (IO#__encode_for_write__ in ruby4.rb) owes
+        /// the bytes that return it to its initial state; MRI's finish_writeconv writes them
+        /// when the stream is closed.
+        /// </summary>
+        private static readonly string/*!*/ WriteConverterVariable = RubyUtils.GetCoreStateInstanceVariableName("@__write_ec__");
+
+        private static void FinishWriteConversion(RubyIO/*!*/ self) {
+            object ec;
+            if (!self.Context.TryGetInstanceVariable(self, WriteConverterVariable, out ec)) {
+                return;
+            }
+            self.Context.SetInstanceVariable(self, WriteConverterVariable, null);
+            var converter = ec as RubyEncodingOps.RubyConverter;
+            if (converter == null || converter.IsFinished || !self.Mode.CanWrite()) {
+                return;
+            }
+            var tail = converter.FinishConversion();
+            if (!tail.IsEmpty) {
+                self.WriteBytes(tail, 0, tail.GetByteCount());
+                self.Flush();
             }
         }
 
@@ -1264,7 +1293,19 @@ namespace IronRuby.Builtins {
             if (self.Closed) {
                 return;
             }
-            self.CloseWriter();
+            // As in #close, a write that fails while finishing the conversion (EPIPE once the
+            // reader is gone) still closes the writer, and is reported as the errno it was.
+            Exception writeError = null;
+            try {
+                FinishWriteConversion(self);
+            } catch (IOException e) {
+                writeError = TranslateWriteError(e, self);
+            } finally {
+                self.CloseWriter();
+            }
+            if (writeError != null) {
+                throw writeError;
+            }
         }
         
         [RubyMethod("closed?")]
@@ -2117,6 +2158,11 @@ namespace IronRuby.Builtins {
                 // be read again.
                 if (buffered > 0 && !IoReadiness.IsReadableNow(io, stream.BaseStream)) {
                     return buffer;
+                }
+                // Nothing in hand and a descriptor with nothing to read: the EAGAIN of MRI's
+                // non-blocking read(2), not a read that waits for the writer.
+                if (buffered == 0 && IoReadiness.IsQuietDescriptor(io, stream.BaseStream)) {
+                    throw NonBlockingError(io.Context, true, "read would block");
                 }
                 int more = io.AppendBytes(buffer, count);
                 return (more == 0 && buffered == 0) ? null : buffer;
