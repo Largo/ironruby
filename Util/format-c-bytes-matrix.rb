@@ -173,3 +173,10 @@ try("frozen?") { ("%c" % 0x41).frozen? }
 puts "== sprintf through other entry points =="
 try("Kernel#sprintf") { sprintf("%c".encode("EUC-KR"), 0x80) }
 try("String#% Array") { "%c%c".encode("Big5") % [0x80, 0xa140] }
+
+puts "== true and false with a #to_int (last: it reopens their classes) =="
+class TrueClass; def to_int = 0x3042; end
+class FalseClass; def to_int = "a"; end
+try("true with #to_int") { "%c" % true }
+try("false with a #to_int giving a String") { "%c" % false }
+try("Shift_JIS true with #to_int") { "%c".encode("Shift_JIS") % true }

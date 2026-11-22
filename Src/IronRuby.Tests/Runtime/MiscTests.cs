@@ -1959,6 +1959,8 @@ t { '%c' % 2.0**31 }
 t { '%c' % 65.9 }
 t { '%c' % true }
 t { '%c' % false }
+class TrueClass; def to_int = 65; end
+t { '%c' % true }
 ", @"
 Shift_JIS [128] false
 Shift_JIS [48, 66] true
@@ -1989,6 +1991,7 @@ RangeError: integer 2147483648 too big to convert to 'int'
 UTF-8 [65] true
 TypeError: no implicit conversion of true into Integer
 TypeError: no implicit conversion of false into Integer
+UTF-8 [65] true
 ");
         }
 

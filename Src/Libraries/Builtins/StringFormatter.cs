@@ -1444,10 +1444,6 @@ namespace IronRuby.Builtins {
                 // core/kernel/shared/sprintf.rb), as it does for the conversion errors.
                 throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
-            if (value is bool) {
-                // rb_num2long names true and false themselves, not their classes
-                throw RubyExceptions.CreateTypeError("no implicit conversion of {0} into Integer", (bool)value ? "true" : "false");
-            }
             if (value is BigInteger) {
                 throw IntegerOutOfIntRange((BigInteger)value);
             }
@@ -1483,9 +1479,11 @@ namespace IronRuby.Builtins {
                 // complaint from one that never offered a conversion at all, and MRI
                 // words the two differently. The exception the conversion site raises
                 // does not always say which it was, so ask the object.
+                // true and false go through #to_int like any object (a TrueClass#to_int is
+                // called), but rb_num2long names them, not their classes, when there is none.
                 throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
                     ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
-                    : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
+                    : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", RubyExceptions.MessageTypeName(className));
             }
         }
 
