@@ -1378,29 +1378,7 @@ namespace IronRuby.Builtins {
                 }
                 TrackEncoding(str);
             } else {
-                if (value == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
-                }
-
-                int codepoint;
-                if (value is int) {
-                    codepoint = (int)value;
-                } else {
-                    try {
-                        codepoint = _siteStorage.CastToFixnum(value);
-                    } catch (InvalidOperationException e) {
-                        string className = _context.GetClassDisplayName(value);
-                        // An object that has #to_int and gave back something else is a different
-                        // complaint from one that never offered a conversion at all, and MRI
-                        // words the two differently. The exception the conversion site raises
-                        // does not always say which it was, so ask the object.
-                        throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
-                            ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
-                            : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
-                    }
-                }
-
-                text = FormatCodepoint(codepoint);
+                text = FormatCodepoint(CharArgumentToInt(value));
             }
 
             // width counts characters, not UTF-16 code units
@@ -1416,44 +1394,110 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The character %c makes of an Integer. The code point is interpreted in the encoding of
-        /// the result, as MRI's rb_enc_mbcput does: in EUC-JP 0x8FABB1 is one character, not an
-        /// out of range Unicode code point.
+        /// MRI's NUM2INT, which %c reads its argument with: an Integer that fits an int, a Float
+        /// truncated to one, anything else through #to_int. A number that does not fit is a
+        /// RangeError that names it, unless it does not fit a long either.
+        /// </summary>
+        private int CharArgumentToInt(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            if (value == null) {
+                // MRI 4.0 says "no implicit conversion from nil to integer" here; ruby/spec pins
+                // this wording for every other engine (raise_consistent_error in
+                // core/kernel/shared/sprintf.rb), as it does for the conversion errors.
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
+            }
+            if (value is BigInteger) {
+                throw IntegerOutOfIntRange((BigInteger)value);
+            }
+            if (value is long) {
+                long l = (long)value;
+                if (l < Int32.MinValue || l > Int32.MaxValue) {
+                    throw IntegerOutOfIntRange(l);
+                }
+                return (int)l;
+            }
+            if (value is double) {
+                double d = (double)value;
+                if (Double.IsNaN(d) || d >= 9223372036854775808.0 || d < -9223372036854775808.0) {
+                    throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", FormatFloatG10(d)));
+                }
+                long truncated = (long)d;
+                if (truncated < Int32.MinValue || truncated > Int32.MaxValue) {
+                    throw IntegerOutOfIntRange(truncated);
+                }
+                return (int)truncated;
+            }
+            try {
+                return _siteStorage.CastToFixnum(value);
+            } catch (InvalidOperationException e) {
+                string className = _context.GetClassDisplayName(value);
+                // An object that has #to_int and gave back something else is a different
+                // complaint from one that never offered a conversion at all, and MRI
+                // words the two differently. The exception the conversion site raises
+                // does not always say which it was, so ask the object.
+                throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
+                    ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
+                    : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
+            }
+        }
+
+        private static Exception/*!*/ IntegerOutOfIntRange(BigInteger value) {
+            if (value < Int64.MinValue || value > Int64.MaxValue) {
+                return RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
+            return RubyExceptions.CreateRangeError(String.Format("integer {0} too {1} to convert to 'int'", value, value.Sign < 0 ? "small" : "big"));
+        }
+
+        // MRI's rb_out_of_range prints the float with "%-.10g".
+        private static string/*!*/ FormatFloatG10(double d) {
+            if (Double.IsNaN(d)) {
+                return "NaN";
+            }
+            if (Double.IsInfinity(d)) {
+                return d > 0 ? "Inf" : "-Inf";
+            }
+            return d.ToString("0.#########e+00", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// The character %c makes of a number, in the encoding of the result: the bytes MRI puts
+        /// for it (Integer.ToFormatBytes), which need not be a well formed character of the
+        /// encoding - they are held as the encoding's escaping form reads them, and written
+        /// back as they are. A US-ASCII format given 0x80-0xFF becomes a binary result
+        /// (rb_ascii8bit_appendable_encoding_index).
         /// </summary>
         private string/*!*/ FormatCodepoint(int codepoint) {
-            RubyEncoding encoding = _resultEncoding ?? _encoding;
-            if (codepoint > 0x7F && encoding != null && !encoding.IsUnicodeEncoding && encoding.IsAsciiIdentity && encoding != RubyEncoding.Binary) {
-                if (encoding == RubyEncoding.Ascii) {
-                    // A US-ASCII format has no character above 0x7F, so MRI makes the result binary.
-                    if (codepoint > 0xFF) {
-                        throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
-                    }
-                    _resultEncoding = RubyEncoding.Binary;
-                    return ((char)codepoint).ToString();
-                }
-
-                MutableString character;
-                try {
-                    character = Integer.ToFormatChr(encoding, codepoint);
-                } catch (ArgumentOutOfRangeException e) {
-                    if (e.Message.StartsWith("invalid codepoint", StringComparison.Ordinal)) {
-                        throw RubyExceptions.CreateArgumentError("invalid character");
-                    }
-                    throw;
-                }
-                if (character.ContainsInvalidCharacters()) {
-                    throw RubyExceptions.CreateArgumentError("invalid character");
-                }
-                return character.ToString();
+            if (codepoint < 0) {
+                throw RubyExceptions.CreateArgumentError("invalid character");
             }
 
-            // a binary format has single-byte characters only (MRI: rb_enc_uint_chr)
-            if (encoding == RubyEncoding.Binary && codepoint > 0xFF) {
-                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            RubyEncoding encoding = _resultEncoding ?? _encoding;
+            if (encoding != null) {
+                bool known;
+                byte[] bytes = Integer.ToFormatBytes(encoding, (uint)codepoint, out known);
+                if (known) {
+                    if (bytes == null) {
+                        throw RubyExceptions.CreateArgumentError("invalid character");
+                    }
+                    if (codepoint < 0x80 && bytes.Length == 1) {
+                        return ((char)codepoint).ToString();
+                    }
+                    if (encoding == RubyEncoding.Ascii) {
+                        _resultEncoding = encoding = RubyEncoding.Binary;
+                    }
+                    // The result holds something that is not ASCII now, so its encoding is
+                    // settled as it is by an argument that is not (TrackEncoding).
+                    if (_argEncoding == null) {
+                        _argEncoding = encoding;
+                    }
+                    return encoding.EscapingEncoding.GetString(bytes);
+                }
             }
 
             // MRI: rb_enc_codelen fails for a code point the encoding has no character for
-            if (codepoint < 0 || codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+            if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
                 throw RubyExceptions.CreateArgumentError("invalid character");
             }
             string text = Char.ConvertFromUtf32(codepoint);
