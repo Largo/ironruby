@@ -1640,6 +1640,9 @@ namespace IronRuby.Runtime {
         /// after the lead is 0xA0 or above, and a private charset's second byte names it.
         /// </summary>
         internal static int Scan(byte[]/*!*/ bytes, int index, int end) {
+            if (index >= end) {
+                return 0;
+            }
             byte lead = bytes[index];
             int length = SequenceLength(lead);
             if (length == 0) {
@@ -1893,6 +1896,9 @@ namespace IronRuby.Runtime {
         /// "\xED\xA0\x80" is a pair cut short.
         /// </summary>
         internal static int Scan(byte[]/*!*/ bytes, int index, int end) {
+            if (index >= end) {
+                return 0;
+            }
             byte b = bytes[index];
             if (b < 0x80) {
                 return 1;
@@ -2092,7 +2098,9 @@ namespace IronRuby.Runtime {
         }
 
         public override int GetMaxCharCount(int byteCount) {
-            return byteCount;
+            // A byte is at most one char, and a decoder may still hold up to five bytes of a
+            // character cut short (CesuDecoder), which the next call can complete or flush.
+            return byteCount + 5;
         }
 
         public override bool IsSingleByte {
