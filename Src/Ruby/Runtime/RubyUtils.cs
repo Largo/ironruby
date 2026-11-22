@@ -177,8 +177,11 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // MRI refuses only an interned String (rb_special_singleton_class_of's FL_FSTR test):
+            // any other frozen one gets a singleton class, and defining a method in it raises
+            // FrozenError.
             var str = obj as MutableString;
-            return str == null || !str.IsFrozen;
+            return str == null || !str.IsInterned;
         }
 
         public static void RequireDefinableSingleton(object obj) {
@@ -195,8 +198,6 @@ namespace IronRuby.Runtime {
         }
 
         
-        private static CallSite<Func<CallSite, object, object>> _InstanceVariablesToInspectSite;
-
         /// <summary>
         /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
         /// array of names from a private #instance_variables_to_inspect. A name that the object
@@ -225,7 +226,9 @@ namespace IronRuby.Runtime {
                 return vars;
             }
 
-            var site = GetCallSite(ref _InstanceVariablesToInspectSite, context, "instance_variables_to_inspect", 0);
+            // the runtime's own site: a static one would stay bound to the first runtime
+            var site = context.GetOrCreateSendSite<Func<CallSite, object, object>>(
+                "instance_variables_to_inspect", RubyCallSignature.WithImplicitSelf(0));
             object names = site.Target(site, obj);
             if (names == null) {
                 return vars;
@@ -1355,7 +1358,12 @@ namespace IronRuby.Runtime {
             // an identity hash stores the string object it was given, it must not copy it;
             // neither is there a reason to copy an already frozen string
             if (str != null && !str.IsFrozen && (hash == null || !hash.ComparesByIdentity)) {
-                key = str.Duplicate(context, false, str.Clone()).Freeze();
+                // MRI's rb_hash_key_str gives a bare String key's copy from the fstring table,
+                // and so refuses it a singleton class; the copy of any other is merely frozen.
+                // It is not put in the table here (which is never swept, MRI's is), only marked.
+                var copy = str.Duplicate(context, false, str.Clone());
+                key = (str.GetType() == typeof(MutableString) && !context.HasInstanceVariables(str))
+                    ? copy.FreezeInterned() : copy.Freeze();
             } else {
                 key = CustomStringDictionary.NullToObj(key);
             }

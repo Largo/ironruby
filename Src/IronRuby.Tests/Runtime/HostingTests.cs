@@ -508,6 +508,33 @@ a = 'ba'.gsub /b/, '1'
         }
 
         /// <summary>
+        /// The call sites Time's methods make their dynamic calls through belong to the runtime
+        /// that calls them. They were statics, bound to the first runtime to get there: a second
+        /// one in the process saw the first one's Integer#&gt; when Time#&lt;=&gt; read the answer of
+        /// the other object's #&lt;=&gt;.
+        /// </summary>
+        public void HostingTimeSitesPerRuntime1() {
+            const string code = @"
+class Other
+  def <=>(o) = 5
+end
+Time.at(0) <=> Other.new
+";
+            var engine1 = Ruby.CreateEngine();
+            var engine2 = Ruby.CreateEngine();
+            Assert((int)engine1.Execute(code) == -1);
+
+            engine2.Execute(@"
+class Integer
+  def >(o) = false
+  def <(o) = true
+end
+");
+            Assert((int)engine2.Execute(code) == 1);
+            Assert((int)engine1.Execute(code) == -1);
+        }
+
+        /// <summary>
         /// -E takes "locale" besides the names of real encodings, as MRI's does; "external" and
         /// "filesystem", which Encoding.find knows, are unknown encoding names there.
         /// </summary>

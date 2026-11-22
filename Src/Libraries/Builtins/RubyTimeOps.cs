@@ -38,28 +38,15 @@ namespace IronRuby.Builtins {
 
         #region Dynamic call helpers
 
-        private static CallSite<Func<CallSite, object, object>> _numeratorSite;
-        private static CallSite<Func<CallSite, object, object>> _denominatorSite;
-        private static CallSite<Func<CallSite, object, object>> _toRSite;
-        private static CallSite<Func<CallSite, object, object>> _toIntSite;
-        private static CallSite<Func<CallSite, object, object>> _toStrSite;
-        private static CallSite<Func<CallSite, object, object>> _toISite;
-        private static CallSite<Func<CallSite, object, object, object>> _localToUtcSite;
-        private static CallSite<Func<CallSite, object, object, object>> _utcToLocalSite;
-        private static CallSite<Func<CallSite, object, object, object>> _compareSite;
-        private static CallSite<Func<CallSite, object, object, object>> _greaterSite;
-        private static CallSite<Func<CallSite, object, object, object>> _lessSite;
-        private static CallSite<Func<CallSite, object, object, object>> _findTimezoneSite;
-        private static CallSite<Func<CallSite, object, object, object>> _abbrSite;
-        private static CallSite<Func<CallSite, object, object>> _nameSite;
-
-        private static object Invoke(RubyContext/*!*/ context, ref CallSite<Func<CallSite, object, object>> site, string/*!*/ name, object target) {
-            var s = RubyUtils.GetCallSite(ref site, context, name, 0);
+        // The sites are the runtime's own (RubyContext.GetOrCreateSendSite), not statics: a site is
+        // bound to the RubyContext that made it, and several runtimes can share the process.
+        private static object Invoke(RubyContext/*!*/ context, string/*!*/ name, object target) {
+            var s = context.GetOrCreateSendSite<Func<CallSite, object, object>>(name, RubyCallSignature.WithImplicitSelf(0));
             return s.Target(s, target);
         }
 
-        private static object Invoke(RubyContext/*!*/ context, ref CallSite<Func<CallSite, object, object, object>> site, string/*!*/ name, object target, object arg) {
-            var s = RubyUtils.GetCallSite(ref site, context, name, 1);
+        private static object Invoke(RubyContext/*!*/ context, string/*!*/ name, object target, object arg) {
+            var s = context.GetOrCreateSendSite<Func<CallSite, object, object, object>>(name, RubyCallSignature.WithImplicitSelf(1));
             return s.Target(s, target, arg);
         }
 
@@ -69,19 +56,17 @@ namespace IronRuby.Builtins {
             }
             // MRI's rb_check_funcall and rb_respond_to ask #respond_to?, and so see a method an
             // object answers through method_missing and respond_to_missing? (a SimpleDelegator).
-            var site = RubyUtils.GetCallSite(ref _respondToSite, context, "respond_to?", 2);
+            var site = context.GetOrCreateSendSite<Func<CallSite, object, object, object, object>>(
+                "respond_to?", RubyCallSignature.WithImplicitSelf(2));
             return Protocols.IsTrue(site.Target(site, obj, context.EncodeIdentifier(name), true));
         }
-
-        private static CallSite<Func<CallSite, object, object, object, object>> _respondToSite;
-        private static CallSite<Func<CallSite, object, object>> _toSSite;
 
         /// <summary>
         /// num_exact_fail's "can't convert X into an exact number": X is the class of the value as
         /// %PRIsVALUE prints it, through #to_s, so that a class with a name of its own shows it.
         /// </summary>
         private static Exception/*!*/ MakeExactNumberError(RubyContext/*!*/ context, object value) {
-            object name = Invoke(context, ref _toSSite, "to_s", context.GetClassOf(value));
+            object name = Invoke(context, "to_s", context.GetClassOf(value));
             return RubyExceptions.CreateTypeError("can't convert {0} into an exact number",
                 name is MutableString ? name.ToString() : context.GetClassName(value));
         }
@@ -151,8 +136,8 @@ namespace IronRuby.Builtins {
         }
 
         private static ExactNum FromRational(RubyContext/*!*/ context, object value) {
-            object n = Invoke(context, ref _numeratorSite, "numerator", value);
-            object d = Invoke(context, ref _denominatorSite, "denominator", value);
+            object n = Invoke(context, "numerator", value);
+            object d = Invoke(context, "denominator", value);
             return ExactNum.Make(ToBigInteger(n), ToBigInteger(d));
         }
 
@@ -170,7 +155,7 @@ namespace IronRuby.Builtins {
             }
 
             if (value != null && !(value is MutableString) && RespondTo(context, value, "to_r") && RespondTo(context, value, "to_int")) {
-                object converted = Invoke(context, ref _toRSite, "to_r", value);
+                object converted = Invoke(context, "to_r", value);
                 if (TryToExactSimple(converted, out result)) {
                     return result;
                 }
@@ -178,7 +163,7 @@ namespace IronRuby.Builtins {
                     return FromRational(context, converted);
                 }
             } else if (value != null && !(value is MutableString) && RespondTo(context, value, "to_int")) {
-                object converted = Invoke(context, ref _toIntSite, "to_int", value);
+                object converted = Invoke(context, "to_int", value);
                 if (TryToExactSimple(converted, out result)) {
                     return result;
                 }
@@ -256,7 +241,7 @@ namespace IronRuby.Builtins {
                 if (value == null || value is RubyTime || !RespondTo(context, value, "to_str")) {
                     return false;
                 }
-                str = Invoke(context, ref _toStrSite, "to_str", value) as MutableString;
+                str = Invoke(context, "to_str", value) as MutableString;
                 if (str == null) {
                     return false;
                 }
@@ -365,7 +350,7 @@ namespace IronRuby.Builtins {
             // A subclass may provide .find_timezone to turn a name into a timezone object.
             bool nameLike = zone is MutableString;
             if (nameLike && owner != null && RespondTo(context, owner, "find_timezone")) {
-                object found = Invoke(context, ref _findTimezoneSite, "find_timezone", owner, zone);
+                object found = Invoke(context, "find_timezone", owner, zone);
                 if (found != null) {
                     zoneObject = found;
                     return RubyTimeZoneKind.FixedOffset;
@@ -394,7 +379,7 @@ namespace IronRuby.Builtins {
                 return time.Seconds;
             }
             if (value != null && RespondTo(context, value, "to_i")) {
-                return (long)ToExact(context, Invoke(context, ref _toISite, "to_i", value)).Floor();
+                return (long)ToExact(context, Invoke(context, "to_i", value)).Floor();
             }
             throw RubyExceptions.CreateTypeError("can't convert {0} into an exact number", context.GetClassName(value));
         }
@@ -409,7 +394,7 @@ namespace IronRuby.Builtins {
             }
 
             var utcView = new RubyTime(instant.Seconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero);
-            object mapped = Invoke(context, ref _utcToLocalSite, "utc_to_local", zoneObject, utcView);
+            object mapped = Invoke(context, "utc_to_local", zoneObject, utcView);
 
             RubyTime mappedTime = mapped as RubyTime;
             long localSeconds = (mappedTime != null)
@@ -426,8 +411,6 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static CallSite<Func<CallSite, object, object, object>> _dstSite;
-
         /// <summary>
         /// MRI's zone_set_dst: a Time with a timezone object is dst? when the zone's #dst?, given the
         /// wall-clock reading, says so - and not when the zone has no #dst?.
@@ -436,7 +419,7 @@ namespace IronRuby.Builtins {
             if (!RespondTo(context, zoneObject, "dst?")) {
                 return false;
             }
-            return Protocols.IsTrue(Invoke(context, ref _dstSite, "dst?", zoneObject, wallClock));
+            return Protocols.IsTrue(Invoke(context, "dst?", zoneObject, wallClock));
         }
 
         #endregion
@@ -636,12 +619,8 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("time string should have ASCII compatible encoding");
             }
 
-            string text = str.ConvertToString();
-            int year, month = 1, day = 1, hour = 0, minute = 0;
-            ExactNum second = ExactNum.Zero;
-            string fraction = null, zoneText = null;
-            ParseTimeText(context, str, text, out year, ref month, ref day, ref hour, ref minute, ref second, ref fraction, ref zoneText);
-
+            // MRI's time_init_parse converts precision: before it reads the string, which the
+            // conversion can change (#to_int may even clear it).
             int precision = 9;
             bool precisionGiven;
             object precisionValue = GetOption(options, "precision", out precisionGiven);
@@ -654,6 +633,12 @@ namespace IronRuby.Builtins {
                     precision = ToIntComponent(context, precisionValue);
                 }
             }
+
+            string text = str.ConvertToString();
+            int year, month = 1, day = 1, hour = 0, minute = 0;
+            ExactNum second = ExactNum.Zero;
+            string fraction = null, zoneText = null;
+            ParseTimeText(context, str, text, out year, ref month, ref day, ref hour, ref minute, ref second, ref fraction, ref zoneText);
 
             if (fraction != null) {
                 string digits = fraction;
@@ -808,7 +793,7 @@ namespace IronRuby.Builtins {
 
             MutableString str = value as MutableString;
             if (str == null && !(value is int) && value != null && RespondTo(context, value, "to_str")) {
-                str = Invoke(context, ref _toStrSite, "to_str", value) as MutableString;
+                str = Invoke(context, "to_str", value) as MutableString;
             }
 
             if (str != null) {
@@ -916,7 +901,7 @@ namespace IronRuby.Builtins {
             }
 
             var asUtc = new RubyTime(wallSeconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero);
-            long utcSeconds = ZoneResultToSeconds(context, Invoke(context, ref _localToUtcSite, "local_to_utc", zoneObject, asUtc));
+            long utcSeconds = ZoneResultToSeconds(context, Invoke(context, "local_to_utc", zoneObject, asUtc));
 
             long offsetSeconds = wallSeconds - utcSeconds;
             if (offsetSeconds <= -86400 || offsetSeconds >= 86400) {
@@ -1144,7 +1129,7 @@ namespace IronRuby.Builtins {
                     // A timezone object names itself. One that cannot - no #name method - takes
                     // the whole time down with it, which is what MRI does too.
                     context.SetInstanceVariable(result, "zone",
-                        Invoke(context, ref _nameSite, "name", self.ZoneObject));
+                        Invoke(context, "name", self.ZoneObject));
                 } else {
                     // A time made with a numeric offset has no zone to name, and MRI writes nil.
                     // On Windows the name is the localized one ("Mitteleuropäische Zeit"), as in #zone.
@@ -1188,7 +1173,7 @@ namespace IronRuby.Builtins {
             if (zoneName != null && RespondTo(context, owner, "find_timezone")) {
                 object found;
                 try {
-                    found = Invoke(context, ref _findTimezoneSite, "find_timezone", owner, zoneName);
+                    found = Invoke(context, "find_timezone", owner, zoneName);
                 } catch (Exception e) when (!(e is StackUnwinder) && context.IsInstanceOf(e, context.StandardErrorClass)) {
                     found = null;
                 }
@@ -1401,17 +1386,17 @@ namespace IronRuby.Builtins {
             }
 
             // MRI asks the other object to compare itself against us and inverts the answer.
-            object result = Invoke(context, ref _compareSite, "<=>", other, self);
+            object result = Invoke(context, "<=>", other, self);
             if (result == null) {
                 return null;
             }
 
-            object greater = Invoke(context, ref _greaterSite, ">", result, ScriptingRuntimeHelpers.Int32ToObject(0));
+            object greater = Invoke(context, ">", result, ScriptingRuntimeHelpers.Int32ToObject(0));
             if (RubyOps.IsTrue(greater)) {
                 return ScriptingRuntimeHelpers.Int32ToObject(-1);
             }
 
-            object less = Invoke(context, ref _lessSite, "<", result, ScriptingRuntimeHelpers.Int32ToObject(0));
+            object less = Invoke(context, "<", result, ScriptingRuntimeHelpers.Int32ToObject(0));
             if (RubyOps.IsTrue(less)) {
                 return ScriptingRuntimeHelpers.Int32ToObject(1);
             }
@@ -1876,7 +1861,7 @@ namespace IronRuby.Builtins {
                 return zoneName.ConvertToString();
             }
             if (zoneObject != null && RespondTo(context, zoneObject, "abbr")) {
-                var abbr = Invoke(context, ref _abbrSite, "abbr", zoneObject, self) as MutableString;
+                var abbr = Invoke(context, "abbr", zoneObject, self) as MutableString;
                 if (abbr != null) {
                     return abbr.ConvertToString();
                 }

@@ -4172,12 +4172,12 @@ namespace IronRuby.Builtins {
 
             // another runtime sees the name decorated with the runtime id; not worth caching
             if (context != _context) {
-                return MutableString.CreateMutable(GetName(context), context.GetIdentifierEncoding()).Freeze();
+                return MutableString.CreateMutable(GetName(context), context.GetIdentifierEncoding()).FreezeInterned();
             }
 
             var result = _nameString;
             if (result == null) {
-                _nameString = result = MutableString.CreateMutable(_name, context.GetIdentifierEncoding()).Freeze();
+                _nameString = result = MutableString.CreateMutable(_name, context.GetIdentifierEncoding()).FreezeInterned();
             }
             return result;
         }

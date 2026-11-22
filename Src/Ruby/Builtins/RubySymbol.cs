@@ -44,7 +44,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>The String Symbol#name answers - one per symbol, frozen.</summary>
         public MutableString/*!*/ FrozenName {
-            get { return _frozenName ?? (_frozenName = MutableString.Create(_string).Freeze()); }
+            get { return _frozenName ?? (_frozenName = MutableString.Create(_string).FreezeInterned()); }
         }
 
         internal RubySymbol(MutableString/*!*/ str, int id, int runtimeId) {

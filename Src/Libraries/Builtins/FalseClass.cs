@@ -24,7 +24,7 @@ namespace IronRuby.Builtins {
         #region Public Instance Methods
 
         /// <summary>One frozen string, answered again every time - as in MRI.</summary>
-        private static readonly MutableString/*!*/ _FalseString = MutableString.CreateAscii("false").Freeze();
+        private static readonly MutableString/*!*/ _FalseString = MutableString.CreateAscii("false").FreezeInterned();
 
         [RubyMethodAttribute("to_s")]
         [RubyMethodAttribute("inspect")]
