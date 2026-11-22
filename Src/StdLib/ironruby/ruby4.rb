@@ -1251,7 +1251,7 @@ class Range
     def __to_count__(n)
       return n if n.is_a?(::Integer)
       unless n.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{n.nil? ? "nil" : n.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(n)} into Integer"
       end
       converted = n.to_int
       unless converted.is_a?(::Integer)
@@ -1369,7 +1369,7 @@ class Array
   # reads the same stretch from its far end.
   def __arithmetic_slice__(sequence)
     unless sequence.is_a?(::Enumerator::ArithmeticSequence)
-      raise TypeError, "no implicit conversion of #{sequence.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(sequence)} into Integer"
     end
 
     step = sequence.step
@@ -1888,7 +1888,8 @@ class Array
       if value.nil?
         raise TypeError, "no implicit conversion of nil into Integer"
       end
-      raise TypeError, "no implicit conversion of #{value.class} into Integer"
+      # rb_to_int names true and false, not their classes
+      raise TypeError, "no implicit conversion of #{true.equal?(value) || false.equal?(value) ? value : value.class} into Integer"
     end
     converted = value.to_int
     unless converted.is_a?(Integer)
@@ -3549,7 +3550,7 @@ module Kernel
       unless uplevel.nil?
         unless ::Integer === uplevel
           unless uplevel.respond_to?(:to_int)
-            raise ::TypeError, "no implicit conversion of #{uplevel.class} into Integer"
+            raise ::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(uplevel)} into Integer"
           end
           uplevel = uplevel.to_int
         end
@@ -4900,7 +4901,7 @@ class SystemCallError
       return __coerce_errno__(errno.real)
     end
     unless errno.respond_to?(:to_int)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{errno.class} into Integer")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(errno)} into Integer")
     end
     errno.to_int
   end
@@ -5442,7 +5443,7 @@ class Enumerator
       return value if value.is_a?(::Float) && value == ::Float::INFINITY
       return value if value.is_a?(::Integer)
       unless value.respond_to?(:to_int)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
       end
       value.to_int
     end
@@ -5491,7 +5492,7 @@ class Enumerator
     return 0 if offset.nil?
     return offset if offset.is_a?(::Integer)
     unless offset.respond_to?(:to_int)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{offset.class} into Integer")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(offset)} into Integer")
     end
     converted = offset.to_int
     unless converted.is_a?(::Integer)
@@ -6498,7 +6499,7 @@ class Enumerator
     def __to_int__(value)
       return value if value.is_a?(::Integer)
       unless value.respond_to?(:to_int)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
       end
       value.to_int
     end
@@ -8461,7 +8462,7 @@ module Math
     end
     ::Kernel.raise(::TypeError, "no implicit conversion of nil into Integer") if n.nil?
     unless n.respond_to?(:to_int)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(n)} into Integer")
     end
     n.to_int
   end
@@ -8625,7 +8626,7 @@ module Process
     # MRI's: a positive Integer (implicitly converted), capped at RB_MAX_GROUPS
     def maxgroups=(value)
       ::Kernel.raise TypeError, "no implicit conversion from nil to integer" if value.nil?
-      n = Integer.try_convert(value) || ::Kernel.raise(TypeError, "no implicit conversion of #{value.class} into Integer")
+      n = Integer.try_convert(value) || ::Kernel.raise(TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
       ::Kernel.raise ArgumentError, "maxgroups #{n} should be positive" if n <= 0
       @__maxgroups__ = n > 65536 ? 65536 : n
     end
@@ -8637,7 +8638,7 @@ module Process
   def self.__integer_value__(value)
     return value if value.is_a?(Integer)
     unless value.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{value.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer"
     end
     result = value.to_int
     unless result.is_a?(Integer)
@@ -9061,7 +9062,7 @@ module Process
       else
         unless value.is_a?(Integer)
           unless value.respond_to?(:to_int) && !value.is_a?(Symbol)
-            raise TypeError, "no implicit conversion of #{value.class} into Integer"
+            raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer"
           end
           value = value.to_int
         end
@@ -9200,7 +9201,7 @@ module Process
           return __rlimit_by_name__(name, resource) if name.is_a?(String)
         end
         unless resource.respond_to?(:to_int)
-          raise TypeError, "no implicit conversion of #{resource.class} into Integer"
+          raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(resource)} into Integer"
         end
         value = resource.to_int
         unless value.is_a?(Integer)
@@ -9226,7 +9227,7 @@ module Process
     def __rlimit_value__(value)
       unless value.is_a?(Integer)
         unless value.respond_to?(:to_int)
-          raise TypeError, "no implicit conversion of #{value.class} into Integer"
+          raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer"
         end
         value = value.to_int
         unless value.is_a?(Integer)
@@ -9633,7 +9634,7 @@ unless defined?(Random)
       # A seed is an Integer however it was given: Random.new(42.5) and Random.new(42)
       # are the same generator, and #seed answers 42 for both.
       unless seed.respond_to?(:to_int)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{seed.class} into Integer")
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(seed)} into Integer")
       end
       @__seed__ = seed.to_int
       @__mt__ = ::Random.__send__(:__mt_class__).new(@__seed__)
@@ -9867,7 +9868,7 @@ class Random
         if args[0].nil?
           ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer")
         end
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_message_type_name__(args[0])} into Integer")
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(args[0])} into Integer")
       elsif v.nil?
         __ir_invalid_argument__(args[0])
       end
@@ -10018,7 +10019,7 @@ module Kernel
       end
 
       unless limit.respond_to?(:to_int)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{limit.class} into Integer")
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(limit)} into Integer")
       end
       n = limit.to_int.abs
       n == 0 ? ::Random.rand : ::Random.rand(n)
@@ -11670,7 +11671,7 @@ class IO
     unless value.is_a?(::Integer)
       unless value.respond_to?(:to_int)
         ::Kernel.raise(::TypeError,
-                       "no implicit conversion of #{value.class} into Integer")
+                       "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
       end
       value = value.to_int
     end
@@ -11705,7 +11706,7 @@ class IO
   def __io_to_int__(value)
     return value if value.is_a?(::Integer)
     unless value.respond_to?(:to_int)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.nil? ? 'nil' : value.class} into Integer")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
     end
     value.to_int
   end
@@ -12183,7 +12184,7 @@ class Struct
       members.index(name.to_sym)
     else
       unless name.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{name.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(name)} into Integer"
       end
       i = name.to_int
       unless i.is_a?(Integer)
@@ -12234,7 +12235,7 @@ class Struct
         end
       else
         unless arg.respond_to?(:to_int)
-          raise TypeError, "no implicit conversion of #{arg.class} into Integer"
+          raise TypeError, "no implicit conversion of #{__ir_conversion_result_name__(arg)} into Integer"
         end
         index = arg.to_int
         normalized = index < 0 ? index + count : index
