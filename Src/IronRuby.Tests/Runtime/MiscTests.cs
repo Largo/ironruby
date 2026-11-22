@@ -4072,7 +4072,7 @@ Dir.mktmpdir do |d|
   bad = File.join(d, 'bad.rb')
   File.write(bad, ""x = 1\n"" * 49 + ""x = )\n"")
   begin; load bad; rescue SyntaxError => e; p e.message.start_with?(""#{bad}:50: ""), e.path == bad; end
-  File.write(bad, ""# encoding: bogus\np 1\n"")
+  File.binwrite(bad, ""# encoding: bogus\np 1\n"")
   begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment\n> 1 | # encoding: bogus\n    |             ^~~~~\n  2 | p 1\n"", e.backtrace.grep(/Parse/); end
 end
 begin; eval(""# coding: foo\n"", nil, 'm.rb', 3); rescue ArgumentError => e; p e.message; end
