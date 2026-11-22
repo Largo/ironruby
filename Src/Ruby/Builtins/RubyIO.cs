@@ -1232,11 +1232,19 @@ namespace IronRuby.Builtins {
                 throw new NotSupportedException();
             }
 
-            int fd = NativeDescriptor;
+            // The standard streams are console streams with no descriptor of their own to report,
+            // but the kernel's 0, 1 and 2 are theirs: STDOUT.fcntl(F_GETFL) let the CLR's
+            // NotSupportedException out.
+            int fd = KernelDescriptor;
             if (fd < 0) {
                 throw new NotSupportedException();
             }
-            int result = NativeFileControl(fd, commandId, arg);
+            int result = LibcVariadic.Fcntl(fd, commandId, arg);
+            if (result < 0) {
+                // what fcntl(2) said - EINVAL for an unknown command, EBADF, EAGAIN for a lock -
+                // rather than EBADF whatever it was, as MRI's rb_sys_fail does
+                throw RubyExceptions.CreateErrno(_context, Marshal.GetLastPInvokeError(), null);
+            }
             // The descriptor's own O_APPEND is the answer wherever the kernel has one, but a
             // stream IronRuby opened in append mode without telling the kernel (the CLR
             // positions an appending FileStream itself) still reports the flag it holds.
