@@ -2360,6 +2360,35 @@ Array
         }
 
         /// <summary>
+        /// `yield x, **h' with h empty passes x alone, but from a call with keywords: MRI auto-splats x only for a block of
+        /// plain parameters (vm_callee_setup_block_arg), not for one with an optional, rest, block or keyword parameter.
+        /// </summary>
+        public void YieldEmptyKeywordSplat1() {
+            TestOutput(@"
+def y(h); yield [1, 2], **h; end
+h = {}
+p y(h) { |a, b| [a, b] }
+p y(h) { |a, b = 0| [a, b] }
+p y(h) { |a, *r| [a, r] }
+p y(h) { |a, &b| a }
+p y(h) { |a, k: 1| [a, k] }
+p y(h, &->(a, b = 0) { [a, b] })
+p y({x: 1}) { |a, b = 0| [a, b] }
+def z; yield [1, 2], **{}; end
+p z { |a, b = 0| [a, b] }
+", @"
+[1, 2]
+[[1, 2], 0]
+[[1, 2], []]
+[1, 2]
+[[1, 2], 1]
+[[1, 2], 0]
+[[1, 2], {x: 1}]
+[[1, 2], 0]
+");
+        }
+
+        /// <summary>
         /// A block a library method wrote in C# is MRI's C block: called after that method has returned, its break has
         /// nowhere to go, which MRI calls an "unexpected break" ([ruby-dev:45041]); a Ruby block's is "from proc-closure".
         /// </summary>

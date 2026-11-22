@@ -1191,6 +1191,7 @@ namespace IronRuby.Tests {
                 PreludeKeywordsArity1,
                 LibraryKeywordsStored1,
                 BlockKeywordsPositional1,
+                YieldEmptyKeywordSplat1,
                 LibraryBlockOrphanBreak1,
                 PreludeKeywordsYielder1,
                 SymbolProcKeywords1,

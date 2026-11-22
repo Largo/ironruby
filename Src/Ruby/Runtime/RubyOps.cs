@@ -1226,6 +1226,24 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// `yield x, **h': the splat is the one-or-zero element array of the keywords (KeywordArgumentSplat). With h empty x
+        /// is all that is passed, but by a call that had keywords, which MRI auto-splats only for a block of plain parameters
+        /// (vm_callee_setup_block_arg); any other - {|a, b = 1|}, {|a, *r|}, {|a, &amp;b|} - takes x as it is
+        /// (setup_parameters_complex allows no auto-splat for a call with keywords).
+        /// </summary>
+        [Emitted]
+        public static object YieldKeywordSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            if (splattee.Count == 0) {
+                var proc = blockParam.Proc;
+                var dispatcher = proc.Dispatcher;
+                if (proc.Kind != ProcKind.Lambda && (dispatcher.Arity < 0 || dispatcher.HasProcParameter || dispatcher.ChecksKeywords)) {
+                    return YieldNoAutoSplat1(arg1, procArg, self, blockParam);
+                }
+            }
+            return YieldSplat1(arg1, splattee, procArg, self, blockParam);
+        }
+
         [Emitted]
         public static object YieldSplat2(object arg1, object arg2, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
