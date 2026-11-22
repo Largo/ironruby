@@ -786,7 +786,9 @@ namespace IronRuby.Builtins {
 
             MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
             result.Append("#<");
-            result.Append(context.GetClassDisplayName(self));
+            // The class is the one the thread was made by, a Thread subclass's included (the CLR thread is
+            // adopted by it), and a name that is not ASCII makes the answer UTF-8, as the name of a thread does.
+            result.Append(MutableString.Create(context.GetClassOf(self).GetNonNullName(context), RubyEncoding.UTF8));
             result.Append(':');
             RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(context, self));
 
