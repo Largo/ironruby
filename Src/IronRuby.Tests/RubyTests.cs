@@ -546,6 +546,7 @@ namespace IronRuby.Tests {
                 Hooks3,
                 MethodLookupCacheFull1,
                 Hooks4,
+                TraceVar_AssignInHandler1,
 
                 ClrFields1,
                 ClrFields2,

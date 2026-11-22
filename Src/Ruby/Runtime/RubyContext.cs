@@ -3428,16 +3428,41 @@ namespace IronRuby.Runtime {
                 handlers = registered.ToArray();
             }
 
-            foreach (var handler in handlers) {
-                var command = handler as GlobalVariableTraceCommand;
-                if (command != null) {
-                    RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
-                } else {
-                    var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
-                    site.Target(site, handler, value);
+            // MRI's rb_gvar_set does not fire a variable's handlers while they are already running
+            // (gvar's block_trace), so that a handler may assign the variable it traces
+            // (trace_var(:$x) { $x *= 2 }) without recursing forever. MRI's flag is the variable's;
+            // without a GVL another thread's assignment should still fire, so here it is the thread's.
+            var running = _runningGlobalVariableTraces;
+            if (running == null) {
+                _runningGlobalVariableTraces = running = new List<KeyValuePair<RubyContext, string>>();
+            }
+            var entry = new KeyValuePair<RubyContext, string>(this, name);
+            if (running.Contains(entry)) {
+                return;
+            }
+
+            running.Add(entry);
+            try {
+                foreach (var handler in handlers) {
+                    var command = handler as GlobalVariableTraceCommand;
+                    if (command != null) {
+                        RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
+                    } else {
+                        var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
+                        site.Target(site, handler, value);
+                    }
                 }
+            } finally {
+                running.Remove(entry);
             }
         }
+
+        /// <summary>
+        /// The globals whose trace_var handlers this thread is running, with their runtime (several
+        /// runtimes can share a process and a thread).
+        /// </summary>
+        [ThreadStatic]
+        private static List<KeyValuePair<RubyContext, string>> _runningGlobalVariableTraces;
 
         #endregion
 
