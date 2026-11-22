@@ -348,9 +348,15 @@ namespace IronRuby.Builtins {
             private void WriteArray(RubyArray/*!*/ value, RubyClass/*!*/ theClass) {
                 WriteSubclassData(value, theClass, typeof(RubyArray));
                 _writer.Write((byte)'[');
-                WriteInt32(value.Count);
-                foreach (object obj in value) {
-                    WriteAnObject(obj);
+                // A _dump or marshal_dump the elements call may change the array; MRI checks its
+                // length after each element.
+                int count = value.Count;
+                WriteInt32(count);
+                for (int i = 0; i < value.Count; i++) {
+                    WriteAnObject(value[i]);
+                    if (value.Count != count) {
+                        throw RubyExceptions.CreateRuntimeError("array modified during dump");
+                    }
                 }
             }
 
@@ -369,9 +375,18 @@ namespace IronRuby.Builtins {
                 char typeFlag = (value.DefaultValue != null) ? '}' : '{';
                 _writer.Write((byte)typeFlag);
                 WriteInt32(value.Count);
-                foreach (KeyValuePair<object, object> pair in value) {
-                    WriteAnObject(pair.Key);
-                    WriteAnObject(pair.Value);
+                // Walked as Hash#each walks it, which is what MRI's rb_hash_foreach amounts to: a
+                // _dump that adds a key meanwhile gets "can't add a new key into hash during iteration".
+                value.BeginIteration();
+                try {
+                    int index = 0;
+                    object key, entryValue;
+                    while (value.TryGetNextEntry(ref index, out key, out entryValue)) {
+                        WriteAnObject(CustomStringDictionary.ObjToNull(key));
+                        WriteAnObject(entryValue);
+                    }
+                } finally {
+                    value.EndIteration();
                 }
                 if (value.DefaultValue != null) {
                     WriteAnObject(value.DefaultValue);
