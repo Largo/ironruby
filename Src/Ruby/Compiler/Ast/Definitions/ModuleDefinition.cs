@@ -160,19 +160,11 @@ namespace IronRuby.Compiler.Ast {
             // end
             gen.LeaveModuleDefinition();
 
-            // The IL compiler inlines a lambda invoked in place, and the body's frame is then not in a
-            // backtrace (`<class:Foo>'). Interpreted code keeps it, and so does compiled code that calls
-            // the body as a delegate, which eval'd code does: it is kept and run again (EvalCodeCache), and
-            // compiled once it is hot, where code compiled for one eval was always interpreted.
-            MSA.Expression bodyInvocation = gen.CompilerOptions.IsEval ?
-                Ast.Invoke(Ast.Convert(bodyLambda, bodyLambda.Type), parentScope, selfVariable) :
-                Ast.Invoke(bodyLambda, parentScope, selfVariable);
-
             MSA.Expression result = new AstBlock {
                 gen.DebugMarker(debugString),
                 Ast.Assign(selfVariable, definition),
                 moduleFrame.ResetEscapes(),
-                Ast.Assign(resultVariable, bodyInvocation),
+                Ast.Assign(resultVariable, Ast.Invoke(bodyLambda, parentScope, selfVariable)),
                 moduleFrame.MakeEscapedJumps(gen),
                 gen.DebugMarker("END OF " + debugString),
                 resultVariable

@@ -1442,6 +1442,10 @@ namespace IronRuby.Runtime {
             return offset;
         }
 
+        private static SourceUnit/*!*/ CreateRubySourceUnit(RubyContext/*!*/ context, MutableString/*!*/ code, string path) {
+            return context.CreateSourceUnit(new BinaryContentProvider(code.ToByteArray()), path, code.Encoding.Encoding, SourceCodeKind.File);
+        }
+
         /// <summary>
         /// What `__FILE__' is inside an eval that was not told a file name: MRI names the place
         /// the eval was written, as "(eval at file:line)". A nested eval nests the same way,
@@ -1478,84 +1482,7 @@ namespace IronRuby.Runtime {
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
             options.EvalSourceEncoding = code.Encoding;
             string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
-            string sourcePath = (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path;
-            byte[] bytes = code.ToByteArray();
-
-            // The same text evaluated again in the same place compiles to the same code (EvalCodeCache).
-            // Not kept: a frame with keyword parameters (its signature is an object of the method's) or in
-            // an isolated proc, and anything compiled while Coverage measures, which wants each compile.
-            EvalCodeCache.Key cacheKey = null;
-            EvalEntryPointDelegate compiled = null;
-            if (bytes.Length <= EvalCodeCache.MaxCodeLength && options.TopLevelParameterSignature == null &&
-                options.IsolatedLocalNames == null && context.Coverage == null) {
-
-                object verbose = context.Verbose;
-                cacheKey = new EvalCodeCache.Key(bytes, code.Encoding, sourcePath, line, module != null,
-                    verbose == null ? 0 : (RubyOps.IsTrue(verbose) ? 2 : 1), options.EvalFrameBaseLabel, options.EvalFrameBlockLevels,
-                    options.TopLevelMethodName, options.TopLevelParameterNames, options.TopLevelHasUnsplatParameter, options.LocalNames,
-                    EvalConstantModules(targetScope, module, lexicalConstantModule));
-                compiled = (EvalEntryPointDelegate)context.EvalCodeCache.TryGet(cacheKey);
-            }
-
-            if (compiled == null) {
-                compiled = CompileEval(context, bytes, code, sourcePath, options, line, cacheKey);
-            }
-
-            var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
-
-            if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {
-                TracePoint.OnScriptCompiled(targetScope, context, code);
-            }
-
-            // module-eval: gets a scope of its own, which starts out public
-            if (module != null) {
-                var moduleScope = CreateModuleEvalScope(targetScope, self, module);
-                if (lexicalConstantModule != null) {
-                    moduleScope.SetLexicalConstantModule(lexicalConstantModule);
-                }
-                return compiled(moduleScope, self, module, blockParameter);
-            }
-
-            // A plain string eval runs in the scope it was called from, so it has nowhere of its
-            // own to keep `private' or `module_function'.  MRI confines a visibility modifier used
-            // inside the string to the string: `eval "module_function"' does not reach a `def'
-            // written after it.  The state is inherited on the way in - a `def' inside the string
-            // does see a modifier set outside it - so saving and restoring it is the whole rule.
-            var attributesScope = targetScope.GetVisibilityScope();
-            var attributes = attributesScope.MethodAttributes;
-            try {
-                return compiled(targetScope, self, module, blockParameter);
-            } finally {
-                attributesScope.MethodAttributes = attributes;
-            }
-        }
-
-        // The modules a constant in the evaluated code is looked up in, innermost first, as
-        // RubyScope.TryResolveConstantNoLock walks them; a module eval adds the scope it makes.
-        private static object[]/*!*/ EvalConstantModules(RubyScope/*!*/ targetScope, RubyModule module, RubyModule lexicalConstantModule) {
-            var result = new List<object>();
-            if (module != null) {
-                result.Add(module);
-                result.Add(lexicalConstantModule ?? module);
-            }
-            for (RubyScope scope = targetScope; scope != null; scope = scope.Parent) {
-                RubyModule scopeModule = scope.Module;
-                if (scopeModule != null) {
-                    result.Add(scopeModule);
-                    result.Add(scope.LexicalConstantModule);
-                }
-            }
-            return result.ToArray();
-        }
-
-        private static EvalEntryPointDelegate/*!*/ CompileEval(RubyContext/*!*/ context, byte[]/*!*/ bytes, MutableString/*!*/ code,
-            string/*!*/ sourcePath, RubyCompilerOptions/*!*/ options, int line, EvalCodeCache.Key cacheKey) {
-
-            var source = context.CreateSourceUnit(new BinaryContentProvider(bytes), sourcePath, code.Encoding.Encoding, SourceCodeKind.File);
-
-            // A compile that gave a warning is not kept: MRI gives it at each eval. Another thread's
-            // warning in between only keeps this one out too.
-            int warnings = context.RuntimeErrorSink.WarningCount;
+            var source = CreateRubySourceUnit(context, code, (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path);
 
             Expression<EvalEntryPointDelegate> lambda;
             try {
@@ -1583,10 +1510,33 @@ namespace IronRuby.Runtime {
             Debug.Assert(lambda != null);
 
             var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context);
-            if (cacheKey != null && context.RuntimeErrorSink.WarningCount == warnings) {
-                context.EvalCodeCache.Add(cacheKey, compiled);
+            var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
+
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {
+                TracePoint.OnScriptCompiled(targetScope, context, code);
             }
-            return compiled;
+
+            // module-eval: gets a scope of its own, which starts out public
+            if (module != null) {
+                var moduleScope = CreateModuleEvalScope(targetScope, self, module);
+                if (lexicalConstantModule != null) {
+                    moduleScope.SetLexicalConstantModule(lexicalConstantModule);
+                }
+                return compiled(moduleScope, self, module, blockParameter);
+            }
+
+            // A plain string eval runs in the scope it was called from, so it has nowhere of its
+            // own to keep `private' or `module_function'.  MRI confines a visibility modifier used
+            // inside the string to the string: `eval "module_function"' does not reach a `def'
+            // written after it.  The state is inherited on the way in - a `def' inside the string
+            // does see a modifier set outside it - so saving and restoring it is the whole rule.
+            var attributesScope = targetScope.GetVisibilityScope();
+            var attributes = attributesScope.MethodAttributes;
+            try {
+                return compiled(targetScope, self, module, blockParameter);
+            } finally {
+                attributesScope.MethodAttributes = attributes;
+            }
         }
 
         private static RubyModuleEvalScope/*!*/ CreateModuleEvalScope(RubyScope/*!*/ parent, object self, RubyModule/*!*/ module) {
