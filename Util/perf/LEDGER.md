@@ -1193,9 +1193,27 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-22 for perf/lrescue**: the branch at df493d8c against master at dbf4a4f4,
+  Release net10.0: **PASS**, on the second run. The first stopped at IronRuby.Tests: `JitCensus1`
+  pinned the old refusal of a method with a rescue clause, which is now a light frame (its JIT
+  verdict unchanged); the expectation was updated (df493d8c). Then IronRuby.Tests 1,297 executed
+  and PASSED on both trees. 35 matrices in five modes (the switches-off mode with
+  `IR_LIGHT_RESCUE=0` too): 175 same, 0 differ. ruby/spec, all five suites (32,680 examples): no
+  failure the known list does not name.
+  Timing (`ab.rb`, six rounds, the order turned each round, ns a call, baseline -> candidate,
+  `Util/bench/rescue-shapes.rb`): rescue not entered 117 -> 77 (0.66), `ensure` 136 -> 96
+  (0.71), `else` 136 -> 104 (0.76), the modifier 112 -> 88 (0.79), rescue entered once in a
+  hundred calls 239 -> 160 (0.67), `loop` left by a break 520 -> 440 (0.85); `=> e` 0.71 with
+  overlapping rounds (by instructions 0.81); `loop` ended by StopIteration 1.01 and the three
+  controls 0.92-1.00, overlapping. Instructions a call 0.78-0.92 on the same shapes. The regex,
+  step, loop and super shapes overlap. micro-table: `s_any1` slower in both orders (1.19 and
+  1.19); alone, eight rounds, 173 -> 176 ns, overlapping. AWFY, 12 iterations, both orders:
+  geomean 0.991 and 1.009 (new/base), every benchmark verified; Queens 1.08 in one order and 0.96
+  in the other, Storage 1.03 and 1.02. Start-up 1,203 and 1,228 ms.
+
 - **perf/lrescue (/perf-step, 2026-11-22) - a method with `rescue`, `else` or `ensure` in a light
   frame; the scope is made only when a handler is entered** (`IR_LIGHT_RESCUE=0` turns it off) -
-  census only, not gated. Gap 22. Two commits.
+  census only when merged, gated on 2026-11-22 (first entry). Gap 22. Two commits.
   The refusal assumed the handler needed the scope; it needs far less. `$!` is saved, set and
   restored through the runtime (`GetCurrentException`, `SetCurrentException`, the `=> e` target),
   and the CLR first-pass filters (`RescuePassMayTest`, `RescueSiteCannotMatch`,
