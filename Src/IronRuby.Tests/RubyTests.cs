@@ -1161,6 +1161,7 @@ namespace IronRuby.Tests {
                 Fiber_ThreadRaiseReachesRunningFiber1,
                 Thread_HandleInterruptOtherRuntime1,
                 Thread_HandleInterruptInherited1,
+                Thread_HandleInterruptIoWrite1,
                 Thread_RaiseBetweenBlockCallsMeetsRescue1,
                 Thread_KillBehindRaise1,
                 Thread_KillBehindRescuedRaise1,
