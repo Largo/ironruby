@@ -1094,6 +1094,47 @@ end
         }
 
         /// <summary>
+        /// #succ steps a letter or digit outside the BMP as one code point, in UTF-8 and CESU-8:
+        /// "\u{10400}!".succ is "\u{10401}!", as in CRuby, where it was "\u{10400}\"".
+        /// </summary>
+        public void String_SuccSupplementary1() {
+            TestOutput(@"
+def u(s) = s.unpack('U*').map { _1.to_s(16) }.join(',')
+[0x10400, 0x1044F, 0x104A9, 0x1D7D7, 0x1F600, 0x3042].each do |c|
+  ch = [c].pack('U')
+  [""#{ch}!"", ""z#{ch}"", ""#{ch}9"", ""9#{ch}""].each do |s|
+    puts ""#{u(s)}: #{u(s.succ)} #{u(s.encode('CESU-8').succ.encode('UTF-8'))}""
+  end
+end
+", @"
+10400,21: 10401,21 10401,21
+7a,10400: 7a,10401 7a,10401
+10400,39: 10401,30 10401,30
+39,10400: 39,10401 39,10401
+1044f,21: 10450,21 10450,21
+7a,1044f: 7a,10450 7a,10450
+1044f,39: 10450,30 10450,30
+39,1044f: 39,10450 39,10450
+104a9,21: 104a1,104a0,21 104a1,104a0,21
+7a,104a9: 61,61,104a0 61,61,104a0
+104a9,39: 104a1,104a0,30 104a1,104a0,30
+39,104a9: 31,30,104a0 31,30,104a0
+1d7d7,21: 1d7d8,21 1d7d8,21
+7a,1d7d7: 7a,1d7d8 7a,1d7d8
+1d7d7,39: 1d7d8,30 1d7d8,30
+39,1d7d7: 39,1d7d8 39,1d7d8
+1f600,21: 1f600,22 1f600,22
+7a,1f600: 61,61,1f600 61,61,1f600
+1f600,39: 1f600,31,30 1f600,31,30
+39,1f600: 31,30,1f600 31,30,1f600
+3042,21: 3043,21 3043,21
+7a,3042: 7a,3043 7a,3043
+3042,39: 3043,30 3043,30
+39,3042: 39,3043 39,3043
+");
+        }
+
+        /// <summary>
         /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
         /// messages), the encoding of the format says how long the character of the number is, "invalid character"
         /// when it has no length for it, and that many bytes of the number are put without asking whether they are a

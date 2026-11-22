@@ -4683,6 +4683,15 @@ namespace IronRuby.Builtins {
                 if (mule && IsEmacsMuleMultibyte(str, i)) {
                     return i;
                 }
+                // a character outside the BMP is a surrogate pair, classified as one code point
+                if (unicode && Char.IsLowSurrogate(c) && i > 0 && Char.IsHighSurrogate(str.GetChar(i - 1))) {
+                    int codepoint = Char.ConvertToUtf32(str.GetChar(i - 1), c);
+                    if (IsSuccDigit(codepoint) || IsSuccAlpha(codepoint)) {
+                        return i;
+                    }
+                    i--;
+                    continue;
+                }
                 if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : (!binary || c < 0x80) && Char.IsLetterOrDigit(c))
                     return i;
             }
@@ -4690,19 +4699,38 @@ namespace IronRuby.Builtins {
             return -1;
         }
 
-        private static bool IsSuccDigit(char c) {
-            return Char.IsDigit(c);
+        private static bool IsSuccDigit(int codepoint) {
+            return Rune.IsValid(codepoint) && Rune.IsDigit(new Rune(codepoint));
         }
 
         // Onigmo's ALPHA is Unicode's Alphabetic property: letters, letter numbers (Roman
         // numerals) and most spacing vowel signs.
-        private static bool IsSuccAlpha(char c) {
-            switch (Char.GetUnicodeCategory(c)) {
+        private static bool IsSuccAlpha(int codepoint) {
+            if (!Rune.IsValid(codepoint)) {
+                return false;
+            }
+            var rune = new Rune(codepoint);
+            switch (Rune.GetUnicodeCategory(rune)) {
                 case UnicodeCategory.LetterNumber:
                 case UnicodeCategory.SpacingCombiningMark:
-                    return c >= 0x80;
+                    return codepoint >= 0x80;
                 default:
-                    return Char.IsLetter(c);
+                    return Rune.IsLetter(rune);
+            }
+        }
+
+        // Puts the character newCodepoint where the one at start (one char, or a surrogate pair)
+        // was.
+        private static void ReplaceCodePoint(MutableString/*!*/ str, int start, int oldCodepoint, int newCodepoint) {
+            int oldLength = oldCodepoint > 0xffff ? 2 : 1;
+            string replacement = Char.ConvertFromUtf32(newCodepoint);
+            if (replacement.Length == oldLength) {
+                for (int i = 0; i < oldLength; i++) {
+                    str.SetChar(start + i, replacement[i]);
+                }
+            } else {
+                str.Remove(start, oldLength);
+                str.Insert(start, replacement);
             }
         }
 
@@ -4716,30 +4744,37 @@ namespace IronRuby.Builtins {
         /// "9".succ is "10".
         /// </summary>
         private static bool TryIncrementNonAsciiAlphaNumericChar(MutableString/*!*/ str, int index) {
-            char c = str.GetChar(index);
+            // index is the end of the character: a char, or the second half of a surrogate pair
+            // (U+10400.succ is U+10401)
+            int start = index;
+            int c = str.GetChar(index);
+            if (Char.IsLowSurrogate((char)c) && index > 0 && Char.IsHighSurrogate(str.GetChar(index - 1))) {
+                start = index - 1;
+                c = Char.ConvertToUtf32(str.GetChar(start), (char)c);
+            }
             bool digit = IsSuccDigit(c);
-            Func<char, bool> sameKind = digit ? (Func<char, bool>)IsSuccDigit : IsSuccAlpha;
+            Func<int, bool> sameKind = digit ? (Func<int, bool>)IsSuccDigit : IsSuccAlpha;
 
-            for (int step = 1; step <= 2 && c + step <= Char.MaxValue; step++) {
-                char next = (char)(c + step);
-                if (!Char.IsSurrogate(next) && sameKind(next)) {
-                    str.SetChar(index, next);
+            for (int step = 1; step <= 2; step++) {
+                int next = c + step;
+                if (sameKind(next)) {
+                    ReplaceCodePoint(str, start, c, next);
                     return true;
                 }
             }
 
-            char first = c;
-            while (first > 0x80 && sameKind((char)(first - 1))) {
+            int first = c;
+            while (first > 0x80 && sameKind(first - 1)) {
                 first--;
             }
             if (first == c) {
                 return false;
             }
 
-            str.SetChar(index, first);
-            int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, index - 1);
+            ReplaceCodePoint(str, start, c, first);
+            int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, start - 1);
             if (nextIndex == -1) {
-                str.Insert(index, digit ? (char)(first + 1) : first);
+                str.Insert(start, Char.ConvertFromUtf32(digit ? first + 1 : first));
             } else {
                 IncrementAlphaNumericChar(str, nextIndex);
             }
