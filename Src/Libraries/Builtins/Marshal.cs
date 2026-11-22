@@ -1833,7 +1833,20 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("instance of {0} needs to have method 'marshal_load'",
                         Context.GetClassOf(obj).GetDisplayName(Context, false).ToString());
                 }
-                _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, ReadAnObject(false));
+                object data = ReadAnObject(false);
+                _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, data);
+
+                // MRI's r_copy_ivar: the instance variables the dumped data carried, and which
+                // #marshal_load did not set itself, go onto the object - a FrozenError if
+                // #marshal_load froze it ([Bug #8276]).
+                if (data != null && Context.HasInstanceVariables(data)) {
+                    foreach (string name in Context.GetInstanceVariableNames(data)) {
+                        object value, existing;
+                        if (!Context.TryGetInstanceVariable(obj, name, out existing) && Context.TryGetInstanceVariable(data, name, out value)) {
+                            Context.SetInstanceVariable(obj, name, value);
+                        }
+                    }
+                }
                 return obj;
             }
 
