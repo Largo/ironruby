@@ -1833,7 +1833,13 @@ namespace IronRuby.Prism {
                 case Pm.LocalVariableTargetNode local:
                     return CurrentScope.ResolveOrAddVariable(local.Name, span);
                 case Pm.RequiredParameterNode requiredParam:
-                    return CurrentScope.ResolveOrAddVariable(requiredParam.Name, span);
+                    // a name inside a destructured parameter |(a, b)| is a parameter of the block like
+                    // any other, and shadows an outer local of that name rather than assigning it; a
+                    // lowered signature (LowerGeneralParameters) binds the ones it has defined already
+                    LocalVariable parameter;
+                    return CurrentScope.TryGetValue(requiredParam.Name, out parameter)
+                        ? parameter
+                        : CurrentScope.AddVariable(requiredParam.Name, span);
                 case Pm.InstanceVariableTargetNode ivar:
                     return new InstanceVariable(IvarName(ivar.Name), span);
                 case Pm.GlobalVariableTargetNode gvar:

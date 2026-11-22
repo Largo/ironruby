@@ -338,6 +338,7 @@ namespace IronRuby.Tests {
                 Scenario_RubyBlockArgs4B,
                 Scenario_RubyBlockArgs5,
                 Scenario_RubyBlockArgs6,
+                Scenario_RubyBlockArgs7,
                 Proc_RhsAndBlockArguments1,
                 Block_ProcParams1,
 

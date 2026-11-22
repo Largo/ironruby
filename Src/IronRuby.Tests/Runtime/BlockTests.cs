@@ -1602,6 +1602,36 @@ nil
 ");
         }
         
+        /// <summary>
+        /// A name inside a destructured block parameter |(a, b)| is a parameter of the block and
+        /// shadows an outer local of that name, as any other parameter does.
+        /// </summary>
+        public void Scenario_RubyBlockArgs7() {
+            TestOutput(@"
+_ = 1; [[2]].each { |(_)| }; p _
+a = 1; [[2]].each { |(a)| }; p a
+b = 1; [[2, 3]].each { |(b, c)| p c }; p b
+f = 1; [[1, 2]].each { |x, (f)| p x }; p f
+g = 1; [[2, 3]].each { |(_, g)| p g }; p g
+p [[1, [2, 3]]].map { |a, (b, c)| [a, b, c] }
+def m((x, y)) = [x, y]
+x = 9
+p m([1, 2]), x
+", @"
+1
+1
+3
+1
+1
+1
+3
+1
+[[1, 2, 3]]
+[1, 2]
+9
+");
+        }
+
         public void RubyProcs1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
