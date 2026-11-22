@@ -187,4 +187,19 @@ using R20
 r << eval('1.twice rescue :none') << m20 << eval('1.twice rescue :none')
 puts "20. refinements: #{r.inspect}"
 
+# 21. the same text, file and line before and inside a `using', and in a method defined before it
+def m21; eval('1.thrice rescue :none', nil, 'u.rb', 1); end
+module R21; refine Integer do; def thrice; self * 3; end; end; end
+r = [m21, eval('1.thrice rescue :none', nil, 'u.rb', 1)]
+using R21
+r << eval('1.thrice rescue :none', nil, 'u.rb', 1) << m21 << eval('1.thrice rescue :none', nil, 'u.rb', 1)
+puts "21. refinements, one key: #{r.inspect}"
+
+# 22. the same text, file and line in methods of different classes: constants and class variables
+class A22; K = :a; @@cv = :ca; def k; eval('[K, @@cv, Module.nesting]', nil, 'k.rb', 1); end; end
+class B22; K = :b; @@cv = :cb; def k; eval('[K, @@cv, Module.nesting]', nil, 'k.rb', 1); end; end
+r = []
+3.times { r << A22.new.k << B22.new.k << A22.new.instance_eval('K rescue :ne', 'k.rb', 1) << A22.class_eval('K', 'k.rb', 1) << B22.class_eval('K', 'k.rb', 1) }
+puts "22. constants, one key: #{r.inspect}"
+
 puts 'end'
