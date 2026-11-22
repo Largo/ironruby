@@ -3205,6 +3205,10 @@ namespace IronRuby.Builtins {
                 // fall through
             }
 
+            if (from.MinBytesPerChar > 1) {
+                return DecodeWideForTranscoding(bytes, from, to, replacement);
+            }
+
             var result = new StringBuilder(bytes.Length);
             var decoder = strict.GetDecoder();
             var chars = new char[8];
@@ -3274,6 +3278,83 @@ namespace IronRuby.Builtins {
                 result.Append(replacement);
             }
 
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// UTF-16 and UTF-32 bytes that do not all decode, the way MRI's from_UTF_16BE/LE and
+        /// from_UTF_32BE/LE transcoders read them (Encoding::Converter's DecodeWideByte does the
+        /// same a byte at a time): a lone low surrogate is one invalid unit; a high surrogate
+        /// followed by anything but a low one is an invalid unit too, and what follows it is read
+        /// again (UTF-16BE knows it from the first byte after the surrogate, UTF-16LE from the
+        /// unit); a UTF-32 unit that is a surrogate or past U+10FFFF is invalid as a whole; and a
+        /// unit cut short by the end of the string is incomplete. .NET's decoder, fed a byte at a
+        /// time, takes the bytes after a bad surrogate into the error instead.
+        /// </summary>
+        private static string/*!*/ DecodeWideForTranscoding(byte[]/*!*/ bytes, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to,
+            string replacement) {
+
+            bool big = from.IsBigEndianUnicode;
+            int unitSize = from.MinBytesPerChar;
+            var result = new StringBuilder(bytes.Length / unitSize);
+            int i = 0;
+            while (i < bytes.Length) {
+                byte[] errorBytes = null, readAgain = null;
+                int length = 0;
+                bool incomplete = false;
+
+                if (i + unitSize > bytes.Length) {
+                    length = bytes.Length - i;
+                    incomplete = true;
+                } else if (unitSize == 4) {
+                    long value = big
+                        ? ((long)bytes[i] << 24) | ((long)bytes[i + 1] << 16) | ((long)bytes[i + 2] << 8) | bytes[i + 3]
+                        : ((long)bytes[i + 3] << 24) | ((long)bytes[i + 2] << 16) | ((long)bytes[i + 1] << 8) | bytes[i];
+                    if (value > 0x10ffff || value >= 0xd800 && value <= 0xdfff) {
+                        length = 4;
+                    } else {
+                        result.Append(Char.ConvertFromUtf32((int)value));
+                        i += 4;
+                        continue;
+                    }
+                } else {
+                    int unit = big ? (bytes[i] << 8) | bytes[i + 1] : (bytes[i + 1] << 8) | bytes[i];
+                    if (unit >= 0xdc00 && unit <= 0xdfff) {
+                        length = 2;
+                    } else if (unit < 0xd800 || unit > 0xdbff) {
+                        result.Append((char)unit);
+                        i += 2;
+                        continue;
+                    } else if (i + 2 >= bytes.Length) {
+                        length = bytes.Length - i;
+                        incomplete = true;
+                    } else if (big && (bytes[i + 2] < 0xdc || bytes[i + 2] > 0xdf)) {
+                        length = 2;
+                        readAgain = new[] { bytes[i + 2] };
+                    } else if (i + 3 >= bytes.Length) {
+                        length = bytes.Length - i;
+                        incomplete = true;
+                    } else {
+                        int low = big ? (bytes[i + 2] << 8) | bytes[i + 3] : (bytes[i + 3] << 8) | bytes[i + 2];
+                        if (low < 0xdc00 || low > 0xdfff) {
+                            length = 2;
+                            readAgain = new[] { bytes[i + 2], bytes[i + 3] };
+                        } else {
+                            result.Append((char)unit).Append((char)low);
+                            i += 4;
+                            continue;
+                        }
+                    }
+                }
+
+                errorBytes = new byte[length];
+                Array.Copy(bytes, i, errorBytes, 0, length);
+                if (replacement == null) {
+                    throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, readAgain, incomplete);
+                }
+                result.Append(replacement);
+                i += length;
+            }
             return result.ToString();
         }
 
