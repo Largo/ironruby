@@ -1724,6 +1724,16 @@ namespace IronRuby.Runtime {
             return (superClassObject != null) ? RubyClass.CheckInheritable(ec, superClassObject) : ec.ObjectClass;
         }
 
+        /// <summary>
+        /// The superclass written after `class X &lt;`, checked before the class is looked up or made
+        /// (vm_find_or_create_class_by_id). The Define*Class helpers take null for "none written",
+        /// so `class X &lt; nil` must be refused here, where nil still means the value nil.
+        /// </summary>
+        [Emitted]
+        public static RubyClass/*!*/ CheckSuperClass(RubyScope/*!*/ scope, object superClassObject) {
+            return RubyClass.CheckInheritable(scope.RubyContext, superClassObject);
+        }
+
         #endregion
 
         #region Constants
