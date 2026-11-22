@@ -113,6 +113,14 @@ namespace IronRuby.Builtins {
             // UTF8-MAC's composition (MRI's from_utf8_mac), which holds the last character decoded
             // back for the one after it; null for any other source.
             private readonly Utf8MacComposer _composer;
+
+            // Characters the composer let go of that a full destination kept from being converted;
+            // they go first in the next call, ahead of any new input.
+            private string _composedPending = String.Empty;
+
+            // How much of this call's output there was when the composer last wrote to it (-1: it
+            // has not), which tells whether the composer is what filled the destination.
+            private int _composerOutputEnd = -1;
             private Encoder/*!*/ _encoder;
 
             private readonly List<byte>/*!*/ _incomplete = new List<byte>();
@@ -621,7 +629,14 @@ namespace IronRuby.Builtins {
                         _putback.Clear();
                     }
 
-                    while (true) {
+                    _composerOutputEnd = -1;
+
+                    // characters the composer let go of last time come before any new input
+                    if (_composedPending.Length != 0) {
+                        status = EncodeComposed(String.Empty, written, limit);
+                    }
+
+                    while (status == null) {
                         if (consumed >= input.Length) {
                             if (_incomplete.Count != 0 && (flags & PartialInputFlag) == 0 &&
                                 (_flags & InvalidMaskFlag) == InvalidReplaceFlag) {
@@ -629,12 +644,14 @@ namespace IronRuby.Builtins {
                                 // sequence like any other, so :invalid => :replace covers it too
                                 // and the conversion finishes rather than stopping on it.
                                 ResetDecoder();
+                                // a full destination parks what the composer held, and the
+                                // replacement after it, rather than leaving the replacement out
                                 string flushStatus = FlushComposer(written, limit);
-                                if (flushStatus != null) {
+                                if (flushStatus != null && flushStatus != "destination_buffer_full") {
                                     status = flushStatus;
                                     break;
                                 }
-                                if (!EmitInserted(_replacementBytes, written, limit) || !EmitFinish(written, limit)) {
+                                if (!EmitInserted(_replacementBytes, written, limit) || flushStatus != null || !EmitFinish(written, limit)) {
                                     status = "destination_buffer_full";
                                     break;
                                 }
@@ -646,6 +663,11 @@ namespace IronRuby.Builtins {
                                 status = "incomplete_input";
                             } else if ((flags & PartialInputFlag) != 0) {
                                 status = "source_buffer_empty";
+                            } else if (_composer != null && _path.Length == 2 && written.Count >= limit &&
+                                _composerOutputEnd == written.Count) {
+                                // MRI's from_utf8_mac has a finish to run, which a destination its
+                                // own output filled leaves for the next call
+                                status = "destination_buffer_full";
                             } else if ((status = FlushComposer(written, limit)) != null) {
                                 // the character the composer held could not be written
                             } else if (!EmitFinish(written, limit)) {
@@ -718,12 +740,13 @@ namespace IronRuby.Builtins {
                                 // the putback buffer, because the conversion carries straight on
                                 // and they may well start a character of their own.
                                 consumed -= readAgain.Length;
+                                // (as above: the replacement is parked after the held character)
                                 string flushStatus = FlushComposer(written, limit);
-                                if (flushStatus != null) {
+                                if (flushStatus != null && flushStatus != "destination_buffer_full") {
                                     status = flushStatus;
                                     break;
                                 }
-                                if (!Emit(_replacementBytes, written, limit)) {
+                                if (!Emit(_replacementBytes, written, limit) || flushStatus != null) {
                                     status = "destination_buffer_full";
                                     break;
                                 }
@@ -765,8 +788,7 @@ namespace IronRuby.Builtins {
 
                         string encodeStatus;
                         if (_composer != null) {
-                            string composed = _composer.Push(chars, charsUsed);
-                            encodeStatus = (composed.Length != 0) ? EncodeChars(composed.ToCharArray(), composed.Length, written, limit) : null;
+                            encodeStatus = EncodeComposed(_composer.Push(chars, charsUsed), written, limit);
                         } else {
                             encodeStatus = EncodeChars(chars, charsUsed, written, limit);
                         }
@@ -1161,11 +1183,35 @@ namespace IronRuby.Builtins {
             // Writes out the character the UTF8-MAC composer holds, if there is one: at the end of
             // the input, and before a replacement, which comes after it in MRI's single converter.
             private string FlushComposer(List<byte>/*!*/ written, int limit) {
-                if (_composer == null) {
-                    return null;
+                return (_composer != null) ? EncodeComposed(_composer.Flush(), written, limit) : null;
+            }
+
+            // The composer can let go of more than one character at a time, whose source bytes are
+            // all read by then. They are converted one by one: one that does not fit is parked
+            // (Put), and those after it wait in _composedPending, so that a full destination is
+            // reported before anything a later character would raise, as MRI does; a character
+            // that cannot be converted is reported even when the destination is just full.
+            private string EncodeComposed(string/*!*/ text, List<byte>/*!*/ written, int limit) {
+                text = _composedPending + text;
+                _composedPending = String.Empty;
+                int i = 0;
+                while (i < text.Length) {
+                    int size = (Char.IsHighSurrogate(text[i]) && i + 1 < text.Length && Char.IsLowSurrogate(text[i + 1])) ? 2 : 1;
+                    var converted = new List<byte>();
+                    string status = EncodeChars(text.ToCharArray(i, size), size, converted, Int32.MaxValue);
+                    bool fits = Put(converted.ToArray(), written, limit);
+                    _composerOutputEnd = written.Count;
+                    i += size;
+                    if (status != null) {
+                        _composedPending = text.Substring(i);
+                        return status;
+                    }
+                    if (!fits) {
+                        _composedPending = text.Substring(i);
+                        return "destination_buffer_full";
+                    }
                 }
-                string held = _composer.Flush();
-                return (held.Length != 0) ? EncodeChars(held.ToCharArray(), held.Length, written, limit) : null;
+                return null;
             }
 
             private void ResetDecoder() {

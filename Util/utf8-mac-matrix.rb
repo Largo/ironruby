@@ -86,6 +86,27 @@ ensure
   File.delete(path) if File.exist?(path)
 end
 
+# Encoding::Converter with a small destination: what the composer holds and lets go of,
+# and a replacement after it, are not lost when the destination fills
+["\u00e9\u{1f600}", "e\u0301\u{1f600}x", "\xc3\xa9\xff", "\xc3\xa9\xe3", "a\u30ab\u3099b", "e\u0301\xffe\u0301",
+ "\u1100\u1161\u11a8\xff", "\xffe\u0301", "e\u0301\xe3\x81"].each do |src|
+  [["UTF-8", nil], ["UTF-8", { invalid: :replace }], ["UTF-16BE", nil], ["EUC-JP", nil]].each do |to, opts|
+    results = (1..7).map do |limit|
+      ec = Encoding::Converter.new("UTF8-MAC", to, **(opts || {}))
+      dst = +""
+      s = src.b
+      statuses = []
+      25.times do
+        r = ec.primitive_convert(s, dst, nil, limit)
+        statuses << r
+        break unless r == :destination_buffer_full
+      end
+      "#{limit}=#{statuses.uniq.join('/')}:#{h(dst)}"
+    end
+    puts "small destination #{h(src)} #{to} #{opts.inspect}: #{results.join(' ')}"
+  end
+end
+
 # the default replacement: U+FFFD where the last converter writes UTF-8
 pairs = [%w[UTF8-MAC UTF-8], %w[UTF-8 UTF8-MAC], %w[EUC-JP UTF8-MAC], %w[UTF8-MAC EUC-JP], %w[UTF8-MAC UTF-16BE],
          %w[CESU-8 UTF-8], %w[UTF-8 CESU-8], %w[EUC-JP CESU-8], %w[CESU-8 EUC-JP], %w[UTF8-KDDI UTF-8], %w[UTF-8 UTF-16LE],
