@@ -1163,7 +1163,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_s")]
         [RubyMethod("inspect")]
-        public static MutableString/*!*/ ToString(int self, int radix) {
+        public static MutableString/*!*/ ToString(int self, [DefaultProtocol]int radix) {
             if (radix < 2 || radix > 36) {
                 throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
             }
@@ -1173,10 +1173,11 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Returns a string containing the representation of self base radix (2 through 36).
         /// </summary>
-        /// <param name="radix">An integer between 2 and 36 inclusive</param>
+        /// <param name="radix">An integer between 2 and 36 inclusive, converted as MRI's NUM2INT does: through
+        /// #to_int, so an object or a Rational is a radix, and with its RangeError for one beyond an int.</param>
         [RubyMethod("to_s")]
         [RubyMethod("inspect")]
-        public static MutableString/*!*/ ToString(BigInteger/*!*/ self, int radix) {
+        public static MutableString/*!*/ ToString(BigInteger/*!*/ self, [DefaultProtocol]int radix) {
             if (radix < 2 || radix > 36) {
                 throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
             }
