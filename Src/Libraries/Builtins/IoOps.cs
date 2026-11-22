@@ -171,6 +171,7 @@ namespace IronRuby.Builtins {
             if (!desc.HasValue) {
                 throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Integer");
             }
+            info.RequireBinmodeForAsciiIncompatible();
             Reinitialize(self, desc.Value, info);
             self.ConversionOptions = AddTextModeDecorator(context, info, options);
 

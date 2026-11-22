@@ -117,6 +117,7 @@ namespace IronRuby.Builtins {
                     permissions = p.Value;
                 }
             }
+            info.RequireBinmodeForAsciiIncompatible();
             self.ConversionOptions = RubyIOOps.AddTextModeDecorator(context, info, options);
             
             // descriptor or path:

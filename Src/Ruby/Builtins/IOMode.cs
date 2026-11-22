@@ -85,6 +85,19 @@ namespace IronRuby.Builtins {
             _textOrBinarySpecified = textOrBinarySpecified;
         }
 
+        /// <summary>
+        /// MRI's validate_enc_binmode: a stream that reads an encoding that is not ASCII
+        /// compatible (UTF-16, UTF-32, ISO-2022-JP) without converting it has to be in binary
+        /// mode, since text mode's newline handling cannot see its line ends.
+        /// </summary>
+        public void RequireBinmodeForAsciiIncompatible() {
+            if (_externalEncoding == null || _internalEncoding != null || !Mode.CanRead() ||
+                (Mode & IOMode.PreserveEndOfLines) != 0 || _externalEncoding.IsAsciiIdentity) {
+                return;
+            }
+            throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding needs binmode");
+        }
+
         public static IOInfo Parse(RubyContext/*!*/ context, MutableString/*!*/ modeAndEncoding) {
             if (!modeAndEncoding.IsAscii()) {
                 throw IOModeEnum.IllegalMode(modeAndEncoding.ToAsciiString());
