@@ -619,12 +619,8 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("time string should have ASCII compatible encoding");
             }
 
-            string text = str.ConvertToString();
-            int year, month = 1, day = 1, hour = 0, minute = 0;
-            ExactNum second = ExactNum.Zero;
-            string fraction = null, zoneText = null;
-            ParseTimeText(context, str, text, out year, ref month, ref day, ref hour, ref minute, ref second, ref fraction, ref zoneText);
-
+            // MRI's time_init_parse converts precision: before it reads the string, which the
+            // conversion can change (#to_int may even clear it).
             int precision = 9;
             bool precisionGiven;
             object precisionValue = GetOption(options, "precision", out precisionGiven);
@@ -637,6 +633,12 @@ namespace IronRuby.Builtins {
                     precision = ToIntComponent(context, precisionValue);
                 }
             }
+
+            string text = str.ConvertToString();
+            int year, month = 1, day = 1, hour = 0, minute = 0;
+            ExactNum second = ExactNum.Zero;
+            string fraction = null, zoneText = null;
+            ParseTimeText(context, str, text, out year, ref month, ref day, ref hour, ref minute, ref second, ref fraction, ref zoneText);
 
             if (fraction != null) {
                 string digits = fraction;
