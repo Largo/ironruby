@@ -1604,6 +1604,17 @@ namespace IronRuby.Builtins {
             /// subclass's instance variables there).
             /// </summary>
             private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef) {
+                return ReadRange(theClass, count, objectRef, false);
+            }
+
+            // MRI's Range is a struct of begin, end and excl, which an 'S' record has to name in that
+            // order (GH-6832: a Range dumped by a program that had redefined Range as a Struct).
+            private static readonly string[]/*!*/ RangeMembers = new[] { "begin", "end", "excl" };
+
+            private object/*!*/ ReadRange(RubyClass/*!*/ theClass, int count, int objectRef, bool asStruct) {
+                if (asStruct && count != RangeMembers.Length) {
+                    throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", theClass.Name);
+                }
                 var range = (Range)RubyUtils.CreateObject(theClass);
                 if (objectRef >= 0) {
                     _objects[objectRef] = range;
@@ -1612,6 +1623,9 @@ namespace IronRuby.Builtins {
                 bool excludeEnd = false, exclGiven = false;
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
+                    if (asStruct && name != RangeMembers[i]) {
+                        throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, RangeMembers[i]);
+                    }
                     object value = ReadAnObject(false);
                     switch (name) {
                         case "begin": rangeBegin = value; break;
@@ -1800,13 +1814,24 @@ namespace IronRuby.Builtins {
             }
 
             private object/*!*/ ReadStruct(int objectRef) {
-                object instance = UnmarshalNewObject();
+                RubyClass theClass = ReadType();
+                if (theClass.IsSubclassOf(Context.GetClass(typeof(Range)))) {
+                    return ReadRange(theClass, ReadInt32(), objectRef, true);
+                }
+
+                // Data shares the Struct record, so which of the two this is can only be told from
+                // the class that was named in it. Anything else is not a struct at all, which MRI's
+                // rb_struct_s_members says before the object is made ([ruby-dev:31709]).
+                bool isStruct = theClass.IsSubclassOf(Context.GetClass(typeof(RubyStruct)));
+                if (!isStruct && GetDataMembers(theClass) == null) {
+                    throw RubyExceptions.CreateTypeError("class {0} not a struct", theClass.Name);
+                }
+
+                object instance = RubyUtils.CreateObject(theClass);
                 if (objectRef >= 0) {
                     _objects[objectRef] = instance;
                 }
 
-                // Data shares the Struct record, so which of the two this is can only be told from
-                // the class that was named in it.
                 if (!(instance is RubyStruct)) {
                     return ReadData(instance);
                 }
@@ -1822,7 +1847,6 @@ namespace IronRuby.Builtins {
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     if (name != names[i]) {
-                        RubyClass theClass = Context.GetClassOf(obj);
                         throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, names[i]);
                     }
                     obj[i] = ReadAnObject(false);
