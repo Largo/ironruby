@@ -1351,6 +1351,11 @@ namespace IronRuby.Builtins {
             GetStream().PushBack(b);            
         }
 
+        /// <summary>#ungetc and #ungetbyte refuse to grow the read buffer past its capacity.</summary>
+        public void RequirePushBackRoom(int count) {
+            GetStream().RequirePushBackRoom(count);
+        }
+
         #endregion
 
         public override string/*!*/ ToString() {

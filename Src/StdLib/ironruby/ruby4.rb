@@ -11689,7 +11689,7 @@ class IO
         end
         byte = byte.to_str
       end
-      byte.bytes.reverse_each { |b| __ir_ungetc__(b) }
+      __ir_ungetbytes__(byte)
     end
     nil
   end unless method_defined?(:ungetbyte)

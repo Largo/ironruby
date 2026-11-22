@@ -3263,7 +3263,19 @@ namespace IronRuby.Builtins {
         [RubyMethod("__ir_ungetc__", RubyMethodAttributes.PrivateInstance)]
         public static void SetPreviousByte(RubyIO/*!*/ self, [DefaultProtocol]int b) {
             self.RequireByteReadable();
+            self.RequirePushBackRoom(1);
             self.PushBack(unchecked((byte)b));
+        }
+
+        // #ungetbyte of a String: its bytes, all of them or none, as MRI's io_ungetbyte.
+        [RubyMethod("__ir_ungetbytes__", RubyMethodAttributes.PrivateInstance)]
+        public static void PushBackBytes(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ bytes) {
+            self.RequireByteReadable();
+            byte[] data = bytes.ToByteArray();
+            if (data.Length > 0) {
+                self.RequirePushBackRoom(data.Length);
+                PushBack(self, data, 0, data.Length);
+            }
         }
 
         // What IO#read (ruby4.rb) puts before the rest of the stream: the text in the character
@@ -3293,7 +3305,8 @@ namespace IronRuby.Builtins {
         private static void PushBackText(RubyIO/*!*/ self, byte[]/*!*/ bytes) {
             if (NeedsReadConversion(self)) {
                 self.PushBackChars(bytes, 0, bytes.Length);
-            } else {
+            } else if (bytes.Length > 0) {
+                self.RequirePushBackRoom(bytes.Length);
                 PushBack(self, bytes, 0, bytes.Length);
             }
         }
