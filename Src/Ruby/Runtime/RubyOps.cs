@@ -4377,15 +4377,6 @@ namespace IronRuby.Runtime {
                 && expectedClass.Version.Method == expectedVersion;
         }
 
-        // MRI formats the expected module with %PRIsVALUE, i.e. its #to_s (an anonymous class with a
-        // singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's own #to_s is
-        // used too, so the name is only the fallback for a #to_s that returns no String.
-        private static string/*!*/ SuperExpectedModuleName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
-            var site = context.GetClassOf(module).ToStringSite;
-            var str = site.Target(site, module) as MutableString;
-            return str != null ? str.ToString() : module.GetDisplayName(context, true).ToString();
-        }
-
         // super call condition
         [Emitted]
         public static object GetSuperCallTarget(RubyScope/*!*/ scope, int targetId) {
@@ -4435,7 +4426,7 @@ namespace IronRuby.Runtime {
             var context = methodScope.RubyContext;
             if (!context.IsKindOf(currentSelf, declaringModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("self has wrong type to call super in this context: {0} (expected {1})",
-                    context.GetClassDisplayName(currentSelf), SuperExpectedModuleName(context, declaringModule)));
+                    context.GetClassDisplayName(currentSelf), context.GetModuleMessageName(declaringModule)));
             }
         }
 

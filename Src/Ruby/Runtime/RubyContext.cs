@@ -2498,6 +2498,16 @@ namespace IronRuby.Runtime {
             return GetClassDisplayName(obj);
         }
 
+        /// <summary>
+        /// A module as MRI writes it into a message with %PRIsVALUE: by its own #to_s (an anonymous
+        /// class with a singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's
+        /// own #to_s is used too; one that returns no String gives the default #&lt;Class:0x...&gt;, as
+        /// string interpolation would.
+        /// </summary>
+        public string/*!*/ GetModuleMessageName(RubyModule/*!*/ module) {
+            return StringConversionSite.Target(StringConversionSite, module).ToString();
+        }
+
         private string/*!*/ GetClassName(object obj, bool display) {
             // doesn't create a RubyClass for .NET types
 
