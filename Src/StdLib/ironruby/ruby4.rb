@@ -6217,13 +6217,16 @@ class Enumerator
     end
 
     # Lazy only without a block; given one it runs the pipeline, as MRI's (which is
-    # Enumerator's) does, and answers what #each answers.
+    # Enumerator's) does, and answers what #each answers. As MRI's enumerator_with_index_i,
+    # the block's value goes back to the source's #each, and the index moves with #succ
+    # (rb_int_succ), not a #+ that a program may have redefined.
     def each_with_index(&block)
       return with_index(0) unless block
       i = 0
       each do |*values|
-        block.call(__value__(values), i)
-        i += 1
+        idx = i
+        i = i.succ
+        block.call(__value__(values), idx)
       end
     end
 
@@ -6622,23 +6625,25 @@ class Enumerator
       defined?(@__enums__) ? @__enums__ : nil
     end
 
-    # nil for any size MRI cannot use (missing, non-Integer, NaN); zero short-circuits
-    # even when another enumerable has an unknown size, and an infinite size carries.
+    # MRI's enum_product_total_size: nil for any size it cannot use (missing, non-Integer,
+    # NaN). The sizes are asked in order and the first zero answers 0 without asking the
+    # rest, even when another enumerable has an unknown size.
     #
     # Past the zero check the sizes are taken in order, and the first unknown or infinite
-    # one decides: product("a".."c", 1..) is nil, product(1.., "a".."c") Infinity.
+    # one is the answer itself: product("a".."c", 1..) is nil, product(1.., "a".."c")
+    # Infinity, whatever the sizes before it multiplied to.
     def size
-      sizes = @__enums__.map { |enum| enum.respond_to?(:size) ? enum.size : nil }
-      return 0 if sizes.any? { |n| n.is_a?(::Integer) && n == 0 }
+      sizes = []
+      @__enums__.each do |enum|
+        n = enum.respond_to?(:size) ? enum.size : nil
+        return n if n.is_a?(::Integer) && n == 0
+        sizes << n
+      end
       total = 1
       sizes.each do |n|
-        if n.is_a?(::Integer)
-          total *= n
-        elsif n.is_a?(::Float) && n.infinite?
-          return total * n
-        else
-          return nil
-        end
+        return n if n.nil? || (n.is_a?(::Float) && n.infinite?)
+        return nil unless n.is_a?(::Integer)
+        total *= n
       end
       total
     end
@@ -12902,12 +12907,12 @@ class Range
     self
   end
 
-  # r_less: the sign of a <=> b, a failed comparison being an ArgumentError (rb_cmpint)
+  # r_less: the sign of a <=> b (rb_cmpint). A nil from <=> is not an error: r_less
+  # answers INT_MAX, which is neither below, at nor in the direction of the walk, so
+  # the step loops above stop there quietly, as MRI's do.
   def __r_less__(a, b)
     c = (a <=> b)
-    if c.nil?
-      ::Kernel.raise(::ArgumentError, "comparison of #{__ir_message_type_name__(a)} with #{__ir_message_type_name__(b)} failed")
-    end
+    return 2147483647 if c.nil?
     c <=> 0
   end
   private :__r_less__
@@ -13498,10 +13503,12 @@ class Enumerator
         ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
       end
       unless args.empty?
-        block = args[0]
-        unless block.is_a?(::Proc)
-          ::Kernel.raise(::TypeError, "wrong argument type #{block.class} (expected Proc)")
+        unless args[0].is_a?(::Proc)
+          ::Kernel.raise(::TypeError, "wrong argument type #{args[0].class} (expected Proc)")
         end
+        # rb_warn, which -W0 silences and plain ruby (no -w) still prints
+        warn "given block not used", uplevel: 1 if block && !$VERBOSE.nil?
+        block = args[0]
       end
       if frozen?
         ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
