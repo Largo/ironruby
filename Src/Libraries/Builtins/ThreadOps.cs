@@ -1023,14 +1023,7 @@ namespace IronRuby.Builtins {
             // MRI delivers the interrupt to the thread's running fiber, and each fiber here is a
             // CLR thread of its own.
             RubyThreadInfo ownerInfo = RubyThreadInfo.FromThread(thread);
-
-            // A thread Thread#kill has been called on dies of the kill, as MRI's does: a raise that
-            // comes in behind it is dropped, whether the kill is still parked or already unwinding
-            // the thread. Parked, it replaced the kill; in flight, it replaced the ThreadExitSignal
-            // and the thread died of the raise, which #join then raised again.
-            if (ownerInfo.ExitRequested) {
-                return;
-            }
+            Thread owner = thread;
 
             RubyThreadInfo info;
             RubyThreadStatus status;
@@ -1038,6 +1031,16 @@ namespace IronRuby.Builtins {
                 Thread activeFiber = ownerInfo.ActiveFiberThread;
                 if (activeFiber != null && activeFiber.IsAlive) {
                     thread = activeFiber;
+                }
+
+                // A raise behind a Thread#kill that has not reached the thread yet is dropped: MRI's
+                // rb_threadptr_to_kill clears the interrupts queued behind the kill when it takes it.
+                // Parked, the raise would replace the kill. Once the kill has been taken and the thread
+                // is running its ensure clauses ("aborting"), a raise is delivered there as anywhere,
+                // wakes a sleep, and the thread dies of it unless it is rescued (test_thread's
+                // test_thread_status_raise_after_kill).
+                if (ownerInfo.ExitRequested && (RubyUtils.IsKillPending(owner) || RubyUtils.IsKillPending(thread))) {
+                    return;
                 }
                 info = RubyThreadInfo.FromThread(thread);
                 status = GetStatus(thread);

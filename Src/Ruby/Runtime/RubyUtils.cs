@@ -2318,6 +2318,18 @@ namespace IronRuby.Runtime {
         public static Func<bool> AsyncExceptionRedirectHook;
 
         /// <summary>The exception parked for a thread, left in place. Null when there is none.</summary>
+        /// <summary>
+        /// Whether a Thread#kill of the thread has not reached it yet: it is parked, or waits behind a
+        /// parked Thread#raise. Once the thread has taken it, it is unwinding (MRI's "aborting").
+        /// </summary>
+        public static bool IsKillPending(Thread/*!*/ thread) {
+            using (new UninterruptedLock(_pendingAsyncExceptions)) {
+                Exception e;
+                return (_pendingAsyncExceptions.TryGetValue(thread, out e) && e is ThreadExitSignal) ||
+                    _killsBehindRaise.Contains(thread);
+            }
+        }
+
         public static Exception PeekPendingAsyncException(Thread/*!*/ thread) {
             using (new UninterruptedLock(_pendingAsyncExceptions)) {
                 Exception e;
