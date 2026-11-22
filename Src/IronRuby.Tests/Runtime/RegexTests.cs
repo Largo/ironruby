@@ -189,7 +189,7 @@ s = 'hello world'.dup; mds = []; s.scan(/o(.)/) { mds << $~ }; s.clear; mds.each
             TestCorrectPatternTranslation(@"[\001-\7]", "[\u0001-\u0007]");
             TestCorrectPatternTranslation(@"[\u{2a}-\u{2b}]", "[\\*-\\+]");
             TestCorrectPatternTranslation(@"[x-]", @"[x\-]");
-            TestCorrectPatternTranslation(@"[---]", @"[\--\-]");
+            TestCorrectPatternTranslation(@"[---]", @"[\u002d-\u002d]");
             TestCorrectPatternTranslation(@"[\u{1 2 40}-\u{60 3 4}]", "[\u0001\u0002\u0040-\u0060\u0003\u0004]");
             TestCorrectPatternTranslation(@"[\u{1 2 40}-\u0060]", "[\u0001\u0002\u0040-\u0060]");
             TestCorrectPatternTranslation(@"[\u{1 2 40}-z]", "[\u0001\u0002\u0040-z]");
