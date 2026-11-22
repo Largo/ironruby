@@ -620,6 +620,49 @@ RegexpError
             Assert(field.GetValue(d) == compiled);
             Assert(d.Match(input).GetGroupStart(1) == 10); // the last "tr"
         }
+
+        /// <summary>
+        /// A character property pins a regexp to the encoding of its source, as MRI's
+        /// rb_reg_preprocess does (Regexp::FIXEDENCODING, and no match against a string of another
+        /// encoding that is not ASCII only); a property name an encoding does not know is a RegexpError.
+        /// Util/regexp-property-matrix.rb has the rest.
+        /// </summary>
+        public void Regex_PropertyEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def d(r) = [r.options, r.encoding, r.fixed_encoding?]
+t('literal') { d(/\p{L}/) + [/\p{L}/.to_s.encoding] }
+t('escaped') { d(/\\p{L}/) }
+t('comment') { [d(/(?#\p{L})x/), d(/x # \p{L}
+/x)] }
+t('union') { d(Regexp.union(/x/, /\p{L}/)) }
+t('interpolation') { d(/#{/x/}\p{N}/) }
+t('binary') { d(Regexp.new('\p{Alpha}'.b)) }
+t('match euc-jp') { [0xa4a2].pack('n').force_encoding('EUC-JP') =~ /\p{L}/ }
+t('match ascii only') { 'ab'.encode('EUC-JP') =~ /\p{L}/ }
+t('match utf-16') { 'ab'.encode('UTF-16LE') =~ /\p{L}/ }
+t('name in us-ascii') { Regexp.new('\p{L}'.encode('US-ASCII')) }
+t('name in euc-jp') { [Regexp.new('\p{Hiragana}'.encode('EUC-JP')).encoding, (Regexp.new('\p{Hangul}'.encode('EUC-JP')) rescue $!.message)] }
+t('marshal') { d(Marshal.load(Marshal.dump(/\p{L}/))) }
+", @"
+literal: [16, #<Encoding:UTF-8>, true, #<Encoding:UTF-8>]
+escaped: [0, #<Encoding:US-ASCII>, false]
+comment: [[0, #<Encoding:US-ASCII>, false], [2, #<Encoding:US-ASCII>, false]]
+union: [16, #<Encoding:UTF-8>, true]
+interpolation: [16, #<Encoding:UTF-8>, true]
+binary: [16, #<Encoding:BINARY (ASCII-8BIT)>, true]
+match euc-jp: [Encoding::CompatibilityError, ""incompatible encoding regexp match (UTF-8 regexp with EUC-JP string)""]
+match ascii only: 0
+match utf-16: [Encoding::CompatibilityError, ""incompatible encoding regexp match (UTF-8 regexp with UTF-16LE string)""]
+name in us-ascii: [RegexpError, ""invalid character property name {L}: /\\p{L}/""]
+name in euc-jp: [#<Encoding:EUC-JP>, ""invalid character property name {Hangul}: /\\p{Hangul}/""]
+marshal: [16, #<Encoding:UTF-8>, true]
+");
+        }
     }
 }
 

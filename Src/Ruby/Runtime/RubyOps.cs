@@ -3268,26 +3268,36 @@ namespace IronRuby.Runtime {
         
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexM(MutableString str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringM(str1, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InSourceEncoding(CreateMutableStringM(str1, encoding), encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringLM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InSourceEncoding(CreateMutableStringLM(str1, str2, encoding), encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexML(MutableString str1, string/*!*/ str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringML(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InSourceEncoding(CreateMutableStringML(str1, str2, encoding), encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringMM(str1, str2, encoding), options); };
+            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InSourceEncoding(CreateMutableStringMM(str1, str2, encoding), encoding), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
+        }
+
+        // MRI builds an interpolated regexp in the encoding of the source it was written in
+        // (rb_reg_preprocess_dregexp): a part such as /x/.to_s is US-ASCII, and does not get to
+        // make /#{/x/}\p{N}/ US-ASCII where the file is UTF-8.
+        private static MutableString/*!*/ InSourceEncoding(MutableString/*!*/ pattern, RubyEncoding/*!*/ encoding) {
+            if (pattern.Encoding != encoding && encoding.IsAsciiIdentity && encoding != RubyEncoding.Binary && pattern.IsAscii()) {
+                pattern.ForceEncoding(encoding);
+            }
+            return pattern;
         }
 
         [Emitted]
