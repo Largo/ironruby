@@ -648,6 +648,8 @@ t('match utf-16') { 'ab'.encode('UTF-16LE') =~ /\p{L}/ }
 t('name in us-ascii') { Regexp.new('\p{L}'.encode('US-ASCII')) }
 t('name in euc-jp') { [Regexp.new('\p{Hiragana}'.encode('EUC-JP')).encoding, (Regexp.new('\p{Hangul}'.encode('EUC-JP')) rescue $!.message)] }
 t('marshal') { d(Marshal.load(Marshal.dump(/\p{L}/))) }
+t('fragment') { d(/#{'\p{Alpha}'.encode('US-ASCII')}/) }
+t('fragments') { /#{'\p{Alpha}'.encode('US-ASCII')}\p{L}/ }
 ", @"
 literal: [16, #<Encoding:UTF-8>, true, #<Encoding:UTF-8>]
 escaped: [0, #<Encoding:US-ASCII>, false]
@@ -661,6 +663,8 @@ match utf-16: [Encoding::CompatibilityError, ""incompatible encoding regexp matc
 name in us-ascii: [RegexpError, ""invalid character property name {L}: /\\p{L}/""]
 name in euc-jp: [#<Encoding:EUC-JP>, ""invalid character property name {Hangul}: /\\p{Hangul}/""]
 marshal: [16, #<Encoding:UTF-8>, true]
+fragment: [16, #<Encoding:US-ASCII>, true]
+fragments: [RegexpError, ""encoding mismatch in dynamic regexp : US-ASCII and UTF-8""]
 ");
         }
     }

@@ -45,6 +45,23 @@ t("interpolate re") { d(/#{a}y/) }
 t("interpolate prop") { d(/#{b}\p{N}/) }
 t("interpolate plain") { d(/#{b}y/) }
 t("new re") { d(Regexp.new(a)) }
+# each interpolated fragment is read in its own encoding (rb_reg_preprocess_dregexp)
+ascii_alpha = '\p{Alpha}'.encode("US-ASCII")
+ascii_l = '\p{L}'.encode("US-ASCII")
+ascii_x = "x".encode("US-ASCII")
+ascii_u = ("\\" + "u3042").encode("US-ASCII")
+t("fragment ascii prop") { d(/#{ascii_alpha}/) }
+t("fragment ascii L") { d(/#{ascii_l}/) }
+t("fragments x x prop") { d(/#{ascii_x}#{ascii_x}#{ascii_alpha}/) }
+t("fragments x x L") { d(/#{ascii_x}#{ascii_x}#{ascii_l}/) }
+t("fragments literal then x x L") { d(/a#{ascii_x}#{ascii_x}#{ascii_l}/) }
+t("fragments x x x literal prop") { d(/#{ascii_x}#{ascii_x}#{ascii_x}\p{N}/) }
+t("fragments ascii prop and euc-jp prop") { d(/#{ascii_alpha}#{'\p{Alpha}'.encode("EUC-JP")}/) }
+t("fragments ascii prop and literal prop") { d(/#{ascii_alpha}\p{L}/) }
+t("fragments \\u escape") { d(/#{ascii_u}/) }
+t("fragments \\u escape and prop") { d(/#{ascii_u}#{ascii_alpha}/) }
+t("fragments euc-jp x and literal non-ascii") { d(/#{"x".encode("EUC-JP")}\u3042/) }
+t("fragments untouched") { s = ascii_alpha.dup; r = /#{s}/; [r.encoding, s.encoding] }
 t("new source") { d(Regexp.new(a.source)) }
 t("new binary") { d(Regexp.new('\p{Alpha}'.b)) }
 t("new ascii alpha") { d(Regexp.new('\p{Alpha}'.encode('US-ASCII'))) }
