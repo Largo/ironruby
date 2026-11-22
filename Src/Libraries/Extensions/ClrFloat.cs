@@ -672,7 +672,9 @@ namespace IronRuby.Builtins {
             switch (direction) {
                 case RoundDirection.Flooring: return NumericRounding.FloorInteger(big, nd);
                 case RoundDirection.Ceiling: return NumericRounding.CeilInteger(big, nd);
-                default: return NumericRounding.TruncateInteger(big, nd);
+                // MRI's flo_truncate is flo_floor for a positive number and flo_ceil for a negative
+                // one, so it refuses ndigits -2**31 as they do, where Integer#truncate answers 0
+                default: return self > 0.0 ? NumericRounding.FloorInteger(big, nd) : NumericRounding.CeilInteger(big, nd);
             }
         }
 

@@ -313,6 +313,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>Floors an integer to a multiple of 10**(-ndigits); ndigits must be negative.</summary>
         internal static object/*!*/ FloorInteger(BigInteger value, int ndigits) {
+            RequirePowerOfTen(ndigits);
             if (RoundsAwayEntirely(value, ndigits) && value.Sign >= 0) {
                 return ScriptingRuntimeHelpers.Int32ToObject(0);
             }
@@ -326,6 +327,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>Ceils an integer to a multiple of 10**(-ndigits); ndigits must be negative.</summary>
         internal static object/*!*/ CeilInteger(BigInteger value, int ndigits) {
+            RequirePowerOfTen(ndigits);
             if (RoundsAwayEntirely(value, ndigits) && value.Sign <= 0) {
                 return ScriptingRuntimeHelpers.Int32ToObject(0);
             }
@@ -424,6 +426,15 @@ namespace IronRuby.Builtins {
             // an Int32 when it fits and an Int64 otherwise, as every other Integer is represented
             result = Protocols.Normalize(rounded);
             return true;
+        }
+
+        // MRI's rb_int_floor and _ceil start with int_pow(10, -ndigits), whatever the number:
+        // -INT_MIN is INT_MIN again, a negative exponent, and that is "exponent is too large" -
+        // even for 0. (#round and #truncate ask int_round_zero_p first and answer 0.)
+        private static void RequirePowerOfTen(int ndigits) {
+            if (ndigits == Int32.MinValue) {
+                throw RubyExceptions.CreateArgumentError("exponent is too large");
+            }
         }
 
         private static BigInteger Pow10(int exponent) {
