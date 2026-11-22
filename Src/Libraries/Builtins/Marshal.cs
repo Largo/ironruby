@@ -24,6 +24,7 @@ using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Conversions;
 using System.Globalization;
 using System.Text;
 
@@ -108,6 +109,150 @@ namespace IronRuby.Builtins {
 
             public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
                 get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
+            }
+
+            private CallSite<Func<CallSite, object, object>> _getbyte;
+            private CallSite<Func<CallSite, object, object, object>> _read;
+            private CallSite<Func<CallSite, object, MutableString>> _stringCast;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ Getbyte {
+                get { return RubyUtils.GetCallSite(ref _getbyte, Context, "getbyte", 0); }
+            }
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ Read {
+                get { return RubyUtils.GetCallSite(ref _read, Context, "read", 1); }
+            }
+
+            public CallSite<Func<CallSite, object, MutableString>>/*!*/ StringCast {
+                get { return RubyUtils.GetCallSite(ref _stringCast, ConvertToStrAction.Make(Context)); }
+            }
+        }
+
+        /// <summary>
+        /// An IO-like object (a StringIO, a Zlib::GzipReader...) read the way MRI's marshal.c reads
+        /// one: a byte by #getbyte (r_byte) and a string's bytes by #read with their count
+        /// (r_bytes1), so that the object is left right after the dump. Only while the loader
+        /// knows that more is coming - the rest of an Array's, Hash's or Struct's elements, which
+        /// it counts in Readable as load_arg.readable does - does it read ahead, and then keeps
+        /// whatever #read gave beyond what it asked for (r_byte1_buffered, r_bytes1_buffered).
+        /// </summary>
+        internal sealed class IOSourceStream : Stream {
+            private const int DefaultBufferSize = 8192; // BUFSIZ
+
+            private readonly ReaderSites/*!*/ _sites;
+            private readonly object _io;
+            private byte[]/*!*/ _buffer = new byte[DefaultBufferSize];
+            private int _offset;
+            private int _length;
+
+            /// <summary>load_arg.readable: a lower bound on the records still to come.</summary>
+            internal long Readable;
+
+            internal IOSourceStream(ReaderSites/*!*/ sites, object io) {
+                _sites = sites;
+                _io = io;
+            }
+
+            public override bool CanRead { get { return true; } }
+            public override bool CanSeek { get { return false; } }
+            public override bool CanWrite { get { return false; } }
+            public override long Length { get { throw new NotSupportedException(); } }
+            public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+            public override void SetLength(long value) { throw new NotSupportedException(); }
+            public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+
+            private static Exception/*!*/ TooShort() {
+                return RubyExceptions.CreateArgumentError("marshal data too short");
+            }
+
+            private byte[]/*!*/ CallRead(long count) {
+                var site = _sites.Read;
+                object result = site.Target(site, _io, Protocols.Normalize(count));
+                if (result == null) {
+                    throw TooShort();
+                }
+                var cast = _sites.StringCast;
+                return cast.Target(cast, result).ToByteArray();
+            }
+
+            public override int ReadByte() {
+                if (Readable > 0 || _length > 0) {
+                    if (_length == 0) {
+                        int readable = (int)Math.Min(Readable, _buffer.Length);
+                        byte[] data = CallRead(readable);
+                        if (data.Length < readable) {
+                            throw TooShort();
+                        }
+                        if (data.Length > _buffer.Length) {
+                            _buffer = new byte[data.Length];
+                        }
+                        Buffer.BlockCopy(data, 0, _buffer, 0, data.Length);
+                        _offset = 0;
+                        _length = data.Length;
+                    }
+                    _length--;
+                    return _buffer[_offset++];
+                }
+
+                var site = _sites.Getbyte;
+                object b = site.Target(site, _io);
+                if (b == null) {
+                    throw new EOFError("end of file reached");
+                }
+                if (b is MutableString str) {
+                    // NUM2CHR takes a String's first byte
+                    return str.IsEmpty ? 0 : str.GetByte(0);
+                }
+                if (b is int i) {
+                    return i & 0xff;
+                }
+                if (b is BigInteger big) {
+                    return (int)(big & 0xff);
+                }
+                throw RubyExceptions.CreateTypeConversionError(_sites.Context.GetClassDisplayName(b), "Integer");
+            }
+
+            public override int Read(byte[]/*!*/ buffer, int offset, int count) {
+                if (count == 0) {
+                    return 0;
+                }
+
+                if (Readable == 0 && _length == 0) {
+                    byte[] data = CallRead(count);
+                    if (data.Length != count) {
+                        throw TooShort();
+                    }
+                    Buffer.BlockCopy(data, 0, buffer, offset, count);
+                    return count;
+                }
+
+                if (count <= _length) {
+                    Buffer.BlockCopy(_buffer, _offset, buffer, offset, count);
+                    _offset += count;
+                    _length -= count;
+                    return count;
+                }
+
+                int buffered = _length;
+                int need = count - buffered;
+                long readable = Math.Min(Readable + 1, _buffer.Length);
+                byte[] more = CallRead(Math.Max(need, readable));
+                if (more.Length < need) {
+                    throw TooShort();
+                }
+                Buffer.BlockCopy(_buffer, _offset, buffer, offset, buffered);
+                Buffer.BlockCopy(more, 0, buffer, offset + buffered, need);
+
+                int rest = more.Length - need;
+                if (rest > _buffer.Length) {
+                    _buffer = new byte[rest];
+                }
+                Buffer.BlockCopy(more, need, _buffer, 0, rest);
+                _offset = 0;
+                _length = rest;
+                return count;
             }
         }
 
@@ -1209,6 +1354,16 @@ namespace IronRuby.Builtins {
 
             internal bool FromStream { get; set; }
 
+            // An IO-like source, read as MRI reads one; null for a String or an IO.
+            internal IOSourceStream IOSource { get; set; }
+
+            // load_arg.readable, which only an IO-like source has a use for.
+            private void AddReadable(long delta) {
+                if (IOSource != null) {
+                    IOSource.Readable += delta;
+                }
+            }
+
             private RubyContext/*!*/ Context {
                 get { return _globalScope.Context; }
             }
@@ -1493,18 +1648,24 @@ namespace IronRuby.Builtins {
                 if (count < 0) {
                     throw RubyExceptions.CreateArgumentError("negative array size (or size too big)");
                 }
+                AddReadable(count - 1);
                 for (int i = 0; i < count; i++) {
                     result.Add(ReadAnObject(false));
+                    AddReadable(-1);
                 }
+                AddReadable(1);
                 return result;
             }
 
             private Hash/*!*/ ReadHash(int typeFlag, Hash/*!*/ result) {
                 int count = ReadInt32();
+                AddReadable((count - 1) * 2L);
                 for (int i = 0; i < count; i++) {
                     object key = ReadAnObject(false);
                     result[key] = ReadAnObject(false);
+                    AddReadable(-2);
                 }
+                AddReadable(2);
                 if (typeFlag == '}') {
                     result.DefaultValue = ReadAnObject(false);
                 }
@@ -1940,13 +2101,16 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", Context.GetClassOf(obj).Name);
                 }
 
+                AddReadable((count - 1) * 2L);
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     if (name != names[i]) {
                         throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", theClass.Name, name, names[i]);
                     }
                     obj[i] = ReadAnObject(false);
+                    AddReadable(-2);
                 }
+                AddReadable(2);
 
                 return obj;
             }
@@ -1962,13 +2126,16 @@ namespace IronRuby.Builtins {
                 if (members != null && count != members.Count) {
                     throw RubyExceptions.CreateTypeError("struct {0} not compatible (struct size differs)", dataClass.Name);
                 }
+                AddReadable((count - 1) * 2L);
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     if (members != null && name != members[i].ToString()) {
                         throw RubyExceptions.CreateTypeError("struct {0} not compatible (:{1} for :{2})", dataClass.Name, name, members[i]);
                     }
                     Context.SetInstanceVariable(instance, RubyUtils.GetHiddenInstanceVariableName(name), ReadAnObject(false));
+                    AddReadable(-2);
                 }
+                AddReadable(2);
                 Context.FreezeObject(instance);
                 return instance;
             }
@@ -2433,6 +2600,9 @@ namespace IronRuby.Builtins {
                         throw new EOFError("end of file reached");
                     }
                     throw RubyExceptions.CreateArgumentError("marshal data too short", e);
+                } catch (EOFError) {
+                    // an IO-like source's #getbyte answered nil (MRI's r_byte: rb_eof_error)
+                    throw;
                 } catch (IOException e) {
                     throw RubyExceptions.CreateArgumentError("marshal data too short", e);
                 }
@@ -2574,18 +2744,16 @@ namespace IronRuby.Builtins {
             object block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
 
-            Stream stream = null;
-            if (source != null && Protocols.RespondTo(respondToStorage, source, "getbyte")) {
-                stream = RubyIOOps.CreateIOWrapper(respondToStorage, source, FileAccess.Read);
-            }
-            if (stream == null || !stream.CanRead) {
+            if (source == null || !Protocols.RespondTo(respondToStorage, source, "getbyte") ||
+                !Protocols.RespondTo(respondToStorage, source, "read")) {
                 throw RubyExceptions.CreateTypeError("instance of IO needed");
             }
 
             SetBinaryMode(sites.Binmode, respondToStorage, source);
 
+            var stream = new IOSourceStream(sites, source);
             BinaryReader reader = new BinaryReader(stream);
-            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
+            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true, IOSource = stream };
             return loader.Load();
         }
 
