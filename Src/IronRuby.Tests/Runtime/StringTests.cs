@@ -963,5 +963,92 @@ round trip: [2217845808, true]
 %c EUC-KR 0xa1a1: a1a1
 ");
         }
+
+        /// <summary>
+        /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
+        /// messages), the encoding of the format says how long the character of the number is, "invalid character"
+        /// when it has no length for it, and that many bytes of the number are put without asking whether they are a
+        /// well formed character - "\x80" in Shift_JIS, "\x01\x00" in EUC-KR, a surrogate's three bytes in UTF-8. A
+        /// single byte encoding refuses a number above 0xFF with a RangeError instead (Util/format-c-matrix.rb).
+        /// </summary>
+        public void Format_Char2() {
+            TestOutput(@"
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.is_a?(String) ? ""#{v.encoding} #{v.unpack1('H*')}"" : v.inspect}""
+end
+{ 'UTF-8' => [0x41, 0x3042, 0xd800, 0x10ffff, 0x110000], 'US-ASCII' => [0x7f, 0x80, 0x100], 'BINARY' => [0xff, 0x100],
+  'ISO-8859-1' => [0xe9, 0x100], 'Shift_JIS' => [0x80, 0x81, 0xa1, 0x100, 0x3042, 0x8140, 0x81fd, 0x10000],
+  'EUC-JP' => [0x80, 0x8140, 0x8ee0, 0xa1a1, 0x8fa1a1, 0x10000], 'EUC-KR' => [0x80, 0x100, 0xa1a1, 0x10000],
+  'GB18030' => [0x100, 0x10000, 0x7fffffff], 'EUC-TW' => [0x8ea1a1], 'Emacs-Mule' => [0x80, 0x8100, 0x10ffff, 0x7fffffff],
+  'CESU-8' => [0x10000], 'UTF8-MAC' => [0x3042] }.each do |e, list|
+  list.each { |n| t(""#{e} #{n.to_s(16)}"") { '<%c>'.dup.force_encoding(e) % n } }
+end
+[2**31, -2**31, -2**31 - 1, 2**64, -1, 65.9, 1e20, :a, 'xy', ''].each { |v| t(""arg #{v.inspect}"") { '%c' % [v] } }
+t('width') { '%3c|%-3c|' % [0x3042, 0x41] }
+t('width Shift_JIS') { format('%-3c|'.dup.force_encoding('Shift_JIS'), 0xa1) }
+t('then %s') { format('%c%s'.dup.force_encoding('Shift_JIS'), 0xa1, [0x3042].pack('U')) }
+t('then %s US-ASCII') { format('%c%s'.dup.force_encoding('US-ASCII'), 0xa1, [0x3042].pack('U')) }
+t('%s then %c') { format('%s%c'.dup.force_encoding('Shift_JIS'), [0x3042].pack('U'), 0xa1).unpack1('H*') }
+t('bytes kept') { [format('<%c>'.dup.force_encoding('EUC-JP'), 0x8fa2b7), format('<%c>'.dup.force_encoding('CESU-8'), 0xdc80)].map { _1.unpack1('H*') } }
+", @"
+UTF-8 41: UTF-8 3c413e
+UTF-8 3042: UTF-8 3ce381823e
+UTF-8 d800: UTF-8 3ceda0803e
+UTF-8 10ffff: UTF-8 3cf48fbfbf3e
+UTF-8 110000: [ArgumentError, ""invalid character""]
+US-ASCII 7f: US-ASCII 3c7f3e
+US-ASCII 80: ASCII-8BIT 3c803e
+US-ASCII 100: [RangeError, ""256 out of char range""]
+BINARY ff: ASCII-8BIT 3cff3e
+BINARY 100: [RangeError, ""256 out of char range""]
+ISO-8859-1 e9: ISO-8859-1 3ce93e
+ISO-8859-1 100: [RangeError, ""256 out of char range""]
+Shift_JIS 80: Shift_JIS 3c803e
+Shift_JIS 81: [ArgumentError, ""invalid character""]
+Shift_JIS a1: Shift_JIS 3ca13e
+Shift_JIS 100: [ArgumentError, ""invalid character""]
+Shift_JIS 3042: Shift_JIS 3c30423e
+Shift_JIS 8140: Shift_JIS 3c81403e
+Shift_JIS 81fd: [ArgumentError, ""invalid character""]
+Shift_JIS 10000: [ArgumentError, ""invalid character""]
+EUC-JP 80: [ArgumentError, ""invalid character""]
+EUC-JP 8140: [ArgumentError, ""invalid character""]
+EUC-JP 8ee0: EUC-JP 3c8ee03e
+EUC-JP a1a1: EUC-JP 3ca1a13e
+EUC-JP 8fa1a1: EUC-JP 3c8fa1a13e
+EUC-JP 10000: [ArgumentError, ""invalid character""]
+EUC-KR 80: EUC-KR 3c803e
+EUC-KR 100: EUC-KR 3c01003e
+EUC-KR a1a1: EUC-KR 3ca1a13e
+EUC-KR 10000: [ArgumentError, ""invalid character""]
+GB18030 100: GB18030 3c01003e
+GB18030 10000: GB18030 3c0100003e
+GB18030 7fffffff: GB18030 3c7fffffff3e
+EUC-TW 8ea1a1: EUC-TW 3c8ea1a13e
+Emacs-Mule 80: [ArgumentError, ""invalid character""]
+Emacs-Mule 8100: Emacs-Mule 3c81003e
+Emacs-Mule 10ffff: Emacs-Mule 3c10ff3e
+Emacs-Mule 7fffffff: Emacs-Mule 3c7fffff3e
+CESU-8 10000: CESU-8 3ceda080edb0803e
+UTF8-MAC 3042: UTF8-MAC 3ce381823e
+arg 2147483648: [RangeError, ""integer 2147483648 too big to convert to 'int'""]
+arg -2147483648: [ArgumentError, ""invalid character""]
+arg -2147483649: [RangeError, ""integer -2147483649 too small to convert to 'int'""]
+arg 18446744073709551616: [RangeError, ""bignum too big to convert into 'long'""]
+arg -1: [ArgumentError, ""invalid character""]
+arg 65.9: UTF-8 41
+arg 1.0e+20: [RangeError, ""float 1e+20 out of range of integer""]
+arg :a: [TypeError, ""no implicit conversion of Symbol into Integer""]
+arg ""xy"": UTF-8 78
+arg """": UTF-8 
+width: UTF-8 2020e381827c4120207c
+width Shift_JIS: Shift_JIS a120207c
+then %s: [Encoding::CompatibilityError, ""incompatible character encodings: Shift_JIS and UTF-8""]
+then %s US-ASCII: [Encoding::CompatibilityError, ""incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8""]
+%s then %c: US-ASCII 65333831383263326131
+bytes kept: [""3c8fa2b73e"", ""3cedb2803e""]
+");
+        }
     }
 }

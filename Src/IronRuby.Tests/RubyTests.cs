@@ -1371,6 +1371,7 @@ namespace IronRuby.Tests {
                 String_UndumpUnicodeEncoding1,
                 String_OrdWide1,
                 Integer_ChrMultibyte1,
+                Format_Char2,
                 Marshal_RangeRecord1,
                 Marshal_LoadedClasses1,
                 Time_NewDstStdZone1,
