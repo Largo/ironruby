@@ -4820,9 +4820,14 @@ namespace IronRuby.Builtins {
         /// and "\xA2\xAE".succ is "\xA2\xAF", not the next character the table knows.
         /// </summary>
         private static int SuccCharLength(RubyEncoding/*!*/ encoding, byte[]/*!*/ bytes, int start, int count) {
+            // No encoding has a character longer than 8 bytes (MRI's longest is GB18030's and
+            // UTF-8's 4), so the window copies no more than that: succ measures every character of
+            // a string without alphanumerics, and copying the rest of the string each time made it
+            // quadratic.
+            int windowCount = Math.Min(count, 8);
             int maxLength;
-            byte[] window = start == 0 ? bytes : SliceBytes(bytes, start, count);
-            int length = encoding.GetPreciseCharacterLength(window, count, out maxLength);
+            byte[] window = start == 0 ? bytes : SliceBytes(bytes, start, windowCount);
+            int length = encoding.GetPreciseCharacterLength(window, windowCount, out maxLength);
             if (maxLength > 0) {
                 return length < 0 ? -1 : length;
             }
