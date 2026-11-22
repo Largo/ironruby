@@ -3500,12 +3500,41 @@ namespace IronRuby.Runtime {
             return _currentException = e;
         }
 
-        internal RubyArray GetCurrentExceptionBacktrace() {
-            // Under certain circumstances MRI invokes "backtrace" method, but it is quite unstable (crashes sometimes).
-            // Therefore we don't call the method and return the backtrace immediately.
+        /// <summary>
+        /// $@ is MRI's rb_get_backtrace($!): the stored backtrace unless the exception's class
+        /// overrides #backtrace, in which case whatever that answers, checked as rb_check_backtrace
+        /// does (nil, a String, or an Array of Strings).
+        /// </summary>
+        internal object GetCurrentExceptionBacktrace() {
             Exception e = _currentException;
-            return (e != null) ? RubyExceptionData.GetInstance(e).Backtrace : null;
+            if (e == null) {
+                return null;
+            }
+
+            var method = GetClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo && method.DeclaringModule == ExceptionClass) {
+                return RubyExceptionData.GetInstance(e).Backtrace;
+            }
+
+            if (_backtraceSite == null) {
+                System.Threading.Interlocked.CompareExchange(ref _backtraceSite,
+                    CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "backtrace", 0)), null);
+            }
+            object backtrace = _backtraceSite.Target(_backtraceSite, e);
+            if (backtrace == null) {
+                return null;
+            }
+            if (backtrace is MutableString) {
+                return RubyArray.Create(backtrace);
+            }
+            var array = backtrace as RubyArray;
+            if (array == null || !CollectionUtils.TrueForAll(array, (item) => item is MutableString)) {
+                throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
+            }
+            return array;
         }
+
+        private CallSite<Func<CallSite, object, object>> _backtraceSite;
 
         internal RubyArray SetCurrentExceptionBacktrace(object value) {
             // first check availability of the current exception:
