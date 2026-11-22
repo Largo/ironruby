@@ -1769,11 +1769,17 @@ namespace IronRuby.Builtins {
                 ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
                 RubyContext/*!*/ context,
                 RubyConverter/*!*/ self,
-                MutableString source,
-                [NotNull]MutableString/*!*/ destination,
+                [DefaultProtocol]MutableString source,
+                [DefaultProtocol, NotNull]MutableString/*!*/ destination,
                 [Optional]object byteOffset,
                 [Optional]object byteLimit,
                 [Optional]object options) {
+
+                // MRI's econv_primitive_convert reads the source and writes the destination in
+                // place, so the two cannot be one string
+                if (ReferenceEquals(source, destination)) {
+                    throw RubyExceptions.CreateArgumentError("cannot convert into the source string");
+                }
 
                 int? offset = ToOptionalInt(toInt, byteOffset);
                 int? limit = ToOptionalInt(toInt, byteLimit);
