@@ -2358,5 +2358,29 @@ Array
 2
 ");
         }
+
+        /// <summary>
+        /// A block a library method wrote in C# is MRI's C block: called after that method has returned, its break has
+        /// nowhere to go, which MRI calls an "unexpected break" ([ruby-dev:45041]); a Ruby block's is "from proc-closure".
+        /// </summary>
+        public void LibraryBlockOrphanBreak1() {
+            TestOutput(@"
+o = Object.new
+class << o
+  include Enumerable
+  attr_reader :block
+  def each(&block); @block = block; self; end
+end
+p o.first
+begin; o.block.call(1); rescue LocalJumpError => e; p e.message, e.reason; end
+def m; proc { break }; end
+begin; m.call; rescue LocalJumpError => e; p e.message; end
+", @"
+nil
+""unexpected break""
+:break
+""break from proc-closure""
+");
+        }
     }
 }
