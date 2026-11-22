@@ -1193,6 +1193,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **The whole gate for #239 (rounds eleven to twenty-eight, the review fixes, master at
+  7fb0cbcb merged in), 2026-11-22, on 9de71602 against 7fb0cbcb: PASS.** Run after the
+  merge, because the review fixes had had the tests and the matrices but no sweep and no
+  timing. IronRuby.Tests on both trees: the same one failure
+  (`Exception_CauseRaisedInClause1`), no other. Twenty-seven matrices under CRuby and
+  seven ways of running the branch (JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`,
+  `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, the ReadyToRun host): CRuby's output but for
+  the known differences that master has too (`int-matrix`'s Integer hashes, addresses in
+  `raise-` and `refinement-matrix`, the ReadyToRun host's missing `Range#each` frame in
+  `block-loop-matrix`); master at 7fb0cbcb differs from CRuby in `binding-lvar` (46 lines),
+  `jit` (26), `osr-array` (10) and `block-loop` (2), which the branch fixed. A million-deep
+  recursion through four of the cheaper frames is SystemStackError with the JIT on and
+  off; `ivar-stress.rb` three times OK; the fourteen benchmarks verify; `app-shapes.rb`
+  prints CRuby's checksums with the JIT on and off; `Util/ci-sweep.sh` of all five suites,
+  32,285 examples, nothing the known-failures list does not name.
+  Timing, against 7fb0cbcb: AWFY geomean 0.864 and 0.848 in the two orders (NBody 0.46,
+  Bounce 0.59, List 0.71-0.73, Havlak 0.86-0.87, Json 0.78-0.85, Richards 0.85-0.92), no
+  benchmark more than 5% slower in both orders (Towers 1.04 and 1.01, Queens 1.02 and
+  1.01); bytes geomean 0.764 (NBody 1.36 GB -> 152 MB, Havlak 2.59 -> 1.87 GB, DeltaBlue
+  24.5 -> 15.7 MB, Queens 41 -> 30 MB, Bounce 11.0 -> 7.3 MB). The micro table: fourteen
+  lines faster in both orders (`rangeeach` 0.39, `abs` 0.67-0.78, `blkattr` 0.67-0.70,
+  `s_each1`, `s_times1`, `s_map1`/`2`/`4`, `veach1`/`2`, `ivar_rw`, `while10`), none
+  slower in both. `app-shapes.rb`, five rounds each way: `erb_result` 0.28 and 0.30,
+  `ostruct` 0.89-0.91; `gem_requirement` 1.13 and 1.11, and in eight more rounds each way
+  alone 0.88 and 1.03 with the ranges inside each other and 14 methods specialized
+  against 12. A loop and a method folding a constant beside a thread that extends objects
+  and defines constants, singleton methods and classes: 936-1163 ms against 1163-1381,
+  invalidations 0 against 8. Start-up on the ReadyToRun host, ten runs: `-e 1`, `gem list`,
+  `irb` within 4% on minima and medians; `gem --version` 1.13 and `require "irb"` 1.00 on
+  minima at first, then thirty alternating runs each: medians 0.975 and 0.996, the first
+  quartiles 1.02 and 1.00, the minima single samples.
+
 - **Gate of 2026-11-21 for perf/jbreak**: the branch at 9bc85a93 against master at 8251113c,
   Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 34 matrices
   in five modes: 165 same; `int-matrix.rb` prints sixteen `Integer#hash` values, which are seeded
