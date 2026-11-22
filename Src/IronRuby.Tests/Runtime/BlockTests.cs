@@ -2389,6 +2389,29 @@ p z { |a, b = 0| [a, b] }
         }
 
         /// <summary>
+        /// A local variable `it' that a block using `it' assigns is a variable of its own: the parameter stays what it was
+        /// for Binding#implicit_parameter_get, and eval sees the local.
+        /// </summary>
+        public void ItParameterLocal1() {
+            TestOutput(@"
+require 'ruby4'
+p(1.then { it; eval('it') rescue $!.class })
+p(1.then { it; binding.local_variables })
+p(1.then { it; it = 5; [it, binding.local_variables, binding.implicit_parameters, binding.implicit_parameter_get(:it), eval('it')] })
+p(1.then { x = it; it = 5; it += 1; [x, it] })
+p(3.then { [it, 2.then { it = 7; it }, it] })
+p proc { that = it; it = nil; [that, it] }.call(1)
+", @"
+NameError
+[]
+[5, [:it], [:it], 1, 5]
+[1, 6]
+[3, 7, 3]
+[1, nil]
+");
+        }
+
+        /// <summary>
         /// A block a library method wrote in C# is MRI's C block: called after that method has returned, its break has
         /// nowhere to go, which MRI calls an "unexpected break" ([ruby-dev:45041]); a Ruby block's is "from proc-closure".
         /// </summary>

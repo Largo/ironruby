@@ -766,7 +766,7 @@ namespace IronRuby.Prism {
                 case Pm.LocalVariableReadNode read:
                     return CurrentScope.ResolveOrAddVariable(read.Name, span);
                 case Pm.ItLocalVariableReadNode _:
-                    return CurrentScope.ResolveOrAddVariable("it", span);
+                    return CurrentScope.ResolveOrAddVariable(ItParameterName, span);
                 case Pm.LocalVariableWriteNode write:
                     return new SimpleAssignmentExpression(
                         CurrentScope.ResolveOrAddVariable(write.Name, span), Expr(write.Value), null, span);
@@ -2070,12 +2070,16 @@ namespace IronRuby.Prism {
                 }
                 case Pm.ItParametersNode it: {
                     var span = Span(it);
-                    var mandatory = new LeftValue[] { DefineParameter("it", span) };
+                    // A local the block assigns to is another variable that is also called `it' (prism tells
+                    // the reads of the parameter from those of the local), so the parameter is kept under a
+                    // name of its own: `it = nil' leaves Binding#implicit_parameter_get(:it) alone, and eval
+                    // sees the local.
+                    var mandatory = new LeftValue[] { DefineParameter(ItParameterName, span) };
                     // `it` is a parameter without a name as far as #parameters is concerned
                     var declared = new[] { new RubyParameterSignature.Parameter("req", null) };
                     return new Parameters(mandatory, 1, null, null, null, span) {
                         Signature = new RubyParameterSignature(declared, 1, 0, 0, false, 0, false, false) {
-                            ImplicitParameterNames = new[] { "it" }
+                            ImplicitParameterNames = new[] { ItParameterName }
                         }
                     };
                 }
@@ -3060,6 +3064,12 @@ namespace IronRuby.Prism {
         // ---- pattern matching (case/in), lowered to tests + bindings ----
 
         private const string ForwardingRestName = "?fwd?";
+
+        /// <summary>
+        /// Where a block's `it' is kept: a compiler name, like the ones below, which no local variable can have
+        /// (see Binding#implicit_parameter_get).
+        /// </summary>
+        public const string ItParameterName = RubyParameterSignature.ItParameterName;
         internal const string AnonymousKeywordRestName = "?kwrest?";
         private const string ForwardingBlockName = "?fwdblk?";
 
