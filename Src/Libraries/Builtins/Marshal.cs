@@ -750,14 +750,19 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteIVarPairs(object/*!*/ obj, string[]/*!*/ names) {
-                var identifierEncoding = _context.GetIdentifierEncoding();
-                foreach (string name in names) {
-                    object value;
-                    if (!_context.TryGetInstanceVariable(obj, name, out value)) {
-                        value = null;
+                // The values are taken before any is written, as MRI's rb_ivar_foreach_buffered takes
+                // them: a marshal_dump one of them runs may remove another, which is still written
+                // with the value it had ([Bug #15968]).
+                object[] values = new object[names.Length];
+                for (int i = 0; i < names.Length; i++) {
+                    if (!_context.TryGetInstanceVariable(obj, names[i], out values[i])) {
+                        values[i] = null;
                     }
-                    WriteSymbol(name, identifierEncoding);
-                    WriteAnObject(value);
+                }
+                var identifierEncoding = _context.GetIdentifierEncoding();
+                for (int i = 0; i < names.Length; i++) {
+                    WriteSymbol(names[i], identifierEncoding);
+                    WriteAnObject(values[i]);
                 }
             }
 
