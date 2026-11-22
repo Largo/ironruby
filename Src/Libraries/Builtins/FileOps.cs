@@ -1126,26 +1126,43 @@ namespace IronRuby.Builtins {
         [RubyMethod("join", RubyMethodAttributes.PublicSingleton)]
         public static MutableString Join(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, params object[]/*!*/ parts) {
             MutableString result = null;
-            Dictionary<object, bool> visitedLists = null;
-            var worklist = new Stack<object>();
             int current = 0;
-            MutableString str;
+            JoinList(toPath, parts, ref result, ref current, null);
+            return result ?? MutableString.CreateEmpty();
+        }
 
-            Push(worklist, parts);
-            while (worklist.Count > 0) {
-                object part = worklist.Pop();
-                var list = part as IList;
-                if (list != null) {
-                    if (list.Count == 0) {
+        /// <summary>
+        /// MRI's rb_file_join over one array. The Strings in it are checked before any element
+        /// is converted, and each element is read when its turn comes rather than up front: a
+        /// #to_path may change what the array holds after it, and what it put there is joined
+        /// (and checked) - [ruby-core:48012].
+        /// </summary>
+        private static void JoinList(ConversionStorage<MutableString>/*!*/ toPath, IList/*!*/ list,
+            ref MutableString result, ref int current, Dictionary<object, bool> visitedLists) {
+
+            for (int i = 0; i < list.Count; i++) {
+                var s = list[i] as MutableString;
+                if (s != null) {
+                    Protocols.CheckPath(s);
+                }
+            }
+
+            for (int i = 0; i < list.Count; i++) {
+                object part = list[i];
+                MutableString str;
+                var nested = part as IList;
+                if (nested != null) {
+                    if (nested.Count == 0) {
                         str = MutableString.FrozenEmpty;
-                    } else if (visitedLists != null && visitedLists.ContainsKey(list)) {
+                    } else if (ReferenceEquals(nested, list) || (visitedLists != null && visitedLists.ContainsKey(nested))) {
                         throw RubyExceptions.CreateArgumentError("recursive array");
                     } else {
                         if (visitedLists == null) {
                             visitedLists = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
                         }
-                        visitedLists.Add(list, true);
-                        Push(worklist, list);
+                        visitedLists.Add(nested, true);
+                        JoinList(toPath, nested, ref result, ref current, visitedLists);
+                        visitedLists.Remove(nested);
                         continue;
                     }
                 } else if (part == null) {
@@ -1160,22 +1177,32 @@ namespace IronRuby.Builtins {
                 }
 
                 if (current > 0) {
-                    // Append negotiates the encodings, so the join of two EUC-JP paths
-                    // stays EUC-JP instead of decaying to binary.
+                    // MRI's fs_enc_check: the encodings have to be compatible, and where that
+                    // leaves US-ASCII the joined part's own encoding is kept, so "a" (US-ASCII)
+                    // joined with a Windows-1251 "b" is Windows-1251.
+                    RubyEncoding encoding = PathEncodingCheck(result, str);
                     AppendDirectoryName(result, str);
+                    result.ForceEncoding(encoding);
                 } else {
                     result = MutableString.CreateMutable(str.Encoding).Append(str);
                 }
                 current++;
             }
-
-            return result ?? MutableString.CreateEmpty();
         }
 
-        private static void Push(Stack<Object>/*!*/ stack, IList/*!*/ values) {
-            for (int i = values.Count - 1; i >= 0; i--) {
-                stack.Push(values[i]);
+        /// <summary>
+        /// MRI's fs_enc_check: rb_enc_check of the two paths, except that an answer of US-ASCII
+        /// gives way to the first path's encoding, or failing that the second's.
+        /// </summary>
+        private static RubyEncoding/*!*/ PathEncodingCheck(MutableString/*!*/ path1, MutableString/*!*/ path2) {
+            RubyEncoding encoding = path1.RequireCompatibleEncoding(path2);
+            if (encoding == RubyEncoding.Ascii) {
+                encoding = path1.Encoding;
+                if (encoding == RubyEncoding.Ascii) {
+                    encoding = path2.Encoding;
+                }
             }
+            return encoding;
         }
 
         private static void AppendDirectoryName(MutableString/*!*/ result, MutableString/*!*/ name) {
