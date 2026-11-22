@@ -166,6 +166,8 @@ namespace IronRuby.Runtime.Jit {
         private object ResolveConstant(ConstantVariable/*!*/ node) {
             var scope = _constantScope;
             if (scope == null) { throw Bail("constant without a scope: " + node.Name); }
+            // before resolving: a constant of the name set after this moves the code epoch (RubyContext.ConstantAppeared)
+            _context.ConstantFolded(node.Name);
             object value;
             RubyModule owner;
             string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner);

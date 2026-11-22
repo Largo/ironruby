@@ -49,10 +49,12 @@ class V
   def each_raise; (0..0).each { |i| raise ArgumentError, "x#{i}" }; end
   def each_throw; (0..0).each { |i| throw :t, @tag }; end
   def each_redo; n = 0; (0..0).each { |i| n += 1; redo if n < 3 }; n; end
+  # what W#each_zsuper's super() reaches
+  alias each_zsuper each
 end
 class W < V
-  def each; super; end
-  def each_zsuper; super(); end
+  def each; super; end              # zsuper
+  def each_zsuper; super(); end     # super() with no arguments, the block passed implicitly
 end
 
 $keep = []

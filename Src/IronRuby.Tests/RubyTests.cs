@@ -1384,6 +1384,7 @@ namespace IronRuby.Tests {
                 Marshal_LoadedClasses1,
                 Time_NewDstStdZone1,
                 Kernel_CloneSpecialConstants1,
+                Kernel_IsAModuleRequired1,
                 Struct_InspectMemberNames1,
                 Integer_BitwiseCoerce1,
                 Comparison_AnonymousClassName1,

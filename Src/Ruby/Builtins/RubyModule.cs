@@ -1774,7 +1774,8 @@ namespace IronRuby.Builtins {
                 // autoload that has not run: the file it loads assigning the constant is no reassignment)
                 _context.ConstantReassigned();
             } else {
-                _context.ConstantsChanged();
+                // new: it may shadow, for a folded read, a constant of the name found elsewhere
+                _context.ConstantAppeared(name);
             }
 
             // assigned by the file an autoload of the constant is running: kept by the autoload until it is done
@@ -3776,6 +3777,27 @@ namespace IronRuby.Builtins {
             }
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
+            MixinConstantsAppearedNoLock(oldPrepends, expanded);
+        }
+
+        /// <summary>
+        /// Mixins were added: the constants they declare may now be found before ones of the same names that a
+        /// read resolved elsewhere. One a compiled body folded moves the code epoch, as a new constant does
+        /// (RubyContext.ConstantAppeared); otherwise only the constant version moves.
+        /// </summary>
+        private void MixinConstantsAppearedNoLock(RubyModule/*!*/[]/*!*/ oldMixins, RubyModule/*!*/[]/*!*/ newMixins) {
+            Context.RequiresClassHierarchyLock();
+            foreach (RubyModule module in newMixins) {
+                if (Array.IndexOf(oldMixins, module) != -1 || module._constants == null) {
+                    continue;
+                }
+                foreach (var entry in module._constants) {
+                    if (!entry.Value.IsRemoved && _context.IsFoldedConstantName(entry.Key)) {
+                        _context.ConstantReassigned();
+                        return;
+                    }
+                }
+            }
             _context.ConstantsChanged();
         }
 
@@ -3922,8 +3944,9 @@ namespace IronRuby.Builtins {
                 } 
             }
 
-            MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantsChanged();
+            var oldMixins = _mixins;
+            MixinsUpdated(oldMixins, _mixins = expanded);
+            MixinConstantsAppearedNoLock(oldMixins, expanded);
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
@@ -3968,8 +3991,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            MixinsUpdated(_mixins, _mixins = expanded);
-            _context.ConstantsChanged();
+            var oldMixins = _mixins;
+            MixinsUpdated(oldMixins, _mixins = expanded);
+            MixinConstantsAppearedNoLock(oldMixins, expanded);
 
             if (!IsClass) {
                 PropagateMixinsToDependentsNoLock();
