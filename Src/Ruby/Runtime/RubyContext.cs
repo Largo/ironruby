@@ -3175,7 +3175,7 @@ namespace IronRuby.Runtime {
             }
 
             var result = new StringBuilder();
-            bool unicode = encoding.IsUnicodeEncoding;
+            bool unicode = encoding.HasUnicodeCodePoints;
             var characters = str.GetCharacters();
             while (characters.MoveNext()) {
                 var c = characters.Current;

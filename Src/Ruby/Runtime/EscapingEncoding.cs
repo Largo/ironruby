@@ -62,8 +62,11 @@ namespace IronRuby.Runtime {
             return c >= (char)0xDC80 && c <= (char)0xDCFF;
         }
 
-        /// <summary>The longest character any encoding used here produces.</summary>
-        private const int MaxSequenceLength = 4;
+        /// <summary>
+        /// The longest character any encoding used here produces: CESU-8's surrogate pairs are six
+        /// bytes.
+        /// </summary>
+        private const int MaxSequenceLength = 6;
 
         #region Decoding
 

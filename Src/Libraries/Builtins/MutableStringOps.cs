@@ -1350,7 +1350,7 @@ namespace IronRuby.Builtins {
         }
 
         private static long NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
-            if (encoding.IsUnicodeEncoding || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
+            if (encoding.HasUnicodeCodePoints || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
                 return codepoint;
             }
             // four bytes with the first above 0x7F - GB18030's, EUC-TW's - do not fit an int:
@@ -2234,6 +2234,12 @@ namespace IronRuby.Builtins {
                 return InspectForeignEncoding(self, resultEncoding);
             }
 
+            // CESU-8 and UTF-8's carrier variants spell even their ASCII control characters as
+            // Unicode's, as UTF-8 does: "\x7F".force_encoding("CESU-8").inspect is "\u007F".
+            if (self.Encoding.HasUnicodeCodePoints && self.Encoding != RubyEncoding.UTF8 && self.Encoding.IsAsciiIdentity) {
+                return InspectForeignEncoding(self, resultEncoding);
+            }
+
             // Note that "self" could be a subclass of MutableString, but the return value should
             // always be just a MutableString
             return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), resultEncoding);
@@ -2277,7 +2283,9 @@ namespace IronRuby.Builtins {
                         AppendByteEscape(result, b);
                     }
                 }
-            } else if (encoding.IsUnicodeEncoding) {
+            } else if (encoding.HasUnicodeCodePoints) {
+                // CESU-8 and UTF-8's carrier variants too: their characters are Unicode's, and
+                // rb_str_inspect spells them \uXXXX as it does UTF-8's.
                 string str = self.ToString();
                 int i = 0;
                 while (i < str.Length) {
@@ -4656,7 +4664,7 @@ namespace IronRuby.Builtins {
         #region succ, succ!
 
         public static int GetIndexOfRightmostAlphaNumericCharacter(MutableString/*!*/ str, int index) {
-            bool unicode = str.Encoding.IsUnicodeEncoding;
+            bool unicode = str.Encoding.HasUnicodeCodePoints;
             // A binary string has no letters outside ASCII: "a\xFF".succ is "b\xFF", the
             // 0xFF byte is not a (Latin-1 letter) to be stepped.
             // Nor has a multibyte encoding other than Unicode: Onigmo's EUC-JP, Shift_JIS, GBK,
@@ -4731,7 +4739,7 @@ namespace IronRuby.Builtins {
         public static void IncrementAlphaNumericChar(MutableString/*!*/ str, int index) {
             while (true) {
                 char c = str.GetChar(index);
-                if (c >= 0x80 && str.Encoding.IsUnicodeEncoding && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
+                if (c >= 0x80 && str.Encoding.HasUnicodeCodePoints && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
                     return;
                 }
                 if (c != 'z' && c != 'Z' && c != '9') {

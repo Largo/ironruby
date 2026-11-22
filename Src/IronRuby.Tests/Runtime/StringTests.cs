@@ -965,6 +965,60 @@ round trip: [2217845808, true]
         }
 
         /// <summary>
+        /// CESU-8 (MRI's enc/cesu_8.c): a character outside the BMP is a surrogate pair in six
+        /// bytes, a lone surrogate is invalid, and the code points are Unicode's, as they are in
+        /// UTF-8's carrier variants. Util/cesu8-matrix.rb has the rest.
+        /// </summary>
+        public void String_Cesu8_1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def hex(s) = s.unpack1('H*')
+['e38182', 'eda0bdedb880', 'edb280', 'eda080', 'eda0', 'f09f9880', '7f', 'eda08061', '61eda080eda080'].each do |h|
+  s = [h].pack('H*').force_encoding('CESU-8')
+  t(h) { [s.valid_encoding?, s.length, s.chars.map { hex(_1) }, hex(s.scrub), s.inspect] }
+  t(""#{h} ord"") { [s.ord, s.codepoints, hex(s.succ)] }
+  t(""#{h} encode"") { hex(s.encode('UTF-8')) }
+end
+t('U+1F600') { c = ""\u{1f600}"".encode('CESU-8'); [hex(c), c.length, c.encode('UTF-8') == ""\u{1f600}""] }
+t('KDDI') { s = [0xe3, 0x81, 0x82].pack('C*').force_encoding('UTF8-KDDI'); [s.ord, s.inspect, hex(s.succ)] }
+", @"
+e38182: [true, 1, [""e38182""], ""e38182"", ""\""\\u3042\""""]
+e38182 ord: [12354, [12354], ""e38183""]
+e38182 encode: ""e38182""
+eda0bdedb880: [true, 1, [""eda0bdedb880""], ""eda0bdedb880"", ""\""\\u{1F600}\""""]
+eda0bdedb880 ord: [128512, [128512], ""eda0bdedb881""]
+eda0bdedb880 encode: ""f09f9880""
+edb280: [false, 3, [""ed"", ""b2"", ""80""], ""3f3f3f"", ""\""\\xED\\xB2\\x80\""""]
+edb280 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+edb280 encode: [Encoding::InvalidByteSequenceError, ""\""\\xED\"" followed by \""\\xB2\"" on CESU-8""]
+eda080: [false, 3, [""ed"", ""a0"", ""80""], ""3f"", ""\""\\xED\\xA0\\x80\""""]
+eda080 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+eda080 encode: [Encoding::InvalidByteSequenceError, ""incomplete \""\\xED\\xA0\\x80\"" on CESU-8""]
+eda0: [false, 2, [""ed"", ""a0""], ""3f"", ""\""\\xED\\xA0\""""]
+eda0 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+eda0 encode: [Encoding::InvalidByteSequenceError, ""incomplete \""\\xED\\xA0\"" on CESU-8""]
+f09f9880: [false, 4, [""f0"", ""9f"", ""98"", ""80""], ""3f3f3f3f"", ""\""\\xF0\\x9F\\x98\\x80\""""]
+f09f9880 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+f09f9880 encode: [Encoding::InvalidByteSequenceError, ""\""\\xF0\"" on CESU-8""]
+7f: [true, 1, [""7f""], ""7f"", ""\""\\u007F\""""]
+7f ord: [127, [127], ""0100""]
+7f encode: ""7f""
+eda08061: [false, 4, [""ed"", ""a0"", ""80"", ""61""], ""3f61"", ""\""\\xED\\xA0\\x80a\""""]
+eda08061 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+eda08061 encode: [Encoding::InvalidByteSequenceError, ""\""\\xED\\xA0\\x80\"" followed by \""a\"" on CESU-8""]
+61eda080eda080: [false, 7, [""61"", ""ed"", ""a0"", ""80"", ""ed"", ""a0"", ""80""], ""613f3f3f"", ""\""a\\xED\\xA0\\x80\\xED\\xA0\\x80\""""]
+61eda080eda080 ord: [ArgumentError, ""invalid byte sequence in CESU-8""]
+61eda080eda080 encode: [Encoding::InvalidByteSequenceError, ""\""\\xED\\xA0\\x80\\xED\"" followed by \""\\xA0\"" on CESU-8""]
+U+1F600: [""eda0bdedb880"", 1, true]
+KDDI: [12354, ""\""\\u3042\"""", ""e38183""]
+");
+        }
+
+        /// <summary>
         /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
         /// messages), the encoding of the format says how long the character of the number is, "invalid character"
         /// when it has no length for it, and that many bytes of the number are put without asking whether they are a

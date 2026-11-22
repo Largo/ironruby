@@ -975,6 +975,17 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// MRI's rb_enc_unicode_p: whether the encoding's code points are Unicode's - the Unicode
+        /// encodings and the ones that are UTF-8 under another name or shape (UTF-8's carrier
+        /// variants, CESU-8), whose characters #ord, #codepoints and #inspect answer as Unicode
+        /// code points: "\xE3\x81\x82" in CESU-8 is 0x3042, not 0xE38182. IsUnicodeEncoding
+        /// is narrower, and also decides what transcodes how, so this is a property of its own.
+        /// </summary>
+        public bool HasUnicodeCodePoints {
+            get { return HasUnicodeCaseMapping; }
+        }
+
+        /// <summary>
         /// Whether MRI case maps the encoding's characters by Unicode's rules, context and
         /// all: the Unicode encodings, UTF-8's carrier variants and CESU-8.
         /// </summary>

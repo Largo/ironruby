@@ -195,8 +195,19 @@ namespace IronRuby.Runtime {
                 maxLength = 4;
                 return ScanGb18030(bytes, 0, count);
             }
+            if (encoding is CesuEncoding) {
+                maxLength = 6;
+                return CesuEncoding.Scan(bytes, 0, count);
+            }
             maxLength = 0;
             return 0;
+        }
+
+        private static int Precise(MultiByteEncoding multiByte, Encoding/*!*/ encoding, byte[]/*!*/ bytes, int index, int end) {
+            if (multiByte != null) {
+                return multiByte.PreciseLength(bytes, index, end);
+            }
+            return (encoding is CesuEncoding) ? CesuEncoding.Scan(bytes, index, end) : ScanGb18030(bytes, index, end);
         }
 
         internal static System.Collections.Generic.List<int> FindScrubRuns(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count) {
@@ -206,6 +217,8 @@ namespace IronRuby.Runtime {
                 maxLength = multiByte.MaxLength;
             } else if (encoding.CodePage == 54936) {
                 maxLength = 4;
+            } else if (encoding is CesuEncoding) {
+                maxLength = 6;
             } else {
                 return null;
             }
@@ -213,7 +226,7 @@ namespace IronRuby.Runtime {
             var runs = new System.Collections.Generic.List<int>();
             int p = 0;
             while (p < count) {
-                int length = (multiByte != null) ? multiByte.PreciseLength(bytes, p, count) : ScanGb18030(bytes, p, count);
+                int length = Precise(multiByte, encoding, bytes, p, count);
                 if (length > 0) {
                     p += length;
                     continue;
@@ -229,7 +242,7 @@ namespace IronRuby.Runtime {
                     clen = 1;
                 } else {
                     for (clen--; clen > 1; clen--) {
-                        int prefix = (multiByte != null) ? multiByte.PreciseLength(bytes, p, p + clen) : ScanGb18030(bytes, p, p + clen);
+                        int prefix = Precise(multiByte, encoding, bytes, p, p + clen);
                         if (prefix == 0) {
                             break;
                         }
@@ -1714,7 +1727,7 @@ namespace IronRuby.Runtime {
     /// sequences (one per surrogate) rather than one four byte sequence.  Ruby ships it; .NET does
     /// not, and .NET's UTF8Encoding rejects the lone surrogates it is made of.
     /// </summary>
-    internal sealed class CesuEncoding : Encoding {
+    internal sealed class CesuEncoding : Encoding, IStructuredEncoding {
         private readonly bool _throwOnError;
 
         internal CesuEncoding(bool throwOnError)
@@ -1756,31 +1769,67 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// Length in bytes of the sequence starting at <paramref name="index"/>, or 0 if the bytes
-        /// there are not a well formed CESU-8 sequence.
+        /// MRI's mbc_enc_len for CESU-8 (enc/cesu_8.c): the length of the character at
+        /// <paramref name="index"/> - 1 to 3 bytes as in UTF-8 but without its four byte form, or 6
+        /// for a surrogate pair, each half in three bytes - 0 if the bytes up to
+        /// <paramref name="end"/> begin one but stop short, or -1 if they begin none. A lone
+        /// surrogate is not a character: "\xED\xB2\x80" is invalid at its second byte, and
+        /// "\xED\xA0\x80" is a pair cut short.
         /// </summary>
-        private static int SequenceLength(byte[]/*!*/ bytes, int index, int limit) {
+        internal static int Scan(byte[]/*!*/ bytes, int index, int end) {
             byte b = bytes[index];
-            int length;
             if (b < 0x80) {
                 return 1;
-            } else if (b >= 0xc2 && b <= 0xdf) {
-                length = 2;
-            } else if (b >= 0xe0 && b <= 0xef) {
-                length = 3;
-            } else {
+            }
+            if (b < 0xc2 || b > 0xef) {
+                return -1;
+            }
+            int length = (b <= 0xdf) ? 2 : 3;
+            // the second byte's range: E0 needs A0-BF (no overlong form), ED 80-AF (80-9F a
+            // character of its own, A0-AF the first half of a pair), the rest 80-BF
+            int low = (b == 0xe0) ? 0xa0 : 0x80;
+            int high = (b == 0xed) ? 0xaf : 0xbf;
+            if (index + 1 >= end) {
                 return 0;
             }
-
-            if (index + length > limit) {
-                return 0;
+            byte b1 = bytes[index + 1];
+            if (b1 < low || b1 > high) {
+                return -1;
             }
-            for (int i = 1; i < length; i++) {
-                if ((bytes[index + i] & 0xc0) != 0x80) {
+            if (b == 0xed && b1 >= 0xa0) {
+                length = 6;
+            }
+            for (int i = 2; i < length; i++) {
+                if (index + i >= end) {
                     return 0;
+                }
+                byte next = bytes[index + i];
+                bool ok;
+                if (i == 3) {
+                    ok = next == 0xed;
+                } else if (i == 4) {
+                    ok = next >= 0xb0 && next <= 0xbf;
+                } else {
+                    ok = next >= 0x80 && next <= 0xbf;
+                }
+                if (!ok) {
+                    return -1;
                 }
             }
             return length;
+        }
+
+        int IStructuredEncoding.FindInvalid(byte[]/*!*/ bytes, int index, int count) {
+            int end = index + count;
+            int i = index;
+            while (i < end) {
+                int length = Scan(bytes, i, end);
+                if (length <= 0) {
+                    return i;
+                }
+                i += length;
+            }
+            return -1;
         }
 
         /// <summary>
@@ -1793,49 +1842,122 @@ namespace IronRuby.Runtime {
             return new DecoderFallbackException(null, new[] { bytes[index] }, index);
         }
 
-        private char Decode(byte[]/*!*/ bytes, int index, int length) {
+        private static char Decode3(byte[]/*!*/ bytes, int index) {
+            return (char)(((bytes[index] & 0x0f) << 12) | ((bytes[index + 1] & 0x3f) << 6) | (bytes[index + 2] & 0x3f));
+        }
+
+        // The characters of a well formed sequence: one, or the two halves of a pair.
+        private static int Decode(byte[]/*!*/ bytes, int index, int length, char[] chars, int charIndex) {
             switch (length) {
-                case 1: return (char)bytes[index];
-                case 2: return (char)(((bytes[index] & 0x1f) << 6) | (bytes[index + 1] & 0x3f));
-                default: return (char)(((bytes[index] & 0x0f) << 12) | ((bytes[index + 1] & 0x3f) << 6) | (bytes[index + 2] & 0x3f));
+                case 1:
+                    if (chars != null) chars[charIndex] = (char)bytes[index];
+                    return 1;
+                case 2:
+                    if (chars != null) chars[charIndex] = (char)(((bytes[index] & 0x1f) << 6) | (bytes[index + 1] & 0x3f));
+                    return 1;
+                case 3:
+                    if (chars != null) chars[charIndex] = Decode3(bytes, index);
+                    return 1;
+                default:
+                    if (chars != null) {
+                        chars[charIndex] = Decode3(bytes, index);
+                        chars[charIndex + 1] = Decode3(bytes, index + 3);
+                    }
+                    return 2;
             }
         }
 
-        public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+        private int DecodeAll(byte[]/*!*/ bytes, int index, int count, char[] chars, int charIndex) {
+            int consumed;
+            return DecodeAll(bytes, index, count, chars, charIndex, true, out consumed);
+        }
+
+        // With flush false a character cut short at the end is left alone, and consumed says
+        // where it starts.
+        private int DecodeAll(byte[]/*!*/ bytes, int index, int count, char[] chars, int charIndex, bool flush, out int consumed) {
             int limit = index + count;
-            int result = 0;
-            int i = index;
+            int i = index, j = charIndex;
             while (i < limit) {
-                int length = SequenceLength(bytes, i, limit);
-                if (length == 0) {
+                int length = Scan(bytes, i, limit);
+                if (length == 0 && !flush) {
+                    break;
+                }
+                if (length <= 0) {
                     if (_throwOnError) {
                         throw Undecodable(bytes, i);
                     }
                     // BinaryDecoderFallback's convention: an undecodable byte becomes one char.
-                    length = 1;
+                    if (chars != null) chars[j] = (char)bytes[i];
+                    i++;
+                    j++;
+                    continue;
                 }
+                j += Decode(bytes, i, length, chars, j);
                 i += length;
-                result++;
             }
-            return result;
+            consumed = i - index;
+            return j - charIndex;
+        }
+
+        public override Decoder/*!*/ GetDecoder() {
+            return new CesuDecoder(this);
+        }
+
+        /// <summary>
+        /// Holds the start of a character that the bytes handed to it so far cut short, as MRI's
+        /// transcoder does: the transcoding walk feeds the bytes one at a time, and names an
+        /// invalid sequence by the bytes held ("\xED\xA0\x80" followed by "a") and an
+        /// unfinished one at the end as incomplete.
+        /// </summary>
+        private sealed class CesuDecoder : Decoder {
+            private readonly CesuEncoding/*!*/ _encoding;
+            private byte[]/*!*/ _pending = new byte[0];
+
+            internal CesuDecoder(CesuEncoding/*!*/ encoding) {
+                _encoding = encoding;
+            }
+
+            public override void Reset() {
+                _pending = new byte[0];
+            }
+
+            private byte[]/*!*/ Join(byte[]/*!*/ bytes, int index, int count) {
+                var input = new byte[_pending.Length + count];
+                Array.Copy(_pending, 0, input, 0, _pending.Length);
+                Array.Copy(bytes, index, input, _pending.Length, count);
+                return input;
+            }
+
+            public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+                return GetCharCount(bytes, index, count, false);
+            }
+
+            public override int GetCharCount(byte[]/*!*/ bytes, int index, int count, bool flush) {
+                byte[] input = Join(bytes, index, count);
+                int consumed;
+                return _encoding.DecodeAll(input, 0, input.Length, null, 0, flush, out consumed);
+            }
+
+            public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
+                return GetChars(bytes, byteIndex, byteCount, chars, charIndex, false);
+            }
+
+            public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex, bool flush) {
+                byte[] input = Join(bytes, byteIndex, byteCount);
+                int consumed;
+                int written = _encoding.DecodeAll(input, 0, input.Length, chars, charIndex, flush, out consumed);
+                _pending = new byte[input.Length - consumed];
+                Array.Copy(input, consumed, _pending, 0, _pending.Length);
+                return written;
+            }
+        }
+
+        public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+            return DecodeAll(bytes, index, count, null, 0);
         }
 
         public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
-            int limit = byteIndex + byteCount;
-            int i = byteIndex, j = charIndex;
-            while (i < limit) {
-                int length = SequenceLength(bytes, i, limit);
-                if (length == 0) {
-                    if (_throwOnError) {
-                        throw Undecodable(bytes, i);
-                    }
-                    chars[j++] = (char)bytes[i++];
-                    continue;
-                }
-                chars[j++] = Decode(bytes, i, length);
-                i += length;
-            }
-            return j - charIndex;
+            return DecodeAll(bytes, byteIndex, byteCount, chars, charIndex);
         }
 
         public override int GetMaxByteCount(int charCount) {
