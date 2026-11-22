@@ -1319,10 +1319,12 @@ class Array
   # The C# Array#length, #at and #[] under names of their own, for the Array methods below
   # that walk their receiver by index as MRI's do: MRI reads the storage (RARRAY_LEN,
   # RARRAY_AREF), so a subclass's own #size or #[] does not change what they visit or answer.
+  # The C# #[]= likewise, for those that write the storage in place (#shuffle!).
   alias :__ary_size__ :length
   alias :__ary_at__ :at
   alias :__ary_slice__ :[]
-  private :__ary_size__, :__ary_at__, :__ary_slice__
+  alias :__ary_store__ :[]=
+  private :__ary_size__, :__ary_at__, :__ary_slice__, :__ary_store__
 
   # MRI's rb_ary_take_while and rb_ary_drop_while are Array's own: an index loop, not #each
   # (Enumerable's went through the prelude's wrapper and a generic C# walk, 3x MRI; a
@@ -1784,49 +1786,56 @@ class Array
   end
 
   # MRI's rb_ary_shuffle_bang: in place, and a generator that changes the array's
-  # length is caught ("modified during shuffle") before the swap it would break.
+  # length is caught ("modified during shuffle") before the swap it would break. MRI
+  # swaps the storage's slots, so a subclass's own #size, #[] or #[]= is not called.
   def shuffle!(random: Random)
     __array_check_frozen__
-    len = i = size
+    len = i = __ary_size__
     while i > 1
       j = __array_rand_index__(random, i)
-      raise RuntimeError, "modified during shuffle" if size != len
+      raise RuntimeError, "modified during shuffle" if __ary_size__ != len
       i -= 1
-      self[i], self[j] = self[j], self[i]
+      tmp = __ary_at__(i)
+      __ary_store__(i, __ary_at__(j))
+      __ary_store__(j, tmp)
     end
     self
   end
 
   # MRI's ary_sample, step for step, so that a given generator picks the same
   # elements: the random numbers are drawn first, then the array is read again, and
-  # what the generator emptied in the meantime is not there to sample.
+  # what the generator emptied in the meantime is not there to sample. The count is
+  # converted before the length is read (a #to_int may change the array), and the
+  # storage is read as RARRAY_LEN and RARRAY_AREF do, not a subclass's #size or #[].
   def sample(*args, random: Random)
     if args.size > 1
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
-    len = size
     if args.empty?
-      return self[len < 2 ? 0 : __array_rand_index__(random, len)]
+      len = __ary_size__
+      return __ary_at__(len < 2 ? 0 : __array_rand_index__(random, len))
     end
 
     # an explicit nil is not "no count": sample(nil) is a TypeError
     n = __array_to_int__(args[0])
     raise ArgumentError, "negative sample number" if n < 0
+    len = __ary_size__
     n = len if n > len
+    return [] if n <= 0
     rnds = n <= 10 ? Array.new(n) { |i| __array_rand_index__(random, len - i) } : nil
     k = len
-    len = size
+    len = __ary_size__
     return [] if len < k && rnds && rnds.any? { |r| r >= len }
     n = len if n > len
     case n
     when 0
       return []
     when 1
-      return [self[rnds[0]]]
+      return [__ary_at__(rnds[0])]
     when 2
       i, j = rnds
       j += 1 if j >= i
-      return [self[i], self[j]]
+      return [__ary_at__(i), __ary_at__(j)]
     when 3
       i, j, k = rnds
       l, g = j, i
@@ -1835,7 +1844,7 @@ class Array
         g = (j += 1)
       end
       k += 1 if k >= l && (k += 1) >= g
-      return [self[i], self[j], self[k]]
+      return [__ary_at__(i), __ary_at__(j), __ary_at__(k)]
     end
     memo_threshold =
       if len < 2560 then len / 128
@@ -1857,10 +1866,10 @@ class Array
         sorted.insert(j, k)
         idx << k
       end
-      idx.map { |x| self[x] }
+      idx.map { |x| __ary_at__(x) }
     elsif n <= memo_threshold / 2
       picks = Array.new(n) { |i| __array_rand_index__(random, len - i) + i }
-      len = size
+      len = __ary_size__
       if len <= picks.max
         n = 0
       elsif n > len
@@ -1872,7 +1881,7 @@ class Array
         i2 = memo.fetch(i, i)
         j2 = memo.fetch(j, j)
         memo[j] = i2
-        self[j2]
+        __ary_at__(j2)
       end
     else
       result = [].concat(self)
