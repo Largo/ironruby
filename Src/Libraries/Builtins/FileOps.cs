@@ -68,6 +68,15 @@ namespace IronRuby.Builtins {
             return Reinitialize(toInt, toHash, toPath, toStr, new RubyFile(self.Context), descriptorOrPath, optionsOrMode, optionsOrPermissions, options);
         }
 
+        // MRI's rb_file_initialize refuses a File that already has a stream - open or closed -
+        // before it looks at the arguments; the prelude's File#initialize asks here first.
+        [RubyMethod("__ir_require_uninitialized__", RubyMethodAttributes.PrivateInstance)]
+        public static void RequireUninitialized(RubyIO/*!*/ self) {
+            if (self.Initialized) {
+                throw new RuntimeError("reinitializing File");
+            }
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyFile/*!*/ Reinitialize(
             ConversionStorage<int?>/*!*/ toInt,

@@ -2232,6 +2232,7 @@ class File
 
   # File takes a permission argument between the mode and the options.
   def initialize(*args, **opts)
+    __ir_require_uninitialized__
     if args.size > 3
       ::Kernel.raise(::ArgumentError,
                      "wrong number of arguments (given #{args.size}, expected 1..3)")
