@@ -1499,8 +1499,11 @@ namespace IronRuby.Builtins {
             private Symbol/*!*/ ReadEncodedSymbol(bool symbol) {
                 int count = ReadInt32();
                 byte[] data = ReadBytes(count);
+                // MRI's r_symreal enters the bytes in the symbol table before it reads the instance
+                // variables, so that a link among them to this very symbol finds it ([Bug #10991]).
                 int slot = _symbols.Count;
-                _symbols[slot] = null;
+                // (Made a symbol only if such a link asks for one.)
+                _symbols[slot] = new Symbol(Context.GetIdentifierEncoding().Encoding.GetString(data, 0, data.Length), null);
 
                 RubyEncoding encoding = RubyEncoding.Binary;
                 int ivarCount = ReadInt32();
