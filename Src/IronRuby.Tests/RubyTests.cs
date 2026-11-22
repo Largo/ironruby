@@ -327,6 +327,7 @@ namespace IronRuby.Tests {
                 Scenario_RubyProcYieldArgs2,
                 Scenario_RubyProcYieldArgs3,
                 Scenario_RubyProcYieldArgs4,
+                Scenario_RubyProcYieldArgs5,
                 Scenario_RubyProcCallArgs1,
                 Scenario_RubyProcCallArgs2A,
                 Scenario_RubyProcCallArgs2B,

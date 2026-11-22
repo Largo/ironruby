@@ -1189,6 +1189,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object YieldSplat0(IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            // yield *[x] passes one argument, exactly as yield x does: a proc auto-splats an Array x
+            // and a lambda takes it whole, so ->(a, b = 0) {} gets [x, 0] rather than x taken apart.
+            // A ruby2_keywords Hash is keywords again once splatted, which only InvokeSplat knows.
+            if (splattee.Count == 1 && !(splattee[0] is Hash h && (h.IsRuby2KeywordsHash || h.IsKeywordArguments))) {
+                return Yield1(splattee[0], procArg, self, blockParam);
+            }
             object result;
             var proc = blockParam.Proc;
             RequireLambdaArity(proc, 0 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : null);

@@ -1430,6 +1430,34 @@ y14 { |x,y,*z,&w| p [x,y,z] }
 
 
         /// <summary>
+        /// yield *[x] passes the one argument x exactly as yield x does: a lambda takes an Array x
+        /// whole rather than having it taken apart over its parameters.
+        /// </summary>
+        public void Scenario_RubyProcYieldArgs5() {
+            TestOutput(@"
+def y1; yield(*[[1, 2]]); end
+def y2(a); yield(*a); end
+p y1(&->(a) { a })
+p y1(&->(a, b = 0) { [a, b] })
+p y1(&->(a, *b) { [a, b] })
+p y1(&->(*a) { a })
+p y2([[1, 2]], &->(a, *b) { [a, b] })
+p y1 { |a, b = 0| [a, b] }
+p((y1(&->(a, b) { }) rescue $!.message))
+p y2([1, 2], &->(a, b) { [a, b] })
+", @"
+[1, 2]
+[[1, 2], 0]
+[[1, 2], []]
+[[1, 2]]
+[[1, 2], []]
+[1, 2]
+""wrong number of arguments (given 1, expected 2)""
+[1, 2]
+");
+        }
+
+        /// <summary>
         /// RHS is list, LHS is not simple, but contains splatting.
         /// </summary>
         public void Scenario_RubyBlockArgs3() {
