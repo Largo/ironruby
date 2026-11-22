@@ -1019,6 +1019,50 @@ KDDI: [12354, ""\""\\u3042\"""", ""e38183""]
         }
 
         /// <summary>
+        /// Emacs-Mule (MRI's enc/emacs_mule.c) reads characters of two to four bytes, numbered by
+        /// their bytes, and Onigmo calls each of them ALPHA, which #succ goes by.
+        /// Util/emacs-mule-matrix.rb has the rest.
+        /// </summary>
+        public void String_EmacsMule1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def hex(s) = s.unpack1('H*')
+%w[81a0 92a4a2 9ae0a0a0 9cf0a0a0 9cf5a0a0 92a4 4192a4a2814281a0 7a8fff 7a9dfeffff 4281a0].each do |h|
+  s = [h].pack('H*').force_encoding('Emacs-Mule')
+  t(h) { [s.valid_encoding?, s.length, s.chars.map { hex(_1) }, hex(s.scrub), s.inspect] }
+  t(""#{h} ord"") { [(s.ord rescue $!.class), hex(s.reverse), hex(s.succ)] }
+end
+t('stateless') { s = ""あ"".encode('EUC-JP').encode('stateless-ISO-2022-JP'); [hex(s), s.length, s.ord, hex(s.succ)] }
+", @"
+81a0: [true, 1, [""81a0""], ""81a0"", ""\""\\x{81A0}\""""]
+81a0 ord: [33184, ""81a0"", ""81a1""]
+92a4a2: [true, 1, [""92a4a2""], ""92a4a2"", ""\""\\x{92A4A2}\""""]
+92a4a2 ord: [9610402, ""92a4a2"", ""92a4a3""]
+9ae0a0a0: [false, 2, [""9ae0a0"", ""a0""], ""9ae0a03f"", ""\""\\x{9AE0A0}\\xA0\""""]
+9ae0a0a0 ord: [10150048, ""a09ae0a0"", ""9ae0a1a0""]
+9cf0a0a0: [true, 1, [""9cf0a0a0""], ""9cf0a0a0"", ""\""\\x{9CF0A0A0}\""""]
+9cf0a0a0 ord: [2633015456, ""9cf0a0a0"", ""9cf0a0a1""]
+9cf5a0a0: [false, 4, [""9c"", ""f5"", ""a0"", ""a0""], ""3f3f3f3f"", ""\""\\x9C\\xF5\\xA0\\xA0\""""]
+9cf5a0a0 ord: [ArgumentError, ""a0a0f59c"", ""019cf5a0a0""]
+92a4: [false, 2, [""92"", ""a4""], ""3f"", ""\""\\x92\\xA4\""""]
+92a4 ord: [ArgumentError, ""a492"", ""0192a4""]
+4192a4a2814281a0: [false, 5, [""41"", ""92a4a2"", ""81"", ""42"", ""81a0""], ""4192a4a23f4281a0"", ""\""A\\x{92A4A2}\\x81B\\x{81A0}\""""]
+4192a4a2814281a0 ord: [65, ""81a0428192a4a241"", ""4192a4a2814281a1""]
+7a8fff: [true, 2, [""7a"", ""8fff""], ""7a8fff"", ""\""z\\x{8FFF}\""""]
+7a8fff ord: [122, ""8fff7a"", ""7a81a0""]
+7a9dfeffff: [true, 2, [""7a"", ""9dfeffff""], ""7a9dfeffff"", ""\""z\\x{9DFEFFFF}\""""]
+7a9dfeffff ord: [122, ""9dfeffff7a"", ""7a9cf0a0a0""]
+4281a0: [true, 2, [""42"", ""81a0""], ""4281a0"", ""\""B\\x{81A0}\""""]
+4281a0 ord: [66, ""81a042"", ""4281a1""]
+stateless: [""92a4a2"", 1, 9610402, ""92a4a3""]
+");
+        }
+
+        /// <summary>
         /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
         /// messages), the encoding of the format says how long the character of the number is, "invalid character"
         /// when it has no length for it, and that many bytes of the number are put without asking whether they are a

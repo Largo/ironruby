@@ -4671,8 +4671,12 @@ namespace IronRuby.Builtins {
             // Big5... answer ALNUM for ASCII only, so "\xA1\xB4" in EUC-JP steps its bytes
             // rather than its (Lm) code point.
             bool binary = str.Encoding == RubyEncoding.Binary || (!unicode && str.Encoding.MaxBytesPerChar > 1);
+            bool mule = IsEmacsMuleShaped(str.Encoding);
             for (int i = index; i >= 0; --i) {
                 char c = str.GetChar(i);
+                if (mule && IsEmacsMuleMultibyte(str, i)) {
+                    return i;
+                }
                 if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : (!binary || c < 0x80) && Char.IsLetterOrDigit(c))
                     return i;
             }
@@ -4736,9 +4740,52 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        /// <summary>
+        /// Emacs-Mule and the stateless ISO-2022-JPs, which MRI makes its replicas: Onigmo's
+        /// emacs_mule.c answers ALPHA for every character of more than one byte.
+        /// </summary>
+        private static bool IsEmacsMuleShaped(RubyEncoding/*!*/ encoding) {
+            switch (encoding.CodePage) {
+                case RubyEncoding.CodePageEmacsMule:
+                case RubyEncoding.CodePageStatelessISO2022JP:
+                case RubyEncoding.CodePageStatelessISO2022JPKDDI:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // A character of two to four bytes is held as a surrogate pair (see EmacsMuleEncoding);
+        // index is that of its second half, the end of the character.
+        private static bool IsEmacsMuleMultibyte(MutableString/*!*/ str, int index) {
+            return index > 0 && Char.IsLowSurrogate(str.GetChar(index)) && Char.IsHighSurrogate(str.GetChar(index - 1));
+        }
+
+        /// <summary>
+        /// MRI's enc_succ_alnum_char for a multibyte character of the Emacs-Mule family: its bytes
+        /// step to the next character of the same length, and one that wraps tries once more
+        /// from zero (max_gaps), which finds the first character of that length - "\x8F\xFF".succ
+        /// is "\x81\xA0" - so nothing carries into the character to its left.
+        /// </summary>
+        private static void SuccEmacsMuleChar(MutableString/*!*/ str, int index) {
+            var encoding = str.Encoding;
+            var strict = encoding.StrictEncoding;
+            byte[] bytes = strict.GetBytes(new[] { str.GetChar(index - 1), str.GetChar(index) });
+            if (!SuccCharacterBytes(encoding, bytes, 0, bytes.Length)) {
+                SuccCharacterBytes(encoding, bytes, 0, bytes.Length);
+            }
+            char[] chars = strict.GetChars(bytes);
+            str.SetChar(index - 1, chars[0]);
+            str.SetChar(index, chars[1]);
+        }
+
         public static void IncrementAlphaNumericChar(MutableString/*!*/ str, int index) {
             while (true) {
                 char c = str.GetChar(index);
+                if (Char.IsLowSurrogate(c) && IsEmacsMuleShaped(str.Encoding) && IsEmacsMuleMultibyte(str, index)) {
+                    SuccEmacsMuleChar(str, index);
+                    return;
+                }
                 if (c >= 0x80 && str.Encoding.HasUnicodeCodePoints && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
                     return;
                 }

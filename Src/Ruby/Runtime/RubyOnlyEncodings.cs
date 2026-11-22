@@ -199,6 +199,10 @@ namespace IronRuby.Runtime {
                 maxLength = 6;
                 return CesuEncoding.Scan(bytes, 0, count);
             }
+            if (encoding is EmacsMuleEncoding) {
+                maxLength = 4;
+                return EmacsMuleEncoding.Scan(bytes, 0, count);
+            }
             maxLength = 0;
             return 0;
         }
@@ -207,7 +211,10 @@ namespace IronRuby.Runtime {
             if (multiByte != null) {
                 return multiByte.PreciseLength(bytes, index, end);
             }
-            return (encoding is CesuEncoding) ? CesuEncoding.Scan(bytes, index, end) : ScanGb18030(bytes, index, end);
+            if (encoding is CesuEncoding) {
+                return CesuEncoding.Scan(bytes, index, end);
+            }
+            return (encoding is EmacsMuleEncoding) ? EmacsMuleEncoding.Scan(bytes, index, end) : ScanGb18030(bytes, index, end);
         }
 
         internal static System.Collections.Generic.List<int> FindScrubRuns(Encoding/*!*/ encoding, byte[]/*!*/ bytes, int count) {
@@ -219,6 +226,8 @@ namespace IronRuby.Runtime {
                 maxLength = 4;
             } else if (encoding is CesuEncoding) {
                 maxLength = 6;
+            } else if (encoding is EmacsMuleEncoding) {
+                maxLength = 4;
             } else {
                 return null;
             }
@@ -1624,22 +1633,37 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// MRI's mbc_enc_len for Emacs-Mule (enc/emacs_mule.c), as rb_enc_precise_mbclen reports
+        /// it: the length of the character at <paramref name="index"/>, 0 if the bytes up to
+        /// <paramref name="end"/> begin one but stop short, or -1 if they begin none. Every byte
+        /// after the lead is 0xA0 or above, and a private charset's second byte names it.
+        /// </summary>
+        internal static int Scan(byte[]/*!*/ bytes, int index, int end) {
+            byte lead = bytes[index];
+            int length = SequenceLength(lead);
+            if (length == 0) {
+                return -1;
+            }
+            for (int j = 1; j < length; j++) {
+                if (index + j >= end) {
+                    return 0;
+                }
+                byte next = bytes[index + j];
+                if (next < 0xa0 || (j == 1 && length > 2 && !IsCharsetByte(lead, next))) {
+                    return -1;
+                }
+            }
+            return length;
+        }
+
         /// <summary>The index of the first byte that is not part of a well formed sequence, or -1.</summary>
         private static int FindInvalid(byte[]/*!*/ bytes, int index, int count) {
             int end = index + count;
             int i = index;
             while (i < end) {
-                int length = SequenceLength(bytes[i]);
-                if (length == 0 || end - i < length) {
-                    return i;
-                }
-                for (int j = 1; j < length; j++) {
-                    // A continuation byte is 0xa0 or above; anything else cuts the sequence short.
-                    if (bytes[i + j] < 0xa0) {
-                        return i;
-                    }
-                }
-                if (length > 2 && !IsCharsetByte(bytes[i], bytes[i + 1])) {
+                int length = Scan(bytes, i, end);
+                if (length <= 0) {
                     return i;
                 }
                 i += length;
@@ -1652,61 +1676,153 @@ namespace IronRuby.Runtime {
             return new DecoderFallbackException(null, new[] { bytes[index] }, index);
         }
 
-        public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
-            if (_throwOnError) {
-                for (int i = 0; i < count; i++) {
-                    if (chars[index + i] > 0xff) {
-                        throw new EncoderFallbackException();
-                    }
-                }
+        // Ruby has no converter between Emacs-Mule and anything else, so a character of it needs
+        // no Unicode counterpart, only a character of its own that writes back as its bytes: the
+        // string representation reads a sequence of two to four bytes as a code point in planes
+        // 4 to 7, which Unicode leaves unassigned, numbered by its bytes (0xA0 to 0xFF after the
+        // lead, 96 values each). #ord, #inspect and #succ go by the bytes, as MRI's do.
+        private const int StandInBase = 0x40000;
+        private const int ThreeByteBase = 15 * 96;                  // after the two byte ones
+        private const int FourByteBase = ThreeByteBase + 12 * 96 * 96;
+        private const int StandInEnd = FourByteBase + 15 * 96 * 96;
+
+        private static int ToStandIn(byte[]/*!*/ bytes, int index, int length) {
+            switch (length) {
+                case 2:
+                    return StandInBase + (bytes[index] - 0x81) * 96 + (bytes[index + 1] - 0xa0);
+                case 3:
+                    return StandInBase + ThreeByteBase + (bytes[index] - 0x90) * 96 * 96 +
+                        (bytes[index + 1] - 0xa0) * 96 + (bytes[index + 2] - 0xa0);
+                default:
+                    // the charset byte, 0xF0 to 0xFE, also says which lead it follows
+                    return StandInBase + FourByteBase + (bytes[index + 1] - 0xf0) * 96 * 96 +
+                        (bytes[index + 2] - 0xa0) * 96 + (bytes[index + 3] - 0xa0);
             }
-            return count;
+        }
+
+        // The bytes of a stand-in code point (see StandInBase), or 0 if it is not one.
+        private static int FromStandIn(int codepoint, byte[] bytes, int byteIndex) {
+            int cell = codepoint - StandInBase;
+            if (cell < 0 || cell >= StandInEnd) {
+                return 0;
+            }
+            int length;
+            byte b0, b1, b2 = 0, b3 = 0;
+            if (cell < ThreeByteBase) {
+                length = 2;
+                b0 = (byte)(0x81 + cell / 96);
+                b1 = (byte)(0xa0 + cell % 96);
+            } else if (cell < FourByteBase) {
+                cell -= ThreeByteBase;
+                length = 3;
+                b0 = (byte)(0x90 + cell / (96 * 96));
+                b1 = (byte)(0xa0 + cell / 96 % 96);
+                b2 = (byte)(0xa0 + cell % 96);
+            } else {
+                cell -= FourByteBase;
+                length = 4;
+                b1 = (byte)(0xf0 + cell / (96 * 96));
+                b0 = (byte)(b1 <= 0xf4 ? 0x9c : 0x9d);
+                b2 = (byte)(0xa0 + cell / 96 % 96);
+                b3 = (byte)(0xa0 + cell % 96);
+            }
+            if (bytes != null) {
+                bytes[byteIndex] = b0;
+                bytes[byteIndex + 1] = b1;
+                if (length > 2) bytes[byteIndex + 2] = b2;
+                if (length > 3) bytes[byteIndex + 3] = b3;
+            }
+            return length;
+        }
+
+        private int Encode(char[]/*!*/ chars, int index, int count, byte[] bytes, int byteIndex) {
+            int end = index + count;
+            int j = byteIndex;
+            for (int i = index; i < end; i++) {
+                char c = chars[i];
+                if (Char.IsHighSurrogate(c) && i + 1 < end && Char.IsLowSurrogate(chars[i + 1])) {
+                    int length = FromStandIn(Char.ConvertToUtf32(c, chars[i + 1]), bytes, j);
+                    if (length > 0) {
+                        j += length;
+                        i++;
+                        continue;
+                    }
+                } else if (c <= 0xff) {
+                    // ASCII, or (from the lenient decoder) a byte that formed no character
+                    if (bytes != null) {
+                        bytes[j] = (byte)c;
+                    }
+                    j++;
+                    continue;
+                }
+                if (_throwOnError) {
+                    throw new EncoderFallbackException();
+                }
+                if (bytes != null) {
+                    bytes[j] = (byte)'?';
+                }
+                j++;
+            }
+            return j - byteIndex;
+        }
+
+        public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
+            return Encode(chars, index, count, null, 0);
         }
 
         public override int GetBytes(char[]/*!*/ chars, int charIndex, int charCount, byte[]/*!*/ bytes, int byteIndex) {
-            for (int i = 0; i < charCount; i++) {
-                char c = chars[charIndex + i];
-                if (c > 0xff) {
+            return Encode(chars, charIndex, charCount, bytes, byteIndex);
+        }
+
+        private int Decode(byte[]/*!*/ bytes, int index, int count, char[] chars, int charIndex) {
+            int end = index + count;
+            int i = index, j = charIndex;
+            while (i < end) {
+                int length = Scan(bytes, i, end);
+                if (length <= 0) {
                     if (_throwOnError) {
-                        throw new EncoderFallbackException();
+                        throw Undecodable(bytes, i);
                     }
-                    c = '?';
+                    // BinaryDecoderFallback's convention: the byte passes through as U+00mn.
+                    if (chars != null) {
+                        chars[j] = (char)bytes[i];
+                    }
+                    i++;
+                    j++;
+                } else if (length == 1) {
+                    if (chars != null) {
+                        chars[j] = (char)bytes[i];
+                    }
+                    i++;
+                    j++;
+                } else {
+                    int codepoint = ToStandIn(bytes, i, length) - 0x10000;
+                    if (chars != null) {
+                        chars[j] = (char)(0xD800 + (codepoint >> 10));
+                        chars[j + 1] = (char)(0xDC00 + (codepoint & 0x3ff));
+                    }
+                    i += length;
+                    j += 2;
                 }
-                bytes[byteIndex + i] = (byte)c;
             }
-            return charCount;
+            return j - charIndex;
         }
 
         public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
-            if (_throwOnError) {
-                int invalid = FindInvalid(bytes, index, count);
-                if (invalid >= 0) {
-                    throw Undecodable(bytes, invalid);
-                }
-            }
-            return count;
+            return Decode(bytes, index, count, null, 0);
         }
 
         public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
-            if (_throwOnError) {
-                int invalid = FindInvalid(bytes, byteIndex, byteCount);
-                if (invalid >= 0) {
-                    throw Undecodable(bytes, invalid);
-                }
-            }
-            for (int i = 0; i < byteCount; i++) {
-                // BinaryDecoderFallback's convention: the byte passes through as U+00mn.
-                chars[charIndex + i] = (char)bytes[byteIndex + i];
-            }
-            return byteCount;
+            return Decode(bytes, byteIndex, byteCount, chars, charIndex);
         }
 
         public override int GetMaxByteCount(int charCount) {
-            return charCount;
+            return (charCount + 1) * 4;
         }
 
         public override int GetMaxCharCount(int byteCount) {
-            return byteCount;
+            // a two byte sequence is a surrogate pair, anything longer fewer chars than bytes
+            return byteCount + 1;
         }
 
         public override bool IsSingleByte {
