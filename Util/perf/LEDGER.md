@@ -1193,6 +1193,65 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-22 for perf/lkw**: the branch at its ledger commit against master at
+  d7730f1b, Release net10.0: **PASS**. IronRuby.Tests 1,294 executed and PASSED on both trees.
+  34 matrices in five modes (the switches-off mode with `IR_LIGHT_KEYWORDS=0` too): 170 same, 0
+  differ. ruby/spec, all five suites (32,680 examples): no failure the known list does not name.
+  Timing (`ab.rb`, six rounds, the order turned each round, ns a call, baseline -> candidate,
+  `Util/bench/keyword-shapes.rb`): a required keyword 176 -> 144 (0.82), an optional one given
+  184 -> 152 (0.83) and left out 144 -> 109 (0.76), two keywords 208 -> 176 (0.85), a keyword
+  after an optional 264 -> 208 (0.79), a small body 248 -> 216 (0.87), a default that reads a
+  parameter 168 -> 112 (0.67), `**rest` 272 -> 200 (0.74); a keyword after a positional 0.86
+  with overlapping rounds, alone 2,167 -> 2,022 instructions (0.93). The JIT-specialized keyword
+  method and the three controls 1.00, overlapping. Instructions a call 0.78-0.92 on the same
+  shapes. The regex, step, loop and super shapes overlap. micro-table: `str==` slower in both
+  orders again (1.14 and 1.12), and alone, eight rounds, 53.9 -> 53.6 ns: that line of the table
+  follows the shapes run before it, as in the last gate. AWFY, 12 iterations, both orders:
+  geomean 1.004 and 0.994 (new/base), every benchmark verified; the benchmarks define no method
+  with keywords. Start-up 1,195 and 1,209 ms.
+
+- **perf/lkw (/perf-step, 2026-11-22) - a method with keyword parameters in a light frame**
+  (`IR_LIGHT_KEYWORDS=0` turns it off) - census only when merged, gated on 2026-11-22 (first entry). Three commits.
+  `IsLightFrameCandidate` refused any method with keywords, a `**rest` or `**nil` outright, the
+  largest line of the census (1,257 methods). Nothing in their lowering needs the scope: the
+  keywords arrive in a hidden optional parameter that holds the call's keyword hash, and a
+  prologue at the head of the body checks it and binds each keyword to its local, the defaults
+  evaluated there in order (`PrismAstBridge.LowerKeywords`): `KeywordArgumentsTest` and
+  `KeywordParameterRead`, runtime calls that take no scope. Only the hidden parameter's own
+  default read the scope, for its RubyContext (`GetOmittedKeywordArguments`,
+  `MakeOmittedKeywordArguments`); a light frame hands it the declaring scope. `eval("super")`
+  finds the keyword signature by the scope's local names, which a light frame now records too.
+  - The prologue's error message was `list.inspect[1..-2]`, and a Range literal keeps a method
+    with literal blocks out: it is `text[1, text.size - 2]` now. The step first used
+    `delete_prefix`/`delete_suffix`, which the prelude defines in Ruby; a runtime without the
+    prelude then raised NoMethodError for an unknown keyword, found by a probe that redefines
+    `String#delete_prefix` and fixed before the merge.
+  - Not taken, each with a census reason of its own: keywords beside a rest or post parameter
+    (146: `Kernel#warn`, `IO#read`, `String#each_line`, `Kernel#open`; the general lowering binds
+    the positionals out of one splat with helpers `IsScopeFree` does not take), a body that passes
+    `**opts` on (52), and bodies kept out by something else (rescue 27, a large multiple
+    assignment 24, about 60 scattered).
+  - Light frames 83.8% -> 87.4% (23,758 -> 24,777), JIT unchanged (Src/StdLib + AWFY, 28,337
+    methods; 1,019 moved up, none down): `Psych.load`, `Prism.parse`, `Pathname#rmtree`,
+    `Exception#detailed_message`, `Array#shuffle!`, `GC#start`, `Kernel#BigDecimal`.
+  - Measured (`ab.rb -i`, instructions a call, switch off -> on, `Util/bench/keyword-shapes.rb`,
+    bodies the method JIT refuses, since it specializes a trivial keyword method and the frame
+    then never runs): a required keyword 1,797 -> 1,625 (0.90), an optional one given 0.88 and
+    left out 1,556 -> 1,330 (0.86), a default that reads a parameter 0.83, two keywords 0.91, a
+    keyword after a positional 0.94, after an optional 0.93, `**rest` 0.91; a JIT-specialized
+    keyword method 1.00 and three controls without keywords 0.99-1.00. Not timed.
+  - Checked: `Util/keyword-light-matrix.rb` (new) prints CRuby 4.0's output on the baseline and
+    on the candidate as built, with the switch off, with `IR_LIGHT_FRAMES=0`, with
+    `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`; nine older matrices the same on both builds. A
+    second probe written for the merge (defaults that call `binding`, `local_variables`,
+    `block_given?`, `__method__`; a `**rest` mutated; a keyword named `if`; zsuper, `eval("super")`
+    and eval reading a keyword; a Hash for an optional before keywords; `**nil`; ten keywords;
+    a frozen Hash splatted; the messages for `:"]"` and a String key; a redefinition half way; a
+    million deep; four threads) prints CRuby's in the same four modes.
+  - Found on the baseline, not fixed: `local_variables` lists keyword parameters in declaration
+    order where CRuby lists the required ones first (`def m(a, k: 1, j:)`: `[:a, :j, :k]`); and
+    an exception raised with an interpolated message reports the `def` line in `backtrace[0]`.
+
 - **Gate of 2026-11-21 for perf/jbreak**: the branch at 9bc85a93 against master at 8251113c,
   Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 34 matrices
   in five modes: 165 same; `int-matrix.rb` prints sixteen `Integer#hash` values, which are seeded
@@ -3221,6 +3280,37 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/jscreen 41ef00da (/perf-step, 2026-11-21) - the screen refuses `x`, a call on self with no
+  arguments, unless x is a leaf, a bindable method, an attribute reader or undefined.** Not merged.
+  The screen took every such call as a possible attr_reader read; a method that calls a Ruby
+  method of its own that way is wrapped, profiled, and declined at the first compile
+  (`rejected ... call: _Spacechar/0`), and keeps its stub.
+  - Counted first, over sixteen traced runs (the fourteen AWFY benchmarks, RDoc::Markdown with
+    `rationalize`, a load of eight libraries): 48 methods declined after the pre-screen. 35 for a
+    call (17 of them a call on self with no arguments, the rest calls with arguments, calls on a
+    local, `<<`, `downcase`), 6 for a deopt after an effect, 2 for `[]` on a RubyArray, 2 for an
+    attribute assignment on an unprofiled receiver, 3 others.
+  - With the change: declined 48 -> 31, specialized 168 -> 168 with the same names, the matrices
+    and a probe of thirteen kinds of callee the same on both builds and on CRuby. Census: maybe
+    2,923 -> 2,393, never 22,121 -> 22,651, all 530 from maybe to never.
+  - **Why not kept: it buys nothing that can be measured.** Instructions a call of a Markdown
+    rule 2,570 -> 2,611 (1.016, inside what the controls move by); the main thread's
+    instructions per parse 49-52e6 on both builds; 1,500 parses 68.6 and 70.0 s against 68.6 and
+    72.2 s. A declined method's stub has settled and costs nothing a call, which the jbreak
+    step's measurement had already said. What the change risks is 530 verdicts decided by the
+    declaring module at the first call (a subclass whose attr_reader shadows the method is then
+    never tried), for no gain.
+  - Learned: (1) Whole-process `perf stat` does not measure a JIT change here: about 60% of a
+    Markdown run's instructions are libclrjit on thread-pool workers and vary by 15e9 between
+    runs. Count the main thread, or use `ab.rb -i`. (2) Compiling these callers is stage 2 of
+    `Docs/jit-resume-deopt.md` (a generic call in a typed body needs a light-scope site, a frame
+    for the backtrace, the tracing hooks, and something to do about a deopt after it); the
+    "tail mode" attempt above was as fast as the generic body. For the Markdown rules the time is
+    in the generic callee anyway. (3) `census.rb -c` differs on a file that defines a method
+    twice under a condition (`markdown.rb`'s `get_byte`): the census keeps the last def, the run
+    the first. (4) `Util/perf/hot-shapes-matrix.rb` differs from CRuby on the baseline in three
+    lines: Encoding::CompatibilityError where CRuby raises FrozenError. Not looked into.
 
 - **`Kernel.raise(...)` and `::Kernel.raise(...)` as the deopt a bare `raise` is**
   (/perf-step, round twenty-four, 2026-11-19, perf/kraise, not merged; census only). The

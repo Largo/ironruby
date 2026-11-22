@@ -611,7 +611,7 @@ def j_break_float_value(n)
   i = 0
   v = while i < n
     i += 1
-    break 1.5 if i == 3
+    break 1.5 if i == 3 && n % 2 == 1
     break if i == 5
   end
   v
