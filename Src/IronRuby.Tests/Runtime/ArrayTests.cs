@@ -570,6 +570,24 @@ p [1, [2, [x, x], 5]].join
         }
 
         /// <summary>
+        /// Array#hash marks every element whose #hash it calls, as MRI's rb_hash does: a Struct whose #hash hashes
+        /// an array holding another Struct that points back recursed until the stack overflowed ([Bug #9151]).
+        /// </summary>
+        public void Array_HashRecursiveElement1() {
+            TestOutput(@"
+s = Struct.new(:x) { def hash; [x, ''].hash; end }
+a = s.new; b = s.new; a.x = b; b.x = a
+p a.hash == b.hash
+h = {}; h[[a, 'hello']] = 1; h[[b, 'world']] = 2; p h.size
+o = Object.new; p [o, o].hash == [o, o].hash
+", @"
+true
+2
+true
+");
+        }
+
+        /// <summary>
         /// A range endpoint that fits a long but not an int is a position past the end of any list (MRI's
         /// rb_range_beg_len reads it with NUM2LONG), not a RangeError; CRuby's TestArray#test_range_with_len_max_end.
         /// </summary>
