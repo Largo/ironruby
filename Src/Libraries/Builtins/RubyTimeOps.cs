@@ -239,7 +239,9 @@ namespace IronRuby.Builtins {
         #region UTC offset parsing
 
         private static readonly Regex/*!*/ _offsetPattern = new Regex(
-            @"^(?<sign>[+-])(?<h>\d\d)(:?(?<m>\d\d)(:?(?<s>\d\d))?)?$", RegexOptions.CultureInvariant);
+            // MRI's utc_offset_arg: +HH, +HHMM, +HHMMSS, +HH:MM or +HH:MM:SS - colons throughout or
+            // not at all ("-02:3040" is an error)
+            @"^(?<sign>[+-])(?<h>\d\d)(?:(?<m>\d\d)(?<s>\d\d)?|:(?<m>\d\d)(?::(?<s>\d\d))?)?$", RegexOptions.CultureInvariant);
 
         /// <summary>
         /// Parses the utc_offset / :in argument. Returns false if the value isn't a String
