@@ -165,6 +165,9 @@ namespace IronRuby.Builtins {
         // the class the method was looked up on.
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(UnboundMethod/*!*/ self) {
+            if (self._isMethodMissing) {
+                return self._targetConstraint;
+            }
             return self._info.AliasOwner ?? self._info.DeclaringModule ?? self._targetConstraint;
         }
 
