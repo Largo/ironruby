@@ -957,6 +957,8 @@ namespace IronRuby.Builtins {
             MutableString basePath, bool expandHome) {
 
             string bytes = BytesAsChars(path);
+            // the absolute directory a relative path is taken in, as bytes too
+            string baseBytes = null;
             RubyEncoding encoding;
             if (expandHome && bytes.Length > 0 && bytes[0] == '~') {
                 int slash = bytes.IndexOf('/');
@@ -970,7 +972,7 @@ namespace IronRuby.Builtins {
             } else if (basePath != null) {
                 MutableString directory = ExpandPathBytes(context, basePath, null, expandHome);
                 encoding = PathEncodingCheck(directory, path);
-                bytes = BytesAsChars(directory) + "/" + bytes;
+                baseBytes = BytesAsChars(directory);
             } else {
                 // MRI's append_fspath: the working directory is the filesystem's, and is converted
                 // to the path's encoding when that is what the two come to.
@@ -987,10 +989,10 @@ namespace IronRuby.Builtins {
                         }
                     }
                 }
-                bytes = BytesAsChars(directory) + "/" + bytes;
+                baseBytes = BytesAsChars(directory);
             }
 
-            string result = RubyUtils.ExpandPath(context.Platform, bytes, null, false);
+            string result = RubyUtils.ExpandPath(context.Platform, bytes, baseBytes, false);
             return MutableString.CreateBinary(CharsAsBytes(result), encoding);
         }
 
