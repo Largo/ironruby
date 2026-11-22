@@ -3926,9 +3926,18 @@ class String
   def undump
     s = self
     forced = nil
-    if (m = /\A(".*")(?:\.dup)?\.force_encoding\("([^"]+)"\)\z/m.match(s))
-      s = m[1]
-      forced = m[2]
+    # The '"...".force_encoding("name")' form, with an optional .dup, found with
+    # string searches: only the last .force_encoding(" can leave a name without
+    # a '"'. A greedy /\A(".*")...\z/m backtracks through all of a long string
+    # on .NET (test_undump passes a 10 MB name).
+    if s.end_with?('")') && (k = s.rindex('.force_encoding("'))
+      head = s[0, k]
+      name = s[(k + 17)...-2]
+      head = head[0...-4] if head.end_with?('".dup')
+      if head.length >= 2 && head.start_with?('"') && head.end_with?('"') && !name.include?('"')
+        s = head
+        forced = name
+      end
     end
     if s.start_with?('"') && !s.end_with?('"') && s.count('"') < 2
       ::Kernel.raise(::RuntimeError, "unterminated dumped string")
@@ -3942,14 +3951,10 @@ class String
     body = s[1...-1]
     ::Kernel.raise(::RuntimeError, "invalid dumped string") if body.nil?
     # The dumped form is plain ASCII; a NUL or a non-ASCII character in it means
-    # it did not come from #dump.
-    body.each_char do |ch|
-      if ch == "\0"
-        ::Kernel.raise(::RuntimeError, "string contains null byte")
-      elsif ch.ord > 0x7f
-        ::Kernel.raise(::RuntimeError, "non-ASCII character detected")
-      end
-    end
+    # it did not come from #dump. MRI's str_undump checks the whole string for
+    # non-ASCII first and for a NUL after, wherever each one is.
+    ::Kernel.raise(::RuntimeError, "non-ASCII character detected") unless body.ascii_only?
+    ::Kernel.raise(::RuntimeError, "string contains null byte") if body.include?("\0")
     out = +""
     unicode_escape = false
     hex_escape = false # a \x escape of a non-ASCII byte
@@ -3957,7 +3962,9 @@ class String
     while i < body.length
       c = body[i]
       if c == '"'
-        ::Kernel.raise(::RuntimeError, "invalid dumped string")
+        # MRI's str_undump ends the string at the first unescaped '"': what is
+        # left has to be the .force_encoding suffix, and here it was not.
+        ::Kernel.raise(::RuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form")
       elsif c == "\\"
         i += 1
         e = body[i]
