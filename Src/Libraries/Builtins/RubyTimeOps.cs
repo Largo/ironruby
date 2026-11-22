@@ -1870,6 +1870,10 @@ namespace IronRuby.Builtins {
             if (!format.Encoding.IsAsciiIdentity) {
                 throw RubyExceptions.CreateArgumentError("format should have ASCII compatible encoding");
             }
+            if (format.IsEmpty) {
+                // MRI's time_strftime: rb_warning, shown under -w only
+                context.ReportWarning("strftime called with empty format string", true);
+            }
             MutableString result = MutableString.CreateMutable(format.Encoding);
             Strftime.Format(context, result, self, format.ConvertToString(), 0);
             return result;
