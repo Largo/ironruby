@@ -1698,12 +1698,14 @@ class Array
     index && self[index]
   end unless method_defined?(:bsearch)
 
-  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args).
+  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args). The
+  # arguments are counted first, as rb_scan_args counts them: rfind(1, 2) without a block is an
+  # ArgumentError, not an Enumerator.
   def rfind(*args, &block)
-    return to_enum(:rfind, *args) unless block
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
+    return to_enum(:rfind, *args) unless block
     ifnone = args[0]
     index = size - 1
     while index >= 0
