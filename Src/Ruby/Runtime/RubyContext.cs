@@ -3103,6 +3103,14 @@ namespace IronRuby.Runtime {
                         // the singleton class's own instance variables go too, as in rb_singleton_class_clone
                         CopyInstanceData(singleton, singletonDup, false);
 
+                        // and so does a singleton class of the singleton class that holds methods
+                        // (o.singleton_class.singleton_class.define_method), which
+                        // rb_singleton_class_clone_and_attach clones along with it
+                        var meta = singleton.ImmediateClass;
+                        if (meta.IsSingletonClass && !meta.IsDummySingletonClass && ReferenceEquals(meta.SingletonClassOf, singleton)) {
+                            singletonDup.GetOrCreateSingletonClass().InitializeMembersFrom(meta);
+                        }
+
                         SetInstanceSingletonOfNoLock(target, ref targetData, singletonDup);
                     }
                 }
