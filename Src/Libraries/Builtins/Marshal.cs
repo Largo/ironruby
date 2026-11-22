@@ -119,6 +119,7 @@ namespace IronRuby.Builtins {
         // (true => UTF-8, false => US-ASCII); everything else is spelled out by name under
         // ":encoding". ASCII-8BIT is represented by the absence of both.
         internal const string EncodingShortIVarName = "E";
+        internal const string Ruby2KeywordsIVarName = "K";
         // MRI's ARG_ENCODING_NONE option bit in a regexp record (/n)
         internal const int NoEncodingFlag = 0x20;
         internal const string EncodingIVarName = "encoding";
@@ -710,12 +711,32 @@ namespace IronRuby.Builtins {
 
             private void WriteIVars(object/*!*/ obj, string[]/*!*/ names, RubyEncoding encoding) {
                 bool writeEncoding = NeedsEncodingIVar(encoding);
-                WriteInt32(names.Length + (writeEncoding ? 1 : 0));
+                bool ruby2Keywords = IsRuby2KeywordsHash(obj);
+                WriteInt32(names.Length + (writeEncoding ? 1 : 0) + (ruby2Keywords ? 1 : 0));
                 if (writeEncoding) {
                     WriteEncodingIVar(encoding);
                 }
+                if (ruby2Keywords) {
+                    // MRI's w_ivar: the flag of a Hash.ruby2_keywords_hash, as a pseudo instance
+                    // variable "K" after the encoding, one level up as the encoding is.
+                    WriteSymbol(Ruby2KeywordsIVarName, _ruby2KeywordsIVarNameBytes, RubyEncoding.Binary);
+                    if (_recursionLimit >= 0) {
+                        _recursionLimit++;
+                    }
+                    WriteAnObject(true);
+                    if (_recursionLimit > 0) {
+                        _recursionLimit--;
+                    }
+                }
                 WriteIVarPairs(obj, names);
             }
+
+            private static bool IsRuby2KeywordsHash(object obj) {
+                Hash hash = obj as Hash;
+                return hash != null && hash.IsRuby2KeywordsHash;
+            }
+
+            private static readonly byte[]/*!*/ _ruby2KeywordsIVarNameBytes = Encoding.ASCII.GetBytes(Ruby2KeywordsIVarName);
 
             /// <summary>
             /// A Set: MRI 4.0 writes its table as the "@hash" instance variable the Set of set.rb had, which
@@ -947,7 +968,7 @@ namespace IronRuby.Builtins {
                             }
 
                             bool writeInstanceData = !isObjectRecord && !(obj is RubyModule) &&
-                                (instanceNames.Length > 0 || NeedsEncodingIVar(encoding));
+                                (instanceNames.Length > 0 || NeedsEncodingIVar(encoding) || IsRuby2KeywordsHash(obj));
 
                             if (writeInstanceData) {
                                 _writer.Write((byte)'I');
@@ -2008,6 +2029,14 @@ namespace IronRuby.Builtins {
                 RubyEncoding encoding = ParseEncodingIVar(name, value);
                 if (encoding != null) {
                     ForceMarshalEncoding(obj, encoding);
+                } else if (name == Ruby2KeywordsIVarName) {
+                    // MRI's r_ivar: the flag Hash.ruby2_keywords_hash leaves, whatever its value
+                    Hash hash = obj as Hash;
+                    if (hash == null) {
+                        throw RubyExceptions.CreateArgumentError("ruby2_keywords flag is given but {0} is not a Hash",
+                            ((obj as MutableString) ?? RubyUtils.ObjectToMutableString(Context, obj)).ToString());
+                    }
+                    hash.IsRuby2KeywordsHash = true;
                 } else {
                     Context.SetInstanceVariable(obj, name, value);
                 }
