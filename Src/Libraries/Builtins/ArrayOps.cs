@@ -205,6 +205,10 @@ namespace IronRuby.Builtins {
         /// complaining that the number will not fit in a machine word.
         /// </summary>
         private static int CheckArraySize(BigInteger size) {
+            // ... but one that is no long at all is NUM2LONG's error, before its sign is looked at
+            if (size > Int64.MaxValue || size < Int64.MinValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
             if (size.Sign < 0) {
                 throw RubyExceptions.CreateArgumentError("negative array size");
             }
@@ -615,8 +619,8 @@ namespace IronRuby.Builtins {
 
         // The count is a long in MRI (NUM2LONG): one past an int still rotates, one past a long is a RangeError.
         [RubyMethod("rotate")]
-        public static RubyArray/*!*/ Rotate(RubyArray/*!*/ self, [DefaultProtocol]IntegerValue count) {
-            return Rotate(self, RotationCount(count));
+        public static RubyArray/*!*/ Rotate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyArray/*!*/ self, object count) {
+            return Rotate(self, RotationCount(integerConversion, count));
         }
 
         private static RubyArray/*!*/ Rotate(RubyArray/*!*/ self, long count) {
@@ -637,9 +641,9 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("rotate!")]
-        public static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self, [DefaultProtocol]IntegerValue count) {
+        public static RubyArray/*!*/ InPlaceRotate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyArray/*!*/ self, object count) {
             // (rb_ary_rotate_bang converts the count before it checks that the Array can be modified)
-            return InPlaceRotate(self, RotationCount(count));
+            return InPlaceRotate(self, RotationCount(integerConversion, count));
         }
 
         private static RubyArray/*!*/ InPlaceRotate(RubyArray/*!*/ self, long count) {
@@ -662,12 +666,28 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        private static long RotationCount(IntegerValue count) {
-            if (count.IsFixnum) {
-                return count.Fixnum;
+        // rb_num2long: an Integer as it is, a Float truncated - never through Float#to_int, which
+        // makes NaN a FloatDomainError and 1e20 a bignum rather than a Float out of range - and
+        // anything else through #to_int. (One object parameter rather than an IntegerValue and a
+        // double overload: an Integer converts to both, and the binder cannot choose.)
+        private static long RotationCount(ConversionStorage<IntegerValue>/*!*/ integerConversion, object count) {
+            if (count is int) {
+                return (int)count;
+            }
+            if (count is double) {
+                double d = (double)count;
+                // the upper end is exclusive: 2.0**63 is not a long
+                if (Double.IsNaN(d) || d >= 9223372036854775808.0 || d < -9223372036854775808.0) {
+                    throw RubyExceptions.CreateFloatOutOfIntegerRangeError(d);
+                }
+                return (long)d;
+            }
+            IntegerValue integer = Protocols.CastToInteger(integerConversion, count);
+            if (integer.IsFixnum) {
+                return integer.Fixnum;
             }
             long value;
-            if (!count.Bignum.AsInt64(out value)) {
+            if (!integer.Bignum.AsInt64(out value)) {
                 throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
             }
             return value;

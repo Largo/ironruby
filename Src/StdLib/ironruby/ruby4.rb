@@ -1798,7 +1798,7 @@ class Array
     end
 
     # an explicit nil is not "no count": sample(nil) is a TypeError
-    n = __array_to_int__(args[0])
+    n = __array_to_long__(args[0])
     raise ArgumentError, "negative sample number" if n < 0
     len = __ary_size__
     n = len if n > len
@@ -1895,6 +1895,26 @@ class Array
       raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
     end
     converted
+  end
+
+  # MRI's NUM2LONG, for the counts Array#sample and #cycle take as a C long: a Float is
+  # truncated - never through Float#to_int, which makes NaN a FloatDomainError - and one that
+  # has no long is "out of range"; an Integer (given, or from #to_int) beyond a long is the
+  # bignum error.
+  def __array_to_long__(value)
+    if value.is_a?(Float)
+      # the upper end is exclusive: 9223372036854775807.0 is 2.0**63 itself
+      if value.nan? || value.infinite? || value < -9223372036854775808.0 || value >= 9223372036854775808.0
+        text = value.nan? ? "NaN" : (value.infinite? ? (value > 0 ? "Inf" : "-Inf") : ("%-.10g" % value))
+        raise RangeError, "float #{text} out of range of integer"
+      end
+      return value.truncate
+    end
+    n = __array_to_int__(value)
+    unless n.between?(-0x8000000000000000, 0x7fffffffffffffff)
+      raise RangeError, "bignum too big to convert into 'long'"
+    end
+    n
   end
 
   # MRI's rb_random_ulong_limited: ask the generator, coerce with #to_int, and
@@ -5006,12 +5026,7 @@ class Array
     if n.nil?
       n = -1
     else
-      count = n
-      n = ::Math.__send__(:__int__, count)
-      unless n.is_a?(::Integer)
-        ::Kernel.raise(::TypeError,
-          "can't convert #{count.class} to Integer (#{count.class}#to_int gives #{__ir_conversion_result_name__(n)})")
-      end
+      n = __array_to_long__(n)
       return nil if n <= 0
     end
     while size > 0 && (n < 0 || (n -= 1) >= 0)

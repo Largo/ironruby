@@ -749,11 +749,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("*")]
         public static MutableString/*!*/ Repeat(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ times) {
+            // NUM2LONG comes first: -2**63-1 is no long before it is a negative count
+            if (times > Int64.MaxValue || times < Int64.MinValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
             if (times.Sign < 0) {
                 throw RubyExceptions.CreateArgumentError("negative argument");
-            }
-            if (times > Int64.MaxValue) {
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
             }
 
             // Ruby 3.0 dropped subclass preservation here: "MyString.new("x") * 2".class is String.
