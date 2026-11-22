@@ -4823,9 +4823,10 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding
+            // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding - of a new
+            // String made from its bytes (rb_enc_str_new_cstr), so a subclass's #inspect is not called
             if (original != null) {
-                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(original).ToString());
+                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(MutableString.Create(original)).ToString());
             }
             throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
         }
@@ -5020,11 +5021,9 @@ namespace IronRuby.Runtime {
                 ? TryParseHexadecimalFloat(str, index + 2, end, out result)
                 : TryParseDecimalFloat(str, index, end, out result);
 
-            if (parsed && !hex && str.IndexOf('_', start, end - start) >= 0) {
-                string truncated = TruncateUnderscoredMantissa(str, start, end);
-                if (truncated != null) {
-                    return TryParseRubyFloat(truncated, out result);
-                }
+            // MRI's strtod stops at an underscore or at trailing whitespace; rb_cstr_to_dbl then parses its own copy
+            if (parsed && (end < str.Length || str.IndexOf('_', start, end - start) >= 0)) {
+                return TryParseRubyFloat(CopyFloatBuffer(str, start, end), out result);
             }
 
             if (parsed && negative) {
@@ -5033,33 +5032,72 @@ namespace IronRuby.Runtime {
             return parsed;
         }
 
-        // MRI's rb_cstr_to_dbl copies a number with underscores in it into a buffer of
-        // DBL_DIG * 4 characters before the exponent (sign and point included), dropping the
-        // rest of the mantissa: Float("1_1_..._1") with 10000 digits is 1.11...e+59, not
-        // Infinity. Null when nothing is dropped.
-        private static string TruncateUnderscoredMantissa(string/*!*/ str, int start, int end) {
-            const int MantissaLimit = 15 * 4;
-            var buffer = new StringBuilder(end - start);
-            int mantissaLength = 0;
-            bool inExponent = false, dropped = false;
-            for (int i = start; i < end; i++) {
-                char c = str[i];
-                if (c == '_') {
-                    continue;
+        // When strtod stops short of the end of the string (at an underscore or at trailing
+        // whitespace), MRI's rb_cstr_to_dbl_raise copies the number, a valid one here, into a
+        // buffer of DBL_DIG * 4 + 10 characters and parses that instead. The copy squeezes the
+        // zeros that lead the number (after "0x" too) into one, takes out the underscores, and
+        // keeps no more than DBL_DIG * 4 characters, sign and point included, until it meets the
+        // exponent letter, which with its sign and the first of its leading zeros always goes in;
+        // the exponent's digits then fill the buffer up to its end. Float("1_1_..._1") with 10000
+        // digits is 1.11...e+59, not Infinity, and Float("0x0 ") is no number at all.
+        private static string/*!*/ CopyFloatBuffer(string/*!*/ str, int start, int end) {
+            const int InitialLimit = 15 * 4, BufferLimit = 15 * 4 + 10 - 1;
+            var buffer = new StringBuilder(BufferLimit + 4);
+            int p = start;
+
+            // where strtod stopped: the first underscore, or the end of the number
+            int parsedEnd = str.IndexOf('_', start, end - start);
+            if (parsedEnd < 0) {
+                parsedEnd = end;
+            }
+
+            char exponentLetter = 'e';
+            if (str[p] == '+' || str[p] == '-') {
+                buffer.Append(str[p++]);
+            }
+            if (p < end && str[p] == '0') {
+                buffer.Append('0');
+                p++;
+                if (p < end && (str[p] == 'x' || str[p] == 'X')) {
+                    buffer.Append('x');
+                    p++;
+                    exponentLetter = 'p';
                 }
-                if (!inExponent && (c == 'e' || c == 'E')) {
-                    inExponent = true;
-                }
-                if (inExponent) {
-                    buffer.Append(c);
-                } else if (mantissaLength < MantissaLimit) {
-                    buffer.Append(c);
-                    mantissaLength++;
-                } else {
-                    dropped = true;
+                while (p < end && str[p] == '0') {
+                    p++;
                 }
             }
-            return dropped ? buffer.ToString() : null;
+
+            // what strtod parsed is copied as it is
+            while (p < parsedEnd && buffer.Length < InitialLimit) {
+                buffer.Append(str[p++]);
+            }
+
+            int limit = InitialLimit;
+            while (p < end) {
+                if (str[p] == '_') {
+                    p++;
+                }
+                char c = str[p++];
+                if (limit == InitialLimit && Char.ToLowerInvariant(c) == exponentLetter) {
+                    limit = BufferLimit;
+                    buffer.Append(c);
+                    if (p < end && (str[p] == '+' || str[p] == '-')) {
+                        buffer.Append(str[p++]);
+                    }
+                    if (p < end && str[p] == '0') {
+                        buffer.Append('0');
+                        while (p < end && str[p] == '0') {
+                            p++;
+                        }
+                    }
+                    continue;
+                }
+                if (buffer.Length < limit) {
+                    buffer.Append(c);
+                }
+            }
+            return buffer.ToString();
         }
 
         private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
@@ -5148,15 +5186,14 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            int scale = 0;
+            int fractionDigits = 0;
             if (index < end && str[index] == '.') {
                 index++;
-                // ruby_strtod takes "0x1." and "0x1.p+0": the point may end the digits, if any came before it
-                int fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
-                if (fractionDigits < 0 || (fractionDigits == 0 && integerDigits == 0)) {
+                // ruby_strtod takes "0x1.", "0x1.p+0" and even "0x." (zero): the point may end the digits
+                fractionDigits = ScanDigitRun(str, end, ref index, digits, ref length, true, true);
+                if (fractionDigits < 0) {
                     return false;
                 }
-                scale = -4 * fractionDigits;
             } else if (integerDigits == 0) {
                 return false;
             }
@@ -5173,38 +5210,50 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            BigInteger mantissa = BigInteger.Zero;
-            for (int i = 0; i < length; i++) {
-                char c = digits[i];
-                int digit = (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
-                mantissa = mantissa * 16 + digit;
+            // ruby_strtod's hexadecimal branch (missing/dtoa.c) adds the digits up in a double, the first
+            // non-zero one weighing 1 and each next one a sixteenth of the one before, and scales the sum by
+            // 2**(4 * (integer digits - 1) + exponent) with ldexp. Every addition rounds, so a mantissa longer
+            // than a double's 53 bits is rounded twice, not to nearest as a whole: Float("0x1.000000000000081p0")
+            // is 1.0. MRI's results are matched, not the correctly rounded ones.
+            double sum = 0.0, weight = 1.0;
+            long power = -4;
+            int i = 0;
+            while (i < integerDigits && digits[i] == '0') {
+                i++;
             }
-
-            long power = (long)exponent + scale;
-
-            // The mantissa is rounded to a double's 53 bits here, to nearest, ties to even (the
-            // BigInteger conversion truncates), and one too long for a double ("0x1f" and 268
-            // zeros) is no longer Infinity before it is scaled down.
-            long bitLength = (long)mantissa.GetBitLength();
-            if (bitLength > 53) {
-                int shift = (int)(bitLength - 53);
-                BigInteger dropped = mantissa & ((BigInteger.One << shift) - 1);
-                BigInteger half = BigInteger.One << (shift - 1);
-                mantissa >>= shift;
-                if (dropped > half || (dropped == half && !mantissa.IsEven)) {
-                    mantissa += 1;
+            for (; i < integerDigits; i++) {
+                sum += weight * HexadecimalDigitValue(digits[i]);
+                power += 4;
+                weight /= 16;
+            }
+            if (fractionDigits > 0) {
+                if (power < 0) {
+                    while (i < length && digits[i] == '0') {
+                        i++;
+                        power -= 4;
+                    }
                 }
-                power += shift;
+                for (; i < length; i++) {
+                    sum += weight * HexadecimalDigitValue(digits[i]);
+                    if ((weight /= 16) == 0.0) {
+                        break;
+                    }
+                }
             }
 
+            power += exponent;
             if (power > 99999) {
                 power = 99999;
             } else if (power < -99999) {
                 power = -99999;
             }
 
-            result = Math.ScaleB((double)mantissa, (int)power);
+            result = Math.ScaleB(sum, (int)power);
             return true;
+        }
+
+        private static int HexadecimalDigitValue(char c) {
+            return (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
         }
 
         #endregion
