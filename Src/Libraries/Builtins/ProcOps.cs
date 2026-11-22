@@ -319,6 +319,10 @@ namespace IronRuby.Builtins {
                     RequireParameterCount(target, all.Count);
                     return target.Call(procArg, all.ToArray());
                 }
+                // curry_proc: a block given to a call that does not complete the arguments is dropped
+                if (procArg != null) {
+                    context.ReportWarning("given block not used");
+                }
                 return MakeCurried(context, target, arity, all);
             });
         }
