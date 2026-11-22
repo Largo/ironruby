@@ -602,7 +602,9 @@ class JwB
 end
 %i[jw_float jw_nil jw_str].each do |m|
   o = JwB.new; r = []
-  120.times { |i| o.send(m, i % 3 != 0, i < 60 ? i : 200); r << [o.x, o.x.class] if i >= 58 && i % 5 == 0 }
+  # hot, the odd calls keep d at 50, so the arm's own store (a Float, nil or a String when i % 3 == 0) is what
+  # the row reads; the even ones take d to 200, and the wide store after the if replaces it
+  120.times { |i| o.send(m, i % 3 != 0, i < 60 ? i : (i.even? ? 200 : 50)); r << [o.x, o.x.class] if i >= 58 && i % 5 == 0 }
   Kernel.p [m, r]
 end
 
