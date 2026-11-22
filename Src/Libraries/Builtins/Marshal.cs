@@ -422,6 +422,19 @@ namespace IronRuby.Builtins {
             private static readonly byte[]/*!*/ _encodingIVarNameBytes = Encoding.ASCII.GetBytes(EncodingIVarName);
 
             private void WriteEncodingIVar(RubyEncoding/*!*/ encoding) {
+                // MRI's w_encoding gives the encoding's value a level of its own, so that the depth
+                // limit that lets a string through lets its encoding through too
+                // (Marshal.dump of a non-ASCII string with a limit of 1, [ruby-core:24100]).
+                if (_recursionLimit >= 0) {
+                    _recursionLimit++;
+                }
+                WriteEncodingIVarValue(encoding);
+                if (_recursionLimit > 0) {
+                    _recursionLimit--;
+                }
+            }
+
+            private void WriteEncodingIVarValue(RubyEncoding/*!*/ encoding) {
                 if (encoding == RubyEncoding.UTF8) {
                     WriteSymbol(EncodingShortIVarName, _encodingShortIVarNameBytes, RubyEncoding.Binary);
                     WriteAnObject(true);
