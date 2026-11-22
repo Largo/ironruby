@@ -1909,7 +1909,8 @@ namespace IronRuby.Builtins {
                 _sb.Append("(?!)");
                 return;
             }
-            _sb.Append("\\k<").Append(name).Append('>');
+            // spelled as the group is: (?<@bar>.) is a .NET group of another name
+            _sb.Append("\\k<").Append(DuplicateGroupName(name, 1)).Append('>');
         }
 
         /// <summary>
