@@ -363,9 +363,20 @@ namespace IronRuby.Builtins {
         }
 
         // A reopened IO answers the other one's path, as MRI copies it with the descriptor.
-        // MRI also gives it the other one's class, which leaves its singleton class behind.
+        // MRI also gives it the other one's class, which leaves its singleton class behind,
+        // and the other one's encodings and conversion options (io_reopen copies fptr->encs).
         private static void CopyPath(RubyIO/*!*/ self, RubyIO/*!*/ source) {
             self.Context.ReplaceClrObjectClass(self, self.Context.GetClassOf(source));
+            self.CopyEncodingsFrom(source);
+            self.ConversionOptions = source.ConversionOptions;
+            // and its binary mode: the prelude's IO#binmode records it in this hidden variable
+            string binmode = RubyUtils.GetCoreStateInstanceVariableName("@__binmode__");
+            object sourceBinmode;
+            if (self.Context.TryGetInstanceVariable(source, binmode, out sourceBinmode)) {
+                self.Context.SetInstanceVariable(self, binmode, sourceBinmode);
+            } else {
+                self.Context.TryRemoveInstanceVariable(self, binmode, out sourceBinmode);
+            }
 
             var file = self as RubyFile;
             var sourceFile = source as RubyFile;
@@ -378,13 +389,34 @@ namespace IronRuby.Builtins {
         [RubyMethod("reopen")]
         public static RubyIO/*!*/ Reopen(RespondToStorage/*!*/ respondToStorage,
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, ConversionStorage<MutableString>/*!*/ toPath,
-            RubyIO/*!*/ self, object path, [DefaultProtocol, Optional, NotNull]MutableString mode) {
+            ConversionStorage<int?>/*!*/ toInt, ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr,
+            RubyIO/*!*/ self, object path, [Optional]object mode, [Keywords, Optional]IDictionary<object, object> options) {
 
+            // An IO to reopen to is taken as it is: MRI ignores the options then.
             var source = TryToIO(respondToStorage, toIoStorage, self.Context, path);
             if (source != null) {
                 return Reopen(self, source);
             }
-            return Reopen(toPath, self, path, mode != null ? IOInfo.Parse(self.Context, mode) : new IOInfo(ReopenMode(self.Mode)));
+
+            // The mode is open(2) flags or a mode string, and the options are File.open's
+            // (encoding:, binmode:, mode: ..., [Feature #7103]); reopen(path, binmode: true) may
+            // come with them as the second argument.
+            object _ = Missing.Value;
+            Protocols.TryConvertToOptions(toHash, ref options, ref mode, ref _);
+            IOInfo info = new IOInfo();
+            if (mode != Missing.Value && mode != null) {
+                var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(self.Context));
+                int? flags = toIntSite.Target(toIntSite, mode);
+                info = flags.HasValue ? new IOInfo(IOModeNative.ToIOMode(flags.Value)) : IOInfo.Parse(self.Context, Protocols.CastToString(toStr, mode));
+            }
+            if (options != null) {
+                info = info.AddOptions(toStr, options);
+            }
+            if (!info.HasMode) {
+                info = new IOInfo(ReopenMode(self.Mode), info.ExternalEncoding, info.InternalEncoding);
+            }
+            return Reopen(toPath, self, path, info);
         }
 
         /// <summary>
@@ -400,18 +432,6 @@ namespace IronRuby.Builtins {
                 }
             }
             return mode;
-        }
-
-        [RubyMethod("reopen")]
-        public static RubyIO/*!*/ Reopen(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, ConversionStorage<MutableString>/*!*/ toPath,
-            RubyIO/*!*/ self, object path, int mode) {
-
-            var source = TryToIO(respondToStorage, toIoStorage, self.Context, path);
-            if (source != null) {
-                return Reopen(self, source);
-            }
-            return Reopen(toPath, self, path, new IOInfo(IOModeNative.ToIOMode(mode)));
         }
 
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
