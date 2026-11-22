@@ -1948,6 +1948,21 @@ namespace IronRuby.Builtins {
 
             private void ReadIVars(object obj) {
                 int count = ReadInt32();
+                // A dump does not get to set the instance variables of a class or module it names: the
+                // one thing that may follow its name is the name's encoding (MRI's r_encname, then
+                // prohibit_ivar), and the error comes before anything is set.
+                RubyModule module = obj as RubyModule;
+                if (module != null) {
+                    for (int i = 0; i < count; i++) {
+                        string name = ReadIdentifier();
+                        object value = ReadAnObject(false);
+                        if (ParseEncodingIVar(name, value) == null) {
+                            throw RubyExceptions.CreateTypeError("can't override instance variable of {0} '{1}'",
+                                module.IsClass ? "class" : "module", module.GetDisplayName(Context, false).ToString());
+                        }
+                    }
+                    return;
+                }
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
                     object value = ReadAnObject(false);
