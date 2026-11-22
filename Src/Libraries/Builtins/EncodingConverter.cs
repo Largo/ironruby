@@ -56,6 +56,10 @@ namespace IronRuby.Builtins {
             internal const int PartialInputFlag = 0x20000;
             internal const int AfterOutputFlag = 0x40000;
 
+            // amp_escape has no flag in MRI - it is only ever asked for by name, as
+            // Encoding::Converter.new("", "amp_escape") - so this one is IronRuby's own
+            internal const int AmpEscapeFlag = 0x10000000;
+
             [RubyConstant("INVALID_MASK")]
             public static readonly int InvalidMask = InvalidMaskFlag;
 
@@ -140,6 +144,13 @@ namespace IronRuby.Builtins {
             // set once the :xml => :attr decorator has written its opening quote, and once it has
             // written the closing one
             private bool _xmlQuoteOpened, _decoratorsFinished;
+
+            // what #convpath and #inspect say of a converter built from a conversion path
+            // (Encoding::Converter.new([...])) or from a decorator's name, which is not what the
+            // flags alone would say; null for any other
+            private RubyArray _explicitConvPath;
+            private string _explicitDescription;
+
             #endregion
 
             #region Construction
@@ -368,6 +379,9 @@ namespace IronRuby.Builtins {
             }
 
             internal RubyArray/*!*/ ConvPath() {
+                if (_explicitConvPath != null) {
+                    return new RubyArray(_explicitConvPath);
+                }
                 return MakeConvPath(_noConversion ? null : _path, _flags);
             }
 
@@ -1285,7 +1299,7 @@ namespace IronRuby.Builtins {
             /// </summary>
             private string XmlEscape(int codepoint) {
                 if ((_flags & (XmlTextFlag | XmlAttrContentFlag)) == 0) {
-                    return null;
+                    return ((_flags & AmpEscapeFlag) != 0 && codepoint == '&') ? "&amp;" : null;
                 }
                 bool attribute = (_flags & XmlAttrContentFlag) != 0;
                 switch (codepoint) {
@@ -1553,10 +1567,33 @@ namespace IronRuby.Builtins {
             [RubyConstructor]
             public static RubyConverter/*!*/ Create(ConversionStorage<MutableString>/*!*/ toStr,
                 ConversionStorage<IDictionary<object, object>>/*!*/ toHash, RubyClass/*!*/ self,
-                object source, object destination, [Optional]object options) {
+                object source, [Optional]object destination, [Optional]object options) {
+
+                if (destination == Missing.Value) {
+                    var convpath = source as IList<object>;
+                    if (convpath == null) {
+                        throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2..3)");
+                    }
+                    return CreateFromConvPath(toStr, convpath);
+                }
 
                 object replacement;
                 int flags = ParseOptions(toHash, options, out replacement);
+
+                // Encoding::Converter.new("", "amp_escape"): a decorator asked for by name, which
+                // MRI finds as a transcoder from "" to it
+                int decorator;
+                var sourceString = source as MutableString;
+                var destinationString = destination as MutableString;
+                if (sourceString != null && sourceString.IsEmpty && destinationString != null &&
+                    TryGetDecoratorFlag(destinationString.ToString(), out decorator)) {
+                    var named = new RubyConverter(null, flags | decorator);
+                    string name = destinationString.ToString();
+                    named._explicitConvPath = new RubyArray { MutableString.CreateAscii(name).Freeze() };
+                    named._explicitDescription = name;
+                    return named;
+                }
+
                 RequireOneNewlineDecorator(toStr, source, destination, flags);
                 var path = ResolvePath(toStr, source, destination, flags, true);
 
@@ -1564,6 +1601,73 @@ namespace IronRuby.Builtins {
                 if (replacement != null && replacement != DefaultReplacementMarker) {
                     result.SetReplacement(ToReplacementString(toStr, replacement));
                 }
+                return result;
+            }
+
+            private static bool TryGetDecoratorFlag(string/*!*/ name, out int flag) {
+                switch (name) {
+                    case "amp_escape": flag = AmpEscapeFlag; return true;
+                    case "xml_text_escape": flag = XmlTextFlag; return true;
+                    case "xml_attr_content_escape": flag = XmlAttrContentFlag; return true;
+                    case "xml_attr_quote": flag = XmlAttrQuoteFlag; return true;
+                    case "universal_newline": flag = UniversalNewlineFlag; return true;
+                    case "crlf_newline": flag = CrlfNewlineFlag; return true;
+                    case "cr_newline": flag = CrNewlineFlag; return true;
+                    case "lf_newline": flag = LfNewlineFlag; return true;
+                    default: flag = 0; return false;
+                }
+            }
+
+            /// <summary>
+            /// Encoding::Converter.new(convpath): the conversion spelled out as MRI's #convpath
+            /// answers it, a list of [source, destination] pairs and decorator names. The pairs
+            /// are chained (each one searched for as Encoding::Converter.new would) and the
+            /// decorators added. #convpath gives the path back as it was asked for; the
+            /// decorators run where the options would put them, wherever they were listed.
+            /// </summary>
+            private static RubyConverter/*!*/ CreateFromConvPath(ConversionStorage<MutableString>/*!*/ toStr, IList<object>/*!*/ convpath) {
+                var path = new List<RubyEncoding>();
+                var reported = new RubyArray();
+                int flags = 0;
+                foreach (object item in convpath) {
+                    var pair = item as IList<object>;
+                    if (pair != null) {
+                        if (pair.Count != 2) {
+                            throw RubyExceptions.CreateArgumentError("not a 2-element array in convpath");
+                        }
+                        string sourceName = EncodingName(toStr, pair[0]);
+                        string destinationName = EncodingName(toStr, pair[1]);
+                        RubyEncoding from = FindEncoding(toStr.Context, pair[0], sourceName);
+                        RubyEncoding to = FindEncoding(toStr.Context, pair[1], destinationName);
+                        if (from == null || to == null || from == to || from.HasNoTranscoder || to.HasNoTranscoder) {
+                            throw RubyExceptions.CreateArgumentError("adding conversion failed: {0} to {1}", sourceName, destinationName);
+                        }
+                        RubyEncoding[] leg = RubyExceptions.ConversionPath(from, to);
+                        if (path.Count != 0 && path[path.Count - 1] != leg[0]) {
+                            throw RubyExceptions.CreateArgumentError("adding conversion failed: {0} to {1}", sourceName, destinationName);
+                        }
+                        for (int i = (path.Count == 0) ? 0 : 1; i < leg.Length; i++) {
+                            path.Add(leg[i]);
+                        }
+                        for (int i = 0; i < leg.Length - 1; i++) {
+                            reported.Add(new RubyArray { leg[i], leg[i + 1] });
+                        }
+                        continue;
+                    }
+
+                    string name = Protocols.CastToString(toStr, item).ToString();
+                    int decorator;
+                    if (!TryGetDecoratorFlag(name, out decorator)) {
+                        throw RubyExceptions.CreateArgumentError("decoration failed: {0}", name);
+                    }
+                    flags |= decorator;
+                    reported.Add(MutableString.CreateAscii(name).Freeze());
+                }
+
+                var result = new RubyConverter(path.Count != 0 ? path.ToArray() : null, flags);
+                result._explicitConvPath = reported;
+                // MRI's #inspect names the encodings of such a converter but none of its decorators
+                result._explicitDescription = (path.Count != 0) ? Describe(path[0].Name, path[path.Count - 1].Name, 0) : "no-conversion";
                 return result;
             }
 
@@ -1639,8 +1743,8 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(RubyConverter/*!*/ self) {
-                string description = self.IsNoConversion ? Describe("", "", self._flags) :
-                    Describe(self.SourceEncoding.Name, self.DestinationEncoding.Name, self._flags);
+                string description = self._explicitDescription ?? (self.IsNoConversion ? Describe("", "", self._flags) :
+                    Describe(self.SourceEncoding.Name, self.DestinationEncoding.Name, self._flags));
                 return MutableString.CreateBinary(Encoding.ASCII.GetBytes("#<Encoding::Converter: " + description + ">"));
             }
 
