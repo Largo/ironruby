@@ -292,13 +292,44 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// An existing constant was assigned again or removed: the one change to constants that a running
         /// compiled loop which folded the constant must see at its next iteration, as CRuby's next read does.
-        /// A new constant, a mixin, an autoload starting or ending move ConstantAccessVersion only
-        /// (ConstantsChanged): no loop has folded what they change, and moving the code epoch for them made
+        /// A new constant or a mixin does too when it brings a name a compiled body folded (ConstantAppeared):
+        /// the folded read may now find it first. Otherwise they, and an autoload starting or ending, move
+        /// ConstantAccessVersion only (ConstantsChanged): moving the code epoch for every one of them made
         /// every running loop in the process hand itself back.
         /// </summary>
         internal void ConstantReassigned() {
             ConstantAccessVersion++;
             RubyUtils.InvalidateCompiledCode();
+        }
+
+        // The names of the constants a typed body or an outlined loop has folded (JitCompiler.ResolveConstant), in this
+        // runtime. Bounded by the constant names of the program; never shrinks.
+        private readonly ConcurrentDictionary<string, bool>/*!*/ _foldedConstantNames = new ConcurrentDictionary<string, bool>();
+
+        /// <summary>
+        /// Called by the JIT before it resolves a constant it is about to fold: from then on a new constant of that name
+        /// moves the code epoch (ConstantAppeared), so that a running loop that folded it hands itself back.
+        /// </summary>
+        internal void ConstantFolded(string/*!*/ name) {
+            _foldedConstantNames.TryAdd(name, true);
+        }
+
+        internal bool IsFoldedConstantName(string/*!*/ name) {
+            return _foldedConstantNames.ContainsKey(name);
+        }
+
+        /// <summary>
+        /// A new constant was set, or a mixin brought constants of these names into a lookup: a read that resolved
+        /// the name elsewhere (an outer module's, a superclass's, Object's) may now find this one first. If a compiled
+        /// body folded a constant of the name, that is a change it must see at its next iteration, as for a
+        /// reassignment; otherwise the version alone moves (ConstantsChanged), and running loops go on.
+        /// </summary>
+        internal void ConstantAppeared(string/*!*/ name) {
+            if (IsFoldedConstantName(name)) {
+                ConstantReassigned();
+            } else {
+                ConstantsChanged();
+            }
         }
 
         // Number of autoloads running anywhere in this runtime. While one is in flight the
