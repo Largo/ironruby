@@ -11016,9 +11016,15 @@ class IO
     __check_set_encoding_options__(opts.empty? ? args : args + [opts])
     if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
       external, internal = args[0].split(":", 2)
-      return __ir_set_encoding__(external, internal, **opts)
+      result = __ir_set_encoding__(external, internal, **opts)
+    else
+      result = __ir_set_encoding__(*args, **opts)
     end
-    __ir_set_encoding__(*args, **opts)
+    # The write converter __encode_for_write__ keeps was made for the old encoding and
+    # options. MRI's io_encoding_set drops it (clear_codeconv) without finishing it: no
+    # closing ESC ( B or quote is written for it, and the next write starts a new one.
+    @__write_ec__ = nil
+    result
   end
 
   # MRI validates the pair before it takes it: an encoding that is not ASCII

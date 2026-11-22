@@ -1227,11 +1227,11 @@ namespace IronRuby.Builtins {
 
             // With #autoclose false the descriptor outlives the IO object - another IO may be
             // using it (IO.new(io.fileno) shares the stream).
+            // Either way MRI's fptr_finalize_flush finishes the write conversion first: the bytes
+            // that return a stateful encoding to its initial state belong to what was written.
             object autoclose;
-            if (self.Context.TryGetInstanceVariable(self, "@__autoclose", out autoclose) && autoclose is bool && !(bool)autoclose) {
-                self.CloseKeepingDescriptor();
-                return;
-            }
+            bool keepDescriptor = self.Context.TryGetInstanceVariable(self, "@__autoclose", out autoclose) &&
+                autoclose is bool && !(bool)autoclose;
             Exception flushError = null;
             try {
                 FinishWriteConversion(self);
@@ -1239,13 +1239,17 @@ namespace IronRuby.Builtins {
                 // state MRI uses for buffering warnings. Do not probe a pipe merely because it
                 // was written: that manufactures EPIPE after its reader has consumed the data.
                 // A failed explicit #flush is different; MRI retries it from #close.
-                if (self.GetStream().WriteFlushFailed) {
+                if (!keepDescriptor && self.GetStream().WriteFlushFailed) {
                     self.Flush();
                 }
             } catch (IOException e) {
                 flushError = TranslateWriteError(e, self);
             } finally {
-                self.Close();
+                if (keepDescriptor) {
+                    self.CloseKeepingDescriptor();
+                } else {
+                    self.Close();
+                }
             }
             if (flushError != null) {
                 throw flushError;
@@ -1289,8 +1293,19 @@ namespace IronRuby.Builtins {
             if (self.Closed) {
                 return;
             }
-            FinishWriteConversion(self);
-            self.CloseWriter();
+            // As in #close, a write that fails while finishing the conversion (EPIPE once the
+            // reader is gone) still closes the writer, and is reported as the errno it was.
+            Exception writeError = null;
+            try {
+                FinishWriteConversion(self);
+            } catch (IOException e) {
+                writeError = TranslateWriteError(e, self);
+            } finally {
+                self.CloseWriter();
+            }
+            if (writeError != null) {
+                throw writeError;
+            }
         }
         
         [RubyMethod("closed?")]
