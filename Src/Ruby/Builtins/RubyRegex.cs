@@ -1636,13 +1636,17 @@ namespace IronRuby.Builtins {
         }
 
         // rb_reg_expr_str writes a character that is neither printable nor a space as \xHH, so a
-        // NUL or an ESC in the pattern shows as "\x00" or "\x1B" in #to_s and #inspect.
+        // NUL or an ESC in the pattern shows as "\x00" or "\x1B" in #to_s and #inspect. A backslash
+        // and the character after it are copied as they are: "\\\e" (a backslash and an ESC) stays
+        // an escaped ESC, which compiles to the same pattern, where "\\\x1B" would not.
         private static void AppendPatternPiece(MutableString/*!*/ result, MutableString/*!*/ pattern, int start, int count) {
             int end = start + count;
             int runStart = start;
             for (int i = start; i < end; i++) {
                 char c = pattern.GetChar(i);
-                if (c < 0x20 && (c < '\t' || c > '\r') || c == 0x7f) {
+                if (c == '\\' && i + 1 < end) {
+                    i++;
+                } else if (c < 0x20 && (c < '\t' || c > '\r') || c == 0x7f) {
                     result.Append(pattern, runStart, i - runStart);
                     result.Append("\\x").Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
                     runStart = i + 1;
