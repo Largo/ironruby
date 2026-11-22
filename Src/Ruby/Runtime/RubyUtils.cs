@@ -1464,6 +1464,11 @@ namespace IronRuby.Runtime {
             return Evaluate(code, targetScope, self, module, null, file, line);
         }
 
+        private static bool StartsWithUtf8Bom(MutableString/*!*/ code) {
+            return code.Encoding.IsAsciiIdentity && code.GetByteCount() >= 3
+                && code.GetByte(0) == 0xEF && code.GetByte(1) == 0xBB && code.GetByte(2) == 0xBF;
+        }
+
         public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module,
             RubyModule lexicalConstantModule, MutableString file, int line) {
             Assert.NotNull(code, targetScope);
@@ -1480,7 +1485,9 @@ namespace IronRuby.Runtime {
 
             // we want to create a new top-level local scope:
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
-            options.EvalSourceEncoding = code.Encoding;
+            // A UTF-8 BOM opening the string makes the code UTF-8 whatever the string's encoding, as
+            // MRI's parser_prepare does (eval "\xEF\xBB\xBF..." from a binary or US-ASCII file).
+            options.EvalSourceEncoding = StartsWithUtf8Bom(code) ? RubyEncoding.UTF8 : code.Encoding;
             string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
             var source = CreateRubySourceUnit(context, code, (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path);
 
