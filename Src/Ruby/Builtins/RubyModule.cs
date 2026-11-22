@@ -879,10 +879,30 @@ namespace IronRuby.Builtins {
             _methodsState = module._methodsState;
             if (module._methods != null) {
                 _methods = new Dictionary<string, RubyMemberInfo>(module._methods.Count);
+                Dictionary<RubyScope, RubyScope> rewrittenScopes = null;
                 foreach (var method in module._methods) {
                     // the undefined/hidden markers are shared singletons, not copied (Integer.dup copies undef'd .new):
-                    _methods[method.Key] = (method.Value.IsUndefined || method.Value.IsHidden || method.Value.IsInteropMember) ?
-                        method.Value : method.Value.Copy(method.Value.Flags, this);
+                    if (method.Value.IsUndefined || method.Value.IsHidden || method.Value.IsInteropMember) {
+                        _methods[method.Key] = method.Value;
+                        continue;
+                    }
+
+                    // A method written in the body of the module being copied looks its constants up in the copy, as
+                    // CRuby's rb_vm_rewrite_cref makes it do: the copy gets the same scope with the copy in place of
+                    // the original module ([Bug #15877]). Methods written elsewhere (in a block, in another module's
+                    // body, the singleton methods of a `def self.m') keep the scope they were written in.
+                    var rubyMethod = method.Value as RubyMethodInfo;
+                    var moduleScope = (rubyMethod != null) ? rubyMethod.DeclaringScope as RubyModuleScope : null;
+                    if (moduleScope != null && moduleScope.Module == module) {
+                        rewrittenScopes ??= new Dictionary<RubyScope, RubyScope>();
+                        RubyScope scope;
+                        if (!rewrittenScopes.TryGetValue(moduleScope, out scope)) {
+                            rewrittenScopes[moduleScope] = scope = moduleScope.CopyFor(this);
+                        }
+                        _methods[method.Key] = rubyMethod.CopyWithScope(scope, this);
+                    } else {
+                        _methods[method.Key] = method.Value.Copy(method.Value.Flags, this);
+                    }
                 }
             } else {
                 _methods = null;
@@ -2707,23 +2727,61 @@ namespace IronRuby.Builtins {
                 var result = ResolveMethodNoLock(name, visibility, MethodLookup.ReturnForwarder,
                     (scope != null) ? scope.GetActiveRefinements() : null).InvalidateSitesOnOverride();
 
-                // `public :m' in a module that inherits m leaves an entry there that only forwards
-                // to the inherited body. MRI's Method made out of it reports that module as its
-                // #owner and the forwarder's visibility, so hand back a copy of the body that says so.
                 if (result.Found && result.Info.IsSuperForwarder) {
-                    var forwarder = (SuperForwarderInfo)result.Info;
-                    var target = result.Owner.ResolveSuperMethodNoLock(forwarder.SuperName, result.Owner).InvalidateSitesOnOverride();
-                    if (!target.Found) {
-                        return target;
-                    }
-
-                    var copy = target.Info.Copy(forwarder.Flags, target.Info.DeclaringModule);
-                    copy.AliasOwner = forwarder.AliasOwner ?? result.Owner;
-                    copy.OriginalName = forwarder.OriginalName ?? target.Info.OriginalName;
-                    return new MethodResolutionResult(copy, result.Owner, true);
+                    return ResolveForwarderNoLock(result);
                 }
 
                 return result;
+            }
+        }
+
+        // `public :m' in a module that inherits m leaves an entry there that only forwards
+        // to the inherited body. MRI's Method made out of it reports that module as its
+        // #owner and the forwarder's visibility, so hand back a copy of the body that says so.
+        private static MethodResolutionResult ResolveForwarderNoLock(MethodResolutionResult forwarderResult) {
+            var forwarder = (SuperForwarderInfo)forwarderResult.Info;
+            var target = forwarderResult.Owner.ResolveSuperMethodNoLock(forwarder.SuperName, forwarderResult.Owner).InvalidateSitesOnOverride();
+            if (!target.Found) {
+                return target;
+            }
+
+            var copy = target.Info.Copy(forwarder.Flags, target.Info.DeclaringModule);
+            copy.AliasOwner = forwarder.AliasOwner ?? forwarderResult.Owner;
+            copy.OriginalName = forwarder.OriginalName ?? target.Info.OriginalName;
+            return new MethodResolutionResult(copy, forwarderResult.Owner, true);
+        }
+
+        /// <summary>
+        /// Method#super_method: what `super' from <paramref name="callerModule"/> reaches, except that a `public :m'
+        /// forwarder on the way is the method found there (MRI's zsuper method entry), made into a Method as
+        /// <see cref="ResolveMethodWithRefinements"/> makes one: its #owner is the module the forwarder is in.
+        /// </summary>
+        public MethodResolutionResult ResolveSuperMethodForReflection(string/*!*/ name, RubyModule/*!*/ callerModule) {
+            using (Context.ClassHierarchyLocker()) {
+                if (callerModule.RefinedModule != null) {
+                    return ResolveSuperMethodNoLock(name, callerModule);
+                }
+
+                InitializeMethodsNoLock();
+
+                RubyMemberInfo info = null;
+                RubyModule owner = null;
+                bool foundModule = false;
+                bool skipHidden = false;
+                if (ForEachAncestor((module) => {
+                    if (module == callerModule) {
+                        foundModule = true;
+                        return false;
+                    }
+
+                    owner = module;
+                    return foundModule && module.TryGetMethod(name, ref skipHidden, out info);
+                }) && !info.IsUndefined) {
+                    var result = new MethodResolutionResult(info, owner, true);
+                    return info.IsSuperForwarder ? ResolveForwarderNoLock(result) : result;
+                }
+
+                return MethodResolutionResult.NotFound;
             }
         }
 

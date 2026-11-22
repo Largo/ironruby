@@ -133,11 +133,7 @@ namespace IronRuby.Builtins {
             string name = self.Info.OriginalName ?? self.Name;
 
             var targetClass = context.GetImmediateClassOf(self.Target);
-            MethodResolutionResult result;
-            using (context.ClassHierarchyLocker()) {
-                result = targetClass.ResolveSuperMethodNoLock(name, owner);
-            }
-
+            MethodResolutionResult result = targetClass.ResolveSuperMethodForReflection(name, owner);
             return result.Found ? new RubyMethod(self.Target, result.Info, name) : null;
         }
 

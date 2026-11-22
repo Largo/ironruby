@@ -930,6 +930,17 @@ namespace IronRuby.Runtime.Calls {
                     return true;
 
                 case MethodMissingBinding.Fallback:
+                    // A call of method_missing itself where it has been undefined: MRI's method_missing() goes to
+                    // raise_method_missing with the call's own arguments, which is what BasicObject#method_missing
+                    // does with them (`no method name given' for none, a name that is not a Symbol refused).
+                    if (defaultFallback && methodName == Symbols.MethodMissing && incompatibleVisibility == RubyMethodVisibility.None) {
+                        var basicMethodMissing = args.RubyContext.BasicObjectClass.GetMethod(Symbols.MethodMissing) as RubyLibraryMethodInfo;
+                        if (basicMethodMissing != null) {
+                            basicMethodMissing.BuildCall(metaBuilder, args, Symbols.MethodMissing);
+                            return true;
+                        }
+                    }
+
                     // method_missing is defined in Kernel:
                     if (defaultFallback && args.Signature.IsVariableCall) {
                         metaBuilder.SetError(Methods.MakeUndefinedLocalOrMethodError.OpCall(

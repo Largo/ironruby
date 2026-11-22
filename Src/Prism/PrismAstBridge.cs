@@ -98,7 +98,16 @@ namespace IronRuby.Prism {
             }
             bool timed = PhaseTimer.Enter(PhaseTimer.Bridge);
             try {
-                string code = sourceUnit.GetCode();
+                string code;
+                try {
+                    code = sourceUnit.GetCode();
+                } catch (ArgumentException e) when (e.Data[RubyContext.InvalidMagicCommentSourceKey] is byte[] source) {
+                    string message = MagicCommentErrorMessage(source, sourceUnit.Path, options.InitialLocation.Line);
+                    if (message == null) {
+                        throw;
+                    }
+                    throw new ArgumentException(message);
+                }
                 // Prism, told this is the main script, would skip a #! line without "ruby" in it to
                 // look for one that has; a binstub that names IronRuby's launcher is already Ruby.
                 if (mainScript && (commandLine & 0x20) == 0 && RubyUtils.ShebangNamesIronRuby(code)) {
@@ -246,6 +255,31 @@ namespace IronRuby.Prism {
             }
 
             return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames, result.DataOffset);
+        }
+
+        /// <summary>
+        /// The ArgumentError MRI raises for a magic comment naming an encoding it does not know: prism's
+        /// "file:line: unknown or invalid encoding in the magic comment" followed by the line, marked under the
+        /// name, the way a syntax error's is (MRI's pm_parse_process_error). Null if prism does not see it so.
+        /// </summary>
+        private static string MagicCommentErrorMessage(byte[]/*!*/ source, string path, int startLine) {
+            int lineOffset = RubyUtils.DecodeEvalLineOffset(ref path);
+            int formatType = 1;
+            if (!Console.IsErrorRedirected) {
+                formatType = String.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")) ? 3 : 2;
+            }
+            byte[] formatted;
+            try {
+                var options = PrismParser.BuildOptionsData(path, (startLine <= 0 ? 1 : startLine) + lineOffset, null);
+                if (PrismSerialize.ErrorsFormat(source, options, formatType, out formatted) != 1) {
+                    return null;
+                }
+            } catch (Exception) {
+                return null;
+            }
+            // the buffer starts with the name of the source's encoding and a NUL
+            int start = Array.IndexOf(formatted, (byte)0) + 1;
+            return System.Text.Encoding.UTF8.GetString(formatted, start, formatted.Length - start);
         }
 
         /// <summary>
@@ -732,7 +766,7 @@ namespace IronRuby.Prism {
                 case Pm.LocalVariableReadNode read:
                     return CurrentScope.ResolveOrAddVariable(read.Name, span);
                 case Pm.ItLocalVariableReadNode _:
-                    return CurrentScope.ResolveOrAddVariable("it", span);
+                    return CurrentScope.ResolveOrAddVariable(ItParameterName, span);
                 case Pm.LocalVariableWriteNode write:
                     return new SimpleAssignmentExpression(
                         CurrentScope.ResolveOrAddVariable(write.Name, span), Expr(write.Value), null, span);
@@ -2036,12 +2070,16 @@ namespace IronRuby.Prism {
                 }
                 case Pm.ItParametersNode it: {
                     var span = Span(it);
-                    var mandatory = new LeftValue[] { DefineParameter("it", span) };
+                    // A local the block assigns to is another variable that is also called `it' (prism tells
+                    // the reads of the parameter from those of the local), so the parameter is kept under a
+                    // name of its own: `it = nil' leaves Binding#implicit_parameter_get(:it) alone, and eval
+                    // sees the local.
+                    var mandatory = new LeftValue[] { DefineParameter(ItParameterName, span) };
                     // `it` is a parameter without a name as far as #parameters is concerned
                     var declared = new[] { new RubyParameterSignature.Parameter("req", null) };
                     return new Parameters(mandatory, 1, null, null, null, span) {
                         Signature = new RubyParameterSignature(declared, 1, 0, 0, false, 0, false, false) {
-                            ImplicitParameterNames = new[] { "it" }
+                            ImplicitParameterNames = new[] { ItParameterName }
                         }
                     };
                 }
@@ -3026,6 +3064,12 @@ namespace IronRuby.Prism {
         // ---- pattern matching (case/in), lowered to tests + bindings ----
 
         private const string ForwardingRestName = "?fwd?";
+
+        /// <summary>
+        /// Where a block's `it' is kept: a compiler name, like the ones below, which no local variable can have
+        /// (see Binding#implicit_parameter_get).
+        /// </summary>
+        public const string ItParameterName = RubyParameterSignature.ItParameterName;
         internal const string AnonymousKeywordRestName = "?kwrest?";
         private const string ForwardingBlockName = "?fwdblk?";
 

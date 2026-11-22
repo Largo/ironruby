@@ -139,11 +139,7 @@ namespace IronRuby.Builtins {
             // an alias resolves super under the name the body was written with
             string name = self._info.OriginalName ?? self._name;
 
-            MethodResolutionResult result;
-            using (context.ClassHierarchyLocker()) {
-                result = self._targetConstraint.ResolveSuperMethodNoLock(name, owner);
-            }
-
+            MethodResolutionResult result = self._targetConstraint.ResolveSuperMethodForReflection(name, owner);
             return result.Found ? new UnboundMethod(self._targetConstraint, name, result.Info) : null;
         }
 

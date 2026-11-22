@@ -5239,6 +5239,11 @@ namespace IronRuby.Runtime {
             return encoding.IsAsciiIdentity ? encoding.StrictEncoding : RubyEncoding.UTF8.StrictEncoding;
         }
 
+        /// <summary>
+        /// The key of the source bytes in the Data of the ArgumentException a magic comment naming no encoding raises.
+        /// </summary>
+        public const string InvalidMagicCommentSourceKey = "IronRuby.InvalidMagicCommentSource";
+
         private SourceCodeReader/*!*/ ReadSource(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding, string path) {
             long initialPosition = stream.Position;
             var reader = new StreamReader(stream, BinaryEncoding.Instance, true);
@@ -5268,7 +5273,14 @@ namespace IronRuby.Runtime {
                 // the parser does not know them (rb_enc_find_index there fails the same way).
                 var rubyEncoding = RubyEncoding.FindByName(encodingName);
                 if (rubyEncoding == null || !rubyEncoding.IsAsciiIdentity) {
-                    throw new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
+                    var error = new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
+                    // MRI's message goes on with prism's picture of the line, numbered from where an eval starts: the parser,
+                    // which knows that line, draws it from these bytes (PrismAstBridge.Parse).
+                    stream.Seek(initialPosition, SeekOrigin.Begin);
+                    var source = new MemoryStream();
+                    stream.CopyTo(source);
+                    error.Data[InvalidMagicCommentSourceKey] = source.ToArray();
+                    throw error;
                 }
                 rubyPreambleEncoding = rubyEncoding.StrictEncoding;
             }
