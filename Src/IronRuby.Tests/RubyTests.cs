@@ -1377,6 +1377,7 @@ namespace IronRuby.Tests {
                 String_InspectUnicodeCarriers1,
                 String_SuccSupplementary1,
                 String_Utf8Mac1,
+                String_InspectOwnEncoding1,
                 Format_Char2,
                 Marshal_RangeRecord1,
                 Marshal_LoadedClasses1,

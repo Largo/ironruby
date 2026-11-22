@@ -2250,9 +2250,87 @@ namespace IronRuby.Builtins {
                 return InspectForeignEncoding(self, resultEncoding);
             }
 
+            // In the encoding the result is in, one of the ASCII compatible encodings without
+            // Unicode's tables (EUC-JP, Shift_JIS, Windows-1252...), MRI writes a character it
+            // calls printable as itself: "\xA4\xA2" in EUC-JP inspects as its own two bytes.
+            if (!self.IsAscii() && resultEncoding != RubyEncoding.UTF8 && resultEncoding != RubyEncoding.Binary &&
+                !resultEncoding.IsDummy && !resultEncoding.HasUnicodeCodePoints) {
+                return InspectInOwnEncoding(self, resultEncoding);
+            }
+
             // Note that "self" could be a subclass of MutableString, but the return value should
             // always be just a MutableString
             return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), resultEncoding);
+        }
+
+        /// <summary>
+        /// rb_str_inspect for a string in the encoding of the result, an ASCII compatible one
+        /// without Unicode's tables: ASCII as everywhere else, a printable character
+        /// (RubyEncoding.IsInspectPrintable) as its own bytes, an invalid byte as \xNN, and a
+        /// character that is valid but not printable as \xNN (one byte) or \x{NNNN}.
+        /// </summary>
+        private static MutableString/*!*/ InspectInOwnEncoding(MutableString/*!*/ self, RubyEncoding/*!*/ encoding) {
+            var output = new List<byte>(self.GetByteCount() + 8);
+            var text = new StringBuilder();
+            text.Append('"');
+
+            // '#' is escaped only when what follows it would start an interpolation (see
+            // InspectForeignEncoding), so it waits for the next character.
+            bool pendingHash = false;
+            var characters = self.GetCharacters();
+            while (characters.MoveNext()) {
+                var current = characters.Current;
+                bool isAscii = current.IsValid && current.Codepoint < 0x80;
+                if (pendingHash) {
+                    int next = isAscii ? current.Codepoint : -1;
+                    if (next == '{' || next == '$' || next == '@') {
+                        text.Append('\\');
+                    }
+                    text.Append('#');
+                    pendingHash = false;
+                }
+                if (isAscii) {
+                    if (current.Codepoint == '#') {
+                        pendingHash = true;
+                        continue;
+                    }
+                    MutableString.AppendCharRepresentation(text, current.Codepoint, -1, MutableString.Escape.Special, '"', -1);
+                    continue;
+                }
+                byte[] bytes = current.ToMutableString(encoding).ToByteArray();
+                // A byte the encoding has a place for but no Unicode character (0xA0 in TIS-620)
+                // comes out of the character walk as an escape, though it is a valid character.
+                bool valid = current.IsValid || !MutableString.CreateBinary(bytes, encoding).ContainsInvalidCharacters();
+                if (valid && encoding.IsInspectPrintable(bytes)) {
+                    AppendAscii(output, text);
+                    output.AddRange(bytes);
+                    continue;
+                }
+                if (!valid || bytes.Length == 1) {
+                    foreach (byte b in bytes) {
+                        AppendByteEscape(text, b);
+                    }
+                    continue;
+                }
+                text.Append("\\x{");
+                foreach (byte b in bytes) {
+                    text.Append(((int)b).ToString("X2", CultureInfo.InvariantCulture));
+                }
+                text.Append('}');
+            }
+            if (pendingHash) {
+                text.Append('#');
+            }
+            text.Append('"');
+            AppendAscii(output, text);
+            return MutableString.CreateBinary(output.ToArray(), encoding);
+        }
+
+        private static void AppendAscii(List<byte>/*!*/ output, StringBuilder/*!*/ text) {
+            for (int i = 0; i < text.Length; i++) {
+                output.Add((byte)text[i]);
+            }
+            text.Clear();
         }
 
         /// <summary>

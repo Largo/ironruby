@@ -745,6 +745,15 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Whether String#inspect writes a valid character of this encoding (an ASCII compatible
+        /// one without Unicode's tables) as itself when it answers in the same encoding, as MRI's
+        /// rb_enc_isprint says (InspectPrintable).
+        /// </summary>
+        public bool IsInspectPrintable(byte[]/*!*/ character) {
+            return InspectPrintable.IsPrintable(this, character);
+        }
+
+        /// <summary>
         /// What Encoding::Converter passes the characters it decodes from this encoding through,
         /// or null for nothing: UTF8-MAC composes them (FinishTranscodingDecode, over a stream).
         /// </summary>

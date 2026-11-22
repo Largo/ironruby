@@ -1172,6 +1172,42 @@ f48fbfbf: Encoding::UndefinedConversionError Encoding::UndefinedConversionError
         }
 
         /// <summary>
+        /// #inspect of a string in the encoding the result is in, one without Unicode's tables:
+        /// a character MRI's rb_enc_isprint calls printable is written as itself, the rest escaped.
+        /// Util/inspect-own-encoding-matrix.rb has the rest.
+        /// </summary>
+        public void String_InspectOwnEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def inspect_in(encoding, hex)
+  v, $VERBOSE = $VERBOSE, nil
+  Encoding.default_internal = encoding
+  $VERBOSE = v
+  i = [hex].pack('H*').force_encoding(encoding).inspect
+  ""#{i.encoding} #{i.b.unpack1('H*')}""
+ensure
+  v, $VERBOSE = $VERBOSE, nil
+  Encoding.default_internal = nil
+  $VERBOSE = v
+end
+[['EUC-JP', '61a4a20a7f23'], ['EUC-JP', 'adf4a4'], ['Shift_JIS', '82a0a1ff'], ['GBK', 'b0a180'], ['ISO-8859-1', '809fa0e9'],
+ ['Windows-1252', '808285'], ['IBM437', '80'], ['TIS-620', 'a0db'], ['EUC-JP', '237ba4a2']].each do |e, h|
+  puts ""#{e} #{h}: #{inspect_in(e, h)}""
+end
+", @"
+EUC-JP 61a4a20a7f23: EUC-JP 2261a4a25c6e5c7837462322
+EUC-JP adf4a4: EUC-JP 22adf45c78413422
+Shift_JIS 82a0a1ff: Shift_JIS 2282a0a15c78464622
+GBK b0a180: GBK 22b0a15c78383022
+ISO-8859-1 809fa0e9: ISO-8859-1 225c7838305c783946a0e922
+Windows-1252 808285: Windows-1252 22805c7838325c78383522
+IBM437 80: IBM437 225c78383022
+TIS-620 a0db: TIS-620 22a05c78444222
+EUC-JP 237ba4a2: EUC-JP 225c237ba4a222
+");
+        }
+
+        /// <summary>
         /// The %c directive, as MRI's rb_str_format has it: the argument is read as an int (NUM2INT, with its
         /// messages), the encoding of the format says how long the character of the number is, "invalid character"
         /// when it has no length for it, and that many bytes of the number are put without asking whether they are a
