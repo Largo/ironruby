@@ -1585,6 +1585,16 @@ namespace IronRuby.Runtime {
             return EvaluateBlock(block, self, self, args, out result) ? result : defaultReturnValue;
         }
 
+        /// <summary>
+        /// The class #instance_eval evaluates a String in: the receiver's singleton class, or, for an Integer
+        /// or a Symbol, which can have none, the dummy singleton in front of its class (as for a block, below).
+        /// </summary>
+        public static RubyClass/*!*/ GetOrCreateEvalSingletonClass(RubyContext/*!*/ context, object self) {
+            return HasSingletonClass(self)
+                ? context.GetOrCreateSingletonClass(self)
+                : context.GetImmediateClassOf(self).GetDummySingletonClass();
+        }
+
         public static object EvaluateInSingleton(object self, BlockParam/*!*/ block, object[] args) {
             // MRI runs the block against anything and only refuses a `def' inside it, so the
             // question here is what the runtime can make a singleton of at all - not what user
