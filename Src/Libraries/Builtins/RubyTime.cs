@@ -197,9 +197,23 @@ namespace IronRuby.Builtins {
             InitializeFromDateTime(dateTime);
         }
 
-        // Used by derived Ruby classes.
+        // Used by derived Ruby classes, and by Time.allocate: the one Time that #initialize may
+        // still set.
         public RubyTime()
             : this(0, ExactNum.Zero, RubyTimeZoneKind.Local, ExactNum.Zero) {
+            _initialized = false;
+        }
+
+        // MRI's time_init_* (time_modify) refuses a Time whose instant has been set: "already
+        // initialized Time" ([Bug #8099]). Every constructor but the allocator's sets one.
+        private bool _initialized = true;
+
+        internal bool IsInitialized {
+            get { return _initialized; }
+        }
+
+        internal void MarkInitialized() {
+            _initialized = true;
         }
 
         public RubyTime(long ticks, DateTimeKind kind)

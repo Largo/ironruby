@@ -532,14 +532,24 @@ namespace IronRuby.Builtins {
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyTime/*!*/ Reinitialize(RubyContext/*!*/ context, RubyTime/*!*/ self) {
+            RequireUninitialized(context, self);
             self.CopyFrom(NowInternal(context, context.GetClassOf(self), null));
+            self.MarkInitialized();
             return self;
+        }
+
+        private static void RequireUninitialized(RubyContext/*!*/ context, RubyTime/*!*/ self) {
+            if (self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("already initialized {0}", context.GetClassOf(self).Name);
+            }
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         [ReceivesKeywords]
         public static RubyTime/*!*/ Reinitialize(RubyContext/*!*/ context, RubyTime/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            RequireUninitialized(context, self);
             self.CopyFrom(CreateFromComponents(context, context.GetClassOf(self), args));
+            self.MarkInitialized();
             return self;
         }
 
