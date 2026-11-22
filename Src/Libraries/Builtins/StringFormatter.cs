@@ -40,6 +40,7 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, object, object>> _new;
         private CallSite<Func<CallSite, object, object>> _numerator;
         private CallSite<Func<CallSite, object, object>> _denominator;
+        private CallSite<Func<CallSite, object, object>> _toInt;
 
         [Emitted]
         public StringFormatterSiteStorage(RubyContext/*!*/ context) : base(context) {
@@ -52,6 +53,12 @@ namespace IronRuby.Builtins {
 
         public object Denominator(object value) {
             var site = RubyUtils.GetCallSite(ref _denominator, Context, "denominator", 0);
+            return site.Target(site, value);
+        }
+
+        /// <summary>Dynamic <c>value.to_int</c>.</summary>
+        public object ToInt(object value) {
+            var site = RubyUtils.GetCallSite(ref _toInt, Context, "to_int", 0);
             return site.Target(site, value);
         }
 
@@ -137,6 +144,9 @@ namespace IronRuby.Builtins {
         private readonly RubyEncoding/*!*/ _encoding;
         private readonly bool _formatIsAscii;
         private RubyEncoding _resultEncoding;
+
+        // Whether a %c put the bytes of a number that is not ASCII (FormatCodepoint).
+        private bool _charBytesPut;
         private RubyEncoding _argEncoding;
 
         private readonly StringFormatterSiteStorage/*!*/ _siteStorage;
@@ -199,7 +209,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            return MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
+            RubyEncoding encoding = _resultEncoding ?? _encoding;
+            if (_charBytesPut && encoding != null) {
+                // A %c put bytes that need not be characters by themselves - a lead byte, say,
+                // that the next directive's byte completes - so the result is its bytes, read
+                // as characters when it is asked for them, and not the pieces it was built of.
+                return MutableString.CreateBinary(encoding.EscapingEncoding.GetBytes(_buf.ToString()), encoding);
+            }
+            return MutableString.Create(_buf.ToString(), encoding);
         }
 
         #endregion
@@ -1431,6 +1448,18 @@ namespace IronRuby.Builtins {
             }
             try {
                 return _siteStorage.CastToFixnum(value);
+            } catch (ArgumentOutOfRangeException) {
+                // #to_int gave an Integer that does not fit: the same RangeError as for a number
+                // given directly. The conversion does not hand the Integer out, so it is asked
+                // for once more.
+                object converted = (value is int || value is BigInteger || value is double) ? null : _siteStorage.ToInt(value);
+                if (converted is BigInteger) {
+                    throw IntegerOutOfIntRange((BigInteger)converted);
+                }
+                if (converted is long) {
+                    throw IntegerOutOfIntRange((long)converted);
+                }
+                throw;
             } catch (InvalidOperationException e) {
                 string className = _context.GetClassDisplayName(value);
                 // An object that has #to_int and gave back something else is a different
@@ -1488,8 +1517,10 @@ namespace IronRuby.Builtins {
                         _resultEncoding = encoding = RubyEncoding.Binary;
                     }
                     // The result holds something that is not ASCII now, so its encoding is
-                    // settled as it is by an argument that is not (TrackEncoding).
-                    if (_argEncoding == null) {
+                    // settled as it is by an argument that is not (TrackEncoding) - unless the
+                    // bytes put are ASCII ones, as the "0B" of 0x3042 in Shift_JIS is.
+                    _charBytesPut = true;
+                    if (_argEncoding == null && !(encoding.IsAsciiIdentity && Array.TrueForAll(bytes, b => b < 0x80))) {
                         _argEncoding = encoding;
                     }
                     return encoding.EscapingEncoding.GetString(bytes);

@@ -53,4 +53,26 @@ end
   try("%c then binary %s #{name}") { format("%c%s".dup.force_encoding(name), 0xa1, "\xff".b) }
   try("%c then %s of the same #{name}") { format("%c%s".dup.force_encoding(name), 0xa1, "\xa1".dup.force_encoding(name)) }
 end
+# Bytes that are a character only together: the result is read by its bytes, not by its pieces.
+sjis = ->(f) { f.dup.force_encoding("Shift_JIS") }
+try("pieces Shift_JIS") { format(sjis["%c%c"], 0x4181, 0x40) }
+try("pieces Shift_JIS chars") { format(sjis["%c%c|%c"], 0x4181, 0x40, 0xa1).chars.map { |c| c.unpack1("H*") } }
+try("pieces Shift_JIS length") { [format(sjis["%c%c"], 0x4181, 0x40).length, format(sjis["%c@x"], 0x4181).length] }
+try("pieces Shift_JIS ==") { format(sjis["%c%c"], 0x4181, 0x40) == "A\x81\x40".dup.force_encoding("Shift_JIS") }
+try("pieces EUC-KR chars") { format("%c%c%c".dup.force_encoding("EUC-KR"), 0xa1, 0xa1, 0x41).chars.map { |c| c.unpack1("H*") } }
+try("pieces UTF-8") { format("%c%c%c", 0xe3, 0x81, 0x82) }
+try("pieces UTF-8 surrogates") { s = format("%c%c", 0xd83d, 0xde00); [s.bytes, s.length, s.valid_encoding?] }
+# A %c whose bytes are ASCII ones settles nothing.
+try("ascii bytes Shift_JIS then %s") { format(sjis["%c%s"], 0x3042, "\u3042") }
+try("ascii bytes GB18030 then %s") { format("%c%s".dup.force_encoding("GB18030"), 0x4142, "\u3042") }
+try("ascii bytes EUC-KR then %s") { format("%c%s".dup.force_encoding("EUC-KR"), 0x100, "\u3042") }
+# #to_int and Floats go through NUM2INT too.
+[2**31, -2**31 - 1, 2**64, 65].each do |n|
+  o = Object.new
+  o.define_singleton_method(:to_int) { n }
+  try("to_int #{n}") { "%c" % [o] }
+end
+[Float::INFINITY, -Float::INFINITY, Float::NAN, 1e19, -1e19, 9.3e18, 3e9, -3e9, 2147483647.9, -2147483648.9, 1.5e300].each do |f|
+  try("float #{f}") { "%c" % f }
+end
 try("%c UTF-16LE") { "%c".encode("UTF-16LE") % 0x3042 }
