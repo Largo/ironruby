@@ -226,12 +226,12 @@ namespace IronRuby.Builtins {
         public static RubyModule/*!*/ Using(RubyScope/*!*/ scope, RubyModule/*!*/ self, object module) {
             // MRI refuses it inside a method body and the blocks in it (a module_eval or Module.new
             // block included), but a class body opened in a method (`class << self`) is a frame of
-            // its own and may use it
+            // its own and may use it. A string module_eval is not: it runs in the frame that called it.
             for (RubyScope s = scope; s != null; s = s.Parent) {
                 if (s.Kind == ScopeKind.Method || s.Kind == ScopeKind.BlockMethod) {
                     throw RubyExceptions.CreateRuntimeError("Module#using is not permitted in methods");
                 }
-                if (s.Kind == ScopeKind.Module || s.Kind == ScopeKind.TopLevel) {
+                if ((s.Kind == ScopeKind.Module && !(s is RubyModuleEvalScope)) || s.Kind == ScopeKind.TopLevel) {
                     break;
                 }
             }
