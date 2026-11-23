@@ -179,5 +179,32 @@ module R9; refine(Integer) { def r9 = :refined }; end
 using R9
 row "refined over many", (1..8).map { o = Object.new; def o.x = 1.r9; o.x }.uniq
 
+# ---------------------------------------------------------------- 10. bodies of a def run for many modules, called hot
+# Each body defined in 8 classes and called 3,000 times on every one, past any compilation threshold.
+
+K10 = 5
+class B10; def m(*) = :base; end
+bodies10 = {
+  owner:   proc { def m = method(:m).owner.superclass },
+  name:    proc { def m = self.class.name },
+  nesting: proc { def m(x = "a") = Module.nesting.size },
+  dsuper:  proc { def m(*a) = defined?(super).inspect },
+  map:     proc { def m(x) = [1, 2].map { |v| v + K10 + x } },
+  dconst:  proc { def m = defined?(K10) },
+  label:   proc { def m = caller_locations(0, 1)[0].label },
+  const:   proc { def m = K10 },
+  lit:     proc { def m = /lit/.source },
+  range:   proc { def m = (1..2).size },
+  ivar:    proc { def m = (@iv ||= K10) },
+  super:   proc { def m(x) = [super, x] },
+}
+bodies10.each do |key, body|
+  cs = 8.times.map { Class.new(B10, &body) }
+  arity = cs[0].instance_method(:m).arity
+  r = nil
+  3000.times { cs.each { |c| r = arity == 1 ? c.new.m(1) : c.new.m } }
+  row "hot #{key}", r
+end
+
 $stderr.puts "jit=#{defined?(IronRuby) ? 'ironruby' : 'cruby'}"
 puts "end"
