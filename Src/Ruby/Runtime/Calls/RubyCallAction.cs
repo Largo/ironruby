@@ -936,6 +936,13 @@ namespace IronRuby.Runtime.Calls {
                     if (defaultFallback && methodName == Symbols.MethodMissing && incompatibleVisibility == RubyMethodVisibility.None) {
                         var basicMethodMissing = args.RubyContext.BasicObjectClass.GetMethod(Symbols.MethodMissing) as RubyLibraryMethodInfo;
                         if (basicMethodMissing != null) {
+                            // MRI sets the reason afresh for this call (vm_call_method_missing): what an earlier
+                            // call left for a custom method_missing that never reached super is not this one's
+                            if (!isSuperCall) {
+                                metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(
+                                    AstUtils.Constant(args.Signature.HasImplicitSelf), AstUtils.Constant(false)
+                                ));
+                            }
                             basicMethodMissing.BuildCall(metaBuilder, args, Symbols.MethodMissing);
                             return true;
                         }
