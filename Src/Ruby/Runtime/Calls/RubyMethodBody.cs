@@ -131,7 +131,8 @@ namespace IronRuby.Runtime.Calls {
                     }
                     Delegate result;
                     if (!_moduleVariants.TryGetValue(declaringModule, out result)) {
-                        result = Compile(declaringScope, declaringModule);
+                        result = (++_moduleVariantCount >= ModuleFactoryAfter ? FromModuleFactory(declaringScope, declaringModule) : null)
+                            ?? Compile(declaringScope, declaringModule);
                         _moduleVariants.Add(declaringModule, result);
                     }
                     return result;
@@ -304,6 +305,8 @@ namespace IronRuby.Runtime.Calls {
                     _delegate = null;
                     _delegateModule = null;
                     _moduleVariants = null;
+                    _moduleVariantCount = 0;
+                    _moduleFactories = null;
                     _singletonLexicalModules = null;
                     _lexicalVariants = null;
                     _moduleFunctionDelegate = null;
@@ -350,6 +353,92 @@ namespace IronRuby.Runtime.Calls {
             }
             return _moduleFunctionDelegate;
         }
+
+        #region Module factories
+
+        // A `def' run for one module after another - `def o.x' for each new object, `Class.new { def a; end }' in a loop -
+        // compiled the body anew each time: transform and LightCompile were most of the 24 us a `def o.x' and its first
+        // call cost (CRuby 0.8). From the ModuleFactoryAfter-th module on, the body is compiled once more, as a factory
+        // that takes the declaring scope and module as parameters (as Util/aot compiles one), and each further module
+        // gets a delegate from it: a closure over the two, no transform and no compilation. Such a body is not a light
+        // frame (TransformLightFrame bakes the module into its scope description), so it costs a scope per call: the
+        // first modules, which a program that makes a handful of classes keeps using, keep the light compilation.
+        // A factory is made per frame label (the module's name is in it) and only where the compilation would carry no
+        // refinement record and no coverage; the other compilations go on as before.
+        internal static readonly int ModuleFactoryAfter = GetModuleFactoryAfter();
+
+        private static int GetModuleFactoryAfter() {
+            // IR_DEF_FACTORY=0 turns the factories off; a number sets from which module on they are used.
+            int n;
+            var value = Environment.GetEnvironmentVariable("IR_DEF_FACTORY");
+            return value == null ? 3 : Int32.TryParse(value, out n) && n > 0 ? n : Int32.MaxValue;
+        }
+
+        private sealed class ModuleFactory {
+            internal Func<RubyScope, RubyModule, Delegate> Create;
+            internal string FrameName;
+        }
+
+        // both under lock (this)
+        private int _moduleVariantCount;
+        private Dictionary<string, ModuleFactory> _moduleFactories;
+
+        // under lock (this)
+        private Delegate FromModuleFactory(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            if (_precompiled != null || _coverage != null || GetDefinitionRefinements(declaringScope, declaringModule) != null) {
+                return null;
+            }
+            var context = declaringScope.RubyContext;
+            string label = MethodDeclaration.QualifyFrameLabel(_ast.Name, declaringModule);
+            if (_moduleFactories == null) {
+                _moduleFactories = new Dictionary<string, ModuleFactory>();
+            }
+            ModuleFactory factory;
+            if (!_moduleFactories.TryGetValue(label, out factory)) {
+                bool timed = PhaseTimer.Enter(PhaseTimer.DefCompile);
+                try {
+                    var gen = new AstGenerator(context, new RubyCompilerOptions(), _document, _encoding, false);
+                    var scopeParameter = MSA.Expression.Parameter(typeof(RubyScope), "#declaringScope");
+                    var moduleParameter = MSA.Expression.Parameter(typeof(RubyModule), "#declaringModule");
+                    MSA.LambdaExpression body;
+                    bool transformTimed = PhaseTimer.Enter(PhaseTimer.DefTransform);
+                    try {
+                        body = _ast.TransformBody(gen, scopeParameter, moduleParameter, label, null);
+                    } finally {
+                        PhaseTimer.Exit(transformTimed);
+                    }
+                    // A super call site shared by every module would see a new class at each and bind a rule for it
+                    // into one ever longer list, slower than a fresh site per compilation: such a body is not made one.
+                    if (gen.HasSuperCall) {
+                        factory = new ModuleFactory();
+                        _moduleFactories.Add(label, factory);
+                        return null;
+                    }
+                    var lambda = MSA.Expression.Lambda<Func<RubyScope, RubyModule, Delegate>>(
+                        MSA.Expression.Convert(body, typeof(Delegate)), "def " + label, new[] { scopeParameter, moduleParameter });
+                    factory = new ModuleFactory {
+                        Create = (Func<RubyScope, RubyModule, Delegate>)RubyScriptCode.CompileLambda(lambda, context),
+                        FrameName = body.Name
+                    };
+                } finally {
+                    PhaseTimer.Exit(timed);
+                }
+                _moduleFactories.Add(label, factory);
+            }
+
+            if (factory.Create == null) {
+                return null;
+            }
+            var result = factory.Create(declaringScope, declaringModule);
+            // -X:JIT, as CompileFromSyntaxTree does:
+            if (context.RubyOptions.Jit) {
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule, declaringScope, null, factory.FrameName);
+                IronRuby.Runtime.Jit.JitStub.SetOwner(result, this);
+            }
+            return result;
+        }
+
+        #endregion
 
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             bool timed = PhaseTimer.Enter(_precompiled != null ? PhaseTimer.Precompiled : PhaseTimer.DefCompile);
