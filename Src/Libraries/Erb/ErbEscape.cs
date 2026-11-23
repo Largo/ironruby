@@ -16,12 +16,16 @@
  *
  * ***************************************************************************/
 
+using System;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Erb {
+    using AskStorage = CallSiteStorage<Func<CallSite, object, object, object, object>>;
+
 
     [RubyClass("ERB")]
     public static class ErbOps {
@@ -36,9 +40,11 @@ namespace IronRuby.StandardLibrary.Erb {
             /// </summary>
             [RubyMethod("html_escape", RubyMethodAttributes.PrivateInstance)]
             [RubyMethod("html_escape", RubyMethodAttributes.PublicSingleton)]
-            public static MutableString/*!*/ HtmlEscape(UnaryOpStorage/*!*/ storage, BinaryOpStorage/*!*/ cgiStorage, object self,
-                object value) {
-                MutableString str = value as MutableString ?? ConvertToS(storage, value);
+            public static MutableString/*!*/ HtmlEscape(UnaryOpStorage/*!*/ storage, BinaryOpStorage/*!*/ cgiStorage,
+                BinaryOpStorage/*!*/ respondTo1Storage, AskStorage/*!*/ respondTo2Storage, AskStorage/*!*/ respondToMissingStorage,
+                object self, object value) {
+                MutableString str = value as MutableString ??
+                    ConvertToS(storage, respondTo1Storage, respondTo2Storage, respondToMissingStorage, value);
                 if (!str.Encoding.IsAsciiIdentity) {
                     return EscapeWithCgi(cgiStorage, str);
                 }
@@ -99,25 +105,79 @@ namespace IronRuby.StandardLibrary.Erb {
 
             /// <summary>
             /// rb_convert_type(value, T_STRING, "String", "to_s"): a value without #to_s is a TypeError,
-            /// and so is a #to_s that answers anything but a String.
+            /// and so is a #to_s that answers anything but a String. Whether there is a #to_s is
+            /// rb_check_funcall's question (vm_eval.c), asked as it asks it:
+            ///   - a respond_to? of the object's own is asked first (check_funcall_respond_to), with
+            ///     include_private true unless it takes one argument, and a false is the TypeError;
+            ///   - a #to_s of any visibility is called;
+            ///   - otherwise (check_funcall_missing) a respond_to_missing? of the object's own is asked
+            ///     (:to_s, true) and a false is the TypeError; then a method_missing of its own is called -
+            ///     BasicObject's is the TypeError - and a NoMethodError out of it is the TypeError too,
+            ///     unless respond_to? or respond_to_missing? had said yes (check_funcall_failed).
             /// </summary>
-            private static MutableString/*!*/ ConvertToS(UnaryOpStorage/*!*/ storage, object value) {
+            private static MutableString/*!*/ ConvertToS(UnaryOpStorage/*!*/ storage, BinaryOpStorage/*!*/ respondTo1Storage,
+                AskStorage/*!*/ respondTo2Storage, AskStorage/*!*/ respondToMissingStorage, object value) {
                 var context = storage.Context;
-                // rb_check_funcall: a method_missing that a respond_to_missing? owns up to counts as #to_s
                 RubyClass cls = context.GetImmediateClassOf(value);
-                if (!cls.ResolveMethod("to_s", VisibilityContext.AllVisible).Found &&
-                    !(cls.ResolveMethod("respond_to?", VisibilityContext.AllVisible).Found && context.RespondTo(value, "to_s"))) {
-                    throw RubyExceptions.CreateTypeError("can't convert {0} into String",
-                        RubyExceptions.MessageTypeName(context.GetClassName(value)));
+                RubySymbol name = context.CreateAsciiSymbol("to_s");
+
+                bool saidYes = false;
+                var respondTo = cls.ResolveMethod("respond_to?", VisibilityContext.AllVisible);
+                if (respondTo.Found && !(respondTo.Info.DeclaringModule == context.KernelModule && respondTo.Info is RubyLibraryMethodInfo)) {
+                    object answer;
+                    if (respondTo.Info.GetArity() == 1) {
+                        var site = respondTo1Storage.GetCallSite("respond_to?", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                        answer = site.Target(site, value, name);
+                    } else {
+                        var site = respondTo2Storage.GetCallSite("respond_to?", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
+                        answer = site.Target(site, value, name, ScriptingRuntimeHelpers.True);
+                    }
+                    if (!RubyOps.IsTrue(answer)) {
+                        throw CannotConvert(context, value);
+                    }
+                    saidYes = true;
                 }
+
+                if (!cls.ResolveMethod("to_s", VisibilityContext.AllVisible).Found) {
+                    var respondToMissing = cls.ResolveMethod("respond_to_missing?", VisibilityContext.AllVisible);
+                    if (respondToMissing.Found && !(respondToMissing.Info.DeclaringModule == context.KernelModule && respondToMissing.Info is RubyLibraryMethodInfo)) {
+                        var site = respondToMissingStorage.GetCallSite("respond_to_missing?", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
+                        if (!RubyOps.IsTrue(site.Target(site, value, name, ScriptingRuntimeHelpers.True))) {
+                            throw CannotConvert(context, value);
+                        }
+                        saidYes = true;
+                    }
+                    var methodMissing = cls.ResolveMethod("method_missing", VisibilityContext.AllVisible);
+                    if (!methodMissing.Found ||
+                        methodMissing.Info.DeclaringModule == context.BasicObjectClass && methodMissing.Info is RubyLibraryMethodInfo) {
+                        throw CannotConvert(context, value);
+                    }
+                    try {
+                        return CheckResult(context, value, CallToS(storage, value));
+                    } catch (MissingMethodException) when (!saidYes) {
+                        throw CannotConvert(context, value);
+                    }
+                }
+                return CheckResult(context, value, CallToS(storage, value));
+            }
+
+            private static object CallToS(UnaryOpStorage/*!*/ storage, object value) {
                 var site = storage.GetCallSite("to_s", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf));
-                object result = site.Target(site, value);
+                return site.Target(site, value);
+            }
+
+            private static MutableString/*!*/ CheckResult(RubyContext/*!*/ context, object value, object result) {
                 if (result is MutableString str) {
                     return str;
                 }
                 string className = RubyExceptions.MessageTypeName(context.GetClassName(value));
                 throw RubyExceptions.CreateTypeError("can't convert {0} to String ({0}#to_s gives {1})",
                     className, RubyExceptions.MessageTypeName(context.GetClassName(result)));
+            }
+
+            private static Exception/*!*/ CannotConvert(RubyContext/*!*/ context, object value) {
+                return RubyExceptions.CreateTypeError("can't convert {0} into String",
+                    RubyExceptions.MessageTypeName(context.GetClassName(value)));
             }
         }
     }

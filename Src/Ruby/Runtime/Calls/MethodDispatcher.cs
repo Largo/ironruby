@@ -392,19 +392,23 @@ namespace IronRuby.Runtime.Calls {
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, T0 arg0) {
             RubyClass cls;
-            // a site the method JIT typed passes `t.held = false' as a Boolean: one of the two shared boxes (Box), not a new
-            // object per store, sixteen megabytes per iteration of Richards once light sites had this dispatcher
-            object value = Box(arg0);
+            // A site the method JIT typed passes `t.held = false' as a Boolean: one of the two shared boxes (Box), not a new
+            // object per store, sixteen megabytes per iteration of Richards once light sites had this dispatcher. Boxed only
+            // once the receiver is this dispatcher's: a miss hands the typed argument on to the next one in the chain.
             // an exact RubyObject that has the variable at the slot the site has seen: the cached store, inline
             if (self != null && self.GetType() == typeof(RubyObject)) {
                 var robj = Unsafe.As<RubyObject>(self);
-                if (robj.ImmediateClass.Version.Method == Version && RubyOps.TryWriteCached(robj._instanceData, value, Site)) {
-                    return value;
+                if (robj.ImmediateClass.Version.Method == Version) {
+                    object value = Box(arg0);
+                    if (RubyOps.TryWriteCached(robj._instanceData, value, Site)) {
+                        return value;
+                    }
+                    return RubyOps.WriteInstanceVariable(robj.ImmediateClass.Context, robj, value, Site);
                 }
             }
             IRubyObject obj = GetRubyObject(self, out cls);
             if (obj != null && cls.Version.Method == Version) {
-                return RubyOps.WriteInstanceVariable(cls.Context, obj, value, Site);
+                return RubyOps.WriteInstanceVariable(cls.Context, obj, Box(arg0), Site);
             } else {
                 return Miss<Func<CallSite, TScope, object, T0, object>>(callSite)(callSite, scope, self, arg0);
             }
