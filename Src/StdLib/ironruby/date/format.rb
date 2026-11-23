@@ -161,6 +161,15 @@ class Date
 
   private_class_method :num_pattern?
 
+  # Whether the format's literal a starts str. A literal in an encoding str's is incompatible with
+  # does not match: CRuby's date__strptime compares bytes, where start_with? would raise.
+  def self.__literal_at_start__(str, a) # :nodoc:
+    str.start_with?(a)
+  rescue Encoding::CompatibilityError
+    false
+  end
+  private_class_method :__literal_at_start__
+
   def self._strptime_i(str, fmt, e) # :nodoc:
     # The tokens of /%([EO]?(?::{1,3}z|.))|(.)/m, cut out by hand: fmt.scan with a block, $&
     # and $' cost more than all the matching of the subject, and a `return' from inside the
@@ -353,7 +362,7 @@ class Date
 	  return unless _strptime_i(str, '%a %b %e %H:%M:%S %Z %Y', e)
 	else
 	  # what str.sub!(Regexp.new('\\A' + Regexp.quote(a)), '') did, without a Regexp per call
-	  return unless str.start_with?(a)
+	  return unless __literal_at_start__(str, a)
 	  str[0, a.size] = ''
 	end
       else
@@ -362,7 +371,7 @@ class Date
 	  str.sub!(/\A\s+/, '')
 	else
 	  # what str.sub!(Regexp.new('\\A' + Regexp.quote(a)), '') did, without a Regexp per call
-	  return unless str.start_with?(a)
+	  return unless __literal_at_start__(str, a)
 	  str[0, a.size] = ''
 	end
       end
