@@ -1513,7 +1513,8 @@ namespace IronRuby.Runtime {
             }
             Debug.Assert(lambda != null);
 
-            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context);
+            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context.DomainManager.Configuration.DebugMode,
+                context.Options.NoAdaptiveCompilation, context.EvalCompilationThreshold);
             var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
 
             if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {

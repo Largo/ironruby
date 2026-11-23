@@ -579,6 +579,25 @@ namespace IronRuby.Runtime {
         // binders' rule caches - into the program's first few hundred milliseconds instead.
         internal const int StartupCompilationThreshold = 200;
 
+        /// <summary>
+        /// The compilation threshold of the code an eval of a String compiles (Kernel#eval, Binding#eval,
+        /// instance_eval and module_eval of a String): its blocks and loops. Each eval builds a new lambda,
+        /// so a block in it that crosses the threshold is compiled - a JIT of a new DynamicMethod, about a
+        /// millisecond on a pool thread - for that one eval, and the next eval of the same text compiles
+        /// it again. ERB#result evals its template each time: the template's `items.each do ... end`
+        /// over 40 items was compiled on every result, three times the CPU the result itself took.
+        /// A block that runs 1000 times in one eval still gets compiled; an explicit
+        /// -X:CompilationThreshold applies as it is.
+        /// </summary>
+        internal int EvalCompilationThreshold {
+            get {
+                int threshold = _options.CompilationThreshold;
+                return threshold < 0 ? Math.Max(DefaultEvalCompilationThreshold, CompilationThreshold) : threshold;
+            }
+        }
+
+        internal const int DefaultEvalCompilationThreshold = 1000;
+
         internal RubyScope/*!*/ EmptyScope {
             get { return _emptyScope; }
         }
