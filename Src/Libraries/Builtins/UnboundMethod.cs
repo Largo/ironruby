@@ -116,7 +116,7 @@ namespace IronRuby.Builtins {
             }
             
             if (self._isMethodMissing) {
-                return RubyMethod.CreateMethodMissing(target, self._info, self._name);
+                return RubyMethod.CreateMethodMissing(target, self._info, self._name, self._targetConstraint);
             }
             var result = new RubyMethod(target, self._info, self._name);
             if (!constraint.IsClass) {
