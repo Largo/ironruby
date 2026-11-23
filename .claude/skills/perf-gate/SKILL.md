@@ -271,7 +271,11 @@ echo '1+1' | IR_CONFIG=R2R $TREE/ir.sh -S irb
 ```
 
 (`ls -l` the two `ir.dll` first: `ir.sh` falls back to nothing here, and a host older than
-the Release build is the tree before the change.) The command-line tools are what
+the Release build is the tree before the change.) A run counts only if it exits 0 and prints
+what it should: `1` prints nothing, `gem --version` a version, `gem list` the gems
+(`minitest` among them), the `require` nothing on stderr, `irb` a line with `2`. A command
+that fails before it does its work can be the fastest of ten, and a current `ir.dll` does not
+say it got that far. The command-line tools are what
 start-up is for, and they run more Ruby before they answer than `-e 1` does, so a change
 to when or what the tiers compile shows on them first. The tiers are on by default and
 are meant to stay on; these five are the price that is watched for it. At a7060a27 they
