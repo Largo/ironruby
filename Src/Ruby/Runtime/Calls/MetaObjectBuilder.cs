@@ -340,7 +340,7 @@ namespace IronRuby.Runtime.Calls {
                         // (#{type})target.ImmediateClass.Version.Method in #{versionSet}
                         AddCondition(versionSet.MakeTest(
                             Ast.Field(Ast.Field(Ast.Call(Ast.Convert(targetParameter, type), classGetter), Fields.RubyModule_Version), Fields.VersionHandle_Method),
-                            targetClass.Version.Method
+                            targetClass.Version.Method, targetParameter
                         ));
                         return;
                     }

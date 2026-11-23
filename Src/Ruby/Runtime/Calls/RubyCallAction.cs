@@ -367,10 +367,108 @@ namespace IronRuby.Runtime.Calls {
         [ThreadStatic]
         private static RubyCallAction _PendingVersionSetOwner;
 
+        private bool IsSharable {
+            get {
+                return !Signature.ResolveOnly && (Signature.Flags & ~SharableCallFlags) == 0 && !TracePoint.CCallTracing;
+            }
+        }
+
+        // Resolves the call for the target as BindShared does: the method a rule shared with receivers of other classes would call
+        // (or the method_missing a call of an undefined name makes), and the version of the target's class it is resolved for.
+        // publicOnly: resolve for a caller that sees public methods only (see TryShareVersion).
+        private bool ResolveShared(RubyContext/*!*/ context, RubyScope/*!*/ scope, object target, bool publicOnly, out int version,
+            out RubyMemberInfo member, out bool isMissing) {
+            version = 0;
+            member = null;
+            isMissing = false;
+
+            // an object of another runtime:
+            RubyClass targetClass = context.GetImmediateClassOf(target);
+            if (targetClass.Context != context) {
+                return false;
+            }
+
+            MethodResolutionResult method;
+            RubyMemberInfo methodMissing = null;
+            using (context.ClassHierarchyLocker()) {
+                targetClass.InitializeMethodsNoLock();
+                if (target != null && !(target is IRubyObject) && !HasPlainClrTypeTest(targetClass, _methodName)) {
+                    return false;
+                }
+                // a rule shared by receivers of several classes cannot hold the lexical refinement guard either
+                if (Signature.HasScope && context.IsRefinementSensitive(targetClass, _methodName)) {
+                    return false;
+                }
+                version = targetClass.Version.Method;
+                // As Resolve does: a site with a light scope has not got the caller's scope, so an explicit-receiver call there
+                // looks for a public method; when there is none, nothing is shared and the ordinary bind reads the scope.
+                var visibility = (publicOnly || Signature.HasLightScope && !Signature.HasImplicitSelf) ?
+                    new VisibilityContext(RubyMethodAttributes.Public) : GetVisibilityContext(Signature, scope);
+                method = targetClass.ResolveMethodForSiteNoLock(_methodName, visibility, MethodLookup.Default);
+
+                // A call of a name a Ruby object's class has no method of, at any visibility, is a call of the method_missing it
+                // resolves: OpenStruct's first `o.total = x' is, on a new singleton class each time. Resolve registers the lookup
+                // of the missing name the same way, so that defining it re-versions the class.
+                if (!method.Found && method.Info == null && method.IncompatibleVisibility == RubyMethodVisibility.None &&
+                    target is IRubyObject && _methodName != Symbols.MethodMissing) {
+                    methodMissing = targetClass.ResolveMethodMissingForSite(_methodName, RubyMethodVisibility.None);
+                }
+            }
+
+            // Rules calling these methods depend on nothing but the method, the call signature and the arguments.
+            // A protected method's rule also tests the caller's class.
+            if (method.Found) {
+                member = method.Info;
+                isMissing = false;
+            } else if (methodMissing != null && methodMissing.GetType() == typeof(RubyMethodInfo)) {
+                member = methodMissing;
+                isMissing = true;
+            } else {
+                return false;
+            }
+            if (member.IsProtected || member.GetType() != typeof(RubyLibraryMethodInfo) && member.GetType() != typeof(RubyMethodInfo)) {
+                return false;
+            }
+
+            // respond_to?(:sym) and send(:sym) rules are specialized on the receiver's class (DispatchIntrinsics):
+            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass)) {
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Called by the test of a shared rule (see RuleVersionSet.IsValid) for a Ruby object whose class version the rule does not
+        /// hold yet: if the call resolves to the rule's method for the object's class, adds the version and returns true. This is
+        /// what BindShared would do, but without going through the call site's update and the binder: a call in a method that
+        /// runs for objects that each get a singleton class of their own (OpenStruct's update_to_values!, new_ostruct_member!...)
+        /// sees a new class version on every call, and bound each of them (~2-10 us apiece, twice once the rule was compiled).
+        /// The caller's scope is not at hand: a call with an explicit receiver whose visibility the bind reads from the scope is
+        /// resolved for public methods, which every caller sees, so it takes in the version only if the rule's method is public there.
+        /// </summary>
+        internal bool TryShareVersion(object/*!*/ target, RuleVersionSet/*!*/ versionSet) {
+            RubyContext context = Context;
+            if (context == null || !IsSharable || versionSet.Member == null) {
+                return false;
+            }
+            bool publicOnly = Signature.HasScope && !Signature.HasImplicitSelf && !Signature.HasLightScope && !Signature.IsInteropCall;
+
+            int version;
+            RubyMemberInfo member;
+            bool isMissing;
+            if (!ResolveShared(context, context.EmptyScope, target, publicOnly, out version, out member, out isMissing) ||
+                member != versionSet.Member || isMissing != versionSet.IsMissing) {
+                return false;
+            }
+
+            versionSet.TryAdd(version);
+            return true;
+        }
+
         internal override T BindShared<T>(object[]/*!*/ args) {
             RubyContext context = Context;
-            if (context == null || Signature.ResolveOnly || (Signature.Flags & ~SharableCallFlags) != 0 ||
-                TracePoint.CCallTracing) {
+            if (context == null || !IsSharable) {
                 return null;
             }
 
@@ -396,59 +494,10 @@ namespace IronRuby.Runtime.Calls {
                 targetType = target.GetType();
             }
 
-            // an object of another runtime:
-            RubyClass targetClass = context.GetImmediateClassOf(target);
-            if (targetClass.Context != context) {
-                return null;
-            }
-
             int version;
-            MethodResolutionResult method;
-            RubyMemberInfo methodMissing = null;
-            using (context.ClassHierarchyLocker()) {
-                targetClass.InitializeMethodsNoLock();
-                if (target != null && !(target is IRubyObject) && !HasPlainClrTypeTest(targetClass, _methodName)) {
-                    return null;
-                }
-                // a rule shared by receivers of several classes cannot hold the lexical refinement guard either
-                if (Signature.HasScope && context.IsRefinementSensitive(targetClass, _methodName)) {
-                    return null;
-                }
-                version = targetClass.Version.Method;
-                // As Resolve does: a site with a light scope has not got the caller's scope, so an explicit-receiver call there
-                // looks for a public method; when there is none, nothing is shared and the ordinary bind reads the scope.
-                var visibility = (Signature.HasLightScope && !Signature.HasImplicitSelf) ?
-                    new VisibilityContext(RubyMethodAttributes.Public) : GetVisibilityContext(Signature, scope);
-                method = targetClass.ResolveMethodForSiteNoLock(_methodName, visibility, MethodLookup.Default);
-
-                // A call of a name a Ruby object's class has no method of, at any visibility, is a call of the method_missing it
-                // resolves: OpenStruct's first `o.total = x' is, on a new singleton class each time. Resolve registers the lookup
-                // of the missing name the same way, so that defining it re-versions the class.
-                if (!method.Found && method.Info == null && method.IncompatibleVisibility == RubyMethodVisibility.None &&
-                    target is IRubyObject && _methodName != Symbols.MethodMissing) {
-                    methodMissing = targetClass.ResolveMethodMissingForSite(_methodName, RubyMethodVisibility.None);
-                }
-            }
-
-            // Rules calling these methods depend on nothing but the method, the call signature and the arguments.
-            // A protected method's rule also tests the caller's class.
             RubyMemberInfo member;
             bool isMissing;
-            if (method.Found) {
-                member = method.Info;
-                isMissing = false;
-            } else if (methodMissing != null && methodMissing.GetType() == typeof(RubyMethodInfo)) {
-                member = methodMissing;
-                isMissing = true;
-            } else {
-                return null;
-            }
-            if (member.IsProtected || member.GetType() != typeof(RubyLibraryMethodInfo) && member.GetType() != typeof(RubyMethodInfo)) {
-                return null;
-            }
-
-            // respond_to?(:sym) and send(:sym) rules are specialized on the receiver's class (DispatchIntrinsics):
-            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass)) {
+            if (!ResolveShared(context, scope, target, false, out version, out member, out isMissing)) {
                 return null;
             }
 
@@ -486,7 +535,21 @@ namespace IronRuby.Runtime.Calls {
             // The shared rule is handed out for a version it does not hold yet, and only then: a call that comes here although
             // the rule holds its version didn't match the rule (its arguments are of other types, say) and gets a rule of its own.
             if (!shared.Versions.TryAdd(version)) {
-                return null;
+                // Or the rule is interpreted and has been compiled meanwhile: it then fails its test once, so that the site binds again
+                // and picks up the compiled one (DynamicUtils.LightBind), which the rule's binder hands out without building a rule.
+                // The shared rule is that one from now on; handing out the interpreted one again would fail and bind every call.
+                RuleBuilt = false;
+                T compiled = this.LightBind<T>(args, Context.CompilationThreshold);
+                if (!RuleBuilt) {
+                    lock (_SharedRulesLock) {
+                        if (shared.Rule == sharedRule) {
+                            shared.Rule = compiled;
+                        }
+                    }
+                } else {
+                    CacheTarget(compiled);
+                }
+                return compiled;
             }
 
             return (T)sharedRule;
@@ -542,7 +605,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private T/*!*/ BindSharedRule<T>(SharedRule/*!*/ shared, object[]/*!*/ args) where T : class {
-            var versionSet = new RuleVersionSet();
+            var versionSet = new RuleVersionSet(this);
             T result;
 
             _PendingVersionSet = versionSet;

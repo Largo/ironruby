@@ -206,5 +206,62 @@ bodies10.each do |key, body|
   row "hot #{key}", r
 end
 
+# ---------------------------------------------------------------- 11. shared rules that take in a new singleton class in their test
+# A shared rule's version test resolves the call again for a class version it does not hold (RuleVersionSet.IsValidFor): each
+# object below has a singleton class of its own, and some resolve the call to another method, a private one, a protected one,
+# method_missing, or nothing.
+
+class C11
+  def m = :c11
+  def go = m
+  def go_explicit(o) = o.m
+  def go_missing = zz
+  def method_missing(n, *a) = n == :zz ? :c11_missing : super
+  def respond_to_missing?(n, p = false) = n == :zz || super
+  protected def pm = :c11_pm
+  def call_pm(o) = o.pm
+end
+module M11; def m = :m11; end
+def c11_object(i)
+  o = C11.new
+  o.singleton_class
+  case i % 7
+  when 1 then def o.m = :single
+  when 2 then o.singleton_class.send(:private, :m)
+  when 3 then o.extend(M11)
+  when 4 then o.define_singleton_method(:m) { :dsm }
+  when 5 then def o.method_missing(n, *a) = n == :zz ? :own_missing : super
+  when 6 then o.singleton_class.send(:undef_method, :m)
+  end
+  o
+end
+row "implicit self over singletons", runs(700) { |i| (c11_object(i).go rescue $!.class) }
+row "explicit receiver over singletons", runs(700) { |i| (C11.new.go_explicit(c11_object(i)) rescue $!.class) }
+row "explicit top-level over singletons", runs(700) { |i| o = c11_object(i); (o.m rescue $!.class) }
+row "method_missing over singletons", runs(700) { |i| (c11_object(i).go_missing rescue $!.class) }
+row "protected over singletons", runs(700) { |i| o = c11_object(i); (o.call_pm(c11_object(i + 1)) rescue $!.class) }
+row "public_send over singletons", runs(700) { |i| (c11_object(i).public_send(:m) rescue $!.class) }
+row "respond_to? over singletons", runs(700) { |i| c11_object(i).respond_to?(:m) }
+row "alternating owners", runs(700) { |i| o = C11.new; (i.even? ? (def o.m = :even) : o.singleton_class); o.go }
+class C11b; def m = :b; def go = m; end
+row "method removed mid-loop", runs(600) { |i|
+  C11b.send(:remove_method, :m) if i == 300
+  C11b.send(:define_method, :m) { :back } if i == 450
+  o = C11b.new; o.singleton_class; (o.go rescue $!.class)
+}
+row "method redefined mid-loop", runs(600) { |i|
+  C11b.send(:define_method, :m) { :redefined } if i == 200
+  o = C11b.new; def o.x = 1; o.go
+}
+module R11; refine(C11b) { def m = :refined }; end
+row "refined class over singletons", runs(300) { |i| o = C11b.new; o.singleton_class; o.go }
+threads = 4.times.map { |t| Thread.new { r = runs(2000) { |i| (c11_object(i + t).go rescue $!.class) }; r.map(&:first).uniq.sort_by(&:to_s) } }
+row "threads over singletons", threads.map(&:value).uniq
+os = 300.times.map { |i| OpenStruct.new(a: i, b: i * 2) }
+row "ostruct readers", os.sum { |o| o.a + o.b + o[:a] + (o.respond_to?(:b) ? 1 : 0) }
+os.each_with_index { |o, i| o.c = i; def o.a = -1 if i % 5 == 0 }
+row "ostruct after writers", os.sum { |o| o.a + o.c + o.to_h.size }
+row "ostruct dig/==", [os[3].dig(:a), os[3] == os[3].dup, os[5].delete_field(:a), (os[5].a rescue $!.class), os[1].frozen?, os[1].freeze.frozen?, (begin; os[1].a = 2; rescue => e; e.class; end)]
+
 $stderr.puts "jit=#{defined?(IronRuby) ? 'ironruby' : 'cruby'}"
 puts "end"
