@@ -3553,7 +3553,8 @@ namespace IronRuby.Runtime {
                 return null;
             }
 
-            var method = GetClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
+            // the exception's own singleton class too (`def e.backtrace'): MRI looks it up in CLASS_OF
+            var method = GetImmediateClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
             if (method == null || method is RubyLibraryMethodInfo && method.DeclaringModule == ExceptionClass) {
                 return RubyExceptionData.GetInstance(e).Backtrace;
             }
