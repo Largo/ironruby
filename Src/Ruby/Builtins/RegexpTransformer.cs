@@ -113,6 +113,12 @@ namespace IronRuby.Builtins {
             public int Emitted;
             // see Transform(..., astralSafe)
             public bool AstralSafe;
+            // see Transform(..., asciiCtype)
+            public bool AsciiCtype;
+            // Whether /i or an inline (?i) may be in effect anywhere in the pattern (AsciiCtype only).
+            public bool MayIgnoreCase;
+            // Whether AsciiCtype made the translation differ from the plain one.
+            public bool AsciiCtypeApplied;
         }
 
         private sealed class ExpansionTooLargeException : Exception {
@@ -223,17 +229,37 @@ namespace IronRuby.Builtins {
         /// with no pairs needs and is what keeps the common case as fast as it was.
         /// </summary>
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor, bool astralSafe) {
+            bool asciiCtypeApplied;
+            return Transform(rubyPattern, options, out hasGAnchor, astralSafe, false, out asciiCtypeApplied);
+        }
+
+        /// <summary>
+        /// With <paramref name="asciiCtype"/> the translation is for a match MRI makes with
+        /// Onigmo's ASCII-8BIT or US-ASCII ctype table (see RubyRegex.UsesAsciiCtype) - a BINARY
+        /// subject that holds bytes above 0x7F, above all. Those tables have nothing above 0x7F:
+        /// no letters, digits, spaces or punctuation, and no case pairs. A BINARY subject's bytes
+        /// reach .NET as U+0080-U+00FF, most of which .NET calls letters, so here the properties
+        /// (as the POSIX classes they are in those tables), the POSIX brackets, (?u)\w \d \s,
+        /// \b and \R are restricted to ASCII, and under /i a Latin-1 letter matches only itself.
+        /// <paramref name="asciiCtypeApplied"/> says whether any of that made a difference, i.e.
+        /// whether the pattern has a construct the restriction applies to.
+        /// </summary>
+        internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor, bool astralSafe,
+            bool asciiCtype, out bool asciiCtypeApplied) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
                 hasGAnchor = false;
+                asciiCtypeApplied = false;
                 return "^(?:[\t\n\r -\uD7FF\uE000-\uFFFD]|[\uD800-\uDBFF][\uDC00-\uDFFF])*$";
             }
             
             RegexpTransformer transformer = new RegexpTransformer(rubyPattern);
             transformer._clrOptions = RubyRegex.ToClrOptions(options);
             transformer._state.AstralSafe = astralSafe;
+            transformer._state.AsciiCtype = asciiCtype;
             var result = transformer.Transform();
             hasGAnchor = transformer._hasGAnchor;
+            asciiCtypeApplied = transformer._state.AsciiCtypeApplied;
             return result;
         }
 
@@ -539,7 +565,39 @@ namespace IronRuby.Builtins {
         }
 
         private void AppendEscaped(int c) {
+            if (IsUnfoldedLatin1Letter(c)) {
+                AppendUnfoldedLatin1Letter(c);
+                return;
+            }
             AppendEscaped(_sb, c);
+        }
+
+        private const string CaseSensitiveLatin1Prefix = "(?-i:";
+
+        /// <summary>
+        /// (?-i:c) for a letter IsUnfoldedLatin1Letter accepts; GetLiteralLength counts it as the
+        /// one character it is, so that (?~...) keeps its fixed-length prefix.
+        /// </summary>
+        private void AppendUnfoldedLatin1Letter(int c) {
+            _sb.Append(CaseSensitiveLatin1Prefix).Append((char)c).Append(')');
+        }
+
+        private static bool IsUnfoldableLatin1Letter(int c) {
+            return c >= 0xc0 && c <= 0xfe && c != 0xd7 && c != 0xf7;
+        }
+
+        /// <summary>
+        /// A Latin-1 letter that has its other case in U+00C0-U+00FE, while the translation is for
+        /// a BINARY subject (SharedState.AsciiCtype) under a pattern that may ignore case: Onigmo's
+        /// ASCII-8BIT folds only A-Z, so it has to be matched case-sensitively, where .NET's
+        /// IgnoreCase would take "\xC9" for "\xE9".
+        /// </summary>
+        private bool IsUnfoldedLatin1Letter(int c) {
+            if (_state.MayIgnoreCase && IsUnfoldableLatin1Letter(c)) {
+                _state.AsciiCtypeApplied = true;
+                return true;
+            }
+            return false;
         }
 
         private static StringBuilder/*!*/ AppendEscaped(StringBuilder/*!*/ builder, string/*!*/ str) {
@@ -604,6 +662,25 @@ namespace IronRuby.Builtins {
                 ((options & RegexOptions.IgnorePatternWhitespace) != 0 ? "x" : ""));
         }
 
+        /// <summary>
+        /// Whether some (?i) or (?i:...) - the i possibly among other options, before any '-' -
+        /// may turn /i on. Errs on the side of yes (an escaped \(?i) counts), which costs no
+        /// more than a (?-i:...) around a Latin-1 letter that did not need one.
+        /// </summary>
+        private static bool HasInlineIgnoreCase(string/*!*/ pattern) {
+            int i = 0;
+            while ((i = pattern.IndexOf("(?", i, StringComparison.Ordinal)) >= 0) {
+                i += 2;
+                while (i < pattern.Length && "imxadu".IndexOf(pattern[i]) >= 0) {
+                    if (pattern[i] == 'i') {
+                        return true;
+                    }
+                    i++;
+                }
+            }
+            return false;
+        }
+
         private string/*!*/ Transform() {
             if (_copyGroups) {
                 return TransformBody();
@@ -616,8 +693,12 @@ namespace IronRuby.Builtins {
 
             for (int depth = DefaultMaxCallDepth; ; depth /= 2) {
                 bool astralSafe = _state.AstralSafe;
+                bool asciiCtype = _state.AsciiCtype;
                 _state = new SharedState();
                 _state.AstralSafe = astralSafe;
+                _state.AsciiCtype = asciiCtype;
+                _state.MayIgnoreCase = asciiCtype &&
+                    ((_clrOptions & RegexOptions.IgnoreCase) != 0 || HasInlineIgnoreCase(_rubyPattern));
                 _state.MaxCallDepth = depth;
                 _state.ClrOptions = _clrOptions;
                 _state.RootPattern = _rubyPattern;
@@ -863,6 +944,10 @@ namespace IronRuby.Builtins {
                             if (group) {
                                 _sb.Append(')');
                             }
+                            break;
+                        }
+                        if (IsUnfoldedLatin1Letter(c)) {
+                            AppendUnfoldedLatin1Letter(c);
                             break;
                         }
                         Append((char)c);
@@ -1474,7 +1559,11 @@ namespace IronRuby.Builtins {
             int length = 0;
             for (int i = 0; i < pattern.Length; i++) {
                 char c = pattern[i];
-                if (c == '\\') {
+                if (c == '(' && i + 6 < pattern.Length && String.CompareOrdinal(pattern, i, CaseSensitiveLatin1Prefix, 0, 5) == 0 &&
+                    pattern[i + 6] == ')' && IsUnfoldableLatin1Letter(pattern[i + 5])) {
+                    // one Latin-1 letter matched case-sensitively for a BINARY subject (AppendUnfoldedLatin1Letter)
+                    i += 6;
+                } else if (c == '\\') {
                     // a meta character or a whitespace character, as Escape writes them
                     if (i + 1 == pattern.Length || !(IsMetaCharacter(pattern[i + 1]) || Char.IsWhiteSpace(pattern[i + 1]))) {
                         return -1;
@@ -1538,7 +1627,13 @@ namespace IronRuby.Builtins {
             switch (escape) {
                 case 'b':   // word boundary
                 case 'B':   // not a word boundary
-                    if (_state.AstralSafe) {
+                    if (_state.AsciiCtype) {
+                        // a BINARY subject's word characters are ASCII ones
+                        _state.AsciiCtypeApplied = true;
+                        _sb.Append(escape == 'b'
+                            ? "(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_]))"
+                            : "(?:(?<=[0-9A-Za-z_])(?=[0-9A-Za-z_])|(?<![0-9A-Za-z_])(?![0-9A-Za-z_]))");
+                    } else if (_state.AstralSafe) {
                         AppendAstralWordBoundary(escape == 'b');
                     } else {
                         Append('\\');
@@ -1584,7 +1679,9 @@ namespace IronRuby.Builtins {
                 case 'R':
                     // A generic line break: CRLF as a unit, or any single line terminator.
                     // Atomic so that CRLF never backtracks into matching just the CR.
-                    _sb.Append("(?>\\r\\n|[\\n\\v\\f\\r\\u0085\\u2028\\u2029])");
+                    // In a BINARY subject (SharedState.AsciiCtype) 0x85 is no line terminator.
+                    _state.AsciiCtypeApplied |= _state.AsciiCtype;
+                    _sb.Append(_state.AsciiCtype ? "(?>\\r\\n|[\\n\\v\\f\\r])" : "(?>\\r\\n|[\\n\\v\\f\\r\\u0085\\u2028\\u2029])");
                     break;
 
                 case 'K':
@@ -1630,7 +1727,7 @@ namespace IronRuby.Builtins {
                     }
 
                     var set = ParseCharacterEscape(escape);
-                    if ((escape == 'w' || escape == 'W') && _characterClassMode == CharacterClassMode.Unicode) {
+                    if ((escape == 'w' || escape == 'W') && _characterClassMode == CharacterClassMode.Unicode && !_state.AsciiCtype) {
                         // Outside a class Onigmo tests a (?u)\w below U+0100 against its ISO-8859-1
                         // ctype table, which also counts the superscripts and vulgar fractions
                         // (U+00B2 U+00B3 U+00B9 U+00BC-U+00BE) as word characters.
@@ -2170,6 +2267,31 @@ namespace IronRuby.Builtins {
         /// a * or + follows is emitted as one class (CharacterSet.AppendLoopBodyTo), for speed.
         /// </summary>
         private void AppendCharacterSet(CharacterSet/*!*/ set, bool parenthesize) {
+            if (_state.MayIgnoreCase) {
+                if (set.IsSingleCharacter && IsUnfoldedLatin1Letter(set.SingleCodepoint)) {
+                    // \xE9: the letter itself, spelled as a literal one is
+                    AppendUnfoldedLatin1Letter(set.SingleCodepoint);
+                    return;
+                }
+                int[] latin1 = set.GetLatin1Members();
+                if (!CodePointRanges.IsLatin1CaseClosed(latin1)) {
+                    _state.AsciiCtypeApplied = true;
+                    // .NET's IgnoreCase would fold the Latin-1 letters, Onigmo's ASCII-8BIT does
+                    // not: the ASCII members as the set itself (so that [^a] still turns "A"
+                    // away under /i), the others case-sensitively, as listed.
+                    _sb.Append("(?:(?![\\x80-\\xff])");
+                    set.AppendTo(_sb, true);
+                    int[] high = CodePointRanges.Intersect(latin1, CodePointRanges.Single(0x80, 0xff));
+                    if (high.Length != 0) {
+                        _sb.Append("|(?-i:");
+                        CharacterSet.MakeSet(high, null).AppendTo(_sb, true);
+                        _sb.Append(')');
+                    }
+                    _sb.Append(')');
+                    return;
+                }
+            }
+
             int next = Peek();
             if ((next == '*' || next == '+') && set.HasAllAstral) {
                 set.AppendLoopBodyTo(_sb);
@@ -2191,7 +2313,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         private CharacterSet/*!*/ MakeAsciiAware(string/*!*/ property, int[]/*!*/ ascii, string/*!*/ asciiText, bool positive) {
             if (_characterClassMode == CharacterClassMode.Unicode) {
-                return CharacterSet.MakeProperty(UnicodeProperties.Find(property), positive);
+                if (!_state.AsciiCtype) {
+                    return CharacterSet.MakeProperty(UnicodeProperties.Find(property), positive);
+                }
+                _state.AsciiCtypeApplied = true;
             }
             var result = CharacterSet.MakeSet(ascii, asciiText);
             return positive ? result : result.Complement();
@@ -2324,6 +2449,7 @@ namespace IronRuby.Builtins {
             public static readonly CharacterSet Empty = new CharacterSet(CodePointRanges.Empty, false, "", -1, -1);
 
             private static readonly int[] BmpRange = CodePointRanges.Single(0, 0xffff);
+            private static readonly int[] Latin1Range = CodePointRanges.Single(0, 0xff);
             private static readonly int[] AstralRange = CodePointRanges.Single(0x10000, CodePointRanges.MaxCodePoint);
             private static readonly int[] SurrogateRange = CodePointRanges.Single(0xd800, 0xdfff);
 
@@ -2379,6 +2505,12 @@ namespace IronRuby.Builtins {
             /// <summary>An Onigmo character property (see UnicodeProperties), or its complement.</summary>
             internal static CharacterSet/*!*/ MakeProperty(int table, bool positive) {
                 return new CharacterSet(UnicodeProperties.GetRanges(table), !positive, null, -1, table);
+            }
+
+            /// <summary>The members in U+0000-U+00FF, the characters a BINARY subject is made of.</summary>
+            internal int[]/*!*/ GetLatin1Members() {
+                int[] members = CodePointRanges.Intersect(_ranges, Latin1Range);
+                return _negated ? CodePointRanges.Subtract(Latin1Range, members) : members;
             }
 
             internal bool IsSingleCharacter {
@@ -2973,6 +3105,14 @@ namespace IronRuby.Builtins {
             if (table < 0) {
                 throw MakeError("invalid character property name {" + name + "}");
             }
+            if (_state.AsciiCtype) {
+                _state.AsciiCtypeApplied = true;
+                // A BINARY subject: the ASCII-8BIT ctype table, whose properties are the POSIX
+                // classes (\p{Punct} takes in $+<=>^`|~ there) over ASCII. A non-POSIX name never
+                // gets here: it makes the regexp fixed-encoding and not BINARY.
+                int posix = UnicodeProperties.FindPosix(normalized);
+                return RestrictToAscii(CharacterSet.MakeProperty(posix >= 0 ? posix : table, true), positive);
+            }
             return CharacterSet.MakeProperty(table, positive);
         }
 
@@ -3015,14 +3155,24 @@ namespace IronRuby.Builtins {
 
         private static readonly int[] _asciiRange = new int[] { 0, 0x7f };
 
-        /// <summary>[[:name:]]: Onigmo's property of that name, all of Unicode unless (?a) is in effect.</summary>
+        /// <summary>
+        /// [[:name:]]: Onigmo's property of that name, all of Unicode unless (?a) is in effect or
+        /// the subject is BINARY (SharedState.AsciiCtype).
+        /// </summary>
         private CharacterSet/*!*/ MakePosixCharacterClass(int table, bool positive) {
             var result = CharacterSet.MakeProperty(table, true);
-            if (_characterClassMode == CharacterClassMode.Ascii) {
+            if (_characterClassMode == CharacterClassMode.Ascii || _state.AsciiCtype) {
                 // (?a) restricts the POSIX classes to ASCII. A negated class still matches
                 // non-ASCII: (?a)[[:^alpha:]] accepts a Hiragana character.
-                result = result.Intersect(CharacterSet.MakeSet(_asciiRange, null));
+                _state.AsciiCtypeApplied |= _state.AsciiCtype;
+                return RestrictToAscii(result, positive);
             }
+            return positive ? result : result.Complement();
+        }
+
+        /// <summary>The ASCII members of <paramref name="set"/>, or every character but those.</summary>
+        private static CharacterSet/*!*/ RestrictToAscii(CharacterSet/*!*/ set, bool positive) {
+            var result = set.Intersect(CharacterSet.MakeSet(_asciiRange, null));
             return positive ? result : result.Complement();
         }
 
