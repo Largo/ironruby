@@ -119,8 +119,21 @@ namespace IronRuby.Runtime.Calls {
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
             if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument)) != 0 ||
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasLightScope)) != 0 ||
                 Signature.HasSplattedArgument && Signature.HasRhsArgument) {
+                return null;
+            }
+
+            // A site with a light scope (a call in a method that runs without its scope, see MethodDefinition.LightScopeCall) is
+            // handed the declaring scope, not the caller's. The dispatcher of a Ruby method or an attribute accessor reads no scope:
+            // it calls the method with the receiver, the block and the arguments, which is all the rule does once the method is
+            // resolved as the rule resolves it - an explicit receiver's public method, which every caller sees, and no refinement.
+            // Everything else (library methods, which may take the scope, a splat, a refined name) is left to the rule, which
+            // answers RubyOps.LightScopeRequired where it would read the scope. Without this a light site whose receivers are of
+            // many classes - a visitor's `node.accept(self)' - built and compiled a rule for every class, and once there were more
+            // than the DLR's rule caches hold, kept building them again.
+            bool light = Signature.HasLightScope;
+            if (light && Signature.HasSplattedArgument) {
                 return null;
             }
 
@@ -161,6 +174,9 @@ namespace IronRuby.Runtime.Calls {
                 // MakeRefinementGuard); any other call of the kind is left to rule building. Refining the name
                 // later re-versions the class, which retires a dispatcher made without the test.
                 if (Signature.HasScope && targetClass.Context.IsRefinementSensitive(targetClass, _methodName)) {
+                    if (light) {
+                        return null;
+                    }
                     refinements = scope.GetActiveRefinements();
                     recordScope = GetRecordScope(scope, refinements);
                     if (recordScope == RecordScope.None) {
@@ -171,12 +187,19 @@ namespace IronRuby.Runtime.Calls {
                         refinements).InvalidateSitesOnOverride();
                 } else {
                     version = targetClass.Version.Method;
-                    method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
+                    method = targetClass.ResolveMethodForSiteNoLock(_methodName, (light && !Signature.HasImplicitSelf) ?
+                        new VisibilityContext(RubyMethodAttributes.Public) : GetVisibilityContext(Signature, scope));
                 }
                 clrTest = (target != null && !(target is IRubyObject)) ? GetClrReceiverTest(targetClass, _methodName) : ClrReceiverTest.None;
             }
 
             if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
+                return null;
+            }
+
+            // A singleton class is one object's (an OpenStruct's, whose members are singleton methods): a dispatcher made for it
+            // serves that object only, and a light site that sees a new one every few calls is better off with the shared rule.
+            if (light && targetClass.IsSingletonClass) {
                 return null;
             }
 
@@ -192,7 +215,7 @@ namespace IronRuby.Runtime.Calls {
             // of Ruby methods don't, a RubyMethodCallPlan does
             var rubyMethod = method.Info as RubyMethodInfo;
             if (rubyMethod != null && rubyMethod.DefinitionName != _methodName) {
-                if (!mayDispatch || refinements != null || passesKeywords && !rubyMethod.TakesOrRefusesKeywords) {
+                if (light || !mayDispatch || refinements != null || passesKeywords && !rubyMethod.TakesOrRefusesKeywords) {
                     return null;
                 }
                 return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, rubyMethod, targetClass, target, clrTest, version, args, null, _methodName);
@@ -233,7 +256,8 @@ namespace IronRuby.Runtime.Calls {
                         null;
                 }
 
-                dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
+                dispatcher = (!light || rubyMethod != null || method.Info is RubyAttributeAccessorInfo) ?
+                    method.Info.GetDispatcher(delegateType, Signature, target, version) : null;
 
                 // a Ruby method of a builtin class (much of the core library is written in Ruby), called on nil, true, false or a CLR object:
                 if (dispatcher == null && rubyMethod != null && !(target is IRubyObject) &&
@@ -248,7 +272,7 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            if (!mayDispatch) {
+            if (light || !mayDispatch) {
                 return null;
             }
 
