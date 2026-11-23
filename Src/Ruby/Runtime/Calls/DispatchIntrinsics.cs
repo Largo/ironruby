@@ -83,7 +83,7 @@ namespace IronRuby.Runtime.Calls {
             // Only a Ruby object's rule tests its exact class; a CLR object's may cover an instance with singleton methods.
             var symbol = args.GetSimpleArgument(0) as RubySymbol;
             var targetClass = args.TargetClass;
-            if (symbol == null || !(args.Target is IRubyObject)) {
+            if (symbol == null || !(args.Target is IRubyObject) || IsObjectSingleton(targetClass)) {
                 return false;
             }
 
@@ -319,12 +319,22 @@ namespace IronRuby.Runtime.Calls {
         /// that for every call of the site, so any other respond_to? site gets the ordinary call and can share it. That is the
         /// site of `respond_to?(name, true)' in OpenStruct#is_method_protected!, which sees a new singleton class with each
         /// OpenStruct: it built and compiled a rule for every one of them (~0.1-0.2 ms each, most of OpenStruct.new).
+        ///
+        /// Nor is `respond_to?(:name)' folded for a receiver whose class is the singleton class of an object (not of a module): that
+        /// class has one instance, so its folded rule would serve one object - OpenStruct's `respond_to?(:total)' met a new one with
+        /// every OpenStruct, and built and compiled a rule for each. The ordinary call is shared between such classes instead.
         /// </summary>
-        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method, RubyCallSignature signature) {
+        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method, RubyCallSignature signature, RubyClass/*!*/ targetClass) {
             if (IsKernelMethod(method, ref _respondTo, "RespondTo")) {
-                return signature.ArgumentCount == 1 && !signature.HasBlock && !signature.HasSplattedArgument && !signature.HasRhsArgument;
+                return signature.ArgumentCount == 1 && !signature.HasBlock && !signature.HasSplattedArgument && !signature.HasRhsArgument &&
+                    !IsObjectSingleton(targetClass);
             }
             return IsSendMethod(method) || IsNotEqualsMethod(method);
+        }
+
+        // the singleton class of an object that is not a module: its only instance is that object
+        private static bool IsObjectSingleton(RubyClass/*!*/ targetClass) {
+            return targetClass.IsSingletonClass && !(targetClass.SingletonClassOf is RubyModule);
         }
 
         /// <summary>
