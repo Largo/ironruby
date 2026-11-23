@@ -72,6 +72,10 @@ namespace IronRuby.Compiler.Ast {
         // Something transformed by this generator calls super (SuperCall), in any method or block of it.
         internal bool HasSuperCall { get; set; }
 
+        // Something transformed by this generator is a literal whose object, or whose once-only value, the compiled code
+        // keeps (a Regexp literal, `/.../o', an Integer Range literal): two compilations of it answer two objects.
+        internal bool HasLiteralState { get; set; }
+
         public RubyCompilerOptions/*!*/ CompilerOptions { 
             get { return _compilerOptions; } 
         }

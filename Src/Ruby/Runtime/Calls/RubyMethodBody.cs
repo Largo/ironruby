@@ -409,7 +409,10 @@ namespace IronRuby.Runtime.Calls {
                     }
                     // A super call site shared by every module would see a new class at each and bind a rule for it
                     // into one ever longer list, slower than a fresh site per compilation: such a body is not made one.
-                    if (gen.HasSuperCall) {
+                    // Nor is one with a literal the compiled code keeps (a Regexp, `/.../o', a Range): every module has its
+                    // own compilation of it below the factory's threshold, so sharing one above it would make which object
+                    // (or which `/o' value) a module's method answers depend on how many modules came before it.
+                    if (gen.HasSuperCall || gen.HasLiteralState) {
                         factory = new ModuleFactory();
                         _moduleFactories.Add(label, factory);
                         return null;
