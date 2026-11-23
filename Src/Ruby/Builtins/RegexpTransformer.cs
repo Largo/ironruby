@@ -687,7 +687,9 @@ namespace IronRuby.Builtins {
                 switch (c = Read()) {
                     case -1:
                         if (isSubexpression) {
-                            throw MakeError("end pattern in group");
+                            // Onigmo's ONIGERR_END_PATTERN_WITH_UNMATCHED_PARENTHESIS: the group
+                            // has begun, and the pattern ends before its ')'
+                            throw MakeError("end pattern with unmatched parenthesis");
                         }
                         return;
                     
@@ -1266,6 +1268,10 @@ namespace IronRuby.Builtins {
                         Append(')');
                         break;
                     }
+
+                    case -1:
+                        // "(?" and nothing after it
+                        throw MakeError("end pattern in group");
 
                     default:
                         throw MakeError("undefined group option");

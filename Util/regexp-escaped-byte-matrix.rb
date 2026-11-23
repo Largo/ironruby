@@ -22,18 +22,18 @@
 # UTF-8 the backslash and the byte are "regexp preprocess failed: invalid
 # multibyte character". Its source is a US-ASCII string holding a byte that
 # is not US-ASCII, so Regexp.new(r.source) raises.
-
-# Left out, and still different:
-# - Regexp#inspect of a regexp whose source holds characters outside ASCII
-#   and is not in the default external encoding: MRI escapes them
-#   (rb_reg_desc, "/\\\xA4\\xA2/" for BINARY "\\\xA4\xA2"), IronRuby does not.
-#   That is Regexp#inspect's own difference, not this one's.
-# - "\\x\xFF" (a \x escape followed by no hex digit): MRI's "invalid hex escape"
-#   comes before its "invalid multibyte character", and writes the byte as
-#   \xFF; IronRuby checks the bytes first.
-# - Matching a US-ASCII regexp that holds bytes outside ASCII against a string
-#   in a single byte encoding other than ISO-8859-1: MRI reads the bytes as
-#   that encoding's characters, IronRuby as ISO-8859-1's.
+#
+# A comment - (?#...), or # to the end of the line in extended mode - pins
+# the encoding only in UTF-8, and the bytes of a # comment are not checked.
+# unescape_nonascii stops at the first thing wrong, so "\\x\xFF" is an
+# "invalid hex escape" in UTF-8 too. Error messages quote the pattern as
+# rb_reg_error_desc does: bytes, in the pattern's encoding, written for the
+# default external encoding (so run both with the same LANG).
+#
+# Left out, and still different: Regexp#inspect of a regexp whose source holds
+# characters outside ASCII and is not in the default external encoding: MRI
+# escapes them (rb_reg_desc, "/\\\xA4\\xA2/" for BINARY "\\\xA4\xA2"), IronRuby
+# does not. That is Regexp#inspect's own difference, not this one's.
 
 $stdout.sync = true
 
@@ -58,15 +58,21 @@ rescue Exception => e
 end
 
 BYTES = ["\\\xFF", "\\\xA4\xA2", "a\\\xFF", "\\\xFFa", "\xFF", "\\\\\xFF", "[\\\xFF]", "\\\xFF\\\xFE",
-         "\\\xFF\xFE", "(?#\\\xFF)a", "\\\xC3\xBF", "\\\xE3\x81\x82", "\\\xB1"]
-ENCODINGS = ["BINARY", "UTF-8", "EUC-JP", "Shift_JIS", "ISO-8859-1", "Windows-1252", "US-ASCII"]
+         "\\\xFF\xFE", "(?#\\\xFF)a", "(?#\xFF)a", "(?#\xC3\xA9)a", "\\\xC3\xBF", "\\\xE3\x81\x82", "\\\xB1",
+         "\\\x80", "\\x\xFF", "\\xg\xFF", "\\u\xFF", "\\c\xFF", "\\M-\xFF", "a/\\\xFF\t", "a # \xFF", "a # \xC3\xA9",
+         "(?x)a # \xFF", "(?x:a # \xFF\n)\xFE", "(?x:a # \xFF\n)b", "[#\xFF]", "a # \\\xFF\n\xFE"]
+ENCODINGS = ["BINARY", "UTF-8", "EUC-JP", "Shift_JIS", "ISO-8859-1", "Windows-1252", "KOI8-R", "US-ASCII"]
 SUBJECTS = ["\xFF".b, "a\xFF".b, "\xA4\xA2".b, "\u00FF", "\xFF".dup.force_encoding("UTF-8"),
-            "\xA4\xA2".dup.force_encoding("EUC-JP"), "\xFF".dup.force_encoding("ISO-8859-1"), "a"]
+            "\xA4\xA2".dup.force_encoding("EUC-JP"), "\xFF".dup.force_encoding("ISO-8859-1"),
+            "\x80".dup.force_encoding("Windows-1252"), "\u20AC", "\xFF".dup.force_encoding("KOI8-R"), "a"]
+
+UNION_PARTS = ["\u00FF", "\xFE".b, "\xFE".dup.force_encoding("ISO-8859-1"), /\u00FF/, /\xfe/n,
+               Regexp.new("\xFE".b), Regexp.new("a\\\xFE".b), "\u00E9".encode("UTF-16LE")]
 
 BYTES.each do |bytes|
   ENCODINGS.each do |enc|
     src = bytes.dup.force_encoding(enc)
-    [0, Regexp::NOENCODING, Regexp::FIXEDENCODING, Regexp::IGNORECASE].each do |opts|
+    [0, Regexp::NOENCODING, Regexp::FIXEDENCODING, Regexp::IGNORECASE, Regexp::EXTENDED].each do |opts|
       label = "#{bytes.b.inspect} #{enc} #{opts}"
       r = nil
       t(label) { r = Regexp.new(src, opts); d(r) }
@@ -77,6 +83,7 @@ BYTES.each do |bytes|
       t("#{label} match") { SUBJECTS.map { |s| m(Regexp.new(src, opts), s) } }
       t("#{label} eql") { [r == Regexp.new(r.source, r.options), r.hash == Regexp.new(r.source, r.options).hash] }
       t("#{label} union") { u = Regexp.union(r, "a"); [u.encoding, u.fixed_encoding?] }
+      t("#{label} unions") { UNION_PARTS.map { |x| [Regexp.union(r, x), Regexp.union(x, r)].map { |u| [u.encoding, u.fixed_encoding?] } rescue [$!.class, $!.message] } }
       t("#{label} interp") { u = /#{r}b/; [u.encoding, u.fixed_encoding?, u.source.b] }
       t("#{label} interp str") { u = /#{src}b/; [u.encoding, u.fixed_encoding?, u.source.b] }
       t("#{label} marshal") { u = Marshal.load(Marshal.dump(r)); [u.encoding, u.fixed_encoding?, u == r] }

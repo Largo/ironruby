@@ -719,6 +719,53 @@ source again: [RegexpError, ""invalid multibyte character: /\\\xFF/""]
 interpolated: [ArgumentError, ""invalid multibyte character""]
 ");
         }
+
+        /// <summary>
+        /// MRI's unescape_nonascii (RubyRegex.Preprocess) beyond an escaped byte: a comment pins the
+        /// encoding only in UTF-8, and the bytes of a # comment in extended mode are not checked;
+        /// it stops at the first thing wrong, so an escape's error comes before the bytes after it.
+        /// A US-ASCII regexp holding bytes outside ASCII writes those as \xHH in its text, is
+        /// compiled again in the encoding of the string it is matched against, makes a union fail
+        /// as rb_str_append does, and equals a regexp with the same source bytes.
+        /// </summary>
+        public void Regex_EscapedByteEncoding2() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def d(r) = [r.encoding, r.fixed_encoding?, r.to_s.b]
+t('comment') { d(Regexp.new(""(?#\xFF)a"".b)) }
+t('comment utf-8') { d(Regexp.new(""(?#\xC3\xA9)a"".b.force_encoding(""UTF-8""))) }
+t('extended comment') { d(Regexp.new(""a # \xFF"".b, Regexp::EXTENDED)) }
+t('inline extended') { d(Regexp.new(""(?x:a # \xFF\n)\xFE"".b)) }
+t('unchecked comment') { d(Regexp.new(""a # \xFF"".b.force_encoding(""UTF-8""), Regexp::EXTENDED)) }
+t('hex escape first') { Regexp.new(""\\x\xFF"".b.force_encoding(""UTF-8"")) }
+t('control escape') { Regexp.new(""\\c\xFF"".b) }
+t('unmatched') { Regexp.new(""(?i:a"") }
+t('windows-1252') { Regexp.new(""\\\x80"".b) =~ ""\x80"".b.force_encoding(""Windows-1252"") }
+t('euro') { Regexp.new(""\\\x80"".b.force_encoding(""Windows-1252"")) =~ ""\u20AC"".encode(""Windows-1252"") }
+r = Regexp.new(""\\\xFF"".b)
+t('union') { [Regexp.union(r, ""a"").encoding, (Regexp.union(r, ""\u00FF"") rescue $!.message), (Regexp.union(""\u00FF"", r) rescue $!.message)] }
+t('union utf-8') { Regexp.union(r, /\u00FF/) }
+t('equal') { m = Regexp.new(""a # \xFF"".b, Regexp::EXTENDED); [m == Regexp.new(m.source, m.options), Marshal.load(Marshal.dump(m)).encoding] }
+", @"
+comment: [#<Encoding:US-ASCII>, false, ""(?-mix:(?#\\xFF)a)""]
+comment utf-8: [#<Encoding:UTF-8>, true, ""(?-mix:(?#\xC3\xA9)a)""]
+extended comment: [#<Encoding:US-ASCII>, false, ""(?x-mi:a # \\xFF)""]
+inline extended: [#<Encoding:BINARY (ASCII-8BIT)>, true, ""(?-mix:(?x:a # \xFF\n)\xFE)""]
+unchecked comment: [#<Encoding:UTF-8>, true, ""(?x-mi:a # \\xFF)""]
+hex escape first: [RegexpError, ""invalid hex escape: /\\x\\xFF/""]
+control escape: [RegexpError, ""too short control escape: /\\c\\xFF/""]
+unmatched: [RegexpError, ""end pattern with unmatched parenthesis: /(?i:a/""]
+windows-1252: 0
+euro: 0
+union: [#<Encoding:US-ASCII>, ""incompatible character encodings: US-ASCII and UTF-8"", ""incompatible character encodings: UTF-8 and US-ASCII""]
+union utf-8: [RegexpError, ""invalid multibyte character: /(?-mix:\\\xFF)|(?-mix:\\u00FF)/""]
+equal: [true, #<Encoding:US-ASCII>]
+");
+        }
     }
 }
 

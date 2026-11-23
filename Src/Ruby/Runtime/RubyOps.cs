@@ -3320,18 +3320,29 @@ namespace IronRuby.Runtime {
                 if (fragment == null) {
                     continue;
                 }
-                // MRI's rb_reg_preprocess_dregexp reads each fragment in its own encoding: one that
-                // is not valid there is refused, and a non-ASCII byte right after a backslash in a
-                // single byte encoding does not pin it (RubyRegex.HasLiteralNonAscii).
-                if (fragment.Encoding != RubyEncoding.Binary && fragment.ContainsInvalidCharacters()) {
-                    throw RubyExceptions.CreateArgumentError("invalid multibyte character");
+                // MRI's rb_reg_preprocess_dregexp reads each fragment in its own encoding
+                // (RubyRegex.Preprocess): what is wrong there is an ArgumentError, and a non-ASCII
+                // byte right after a backslash in a single byte encoding, or in a comment outside
+                // UTF-8, does not pin it.
+                bool pinned, isUnicode;
+                int nonAsciiEscape;
+                if (fragment.Encoding.IsAsciiIdentity) {
+                    string error = RubyRegex.Preprocess(fragment.ToByteArray(), fragment.Encoding, extended, out pinned, out nonAsciiEscape);
+                    if (error != null) {
+                        throw RubyExceptions.CreateArgumentError(error);
+                    }
+                } else {
+                    if (fragment.ContainsInvalidCharacters()) {
+                        throw RubyExceptions.CreateArgumentError("invalid multibyte character");
+                    }
+                    pinned = !fragment.IsAscii();
+                    nonAsciiEscape = RubyRegex.HasNonAsciiEscape(fragment, extended, out isUnicode) ? (isUnicode ? 2 : 1) : 0;
                 }
                 RubyEncoding encoding;
-                bool isUnicode;
-                if (RubyRegex.HasLiteralNonAscii(fragment)) {
+                if (pinned) {
                     encoding = fragment.Encoding;
-                } else if (RubyRegex.HasNonAsciiEscape(fragment, out isUnicode)) {
-                    encoding = isUnicode ? RubyEncoding.UTF8 : fragment.Encoding;
+                } else if (nonAsciiEscape != 0) {
+                    encoding = nonAsciiEscape == 2 ? RubyEncoding.UTF8 : fragment.Encoding;
                 } else if (RubyRegex.HasPropertyEscape(fragment, extended)) {
                     encoding = fragment.Encoding;
                 } else {
@@ -3347,6 +3358,19 @@ namespace IronRuby.Runtime {
                 // the concatenation may be one of the interpolated strings itself
                 pattern = pattern.Clone();
                 pattern.ForceEncoding(fixedEncoding);
+            } else if (fixedEncoding == null && !pattern.IsAscii()) {
+                // MRI appends the fragments to the first (rb_str_buf_append), so bytes outside ASCII
+                // that pin nothing - after a backslash, in a comment - keep the encoding of the
+                // fragment they came from: /#{"(?x)a # \xFF".encode("US-ASCII")}b/ is US-ASCII.
+                foreach (var fragment in fragments) {
+                    if (fragment != null && !fragment.IsAscii()) {
+                        if (fragment.Encoding != pattern.Encoding && fragment.Encoding.IsAsciiIdentity) {
+                            pattern = pattern.Clone();
+                            pattern.ForceEncoding(fragment.Encoding);
+                        }
+                        break;
+                    }
+                }
             }
             return pattern;
         }

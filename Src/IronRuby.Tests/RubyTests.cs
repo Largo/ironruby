@@ -208,6 +208,7 @@ namespace IronRuby.Tests {
                 Regex_SharedTranslation2,
                 Regex_PropertyEncoding1,
                 Regex_EscapedByteEncoding1,
+                Regex_EscapedByteEncoding2,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,

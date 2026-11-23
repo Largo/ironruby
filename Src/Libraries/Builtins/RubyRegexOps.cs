@@ -97,8 +97,14 @@ namespace IronRuby.Builtins {
 
             double? timeout = TakeTimeout(self.Context, ref options, keywords);
             RubyRegexOptions regexOptions = MakeOptions(self.Context, options, null);
-            RubyRegex.RequireValidPattern(pattern, regexOptions);
-            return new RubyRegex(pattern, regexOptions) { Timeout = timeout };
+            try {
+                RubyRegex.RequireValidPattern(pattern, regexOptions);
+                return new RubyRegex(pattern, regexOptions) { Timeout = timeout };
+            } catch (RegexpError e) {
+                // the message quotes the pattern as the default external encoding has it written
+                RubyRegex.DescribeIn(e, self.Context);
+                throw;
+            }
         }
 
         [RubyConstructor]
@@ -816,55 +822,99 @@ namespace IronRuby.Builtins {
 
                 var regex = parts[i] as RubyRegex;
                 if (regex != null) {
-                    regex.AppendTo(result, false);
+                    // its bytes as they are: a US-ASCII regexp may hold bytes outside ASCII
+                    // (RubyRegex.HasLiteralNonAscii), tagged with whatever encoding its source had
+                    result.Append(regex.AppendTo(MutableString.CreateBinary(), false).ToByteArray());
                 } else {
                     result.Append(RubyRegex.Escape((MutableString)parts[i]));
                 }
             }
 
+            // Such bytes can also leave the source as a whole invalid in its encoding:
+            // Regexp.union(Regexp.new("\\\xFF".b), /\u00FF/) is UTF-8.
+            try {
+                RubyRegex.RequireValidPattern(result, RubyRegexOptions.NONE);
+            } catch (RegexpError e) {
+                RubyRegex.DescribeIn(e, stringCast.Context);
+                throw;
+            }
             return new RubyRegex(result, RubyRegexOptions.NONE);
         }
 
         /// <summary>
-        /// MRI's rule for Regexp.union: only the parts that are not ASCII only get a say in the
-        /// result's encoding, they all have to agree, and an ASCII incompatible one cannot be
-        /// mixed with an ASCII only part at all.
+        /// MRI's rb_reg_s_union, which takes the parts in order. Only the parts that are not ASCII
+        /// only get a say in the result's encoding: the ASCII incompatible ones have to agree, and
+        /// so do the others; an ASCII incompatible part goes with neither an ASCII only part nor
+        /// one of another encoding that is not ASCII only. Each part's text is then appended to
+        /// the source (rb_str_append), which can still fail: a US-ASCII regexp that holds bytes
+        /// outside ASCII (RubyRegex.HasLiteralNonAscii) has a say in nothing, but its text is not
+        /// ASCII only. The source is BINARY when no part had a say, which Regexp.new makes
+        /// US-ASCII when it can.
         /// </summary>
         private static RubyEncoding/*!*/ NegotiateUnionEncoding(List<object>/*!*/ parts) {
-            RubyEncoding result = null;
+            RubyEncoding incompatible = null, compatibleFixed = null;
             bool hasAsciiOnlyPart = false;
+            RubyEncoding sourceEncoding = null;
+            bool sourceIsAscii = true;
 
             foreach (var part in parts) {
-                RubyEncoding encoding;
+                RubyEncoding encoding, textEncoding;
+                bool isFixed, textIsAscii;
                 var regex = part as RubyRegex;
                 if (regex != null) {
                     // rb_reg_fixed_encoding_p: a regexp has a say when its encoding is pinned, by a
                     // modifier or by its source (non-ASCII text, a \u escape, a \p property)
-                    encoding = regex.IsFixedEncoding ? regex.Encoding : null;
+                    encoding = textEncoding = regex.Encoding;
+                    isFixed = regex.IsFixedEncoding;
+                    textIsAscii = regex.TextPattern.IsAscii();
                 } else {
                     var str = (MutableString)part;
-                    encoding = IsAsciiOnly(str) ? null : str.Encoding;
+                    encoding = str.Encoding;
+                    isFixed = !IsAsciiOnly(str);
+                    // Regexp.escape: US-ASCII when ASCII only
+                    textIsAscii = encoding.IsAsciiIdentity && str.IsAscii();
+                    textEncoding = textIsAscii ? RubyEncoding.Ascii : encoding;
                 }
 
-                if (encoding == null) {
+                if (!encoding.IsAsciiIdentity) {
+                    if (incompatible == null) {
+                        incompatible = encoding;
+                    } else if (incompatible != encoding) {
+                        throw IncompatibleEncodings(incompatible, encoding);
+                    }
+                } else if (isFixed) {
+                    if (compatibleFixed == null) {
+                        compatibleFixed = encoding;
+                    } else if (compatibleFixed != encoding) {
+                        throw IncompatibleEncodings(compatibleFixed, encoding);
+                    }
+                } else {
                     hasAsciiOnlyPart = true;
-                } else if (result == null) {
-                    result = encoding;
-                } else if (result != encoding) {
-                    throw RubyExceptions.CreateArgumentError("incompatible encodings: {0} and {1}",
-                        result.Name, encoding.Name);
                 }
+
+                if (incompatible != null) {
+                    if (hasAsciiOnlyPart) {
+                        throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", incompatible.Name);
+                    }
+                    if (compatibleFixed != null) {
+                        throw IncompatibleEncodings(incompatible, compatibleFixed);
+                    }
+                }
+
+                if (sourceEncoding != null && sourceEncoding != textEncoding && !sourceIsAscii && !textIsAscii) {
+                    throw RubyExceptions.CreateEncodingCompatibilityError(sourceEncoding, textEncoding);
+                }
+                if (sourceEncoding == null || sourceIsAscii && !textIsAscii) {
+                    sourceEncoding = textEncoding;
+                }
+                sourceIsAscii &= textIsAscii;
             }
 
-            if (result == null) {
-                return RubyEncoding.Ascii;
-            }
+            return incompatible ?? compatibleFixed ?? RubyEncoding.Binary;
+        }
 
-            if (hasAsciiOnlyPart && !result.IsAsciiIdentity) {
-                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", result.Name);
-            }
-
-            return result;
+        private static Exception/*!*/ IncompatibleEncodings(RubyEncoding/*!*/ first, RubyEncoding/*!*/ second) {
+            return RubyExceptions.CreateArgumentError("incompatible encodings: {0} and {1}", first.Name, second.Name);
         }
 
         private static bool IsAsciiOnly(MutableString/*!*/ str) {
