@@ -77,6 +77,20 @@ EXPRESSIONS = <<~'RUBY'.lines.map(&:strip).reject { |l| l.empty? || l.start_with
   (d = AREA.allocate; Data.instance_method(:initialize).bind_call(d, w: 2, h: 3, area: 6); d.to_h)
   ($p = []; c = Data.define(:a) { def initialize(*, **); super; $p << :init; end }; c.new(1); $p)
   M.new(1, "m").instance_variables.empty?
+  M.new(amount: 1, "amount" => 2, unit: "m").to_h
+  M.new(unit: "m", amount: 1).to_h
+  (M.new(1, "m").__send__(:initialize, amount: 2, unit: "x") rescue "#{$!.class}: #{$!.message}")
+  (M.new(amount: 1, unit: "m", amount2: 3, x: 4) rescue "#{$!.class}: #{$!.message}")
+  (M.new(unit: "m", zz: 1) rescue "#{$!.class}: #{$!.message}")
+  (c = Data.define(:a, :b) { def a = 99 }; c.new(1, 2).with(b: 3).to_h)
+  (c = Data.define(:a, :b) { def a = 99 }; c.new(1, 2).with(b: 3).a)
+  M.new(1, "m").with(amount: 1, "amount" => 2).to_h
+  M.new(1, "m").with(unit: "x", amount: 5).to_h
+  (M.new(1, "m").with(amount: 2, zz: 1, yy: 2) rescue "#{$!.class}: #{$!.message}")
+  (d = M.new(1, "m").with(amount: 3); [d.frozen?, d.class, d.instance_variables])
+  ($trace = nil; OVER.new(1, "m").with(unit: "x"); $trace)
+  ($trace = nil; OVER.new(1, "m").with("unit" => "x"); $trace)
+  (AREA.new(w: 2, h: 3).with(w: 5) rescue "#{$!.class}: #{$!.message}")
 
   # --- Data instance protocol
   M.new(1, "m").members
