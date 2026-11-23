@@ -126,6 +126,14 @@ class Date
 	@elem = {}
       end
 
+      # The fields the parsers set, as plain methods: going through method_missing (a rest
+      # argument, a block, a String made from the Symbol and interned back) cost several times
+      # the parsing they did. Any other name still goes to method_missing.
+      %i[year mon mday hour min sec sec_fraction seconds zone offset wday yday cwyear cweek
+	 cwday wnum0 wnum1 leftover _cent _merid _comp _bc].each do |name|
+	class_eval("def #{name}; @elem[:#{name}]; end; def #{name}=(v); @elem[:#{name}] = v; end", __FILE__, __LINE__)
+      end
+
       def method_missing(t, *args, &block)
 	# Symbol#to_s hands back a chilled string, and chomp! mutating it is a deprecation
 	# warning per call - thousands of them while parsing dates. dup takes the chill off.
@@ -154,8 +162,33 @@ class Date
   private_class_method :num_pattern?
 
   def self._strptime_i(str, fmt, e) # :nodoc:
-    fmt.scan(/%([EO]?(?::{1,3}z|.))|(.)/m) do |s, c|
-      a = $&
+    # The tokens of /%([EO]?(?::{1,3}z|.))|(.)/m, cut out by hand: fmt.scan with a block, $&
+    # and $' cost more than all the matching of the subject, and a `return' from inside the
+    # block made every directive a jump out of it. `rest' is what $' was.
+    pos = 0
+    size = fmt.size
+    while pos < size
+      s = c = nil
+      ch = fmt[pos]
+      if ch == '%' && pos + 1 < size
+	k = pos + 1
+	prefix = fmt[k]
+	if (prefix == 'E' || prefix == 'O') && k + 1 < size
+	  k += 1
+	else
+	  prefix = nil
+	end
+	m = k
+	m += 1 while m < size && m - k < 3 && fmt[m] == ':'
+	k = m if m > k && m < size && fmt[m] == 'z'
+	s = fmt[pos + 1..k]
+	len = k + 1 - pos
+      else
+	c = ch
+	len = 1
+      end
+      a = fmt[pos, len]
+      pos += len
       if s
 	case s
 	when 'A', 'a'
@@ -171,7 +204,7 @@ class Date
 	  return unless val
 	  e.mon = val
 	when 'C', 'EC'
-	  return unless str.sub!(if num_pattern?($')
+	  return unless str.sub!(if num_pattern?(fmt[pos..])
 				 then /\A([-+]?\d{1,2})/
 				 else /\A([-+]?\d{1,})/
 				 end, '')
@@ -189,7 +222,7 @@ class Date
 	when 'F'
 	  return unless _strptime_i(str, '%Y-%m-%d', e)
 	when 'G'
-	  return unless str.sub!(if num_pattern?($')
+	  return unless str.sub!(if num_pattern?(fmt[pos..])
 				 then /\A([-+]?\d{1,4})/
 				 else /\A([-+]?\d{1,})/
 				 end, '')
@@ -217,7 +250,7 @@ class Date
 	  return unless (1..366) === val
 	  e.yday = val
 	when 'L'
-	  return unless str.sub!(if num_pattern?($')
+	  return unless str.sub!(if num_pattern?(fmt[pos..])
 				 then /\A([-+]?\d{1,3})/
 				 else /\A([-+]?\d{1,})/
 				 end, '')
@@ -235,7 +268,7 @@ class Date
 	  return unless (1..12) === val
 	  e.mon = val
 	when 'N'
-	  return unless str.sub!(if num_pattern?($')
+	  return unless str.sub!(if num_pattern?(fmt[pos..])
 				 then /\A([-+]?\d{1,9})/
 				 else /\A([-+]?\d{1,})/
 				 end, '')
@@ -293,7 +326,7 @@ class Date
 	when 'x', 'Ex'
 	  return unless _strptime_i(str, '%m/%d/%y', e)
 	when 'Y', 'EY'
-	  return unless str.sub!(if num_pattern?($')
+	  return unless str.sub!(if num_pattern?(fmt[pos..])
 				 then /\A([-+]?\d{1,4})/
 				 else /\A([-+]?\d{1,})/
 				 end, '')
@@ -319,17 +352,22 @@ class Date
 	when '+'
 	  return unless _strptime_i(str, '%a %b %e %H:%M:%S %Z %Y', e)
 	else
-	  return unless str.sub!(Regexp.new('\\A' + Regexp.quote(a)), '')
+	  # what str.sub!(Regexp.new('\\A' + Regexp.quote(a)), '') did, without a Regexp per call
+	  return unless str.start_with?(a)
+	  str[0, a.size] = ''
 	end
       else
 	case c
 	when /\A\s/
 	  str.sub!(/\A\s+/, '')
 	else
-	  return unless str.sub!(Regexp.new('\\A' + Regexp.quote(a)), '')
+	  # what str.sub!(Regexp.new('\\A' + Regexp.quote(a)), '') did, without a Regexp per call
+	  return unless str.start_with?(a)
+	  str[0, a.size] = ''
 	end
       end
     end
+    true
   end
 
   private_class_method :_strptime_i
