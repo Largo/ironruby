@@ -683,11 +683,19 @@ namespace IronRuby.Builtins {
         /// Only UTF-8 and the multibyte encodings whose shape is known here can end inside a
         /// character; in a single byte encoding every byte is one.
         /// </summary>
+        /// <summary>
+        /// UTF-8 and the encodings that are UTF-8 under another name (UTF8-MAC, UTF8-DoCoMo...):
+        /// their characters have UTF-8's shape.
+        /// </summary>
+        private bool IsUtf8Shaped {
+            get { return RubyOnlyEncodings.GetTableCodePage(CodePage) == CodePageUTF8; }
+        }
+
         public bool EndsInsideCharacter(byte[]/*!*/ bytes, int start, int count) {
             if (count <= 0) {
                 return false;
             }
-            if (StrictEncoding.CodePage == 65001) {
+            if (IsUtf8Shaped) {
                 // UTF-8 synchronises itself: only the last character needs looking at
                 int head = start + count - 1;
                 while (head >= start && start + count - head < 4 && (bytes[head] & 0xC0) == 0x80) {
@@ -741,7 +749,7 @@ namespace IronRuby.Builtins {
             if (index >= end) {
                 return -1;
             }
-            if (StrictEncoding.CodePage == 65001) {
+            if (IsUtf8Shaped) {
                 int lead = bytes[index];
                 int length = (lead < 0x80) ? 1 : (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : -1;
                 if (length <= 1 || index + length > end) {
@@ -769,6 +777,13 @@ namespace IronRuby.Builtins {
         /// begin inside one of their characters.
         /// </summary>
         public bool IsCharacterBoundary(byte[]/*!*/ bytes, int start, int count, int offset) {
+            // UTF-16 and UTF-32 go by code units (see EndsInsideCharacter): "\n" in UTF-16LE is
+            // "\x0A\x00", which the character "ੁ" followed by "䈀" also contains.
+            int codePage = StrictEncoding.CodePage;
+            if (codePage == 12000 || codePage == 12001 || codePage == 1200 || codePage == 1201) {
+                return !EndsInsideCharacter(bytes, start, offset);
+            }
+
             int end = start + count;
             int target = start + offset;
             int p = start;
