@@ -32,7 +32,8 @@ namespace IronRuby.Runtime.Calls {
         protected RubyAttributeAccessorInfo(RubyMemberFlags flags, RubyModule/*!*/ declaringModule, string/*!*/ variableName)
             : base(flags, declaringModule) {
             Assert.NotEmpty(variableName);
-            Debug.Assert(variableName.StartsWith("@"));
+            // an attr_accessor's @name, or the hidden variable a Data member's reader reads (KernelOps.DefineData)
+            Debug.Assert(variableName.StartsWith("@") || variableName.StartsWith(RubyUtils.GetHiddenInstanceVariableName("")));
             _instanceVariableName = variableName;
         }
 
