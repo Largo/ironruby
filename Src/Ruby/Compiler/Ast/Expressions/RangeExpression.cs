@@ -67,6 +67,7 @@ namespace IronRuby.Compiler.Ast {
             if (IsIntegerRange(out intBegin, out intEnd)) {
                 // a Range is frozen, and MRI makes a literal one of integers a single object, which
                 // the expression evaluates to every time
+                gen.HasLiteralState = true;
                 return AstUtils.Constant(new IronRuby.Builtins.Range(intBegin, intEnd, _isExclusive));
             } else {
                 return (_isExclusive ? Methods.CreateExclusiveRange : Methods.CreateInclusiveRange).OpCall(
