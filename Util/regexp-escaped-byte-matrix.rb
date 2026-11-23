@@ -28,12 +28,8 @@
 # unescape_nonascii stops at the first thing wrong, so "\\x\xFF" is an
 # "invalid hex escape" in UTF-8 too. Error messages quote the pattern as
 # rb_reg_error_desc does: bytes, in the pattern's encoding, written for the
-# default external encoding (so run both with the same LANG).
-#
-# Left out, and still different: Regexp#inspect of a regexp whose source holds
-# characters outside ASCII and is not in the default external encoding: MRI
-# escapes them (rb_reg_desc, "/\\\xA4\\xA2/" for BINARY "\\\xA4\xA2"), IronRuby
-# does not. That is Regexp#inspect's own difference, not this one's.
+# default external encoding, and so does #inspect (rb_reg_desc): run both
+# with the same LANG.
 
 $stdout.sync = true
 
@@ -46,9 +42,7 @@ def t(label)
   puts "#{label}: #{v.inspect}"
 end
 
-# (#inspect only where it writes the source as it is; see above)
-def d(r) = [r.encoding, r.source.encoding, r.fixed_encoding?, r.source.b,
-            r.encoding == Encoding::US_ASCII || r.source.ascii_only? ? r.inspect.b : "-", r.inspect.encoding,
+def d(r) = [r.encoding, r.source.encoding, r.fixed_encoding?, r.source.b, r.inspect.b, r.inspect.encoding,
             r.to_s.b, r.options]
 
 def m(r, s)
