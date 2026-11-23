@@ -416,13 +416,16 @@ namespace IronRuby.Builtins {
         /// Returns "/{pattern-with-forward-slash-escaped}/"
         /// Doesn't escape forward slashes that are already escaped.
         /// An uninitialized Regexp shows as a plain object, "#&lt;Regexp:0x...&gt;", as in MRI.
+        /// Like String#inspect, it is written for the default internal encoding, or the default
+        /// external one when there is none (rb_reg_desc): a character that encoding does not hold
+        /// is escaped, so Regexp.new("\u3042").inspect is "/\\u3042/" where the terminal is US-ASCII.
         /// </summary>
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
             if (!self.IsInitialized) {
                 return RubyUtils.ObjectToMutableString(context, self);
             }
-            return self.Inspect();
+            return self.Inspect(context.DefaultInternalEncoding ?? context.DefaultExternalEncoding);
         }
 
         [RubyMethod("options")]
