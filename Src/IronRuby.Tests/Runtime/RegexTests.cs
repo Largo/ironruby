@@ -908,6 +908,42 @@ utf-8: [0, 0]
 absent /i: [""\xE9"", ""a"", ""\xC9a"", ""\xE9a""]
 ");
         }
+
+        /// <summary>
+        /// An ISO-8859-1 subject is matched with Onigmo's ISO-8859-1 ctype table: its own
+        /// punctuation (U+00AD, not U+00A7), U+00A0 as a space for \s in every mode but U+0085 as
+        /// neither a space nor a line break, the superscripts and fractions as word characters, and
+        /// (?a) restricting [[:word:]] and \b but not [[:alpha:]] or \p{...}. An ISO-8859-1
+        /// regexp's \p{Punct} is [[:punct:]] on ASCII text too, and (?a)\b is ASCII in UTF-8.
+        /// </summary>
+        public void Regex_Latin1Ctype1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def l1(s) = s.dup.force_encoding('ISO-8859-1')
+s = l1(""a\xE9b\xB2 c\xA0d\xAD\xA7"")
+t('punct') { [s.scan(/[[:punct:]]/), s =~ Regexp.new(l1('\p{Punct}')), ""$"" =~ Regexp.new(l1('\p{Punct}'))] }
+t('space') { [s.scan(/\s/), s.scan(/(?a)\s/), s.scan(/[[:space:]]/), l1(""\x85"") =~ /[[:space:]]/, l1(""\x85"") =~ /\R/] }
+t('word') { [s.scan(/[[:word:]]+/), s.scan(/(?u)\w+/), s.scan(/\w+/), s.split(/\b/)] }
+t('(?a)') { [s.scan(/(?a)[[:alpha:]]+/), s.scan(/(?a)[[:word:]]+/), s.scan(/(?a)\b./), s =~ Regexp.new(l1('(?a)\p{Word}{4}'))] }
+t('upper /i') { [l1(""\xDF\xFF\xC9\xE9"").scan(/[[:upper:]]/i), l1(""\xFF"") =~ Regexp.new(l1('\p{Upper}'), Regexp::IGNORECASE)] }
+t('fold') { [l1(""\xC9"") =~ Regexp.new(l1(""\xE9""), Regexp::IGNORECASE), l1(""\xFE"") =~ Regexp.new(l1(""[\xDE]""), Regexp::IGNORECASE)] }
+t('one regexp') { re = /[[:punct:]]/; [re.match?(""\u00a7""), re.match?(l1(""\xA7"")), re.match?(""\u00a7""), re.match?(l1(""\xAD""))] }
+t('utf-8 (?a)\b') { [""\u00e9"" =~ /(?a)\b/, ""a\u00e9"" =~ /(?a)a\b/, ""\u00e9"" =~ /\b/] }
+", @"
+punct: [[""\xAD""], 8, 0]
+space: [["" "", ""\xA0""], ["" "", ""\xA0""], ["" "", ""\xA0""], nil, nil]
+word: [[""a\xE9b\xB2"", ""c"", ""d""], [""a\xE9b\xB2"", ""c"", ""d""], [""a"", ""b"", ""c"", ""d""], [""a\xE9b\xB2"", "" "", ""c"", ""\xA0"", ""d"", ""\xAD\xA7""]]
+(?a): [[""a\xE9b"", ""c"", ""d""], [""a"", ""b"", ""c"", ""d""], [""a"", ""\xE9"", ""b"", ""\xB2"", ""c"", ""\xA0"", ""d"", ""\xAD""], 0]
+upper /i: [[""\xC9"", ""\xE9""], nil]
+fold: [0, 0]
+one regexp: [true, false, true, true]
+utf-8 (?a)\b: [nil, 0, 0]
+");
+        }
     }
 }
 

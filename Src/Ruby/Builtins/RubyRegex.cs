@@ -49,17 +49,19 @@ namespace IronRuby.Builtins {
         private Regex _cachedAstralRegex;
         private TimeSpan _cachedAstralTimeout;
 
-        // The same pattern translated for a match Onigmo makes with its ASCII-8BIT or US-ASCII
-        // ctype table (UsesAsciiCtype) - above all a BINARY subject with bytes above 0x7F, which
-        // has no letters, punctuation or case pairs there, where .NET sees U+0080-U+00FF (see
-        // RegexpTransformer.Transform(..., asciiCtype)). The regex and the timeout it was made
-        // with are published together, so that a thread never pairs one rebuild's regex with
-        // another's timeout.
+        // The same pattern translated for a match Onigmo makes with a single byte encoding's
+        // ctype table (GetCtypeTable): ASCII-8BIT's or US-ASCII's - above all for a BINARY
+        // subject with bytes above 0x7F, which has no letters, punctuation or case pairs there,
+        // where .NET sees U+0080-U+00FF - and ISO-8859-1's (see RegexpTransformer.Transform(...,
+        // ctype)). Each regex and the timeout it was made with are published together, so that a
+        // thread never pairs one rebuild's regex with another's timeout.
         private Tuple<TimeSpan, Regex> _cachedBinary;
+        private Tuple<TimeSpan, Regex> _cachedLatin1;
         // Set once that translation has turned out to be the plain one - the pattern has no
         // property, POSIX class, \b, \R or /i Latin-1 letter - so that such a subject keeps
         // matching with _cachedRegex, which is compiled once it has been used enough.
         private bool _binaryIsPlain;
+        private bool _latin1IsPlain;
 
         // The same CLR regex forced to start where the search starts, for the scanning operations
         // that only ever look at the current position (StringScanner#scan, #skip, #check, #match?).
@@ -173,6 +175,8 @@ namespace IronRuby.Builtins {
             _cachedAstralRegex = null;
             _cachedBinary = null;
             _binaryIsPlain = false;
+            _cachedLatin1 = null;
+            _latin1IsPlain = false;
             _nonAsciiEscape = -1;
             _hasProperty = -1;
             _literalNonAscii = -1;
@@ -314,38 +318,53 @@ namespace IronRuby.Builtins {
             if (astral) {
                 return target.TransformAstralPattern();
             }
-            if (target.UsesAsciiCtype(input)) {
-                return target.TransformBinaryPattern(countUse);
+            switch (target.GetCtypeTable(input)) {
+                case RegexpTransformer.CtypeTable.Ascii:
+                    return target.TransformCtypePattern(RegexpTransformer.CtypeTable.Ascii, ref target._cachedBinary, ref target._binaryIsPlain, countUse);
+                case RegexpTransformer.CtypeTable.Latin1:
+                    return target.TransformCtypePattern(RegexpTransformer.CtypeTable.Latin1, ref target._cachedLatin1, ref target._latin1IsPlain, countUse);
+                default:
+                    return target.TransformPattern(countUse);
             }
-            return target.TransformPattern(countUse);
         }
 
         /// <summary>
-        /// Whether MRI would match <paramref name="input"/> with Onigmo's ASCII-8BIT or US-ASCII
-        /// ctype table. rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the
-        /// subject's encoding, and a fixed one for its own (the subject is then in that encoding
-        /// or ASCII only). Two cases differ from the plain translation: a BINARY subject with
-        /// bytes above 0x7F (a US-ASCII subject that got here is ASCII), and a BINARY or US-ASCII
-        /// regexp with a property, whose \p{Punct} is [[:punct:]] even on ASCII text. Any other
-        /// fixed BINARY or US-ASCII regexp matches ASCII text as the plain translation does.
+        /// The Onigmo ctype table MRI would match <paramref name="input"/> with, where it is one
+        /// the plain translation does not stand for. rb_reg_prepare_enc compiles a regexp that is
+        /// not fixed-encoding for the subject's encoding, and a fixed one for its own (the subject
+        /// is then in that encoding or ASCII only). So a BINARY subject with bytes above 0x7F is
+        /// matched with ASCII-8BIT's table and an ISO-8859-1 one with ISO-8859-1's (a US-ASCII
+        /// subject that got here is ASCII); and a BINARY, US-ASCII or ISO-8859-1 regexp with a
+        /// property uses its own table on any subject, as its \p{Punct} is [[:punct:]] even on
+        /// ASCII text. Any other fixed regexp of those encodings matches ASCII text as the plain
+        /// translation does.
         /// </summary>
-        private bool UsesAsciiCtype(MutableString/*!*/ input) {
-            if (input.Encoding == RubyEncoding.Binary && !input.IsAscii()) {
-                return true;
+        private RegexpTransformer.CtypeTable GetCtypeTable(MutableString/*!*/ input) {
+            RubyEncoding encoding = input.Encoding;
+            if ((encoding == RubyEncoding.Binary || encoding.CodePage == CodePageLatin1) && !input.IsAscii()) {
+                return TableOf(encoding);
             }
             if (PatternHasProperty) {
-                RubyEncoding encoding = Encoding;
-                return encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii;
+                return TableOf(Encoding);
             }
-            return false;
+            return RegexpTransformer.CtypeTable.Unicode;
         }
 
-        private Regex/*!*/ TransformBinaryPattern(bool countUse) {
+        private const int CodePageLatin1 = 28591;
+
+        private static RegexpTransformer.CtypeTable TableOf(RubyEncoding/*!*/ encoding) {
+            if (encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) {
+                return RegexpTransformer.CtypeTable.Ascii;
+            }
+            return (encoding.CodePage == CodePageLatin1) ? RegexpTransformer.CtypeTable.Latin1 : RegexpTransformer.CtypeTable.Unicode;
+        }
+
+        private Regex/*!*/ TransformCtypePattern(RegexpTransformer.CtypeTable ctype, ref Tuple<TimeSpan, Regex> cache, ref bool isPlain, bool countUse) {
             TimeSpan timeout = EffectiveTimeout;
-            if (_binaryIsPlain) {
+            if (isPlain) {
                 return TransformPattern(countUse);
             }
-            var cached = _cachedBinary;
+            var cached = cache;
             if (cached != null && timeout == cached.Item1) {
                 return cached.Item2;
             }
@@ -355,9 +374,9 @@ namespace IronRuby.Builtins {
             Regex result;
             try {
                 bool hasGAnchor, applied;
-                string translated = RegexpTransformer.Transform(GetClrPatternSource(), _options, out hasGAnchor, false, true, out applied);
+                string translated = RegexpTransformer.Transform(GetClrPatternSource(), _options, out hasGAnchor, false, ctype, out applied);
                 if (!applied) {
-                    _binaryIsPlain = true;
+                    isPlain = true;
                     return plain;
                 }
                 result = new Regex(translated, plain.Options, timeout);
@@ -365,7 +384,7 @@ namespace IronRuby.Builtins {
                 result = plain;
             }
 
-            _cachedBinary = Tuple.Create(timeout, result);
+            cache = Tuple.Create(timeout, result);
             return result;
         }
 

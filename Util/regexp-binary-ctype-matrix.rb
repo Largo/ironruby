@@ -16,12 +16,13 @@
 # A row lists, for each subject encoding, which of the characters 0x80-0xFF (and 0x00-0x7F,
 # as a check that ASCII is unchanged) the pattern matches, as hex ranges.
 #
-# The BINARY and US-ASCII columns and the entry points agree with CRuby 4.0. Rows that still
-# differ, all in the other columns and all older than this matrix: ISO-8859-1 subjects are
-# matched with Unicode's tables rather than Onigmo's ISO-8859-1 ctype table ([[:punct:]],
-# [[:space:]], \s, (?u)\s, \R and 0x85, [[:word:]] and \b with the superscripts and fractions,
-# (?a)[[:alpha:]], [[:upper:]]/i), UTF-8's \b and \B do not count U+00B2 U+00B3 U+00B9
-# U+00BC-U+00BE as word characters, and UTF-8's [[:upper:]]/i misses U+00B5.
+# The BINARY, US-ASCII and ISO-8859-1 columns and the entry points agree with CRuby 4.0; an
+# ISO-8859-1 subject is matched with Onigmo's ISO-8859-1 ctype table (its own punctuation,
+# U+00A0 as its one space above ASCII, the superscripts and fractions as word characters, and
+# (?a) restricting only [[:graph:]] [[:print:]] [[:word:]] and \b). Rows that still differ, in
+# the UTF-8 column and older than this matrix: UTF-8's \b and \B do not count U+00B2 U+00B3
+# U+00B9 U+00BC-U+00BE as word characters, and UTF-8's [[:upper:]]/i misses U+00B5. Neither
+# encoding folds "\u00DF" onto "ss" under /i, as Onigmo does.
 
 require "strscan"
 
@@ -203,6 +204,30 @@ rb = Regexp.new('\b')
   ["same re, UTF-8 then BINARY", -> { [re.match?("é"), re.match?("\xE9".b), re.match?("é")] }],
   ["same re, ISO-8859-1, BINARY", -> { [re.match?("\xE9".dup.force_encoding("ISO-8859-1")), re.match?("\xE9".b)] }],
   ["astral UTF-8 then BINARY", -> { [re.match?("\u{1D4B3}é"), re.match?("\xE9".b)] }],
+].each do |label, probe|
+  puts "#{label.ljust(30)} => #{attempt { probe.call }.inspect}"
+end
+
+# ISO-8859-1: the same through the entry points, and the (?a) quirks.
+puts
+puts "# ISO-8859-1"
+l = "a\xE9b\xB2 c\xA0d\xAD\xA7".dup.force_encoding(Encoding::ISO_8859_1)
+def latin1(src) = Regexp.new(src.dup.force_encoding(Encoding::ISO_8859_1))
+[
+  ["scan [[:alpha:]]+", -> { l.scan(/[[:alpha:]]+/) }],
+  ["scan \\w (?u)", -> { l.scan(/(?u)\w+/) }],
+  ["split \\s", -> { l.split(/\s/) }],
+  ["split \\b", -> { l.split(/\b/) }],
+  ["gsub [[:punct:]]", -> { l.gsub(/[[:punct:]]/, "!") }],
+  ["index \\p{Space}", -> { l.index(latin1('\p{Space}')) }],
+  ["(?a) posix", -> { %w[alpha punct space graph print word].map { |n| l.scan(Regexp.new("(?a)[[:#{n}:]]")).size } }],
+  ["(?a)\\b", -> { l.scan(/(?a)\b./) }],
+  ["\\R", -> { "\r\n\x85\n".dup.force_encoding(Encoding::ISO_8859_1).scan(/\R/) }],
+  ["upper /i", -> { "\xDF\xFF\xC9\xE9".dup.force_encoding(Encoding::ISO_8859_1).scan(/[[:upper:]]/i) }],
+  ["StringScanner", -> { ss = StringScanner.new(l); [ss.scan(/[[:alpha:]]+/), ss.scan(/[[:alpha:]\s]+/), ss.pos] }],
+  ["latin1 regexp, ASCII subject", -> { ["$" =~ latin1('\p{Punct}'), "$" =~ /\p{Punct}/u] }],
+  ["one regexp, three encodings", -> { re = /\s/; [re.match?("\u00a0"), re.match?("\xA0".b), re.match?("\xA0".dup.force_encoding(Encoding::ISO_8859_1))] }],
+  ["(?a)\\b in UTF-8", -> { ["\u00e9" =~ /(?a)\b/, "\u00e9a" =~ /(?a)\Ba/, "a\u00e9" =~ /(?a)a\b/] }],
 ].each do |label, probe|
   puts "#{label.ljust(30)} => #{attempt { probe.call }.inspect}"
 end
