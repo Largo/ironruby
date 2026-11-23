@@ -1174,7 +1174,7 @@ namespace IronRuby.Builtins {
             string str;
             bool astral;
             Regex regex = Transform(input, out str, out astral, true);
-            return MatchData.Create(astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str), input, true, str, this, astral);
+            return MatchData.Create(astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str), input, true, str, this, astral, regex);
         }
 
         /// <summary>
@@ -1226,7 +1226,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
             Match match = astral ? MatchOutsidePairs(regex, str, start) : regex.Match(str, start);
-            return MatchData.Create(match, input, freezeInput, str, this, astral);
+            return MatchData.Create(match, input, freezeInput, str, this, astral, regex);
         }
 
         /// <summary>
@@ -1265,7 +1265,7 @@ namespace IronRuby.Builtins {
             }
 
             Match match = astral ? MatchOutsidePairs(regex, str, start, str.Length - start) : regex.Match(str, start, str.Length - start);
-            return MatchData.Create(match, input, freezeInput, str, this, astral);
+            return MatchData.Create(match, input, freezeInput, str, this, astral, regex);
         }
 
         /// <summary>
@@ -1294,7 +1294,7 @@ namespace IronRuby.Builtins {
                 }
                 Match match = _regex.Match(_text, _start, _text.Length - _start);
                 Debug.Assert(match.Success);
-                return MatchData.Create(match, _input, false, _text, _owner, false);
+                return MatchData.Create(match, _input, false, _text, _owner, false, _regex);
             }
         }
 
@@ -1430,7 +1430,7 @@ namespace IronRuby.Builtins {
                     return null;
                 }
             }
-            return MatchData.Create(match, input, true, str, this, astral);
+            return MatchData.Create(match, input, true, str, this, astral, regex);
         }
 
         /// <summary>
@@ -1524,7 +1524,7 @@ namespace IronRuby.Builtins {
             }
 
             for (int i = 0; i < result.Length; i++) {
-                result[i] = MatchData.Create(matches[i], input, false, str, this, astral);
+                result[i] = MatchData.Create(matches[i], input, false, str, this, astral, regex);
             }
 
             return result;
