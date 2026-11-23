@@ -288,12 +288,9 @@ namespace IronRuby.Builtins {
         // method_inspect writes each module with rb_inspect, so an anonymous one that says what it is
         // (EnvUtil.labeled_class) is shown by what it says rather than as #<Class:0x...>.
         private static MutableString/*!*/ InspectModule(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            // and what its #inspect raises goes to the caller, as from rb_inspect
             if (module.Name == null && !module.IsSingletonClass) {
-                try {
-                    return context.Inspect(module);
-                } catch (Exception) {
-                    // the name it would have had
-                }
+                return context.Inspect(module);
             }
             return module.GetDisplayName(context, false);
         }
