@@ -416,8 +416,11 @@ namespace IronRuby.Runtime.Calls {
                     }
                     var lambda = MSA.Expression.Lambda<Func<RubyScope, RubyModule, Delegate>>(
                         MSA.Expression.Convert(body, typeof(Delegate)), "def " + label, new[] { scopeParameter, moduleParameter });
+                    // Compiled to IL at once, not LightCompiled: the interpreter's closure rewrite of the body nested in the
+                    // factory (LightLambdaClosureVisitor) recursed without end on its reducible nodes when the adaptive
+                    // compilation of a hot factory-made body ran - a process-killing stack overflow.
                     factory = new ModuleFactory {
-                        Create = (Func<RubyScope, RubyModule, Delegate>)RubyScriptCode.CompileLambda(lambda, context),
+                        Create = lambda.Compile(),
                         FrameName = body.Name
                     };
                 } finally {
