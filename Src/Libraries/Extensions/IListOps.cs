@@ -166,7 +166,9 @@ namespace IronRuby.Builtins {
                 end++;
             }
 
-            long longCount = Math.Max(end - longBegin, 0);
+            // compared before subtracting: a descending range from a large beginning to a very
+            // negative end would wrap around
+            long longCount = end > longBegin ? end - longBegin : 0;
 
             // The answer is padded with nil to the range's full length; one longer than an array
             // may be is MRI's rb_ary_store error rather than an allocation that never ends.
@@ -174,7 +176,9 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateIndexError("index {0} too big", longCount - 1);
             }
 
-            begin = (int)longBegin;
+            // A beginning past the end only pads: it is kept as the list's length rather than cut
+            // to an int that could land inside the list.
+            begin = (int)Math.Min(longBegin, listCount);
             count = (int)longCount;
         }
 
@@ -741,8 +745,8 @@ namespace IronRuby.Builtins {
             if (index >= list.Count) {
                 ExpandList(list, index);
             } else {
-                // normalize for max length
-                if (index + length > list.Count) {
+                // normalize for max length (not as index + length, which a range to Int32.MaxValue overflows)
+                if (length > list.Count - index) {
                     length = list.Count - index;
                 }
 
@@ -1668,6 +1672,11 @@ namespace IronRuby.Builtins {
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start, int length) {
             RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
+
+            // as for an object (above): MRI's rb_ary_fill refuses the size before the first yield
+            if (length >= 0 && (start >= MaxArraySize || length > MaxArraySize - start)) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
+            }
 
             ExpandList(self, Math.Min(start, start + length));
 
