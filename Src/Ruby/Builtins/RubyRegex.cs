@@ -150,6 +150,8 @@ namespace IronRuby.Builtins {
 
         public void Set(MutableString/*!*/ pattern, RubyRegexOptions options) {
             ContractUtils.RequiresNotNull(pattern, "pattern");
+            // before any state changes: an allocated regexp refused here can still be initialized
+            RequireBinaryCompatibleSource(pattern, options);
             _initialized = true;
 
             // RubyRegexOptions.Once is only used to determine how the Regexp object should be created and cached. 
@@ -160,8 +162,8 @@ namespace IronRuby.Builtins {
             _nonAsciiEscape = -1;
             _hasProperty = -1;
             _literalNonAscii = -1;
+            _recompiled = null;
 
-            RequireBinaryCompatibleSource(pattern, options);
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
                 _pattern = MutableString.CreateBinary(pattern.ToByteArray(), encoding).Freeze();
@@ -226,7 +228,8 @@ namespace IronRuby.Builtins {
             // MRI's rb_reg_prepare_re compiles a regexp that is not fixed again in the encoding of
             // a non-ASCII string it is matched against. A US-ASCII one can still hold bytes that are
             // not ASCII (HasLiteralNonAscii), and that fails when they are not characters there.
-            if (IsRecompiledFor(input)) {
+            // (once it has, the regexp it made is kept: RecompiledFor)
+            if (IsRecompiledFor(input) && !IsRecompiledCached(input.Encoding)) {
                 bool pinned;
                 string error = Preprocess(_pattern.ToByteArray(), input.Encoding, (_options & RubyRegexOptions.Extended) != 0, out pinned);
                 if (error != null) {
@@ -246,8 +249,13 @@ namespace IronRuby.Builtins {
                 !_pattern.IsAscii() && Encoding == RubyEncoding.Ascii && !input.IsAscii();
         }
 
-        // the regexp IsRecompiledFor made for the last encoding it was asked for
+        // the regexp IsRecompiledFor made for the last encoding it was asked for; Set drops it
         private Tuple<RubyEncoding, RubyRegex> _recompiled;
+
+        private bool IsRecompiledCached(RubyEncoding/*!*/ encoding) {
+            var recompiled = _recompiled;
+            return recompiled != null && recompiled.Item1 == encoding;
+        }
 
         private RubyRegex/*!*/ RecompiledFor(MutableString/*!*/ input) {
             if (!IsRecompiledFor(input)) {
@@ -258,9 +266,11 @@ namespace IronRuby.Builtins {
                 // (as Onigmo options: the encoding is the string's, /n or not)
                 var regex = new RubyRegex(MutableString.CreateBinary(_pattern.ToByteArray(), input.Encoding),
                     _options & ~(RubyRegexOptions.EncodingMask | RubyRegexOptions.FixedEncoding));
-                regex.Timeout = Timeout;
                 _recompiled = recompiled = Tuple.Create(input.Encoding, regex);
             }
+            // the timeout is this regexp's, as it is now; the other rebuilds its CLR regex only
+            // when its effective timeout changes
+            recompiled.Item2.Timeout = Timeout;
             return recompiled.Item2;
         }
 
@@ -556,7 +566,8 @@ namespace IronRuby.Builtins {
         /// ASCII from \xHH and writes "/" as "\/".
         /// </summary>
         private RegexpError/*!*/ TranslationError(string/*!*/ message) {
-            string tail = ": /" + _pattern.ConvertToString() + "/" + OptionLetters(_options);
+            // the translation quotes its own input, which GetClrPatternSource may have decoded
+            string tail = ": /" + GetClrPatternSource() + "/" + OptionLetters(_options);
             if (message.EndsWith(tail, StringComparison.Ordinal) && _pattern.Encoding.IsAsciiIdentity) {
                 return CreatePatternError(message.Substring(0, message.Length - tail.Length), _pattern, _options);
             }
@@ -1571,7 +1582,9 @@ namespace IronRuby.Builtins {
             }
 
             Match match;
-            if (_hasGAnchor) {
+            // the regexp that ran: one compiled again for the input's encoding can read \G where
+            // this one does not (RecompiledFor)
+            if (RecompiledFor(input)._hasGAnchor) {
                 match = LastMatchWithGAnchor(regex, str, start, astral);
                 if (match == null) {
                     return null;
@@ -2123,8 +2136,11 @@ namespace IronRuby.Builtins {
 
         private static MutableString/*!*/ DescribePatternError(string/*!*/ error, MutableString/*!*/ pattern, RubyRegexOptions options,
             RubyEncoding/*!*/ textEncoding) {
-            // the error can quote the pattern too: "invalid character property name {Alphä}"
-            var bytes = new List<byte>(pattern.Encoding.Encoding.GetBytes(error));
+            // The error can quote the pattern too: "invalid character property name {Alphä}". MRI
+            // writes it and the rest as bytes in the pattern's encoding, ASCII ones as they are
+            // even in an ASCII incompatible encoding.
+            var bytes = new List<byte>(pattern.Encoding.IsAsciiIdentity ? pattern.Encoding.Encoding.GetBytes(error) :
+                System.Text.Encoding.ASCII.GetBytes(error));
             AppendAscii(bytes, ": /");
             AppendPatternDescription(bytes, pattern, textEncoding);
             AppendAscii(bytes, "/" + OptionLetters(options));
@@ -2156,7 +2172,12 @@ namespace IronRuby.Builtins {
             RubyEncoding encoding = pattern.Encoding;
             byte[] bytes = pattern.ToByteArray();
 
-            bool needEscape = !encoding.IsAsciiIdentity || encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters();
+            if (!encoding.IsAsciiIdentity) {
+                AppendWidePatternDescription(result, bytes, encoding);
+                return;
+            }
+
+            bool needEscape = encoding != RubyEncoding.Binary && pattern.ContainsInvalidCharacters();
             for (int j = 0; j < bytes.Length && !needEscape; j++) {
                 needEscape = bytes[j] == '/' || (bytes[j] < 0x80 ? !IsPrintableAscii(bytes[j]) : encoding != textEncoding);
             }
@@ -2203,6 +2224,40 @@ namespace IronRuby.Builtins {
                 } else {
                     AppendAscii(result, String.Format(CultureInfo.InvariantCulture, "\\x{0:X2}", b));
                     i++;
+                }
+            }
+        }
+
+        /// <summary>
+        /// AppendPatternDescription for an ASCII incompatible encoding (UTF-16, UTF-32), which
+        /// rb_reg_expr_str always escapes, a character at a time: the ASCII text it adds is single
+        /// bytes all the same.
+        /// </summary>
+        private static void AppendWidePatternDescription(List<byte>/*!*/ result, byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
+            int i = 0;
+            while (i < bytes.Length) {
+                int length = CharacterLength(bytes, i, encoding);
+                if (length < 0) {
+                    AppendAscii(result, String.Format(CultureInfo.InvariantCulture, "\\x{0:X2}", bytes[i]));
+                    i++;
+                    continue;
+                }
+                int codepoint = Char.ConvertToUtf32(encoding.StrictEncoding.GetString(bytes, i, length), 0);
+                if (codepoint == '\\' && i + length < bytes.Length) {
+                    length += Math.Max(CharacterLength(bytes, i + length, encoding), 1);
+                } else if (codepoint == '/') {
+                    result.Add((byte)'\\');
+                } else if (codepoint >= 0x80) {
+                    AppendAscii(result, String.Format(CultureInfo.InvariantCulture, codepoint < 0x10000 ? "\\u{0:X4}" : "\\u{{{0:X}}}", codepoint));
+                    i += length;
+                    continue;
+                } else if (!IsPrintableAscii((byte)codepoint) && (codepoint < '\t' || codepoint > '\r')) {
+                    AppendAscii(result, String.Format(CultureInfo.InvariantCulture, "\\x{0:X2}", codepoint));
+                    i += length;
+                    continue;
+                }
+                for (int j = 0; j < length && i < bytes.Length; j++) {
+                    result.Add(bytes[i++]);
                 }
             }
         }

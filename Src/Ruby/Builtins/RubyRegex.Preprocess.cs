@@ -23,39 +23,58 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// MRI's unescape_nonascii, which rb_reg_preprocess runs over a source before Onigmo sees
         /// it, for what it decides rather than for what it writes: the first error it stops at
-        /// (null if none), and whether a character outside ASCII pins the regexp to
-        /// <paramref name="encoding"/> (<paramref name="pinned"/>, MRI's *encp).
+        /// (null if none), and the encoding the source fixes (<paramref name="fixedEncoding"/>,
+        /// MRI's *encp; null if none).
         ///
-        /// Not every non-ASCII byte pins. A character right after a backslash only does when it is
-        /// longer than one byte (the backslash goes with it); a single non-ASCII byte there - a
-        /// BINARY, ISO-8859-1 or other single byte source can hold one, and Shift_JIS's half-width
-        /// katakana are one - is copied "as is", so Regexp.new("\\\xFF".b) is US-ASCII and not
-        /// fixed. A comment - (?#...), or # to the end of the line in extended mode outside a
-        /// character class - pins only in UTF-8, and the bytes of a # comment are not even
-        /// checked. (?x) and (?-x) turn extended mode on or off for the rest of the group around
-        /// them, (?x:...) and (?-x:...) inside their own group.
+        /// A character outside ASCII fixes <paramref name="encoding"/>, and so does an escape of
+        /// bytes outside ASCII (\xHH, \NNN, \M-...) outside US-ASCII; a \u escape above 0x7F fixes
+        /// UTF-8. Two of them that disagree are an error: "non ASCII character in UTF-8 regexp",
+        /// "escaped non ASCII character in UTF-8 regexp", "UTF-8 character in non UTF-8 regexp".
         ///
-        /// The escapes a byte is read from (\x, \NNN, \c, \C-, \M-) and \u are checked for their
-        /// form, and <paramref name="nonAsciiEscape"/> tells whether the first that stands for
-        /// something outside ASCII is one of them (1) or a \u (2), 0 if none does; what they stand
-        /// for is the translation's business (GetClrPatternSource). <paramref name="encoding"/> is
-        /// ASCII compatible.
+        /// Not every non-ASCII byte fixes it. A character right after a backslash only does when
+        /// it is longer than one byte (the backslash goes with it); a single non-ASCII byte there
+        /// - a BINARY, ISO-8859-1 or other single byte source can hold one, and Shift_JIS's
+        /// half-width katakana are one - is copied "as is", so Regexp.new("\\\xFF".b) is
+        /// US-ASCII and not fixed. A comment - (?#...), or # to the end of the line in extended
+        /// mode outside a character class - fixes it only in UTF-8 and is never an error that way,
+        /// and the bytes of a # comment are not checked. (?x) and (?-x) turn extended mode on or
+        /// off for the rest of the group around them, (?x:...) and (?-x:...) inside their own group.
+        ///
+        /// The escapes of bytes are read as MRI's read_escaped_byte and unescape_escaped_nonascii
+        /// read them: outside US-ASCII, escaped bytes outside ASCII have to make whole characters
+        /// of <paramref name="encoding"/>. <paramref name="pinned"/> tells whether a character (not
+        /// an escape) fixed the encoding, <paramref name="nonAsciiEscape"/> whether the first escape
+        /// that stands for something outside ASCII is one of bytes (1) or a \u (2), 0 if none is.
+        /// <paramref name="encoding"/> is ASCII compatible.
         /// </summary>
         internal static string Preprocess(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, bool extended, out bool pinned) {
             int nonAsciiEscape;
-            return Preprocess(bytes, encoding, extended, out pinned, out nonAsciiEscape);
+            RubyEncoding fixedEncoding;
+            return Preprocess(bytes, encoding, extended, out pinned, out nonAsciiEscape, out fixedEncoding);
         }
 
         internal static string Preprocess(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, bool extended, out bool pinned,
             out int nonAsciiEscape) {
+            RubyEncoding fixedEncoding;
+            return Preprocess(bytes, encoding, extended, out pinned, out nonAsciiEscape, out fixedEncoding);
+        }
+
+        internal static string Preprocess(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, bool extended, out bool pinned,
+            out int nonAsciiEscape, out RubyEncoding fixedEncoding) {
             pinned = false;
             nonAsciiEscape = 0;
+            fixedEncoding = null;
             bool utf8 = encoding == RubyEncoding.UTF8;
+            bool usAscii = encoding == RubyEncoding.Ascii;
+            // in US-ASCII an escape of a byte outside ASCII is copied as it is, which a \u that
+            // fixes UTF-8 makes an invalid code point for Onigmo
+            bool usAsciiHighByte = false;
             int classDepth = 0;
             // what each open group restores extended mode to at its ')': -1 nothing, 0 off, 1 on
             var groups = new Stack<int>();
             int n = bytes.Length;
             int i = 0;
+            string error;
             while (i < n) {
                 int length = CharacterLength(bytes, i, encoding);
                 if (length < 0) {
@@ -63,6 +82,9 @@ namespace IronRuby.Builtins {
                 }
                 if (length > 1 || bytes[i] >= 0x80) {
                     pinned = true;
+                    if ((error = Fix(ref fixedEncoding, encoding, "non ASCII character in UTF-8 regexp")) != null) {
+                        return error;
+                    }
                     i += length;
                     continue;
                 }
@@ -78,7 +100,11 @@ namespace IronRuby.Builtins {
                             return "invalid multibyte character";
                         }
                         if (length > 1) {
+                            // the backslash goes with the character
                             pinned = true;
+                            if ((error = Fix(ref fixedEncoding, encoding, "non ASCII character in UTF-8 regexp")) != null) {
+                                return error;
+                            }
                             i += length;
                             break;
                         }
@@ -102,22 +128,39 @@ namespace IronRuby.Builtins {
                             case (byte)'M':
                                 i -= 2;
                                 int code;
-                                string error = ReadEscapedByte(bytes, ref i, out code);
-                                if (error != null) {
-                                    return error;
-                                }
-                                if (code > 0x7f && nonAsciiEscape == 0) {
-                                    nonAsciiEscape = 1;
+                                if (usAscii) {
+                                    if ((error = ReadEscapedByte(bytes, ref i, out code)) != null) {
+                                        return error;
+                                    }
+                                    usAsciiHighByte |= code > 0x7f;
+                                } else {
+                                    bool isNonAscii;
+                                    if ((error = ReadEscapedCharacter(bytes, ref i, encoding, out isNonAscii)) != null) {
+                                        return error;
+                                    }
+                                    if (isNonAscii) {
+                                        if ((error = Fix(ref fixedEncoding, encoding, "escaped non ASCII character in UTF-8 regexp")) != null) {
+                                            return error;
+                                        }
+                                        if (nonAsciiEscape == 0) {
+                                            nonAsciiEscape = 1;
+                                        }
+                                    }
                                 }
                                 break;
 
                             case (byte)'u':
-                                error = ReadUnicodeEscape(bytes, ref i, out code);
-                                if (error != null) {
+                                bool isUnicode;
+                                if ((error = ReadUnicodeEscape(bytes, ref i, out isUnicode)) != null) {
                                     return error;
                                 }
-                                if (code > 0x7f && nonAsciiEscape == 0) {
-                                    nonAsciiEscape = 2;
+                                if (isUnicode) {
+                                    if ((error = Fix(ref fixedEncoding, RubyEncoding.UTF8, "UTF-8 character in non UTF-8 regexp")) != null) {
+                                        return error;
+                                    }
+                                    if (nonAsciiEscape == 0) {
+                                        nonAsciiEscape = 2;
+                                    }
                                 }
                                 break;
                         }
@@ -126,7 +169,8 @@ namespace IronRuby.Builtins {
                     case (byte)'#':
                         if (extended && classDepth == 0) {
                             while (i < n && bytes[i++] != '\n') {
-                                if (bytes[i - 1] >= 0x80 && utf8) {
+                                if (bytes[i - 1] >= 0x80 && utf8 && fixedEncoding == null) {
+                                    fixedEncoding = encoding;
                                     pinned = true;
                                 }
                             }
@@ -157,8 +201,12 @@ namespace IronRuby.Builtins {
                             break;
                         }
                         if (i + 1 < n && bytes[i] == '?' && bytes[i + 1] == '#') {
-                            string error;
-                            if (SkipGroupComment(bytes, ref i, encoding, ref pinned, out error)) {
+                            bool commentFixes;
+                            if (SkipGroupComment(bytes, ref i, encoding, out commentFixes, out error)) {
+                                if (commentFixes && fixedEncoding == null) {
+                                    fixedEncoding = encoding;
+                                    pinned = true;
+                                }
                                 break;
                             }
                             if (error != null) {
@@ -172,6 +220,49 @@ namespace IronRuby.Builtins {
                         break;
                 }
             }
+            if (usAsciiHighByte && fixedEncoding == RubyEncoding.UTF8) {
+                return "invalid code point value";
+            }
+            return null;
+        }
+
+        // MRI's "if (*encp == 0) *encp = enc; else if (*encp != enc) error"
+        private static string Fix(ref RubyEncoding fixedEncoding, RubyEncoding/*!*/ encoding, string/*!*/ error) {
+            if (fixedEncoding == null) {
+                fixedEncoding = encoding;
+            } else if (fixedEncoding != encoding) {
+                return error;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// MRI's unescape_escaped_nonascii: the escaped bytes starting at the backslash at
+        /// <paramref name="p"/>, as many as make one character of <paramref name="encoding"/>.
+        /// <paramref name="isNonAscii"/> tells whether that is outside ASCII.
+        /// </summary>
+        private static string ReadEscapedCharacter(byte[]/*!*/ bytes, ref int p, RubyEncoding/*!*/ encoding, out bool isNonAscii) {
+            isNonAscii = false;
+            const int MaxLength = 6;
+            var area = new byte[MaxLength];
+            int count = 0;
+            int length;
+            while (true) {
+                int code;
+                string error = ReadEscapedByte(bytes, ref p, out code);
+                if (error != null) {
+                    return error;
+                }
+                area[count++] = (byte)code;
+                length = PreciseLength(area, 0, count, encoding);
+                if (length != 0 || count == MaxLength) {
+                    break;
+                }
+            }
+            if (length < 0) {
+                return "invalid multibyte escape";
+            }
+            isNonAscii = count > 1 || area[0] >= 0x80;
             return null;
         }
 
@@ -215,11 +306,13 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Skips the comment "(?#...)" whose "?#" starts at <paramref name="i"/>: false, with
         /// <paramref name="i"/> unchanged, if it has no ')'. A backslash takes the character after
-        /// it along, and a character outside ASCII pins the regexp only in UTF-8.
+        /// it along, and a character outside ASCII fixes the encoding only in UTF-8
+        /// (<paramref name="fixes"/>).
         /// </summary>
-        private static bool SkipGroupComment(byte[]/*!*/ bytes, ref int i, RubyEncoding/*!*/ encoding, ref bool pinned,
+        private static bool SkipGroupComment(byte[]/*!*/ bytes, ref int i, RubyEncoding/*!*/ encoding, out bool fixes,
             out string error) {
             error = null;
+            fixes = false;
             int p = i + 2;
             while (p < bytes.Length) {
                 byte c = bytes[p++];
@@ -229,9 +322,7 @@ namespace IronRuby.Builtins {
                 }
                 if (c == '\\' || c >= 0x80) {
                     if (c >= 0x80) {
-                        if (encoding == RubyEncoding.UTF8) {
-                            pinned = true;
-                        }
+                        fixes |= encoding == RubyEncoding.UTF8;
                         p--;
                     }
                     int length = p < bytes.Length ? CharacterLength(bytes, p, encoding) : -1;
@@ -246,8 +337,8 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// MRI's read_escaped_byte, for its errors: \xHH, \OOO, \cX, \C-X, \M-X and their
-        /// combinations, starting at the backslash.
+        /// MRI's read_escaped_byte: \xHH, \OOO, \cX, \C-X, \M-X and their combinations, starting at
+        /// the backslash; <paramref name="code"/> is the byte.
         /// </summary>
         private static string ReadEscapedByte(byte[]/*!*/ bytes, ref int p, out int code) {
             int n = bytes.Length;
@@ -347,12 +438,14 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// MRI's unescape_unicode_list and unescape_unicode_bmp, for their errors: \u{H HH ...}
-        /// or \uHHHH, starting after the u.
+        /// MRI's unescape_unicode_list and unescape_unicode_bmp: \u{H HH ...} or \uHHHH, starting
+        /// after the u, each code point checked as check_unicode_range checks it (no surrogate,
+        /// none above U+10FFFF). <paramref name="isUnicode"/> tells whether one is outside ASCII
+        /// (MRI's append_utf8, which fixes UTF-8).
         /// </summary>
-        private static string ReadUnicodeEscape(byte[]/*!*/ bytes, ref int p, out int maxCode) {
+        private static string ReadUnicodeEscape(byte[]/*!*/ bytes, ref int p, out bool isUnicode) {
             int n = bytes.Length;
-            maxCode = 0;
+            isUnicode = false;
             if (p == n) {
                 return "too short escape sequence";
             }
@@ -374,11 +467,11 @@ namespace IronRuby.Builtins {
                     if (digits == 0) {
                         break;
                     }
-                    if (digits > 6) {
+                    if (digits > 6 || !IsUnicodeScalar(code)) {
                         return "invalid Unicode range";
                     }
                     any = true;
-                    maxCode = Math.Max(maxCode, code);
+                    isUnicode |= code > 0x7f;
                     while (p < n && IsSpace(bytes[p])) {
                         p++;
                     }
@@ -388,14 +481,23 @@ namespace IronRuby.Builtins {
                 }
                 return null;
             }
+            int value = 0;
             for (int k = 0; k < 4; k++) {
                 if (p + k >= n || !IsHexDigit(bytes[p + k])) {
                     return "invalid Unicode escape";
                 }
-                maxCode = maxCode * 16 + HexDigitValue(bytes[p + k]);
+                value = value * 16 + HexDigitValue(bytes[p + k]);
             }
+            if (!IsUnicodeScalar(value)) {
+                return "invalid Unicode range";
+            }
+            isUnicode = value > 0x7f;
             p += 4;
             return null;
+        }
+
+        private static bool IsUnicodeScalar(int code) {
+            return code <= 0x10ffff && (code < 0xd800 || code > 0xdfff);
         }
 
         private static bool IsHexDigit(byte b) {
@@ -411,6 +513,16 @@ namespace IronRuby.Builtins {
         /// (MRI's rb_enc_precise_mbclen), or -1 if they begin none.
         /// </summary>
         internal static int CharacterLength(byte[]/*!*/ bytes, int start, RubyEncoding/*!*/ encoding) {
+            int length = PreciseLength(bytes, start, bytes.Length - start, encoding);
+            return length > 0 ? length : -1;
+        }
+
+        /// <summary>
+        /// MRI's rb_enc_precise_mbclen for the <paramref name="count"/> bytes at
+        /// <paramref name="start"/>: the length of the character they begin with, 0 if they are
+        /// the beginning of one that is cut short, negative if they begin none.
+        /// </summary>
+        private static int PreciseLength(byte[]/*!*/ bytes, int start, int count, RubyEncoding/*!*/ encoding) {
             // every byte is a character of a single byte encoding, those it has no table entry
             // for (Windows-1252's 0x81) included; US-ASCII has none above 0x7F
             if (bytes[start] < 0x80 && encoding.IsAsciiIdentity || encoding == RubyEncoding.Binary ||
@@ -418,19 +530,18 @@ namespace IronRuby.Builtins {
                 return 1;
             }
 
-            int remaining = bytes.Length - start;
-            var head = new byte[Math.Min(remaining, 8)];
+            var head = new byte[Math.Min(count, 8)];
             Buffer.BlockCopy(bytes, start, head, 0, head.Length);
             int maxLength;
             int length = RubyOnlyEncodings.PreciseLength(encoding.Encoding, head, head.Length, out maxLength);
             if (maxLength > 0) {
-                return length > 0 ? length : -1;
+                return length;
             }
 
             // A decoder that is not flushed keeps a character it has only begun to itself: no
             // characters yet, and no error either.
             Decoder decoder = encoding.StrictEncoding.GetDecoder();
-            for (int k = 1; k <= Math.Min(remaining, 4); k++) {
+            for (int k = 1; k <= Math.Min(count, 4); k++) {
                 try {
                     decoder.Reset();
                     if (decoder.GetCharCount(bytes, start, k, false) > 0) {
@@ -440,7 +551,7 @@ namespace IronRuby.Builtins {
                     return -1;
                 }
             }
-            return -1;
+            return count < 4 ? 0 : -1;
         }
     }
 }

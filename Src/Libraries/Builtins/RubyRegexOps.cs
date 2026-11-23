@@ -918,9 +918,10 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsAsciiOnly(MutableString/*!*/ str) {
-            // An ASCII incompatible encoding is never "ASCII only" however plain its characters
-            // look: "a" in UTF-16LE is the two bytes 61 00.
-            return str.Encoding.IsAsciiIdentity && str.IsAscii() && !RubyRegex.HasNonAsciiEscape(str);
+            // rb_enc_str_asciionly_p. An ASCII incompatible encoding is never "ASCII only" however
+            // plain its characters look: "a" in UTF-16LE is the two bytes 61 00. What looks like
+            // an escape in the string does not count: Regexp.union quotes the backslash.
+            return str.Encoding.IsAsciiIdentity && str.IsAscii();
         }
     }
 }

@@ -766,6 +766,56 @@ union utf-8: [RegexpError, ""invalid multibyte character: /(?-mix:\\\xFF)|(?-mix
 equal: [true, #<Encoding:US-ASCII>]
 ");
         }
+
+        /// <summary>
+        /// MRI's unescape_nonascii keeps one fixed encoding: a character, an escape of bytes and a
+        /// \u escape that disagree are an error, and escaped bytes outside ASCII have to make a
+        /// whole character. An interpolated regexp reads each fragment so, /n ones as BINARY, and
+        /// Regexp.union classifies a string by its encoding and ASCII content alone.
+        /// </summary>
+        public void Regex_EscapedByteEncoding3() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; r = yield; r.is_a?(Regexp) ? [r.encoding, r.fixed_encoding?] : r; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+L = ->(s) { s.encode(""ISO-8859-1"") }
+t('escape then literal') { Regexp.new(L[""\\u00E9\u00e9""]) }
+t('escape then byte') { Regexp.new(L[""\\u00E9\\xE9""]) }
+t('byte then escape') { Regexp.new('\xFF\u00e9'.b) }
+t('class') { Regexp.new('[\u00e9-\xFF]'.b) }
+t('escaped character') { Regexp.new('\xC3\xA9') }
+t('cut short') { Regexp.new('\xC3') }
+t('not a character') { Regexp.new('\xC3\x41') }
+t('meta') { Regexp.new('\M-\C-a') }
+t('surrogate') { Regexp.new('\uD800\x') }
+t('list space') { r = Regexp.new('\u{ 41 42 }'); r =~ ""AB"" }
+t('fragment') { s = '\xC3z'; /#{s}/ }
+t('fragment n') { s = '\x'; /#{s}/n }
+t('fragments') { s = '\u00e9'; /#{s}\xE9/n }
+t('union string') { Regexp.union('\M-a', L[""\u00e9""]) }
+t('retry') { r = Regexp.allocate; (r.send(:initialize, ""\u00e9"", Regexp::NOENCODING) rescue nil); r.send(:initialize, ""a""); r.source }
+t('translated') { Regexp.new('\xC3\xA9)') }
+", @"
+escape then literal: [RegexpError, ""non ASCII character in UTF-8 regexp: /\\u00E9\\xE9/""]
+escape then byte: [RegexpError, ""escaped non ASCII character in UTF-8 regexp: /\\u00E9\\xE9/""]
+byte then escape: [RegexpError, ""UTF-8 character in non UTF-8 regexp: /\\xFF\\u00e9/""]
+class: [RegexpError, ""escaped non ASCII character in UTF-8 regexp: /[\\u00e9-\\xFF]/""]
+escaped character: [#<Encoding:UTF-8>, true]
+cut short: [RegexpError, ""too short escaped multibyte character: /\\xC3/""]
+not a character: [RegexpError, ""invalid multibyte escape: /\\xC3\\x41/""]
+meta: [RegexpError, ""invalid multibyte escape: /\\M-\\C-a/""]
+surrogate: [RegexpError, ""invalid Unicode range: /\\uD800\\x/""]
+list space: 0
+fragment: [ArgumentError, ""too short escaped multibyte character""]
+fragment n: [ArgumentError, ""invalid hex escape""]
+fragments: [RegexpError, ""encoding mismatch in dynamic regexp : UTF-8 and ASCII-8BIT""]
+union string: [#<Encoding:ISO-8859-1>, true]
+retry: ""a""
+translated: [RegexpError, ""unmatched close parenthesis: /\\xC3\\xA9)/""]
+");
+        }
     }
 }
 

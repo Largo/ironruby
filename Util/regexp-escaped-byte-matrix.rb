@@ -83,7 +83,16 @@ BYTES.each do |bytes|
       t("#{label} match") { SUBJECTS.map { |s| m(Regexp.new(src, opts), s) } }
       t("#{label} eql") { [r == Regexp.new(r.source, r.options), r.hash == Regexp.new(r.source, r.options).hash] }
       t("#{label} union") { u = Regexp.union(r, "a"); [u.encoding, u.fixed_encoding?] }
-      t("#{label} unions") { UNION_PARTS.map { |x| [Regexp.union(r, x), Regexp.union(x, r)].map { |u| [u.encoding, u.fixed_encoding?] } rescue [$!.class, $!.message] } }
+      t("#{label} unions") do
+        UNION_PARTS.map do |x|
+          [[r, x], [x, r]].map do |parts|
+            u = Regexp.union(*parts)
+            [u.encoding, u.fixed_encoding?]
+          rescue => e
+            [e.class, e.message]
+          end
+        end
+      end
       t("#{label} interp") { u = /#{r}b/; [u.encoding, u.fixed_encoding?, u.source.b] }
       t("#{label} interp str") { u = /#{src}b/; [u.encoding, u.fixed_encoding?, u.source.b] }
       t("#{label} marshal") { u = Marshal.load(Marshal.dump(r)); [u.encoding, u.fixed_encoding?, u == r] }

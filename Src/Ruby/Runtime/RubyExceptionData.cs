@@ -965,6 +965,8 @@ namespace IronRuby.Runtime {
                 return exception;
             }
 
+            // a redefined #new reads the message (DescribeForContext)
+            instanceData.DescribeForContext(context);
             object message = instanceData.Message;
             // Errno classes extend CLR exceptions of several roots (ExternalException,
             // IOException, ...), so SystemCallError membership is decided on the Ruby side.
