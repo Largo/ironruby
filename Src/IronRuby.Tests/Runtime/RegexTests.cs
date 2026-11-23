@@ -885,6 +885,7 @@ t('(?i)') { ""\xC9a"".b =~ /(?i:\xE9)|(?i)A/n }
 t('one regexp') { re = /[[:alpha:]]/; [re.match?(""\u00e9""), re.match?(""\xE9"".b), re.match?(""\u00e9""), re.match?(""\xE9"".dup.force_encoding(""ISO-8859-1""))] }
 t('iso-8859-1') { [""\xE9"".dup.force_encoding(""ISO-8859-1"") =~ /[[:alpha:]]/, ""\xC9"".dup.force_encoding(""ISO-8859-1"") =~ Regexp.new(""\xE9"".dup.force_encoding(""ISO-8859-1""), Regexp::IGNORECASE)] }
 t('utf-8') { [""\u00e9"" =~ /\p{Alpha}/, ""\u00e9"" =~ /\b/] }
+t('absent /i') { a = ""\xE9a"".b; [a.match(/(?~\xE9a)/in, 0)[0], a.match(/(?~\xE9a)/in, 1)[0], ""\xC9a"".b.match(/(?~\xE9a)/in)[0], a.match(/(?~\xC9a)/in)[0]] }
 ", @"
 property /n: nil
 posix: nil
@@ -904,6 +905,7 @@ gsub: ""a.b..c.""
 one regexp: [true, false, true, true]
 iso-8859-1: [0, 0]
 utf-8: [0, 0]
+absent /i: [""\xE9"", ""a"", ""\xC9a"", ""\xE9a""]
 ");
         }
     }

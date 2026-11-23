@@ -52,9 +52,10 @@ namespace IronRuby.Builtins {
         // The same pattern translated for a match Onigmo makes with its ASCII-8BIT or US-ASCII
         // ctype table (UsesAsciiCtype) - above all a BINARY subject with bytes above 0x7F, which
         // has no letters, punctuation or case pairs there, where .NET sees U+0080-U+00FF (see
-        // RegexpTransformer.Transform(..., asciiCtype)).
-        private Regex _cachedBinaryRegex;
-        private TimeSpan _cachedBinaryTimeout;
+        // RegexpTransformer.Transform(..., asciiCtype)). The regex and the timeout it was made
+        // with are published together, so that a thread never pairs one rebuild's regex with
+        // another's timeout.
+        private Tuple<TimeSpan, Regex> _cachedBinary;
         // Set once that translation has turned out to be the plain one - the pattern has no
         // property, POSIX class, \b, \R or /i Latin-1 letter - so that such a subject keeps
         // matching with _cachedRegex, which is compiled once it has been used enough.
@@ -170,7 +171,7 @@ namespace IronRuby.Builtins {
             _options = options & ~RubyRegexOptions.Once;
             _cachedRegex = null;
             _cachedAstralRegex = null;
-            _cachedBinaryRegex = null;
+            _cachedBinary = null;
             _binaryIsPlain = false;
             _nonAsciiEscape = -1;
             _hasProperty = -1;
@@ -344,8 +345,9 @@ namespace IronRuby.Builtins {
             if (_binaryIsPlain) {
                 return TransformPattern(countUse);
             }
-            if (_cachedBinaryRegex != null && timeout == _cachedBinaryTimeout) {
-                return _cachedBinaryRegex;
+            var cached = _cachedBinary;
+            if (cached != null && timeout == cached.Item1) {
+                return cached.Item2;
             }
 
             // the plain translation first: it validates the pattern and sets _hasGAnchor
@@ -363,8 +365,7 @@ namespace IronRuby.Builtins {
                 result = plain;
             }
 
-            _cachedBinaryTimeout = timeout;
-            _cachedBinaryRegex = result;
+            _cachedBinary = Tuple.Create(timeout, result);
             return result;
         }
 

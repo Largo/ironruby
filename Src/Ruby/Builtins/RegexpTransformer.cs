@@ -566,12 +566,24 @@ namespace IronRuby.Builtins {
 
         private void AppendEscaped(int c) {
             if (IsUnfoldedLatin1Letter(c)) {
-                _sb.Append("(?-i:");
-                AppendEscaped(_sb, c);
-                _sb.Append(')');
+                AppendUnfoldedLatin1Letter(c);
                 return;
             }
             AppendEscaped(_sb, c);
+        }
+
+        private const string CaseSensitiveLatin1Prefix = "(?-i:";
+
+        /// <summary>
+        /// (?-i:c) for a letter IsUnfoldedLatin1Letter accepts; GetLiteralLength counts it as the
+        /// one character it is, so that (?~...) keeps its fixed-length prefix.
+        /// </summary>
+        private void AppendUnfoldedLatin1Letter(int c) {
+            _sb.Append(CaseSensitiveLatin1Prefix).Append((char)c).Append(')');
+        }
+
+        private static bool IsUnfoldableLatin1Letter(int c) {
+            return c >= 0xc0 && c <= 0xfe && c != 0xd7 && c != 0xf7;
         }
 
         /// <summary>
@@ -581,7 +593,7 @@ namespace IronRuby.Builtins {
         /// IgnoreCase would take "\xC9" for "\xE9".
         /// </summary>
         private bool IsUnfoldedLatin1Letter(int c) {
-            if (_state.MayIgnoreCase && c >= 0xc0 && c <= 0xfe && c != 0xd7 && c != 0xf7) {
+            if (_state.MayIgnoreCase && IsUnfoldableLatin1Letter(c)) {
                 _state.AsciiCtypeApplied = true;
                 return true;
             }
@@ -935,7 +947,7 @@ namespace IronRuby.Builtins {
                             break;
                         }
                         if (IsUnfoldedLatin1Letter(c)) {
-                            _sb.Append("(?-i:").Append((char)c).Append(')');
+                            AppendUnfoldedLatin1Letter(c);
                             break;
                         }
                         Append((char)c);
@@ -1547,7 +1559,11 @@ namespace IronRuby.Builtins {
             int length = 0;
             for (int i = 0; i < pattern.Length; i++) {
                 char c = pattern[i];
-                if (c == '\\') {
+                if (c == '(' && i + 6 < pattern.Length && String.CompareOrdinal(pattern, i, CaseSensitiveLatin1Prefix, 0, 5) == 0 &&
+                    pattern[i + 6] == ')' && IsUnfoldableLatin1Letter(pattern[i + 5])) {
+                    // one Latin-1 letter matched case-sensitively for a BINARY subject (AppendUnfoldedLatin1Letter)
+                    i += 6;
+                } else if (c == '\\') {
                     // a meta character or a whitespace character, as Escape writes them
                     if (i + 1 == pattern.Length || !(IsMetaCharacter(pattern[i + 1]) || Char.IsWhiteSpace(pattern[i + 1]))) {
                         return -1;
@@ -2252,6 +2268,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void AppendCharacterSet(CharacterSet/*!*/ set, bool parenthesize) {
             if (_state.MayIgnoreCase) {
+                if (set.IsSingleCharacter && IsUnfoldedLatin1Letter(set.SingleCodepoint)) {
+                    // \xE9: the letter itself, spelled as a literal one is
+                    AppendUnfoldedLatin1Letter(set.SingleCodepoint);
+                    return;
+                }
                 int[] latin1 = set.GetLatin1Members();
                 if (!CodePointRanges.IsLatin1CaseClosed(latin1)) {
                     _state.AsciiCtypeApplied = true;
