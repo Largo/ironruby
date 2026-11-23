@@ -1955,6 +1955,135 @@ namespace IronRuby.Builtins {
             return value;
         }
 
+        /// <summary>
+        /// Data.new (ruby4.rb) for the usual call: when the class's initialize is Data#initialize itself and the
+        /// arguments are a value for every member, positionally or as keywords named by their Symbols, the new
+        /// frozen instance, made the way Data#initialize would have made it; null for anything else - an
+        /// initialize of the class's own, missing, unknown or String keys, the wrong count - which the caller
+        /// then does the long way, through initialize. MRI's rb_class_new_instance_pass_kw allocates without
+        /// calling #allocate and rb_data_initialize_m freezes without calling #freeze, as this does.
+        /// </summary>
+        [RubyMethod("__ir_data_new__", RubyMethodAttributes.PrivateInstance)]
+        public static object DataNew(RubyContext/*!*/ context, object self, [NotNull]RubyClass/*!*/ dataClass,
+            [NotNull]RubyArray/*!*/ args, [NotNull]Hash/*!*/ kwargs) {
+            var cls = self as RubyClass;
+            DataLayout layout;
+            if (cls == null || (layout = GetDataLayout(context, cls, dataClass)) == null) {
+                return null;
+            }
+            var members = layout.Members;
+            int n = members.Length;
+            var values = new object[n];
+            if (args.Count != 0) {
+                if (kwargs.Count != 0 || args.Count != n) {
+                    return null;
+                }
+                for (int i = 0; i < n; i++) {
+                    values[i] = args[i];
+                }
+            } else {
+                if (kwargs.Count != n) {
+                    return null;
+                }
+                for (int i = 0; i < n; i++) {
+                    if (!kwargs.TryGetValue(members[i], out values[i])) {
+                        return null;
+                    }
+                }
+            }
+            return NewData(context, cls, layout, values);
+        }
+
+        /// <summary>
+        /// Data#with (ruby4.rb) for the usual call: keywords that are all members named by their Symbols, on an
+        /// instance whose class's initialize is Data#initialize. The copy MRI's rb_data_with makes by passing
+        /// to_h merged with the keywords to initialize, made directly; null for anything else.
+        /// </summary>
+        [RubyMethod("__ir_data_with__", RubyMethodAttributes.PrivateInstance)]
+        public static object DataWith(RubyContext/*!*/ context, object self, [NotNull]RubyClass/*!*/ dataClass, [NotNull]Hash/*!*/ kwargs) {
+            var cls = context.GetClassOf(self).GetNonSingletonClass();
+            var layout = GetDataLayout(context, cls, dataClass);
+            if (layout == null) {
+                return null;
+            }
+            var members = layout.Members;
+            int n = members.Length;
+            var values = new object[n];
+            int found = 0;
+            for (int i = 0; i < n; i++) {
+                if (kwargs.TryGetValue(members[i], out values[i])) {
+                    found++;
+                } else {
+                    context.TryGetInstanceVariable(self, layout.Variables[i], out values[i]);
+                }
+            }
+            return found == kwargs.Count ? NewData(context, cls, layout, values) : null;
+        }
+
+        /// <summary>
+        /// The end of Data.define (ruby4.rb): stores the member list on the new class, with the names of the hidden
+        /// instance variables the members' values live in (DataNew and DataWith read them, so that nothing makes
+        /// the names anew on every call), and defines each member's reader - an attribute reader of that variable,
+        /// which a call site reads as it reads an attr_reader's, where a define_method block calling
+        /// __ir_hidden_ivar__ cost a block frame and a new name on every read.
+        /// </summary>
+        [RubyMethod("__ir_data_define__", RubyMethodAttributes.PrivateInstance)]
+        public static void DefineData(RubyContext/*!*/ context, [NotNull]RubyClass/*!*/ self, [NotNull]RubyArray/*!*/ names) {
+            var members = new RubySymbol[names.Count];
+            var variables = new string[names.Count];
+            for (int i = 0; i < variables.Length; i++) {
+                members[i] = (RubySymbol)names[i];
+                variables[i] = RubyUtils.GetHiddenInstanceVariableName(members[i].ToString());
+            }
+            context.SetInstanceVariable(self, RubyUtils.GetHiddenInstanceVariableName("data_members"), names);
+            context.SetInstanceVariable(self, DataLayoutName, new DataLayout(members, variables));
+            for (int i = 0; i < variables.Length; i++) {
+                string methodName = members[i].ToString();
+                self.AddMethod(context, methodName, new RubyAttributeReaderInfo(
+                    (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(RubyMethodVisibility.Public, methodName), self, variables[i]));
+            }
+        }
+
+        // A Data class's members and the hidden variables their values are kept in (DefineData).
+        private sealed class DataLayout {
+            public readonly RubySymbol/*!*/[]/*!*/ Members;
+            public readonly string/*!*/[]/*!*/ Variables;
+
+            public DataLayout(RubySymbol/*!*/[]/*!*/ members, string/*!*/[]/*!*/ variables) {
+                Members = members;
+                Variables = variables;
+            }
+        }
+
+        // The layout Data.define stored on cls or a class above it, when cls's initialize is Data#initialize.
+        private static DataLayout GetDataLayout(RubyContext/*!*/ context, RubyClass/*!*/ cls, RubyClass/*!*/ dataClass) {
+            var initializer = cls.ResolveMethod(Symbols.Initialize, VisibilityContext.AllVisible).Info;
+            if (initializer == null || initializer.DeclaringModule != dataClass) {
+                return null;
+            }
+            for (var c = cls; c != null && c != dataClass; c = c.SuperClass) {
+                object layout;
+                if (context.TryGetInstanceVariable(c, DataLayoutName, out layout)) {
+                    return layout as DataLayout;
+                }
+            }
+            return null;
+        }
+
+        private static readonly string DataLayoutName = RubyUtils.GetHiddenInstanceVariableName("data_layout");
+
+        private static object NewData(RubyContext/*!*/ context, RubyClass/*!*/ cls, DataLayout/*!*/ layout, object[]/*!*/ values) {
+            object instance = cls.TryAllocatePlainInstance();
+            if (instance == null) {
+                return null;
+            }
+            for (int i = 0; i < values.Length; i++) {
+                context.SetInstanceVariable(instance, layout.Variables[i], values[i]);
+            }
+            context.FreezeObject(instance);
+            return instance;
+        }
+
         [RubyMethod("__ir_set_hidden_ivar__", RubyMethodAttributes.PrivateInstance)]
         public static object SetHiddenInstanceVariable(RubyContext/*!*/ context, object self, [NotNull]RubySymbol/*!*/ name, object value) {
             context.SetInstanceVariable(self, RubyUtils.GetHiddenInstanceVariableName(name.ToString()), value);
