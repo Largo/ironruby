@@ -104,9 +104,26 @@ namespace IronRuby.Prism {
                 if (mainScript && (commandLine & 0x20) == 0 && RubyUtils.ShebangNamesIronRuby(code)) {
                     mainScript = false;
                 }
-                return ParseText(code, sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
-                    options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
-                    options.EvalSourceEncoding, commandLine, mainScript, options.IsolatedLocalNames);
+                bool evalOutsideMethod = options.IsEval && options.TopLevelMethodName == null;
+                string key = null;
+                EvalAstCache cache = null;
+                if (options.IsEval && options.IsolatedLocalNames == null && commandLine == 0 && !mainScript &&
+                    code.Length <= EvalAstCache.MaxCodeLength && sourceUnit.LanguageContext is RubyContext evalContext) {
+                    cache = evalContext.EvalAstCache ??= new EvalAstCache();
+                    key = EvalAstCache.MakeKey(code, sourceUnit.Path, options.InitialLocation.Line, evalOutsideMethod,
+                        options.EvalSourceEncoding, options.LocalNames);
+                    SourceUnitTree cached = cache.Get(key);
+                    if (cached != null) {
+                        return cached;
+                    }
+                }
+                SourceUnitTree tree = ParseText(code, sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
+                    options.InitialLocation.Line, evalOutsideMethod, options.IsEval,
+                    options.EvalSourceEncoding, commandLine, mainScript, options.IsolatedLocalNames, out bool reported);
+                if (cache != null && tree != null && !reported) {
+                    cache.Add(key, tree);
+                }
+                return tree;
             } finally {
                 PhaseTimer.Exit(timed);
             }
@@ -143,6 +160,17 @@ namespace IronRuby.Prism {
             SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false,
             RubyEncoding evalSourceEncoding = null, byte commandLine = 0, bool mainScript = false,
             ICollection<string> isolatedLocalNames = null) {
+            return ParseText(code, path, outerLocalNames, sourceUnit, errorSink, startLine, evalOutsideMethod, isEval,
+                evalSourceEncoding, commandLine, mainScript, isolatedLocalNames, out _);
+        }
+
+        // reported: whether the parse told the error sink anything (a warning, which depends on
+        // $VERBOSE and must come again at the next parse), which keeps its tree out of EvalAstCache.
+        private static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
+            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod, bool isEval,
+            RubyEncoding evalSourceEncoding, byte commandLine, bool mainScript,
+            ICollection<string> isolatedLocalNames, out bool reported) {
+            reported = false;
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -218,6 +246,7 @@ namespace IronRuby.Prism {
             bridge._isolatedLocalNames = isolatedLocalNames;
 
             if (result.Errors.Count > 0) {
+                reported = true;
                 if (errorSink != null && sourceUnit != null) {
                     // A SyntaxError's message is MRI's: "syntax errors found" and prism's picture of where,
                     // at the line of the first error prism found (not the first in the source). Any other
@@ -237,6 +266,7 @@ namespace IronRuby.Prism {
                     $"syntax error: {first.Message} (line {bridge.Location(first.Location.Start).Line})");
             }
 
+            reported = result.Warnings.Count > 0;
             if (errorSink != null && sourceUnit != null) {
                 foreach (var warning in result.Warnings) {
                     // prism levels: 0 = always, 1 = only when $VERBOSE is true
@@ -245,7 +275,17 @@ namespace IronRuby.Prism {
                 }
             }
 
-            return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames, result.DataOffset);
+            SourceUnitTree tree = bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames, result.DataOffset);
+            reported |= bridge._reported;
+            return tree;
+        }
+
+        // Whether the mapping told the error sink anything (see Report).
+        private bool _reported;
+
+        private void Report(string/*!*/ message, SourceSpan span, int errorCode, Severity severity) {
+            _reported = true;
+            _errorSink.Add(_sourceUnit, message, span, errorCode, severity);
         }
 
         /// <summary>
@@ -587,7 +627,7 @@ namespace IronRuby.Prism {
             // still map the operand: it may introduce locals the rest of the scope refers to
             Expr(defined.Value);
             if (_errorSink != null && _sourceUnit != null) {
-                _errorSink.Add(_sourceUnit, "possibly useless use of defined? in void context", span,
+                Report("possibly useless use of defined? in void context", span,
                     Errors.RuntimeVerboseWarning, Severity.Warning);
             }
             return Literal.Nil(span);
@@ -1007,7 +1047,7 @@ namespace IronRuby.Prism {
                 case Pm.ReturnNode ret:
                     if (ret.Arguments != null && !_isEval && CurrentScope is TopStaticLexicalScope &&
                         _errorSink != null && _sourceUnit != null) {
-                        _errorSink.Add(_sourceUnit, "argument of top-level return is ignored", span,
+                        Report("argument of top-level return is ignored", span,
                             Errors.RuntimeWarning, Severity.Warning);
                     }
                     return new ReturnStatement(OptionalArguments(ret.Arguments), span);
@@ -1020,7 +1060,7 @@ namespace IronRuby.Prism {
                 case Pm.YieldNode yield:
                     _usesBlock = true;
                     if (!IsYieldAllowed() && _errorSink != null) {
-                        _errorSink.Add(_sourceUnit, "Invalid yield", span, 0, Severity.FatalError);
+                        Report("Invalid yield", span, 0, Severity.FatalError);
                     }
                     return new YieldCall(yield.Arguments != null ? BuildArguments(yield.Arguments) : null, span);
 
@@ -1199,7 +1239,7 @@ namespace IronRuby.Prism {
             var warnings = RegexpTransformer.GetWarnings(text);
             if (warnings != null) {
                 foreach (var warning in warnings) {
-                    _errorSink.Add(_sourceUnit, warning + ": /" + text + "/", span, Errors.RuntimeWarning, Severity.Warning);
+                    Report(warning + ": /" + text + "/", span, Errors.RuntimeWarning, Severity.Warning);
                 }
             }
         }

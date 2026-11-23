@@ -579,6 +579,9 @@ namespace IronRuby.Runtime {
         // binders' rule caches - into the program's first few hundred milliseconds instead.
         internal const int StartupCompilationThreshold = 200;
 
+        /// <summary>The trees of recently evaluated strings (PrismAstBridge.Parse); made at the first eval.</summary>
+        internal EvalAstCache EvalAstCache;
+
         /// <summary>
         /// The compilation threshold of the code an eval of a String compiles (Kernel#eval, Binding#eval,
         /// instance_eval and module_eval of a String): its blocks and loops. Each eval builds a new lambda,
