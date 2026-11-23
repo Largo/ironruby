@@ -687,7 +687,9 @@ namespace IronRuby.Builtins {
                 switch (c = Read()) {
                     case -1:
                         if (isSubexpression) {
-                            throw MakeError("end pattern in group");
+                            // Onigmo's ONIGERR_END_PATTERN_WITH_UNMATCHED_PARENTHESIS: the group
+                            // has begun, and the pattern ends before its ')'
+                            throw MakeError("end pattern with unmatched parenthesis");
                         }
                         return;
                     
@@ -1266,6 +1268,10 @@ namespace IronRuby.Builtins {
                         Append(')');
                         break;
                     }
+
+                    case -1:
+                        // "(?" and nothing after it
+                        throw MakeError("end pattern in group");
 
                     default:
                         throw MakeError("undefined group option");
@@ -2213,18 +2219,30 @@ namespace IronRuby.Builtins {
             return codepoint;
         }
 
+        // MRI's unescape_unicode_list: white space (ISSPACE) may stand before, between and after
+        // the code points, \u{ 41 42 }, but there has to be one.
         private IEnumerable<int>/*!*/ ParseUnicodeEscapeList() {
             Skip('{');
-            while (true) {
+            SkipUnicodeListSpace();
+            bool any = false;
+            while (Tokenizer.ToDigit(Peek()) < 16) {
                 int codepoint = ParseUnicodeCodePoint();
-                int c = Read();
+                SkipUnicodeListSpace();
+                any = true;
                 yield return codepoint;
-                if (c == '}') {
-                    break;
+            }
+            if (!any || Read() != '}') {
+                throw MakeError("invalid Unicode list");
+            }
+        }
+
+        private void SkipUnicodeListSpace() {
+            while (true) {
+                int c = Peek();
+                if (c != ' ' && (c < '\t' || c > '\r')) {
+                    return;
                 }
-                if (c != ' ') {
-                    throw MakeError("invalid Unicode list");
-                }
+                Skip();
             }
         }
 
