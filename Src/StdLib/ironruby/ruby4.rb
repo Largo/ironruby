@@ -7654,7 +7654,7 @@ class Data
               n = args.size
               while i < n
                 kwargs[members[i]] = args[i]
-                i += 1
+                i = i.succ
               end
             end
             instance = allocate
@@ -7705,8 +7705,10 @@ class Data
       ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
     end
     # one positional Hash passes for the keywords, as MRI's rb_scan_args still allows here
+    positional = false
     if args.size == 1 && kwargs.empty? && ::Hash === args[0]
       kwargs = args.pop
+      positional = true
     end
     unless args.empty?
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
@@ -7714,16 +7716,18 @@ class Data
     names = __data_members__
     # The usual call names every member once, as a Symbol: store them without the
     # bookkeeping below. Equal sizes and every member a key leave no room for another key.
+    # Not a positional Hash, which is the caller's own and may answer #key? and #[] with
+    # methods of its own; MRI reads its entries as they are stored.
     n = names.size
-    if kwargs.size == n
+    if !positional && kwargs.size == n
       i = 0
-      i += 1 while i < n && kwargs.key?(names[i])
+      i = i.succ while i < n && kwargs.key?(names[i])
       if i == n
         i = 0
         while i < n
           name = names[i]
           __ir_set_hidden_ivar__(name, kwargs[name])
-          i += 1
+          i = i.succ
         end
         freeze
         return nil
@@ -7839,7 +7843,7 @@ class Data
     while i < n
       name = names[i]
       values[name] = __ir_hidden_ivar__(name)
-      i += 1
+      i = i.succ
     end
     copy = self.class.allocate
     copy.__send__(:initialize, **values.merge!(kwargs))

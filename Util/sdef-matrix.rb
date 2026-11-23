@@ -56,8 +56,8 @@ row "singleton_class then def", runs { |i| o7.singleton_class if i == 20; (def o
 # ---------------------------------------------------------------- 2. fresh objects through one site
 
 class C2; def x = 1; end
-row "fresh singleton each call", runs { |i| f = C2.new; f.define_singleton_method(:x) { i % 3 } if i.odd?; call_x(f) }.size
-row "fresh def each call", runs(100) { |i| f = C2.new; (def f.x = 7) if i % 4 == 0; call_x(f) }.map(&:first).tally
+row "fresh singleton each call", runs { |i| f = C2.new; f.define_singleton_method(:x) { i % 3 } if i.odd?; call_x(f) }
+row "fresh def each call", runs(100) { |i| f = C2.new; (def f.x = 7) if i % 4 == 0; call_x(f) }
 row "fresh singleton_class only", runs { |i| f = C2.new; f.singleton_class; call_x(f) }
 
 # ---------------------------------------------------------------- 3. extend, include into a singleton, Class.new
@@ -70,7 +70,7 @@ d = C1.new
 row "include into singleton", runs { |i| d.singleton_class.include(N3) if i == 60; call_x(d) }
 e = C1.new; e.extend(M3)
 row "extend then def", runs { |i| (def e.x = :own) if i == 100; call_x(e) }
-row "Class.new with methods", runs { |i| k = Class.new(C1) { define_method(:x) { i % 2 } if i > 100 }; call_x(k.new) }.map(&:first).tally
+row "Class.new with methods", runs { |i| k = Class.new(C1) { define_method(:x) { i % 2 } if i > 100 }; call_x(k.new) }
 
 # ---------------------------------------------------------------- 4. definitions in the class
 
@@ -96,7 +96,7 @@ module Use5
   using R5
   def self.go(o) = o.x
 end
-row "refined vs singleton", runs { |i| o = i.even? ? C5.new : f5; Use5.go(o) }.size
+row "refined vs singleton", runs { |i| o = i.even? ? C5.new : f5; Use5.go(o) }
 row "refined fresh singleton", runs { |i| o = C5.new; o.singleton_class if i.odd?; Use5.go(o) }
 
 # ---------------------------------------------------------------- 6. respond_to? through many singleton classes

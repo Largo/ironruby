@@ -95,13 +95,13 @@ N.times { |i| r += 1 if d.me.equal?(d) && d.meth == :meth }
 row "4. self and __method__", r
 
 r = []
-N.times { |i| r << d.sup(i) if i % 1000 == 0 }
+N.times { |i| v = d.sup(i); r << v if i % 1000 == 0 }
 row "5. explicit super", r
 row "5a. implicit super", err { d.isup(1) }
 row "5b. implicit super hot", (1..N).map { err { d.isup(1) } }.uniq
 
 r = []
-N.times { |i| r << [d.bg, d.bg { i }, d.bg2, d.bg2 { }, d.yl { |x| x + i }] if i % 1000 == 0 }
+N.times { |i| v = [d.bg, d.bg { i }, d.bg2, d.bg2 { }, d.yl { |x| x + i }]; r << v if i % 1000 == 0 }
 row "6. block_given? and the block", r
 
 r = []
@@ -127,7 +127,7 @@ ls = []
 N.times { |i| ls << d.keep(i) }
 row "10. closures kept", [ls[0].call, ls[1500].call, ls[-1].call]
 ps = []
-N.times { |i| ps << d.keepproc(i) if i % 1000 == 0 }
+N.times { |i| v = d.keepproc(i); ps << v if i % 1000 == 0 }
 row "10a. return from a proc after its method", ps.map { |pr| err { pr.call } }
 counter = 0
 D.send(:define_method, :cl) { counter += 1 }
@@ -140,7 +140,7 @@ N.times { |i| s += d.from_method(i) + d.from_lambda(i) + d.from_bound(i) + d.fro
 row "11. from Method/lambda", [s, err { d.from_lambda }, d.method(:from_lambda).arity, d.method(:from_method).arity]
 
 r = []
-N.times { |i| r << d.ie(i) if i % 1000 == 0 }
+N.times { |i| v = d.ie(i); r << v if i % 1000 == 0 }
 row "12. instance_exec", r
 
 row "13. recursion", [d.rec(50), (1..N).sum { |i| d.rec(i % 5) }]

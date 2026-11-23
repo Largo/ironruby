@@ -379,6 +379,8 @@ namespace IronRuby.Runtime.Calls {
             internal string FrameName;
         }
 
+        private const int MaxModuleFactories = 8;
+
         // both under lock (this)
         private int _moduleVariantCount;
         private Dictionary<string, ModuleFactory> _moduleFactories;
@@ -395,6 +397,12 @@ namespace IronRuby.Runtime.Calls {
             }
             ModuleFactory factory;
             if (!_moduleFactories.TryGetValue(label, out factory)) {
+                // The label names the module, so each named module the def runs for asks for a factory of its own, which it
+                // uses once: past a few labels the body is compiled for its module as below the threshold, and the factories
+                // made (each holding its compiled code for as long as the body lives) stop growing in number.
+                if (_moduleFactories.Count >= MaxModuleFactories) {
+                    return null;
+                }
                 bool timed = PhaseTimer.Enter(PhaseTimer.DefCompile);
                 try {
                     var gen = new AstGenerator(context, new RubyCompilerOptions(), _document, _encoding, false);
