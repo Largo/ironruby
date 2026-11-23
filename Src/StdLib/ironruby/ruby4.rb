@@ -4677,8 +4677,15 @@ class << Dir
   def home(user = nil)
     # MRI converts the name with to_str, and an empty one is the current user, as nil is.
     unless user.nil?
-      raise TypeError, "no implicit conversion of #{user.class} into String" unless user.respond_to?(:to_str)
-      user = user.to_str
+      unless user.is_a?(String)
+        raise TypeError, "no implicit conversion of #{user.class} into String" unless user.respond_to?(:to_str)
+        converted = user.to_str
+        # StringValue: what #to_str gives has to be a String (nil included, which is not "no name")
+        unless converted.is_a?(String)
+          raise TypeError, "can't convert #{user.class} to String (#{user.class}#to_str gives #{converted.class})"
+        end
+        user = converted
+      end
       user = nil if user.empty?
     end
     if user.nil?

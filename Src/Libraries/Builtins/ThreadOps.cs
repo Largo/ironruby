@@ -607,13 +607,17 @@ namespace IronRuby.Builtins {
                     if (_wokenByRun) {
                         return false;
                     }
-                    if (RubyUtils.HasPendingAsyncException(_thread)) {
-                        // drop the RunForInterrupt wake-up, if it has not been taken, or the next wait ends at once
-                        _runSignal.Reset();
-                        return true;
+                    if (!RubyUtils.HasPendingAsyncException(_thread)) {
+                        return false;
                     }
-                    return false;
+                    // drop the RunForInterrupt wake-up, if it has not been taken, or the next wait ends at once
+                    _runSignal.Reset();
                 }
+                // A raise that may be delivered and was parked since the look above has had its wake-up
+                // dropped by that Reset, if its RunForInterrupt came first: take it now rather than wait
+                // for a wake-up that has come and gone. One parked after the Reset sets the signal again.
+                RubyUtils.CheckAsyncException();
+                return true;
             }
 
             /// <summary>

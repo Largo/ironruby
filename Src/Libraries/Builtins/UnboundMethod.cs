@@ -95,7 +95,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The receiver has to be a kind of the module the method is *defined* in, not of the one
+        /// The receiver has to be a kind of the method's #owner (mostly the module it is defined in), not of the one
         /// it was extracted from: Child.instance_method(:inherited_one) binds to any Parent, which
         /// constraining on Child would refuse. Since Ruby 3.0 (Feature #15608) a method whose owner
         /// is a module rather than a class binds to anything at all.
@@ -103,7 +103,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("bind")]
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
-            RubyModule constraint = self._info.DeclaringModule ?? self._targetConstraint;
+            // MRI checks against the method's #owner: an alias, or a `public :m' in a subclass, binds only
+            // to instances of the class it is in
+            RubyModule constraint = GetOwner(self);
             // a refinement's method binds to what the refinement refines (Feature #14223)
             if (constraint.IsRefinement && constraint.RefinedModule != null) {
                 constraint = constraint.RefinedModule;
@@ -116,7 +118,7 @@ namespace IronRuby.Builtins {
             }
             
             if (self._isMethodMissing) {
-                return RubyMethod.CreateMethodMissing(target, self._info, self._name);
+                return RubyMethod.CreateMethodMissing(target, self._info, self._name, self._targetConstraint);
             }
             var result = new RubyMethod(target, self._info, self._name);
             if (!constraint.IsClass) {
@@ -286,12 +288,9 @@ namespace IronRuby.Builtins {
         // method_inspect writes each module with rb_inspect, so an anonymous one that says what it is
         // (EnvUtil.labeled_class) is shown by what it says rather than as #<Class:0x...>.
         private static MutableString/*!*/ InspectModule(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            // and what its #inspect raises goes to the caller, as from rb_inspect
             if (module.Name == null && !module.IsSingletonClass) {
-                try {
-                    return context.Inspect(module);
-                } catch (Exception) {
-                    // the name it would have had
-                }
+                return context.Inspect(module);
             }
             return module.GetDisplayName(context, false);
         }

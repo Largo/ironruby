@@ -892,6 +892,10 @@ namespace IronRuby.Builtins {
                     // the original module ([Bug #15877]). Methods written elsewhere (in a block, in another module's
                     // body, the singleton methods of a `def self.m') keep the scope they were written in.
                     var rubyMethod = method.Value as RubyMethodInfo;
+                    if (rubyMethod != null) {
+                        // the refinements active at its `def' go with it, whichever scope it gets
+                        rubyMethod.Body.CopyDefinitionRefinements(rubyMethod.DeclaringModule, this);
+                    }
                     var moduleScope = (rubyMethod != null) ? rubyMethod.DeclaringScope as RubyModuleScope : null;
                     if (moduleScope != null && moduleScope.Module == module) {
                         rewrittenScopes ??= new Dictionary<RubyScope, RubyScope>();

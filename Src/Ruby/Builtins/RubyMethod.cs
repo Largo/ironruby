@@ -46,6 +46,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         private readonly string _methodMissingName;
 
+        // The #owner of such a method: the receiver's class (its singleton class if it had one) when the
+        // Method was made, which mnew_missing stores rather than works out again later.
+        private readonly RubyModule _methodMissingOwner;
+
         /// <summary>
         /// The module the method reads as looked up on, when that is not the receiver's class:
         /// UnboundMethod#bind of a method a module owns makes a Method of that module, which
@@ -55,6 +59,11 @@ namespace IronRuby.Builtins {
 
         public bool IsMethodMissing {
             get { return _methodMissingName != null; }
+        }
+
+        /// <summary>The #owner of a method made by <see cref="CreateMethodMissing"/>, null for any other.</summary>
+        public RubyModule MethodMissingOwner {
+            get { return _methodMissingOwner; }
         }
 
         public object Target {
@@ -78,20 +87,22 @@ namespace IronRuby.Builtins {
             _name = name;
         }
 
-        private RubyMethod(object target, RubyMemberInfo/*!*/ info, string/*!*/ name, string methodMissingName)
+        private RubyMethod(object target, RubyMemberInfo/*!*/ info, string/*!*/ name, string methodMissingName, RubyModule methodMissingOwner)
             : this(target, info, name) {
             _methodMissingName = methodMissingName;
+            _methodMissingOwner = methodMissingOwner;
         }
 
         /// <summary>
-        /// A Method standing in for a name the object only answers through #method_missing.
+        /// A Method standing in for a name the object only answers through #method_missing, owned by
+        /// <paramref name="owner"/> (an UnboundMethod's owner, bound again) or else by the receiver's class.
         /// </summary>
-        public static RubyMethod/*!*/ CreateMethodMissing(object target, RubyMemberInfo/*!*/ info, string/*!*/ name) {
-            return new RubyMethod(target, info, name, name);
+        public static RubyMethod/*!*/ CreateMethodMissing(object target, RubyMemberInfo/*!*/ info, string/*!*/ name, RubyModule owner = null) {
+            return new RubyMethod(target, info, name, name, owner ?? info.Context.GetImmediateClassOf(target));
         }
 
         object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
-            var result = new RubyMethod(_target, _info, _name, _methodMissingName);
+            var result = new RubyMethod(_target, _info, _name, _methodMissingName, _methodMissingOwner);
             result.LookupModule = LookupModule;
             context.CopyInstanceData(this, result, copySingletonMembers);
             return result;

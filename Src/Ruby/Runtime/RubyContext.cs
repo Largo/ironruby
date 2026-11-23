@@ -3120,7 +3120,10 @@ namespace IronRuby.Runtime {
                         // rb_singleton_class_clone_and_attach clones along with it
                         var meta = singleton.ImmediateClass;
                         if (meta.IsSingletonClass && !meta.IsDummySingletonClass && ReferenceEquals(meta.SingletonClassOf, singleton)) {
-                            singletonDup.GetOrCreateSingletonClass().InitializeMembersFrom(meta);
+                            var metaDup = singletonDup.GetOrCreateSingletonClass();
+                            metaDup.InitializeMembersFrom(meta);
+                            // with its instance variables, as for the singleton class above
+                            CopyInstanceData(meta, metaDup, false);
                         }
 
                         SetInstanceSingletonOfNoLock(target, ref targetData, singletonDup);
@@ -3550,7 +3553,8 @@ namespace IronRuby.Runtime {
                 return null;
             }
 
-            var method = GetClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
+            // the exception's own singleton class too (`def e.backtrace'): MRI looks it up in CLASS_OF
+            var method = GetImmediateClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
             if (method == null || method is RubyLibraryMethodInfo && method.DeclaringModule == ExceptionClass) {
                 return RubyExceptionData.GetInstance(e).Backtrace;
             }

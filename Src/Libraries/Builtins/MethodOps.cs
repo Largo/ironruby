@@ -72,10 +72,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
             // A method only respond_to_missing? vouches for belongs to the receiver's class (its
-            // singleton class if it has one), as mnew_missing makes it, not to the method_missing
-            // that would run it.
+            // singleton class if it had one) as it was when the Method was made, which is what
+            // mnew_missing stores, not to the method_missing that would run it.
             if (self.IsMethodMissing) {
-                return self.Info.Context.GetImmediateClassOf(self.Target);
+                return self.MethodMissingOwner;
             }
             return self.Info.AliasOwner ?? self.Info.DeclaringModule ?? self.GetTargetClass();
         }
@@ -140,7 +140,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("unbind")]
         public static UnboundMethod/*!*/ Unbind(RubyMethod/*!*/ self) {
             return new UnboundMethod(
-                self.IsMethodMissing ? self.Info.Context.GetImmediateClassOf(self.Target) : self.GetTargetClass(),
+                self.IsMethodMissing ? self.MethodMissingOwner : self.GetTargetClass(),
                 self.Name, self.Info, self.IsMethodMissing
             );
         }
