@@ -82,6 +82,13 @@ namespace IronRuby.Runtime.Calls {
             if (argArray != null) {
                 firstArg = argArray.GetArgument(0);
             } else {
+                // A site with a light scope has a precompiled dispatcher for a Ruby method (RubyCallAction.BindPrecompiled), one class
+                // at a time; a method that receivers of many classes resolve the call to - singleton classes of objects of one class,
+                // say - is better served by the one rule that holds them all, as it was before light sites had dispatchers.
+                if (Signature.HasLightScope && _context != null && !_context.Options.NoAdaptiveCompilation && (result = BindShared<T>(args)) != null) {
+                    if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : "shared-hit";
+                    return result;
+                }
                 object precompiled = BindPrecompiled(delegateType, args);
                 if (precompiled != null) {
                     result = (T)precompiled;
