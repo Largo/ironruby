@@ -194,13 +194,17 @@ def jd_threads(jp)
       j += 1
     end
   end
-  50_000.times do
-    c = jp.read
-    bad << c unless c.nil? || (c.size == 1 && (JD_TEXT + alt).include?(c))
-    jp.index = -1 if c.nil?
+  begin
+    50_000.times do
+      c = jp.read
+      bad << c unless c.nil? || (c.size == 1 && (JD_TEXT + alt).include?(c))
+      jp.index = -1 if c.nil?
+    end
+  ensure
+    # also when read raised: the writer must not run on through the rows after this one
+    stop = true
+    th.join
   end
-  stop = true
-  th.join
   bad.uniq.first(3)
 end
 jp = jd_class.new(JD_TEXT.dup)
@@ -423,7 +427,7 @@ class JdRd
   def state = [@index, @log, @other.n, @arr[0], @current]
 end
 class JdBox; attr_accessor :n; def initialize = (@n = 0); end
-%i[c_arr].each do |m|
+%i[c_ivar c_attr c_arr].each do |m|
   r = JdRd.new("ab\ncd" * 4)
   200.times { |i| r.index = -1 if r.current.nil?; r.input = nil if i == 150; (r.send(m) rescue nil) }
   Kernel.p [m, r.state]
@@ -598,7 +602,9 @@ class JwB
 end
 %i[jw_float jw_nil jw_str].each do |m|
   o = JwB.new; r = []
-  120.times { |i| o.send(m, i % 3 != 0, i < 60 ? i : 200); r << [o.x, o.x.class] if i >= 58 && i % 5 == 0 }
+  # hot, the odd calls keep d at 50, so the arm's own store (a Float, nil or a String when i % 3 == 0) is what
+  # the row reads; the even ones take d to 200, and the wide store after the if replaces it
+  120.times { |i| o.send(m, i % 3 != 0, i < 60 ? i : (i.even? ? 200 : 50)); r << [o.x, o.x.class] if i >= 58 && i % 5 == 0 }
   Kernel.p [m, r]
 end
 
@@ -779,7 +785,7 @@ def jz_run_row(label, v)
   r1 = (z.sp_run rescue $!.class)
   z2 = JzRun.new(v)
   r2 = (z2.sp_run_if rescue $!.class)
-  t('opening run then a deopt: ' + label) { [r1, z.instance_variables, z.k = nil, r2, z2.instance_variables, z2.a] }
+  t('opening run then a deopt: ' + label) { [r1, z.instance_variables, z.k, r2, z2.instance_variables, z2.a] }
 end
 class JzRun; attr_accessor :k; end
 jz_run_row('an Array', [1, 2, 3])

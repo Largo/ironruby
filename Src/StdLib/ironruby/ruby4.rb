@@ -185,7 +185,8 @@ module Kernel
     # caller(0), not caller: this method's own frame is reported with its caller's file and
     # line, and where the CLR stack cannot be walked (AOT-compiled browser-wasm) the frame of a
     # method the DLR has compiled is missing altogether - caller(1) would then skip the caller.
-    caller_path = caller(0).first.split(/:\d/, 2).first
+    # One frame is made, not the whole backtrace's.
+    caller_path = caller(0, 1).first.split(/:\d/, 2).first
     # Relative to where the file really is: through a symlink, the link's target, and for a
     # file run by a relative path, where it was before any chdir.
     if !File.file?(caller_path) || File.symlink?(caller_path)
@@ -2398,7 +2399,7 @@ module Kernel
   private
 
   def __dir__
-    file = caller(0).first   # see require_relative
+    file = caller(0, 1).first   # see require_relative
     file = file.split(/:\d/, 2).first if file
     # Only a real file has a directory. Code that came from a string - an eval, the console -
     # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at
@@ -7648,7 +7649,13 @@ class Data
                 expected = members.empty? ? "0" : "0..#{members.size}"
                 ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected #{expected})")
               end
-              args.each_with_index { |value, i| kwargs[members[i]] = value }
+              kwargs = {}
+              i = 0
+              n = args.size
+              while i < n
+                kwargs[members[i]] = args[i]
+                i = i.succ
+              end
             end
             instance = allocate
             instance.__send__(:initialize, **kwargs, &block)
@@ -7698,13 +7705,34 @@ class Data
       ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
     end
     # one positional Hash passes for the keywords, as MRI's rb_scan_args still allows here
+    positional = false
     if args.size == 1 && kwargs.empty? && ::Hash === args[0]
       kwargs = args.pop
+      positional = true
     end
     unless args.empty?
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
     end
     names = __data_members__
+    # The usual call names every member once, as a Symbol: store them without the
+    # bookkeeping below. Equal sizes and every member a key leave no room for another key.
+    # Not a positional Hash, which is the caller's own and may answer #key? and #[] with
+    # methods of its own; MRI reads its entries as they are stored.
+    n = names.size
+    if !positional && kwargs.size == n
+      i = 0
+      i = i.succ while i < n && kwargs.key?(names[i])
+      if i == n
+        i = 0
+        while i < n
+          name = names[i]
+          __ir_set_hidden_ivar__(name, kwargs[name])
+          i = i.succ
+        end
+        freeze
+        return nil
+      end
+    end
     given = {}
     unknown = []
     kwargs.each do |key, value|
@@ -7806,23 +7834,19 @@ class Data
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
     end
     return self if kwargs.empty?
+    # MRI's rb_data_with: initialize gets to_h merged with the keywords as given (a
+    # String key is not converted, an unknown one is initialize's to report).
+    values = {}
     names = __data_members__
-    updates = {}
-    unknown = []
-    kwargs.each do |key, value|
-      key = __data_key__(key)
-      if names.include?(key.to_sym)
-        updates[key.to_sym] = value
-      else
-        unknown << key.inspect
-      end
-    end
-    unless unknown.empty?
-      ::Kernel.raise(::ArgumentError,
-        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.join(', ')}")
+    i = 0
+    n = names.size
+    while i < n
+      name = names[i]
+      values[name] = __ir_hidden_ivar__(name)
+      i = i.succ
     end
     copy = self.class.allocate
-    copy.__send__(:initialize, **to_h.merge(updates))
+    copy.__send__(:initialize, **values.merge!(kwargs))
     copy
   end
 

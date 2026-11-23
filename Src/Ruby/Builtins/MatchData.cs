@@ -19,6 +19,7 @@ using IronRuby.Runtime;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace IronRuby.Builtins {
@@ -40,6 +41,12 @@ namespace IronRuby.Builtins {
         // the caller matched with - the spec compares object_id - so it cannot be rebuilt from
         // the CLR Regex and has to be carried here from every construction site.
         private RubyRegex _regexp;
+
+        // The CLR regex the match came from (null if not known), the key of NamedGroupTables.
+        private Regex _clrRegex;
+
+        // The named groups, looked up on the first named access.
+        private NamedGroupTable _namedGroups;
 
         // #string answers the same frozen String every time it is called, so it is made once.
         private MutableString _frozenInput;
@@ -162,6 +169,8 @@ namespace IronRuby.Builtins {
             _originalString = other._originalString;
             _pairedText = other._pairedText;
             _regexp = other._regexp;
+            _clrRegex = other._clrRegex;
+            _namedGroups = other._namedGroups;
             _frozenInput = other._frozenInput;
             _detachedString = other._detachedString;
         }
@@ -171,7 +180,7 @@ namespace IronRuby.Builtins {
         /// the match's CLR offsets index it.
         /// </summary>
         internal static MatchData Create(Match/*!*/ match, MutableString/*!*/ input, bool freezeInput, string/*!*/ text,
-            RubyRegex regexp, bool hasPairs) {
+            RubyRegex regexp, bool hasPairs, Regex clrRegex) {
 
             if (!match.Success) {
                 return null;
@@ -183,6 +192,7 @@ namespace IronRuby.Builtins {
 
             MatchData result = new MatchData(match, input);
             result._regexp = regexp;
+            result._clrRegex = clrRegex;
             if (hasPairs) {
                 result._pairedText = text;
             }
@@ -261,16 +271,73 @@ namespace IronRuby.Builtins {
         /// that is the last of them that took part in the match, as in Onigmo.
         /// </summary>
         private Group/*!*/ GetNamedGroup(string/*!*/ name) {
+            int[] numbers;
+            if (!GetNamedGroupTable().Numbers.TryGetValue(name, out numbers)) {
+                return _match.Groups[name];
+            }
             Group result = null;
-            foreach (var clrName in _match.Groups.Keys) {
-                if (RegexpTransformer.GetRubyGroupName(clrName) == name) {
-                    var group = _match.Groups[clrName];
-                    if (result == null || group.Success) {
-                        result = group;
-                    }
+            foreach (int number in numbers) {
+                var group = _match.Groups[number];
+                if (result == null || group.Success) {
+                    result = group;
                 }
             }
-            return result ?? _match.Groups[name];
+            return result;
+        }
+
+        /// <summary>
+        /// The Ruby names of a regex's named groups: in declaration order, and each with the CLR
+        /// group numbers that carry it (several when the name is repeated, see RegexpTransformer).
+        /// A function of the CLR regex alone, which is immutable.
+        /// </summary>
+        private sealed class NamedGroupTable {
+            public readonly Dictionary<string, int[]>/*!*/ Numbers;
+            public readonly string/*!*/[]/*!*/ Names;
+
+            public NamedGroupTable(Match/*!*/ match) {
+                var numbers = new Dictionary<string, List<int>>();
+                var names = new List<string>();
+                var groups = match.Groups;
+                for (int i = 0; i < groups.Count; i++) {
+                    var rubyName = RegexpTransformer.GetRubyGroupName(groups[i].Name);
+                    if (rubyName == null) {
+                        continue;
+                    }
+                    List<int> list;
+                    if (!numbers.TryGetValue(rubyName, out list)) {
+                        numbers.Add(rubyName, list = new List<int>());
+                        names.Add(rubyName);
+                    }
+                    list.Add(i);
+                }
+                Numbers = new Dictionary<string, int[]>(numbers.Count);
+                foreach (var entry in numbers) {
+                    Numbers.Add(entry.Key, entry.Value.ToArray());
+                }
+                Names = names.ToArray();
+            }
+        }
+
+        // Every named lookup used to walk the whole group collection several times, decoding each
+        // name: on a pattern of many groups (URI's RFC 3986 one has dozens) that cost tens of
+        // microseconds per MatchData#[]. Keyed weakly by the CLR regex, so an entry lives as long
+        // as its regex does; the table depends on nothing else, so it is never invalidated, and
+        // runtimes sharing the process may share it.
+        private static readonly ConditionalWeakTable<Regex, NamedGroupTable> _namedGroupTables =
+            new ConditionalWeakTable<Regex, NamedGroupTable>();
+
+        private NamedGroupTable/*!*/ GetNamedGroupTable() {
+            var table = _namedGroups;
+            if (table == null) {
+                if (_clrRegex != null) {
+                    var match = _match;
+                    table = _namedGroupTables.GetValue(_clrRegex, _ => new NamedGroupTable(match));
+                } else {
+                    table = new NamedGroupTable(_match);
+                }
+                _namedGroups = table;
+            }
+            return table;
         }
 
         private int[] OffsetsOf(Group/*!*/ group, bool inBytes) {
@@ -336,15 +403,7 @@ namespace IronRuby.Builtins {
         /// written in Ruby in the prelude and reach these two as plain CLR methods.
         /// </summary>
         public string/*!*/[]/*!*/ GetGroupNames() {
-            var names = _match.Groups.Keys;
-            var result = new List<string>();
-            foreach (var name in names) {
-                var rubyName = RegexpTransformer.GetRubyGroupName(name);
-                if (rubyName != null && !result.Contains(rubyName)) {
-                    result.Add(rubyName);
-                }
-            }
-            return result.ToArray();
+            return (string[])GetNamedGroupTable().Names.Clone();
         }
 
         /// <summary>The group's name if it has one, otherwise its number as a string.</summary>
@@ -354,12 +413,7 @@ namespace IronRuby.Builtins {
         }
 
         public bool HasNamedGroup(string/*!*/ name) {
-            foreach (var groupName in _match.Groups.Keys) {
-                if (RegexpTransformer.GetRubyGroupName(groupName) == name) {
-                    return true;
-                }
-            }
-            return false;
+            return GetNamedGroupTable().Numbers.ContainsKey(name);
         }
 
         public bool NamedGroupSuccess(string/*!*/ name) {

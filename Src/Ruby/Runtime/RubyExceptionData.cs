@@ -227,6 +227,15 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The innermost <paramref name="maxFrames"/> Ruby frames of the calling thread, read from the interpreted frames and the
+        /// compiled frames' records as <see cref="GetCallerFrame"/> reads them: without the frames of library methods.
+        /// </summary>
+        internal static RubyArray/*!*/ GetRecordedFrames(RubyContext/*!*/ context, int maxFrames) {
+            return new RubyStackTraceBuilder(context, InterpretedFrame.CurrentFrame.Value,
+                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), Precompiled.PrecompiledFrames.CaptureLoopLines(), maxFrames).RubyTrace;
+        }
+
+        /// <summary>
         /// A RegexpError about a pattern quotes it as written for the default internal or external
         /// encoding (MRI's rb_reg_error_desc), which only a context knows, and a regexp literal is
         /// made without one: the message is written again once the exception reaches Ruby code.
