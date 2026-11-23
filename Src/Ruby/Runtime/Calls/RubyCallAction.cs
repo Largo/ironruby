@@ -119,10 +119,18 @@ namespace IronRuby.Runtime.Calls {
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
             if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument)) != 0 ||
-                Signature.HasSplattedArgument && Signature.HasRhsArgument) {
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasLightScope)) != 0 ||
+                Signature.HasSplattedArgument && Signature.HasRhsArgument ||
+                Signature.HasLightScope && Signature.HasSplattedArgument) {
                 return null;
             }
+
+            // A site with a light scope (a method body running without a scope) passes a scope that must not be read. Only the
+            // call of a method define_method made of a block is precompiled there (LambdaMethodCall, which reads no scope): every
+            // receiver of a singleton method so defined - OpenStruct's readers, one singleton class per object - got a rule of
+            // its own otherwise, built and interpreted for one call. The method is resolved as Resolve resolves it at such a
+            // site: an explicit-receiver call looks for a public method; when there is none, the rule reads the scope.
+            bool lightScope = Signature.HasLightScope;
 
             // Nor can it hold RubyMethodInfo.BuildCallNoFlow's unmarking of a keyword-arguments
             // hash handed to a method that declares no keywords. A call site's syntax decides
@@ -161,6 +169,9 @@ namespace IronRuby.Runtime.Calls {
                 // MakeRefinementGuard); any other call of the kind is left to rule building. Refining the name
                 // later re-versions the class, which retires a dispatcher made without the test.
                 if (Signature.HasScope && targetClass.Context.IsRefinementSensitive(targetClass, _methodName)) {
+                    if (lightScope) {
+                        return null;
+                    }
                     refinements = scope.GetActiveRefinements();
                     recordScope = GetRecordScope(scope, refinements);
                     if (recordScope == RecordScope.None) {
@@ -171,12 +182,17 @@ namespace IronRuby.Runtime.Calls {
                         refinements).InvalidateSitesOnOverride();
                 } else {
                     version = targetClass.Version.Method;
-                    method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope));
+                    method = targetClass.ResolveMethodForSiteNoLock(_methodName, (lightScope && !Signature.HasImplicitSelf) ?
+                        new VisibilityContext(RubyMethodAttributes.Public) : GetVisibilityContext(Signature, scope));
                 }
                 clrTest = (target != null && !(target is IRubyObject)) ? GetClrReceiverTest(targetClass, _methodName) : ClrReceiverTest.None;
             }
 
             if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
+                return null;
+            }
+
+            if (lightScope && method.Info.GetType() != typeof(RubyLambdaMethodInfo)) {
                 return null;
             }
 
@@ -233,7 +249,7 @@ namespace IronRuby.Runtime.Calls {
                         null;
                 }
 
-                dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
+                dispatcher = lightScope ? null : method.Info.GetDispatcher(delegateType, Signature, target, version);
 
                 // a Ruby method of a builtin class (much of the core library is written in Ruby), called on nil, true, false or a CLR object:
                 if (dispatcher == null && rubyMethod != null && !(target is IRubyObject) &&
@@ -299,6 +315,8 @@ namespace IronRuby.Runtime.Calls {
         // the set once the call has been resolved for it again - with no rule built or compiled.
         private sealed class SharedRule {
             internal readonly RubyMemberInfo/*!*/ Member;
+            // the call finds no method of its name, and Member is the method_missing it calls
+            internal readonly bool IsMissing;
             internal readonly Type/*!*/ TargetType;
             internal readonly Type/*!*/ DelegateType;
             internal readonly int FirstVersion;
@@ -307,8 +325,9 @@ namespace IronRuby.Runtime.Calls {
             internal RuleVersionSet Versions;
             internal volatile object Rule;
 
-            internal SharedRule(RubyMemberInfo/*!*/ member, Type/*!*/ targetType, Type/*!*/ delegateType, int firstVersion) {
+            internal SharedRule(RubyMemberInfo/*!*/ member, bool isMissing, Type/*!*/ targetType, Type/*!*/ delegateType, int firstVersion) {
                 Member = member;
+                IsMissing = isMissing;
                 TargetType = targetType;
                 DelegateType = delegateType;
                 FirstVersion = firstVersion;
@@ -367,6 +386,7 @@ namespace IronRuby.Runtime.Calls {
 
             int version;
             MethodResolutionResult method;
+            RubyMemberInfo methodMissing = null;
             using (context.ClassHierarchyLocker()) {
                 targetClass.InitializeMethodsNoLock();
                 if (target != null && !(target is IRubyObject) && !HasPlainClrTypeTest(targetClass, _methodName)) {
@@ -382,17 +402,35 @@ namespace IronRuby.Runtime.Calls {
                 var visibility = (Signature.HasLightScope && !Signature.HasImplicitSelf) ?
                     new VisibilityContext(RubyMethodAttributes.Public) : GetVisibilityContext(Signature, scope);
                 method = targetClass.ResolveMethodForSiteNoLock(_methodName, visibility, MethodLookup.Default);
+
+                // A call of a name a Ruby object's class has no method of, at any visibility, is a call of the method_missing it
+                // resolves: OpenStruct's first `o.total = x' is, on a new singleton class each time. Resolve registers the lookup
+                // of the missing name the same way, so that defining it re-versions the class.
+                if (!method.Found && method.Info == null && method.IncompatibleVisibility == RubyMethodVisibility.None &&
+                    target is IRubyObject && _methodName != Symbols.MethodMissing) {
+                    methodMissing = targetClass.ResolveMethodMissingForSite(_methodName, RubyMethodVisibility.None);
+                }
             }
 
             // Rules calling these methods depend on nothing but the method, the call signature and the arguments.
             // A protected method's rule also tests the caller's class.
-            if (!method.Found || method.Info.IsProtected ||
-                method.Info.GetType() != typeof(RubyLibraryMethodInfo) && method.Info.GetType() != typeof(RubyMethodInfo)) {
+            RubyMemberInfo member;
+            bool isMissing;
+            if (method.Found) {
+                member = method.Info;
+                isMissing = false;
+            } else if (methodMissing != null && methodMissing.GetType() == typeof(RubyMethodInfo)) {
+                member = methodMissing;
+                isMissing = true;
+            } else {
+                return null;
+            }
+            if (member.IsProtected || member.GetType() != typeof(RubyLibraryMethodInfo) && member.GetType() != typeof(RubyMethodInfo)) {
                 return null;
             }
 
             // respond_to?(:sym) and send(:sym) rules are specialized on the receiver's class (DispatchIntrinsics):
-            if (DispatchIntrinsics.MaySpecialize(method.Info, Signature)) {
+            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass)) {
                 return null;
             }
 
@@ -400,7 +438,7 @@ namespace IronRuby.Runtime.Calls {
             var sharedRules = _sharedRules;
             if (sharedRules != null) {
                 foreach (var rule in sharedRules) {
-                    if (rule.Member == method.Info && rule.TargetType == targetType && rule.DelegateType == typeof(T)) {
+                    if (rule.Member == member && rule.IsMissing == isMissing && rule.TargetType == targetType && rule.DelegateType == typeof(T)) {
                         shared = rule;
                         break;
                     }
@@ -411,7 +449,7 @@ namespace IronRuby.Runtime.Calls {
                 lock (_SharedRulesLock) {
                     sharedRules = _sharedRules;
                     if (sharedRules == null || sharedRules.Length < MaxSharedRules) {
-                        _sharedRules = ArrayUtils.Append(sharedRules ?? new SharedRule[0], new SharedRule(method.Info, targetType, typeof(T), version));
+                        _sharedRules = ArrayUtils.Append(sharedRules ?? new SharedRule[0], new SharedRule(member, isMissing, targetType, typeof(T), version));
                     }
                 }
                 return null;
@@ -500,7 +538,7 @@ namespace IronRuby.Runtime.Calls {
             CacheTarget(result);
 
             // The rule tests the version set iff Build has taken it and bound it to a version the method was resolved for:
-            if (versionSet.Member == shared.Member) {
+            if (versionSet.Member == shared.Member && versionSet.IsMissing == shared.IsMissing) {
                 lock (_SharedRulesLock) {
                     if (shared.Rule == null) {
                         shared.Versions = versionSet;
@@ -822,7 +860,15 @@ namespace IronRuby.Runtime.Calls {
 
                 // the version the test was bound against resolves to this method:
                 if (versionSet != null && versionSet.Count > 0) {
-                    versionSet.Member = method.Found ? method.Info : null;
+                    if (method.Found) {
+                        versionSet.Member = method.Info;
+                    } else if (method.Info == null && method.IncompatibleVisibility == RubyMethodVisibility.None) {
+                        // the method_missing a call of an undefined name makes (see BindShared)
+                        versionSet.Member = methodMissing;
+                        versionSet.IsMissing = true;
+                    } else {
+                        versionSet.Member = null;
+                    }
                 }
             }
 

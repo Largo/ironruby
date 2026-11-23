@@ -54,6 +54,9 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         internal RubyMemberInfo Member;
 
+        // Member is the method_missing a call of a name no method has makes (see RubyCallAction.BindShared).
+        internal bool IsMissing;
+
         internal RuleVersionSet() {
             _slots = new int[8];
         }
