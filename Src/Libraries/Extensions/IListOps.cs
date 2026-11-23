@@ -2088,14 +2088,36 @@ namespace IronRuby.Builtins {
         // nil.to_s, which is US-ASCII; it is only ever appended to the result, never handed out.
         private static readonly MutableString/*!*/ NilJoinString = MutableString.CreateEmpty(RubyEncoding.Ascii).Freeze();
 
-        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, MutableString separator,
+        /// <summary>
+        /// The separator as it was at each gap. MRI appends it as it goes, so a #to_s that changes
+        /// it changes only the gaps after that element; the parts are put together at the end, so
+        /// each gap holds a copy, shared by the gaps until an element's conversion has run Ruby code.
+        /// </summary>
+        private sealed class JoinSeparator {
+            private readonly MutableString/*!*/ _separator;
+            private MutableString _copy;
+
+            public JoinSeparator(MutableString/*!*/ separator) {
+                _separator = separator;
+            }
+
+            public MutableString/*!*/ Current {
+                get { return _copy ?? (_copy = _separator.CloneDerived()); }
+            }
+
+            public void Invalidate() {
+                _copy = null;
+            }
+        }
+
+        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, JoinSeparator separator,
             List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
             // the length is read again on every step, as MRI's ary_join_1 does: a #to_str or #to_ary
             // may change the array
             for (int i = 0; i < list.Count; i++) {
                 if (i > 0 && separator != null) {
-                    parts.Add(separator);
+                    parts.Add(separator.Current);
                 }
                 JoinItem(conversions, list, list[i], separator, parts, ref isBinary, ref seen);
             }
@@ -2105,12 +2127,17 @@ namespace IronRuby.Builtins {
         /// Adds the strings <paramref name="item"/> joins to, separators included, to <paramref name="parts"/>.
         /// Returns true if the item was an array (or converted to one) and false if it became a string.
         /// </summary>
-        private static bool JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, MutableString separator,
+        private static bool JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, JoinSeparator separator,
             List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
             {
                 if (item == null) {
                     parts.Add(NilJoinString);
                     return false;
+                }
+
+                // the conversions below may run Ruby code, which may change the separator
+                if (separator != null && !(item is MutableString)) {
+                    separator.Invalidate();
                 }
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
@@ -2162,6 +2189,8 @@ namespace IronRuby.Builtins {
                 break;
             }
 
+            var gap = (separator != null) ? new JoinSeparator(separator) : null;
+
             // The separators go in between the elements of every array joined, nested ones included,
             // and an empty nested array still has its neighbours separated ([[], 1].join("-") is "-1").
             bool firstIsArray = false;
@@ -2172,15 +2201,15 @@ namespace IronRuby.Builtins {
                     break;
                 }
                 if (index > 0 && separator != null) {
-                    parts.Add(separator);
+                    parts.Add(gap.Current);
                 }
-                JoinItem(conversions, self, str, separator, parts, ref isBinary, ref seen);
+                JoinItem(conversions, self, str, gap, parts, ref isBinary, ref seen);
             }
             for (; index < self.Count; index++) {
                 if (index > 0 && separator != null) {
-                    parts.Add(separator);
+                    parts.Add(gap.Current);
                 }
-                bool isArray = JoinItem(conversions, self, self[index], separator, parts, ref isBinary, ref seen);
+                bool isArray = JoinItem(conversions, self, self[index], gap, parts, ref isBinary, ref seen);
                 if (index == 0) {
                     firstIsArray = isArray;
                 }
