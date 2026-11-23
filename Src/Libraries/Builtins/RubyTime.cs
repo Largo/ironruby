@@ -273,7 +273,10 @@ namespace IronRuby.Builtins {
             ResolveLocalZone();
         }
 
+        // A copy of an initialized Time is one (MRI's time_init_copy copies the whole time_object),
+        // which also makes a subclass's Time.at or Time.now refuse #initialize as MRI's does.
         internal void CopyFrom(RubyTime/*!*/ other) {
+            _initialized = other._initialized;
             _seconds = other._seconds;
             _subsec = other._subsec;
             _zoneKind = other._zoneKind;
@@ -298,7 +301,7 @@ namespace IronRuby.Builtins {
         }
 
         internal RubyTime/*!*/ WithZone(RubyTimeZoneKind kind, ExactNum fixedOffset, object zoneObject) {
-            return new RubyTime(_seconds, _subsec, kind, fixedOffset) { _zoneObject = zoneObject };
+            return new RubyTime(_seconds, _subsec, kind, fixedOffset) { _zoneObject = zoneObject, _initialized = _initialized };
         }
 
         #endregion

@@ -160,7 +160,7 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Whether the directive makes room for its width (MRI's NEEDS(precision)): a known one,
-        /// except that '-' turns the padding of a number or a name off. %N, %L, %z and the
+        /// except that '-' (sticky, even under a later '_' or '0') turns the padding of a number or a name off. %N, %L, %z and the
         /// compound directives take the width whatever the flags.
         /// </summary>
         private static bool PadsToWidth(char directive, Modifiers modifiers) {
@@ -171,7 +171,7 @@ namespace IronRuby.Builtins {
             if ("NLzcDxFrRTXv".IndexOf(directive) >= 0) {
                 return true;
             }
-            return modifiers.Pad != '-' && "%ntaAhbBpPCdeHkIljmMSuwyYGgVUWsZ".IndexOf(directive) >= 0;
+            return !modifiers.NoPadding && "%ntaAhbBpPCdeHkIljmMSuwyYGgVUWsZ".IndexOf(directive) >= 0;
         }
 
         private static string FormatDirective(RubyContext/*!*/ context, RubyTime/*!*/ time, char directive, Modifiers modifiers, int width, int depth) {

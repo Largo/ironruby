@@ -56,6 +56,10 @@ namespace IronRuby.Builtins {
             }
             // MRI's rb_check_funcall and rb_respond_to ask #respond_to?, and so see a method an
             // object answers through method_missing and respond_to_missing? (a SimpleDelegator).
+            // A BasicObject has no #respond_to? to ask, and MRI then takes the answer as no.
+            if (!context.ResolveMethod(obj, "respond_to?", VisibilityContext.AllVisible).Found) {
+                return false;
+            }
             var site = context.GetOrCreateSendSite<Func<CallSite, object, object, object, object>>(
                 "respond_to?", RubyCallSignature.WithImplicitSelf(2));
             return Protocols.IsTrue(site.Target(site, obj, context.EncodeIdentifier(name), true));
@@ -407,13 +411,31 @@ namespace IronRuby.Builtins {
             }
 
             var result = instant.WithZone(RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds), zoneObject);
-            result.ZoneDst = AskZoneDst(context, zoneObject, new RubyTime(localSeconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero));
+            // MRI's zone_localtime asks #dst? about the same UTC reading it gave #utc_to_local.
+            result.ZoneDst = AskZoneDst(context, zoneObject, utcView);
             return result;
         }
 
         /// <summary>
+        /// A Time made from another at a different instant (+, -, round, floor, ceil) keeps its timezone
+        /// object (MRI's TZMODE_COPY), and its offset and dst? come from that object again for the new
+        /// instant (force_make_tm, zone_localtime). A zone name, or a zone with no #utc_to_local, keeps
+        /// the offset and the flag it had.
+        /// </summary>
+        private static RubyTime/*!*/ RezoneShifted(RubyContext/*!*/ context, RubyTime/*!*/ source, RubyTime/*!*/ time) {
+            object zoneObject = source.ZoneObject;
+            time.ZoneObject = zoneObject;
+            time.ZoneDst = source.ZoneDst;
+            if (zoneObject != null && !(zoneObject is MutableString) && RespondTo(context, zoneObject, "utc_to_local")) {
+                return ApplyZoneObjectToInstant(context, time, zoneObject);
+            }
+            return time;
+        }
+
+        /// <summary>
         /// MRI's zone_set_dst: a Time with a timezone object is dst? when the zone's #dst?, given the
-        /// wall-clock reading, says so - and not when the zone has no #dst?.
+        /// time-like object the zone's conversion was given (the UTC reading for #utc_to_local, the
+        /// wall-clock one for #local_to_utc), says so - and not when the zone has no #dst?.
         /// </summary>
         private static bool AskZoneDst(RubyContext/*!*/ context, object/*!*/ zoneObject, RubyTime/*!*/ wallClock) {
             if (!RespondTo(context, zoneObject, "dst?")) {
@@ -1180,7 +1202,7 @@ namespace IronRuby.Builtins {
                 if (found != null) {
                     result.ZoneObject = found;
                     result.ZoneDst = AskZoneDst(context, found,
-                        new RubyTime(result.Seconds + result.UtcOffsetSeconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero));
+                        new RubyTime(result.Seconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero));
                 }
             }
             return result;
@@ -1343,11 +1365,8 @@ namespace IronRuby.Builtins {
 
         private static RubyTime/*!*/ Shift(RubyTime/*!*/ self, ExactNum delta) {
             ExactNum result = self.ToExactSeconds() + delta;
-            var time = RubyTime.FromExactSeconds(result, self.ZoneKind,
+            return RubyTime.FromExactSeconds(result, self.ZoneKind,
                 self.ZoneKind == RubyTimeZoneKind.FixedOffset ? self.UtcOffsetExact : ExactNum.Zero);
-            time.ZoneObject = self.ZoneObject;
-            time.ZoneDst = self.ZoneDst;
-            return time;
         }
 
         [RubyMethod("+")]
@@ -1355,11 +1374,13 @@ namespace IronRuby.Builtins {
             if (seconds is RubyTime) {
                 throw RubyExceptions.CreateTypeError("time + time?");
             }
+            RubyTime result;
             try {
-                return Shift(self, ToExact(context, seconds));
+                result = Shift(self, ToExact(context, seconds));
             } catch (OverflowException) {
                 throw RubyExceptions.CreateRangeError(String.Format("time + {0} out of Time range", context.Inspect(seconds).ToString()));
             }
+            return RezoneShifted(context, self, result);
         }
 
         [RubyMethod("-")]
@@ -1371,11 +1392,13 @@ namespace IronRuby.Builtins {
             if (other is DateTime) {
                 return (self.UtcDateTime - RubyTime.ToUniversalTime((DateTime)other)).TotalSeconds;
             }
+            RubyTime result;
             try {
-                return Shift(self, -ToExact(context, other));
+                result = Shift(self, -ToExact(context, other));
             } catch (OverflowException) {
                 throw RubyExceptions.CreateRangeError(String.Format("time - {0} out of Time range", context.Inspect(other).ToString()));
             }
+            return RezoneShifted(context, self, result);
         }
 
         [RubyMethod("<=>")]
@@ -1666,10 +1689,8 @@ namespace IronRuby.Builtins {
             ExactNum result = ExactNum.Make(rounded, scale.Numerator);
             var time = RubyTime.FromExactSeconds(result, self.ZoneKind,
                 self.ZoneKind == RubyTimeZoneKind.FixedOffset ? self.UtcOffsetExact : ExactNum.Zero);
-            time.ZoneObject = self.ZoneObject;
-            time.ZoneDst = self.ZoneDst;
             time.InheritLocalZone(self);
-            return time;
+            return RezoneShifted(context, self, time);
         }
 
         #endregion
