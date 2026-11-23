@@ -213,6 +213,13 @@ namespace IronRuby.StandardLibrary.Date {
             return CreateCivil(self, year, month, day, ToStart(start));
         }
 
+        // date/format.rb's _strptime for ASCII-only strings (DateStrptime.cs): a Hash, nil, or false
+        // when format.rb has to do it.
+        [RubyMethod("__strptime_ascii", RubyMethodAttributes.PrivateSingleton)]
+        public static object StrptimeAscii(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]MutableString/*!*/ str, [NotNull]MutableString/*!*/ fmt) {
+            return DateStrptime.Parse(context, str, fmt);
+        }
+
         [RubyMethod("civil", RubyMethodAttributes.PublicSingleton)]
         public static RubyDate/*!*/ Civil(RubyClass/*!*/ self,
             [DefaultProtocol, DefaultParameterValue(-4712)]int year,
