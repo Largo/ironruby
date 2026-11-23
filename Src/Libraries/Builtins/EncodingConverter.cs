@@ -127,6 +127,11 @@ namespace IronRuby.Builtins {
             // they go first in the next call, ahead of any new input.
             private string _composedPending = String.Empty;
 
+            // Decoded characters a newline that filled the destination kept from being converted;
+            // they go through EncodeChars first in the next call (the XML escapes and the newline
+            // decorators still apply to them), ahead of any new input.
+            private string _pendingChars = String.Empty;
+
             // How much of this call's output there was when the composer last wrote to it (-1: it
             // has not), which tells whether the composer is what filled the destination.
             private int _composerOutputEnd = -1;
@@ -651,8 +656,14 @@ namespace IronRuby.Builtins {
 
                     _composerOutputEnd = -1;
 
+                    if (_pendingChars.Length != 0) {
+                        char[] pending = _pendingChars.ToCharArray();
+                        _pendingChars = String.Empty;
+                        status = EncodeChars(pending, pending.Length, written, limit);
+                    }
+
                     // characters the composer let go of last time come before any new input
-                    if (_composedPending.Length != 0) {
+                    if (status == null && _composedPending.Length != 0) {
                         status = EncodeComposed(String.Empty, written, limit);
                     }
 
@@ -877,13 +888,9 @@ namespace IronRuby.Builtins {
                         if (newline.Length != 0 && !Emit(AsciiInDestination(newline), written, limit)) {
                             if (consumed) {
                                 i += size;
-                                if (i < count) {
-                                    // the rest of the characters are still to be converted
-                                    _pendingOutput.AddRange(EncodeRemaining(chars, i, count));
-                                }
-                            } else {
-                                _pendingOutput.AddRange(EncodeRemaining(chars, i, count));
                             }
+                            // the rest of the characters are still to be converted, by the next call
+                            _pendingChars = new string(chars, i, count - i) + _pendingChars;
                             return "destination_buffer_full";
                         }
                         if (consumed) {
@@ -982,31 +989,6 @@ namespace IronRuby.Builtins {
                 }
                 consumed = false;
                 return "";
-            }
-
-            /// <summary>
-            /// The characters a full destination left unconverted, encoded as they are, to wait
-            /// in _pendingOutput with the rest of what did not fit.
-            /// </summary>
-            private byte[]/*!*/ EncodeRemaining(char[]/*!*/ chars, int index, int count) {
-                var bytes = new List<byte>();
-                for (int i = index; i < count; i++) {
-                    int c = chars[i];
-                    if (c == '\n' || c == '\r') {
-                        bool consumed;
-                        string newline = TranslateNewline(c, out consumed);
-                        bytes.AddRange(AsciiInDestination(newline));
-                        if (consumed) {
-                            continue;
-                        }
-                    }
-                    try {
-                        bytes.AddRange(EncodeCodepoint(chars, i, 1));
-                    } catch (EncoderFallbackException) {
-                        bytes.AddRange(_replacementBytes);
-                    }
-                }
-                return bytes.ToArray();
             }
 
             private bool IsWideSource {
