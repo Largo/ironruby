@@ -244,11 +244,46 @@ class Set
     enum.nil? and return
 
     if block
-      __do_with_enum__(enum) { |o| add(block[o]) }
+      if __core_set__?
+        __init_block__(enum, block)
+      else
+        __do_with_enum__(enum) { |o| add(block[o]) }
+      end
     else
-      merge(enum)
+      __init_enum__(enum)
     end
   end
+
+  # set_i_initialize: an Array's elements are stored as they are, anything else's come
+  # from its each_entry (or #each), a Set's too. A Set whose #each is Set's own is copied
+  # by its table, which nothing can tell apart. A subclass with Set::SubclassCompatible
+  # merges.
+  def __init_enum__(enum) # :nodoc:
+    return merge(enum) unless __core_set__? && !frozen? && !@__iter_lev__
+    if ::Array === enum
+      __merge_array__(enum)
+    elsif ::Set === enum && enum.method(:each).owner.equal?(::Set) &&
+        enum.method(:each_entry).owner.equal?(::Enumerable)
+      @__hash__.update(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
+    else
+      __merge_each__(enum)
+    end
+  end
+  private :__init_enum__
+
+  # set_initialize_with_block: what the block answers is stored without #add.
+  def __init_block__(enum, block) # :nodoc:
+    if ::Array === enum
+      i = 0
+      while i < enum.__send__(:__ary_size__)
+        __store__(block[enum.__send__(:__ary_at__, i)])
+        i = i.succ
+      end
+    else
+      __do_with_enum__(enum) { |o| __store__(block[o]) }
+    end
+  end
+  private :__init_block__
 
   # Makes the set compare its elements by their identity and returns
   # self.  This method may not be supported by all subclasses of Set.
@@ -436,6 +471,9 @@ class Set
   # Returns true if the set is a superset of the given set.
   def superset?(set)
     case
+    when ::Set === set && __core_set__?
+      other = set.__send__(:__ir_hidden_ivar__, :@__hash__)
+      @__hash__.size >= other.size && __table_in__(other, @__hash__)
     when set.instance_of?(self.class) && @__hash__.respond_to?(:>=)
       @__hash__ >= set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
@@ -449,6 +487,9 @@ class Set
   # Returns true if the set is a proper superset of the given set.
   def proper_superset?(set)
     case
+    when ::Set === set && __core_set__?
+      other = set.__send__(:__ir_hidden_ivar__, :@__hash__)
+      @__hash__.size > other.size && __table_in__(other, @__hash__)
     when set.instance_of?(self.class) && @__hash__.respond_to?(:>)
       @__hash__ > set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
@@ -462,6 +503,9 @@ class Set
   # Returns true if the set is a subset of the given set.
   def subset?(set)
     case
+    when ::Set === set && __core_set__?
+      other = set.__send__(:__ir_hidden_ivar__, :@__hash__)
+      @__hash__.size <= other.size && __table_in__(@__hash__, other)
     when set.instance_of?(self.class) && @__hash__.respond_to?(:<=)
       @__hash__ <= set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
@@ -475,6 +519,9 @@ class Set
   # Returns true if the set is a proper subset of the given set.
   def proper_subset?(set)
     case
+    when ::Set === set && __core_set__?
+      other = set.__send__(:__ir_hidden_ivar__, :@__hash__)
+      @__hash__.size < other.size && __table_in__(@__hash__, other)
     when set.instance_of?(self.class) && @__hash__.respond_to?(:<)
       @__hash__ < set.__send__(:__ir_hidden_ivar__, :@__hash__)
     when set.is_a?(Set)
@@ -484,6 +531,22 @@ class Set
     end
   end
   alias < proper_subset?
+
+  # Whether every key of +a+ is one of +b+ (set_le_i): the tables, not #each or #include?,
+  # as core Set compares with another Set.
+  def __table_in__(a, b) # :nodoc:
+    a.each_key { |o| return false unless b.key?(o) }
+    true
+  end
+  private :__table_in__
+
+  # Whether +a+ and +b+ share a key (set_i_intersect's walk of the smaller table).
+  def __tables_meet__(a, b) # :nodoc:
+    a, b = b, a if a.size > b.size
+    a.each_key { |o| return true if b.key?(o) }
+    false
+  end
+  private :__tables_meet__
 
   # Returns 0 if the set are equal,
   # -1 / +1 if the set is a proper subset / superset of the given set,
@@ -508,6 +571,7 @@ class Set
   def intersect?(set)
     case set
     when Set
+      return __tables_meet__(@__hash__, set.__send__(:__ir_hidden_ivar__, :@__hash__)) if __core_set__?
       if size < set.size
         any?(set)
       else
@@ -658,16 +722,87 @@ class Set
   def merge(*enums, **nil)
     __check_frozen__
     raise RuntimeError, "cannot add to set during iteration" if @__iter_lev__
-    enums.each do |enum|
-      if enum.instance_of?(self.class)
-        @__hash__.update(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
-      else
-        __do_with_enum__(enum) { |o| add(o) }
-      end
-    end
-
+    enums.each { |enum| __merge_enum__(enum) }
     self
   end
+
+  # set_merge_enum_into: core Set fills its table from another Set or an Array without
+  # calling #each or #add, and from anything else with each_entry (or #each), still without
+  # #add. A subclass with Set::SubclassCompatible adds each element with #add.
+  def __merge_enum__(enum) # :nodoc:
+    if enum.instance_of?(self.class)
+      @__hash__.update(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
+    elsif !__core_set__?
+      __do_with_enum__(enum) { |o| add(o) }
+    elsif ::Array === enum
+      __merge_array__(enum)
+    elsif ::Set === enum
+      @__hash__.update(enum.__send__(:__ir_hidden_ivar__, :@__hash__))
+    else
+      __merge_each__(enum)
+    end
+    self
+  end
+  private :__merge_enum__
+
+  # The Array's storage, not its #each, #size or #[]: a subclass's own are not called.
+  def __merge_array__(ary) # :nodoc:
+    h = @__hash__
+    if ary.instance_of?(::Array)
+      ary.each { |o| h[o] = true }
+    else
+      i = 0
+      while i < ary.__send__(:__ary_size__)
+        h[ary.__send__(:__ary_at__, i)] = true
+        i = i.succ
+      end
+    end
+  end
+  private :__merge_array__
+
+  # set_merge_enum_into's rb_block_call of each_entry (or #each), whose block stores the
+  # element without #add. Enumerable#each_entry is inlined when it is the receiver's: it
+  # packs what #each yields (no value is nil, several an Array) as enum_yield does. The
+  # block raises as #add did when the enumerable froze or began iterating the set (MRI
+  # stores the element regardless; the table here, a Hash, would raise its own error).
+  def __merge_each__(enum) # :nodoc:
+    if enum.respond_to?(:each_entry)
+      if enum.method(:each_entry).owner.equal?(::Enumerable)
+        __merge_one_each__(enum) and return
+        enum.each { |*v| __store__(v.size == 1 ? v[0] : (v.empty? ? nil : v)) }
+      else
+        enum.each_entry { |o| __store__(o) }
+      end
+    elsif enum.respond_to?(:each)
+      enum.each { |o| __store__(o) }
+    else
+      raise ArgumentError, "value must be enumerable"
+    end
+  end
+  private :__merge_each__
+
+  # #add without the call of a subclass's own.
+  def __store__(o) # :nodoc:
+    h = @__hash__
+    h.frozen? and __check_frozen__
+    if @__iter_lev__ && !h.key?(o)
+      raise RuntimeError, "can't add a new item into set during iteration"
+    end
+    h[o] = true
+  end
+  private :__store__
+
+  # A Range's or an arithmetic sequence's own #each yields one value at a time, so the
+  # block takes it as it is. Answers nil for any other #each.
+  def __merge_one_each__(enum) # :nodoc:
+    c = enum.class
+    return unless (c.equal?(::Range) || c.equal?(::Enumerator::ArithmeticSequence)) &&
+      enum.method(:each).owner.equal?(c)
+    h = @__hash__
+    enum.each { |o| h[o] = true }
+    true
+  end
+  private :__merge_one_each__
 
   # Deletes every element that appears in the given enumerable object
   # and returns self.
@@ -694,7 +829,15 @@ class Set
   #     Set[1, 3, 5] - Set[1, 5]                #=> #<Set: {3}>
   #     Set['a', 'b', 'z'] - ['a', 'c']         #=> #<Set: {"b", "z"}>
   def -(enum)
-    dup.subtract(enum)
+    return dup.subtract(enum) unless __core_set__?
+    n = dup
+    h = n.__send__(:__ir_hidden_ivar__, :@__hash__)
+    if ::Set === enum
+      enum.__send__(:__ir_hidden_ivar__, :@__hash__).each_key { |o| h.delete(o) }
+    else
+      __do_with_enum__(enum) { |o| h.delete(o) }
+    end
+    n
   end
   alias difference -
 
@@ -705,7 +848,17 @@ class Set
   #     Set['a', 'b', 'z'] & ['a', 'b', 'c']    #=> #<Set: {"a", "b"}>
   def &(enum)
     n = __new_like__
-    if enum.is_a?(Set)
+    if ::Set === enum && __core_set__?
+      # set_i_intersection: the smaller table walked, the larger one looked up
+      h = n.__send__(:__ir_hidden_ivar__, :@__hash__)
+      mine = @__hash__
+      other = enum.__send__(:__ir_hidden_ivar__, :@__hash__)
+      if other.size > mine.size
+        mine.each_key { |o| h[o] = true if other.key?(o) }
+      else
+        other.each_key { |o| h[o] = true if mine.key?(o) }
+      end
+    elsif enum.is_a?(Set)
       if enum.size > size
         each { |o| n.add(o) if enum.include?(o) }
       else
@@ -716,9 +869,11 @@ class Set
       # enumerable's #each may look at what its block answers. Kept and called after
       # #& has returned, it still adds to the result but answers nil, as MRI's does
       # (test_set.rb's test_and).
+      h = n.__send__(:__ir_hidden_ivar__, :@__hash__)
+      mine = @__hash__
       done = false
       begin
-        __do_with_enum__(enum) { |o| n.add(o) if include?(o); done ? nil : o }
+        __do_with_enum__(enum) { |o| h[o] = true if mine.key?(o); done ? nil : o }
       ensure
         done = true
       end
@@ -749,8 +904,15 @@ class Set
       return n
     end
     n = dup
-    enum = __alloc_like__.merge(enum) unless enum.is_a?(Set)
-    enum.each { |o| n.add(o) unless n.delete?(o) }
+    h = n.__send__(:__ir_hidden_ivar__, :@__hash__)
+    enum = __alloc_like__.merge(enum) unless ::Set === enum
+    enum.__send__(:__ir_hidden_ivar__, :@__hash__).each_key do |o|
+      if h.key?(o)
+        h.delete(o)
+      else
+        h[o] = true
+      end
+    end
     n
   end
 
