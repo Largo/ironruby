@@ -224,4 +224,17 @@ c = []
 2.times { eval("define_method(:evb24) { /blk/ }"); c << evb24 }
 puts "24. literals in defs: #{r.inspect} #{[a[0].equal?(a[1]), a[0].equal?(a[2]), b[0].equal?(b[1]), c[0].equal?(c[1])].inspect}"
 
+# 25. blocks and loops of eval'd text that run past the interpreter's compilation threshold (an
+# eval's is higher than other code's): a method redefined, a closure local, a /o regexp, break and
+# next while they run; a while loop whose locals the binding keeps; a define_method block called on
+def f25(i) = i
+src25 = "acc = []; o = nil\n1500.times { |i| (def f25(i) = -i) if i == 700; (def f25(i) = i * 2) if i == 1200\n" \
+        "o = /o\#{i}/o; next if i.odd?; break if i == 1400; acc << f25(i) }\n" \
+        "j = 0; s = 0; while j < 3000; s += j; j += 1; end\n" \
+        "define_method(:g25) { |x| x + j }\n[acc.size, acc.sum, acc[349..352], o, s]"
+r = 3.times.map { eval(src25) }
+g = (1..2500).sum { |x| g25(x) }
+b25 = binding; eval("k25 = 0; 2000.times { k25 += 1 }", b25)
+puts "25. hot blocks in eval: #{r.uniq.inspect} #{r.size} #{g} #{b25.local_variable_get(:k25)}"
+
 puts 'end'
