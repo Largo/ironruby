@@ -3120,7 +3120,10 @@ namespace IronRuby.Runtime {
                         // rb_singleton_class_clone_and_attach clones along with it
                         var meta = singleton.ImmediateClass;
                         if (meta.IsSingletonClass && !meta.IsDummySingletonClass && ReferenceEquals(meta.SingletonClassOf, singleton)) {
-                            singletonDup.GetOrCreateSingletonClass().InitializeMembersFrom(meta);
+                            var metaDup = singletonDup.GetOrCreateSingletonClass();
+                            metaDup.InitializeMembersFrom(meta);
+                            // with its instance variables, as for the singleton class above
+                            CopyInstanceData(meta, metaDup, false);
                         }
 
                         SetInstanceSingletonOfNoLock(target, ref targetData, singletonDup);
