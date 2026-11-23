@@ -227,6 +227,15 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The innermost <paramref name="maxFrames"/> Ruby frames of the calling thread, read from the interpreted frames and the
+        /// compiled frames' records as <see cref="GetCallerFrame"/> reads them: without the frames of library methods.
+        /// </summary>
+        internal static RubyArray/*!*/ GetRecordedFrames(RubyContext/*!*/ context, int maxFrames) {
+            return new RubyStackTraceBuilder(context, InterpretedFrame.CurrentFrame.Value,
+                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), Precompiled.PrecompiledFrames.CaptureLoopLines(), maxFrames).RubyTrace;
+        }
+
+        /// <summary>
         /// Builds backtrace for the exception if it wasn't built yet. 
         /// Captures a full stack trace starting with the current frame and combines it with the trace of the exception.
         /// Called from compiled code.

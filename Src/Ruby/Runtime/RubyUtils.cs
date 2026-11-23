@@ -1454,8 +1454,12 @@ namespace IronRuby.Runtime {
         private static string/*!*/ DefaultEvalFileName(RubyContext/*!*/ context) {
             string path;
             int line;
-            if (!context.TryGetCurrentSourceLocation(out path, out line) || path == null) {
-                return "(eval)";
+            // The frame of the eval has a scope, so it is an interpreted frame or a compiled one with a record: the record
+            // walk finds it without the CLR stack walk, which cost 30-90 us of the ~250 of such an eval (gap 31).
+            if (!context.TryGetCurrentSourceLocation(true, out path, out line) || path == null) {
+                if (!context.TryGetCurrentSourceLocation(out path, out line) || path == null) {
+                    return "(eval)";
+                }
             }
             return "(eval at " + path + ":" + line + ")";
         }

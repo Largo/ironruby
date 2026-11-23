@@ -1019,7 +1019,9 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("negative level ({0})", skipFrames);
             }
 
-            var frames = RubyExceptionData.CreateBacktrace(context, skipFrames);
+            // caller(n, length) and caller_locations(n, length): the frames past the last one asked for are not made
+            // (most of the cost on a deep stack, after the CLR's walk itself).
+            var frames = (length > 0) ? RubyExceptionData.CreateBacktrace(context, skipFrames, length) : RubyExceptionData.CreateBacktrace(context, skipFrames);
             if (frames.Count == 0 && skipFrames > 0 && skipFrames > RubyExceptionData.CreateBacktrace(context, 0).Count) {
                 return null;
             }
