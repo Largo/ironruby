@@ -211,4 +211,17 @@ r = 300.times.map { t23 }
 v = 300.times.map { eval("class C23; [self, 1]; end") }
 puts "23. class body: #{r.uniq.inspect} #{r.size} #{v.uniq.inspect}"
 
+# 24. literals inside a method or block the eval'd text defines, which are compiled at their first
+# call and not with the text: each eval of the same text makes a method with its own `/o' regexp,
+# and a literal regexp or range is one object per method, not one for every eval of the text
+r = []
+3.times { |i| eval("def evo24(x) = /\#{x}/o"); r << evo24("v#{i}") << evo24("w#{i}") }
+a = []
+2.times { eval("def evl24 = /lit/"); a << evl24 << evl24 }
+b = []
+2.times { eval("def evr24 = (1..2)"); b << evr24 }
+c = []
+2.times { eval("define_method(:evb24) { /blk/ }"); c << evb24 }
+puts "24. literals in defs: #{r.inspect} #{[a[0].equal?(a[1]), a[0].equal?(a[2]), b[0].equal?(b[1]), c[0].equal?(c[1])].inspect}"
+
 puts 'end'
