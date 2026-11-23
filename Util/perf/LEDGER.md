@@ -1052,6 +1052,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 23. **A method made by `define_method` is called at 2.3 times CRuby's time** (64 against
     28 ns; a `def` of the same body 31; YJIT 2-5 ns): the method JIT takes no block as a
     method body. Rails-style code defines most of its small methods this way.
+    Tried in round thirty-one (see Rejected, perf/dmeth): without the method JIT the call is
+    only about 1.15 times a `def`'s, and a pooled BlockParam and a direct rule bought 1.16-1.2;
+    what is left is the JIT taking a block body (a `JitStub` over a `BlockDefinition`).
 24. **Struct with `keyword_init: true`: creating an object is 3.2 times CRuby** (1162
     against 369 ns; positional creation is level at 142 against 131). And
     `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
@@ -1152,6 +1155,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the version on every iteration (`Object.new.extend(M)` in a loop, gap 19) has not
     been timed - each call of each such method then takes the class hierarchy lock once
     per lookup, as each generic constant site does.
+    A fault of the same guard, found in round thirty-one and still open: a compiled loop
+    that is running and has folded a constant goes on answering it after a nearer constant
+    of that name appears (another thread defines `M::SHL10` lexically nearer than the folded
+    `Object::SHL10`, a superclass gets `SHS10`, an included module brings `SHI10`); CRuby's
+    next read answers the new one. A new constant moves `ConstantAccessVersion`, which the
+    loop's safe point does not compare. The fix that moved the code epoch for any new
+    constant whose name had been folded was taken back (see Rejected, rminor's epoch move):
+    the name cannot tell a constant that shadows the folded one from any other of that name.
+    The next attempt keys on where the constant was found (the modules of the folded lookup's
+    path), and is measured on a loop beside a thread that defines the same name elsewhere.
 30. **`Binding#local_variable_get`, `_set`, `_defined?` and `local_variables` are an
     `eval` of source text each** (the prelude, `class Binding`): 436 us for a set against
     0.1 on CRuby. `ERB#result_with_hash` sets one per key (237 times CRuby), irb sets `_`
@@ -1165,6 +1178,18 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     parse and the bridge, the transformation, the light compiler's first run), and a
     cache of the compiled code by source text, file, line and the scope's layout, which
     is what a template evaluated per request needs.
+    Measured and tried in round thirty-one (see Rejected, perf/evalc): of about 250 us for
+    `eval('1 + 1')`, the native parse is 20, prism's load 10, the bridge 23, the
+    transformation 60, the light compile and the default file name the rest; with no file
+    given, the name `(eval at f:l)` takes a CLR stack walk of 30-90 us (`caller(0)` costs
+    15-20 us, CRuby's 2.9). A cache of the compiled code made a hit cost 1 us with a file
+    and 33 with none, and `erb_result` 0.41 of its time; it was rejected because compiled
+    code keeps per-site state in boxes of its own that a second eval must not share.
+    Round thirty-two (see Landed, perf/caller): the default file name is read from the frame
+    records, without the CLR walk: `eval` without a file at 5 and 50 frames deep 0.60 and
+    0.46 of its time, `instance_eval` and `binding.eval` about half. Left: the parse, bridge,
+    transformation and compilation of every text (about 15 us at the least, CRuby's 2), and
+    `caller(0)`/`caller_locations` paying the whole CLR walk.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1174,6 +1199,15 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (`Object.new.extend(M)` at 200 to 300 times) is the same family. Untried: what one
     `def o.x` invalidates, counted (rules rebuilt, typed bodies respecialized), on
     `ostruct` of `app-shapes.rb`.
+    Counted in round thirty-one (see Landed, perf/sdef): of `OpenStruct.new`'s time most was
+    the rule of `respond_to?(name, true)` built and compiled anew for each object's singleton
+    class (0.1-0.2 ms each); sharing that rule made it 663 -> 59 us (CRuby 8.7). `def o.x`
+    (27 us), `singleton_class` and `Class.new` are unchanged.
+    Round thirty-two (see Landed, perf/sclass): from the third module on, a `def` takes a
+    delegate from one compiled factory: `def o.x` with its first call 0.24-0.27 of its time.
+    Left: `singleton_class` (1.4 us here, mostly the class itself), `define_singleton_method`
+    (4-9 us, which the factory does not cover: its body is a block), `extend` (gap 19), and
+    the scope per call of a factory-made body.
 
 33. **Three differences from CRuby in interpolation**, found by the probes of
     `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
@@ -1192,6 +1226,144 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **Gate of 2026-11-23 for round thirty-two** (perf/caller, perf/stdre, perf/invoice,
+  perf/sclass): the branch at dbe0a3b3 against b7b71c89, Release net10.0: **PASS**.
+  IronRuby.Tests PASSED on both trees, no failure name on either. 35 matrices in seven modes
+  (JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`,
+  ReadyToRun, and the baseline): CRuby's output but for the differences the baseline has too,
+  and `value-object-matrix` two lines closer to it (the `Data` rows the round fixed). Two that
+  looked new were not: `block-loop-matrix`'s nested `Range#each` frame, missing from the
+  backtrace and from `caller` of a raise in the inner block, is missing in 2 of 20 runs of each
+  tree with the JIT on (and was a ReadyToRun-only difference in round thirty-one's gate); and
+  on the ReadyToRun host `caller-matrix` row 8 sometimes loses the `Kernel#eval` frame in the
+  first iterations, which the baseline does too with `DOTNET_TieredPGO=0` (3 of 5 runs).
+  Recursion a million deep: SystemStackError on both modes. ruby/spec, all five suites
+  (32,285 examples): no failure the known list does not name. The fourteen benchmarks verify;
+  `app-shapes.rb` prints CRuby's checksum for all 26 shapes, JIT on and off.
+  Timing: AWFY, 12 iterations, both orders: geomean 0.995 and 0.997 (new/base), no benchmark
+  more than 5% slower in both. micro-table: no line more than 5% slower in both orders.
+  `app-shapes.rb` five rounds each order: `uri` 0.38 and 0.40 of its time, `time` 0.63 and
+  0.65, `invoice_build` 0.64 and 0.65, `invoice_render` 0.69 and 0.71, the rest overlapping.
+  One order of `caller-shapes.rb`, `sdef-shapes.rb` and perf/evalc's eval shapes put `dsm` at 1.99,
+  `eval_file_5` 1.45, `eval_file_50` 1.40 and `caller0_5` 1.13; each in processes of its own,
+  eight of each tree taken alternately, medians (minima) new/base: 0.82 (1.09), 1.00 (0.99),
+  0.91 (0.89), 0.97 (1.12) - the state an earlier shape left behind, not a cost. Bytes per
+  iteration 1.012 (Towers 156 -> 175 kB, DeltaBlue 14.4 -> 14.8 MB; the rest within 0.5%).
+  Start-up on the ReadyToRun host, ten alternating runs, best ms (base -> new): `-e 1` 403 ->
+  394, `gem --version` 508 -> 503, `gem list` 1088 -> 1093, `require "irb"` 993 -> 982, `irb`
+  1306 -> 1312.
+
+- **perf/caller (round thirty-two, 2026-11-23, 902a62ac, merged in 28a71259) - an eval's
+  default file name from the frame records, and `caller(n, length)` makes `length` frames**
+  (gap 31). `eval(str)` without a file names its code `(eval at f:l)`, which took a CLR stack
+  walk of the whole Ruby backtrace (30-90 us); `RubyUtils.DefaultEvalFileName` now reads the
+  location from the interpreted frames and the compiled frames' records
+  (`RubyExceptionData.GetRecordedFrames`, at most 8 frames) and walks the stack only when they
+  name no file. `Kernel#caller(n, length)` builds `length` frames, and `require_relative` and
+  `__dir__` ask `caller(0, 1)`. New `Util/caller-matrix.rb` (probes of caller, caller_locations
+  and the eval file name from methods, blocks, evals, class bodies, define_method, threads) and
+  `Util/bench/caller-shapes.rb`. In the gate (one order): `eval_5` 0.60, `eval_50` 0.46,
+  `caller1_50` 0.62, `loc1_50` 0.78 of its time; perf/evalc's eval shapes: `eval_bind` 0.58,
+  `instance_eval` 0.51, `eval_distinct` 0.51, `erb_src_eval` 0.70. Left: `caller(0)` and
+  `caller_locations` still pay the CLR walk, which is most of what they cost (.NET has no walk
+  of part of the stack); the records lack the library methods' frames, so they cannot replace
+  it for a backtrace.
+
+- **perf/stdre (round thirty-two, 2026-11-23, 128bf39f and 2d8741b0, merged in 0a9b4be6) -
+  MatchData's named groups from a table per CLR regex, and `Date._strptime` without
+  `method_missing`.** `MatchData#[]` with a name, `named_captures` and `names` built the map of
+  Ruby names to CLR group numbers anew for every match (`RegexpTransformer.GetRubyGroupName`
+  over every group); `MatchData.NamedGroupTable` is made once per CLR regex
+  (a `ConditionalWeakTable`) and shared by its matches. `URI::RFC3986_Parser#split` reads
+  eleven named groups per URI. And `date/format.rb`'s `_strptime` (a port of 1.9's) tokenized
+  the format with a regexp per directive, matched each literal with a new Regexp, and set the
+  results through `Format::Bag#method_missing`; it now tokenizes with a loop, matches a literal
+  with `start_with?` (a literal in an incompatible encoding answers nil, as CRuby's does:
+  4d15a1c2), and the bag has accessors. New `Util/stdre-matrix.rb` and
+  `Util/strptime-matrix.rb` (133 rows). `uri` of `app-shapes.rb` 0.38-0.40 of its time, `time`
+  0.63-0.65. Left in `time`: the `case` over directives and the adaptive compilation of
+  `_strptime_i`'s large body.
+
+- **perf/invoice (round thirty-two, 2026-11-23, 453a8844, merged in 13d6eef4) - a `Data` value
+  built without the bookkeeping when every member is given.** `Data#initialize` checked
+  missing and unknown keywords and built its error lists on every call; when the keywords are
+  exactly the members (as many, each a member) it stores them at once and freezes. `Data#with`
+  reads the values without `to_h`, and `Data.new` with positional values builds the keywords
+  with a loop. 14 new rows in `Util/value-object-matrix.rb`. `invoice_build` 0.64-0.65,
+  `invoice_render` 0.69-0.71. Left: `Data.new` with positional values is about 4 us, CRuby's
+  0.3.
+
+- **perf/sclass (round thirty-two, 2026-11-23, 98e19d37, 2523d7df and 35fac274, merged in
+  dbe0a3b3) - one compiled factory for a `def` run for many modules** (gap 32). A `def` run
+  for one module after another (`def o.x` per object, `Class.new { def a; end }` in a loop)
+  transformed and compiled its body for each module, most of the 24 us of a `def o.x` and its
+  first call. From the third module on (`IR_DEF_FACTORY`, 0 turns it off) the body is compiled
+  once more as a factory taking the declaring scope and module, compiled to IL (the light
+  compiler's closure rewrite of the nested body recursed without end when a factory-made body
+  ran hot), and each further module gets a delegate from it. Kept out: a body with `super`
+  (one shared site would collect a rule per class), with a Regexp or Range literal (which
+  object, or which `/o` value, a module's method answers would depend on how many modules came
+  first: `AstGenerator.HasLiteralState`), with refinements or coverage. A factory-made body is
+  not a light frame, so it costs a scope per call. New `Util/sdef-matrix.rb` section 10 and
+  `Util/bench/sdef-shapes.rb`. `def_o_x` 0.24-0.27 of its time, `Class.new { def a = 1
+  }.new.a` 0.35; hot calls of a factory-made body unchanged. Left: the IL compile of the
+  factory (once per body and label) and the scope per call of the bodies it makes.
+
+- **Gate of 2026-11-23 for round thirty-one** (perf/sdef, perf/rminor, perf/dmeth's matrix; the
+  eval cache and the epoch move taken back): the branch at aa7474c1 against 58c73a6a, Release
+  net10.0: **PASS**. IronRuby.Tests PASSED on both trees (`Exception_CauseRaisedInClause1`
+  passed too), no failure name on either. 30 matrices in seven modes (JIT on, `-X:NoJIT
+  -X:NoOSR`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, ReadyToRun, and the
+  baseline): CRuby's output but for the differences the baseline has too (`eval-matrix` row 8,
+  the regexp warning IronRuby never gives in eval; `int-matrix` 16 lines; `raise-matrix` and
+  `refinement-matrix`'s anonymous class addresses; `block-loop-matrix` on the ReadyToRun
+  host), and `jit-matrix`'s `is_a?` rows, which the baseline fails. Recursion a million deep:
+  SystemStackError on every mode. ruby/spec, all five suites (32,285 examples): no failure the
+  known list does not name. The fourteen benchmarks verify; `app-shapes.rb` prints CRuby's
+  checksum for all 26 shapes, JIT on and off.
+  Timing: AWFY, 12 iterations, both orders: geomean 1.005 and 0.996 (new/base). Towers was
+  slower in both (1.07, 1.06) and Storage in one (1.08); in separate processes, eight of each
+  taken alternately, Towers' median 97.9 against 95.9 ms and its minimum 91.9 against 93.4,
+  Storage 83.5 against 84.0: the same. micro-table: `selfcall` and `veach1` slower in both
+  orders; `ab.rb`, six rounds each order, every line overlapping (0.97-1.09). `app-shapes.rb`
+  five rounds each order: `ostruct` 0.57 and 0.51, the rest overlapping but `forwardable`
+  (0.87 in one order, 1.00 in the other) and `json_generate` (0.91, 1.02). Bytes per
+  iteration 1.002. Start-up on the ReadyToRun host, ten alternating runs, best and median ms
+  (base -> new): `-e 1` 421/443 -> 405/435, `gem --version` 532/565 -> 514/558, `gem list`
+  1126/1185 -> 1132/1193, `require "irb"` 1018/1057 -> 1041/1097, `irb` 1463/1557 ->
+  1546/1584 (the best 6% apart, the medians 2%; nothing in the round runs at start-up but
+  `respond_to?` sites binding).
+
+- **perf/sdef (round thirty-one, 2026-11-22, 2bcbf532, merged in 4398562f) - the rule of a
+  `respond_to?` call that cannot be folded is shared across classes** (gap 32).
+  `RubyCallAction.BindShared` refused every call resolving to `Kernel#respond_to?`, because
+  `TryBuildRespondTo` folds `respond_to?(:name)` to a constant for the receiver's class. But
+  it folds only a call with one plain argument and no block, and every other `respond_to?`
+  site got a rule built and compiled for each class it saw: `respond_to?(name, true)` in
+  `OpenStruct#is_method_protected!`, which sees a new singleton class with every OpenStruct
+  (0.1-0.2 ms a rule, `IR_BIND_TRACE=1`). `DispatchIntrinsics.MaySpecialize` now takes the
+  call signature and keeps only a foldable site out of sharing.
+  `OpenStruct.new` of three keys 663 -> 59 us (CRuby 8.7). In the round's gate (`ab.rb`, both
+  orders): `ostruct` of `app-shapes.rb` 0.57 and 0.51 of its time; `sdef-shapes.rb`
+  `ostruct3_new` 0.33, `ostruct_app` 0.39, `ostruct3` 0.75; `def o.x`, `singleton_class`,
+  `define_singleton_method`, `Class.new` unchanged. `Util/sdef-matrix.rb` (new, 43 rows: hot
+  sites across singleton classes and run-time definitions) prints CRuby's output in every
+  mode.
+
+- **perf/rminor (round thirty-one, 2026-11-22, merged in a7b4e435) - `is_a?` with a non-module
+  raises CRuby's TypeError, and the review's minor findings on the tools.**
+  `is_a?`/`kind_of?`/`instance_of?` with nil raised a CLR `ArgumentNullException` and with
+  another non-module the binder's conversion error; CRuby 4.0 raises `TypeError: class or
+  module required` for both (the "Regressions" entry). A CLR type group is still taken
+  (495a9aa2). New test `Kernel_IsAModuleRequired1`. And: the census names a method's own
+  refusal, not that of a callee screened on the way (`JitScreen._rejectedDetail`); `census.rb`
+  matches trace records by expanded path, line and method; `alloc.rb` keeps each benchmark's
+  two iteration counts apart; jit-raise, jit-scan, jit-construct, osr-array and parked-scope
+  matrices run the rows they meant to; `LoopTests.BlockLoopNested1` redefines
+  `Integer#times` only after its loop has progressed; `prism_walk` of `app-shapes.rb` parses a
+  whole module. Its third change, the epoch move for a shadowing constant, was taken back
+  (see Rejected).
 
 - **Gate of 2026-11-22 for perf/lrescue**: the branch at df493d8c against master at dbf4a4f4,
   Release net10.0: **PASS**, on the second run. The first stopped at IronRuby.Tests: `JitCensus1`
@@ -1315,6 +1487,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   - Found on the baseline, not fixed: `local_variables` lists keyword parameters in declaration
     order where CRuby lists the required ones first (`def m(a, k: 1, j:)`: `[:a, :j, :k]`); and
     an exception raised with an interpolated message reports the `def` line in `backtrace[0]`.
+
+- **The whole gate for #239 (rounds eleven to twenty-eight, the review fixes, master at
+  7fb0cbcb merged in), 2026-11-22, on 9de71602 against 7fb0cbcb: PASS.** Run after the
+  merge, because the review fixes had had the tests and the matrices but no sweep and no
+  timing. IronRuby.Tests on both trees: the same one failure
+  (`Exception_CauseRaisedInClause1`), no other. Twenty-seven matrices under CRuby and
+  seven ways of running the branch (JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`,
+  `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, the ReadyToRun host): CRuby's output but for
+  the known differences that master has too (`int-matrix`'s Integer hashes, addresses in
+  `raise-` and `refinement-matrix`, the ReadyToRun host's missing `Range#each` frame in
+  `block-loop-matrix`); master at 7fb0cbcb differs from CRuby in `binding-lvar` (46 lines),
+  `jit` (26), `osr-array` (10) and `block-loop` (2), which the branch fixed. A million-deep
+  recursion through four of the cheaper frames is SystemStackError with the JIT on and
+  off; `ivar-stress.rb` three times OK; the fourteen benchmarks verify; `app-shapes.rb`
+  prints CRuby's checksums with the JIT on and off; `Util/ci-sweep.sh` of all five suites,
+  32,285 examples, nothing the known-failures list does not name.
+  Timing, against 7fb0cbcb: AWFY geomean 0.864 and 0.848 in the two orders (NBody 0.46,
+  Bounce 0.59, List 0.71-0.73, Havlak 0.86-0.87, Json 0.78-0.85, Richards 0.85-0.92), no
+  benchmark more than 5% slower in both orders (Towers 1.04 and 1.01, Queens 1.02 and
+  1.01); bytes geomean 0.764 (NBody 1.36 GB -> 152 MB, Havlak 2.59 -> 1.87 GB, DeltaBlue
+  24.5 -> 15.7 MB, Queens 41 -> 30 MB, Bounce 11.0 -> 7.3 MB). The micro table: fourteen
+  lines faster in both orders (`rangeeach` 0.39, `abs` 0.67-0.78, `blkattr` 0.67-0.70,
+  `s_each1`, `s_times1`, `s_map1`/`2`/`4`, `veach1`/`2`, `ivar_rw`, `while10`), none
+  slower in both. `app-shapes.rb`, five rounds each way: `erb_result` 0.28 and 0.30,
+  `ostruct` 0.89-0.91; `gem_requirement` 1.13 and 1.11, and in eight more rounds each way
+  alone 0.88 and 1.03 with the ranges inside each other and 14 methods specialized
+  against 12. A loop and a method folding a constant beside a thread that extends objects
+  and defines constants, singleton methods and classes: 936-1163 ms against 1163-1381,
+  invalidations 0 against 8. Start-up on the ReadyToRun host, ten runs: `-e 1`, `gem list`,
+  `irb` within 4% on minima and medians; `gem --version` 1.13 and `require "irb"` 1.00 on
+  minima at first, then thirty alternating runs each: medians 0.975 and 0.996, the first
+  quartiles 1.02 and 1.00, the minima single samples.
 
 - **Gate of 2026-11-21 for perf/jbreak**: the branch at 9bc85a93 against master at 8251113c,
   Release net10.0: **PASS**. IronRuby.Tests 1,292 executed and PASSED on both trees. 34 matrices
@@ -3345,6 +3549,79 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/evalc da03f675 and its second pass (round thirty-one, 2026-11-22) - a cache of the
+  compiled code of eval'd strings** (gap 31). Merged, then taken out (f133bcfa) after an
+  independent review; the second pass that fixed the review's points was rejected too.
+  - The cache: per RubyContext, 256 entries least recently used first, under a lock; the key
+    the bytes and encoding, the file (or the default name) and line, module eval or not,
+    `$VERBOSE`, the frame label and block depth, the method's name and parameters, the
+    visible locals and the modules constants are looked up in; not kept for texts over
+    64 KB, keyword frames, isolated procs, Coverage, or a compile that warned.
+  - Timing (`ab.rb`, ns, unchanged -> cached; CRuby): `eval('1 + 1')` 63,202 -> 22,457
+    (4,182), `eval` with a binding 34,003 -> 18,474, `instance_eval` 34,010 -> 18,284, an ERB
+    template's `result` 77,228 -> 7,492 (18,151), `erb_result` of `app-shapes.rb` 0.41. A hit
+    with a file costs 1.05 us; one without a file 33, nearly all of it the stack walk that
+    names `(eval at f:l)` (`TryGetCurrentSourceLocation` builds a whole CLR `StackTrace`).
+  - **Why not kept: compiled code is not only code.** It keeps per-site state in boxes of its
+    own, and a second eval of the same text must get fresh ones. The review found a `/.../o`
+    regexp evaluated once per entry instead of once per eval (`eval('/#{x}/o')` for three
+    `x`: `/v0/` three times), an `END {}` registered once, regexp and range literals the same
+    object across evals, an entry whose module was collected never evicted (2,048 entries
+    in an LRU of 256 after 20,000 `Object.new.instance_eval`), and a miss 1.25-1.4 times an
+    uncached eval. The second pass fixed all of those for the text's own body, and the
+    same faults remained one level down: a `def` or a block in the text is compiled at its
+    first call, after the cache has looked, so `eval("def evo(x) = /\#{x}/o")` three times
+    still gave `/v0/` for all three methods, and a literal in such a method was one object
+    for both evals (`Util/eval-matrix.rb` row 24 now).
+  - Learned: (1) the 250 us of an eval are parse 20, load 10, bridge 23, transformation 60,
+    light compile and file name the rest; (2) without a file, the stack walk alone bounds a
+    cached eval at 33 us - the next attempt needs a cheap caller line first (`caller(0)` is
+    15-20 us against CRuby's 2.9: the same walk); (3) a cache must either scan the whole
+    tree, nested `def` and block bodies included, for anything that keeps state per site
+    (`/o`, regexp, range and other folded literals, `END`, `BEGIN`, `__method__`-keyed
+    caches, `defined?` caches) and refuse those texts, or cache the transformed tree and
+    compile per eval - which keeps parse, load, bridge and transformation (113 of 250 us)
+    and loses the rest; (4) eval'd code that runs hot reaches the IL compiler, which inlined
+    a class body's lambda and lost `<class:Foo>` from backtraces (the unchanged build does
+    the same under `-X:NoAdaptiveCompilation`).
+
+- **perf/rminor's epoch move 413b629c (round thirty-one, 2026-11-22) - a new constant whose name
+  some compiled code folded moves the code epoch.** Merged, taken back in aa7474c1. It fixed a
+  real fault (gap 29: a running compiled loop does not see a nearer constant of the name it
+  folded appear), by recording the names the JIT folds and treating a new constant of such a
+  name, or a mixin bringing one, as a reassignment.
+  - **Why not kept: it moved every guard for events that do not concern them.** An independent
+    review: a loop reading `Cfg::LIMIT` beside a thread that defines `LIMIT` on fresh anonymous
+    classes went from 0.26 s to 8.1 s, since a name cannot tell a constant that shadows the
+    folded one from one in an unrelated class. And the qualifier of `A::B` was never recorded,
+    so a new `B` nearer to `A`'s lookup was missed.
+  - Learned: the invalidation has to know the lookup's path - the lexical scopes and the
+    ancestors the folded constant was searched through - and test a new constant's owner
+    against it; and every such change gets the probe of the gate's rule: the same event in an
+    unrelated place, timed.
+
+- **perf/dmeth (round thirty-one, 2026-11-22) - a `define_method` method called through a
+  pooled BlockParam and a direct rule** (gap 23). Reverted by its author; only
+  `Util/dmeth-matrix.rb` (CRuby's output on every build and mode) was kept. The diff is not in
+  the repository.
+  - Where the time goes (perf samples, 60 million calls of `define_method(:bm) { |x| x + 1 }`
+    against `def bm(x) = x + 1`): mostly the method JIT, which compiles the `def` to an add and
+    never takes a block body (`JitStub` and `JitCompiler` are built on `MethodDefinition`).
+    The rest: the rule of `Proc.BuildCall` allocates a BlockParam per call and wraps the
+    call in a try/filter/finally, `RubyOps.Yield1` checks the lambda's arity again (4.5% of
+    samples) after the rule already did, a virtual `BlockDispatcher1.InvokeNoAutoSplat`, and
+    write barriers (3.9%). The body is already scope-free.
+  - The change: `RubyLambdaMethodInfo.TryBuildDirectCall` for 0-4 plain arguments calling a
+    static `Invoke0`..`Invoke4` that does the rule's work in C# without the second arity check,
+    and one pooled BlockParam per method, taken with `Interlocked.Exchange` and given back
+    only after a normal return when it was not kept.
+  - Timing (`ab.rb`, ns a call; CRuby, unchanged, changed): `bmethod` 29.2 / 63.5 / 53.1
+    (1.20 times faster), `bmethod0` 24.7 / 61.6 / 52.9 (1.16); `forwardable` and `delegate` of
+    `app-shapes.rb` unchanged (their methods take `*args, &block`, which the rule did not
+    cover). Under the 1.5 the brief asked for.
+  - Learned: without the JIT the define_method call is only about 1.15 times a `def`'s; what
+    gap 23 measures is the JIT's, and the next attempt is a `JitStub` over a block body.
+
 - **perf/jscreen 41ef00da (/perf-step, 2026-11-21) - the screen refuses `x`, a call on self with no
   arguments, unless x is a leaf, a bindable method, an attribute reader or undefined.** Not merged.
   The screen took every such call as a possible attr_reader read; a method that calls a Ruby
@@ -3812,7 +4089,7 @@ with that on every build alike (see "Caught by the review (round seventeen)").
   (Parameter 'other')") where CRuby raises TypeError "class or module required"; and with
   an argument that is no module (`1.is_a?(3)`, `"s".is_a?("String")`) the TypeError says
   "no implicit conversion of Integer into Module" where CRuby says "class or module
-  required".
+  required". Fixed in round thirty-one (perf/rminor, see Landed).
 
 - **On the ReadyToRun host a backtrace through a block nested in a block lacks the
   `Range#each` frame** (found by the gate of round twenty-five; on master 0e78b9fd too,

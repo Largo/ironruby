@@ -314,9 +314,17 @@ namespace IronRuby.Runtime.Calls {
         /// <summary>
         /// The rules TryBuildRespondTo, TryBuildSend and TryBuildNotEquals build depend on the receiver's class, not only on the
         /// method, so RubyCallAction.BindShared must not hand them to receivers of other classes.
+        ///
+        /// TryBuildRespondTo folds only a call with one plain argument and no block (`respond_to?(:name)'); the signature decides
+        /// that for every call of the site, so any other respond_to? site gets the ordinary call and can share it. That is the
+        /// site of `respond_to?(name, true)' in OpenStruct#is_method_protected!, which sees a new singleton class with each
+        /// OpenStruct: it built and compiled a rule for every one of them (~0.1-0.2 ms each, most of OpenStruct.new).
         /// </summary>
-        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method) {
-            return IsKernelMethod(method, ref _respondTo, "RespondTo") || IsSendMethod(method) || IsNotEqualsMethod(method);
+        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method, RubyCallSignature signature) {
+            if (IsKernelMethod(method, ref _respondTo, "RespondTo")) {
+                return signature.ArgumentCount == 1 && !signature.HasBlock && !signature.HasSplattedArgument && !signature.HasRhsArgument;
+            }
+            return IsSendMethod(method) || IsNotEqualsMethod(method);
         }
 
         /// <summary>

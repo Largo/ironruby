@@ -59,6 +59,7 @@ namespace IronRuby.Compiler.Ast {
 
         internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
             gen.CurrentMethod.HasSuperCall = true;
+            gen.HasSuperCall = true;
 
             // variable assigned to the transformed block in MakeCallWithBlockRetryable:
             MSA.Expression blockArgVariable = gen.CurrentScope.DefineHiddenVariable("#super-call-block", typeof(Proc));

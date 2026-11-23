@@ -257,8 +257,11 @@ module Lib
     def visit_if_node(node); @counts[:if] += 1; super; end
     def visit_class_node(node); @counts[:class] += 1; super; end
   end
-  # what is timed is the walk: a hundred lines of ordinary Ruby (this file's first), parsed once
-  TREE = Prism.parse(File.read(__FILE__, encoding: "UTF-8").lines.grep_v(/\A\s*#/).first(100).join).value
+  # what is timed is the walk: this file's first module (Lib, about 160 lines of ordinary Ruby without its
+  # comments), parsed once. Whole, so that prism parses it without errors: the first hundred lines it used to
+  # take ended inside the module, and the tree was an error-recovered one.
+  TREE = File.read(__FILE__, encoding: "UTF-8").lines.then { |l| l[0..l.index { |x| x.start_with?("end") }] }
+             .grep_v(/\A\s*#/).join.then { |src| Prism.parse(src).tap { |r| raise r.errors.inspect unless r.errors.empty? }.value }
   def self.prism_walk
     c = Counter.new
     TREE.accept(c)
@@ -585,7 +588,7 @@ t("ostruct", n(70))           { |n| i = 0; s = 0; while i < n; s += Lib.ostruct;
 t("strscan", n(550))          { |n| i = 0; s = 0; while i < n; s += Lib.strscan; i += 1; end; s }
 t("json_generate", n(1400))   { |n| i = 0; s = 0; while i < n; s += Lib.json_generate; i += 1; end; s }
 t("json_parse", n(1360))      { |n| i = 0; s = 0; while i < n; s += Lib.json_parse; i += 1; end; s }
-t("prism_walk", n(670))       { |n| i = 0; s = 0; while i < n; s += Lib.prism_walk; i += 1; end; s }
+t("prism_walk", n(330))       { |n| i = 0; s = 0; while i < n; s += Lib.prism_walk; i += 1; end; s }
 t("invoice_build", n(390))    { |n| i = 0; s = 0; while i < n; s += Shop.invoice_build; i += 1; end; s }
 t("invoice_render", n(480))   { |n| i = 0; s = 0; while i < n; s += Shop.invoice_render; i += 1; end; s }
 t("render", n(1900))          { |n| i = 0; s = 0; while i < n; s += Markup.run; i += 1; end; s }

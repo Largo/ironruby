@@ -58,6 +58,7 @@ namespace IronRuby.Compiler.Ast {
 
         MSA.Expression/*!*/ StringConstructor.IFactory.CreateExpression(AstGenerator/*!*/ gen, string/*!*/ literal, RubyEncoding/*!*/ encoding) {
             // TODO: create the regex here, not at runtime:
+            gen.HasLiteralState = true;
             return Methods.CreateRegexL.OpCall(
                 Ast.Constant(literal), encoding.Expression, AstUtils.Constant(_options), AstUtils.Constant(new StrongBox<RubyRegex>(null))
             );
@@ -65,6 +66,7 @@ namespace IronRuby.Compiler.Ast {
 
         MSA.Expression/*!*/ StringConstructor.IFactory.CreateExpression(AstGenerator/*!*/ gen, byte[]/*!*/ literal, RubyEncoding/*!*/ encoding) {
             // TODO: create the regex here, not at runtime:
+            gen.HasLiteralState = true;
             return Methods.CreateRegexB.OpCall(
                 Ast.Constant(literal), encoding.Expression, AstUtils.Constant(_options), AstUtils.Constant(new StrongBox<RubyRegex>(null))
             );
@@ -72,6 +74,7 @@ namespace IronRuby.Compiler.Ast {
 
 
         MSA.Expression/*!*/ StringConstructor.IFactory.CreateExpressionN(AstGenerator/*!*/ gen, IEnumerable<MSA.Expression>/*!*/ args) {
+            gen.HasLiteralState = true;
             return Methods.CreateRegex("N").OpCall(
                 Ast.NewArrayInit(typeof(MutableString), args),
                 AstUtils.Constant(_options), 
@@ -80,6 +83,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         MSA.Expression/*!*/ StringConstructor.IFactory.CreateExpressionM(AstGenerator/*!*/ gen, MSAst.ExpressionCollectionBuilder/*!*/ args) {
+            gen.HasLiteralState = true;
             string suffix = new String('M', args.Count);
             args.Add(gen.Encoding.Expression);
             args.Add(AstUtils.Constant(_options));

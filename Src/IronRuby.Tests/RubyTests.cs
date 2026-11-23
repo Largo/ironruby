@@ -208,6 +208,9 @@ namespace IronRuby.Tests {
                 Regex_SharedTranslation2,
                 Regex_PropertyEncoding1,
                 Regex_BinaryCtype1,
+                Regex_EscapedByteEncoding1,
+                Regex_EscapedByteEncoding2,
+                Regex_EscapedByteEncoding3,
                 
                 Scenario_RubyScopeParsing,
                 Scenario_RubyScopes1,
@@ -1385,6 +1388,7 @@ namespace IronRuby.Tests {
                 Marshal_LoadedClasses1,
                 Time_NewDstStdZone1,
                 Kernel_CloneSpecialConstants1,
+                Kernel_IsAModuleRequired1,
                 Struct_InspectMemberNames1,
                 Integer_BitwiseCoerce1,
                 Comparison_AnonymousClassName1,

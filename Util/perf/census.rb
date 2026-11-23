@@ -67,6 +67,13 @@ failed, methods = result.partition { |h| h.key?(:error) }
 # line with the file and line, and the screen's refusal, if it refuses, is the [jit] line that follows it. A typed
 # body is named by class and method, not by line; a decline's reason is on its own line, or, when the compiler bailed
 # out, on the `rejected NAME arity N' line just before it.
+# A method of the trace and of the census is known by file, line and name: two methods can share a line
+# (`def hot; 1; end; def cold; 2; end'), and the name tells them apart. The runtime prints the path as it was
+# given (a relative main file or load path), the census an expanded one: a relative one is taken from the current
+# directory, so run the census from the directory the traced run started in.
+key = ->(file, line, name) { "#{File.expand_path(file)}:#{line}:#{name}" }
+mkey = ->(m) { key.(m[:file], m[:line], m[:name]) }
+
 read_trace = lambda do |log|
   run = {}
   last = nil
@@ -76,7 +83,7 @@ read_trace = lambda do |log|
   File.foreach(log, chomp: true) do |line|
     case line
     when /\A\[light\] (light|needs scope|why not): (.+) \((.+):(\d+)\)(?:: (.*))?\z/
-      at = "#{$3}:#{$4}"
+      at = key.($3, $4, $2)
       last = run[at] ||= { name: $2, light: false, screen: nil }
       last[:light] = true if $1 == 'light'
       last[:light_why] = $5 if $5
@@ -96,8 +103,8 @@ end
 if used
   trace = read_trace.(used)
   of = methods.size
-  # matched as -c matches: by file and line
-  methods = methods.select { |m| trace[0].key?("#{m[:file]}:#{m[:line]}") }
+  # matched as -c matches: by file, line and name
+  methods = methods.select { |m| trace[0].key?(mkey.(m)) }
 end
 
 label = ->(m) { "#{m[:module]}#{m[:singleton] ? '.' : '#'}#{m[:name]}" }
@@ -243,7 +250,7 @@ end
 # for some arity), declined, rejected at the screen; the rest the run did neither to.
 if used
   run, specialized, declined, reasons = trace
-  at = ->(m) { run["#{m[:file]}:#{m[:line]}"] }
+  at = ->(m) { run[mkey.(m)] }
   spec = specialized.keys.flat_map { |k| find_in.(methods, k) }.uniq
   decl = declined.keys.flat_map { |k| find_in.(methods, k) }.uniq - spec
   screen = methods.select { |m| at.(m)[:screen] } - spec - decl
@@ -265,18 +272,18 @@ end
 if check
   run, specialized, declined = read_trace.(check)
 
-  called = methods.select { |m| run.key?("#{m[:file]}:#{m[:line]}") }
+  called = methods.select { |m| run.key?(mkey.(m)) }
   puts '', "against the run in #{check}: it called #{called.size} of the #{total} methods"
   report = lambda do |name, differ|
     puts format('  %-12s %d agree, %d differ', name, called.size - differ.size, differ.size)
     differ.first(rows).each { |m, text| puts format('    %-40s %-28s %s', label.(m), where.(m), text) }
   end
   report.('light frame', called.filter_map { |m|
-    r = run["#{m[:file]}:#{m[:line]}"]
+    r = run[mkey.(m)]
     [m, "census: #{light_text.(m)}; run: #{r[:light] ? 'light' : "scope (#{r[:light_why]})"}"] if r[:light] != m[:light]
   })
   report.('JIT screen', called.filter_map { |m|
-    r = run["#{m[:file]}:#{m[:line]}"]
+    r = run[mkey.(m)]
     [m, "census: #{jit_text.(m)}; run: #{r[:screen] ? "screen rejected (#{r[:screen]})" : 'not rejected by the screen'}"] if (m[:jit_stage] == 'screen') != !r[:screen].nil?
   })
   find = ->(k) { find_in.(called, k) }
