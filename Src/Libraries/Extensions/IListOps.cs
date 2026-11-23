@@ -627,10 +627,17 @@ namespace IronRuby.Builtins {
                 return GetElement(self, (double)index);
             }
             // rb_ary_aref1 asks rb_range_beg_len first: an object with #begin, #end and
-            // #exclude_end? indexes as the Range it describes.
+            // #exclude_end? indexes as the Range it describes. The range is normalized against the
+            // length before those methods ran (MRI reads RARRAY_LEN first) and read from the array
+            // as they left it.
+            int length = self.Count;
             Range range = rangeValues.TryConvert(index);
             if (range != null) {
-                return GetElements(fixnumCast, allocateStorage, self, range);
+                int start, count;
+                if (!NormalizeRange(fixnumCast, length, range, out start, out count)) {
+                    return null;
+                }
+                return count < 0 ? CreateResultArray(allocateStorage, self) : GetElements(allocateStorage, self, start, count);
             }
             return GetElement(self, Protocols.CastToInteger(integerConversion, index));
         }
@@ -760,13 +767,15 @@ namespace IronRuby.Builtins {
             if (!(index is int)) {
                 // rb_ary_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
                 // describes, and one reaching before the first element is reported by its #inspect.
+                // It is normalized against the length before those methods ran, as MRI's is.
+                int length = self.Count;
                 Range range = rangeValues.TryConvert(index);
                 if (range != null) {
-                    if (range.Begin is int && (int)range.Begin + self.Count < 0) {
+                    if (range.Begin is int && (int)range.Begin + length < 0) {
                         throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
                     }
                     int start, count;
-                    RangeToStartAndCount(fixnumCast, range, self.Count, out start, out count);
+                    RangeToStartAndCount(fixnumCast, range, length, out start, out count);
                     return SetElement(arrayTryCast, self, start, count, value);
                 }
             }
