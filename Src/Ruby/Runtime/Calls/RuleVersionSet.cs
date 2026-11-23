@@ -57,7 +57,11 @@ namespace IronRuby.Runtime.Calls {
         // Member is the method_missing a call of a name no method has makes (see RubyCallAction.BindShared).
         internal bool IsMissing;
 
-        internal RuleVersionSet() {
+        // The binder of the call the rule makes: asked to verify a version the set does not hold yet (see IsValidFor).
+        private readonly RubyCallAction _owner;
+
+        internal RuleVersionSet(RubyCallAction owner) {
+            _owner = owner;
             _slots = new int[8];
         }
 
@@ -137,7 +141,29 @@ namespace IronRuby.Runtime.Calls {
             return set.Contains(version);
         }
 
-        private static MethodInfo _IsValidMethod;
+        /// <summary>
+        /// The test of a Ruby object's class version: a version the set does not hold is added if the call resolves to the rule's
+        /// method for the object's class (RubyCallAction.TryShareVersion), without binding the call again.
+        /// </summary>
+        public static bool IsValidFor(RuleVersionSet/*!*/ set, int version, object target) {
+            if (set.Contains(version)) {
+                return true;
+            }
+            // A site whose receivers resolve the call to other methods tries its rules in turn: a version found not to resolve to this
+            // one fails at once the next time instead of being resolved again.
+            if (set._owner == null || !(target is IRubyObject) || version == Volatile.Read(ref set._lastRejected)) {
+                return false;
+            }
+            if (set._owner.TryShareVersion(target, set)) {
+                return true;
+            }
+            Volatile.Write(ref set._lastRejected, version);
+            return false;
+        }
+
+        private int _lastRejected;
+
+        private static MethodInfo _IsValidMethod, _IsValidForMethod;
 
         private static FieldInfo _LastVersionField;
 
@@ -150,15 +176,25 @@ namespace IronRuby.Runtime.Calls {
         /// rules ran 5-10% slower than one whose sites got rules of their own (the precompiled startup library makes the former
         /// common: its compiled sites register the typed delegate shapes before startup's last method definitions bump the classes).
         /// </summary>
-        internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression, int boundVersion) {
-            var method = _IsValidMethod ?? (_IsValidMethod = CallInstruction.CacheFunc<RuleVersionSet, int, bool>(IsValid));
+        ///
+        /// <paramref name="target"/>, if given, is the receiver (a Ruby object) whose class version is tested: a version not in the set
+        /// is then verified and added by the test itself (see <see cref="IsValidFor"/>).
+        internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression, int boundVersion, Expression target = null) {
             var lastVersion = _LastVersionField ?? (_LastVersionField = typeof(RuleVersionSet).GetField("LastVersion"));
             var set = AstUtils.Constant(this);
+            Expression inSet;
+            if (target != null) {
+                var method = _IsValidForMethod ?? (_IsValidForMethod = CallInstruction.CacheFunc<RuleVersionSet, int, object, bool>(IsValidFor));
+                inSet = Expression.Call(method, set, versionExpression, AstUtils.Convert(target, typeof(object)));
+            } else {
+                var method = _IsValidMethod ?? (_IsValidMethod = CallInstruction.CacheFunc<RuleVersionSet, int, bool>(IsValid));
+                inSet = Expression.Call(method, set, versionExpression);
+            }
             return Expression.OrElse(
                 Expression.Equal(versionExpression, AstUtils.Constant(boundVersion)),
                 Expression.OrElse(
                     Expression.Equal(versionExpression, Expression.Field(set, lastVersion)),
-                    Expression.Call(method, set, versionExpression)
+                    inSet
                 )
             );
         }

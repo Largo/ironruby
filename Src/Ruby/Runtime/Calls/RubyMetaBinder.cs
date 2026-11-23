@@ -85,7 +85,10 @@ namespace IronRuby.Runtime.Calls {
                 // A site with a light scope has a precompiled dispatcher for a Ruby method (RubyCallAction.BindPrecompiled), one class
                 // at a time; a method that receivers of many classes resolve the call to - singleton classes of objects of one class,
                 // say - is better served by the one rule that holds them all, as it was before light sites had dispatchers.
-                if (Signature.HasLightScope && _context != null && !_context.Options.NoAdaptiveCompilation && (result = BindShared<T>(args)) != null) {
+                // So is a call on an object with a singleton class of its own at any site: a dispatcher serves that one object, while the
+                // shared rule's test takes in the next object's singleton class without a bind (RuleVersionSet.IsValidFor).
+                if ((Signature.HasLightScope || IsObjectWithSingleton(args)) && _context != null && !_context.Options.NoAdaptiveCompilation &&
+                    (result = BindShared<T>(args)) != null) {
                     if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : "shared-hit";
                     return result;
                 }
@@ -145,6 +148,12 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        // The receiver is a Ruby object (not a module) whose class is its singleton class.
+        private bool IsObjectWithSingleton(object[]/*!*/ args) {
+            int i = Signature.HasScope ? 1 : 0;
+            return i < args.Length && args[i] is IronRuby.Builtins.RubyObject obj && obj.ImmediateClass.IsSingletonClass;
+        }
+
         /// <summary>
         /// Returns a precompiled rule delegate or null, if not available for the given delegate type and arguments.
         /// </summary>
@@ -176,7 +185,12 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        // Set by every Bind: tells a LightBind that built a rule from one that handed out a compiled target (see RubyCallAction.BindShared).
+        [ThreadStatic]
+        internal static bool RuleBuilt;
+
         private DynamicMetaObject/*!*/ BindNoTiming(DynamicMetaObject/*!*/ scopeOrContextOrTargetOrArgArray, DynamicMetaObject/*!*/[]/*!*/ args) {
+            RuleBuilt = true;
             if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "rule";
             PerfTrack.NoteEvent(PerfTrack.Categories.Binding, "Ruby: " + GetType().Name + Signature.ToString() + ": Bind");
 
