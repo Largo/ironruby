@@ -195,9 +195,10 @@ namespace IronRuby.Builtins {
         /// ASCII only and escapes nothing outside ASCII (MRI's rb_reg_preprocess fixed_enc): its own
         /// encoding for a character outside ASCII, a \xHH or octal escape above 0x7f or a
         /// \p{...} property, UTF-8 for a \u escape above 0x7f, whichever comes first. A piece that
-        /// is not valid in its encoding is an ArgumentError, as in MRI.
+        /// is not valid in its encoding is an ArgumentError, as in MRI. <paramref name="options"/>
+        /// are the regexp's: under /n a piece that is ASCII only is read as binary.
         /// </summary>
-        public static RubyEncoding GetFixedEncoding(MutableString/*!*/ part) {
+        public static RubyEncoding GetFixedEncoding(MutableString/*!*/ part, RubyRegexOptions options) {
             RubyEncoding encoding = part.Encoding;
             if (encoding != RubyEncoding.Binary && part.ContainsInvalidCharacters()) {
                 throw RubyExceptions.CreateArgumentError("invalid multibyte character");
@@ -205,12 +206,13 @@ namespace IronRuby.Builtins {
             if (!encoding.IsAsciiIdentity) {
                 return encoding;
             }
-            if (!part.IsAscii()) {
-                return encoding;
-            }
+            bool ascii = part.IsAscii();
+            // MRI's rb_reg_preprocess_dregexp reads an ASCII-only piece of a /n regexp as binary
+            bool binary = encoding == RubyEncoding.Binary ||
+                ascii && (options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED;
             string source = part.ToString();
             int i = source.IndexOf('\\');
-            if (i >= 0 && encoding != RubyEncoding.Binary && encoding != RubyEncoding.Ascii) {
+            if (i >= 0 && !binary && encoding != RubyEncoding.Ascii) {
                 // its escapes must decode on their own: /#{'\xc2'}#{'\xa1'}/ is an ArgumentError
                 try {
                     CheckLiteralFragment(part, RubyRegexOptions.NONE);
@@ -219,6 +221,11 @@ namespace IronRuby.Builtins {
                     int at = message.IndexOf(": /", StringComparison.Ordinal);
                     throw RubyExceptions.CreateArgumentError(at < 0 ? message : message.Substring(0, at));
                 }
+            }
+            // a piece with characters outside ASCII is checked all the same, on its own: the
+            // halves of an escaped character must not meet in the next piece (/#{"é\\xc2"}#{"\\xa1"}/)
+            if (!ascii) {
+                return encoding;
             }
             while (i >= 0 && i + 1 < source.Length) {
                 char c = source[i + 1];

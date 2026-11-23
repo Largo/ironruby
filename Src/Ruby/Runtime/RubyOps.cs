@@ -3315,7 +3315,7 @@ namespace IronRuby.Runtime {
         private static void CheckDynamicRegexParts(RubyRegexOptions options, params MutableString[]/*!*/ parts) {
             foreach (var part in parts) {
                 if (part != null) {
-                    RubyRegex.GetFixedEncoding(part);
+                    RubyRegex.GetFixedEncoding(part, options);
                 }
             }
             DynamicRegexEncoding(options, parts);
