@@ -2220,6 +2220,14 @@ namespace IronRuby.Builtins {
 
             // Remove single trailing CR/LFs
             MutableString result = self.CloneDerived();
+
+            // MRI's chompped_length: an explicit separator longer than the string leaves it alone,
+            // before the separator is even looked at for a newline (a UTF-32 "\n" does not chomp
+            // the two bytes of a UTF-16 one)
+            if (!defaultSeparator && separator.GetByteCount() > self.GetByteCount()) {
+                return result;
+            }
+
             int length = result.GetCharCount();
             bool newline = defaultSeparator && separator.StartsWith('\n') && separator.GetLength() == 1 ||
                 separator.GetByteCount() == separator.Encoding.MinBytesPerChar &&
