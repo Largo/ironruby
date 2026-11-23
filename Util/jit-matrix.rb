@@ -1286,9 +1286,19 @@ def sp_isa_local_inst(v, k)
 end
 ISA_N.times { |i| sp_isa_local(i, Integer); sp_isa_local(IsaC.new, IsaC); sp_isa_local_inst(IsaSub.new, IsaC) }
 t('is_a?(local) over the receivers') { isa_receivers.map { |r| [sp_isa_local(r, Comparable), sp_isa_local(r, IsaC), sp_isa_local_inst(r, IsaC), sp_isa_local_inst(r, IsaM)] } }
-# (nil, and the message of the TypeError, are left out: IronRuby raises ArgumentNullException for nil and
-# says "no implicit conversion of String into Module" where CRuby says "class or module required", with or
-# without the JIT)
+# nil and a value that is no module raise TypeError "class or module required" (rb_obj_is_kind_of's
+# message, not a conversion's); the message rows print it, since t prints only the class
+def isa_msg
+  yield
+rescue TypeError => e
+  "#{e.class}: #{e.message}"
+end
+t('is_a?(nil)') { sp_isa_local(1, nil) }
+t('instance_of?(nil)') { sp_isa_local_inst(1, nil) }
+t('the messages: nil, 3, "String", :Sym') do
+  [nil, 3, "String", :Sym].flat_map { |k| [isa_msg { sp_isa_local(1, k) }, isa_msg { sp_isa_local_inst(1, k) }] }
+end
+t('kind_of?(nil), kind_of?(Object.new)') { [isa_msg { 1.kind_of?(nil) }, isa_msg { 1.kind_of?(Object.new) }] }
 t('is_a?(3)') { sp_isa_local(1, 3) }
 t('is_a?("String")') { sp_isa_local("s", "String") }
 t('instance_of?(3)') { sp_isa_local_inst(1, 3) }

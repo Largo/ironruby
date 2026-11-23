@@ -227,6 +227,26 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The innermost <paramref name="maxFrames"/> Ruby frames of the calling thread, read from the interpreted frames and the
+        /// compiled frames' records as <see cref="GetCallerFrame"/> reads them: without the frames of library methods.
+        /// </summary>
+        internal static RubyArray/*!*/ GetRecordedFrames(RubyContext/*!*/ context, int maxFrames) {
+            return new RubyStackTraceBuilder(context, InterpretedFrame.CurrentFrame.Value,
+                Precompiled.PrecompiledFrames.Snapshot(Thread.CurrentThread), Precompiled.PrecompiledFrames.CaptureLoopLines(), maxFrames).RubyTrace;
+        }
+
+        /// <summary>
+        /// A RegexpError about a pattern quotes it as written for the default internal or external
+        /// encoding (MRI's rb_reg_error_desc), which only a context knows, and a regexp literal is
+        /// made without one: the message is written again once the exception reaches Ruby code.
+        /// </summary>
+        private void DescribeForContext(RubyContext/*!*/ context) {
+            if (_exception is RegexpError) {
+                RubyRegex.DescribeIn(_exception, context);
+            }
+        }
+
+        /// <summary>
         /// Builds backtrace for the exception if it wasn't built yet. 
         /// Captures a full stack trace starting with the current frame and combines it with the trace of the exception.
         /// Called from compiled code.
@@ -246,6 +266,8 @@ namespace IronRuby.Runtime {
         /// </param>
         /// <param name="passed">What <see cref="TakePassedEnsureCapture"/> has returned already, if anything.</param>
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope, bool rescuing, int frameDepth = -1, RubyStackTraceBuilder.CapturedTrace passed = null) {
+            DescribeForContext(scope.RubyContext);
+
             // what the ensure clauses the exception went through took of its backtrace (see EnterPassedEnsure): the rest is taken here
             passed = passed ?? TakePassedEnsureCapture();
 
@@ -610,6 +632,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void CaptureExceptionTrace(RubyContext/*!*/ context) {
+            DescribeForContext(context);
             var passed = TakePassedEnsureCapture();
             if (HasBacktrace || _raiseBacktrace != null) {
                 return;
@@ -942,6 +965,8 @@ namespace IronRuby.Runtime {
                 return exception;
             }
 
+            // a redefined #new reads the message (DescribeForContext)
+            instanceData.DescribeForContext(context);
             object message = instanceData.Message;
             // Errno classes extend CLR exceptions of several roots (ExternalException,
             // IOException, ...), so SystemCallError membership is decided on the Ruby side.

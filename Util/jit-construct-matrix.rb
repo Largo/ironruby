@@ -636,6 +636,8 @@ class Array
     concat([v] * n)
   end
 end
+$ar_inits = 0
+t('arr: counting initialize, the first calls') { [am.an_sized(2), am.an_filled(2, 1), am.an_lit(1), $ar_inits] }
 ar_warm(am)
 $ar_inits = 0
 t('arr: counting initialize') { [am.an_sized(2), am.st, am.an_filled(2, 1), am.an_lit(1), am.st, am.st2, $ar_inits] }
@@ -644,16 +646,19 @@ class Array
   private :initialize
   remove_method :ar_matrix_init
 end
+t('arr: initialize restored, the first calls') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 ar_warm(am)
 t('arr: initialize restored') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 
 # a singleton new on Array, then removed
 def Array.new(*a) = [:singleton, a]
+t('arr: singleton new, the first calls') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 ar_warm(am)
 t('arr: singleton new') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 class << Array
   remove_method :new
 end
+t('arr: singleton new removed, the first calls') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 ar_warm(am)
 t('arr: singleton new removed') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 
@@ -666,7 +671,9 @@ module ArNewPrepend
     a.size == 2 ? [a[1]] * a[0] : super
   end
 end
+ar_warm(am)
 Array.singleton_class.prepend(ArNewPrepend)
+t('arr: new prepended, switched off, the first calls') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
 ar_warm(am)
 $ar_prepended = true
 t('arr: prepended new') { [am.an_sized(2), am.st, am.an_filled(2, 1)] }
@@ -688,8 +695,11 @@ class ArRefined
 end
 ar = ArRefined.new
 warm_up { |i| ar.an_ref(i % 3) }
-# CRuby's an_ref answers the refined new's [:refined, [2]]; IronRuby's ignores the refinement
-# here (it does not in a file of its own), so only what the two agree on is printed
+# CRuby's an_ref answers the refined new's [[:refined, [2]], 3]. IronRuby, with the JIT or without,
+# ignores the refinement once a module is prepended to Array's singleton class (above) and answers
+# [[nil, nil], 3]; in a file of its own, or before the prepend, it answers CRuby's. (The case cannot
+# move before the prepend: with this refinement active, CRuby's prepended new is no longer called.)
+# Only what the two agree on is printed.
 t('arr: refined new') { r = ar.an_ref(2); [r.class, r[0].class, r[1]] }
 
 exit 1 if $check_failed
