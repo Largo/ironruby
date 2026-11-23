@@ -149,5 +149,35 @@ t3 = Thread.new { 300.times { |i| hot.define_singleton_method(:x) { i }; bad << 
 t1.join; t3.join; stop = true; t2.join
 row "threads", [bad.first(3), call_x(hot)]
 
+# ---------------------------------------------------------------- 9. one `def' run for many modules
+# The same body defined in a fresh singleton class or Class.new each time: each definition must see its own
+# module (super, method owner, constants of the block it ran in, frame labels), however many came before.
+
+class B9; def m(v) = [:b9, v]; def w = :b9w; end
+K9 = :top
+r9 = (1..12).map do |i|
+  o = Object.new
+  def o.x = [__method__, self.class, singleton_class.instance_methods(false)]
+  def o.boom = raise("x")
+  c = Class.new(B9) do
+    k = i
+    define_method(:k) { k }
+    def m(v) = super(v + 1)
+    def w = [super, K9, self.class.superclass]
+    def lab = caller_locations(0, 1)[0].label
+  end
+  [o.x, (o.boom rescue $!.backtrace_locations[0].label), o.method(:x).owner == o.singleton_class,
+   c.new.m(i), c.new.w, c.new.k, c.new.lab, c.instance_method(:m).owner == c]
+end
+row "many modules", r9.uniq.size == 12 ? [r9.first, r9.last] : r9
+named9 = (1..6).map { |i| Object.const_set("N9_#{i}", Class.new(B9)) }
+named9.each { |c| c.class_eval { def lab = caller_locations(0, 1)[0].label; def m(v) = super(v * 2) } }
+row "named class_eval", named9.map { |c| [c.new.lab, c.new.m(3)] }
+row "hot over many", runs(60) { |i| o = Object.new; def o.x = 9; call_x(o) }
+row "redefine after many", (1..10).map { |i| o = Object.new; def o.x = 1; a = call_x(o); def o.x = 2; [a, call_x(o)] }.uniq
+module R9; refine(Integer) { def r9 = :refined }; end
+using R9
+row "refined over many", (1..8).map { o = Object.new; def o.x = 1.r9; o.x }.uniq
+
 $stderr.puts "jit=#{defined?(IronRuby) ? 'ironruby' : 'cruby'}"
 puts "end"
