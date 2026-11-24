@@ -1,8 +1,20 @@
 # IronRuby regression checks for discarded fibers. Run with a built Release runtime:
 # IR_CONFIG=Release IR_TFM=net10.0 ./ir.sh Util/fiber-reclaim-matrix.rb
+# Most checks reach into IronRuby's fiber state (Fiber#__state__, the worker thread) and the CLR's
+# finalizer queue, and need IronRuby's reclamation, so they run only there. The rest - ensure and
+# rescue order on kill and raise, MRI's errors for a copied or twice-initialized fiber, thread
+# storage, tracing - also run under CRuby, which is how their expectations are checked: the file is a
+# differential matrix too (ruby Util/fiber-reclaim-matrix.rb prints the same line).
 require 'weakref'
 
 module FiberReclaimChecks
+  IRONRUBY = RUBY_ENGINE == 'ironruby'
+
+  def self.collect
+    GC.start
+    System::GC.wait_for_pending_finalizers if IRONRUBY
+  end
+
   def self.assert(value, message)
     raise message unless value
   end
@@ -205,49 +217,57 @@ module FiberReclaimChecks
   def self.discard_thread_creator(gate)
     fiber = build_thread_creator(gate)
     thread = fiber.resume
-    [WeakRef.new(fiber), fiber.__state__.__core__, thread]
+    [WeakRef.new(fiber), IRONRUBY ? fiber.__state__.__core__ : nil, thread]
   end
 
   def self.run
     root = Fiber.current
     initial_threads = Thread.list.size
-    [:resume, :transfer, :raise, :kill].each { |kind| check_waiting_resumer(kind) }
-    transfer_weak, transfer_core = discard_transferred_fiber
-    eventually('transferred fiber was incorrectly pinned') do
-      !transfer_weak.weakref_alive? && transfer_core.status == 'terminated'
+    if IRONRUBY
+      [:resume, :transfer, :raise, :kill].each { |kind| check_waiting_resumer(kind) }
+      transfer_weak, transfer_core = discard_transferred_fiber
+      eventually('transferred fiber was incorrectly pinned') do
+        !transfer_weak.weakref_alive? && transfer_core.status == 'terminated'
+      end
     end
     gate = Queue.new
     creator_weak, creator_core, child_thread = discard_thread_creator(gate)
-    eventually('a thread kept the fiber that created it') do
-      !creator_weak.weakref_alive? && creator_core.status == 'terminated'
+    if IRONRUBY
+      eventually('a thread kept the fiber that created it') do
+        !creator_weak.weakref_alive? && creator_core.status == 'terminated'
+      end
     end
     gate << :go
     assert(child_thread.value == :yes, 'thread lost the storage of the fiber that created it')
     events = []
-    weak, core, worker = discard(events)
-    eventually('discarded handle or worker was retained') do
-      !weak.weakref_alive? && core.status == 'terminated' && !Thread.list.include?(worker)
+    if IRONRUBY
+      weak, core, worker = discard(events)
+      eventually('discarded handle or worker was retained') do
+        !weak.weakref_alive? && core.status == 'terminated' && !Thread.list.include?(worker)
+      end
+      assert(events.empty?, "reclamation ran Ruby code: #{events.inspect}")
+      assert(Fiber.current.equal?(root), 'reclamation changed the owner fiber')
     end
-    assert(events.empty?, "reclamation ran Ruby code: #{events.inspect}")
-    assert(Fiber.current.equal?(root), 'reclamation changed the owner fiber')
 
     # A reclaimed worker must be reusable, with the reclamation flag cleared and
     # ordinary ensure execution restored.
     fresh = Fiber.new { begin; :complete; ensure; events << :normal_ensure; end }
     assert(fresh.resume == :complete, 'reused worker did not complete')
-    assert(fresh.__state__.__thread__.equal?(worker), 'reclaimed worker was not reused')
+    assert(fresh.__state__.__thread__.equal?(worker), 'reclaimed worker was not reused') if IRONRUBY
     assert(events == [:normal_ensure], 'reused worker skipped its ensure')
     events.clear
 
-    enum_weak, fiber_weak, enum_core = discard_enumerator(events)
-    eventually('discarded enumerator retained its worker') do
-      !enum_weak.weakref_alive? && !fiber_weak.weakref_alive? && enum_core.status == 'terminated'
-    end
-    assert(events.empty?, 'discarded enumerator ran an ensure or rescue')
+    if IRONRUBY
+      enum_weak, fiber_weak, enum_core = discard_enumerator(events)
+      eventually('discarded enumerator retained its worker') do
+        !enum_weak.weakref_alive? && !fiber_weak.weakref_alive? && enum_core.status == 'terminated'
+      end
+      assert(events.empty?, 'discarded enumerator ran an ensure or rescue')
 
-    native_weak, native_fiber_weak, native_core = discard_native_enumerator
-    eventually('discarded native enumerator retained its worker') do
-      !native_weak.weakref_alive? && !native_fiber_weak.weakref_alive? && native_core.status == 'terminated'
+      native_weak, native_fiber_weak, native_core = discard_native_enumerator
+      eventually('discarded native enumerator retained its worker') do
+        !native_weak.weakref_alive? && !native_fiber_weak.weakref_alive? && native_core.status == 'terminated'
+      end
     end
 
     trace = TracePoint.new(:b_return) do |tp|
@@ -257,11 +277,13 @@ module FiberReclaimChecks
     end
     begin
       trace.enable
-      traced_weak, traced_core = discard_traced_fiber(events)
-      eventually('traced fiber retained its worker') do
-        !traced_weak.weakref_alive? && traced_core.status == 'terminated'
+      if IRONRUBY
+        traced_weak, traced_core = discard_traced_fiber(events)
+        eventually('traced fiber retained its worker') do
+          !traced_weak.weakref_alive? && traced_core.status == 'terminated'
+        end
+        assert(events.empty?, 'reclamation invoked Ruby tracing or ensure code')
       end
-      assert(events.empty?, 'reclamation invoked Ruby tracing or ensure code')
       normal_traced = build_traced_fiber(events)
       normal_traced.resume
       normal_traced.resume
@@ -272,16 +294,18 @@ module FiberReclaimChecks
       trace.disable
     end
 
-    block_weak, block_core = discard_block_factory(events)
-    eventually('completed block factory retained its return value') do
-      !block_weak.weakref_alive? && block_core.status == 'terminated'
+    if IRONRUBY
+      block_weak, block_core = discard_block_factory(events)
+      eventually('completed block factory retained its return value') do
+        !block_weak.weakref_alive? && block_core.status == 'terminated'
+      end
+      assert(events.empty?, 'discarded block-factory fiber ran its ensure')
     end
-    assert(events.empty?, 'discarded block-factory fiber ran its ensure')
 
     # Keeping the public handle alive must keep a suspended fiber resumable.
     live = Fiber.new { Fiber.yield :first; :last }
     assert(live.resume == :first, 'live fiber did not yield')
-    3.times { GC.start; System::GC.wait_for_pending_finalizers }
+    3.times { collect }
     assert(live.alive? && live.resume == :last, 'reachable fiber was reclaimed')
 
     [:dup, :clone].each do |method|
@@ -332,25 +356,27 @@ module FiberReclaimChecks
     assert(active.resume.equal?(active), 'running fiber lost its identity')
     assert(active.resume.equal?(active), 'resumed fiber lost its identity')
 
-    3.times do
-      wave = Array.new(32) { discard(events) }
-      eventually('a wave of discarded workers leaked') do
-        wave.all? { |w, c, _t| !w.weakref_alive? && c.status == 'terminated' } &&
-          Thread.list.size <= initial_threads
+    if IRONRUBY
+      3.times do
+        wave = Array.new(32) { discard(events) }
+        eventually('a wave of discarded workers leaked') do
+          wave.all? { |w, c, _t| !w.weakref_alive? && c.status == 'terminated' } &&
+            Thread.list.size <= initial_threads
+        end
       end
+      assert(events.empty?, 'discarded worker waves ran Ruby cleanup')
+
+      # Captured program references remain real roots. They require explicit
+      # completion/kill; clearing the captured local makes the handle collectible.
+      cycle = captured_handle(false)
+      3.times { collect }
+      assert(cycle.weakref_alive?, 'a captured live handle was reclaimed')
+      cycle.__getobj__.kill
+      cleared = captured_handle(true)
+      eventually('cleared captured local still retained its handle') { !cleared.weakref_alive? }
+
+      assert(worker.join(5) && !worker.alive?, 'idle reclaimed worker did not retire')
     end
-    assert(events.empty?, 'discarded worker waves ran Ruby cleanup')
-
-    # Captured program references remain real roots. They require explicit
-    # completion/kill; clearing the captured local makes the handle collectible.
-    cycle = captured_handle(false)
-    3.times { GC.start; System::GC.wait_for_pending_finalizers }
-    assert(cycle.weakref_alive?, 'a captured live handle was reclaimed')
-    cycle.__getobj__.kill
-    cleared = captured_handle(true)
-    eventually('cleared captured local still retained its handle') { !cleared.weakref_alive? }
-
-    assert(worker.join(5) && !worker.alive?, 'idle reclaimed worker did not retire')
 
     puts 'PASS: collection, worker reuse, nested ensures, rescue, enumerators, live handles, kill/raise, and discarded-worker waves'
   end
