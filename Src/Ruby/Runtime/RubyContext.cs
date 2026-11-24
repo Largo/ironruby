@@ -582,6 +582,9 @@ namespace IronRuby.Runtime {
         /// <summary>The trees of recently evaluated strings (PrismAstBridge.Parse); made at the first eval.</summary>
         internal EvalAstCache EvalAstCache;
 
+        /// <summary>The compiled code of recently evaluated strings that keep no state of one eval (RubyUtils.Evaluate).</summary>
+        internal EvalCodeCache EvalCodeCache;
+
         /// <summary>
         /// The compilation threshold of the code an eval of a String compiles (Kernel#eval, Binding#eval,
         /// instance_eval and module_eval of a String): its blocks and loops. Each eval builds a new lambda,
@@ -4374,6 +4377,10 @@ namespace IronRuby.Runtime {
 
             if (ast == null) {
                 return null;
+            }
+
+            if (options.CheckEvalCodeShareable) {
+                options.EvalCodeShareable = EvalCodeCache.IsShareable(ast);
             }
 
             traceStart = StartupTrace.Now();
