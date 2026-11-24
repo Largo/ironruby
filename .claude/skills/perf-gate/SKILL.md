@@ -86,8 +86,7 @@ IR_CONFIG=Release Util/parallel-tests.sh /abs/path/tests-<tree>; echo "exit $?"
 
 `Util/parallel-tests.sh` runs the suite as a queue of processes of twenty tests, one per core,
 with the few slow tests first: about three minutes instead of nine (the suite costs some
-twenty CPU-minutes, and the old single process already used two cores; `DeepNesting1` alone
-is 75 s). Exit 0 is `PASSED`; 1 is a failure that failed again when run alone; 2 is a run that
+twenty CPU-minutes, and the old single process already used two cores). Exit 0 is `PASSED`; 1 is a failure that failed again when run alone; 2 is a run that
 is not complete - a process that did not end as the driver ends (crashed, killed, timed out:
 the OOM killer has taken this suite when other builds ran beside it) or a listed test that
 never ran. An incomplete run would compare as clean: run the lists it names again, alone.

@@ -3,7 +3,7 @@
 # instead of one process that runs the 1,300 tests one after another: about nine minutes on a
 # Release build, three on eight cores. It is not eight times faster because the one process
 # already kept two cores busy (the CLR compiles in the background; the suite costs about twenty
-# CPU-minutes either way), and because DeepNesting1 alone takes 75 s. The tests are
+# CPU-minutes either way). The tests are
 # independent: each gets a fresh runtime, and those that write files name them by GUID or pid.
 #
 # Usage:  Util/parallel-tests.sh [OUT_DIR]          (default: the test build's directory)
@@ -39,7 +39,7 @@ EXE=$TEST_DIR/IronRuby.Tests
 # The tests that take several seconds each go first, one per process, so that the queue does
 # not end with one of them running alone. Only the order depends on this list: a name that no
 # longer exists is skipped, and a new slow test runs in a chunk like any other.
-SLOW="DeepNesting1 Thread_IdReuseStartsFresh1 Puma_Tls1 BlockLoopNested1 NetHttp_Tls1
+SLOW="Thread_IdReuseStartsFresh1 Puma_Tls1 BlockLoopNested1 NetHttp_Tls1
 ModuleClassNew4 ErrorHighlight_Spots1 NetHttp_GemNetTls1 ErrorHighlight_Report1
 NetHttp_TlsVerifyCallback1 Backtrace_CompiledLoopLineFrameReleased1 Method_ParkedScopeLeak1"
 
