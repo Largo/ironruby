@@ -1042,6 +1042,12 @@ namespace IronRuby.Compiler.Ast {
             if (node is LocalVariable || node is Literal || node is SelfReference || node is InstanceVariable) {
                 return true;
             }
+            // `defined?(@x)' (SimpleDelegator#__getobj__): RubyOps.IsDefinedInstanceVariable reads only the runtime from the
+            // scope, which the rewriter hands the declaring scope for (LightFrameRewriter.ScopeOperandIndex)
+            var isDefined = node as IsDefinedExpression;
+            if (isDefined != null && isDefined.Expression is InstanceVariable) {
+                return true;
+            }
             var constant = node as ConstantVariable;
             if (constant != null) {
                 return IsCachedConstant(constant) || Refuse(why, "ConstantVariable with an expression qualifier");
