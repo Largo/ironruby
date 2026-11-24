@@ -212,59 +212,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The encoding a piece of an interpolated regexp ties the regexp to, or null if it is
-        /// ASCII only and escapes nothing outside ASCII (MRI's rb_reg_preprocess fixed_enc): its own
-        /// encoding for a character outside ASCII, a \xHH or octal escape above 0x7f or a
-        /// \p{...} property, UTF-8 for a \u escape above 0x7f, whichever comes first. A piece that
-        /// is not valid in its encoding is an ArgumentError, as in MRI.
-        /// </summary>
-        public static RubyEncoding GetFixedEncoding(MutableString/*!*/ part) {
-            RubyEncoding encoding = part.Encoding;
-            if (encoding != RubyEncoding.Binary && part.ContainsInvalidCharacters()) {
-                throw RubyExceptions.CreateArgumentError("invalid multibyte character");
-            }
-            if (!encoding.IsAsciiIdentity) {
-                return encoding;
-            }
-            if (!part.IsAscii()) {
-                return encoding;
-            }
-            string source = part.ToString();
-            int i = source.IndexOf('\\');
-            if (i >= 0 && encoding != RubyEncoding.Binary && encoding != RubyEncoding.Ascii) {
-                // its escapes must decode on their own: /#{'\xc2'}#{'\xa1'}/ is an ArgumentError
-                try {
-                    CheckLiteralFragment(part, RubyRegexOptions.NONE);
-                } catch (RegexpError e) {
-                    string message = e.Message;
-                    int at = message.IndexOf(": /", StringComparison.Ordinal);
-                    throw RubyExceptions.CreateArgumentError(at < 0 ? message : message.Substring(0, at));
-                }
-            }
-            while (i >= 0 && i + 1 < source.Length) {
-                char c = source[i + 1];
-                if (c == 'u') {
-                    ReadUnicodeEscape(source, i + 2, out bool nonAscii);
-                    if (nonAscii) {
-                        return RubyEncoding.UTF8;
-                    }
-                } else if (c == 'p' || c == 'P') {
-                    if (i + 2 < source.Length && source[i + 2] == '{') {
-                        return encoding;
-                    }
-                } else {
-                    int value = ReadByteEscape(source, i, out _);
-                    if (value >= 0x80) {
-                        return encoding;
-                    }
-                }
-                // an escaped backslash is not the start of an escape
-                i = source.IndexOf('\\', i + 2);
-            }
-            return null;
-        }
-
-        /// <summary>
         /// MRI's rb_reg_preprocess: a regexp is in one encoding, so in a pattern of an encoding
         /// other than UTF-8 a \u escape above 0x7f (which can only mean UTF-8) cannot meet a
         /// character of the pattern's own encoding outside ASCII, raw or written as \xHH or octal

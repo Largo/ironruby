@@ -166,7 +166,9 @@ namespace IronRuby.Builtins {
                 end++;
             }
 
-            long longCount = Math.Max(end - longBegin, 0);
+            // compared before subtracting: a descending range from a large beginning to a very
+            // negative end would wrap around
+            long longCount = end > longBegin ? end - longBegin : 0;
 
             // The answer is padded with nil to the range's full length; one longer than an array
             // may be is MRI's rb_ary_store error rather than an allocation that never ends.
@@ -174,7 +176,9 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateIndexError("index {0} too big", longCount - 1);
             }
 
-            begin = (int)longBegin;
+            // A beginning past the end only pads: it is kept as the list's length rather than cut
+            // to an int that could land inside the list.
+            begin = (int)Math.Min(longBegin, listCount);
             count = (int)longCount;
         }
 
@@ -627,10 +631,17 @@ namespace IronRuby.Builtins {
                 return GetElement(self, (double)index);
             }
             // rb_ary_aref1 asks rb_range_beg_len first: an object with #begin, #end and
-            // #exclude_end? indexes as the Range it describes.
+            // #exclude_end? indexes as the Range it describes. The range is normalized against the
+            // length before those methods ran (MRI reads RARRAY_LEN first) and read from the array
+            // as they left it.
+            int length = self.Count;
             Range range = rangeValues.TryConvert(index);
             if (range != null) {
-                return GetElements(fixnumCast, allocateStorage, self, range);
+                int start, count;
+                if (!NormalizeRange(fixnumCast, length, range, out start, out count)) {
+                    return null;
+                }
+                return count < 0 ? CreateResultArray(allocateStorage, self) : GetElements(allocateStorage, self, start, count);
             }
             return GetElement(self, Protocols.CastToInteger(integerConversion, index));
         }
@@ -734,8 +745,8 @@ namespace IronRuby.Builtins {
             if (index >= list.Count) {
                 ExpandList(list, index);
             } else {
-                // normalize for max length
-                if (index + length > list.Count) {
+                // normalize for max length (not as index + length, which a range to Int32.MaxValue overflows)
+                if (length > list.Count - index) {
                     length = list.Count - index;
                 }
 
@@ -760,13 +771,15 @@ namespace IronRuby.Builtins {
             if (!(index is int)) {
                 // rb_ary_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
                 // describes, and one reaching before the first element is reported by its #inspect.
+                // It is normalized against the length before those methods ran, as MRI's is.
+                int length = self.Count;
                 Range range = rangeValues.TryConvert(index);
                 if (range != null) {
-                    if (range.Begin is int && (int)range.Begin + self.Count < 0) {
+                    if (range.Begin is int && (int)range.Begin + length < 0) {
                         throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
                     }
                     int start, count;
-                    RangeToStartAndCount(fixnumCast, range, self.Count, out start, out count);
+                    RangeToStartAndCount(fixnumCast, range, length, out start, out count);
                     return SetElement(arrayTryCast, self, start, count, value);
                 }
             }
@@ -1660,6 +1673,11 @@ namespace IronRuby.Builtins {
             RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
 
+            // as for an object (above): MRI's rb_ary_fill refuses the size before the first yield
+            if (length >= 0 && (start >= MaxArraySize || length > MaxArraySize - start)) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
+            }
+
             ExpandList(self, Math.Min(start, start + length));
 
             for (int i = start; i < start + length; i++) {
@@ -2070,14 +2088,36 @@ namespace IronRuby.Builtins {
         // nil.to_s, which is US-ASCII; it is only ever appended to the result, never handed out.
         private static readonly MutableString/*!*/ NilJoinString = MutableString.CreateEmpty(RubyEncoding.Ascii).Freeze();
 
-        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, MutableString separator,
+        /// <summary>
+        /// The separator as it was at each gap. MRI appends it as it goes, so a #to_s that changes
+        /// it changes only the gaps after that element; the parts are put together at the end, so
+        /// each gap holds a copy, shared by the gaps until an element's conversion has run Ruby code.
+        /// </summary>
+        private sealed class JoinSeparator {
+            private readonly MutableString/*!*/ _separator;
+            private MutableString _copy;
+
+            public JoinSeparator(MutableString/*!*/ separator) {
+                _separator = separator;
+            }
+
+            public MutableString/*!*/ Current {
+                get { return _copy ?? (_copy = _separator.CloneDerived()); }
+            }
+
+            public void Invalidate() {
+                _copy = null;
+            }
+        }
+
+        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, JoinSeparator separator,
             List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
             // the length is read again on every step, as MRI's ary_join_1 does: a #to_str or #to_ary
             // may change the array
             for (int i = 0; i < list.Count; i++) {
                 if (i > 0 && separator != null) {
-                    parts.Add(separator);
+                    parts.Add(separator.Current);
                 }
                 JoinItem(conversions, list, list[i], separator, parts, ref isBinary, ref seen);
             }
@@ -2087,12 +2127,17 @@ namespace IronRuby.Builtins {
         /// Adds the strings <paramref name="item"/> joins to, separators included, to <paramref name="parts"/>.
         /// Returns true if the item was an array (or converted to one) and false if it became a string.
         /// </summary>
-        private static bool JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, MutableString separator,
+        private static bool JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, JoinSeparator separator,
             List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
             {
                 if (item == null) {
                     parts.Add(NilJoinString);
                     return false;
+                }
+
+                // the conversions below may run Ruby code, which may change the separator
+                if (separator != null && !(item is MutableString)) {
+                    separator.Invalidate();
                 }
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
@@ -2144,6 +2189,8 @@ namespace IronRuby.Builtins {
                 break;
             }
 
+            var gap = (separator != null) ? new JoinSeparator(separator) : null;
+
             // The separators go in between the elements of every array joined, nested ones included,
             // and an empty nested array still has its neighbours separated ([[], 1].join("-") is "-1").
             bool firstIsArray = false;
@@ -2154,15 +2201,15 @@ namespace IronRuby.Builtins {
                     break;
                 }
                 if (index > 0 && separator != null) {
-                    parts.Add(separator);
+                    parts.Add(gap.Current);
                 }
-                JoinItem(conversions, self, str, separator, parts, ref isBinary, ref seen);
+                JoinItem(conversions, self, str, gap, parts, ref isBinary, ref seen);
             }
             for (; index < self.Count; index++) {
                 if (index > 0 && separator != null) {
-                    parts.Add(separator);
+                    parts.Add(gap.Current);
                 }
-                bool isArray = JoinItem(conversions, self, self[index], separator, parts, ref isBinary, ref seen);
+                bool isArray = JoinItem(conversions, self, self[index], gap, parts, ref isBinary, ref seen);
                 if (index == 0) {
                     firstIsArray = isArray;
                 }

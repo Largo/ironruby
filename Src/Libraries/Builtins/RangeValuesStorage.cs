@@ -29,17 +29,26 @@ namespace IronRuby.Builtins {
                 return range;
             }
             if (value == null || value is int || value is double || value is long || value is BigInteger || value is bool ||
-                value is MutableString || value is RubySymbol ||
-                !RespondTo(value, "begin") || !RespondTo(value, "end") || !RespondTo(value, "exclude_end?") ||
-                IsArithmeticSequence(value)) {
+                value is MutableString || value is RubySymbol || IsArithmeticSequence(value)) {
                 return null;
             }
 
+            // Each method is looked for and called before the next is looked for, as MRI's
+            // rb_check_funcall calls do: a #begin that defines #end makes the object range-like.
+            if (!RespondTo(value, "begin")) {
+                return null;
+            }
             var beginSite = RubyUtils.GetCallSite(ref _beginSite, Context, "begin", RubyCallSignature.WithImplicitSelf(0));
-            var endSite = RubyUtils.GetCallSite(ref _endSite, Context, "end", RubyCallSignature.WithImplicitSelf(0));
-            var excludeEndSite = RubyUtils.GetCallSite(ref _excludeEndSite, Context, "exclude_end?", RubyCallSignature.WithImplicitSelf(0));
             object begin = beginSite.Target(beginSite, value);
+            if (!RespondTo(value, "end")) {
+                return null;
+            }
+            var endSite = RubyUtils.GetCallSite(ref _endSite, Context, "end", RubyCallSignature.WithImplicitSelf(0));
             object end = endSite.Target(endSite, value);
+            if (!RespondTo(value, "exclude_end?")) {
+                return null;
+            }
+            var excludeEndSite = RubyUtils.GetCallSite(ref _excludeEndSite, Context, "exclude_end?", RubyCallSignature.WithImplicitSelf(0));
             return Range.CreateValidated(begin, end, RubyOps.IsTrue(excludeEndSite.Target(excludeEndSite, value)));
         }
 

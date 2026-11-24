@@ -1102,10 +1102,17 @@ namespace IronRuby.Builtins {
                 i = (int)index;
             } else {
                 // rb_str_aref asks rb_range_beg_len before it converts the index: an object with
-                // #begin, #end and #exclude_end? stands for the Range it describes.
+                // #begin, #end and #exclude_end? stands for the Range it describes. The range is
+                // normalized against the length before those methods ran (MRI reads str_strlen
+                // first) and read from the string as they left it.
+                int length = GetCharacterLength(self);
                 Range range = rangeValues.TryConvert(index);
                 if (range != null) {
-                    return GetSubstring(fixnumCast, self, range);
+                    int begin, count;
+                    if (!NormalizeSubstringRange(fixnumCast, range, length, out begin, out count)) {
+                        return null;
+                    }
+                    return (count < 0) ? self.CreateDerived() : GetSubstring(self, begin, count);
                 }
                 i = Protocols.CastToFixnum(fixnumCast, index);
             }
@@ -1426,17 +1433,22 @@ namespace IronRuby.Builtins {
 
             if (!(index is int)) {
                 // rb_str_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
-                // describes, and one starting outside the string is reported by its #inspect.
+                // describes, and one starting outside the string is reported by its #inspect. As in
+                // MRI the range is resolved against the length before those methods ran and before
+                // the replacement is converted; the replacement goes where it says in the string as
+                // the conversion left it.
+                int length = GetCharacterLength(self);
                 Range range = rangeValues.TryConvert(index);
                 if (range != null) {
                     if (range.Begin is int) {
-                        int length = GetCharacterLength(self);
                         int begin = (int)range.Begin < 0 ? (int)range.Begin + length : (int)range.Begin;
                         if (begin < 0 || begin > length) {
                             throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
                         }
                     }
-                    return ReplaceSubstring(fixnumCast, self, range, Protocols.CastToString(stringCast, value));
+                    int start, count;
+                    NormalizeReplacedRange(fixnumCast, range, length, out start, out count);
+                    return ReplaceSubstring(self, start, count, Protocols.CastToString(stringCast, value));
                 }
             }
             int i = index is int ? (int)index : Protocols.CastToFixnum(fixnumCast, index);
@@ -1504,7 +1516,17 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceSubstring(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, 
             [NotNull]Range/*!*/ range, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
-            int length = GetCharacterLength(self);
+            int start, count;
+            NormalizeReplacedRange(fixnumCast, range, GetCharacterLength(self), out start, out count);
+            return ReplaceSubstring(self, start, count, value);
+        }
+
+        /// <summary>
+        /// The characters String#[]= with a Range replaces in a string of <paramref name="length"/> characters.
+        /// </summary>
+        private static void NormalizeReplacedRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length,
+            out int start, out int count) {
+
             int begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
             int end = (range.End == null) ? length : IListOps.CastToRangeComponent(fixnumCast, range.End);
 
@@ -1519,9 +1541,12 @@ namespace IronRuby.Builtins {
 
             end = end < 0 ? end + length : end;
 
-            int count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
+            count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
             // An end before the beginning is an insertion, not a negative-length error.
-            return ReplaceSubstring(self, normalizedBegin, count < 0 ? 0 : count, value);
+            if (count < 0) {
+                count = 0;
+            }
+            start = normalizedBegin;
         }
 
         [RubyMethod("[]=")]
@@ -2195,6 +2220,14 @@ namespace IronRuby.Builtins {
 
             // Remove single trailing CR/LFs
             MutableString result = self.CloneDerived();
+
+            // MRI's chompped_length: an explicit separator longer than the string leaves it alone,
+            // before the separator is even looked at for a newline (a UTF-32 "\n" does not chomp
+            // the two bytes of a UTF-16 one)
+            if (!defaultSeparator && separator.GetByteCount() > self.GetByteCount()) {
+                return result;
+            }
+
             int length = result.GetCharCount();
             bool newline = defaultSeparator && separator.StartsWith('\n') && separator.GetLength() == 1 ||
                 separator.GetByteCount() == separator.Encoding.MinBytesPerChar &&
