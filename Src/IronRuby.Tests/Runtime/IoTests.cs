@@ -264,6 +264,24 @@ false
             Assert(io.ReadByte() == -1);
         }
 
+        /// <summary>
+        /// A read that answers fewer bytes than were asked for, none of them a line end, is not the
+        /// end of the stream: the line goes on in the next read. Io_GetsLongLineFromPipe1 needs a
+        /// thread to be slow for this; here the stream answers short by itself.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void File_ReadLineShortRead1() {
+            var io = new RubyBufferedStream(new ChunkedStream(B("aaaa\r\nb"), 4, 2), false, 16);
+            TestReadLine(io, true, "aaaa\r\n");
+            TestReadLine(io, true, "b");
+            TestReadLine(io, true, null);
+
+            io = new RubyBufferedStream(new ChunkedStream(B("aaaa\r\nb"), 4, 2), false, 16);
+            TestReadLine(io, false, "aaaa\n");
+            TestReadLine(io, false, "b");
+            TestReadLine(io, false, null);
+        }
+
         private void TestReadLine(RubyBufferedStream/*!*/ io, bool preserveEolns, string expected) {
             var s = io.ReadLine(RubyEncoding.Binary, preserveEolns, -1);
             Assert(s == null && expected == null || s.ToString() == expected);
