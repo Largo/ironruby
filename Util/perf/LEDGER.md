@@ -1428,6 +1428,33 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   one (refine_spec: a `using` inside `Module.new { }`). `delegate` of `app-shapes.rb` 0.66-0.70
   of its time. `Util/delegate-matrix.rb`, `Util/bench/dlg-shapes.rb`.
 
+- **perf/lfirst (2026-11-24, 32e7e2ad and 97c5019b) - a light frame's first call costs less.**
+  Light frames made start-up 2% slower than v4.0.6 (`ir -e 1`, ReadyToRun host, instructions),
+  because a light method costs more at its first call than one with a scope: 0.62M instructions
+  more for a plain body, 1.63M more for a body with `rescue` (200 such methods, one call each).
+  A profile put the largest part in `ScopeBuilder.TryUseRegisterLocals`: the scope a light frame
+  makes on demand is one node used at every rescue helper, every call made again with the scope
+  and the frame's filter, and the register rewrite rebuilt the nine-argument
+  `CreateMethodScopeLazy` call and the locals tuple at each use. `LightFrame.MakeScope` is now one
+  node, and the rewriter rewrites each `??` and scope-making call once (memoized by reference,
+  outside OSR arguments, its only context). Second, `HandlingScopes` was a
+  `Dictionary<string, enum>`, whose code the ReadyToRun image cannot hold: the first light frame
+  of every process JIT-compiled ten dictionary methods. It is a switch now. The generated code is
+  unchanged: a DebugView dump of all 2,165 method lambdas of the 200-method scripts, the light
+  matrices and the shape files is byte-identical; the census is unchanged (25,856 of 28,369 light).
+  Light frames on minus off, ReadyToRun host, `DOTNET_TC_CallCounting=0`, five runs:
+  plain method 0.617M -> 0.489M, rescue method 1.630M -> 1.312M, `-e 1` 13.1M -> 6.7M.
+  What is left is two full-tree rewrites (about 42%), compiling the larger tree (40%) and binding
+  (19%: light sites probe the shared rule first, and its version test fails for an Integer
+  receiver after each top-level `def`, so they rebind; not changed here).
+  Gate, the branch at 0968a9ab against 4ed96a37, Release net10.0: **PASS**. IronRuby.Tests
+  PASSED on both (1,311). 35 matrices in five modes: 175 same, 0 differ. ruby/spec, all five
+  suites (32,680 examples): no failure the known list does not name. Instructions per call
+  (`ab.rb -i`): rescue shapes 0.93-1.00, keyword 0.96-1.02, loop 0.98-1.02, regex 0.99-1.02
+  (`kase` 1.060 in two rounds, 1.003 in four). Timing not run: load average 25-45 for most of
+  the gate. Light frames on minus off on the gate's trees: `-e 1` 12.8M -> 6.3M, 200 plain
+  methods 120.8M -> 98.3M, 200 rescue methods 282.7M -> 255.8M.
+
 - **Gate of 2026-11-24 for round thirty-four** (perf/time2, perf/inv2, perf/erb2, perf/ostr2):
   the branch at 77f841b9 against 592c75ab, Release net10.0: **PASS** with 7289271b (below).
   IronRuby.Tests PASSED on both trees, no failure name on either. 37 matrices in seven modes:
