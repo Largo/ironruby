@@ -856,3 +856,37 @@ def one_char_slice_threads
   p [errs.size, dups, Array.new(128) { |i| (0..127).map(&:chr).join[i].ord } == Array.new(128) { |i| i }]
 end
 one_char_slice_threads
+
+# ---- attribute writers called hot from methods without a scope (their sites have a precompiled dispatcher), with a
+# literal, a passed and a computed Boolean or Integer: the method JIT types those sites, and the dispatcher boxes the value
+# as the runtime does (true and false are the shared objects). Then a subclass's own writer, a writer redefined, the
+# receiver frozen and a singleton writer, each after the sites are hot.
+class HSWriter
+  attr_accessor :b, :i, :f, :o
+  def set_lit; self.b = false; self.i = 7; self.f = 1.5; self.o = nil; self; end
+  def set_var(x, y); self.b = x; self.i = y; self; end
+  def set_cmp(y); self.b = y > 3; self.i = y * 2; self; end
+end
+class HSWriter2 < HSWriter
+  def b=(v); @b = [:w2, v]; end
+end
+def hs_writers
+  r = []
+  w = HSWriter.new
+  5000.times { |k| w.set_lit; w.set_var(k.odd?, k); w.set_cmp(k) }
+  r << [w.b, w.i, w.f, w.o, w.b.equal?(true), w.i.equal?(9998)]
+  w.set_lit
+  r << [w.b, w.b.equal?(false), w.i, w.f]
+  v = HSWriter2.new
+  3000.times { |k| v.set_lit; v.set_cmp(k) }
+  r << [v.b, v.i]
+  HSWriter.class_eval { def i=(v); @i = -v; end }
+  w.set_lit; w.set_var(true, 100); r << [w.b, w.i]
+  w.freeze
+  begin; w.set_lit; rescue => e; r << e.class; end
+  o = HSWriter.new; def o.b=(v); @b = :single; end
+  2000.times { o.set_lit }
+  r << o.b
+  p r
+end
+hs_writers

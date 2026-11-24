@@ -1735,6 +1735,20 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// A new, uninitialized instance of this class, made the way Class#new makes one of a plain Ruby class
+        /// (<see cref="TryGetPlainAllocation"/>), without calling anything; null for a class whose instances are
+        /// made some other way. For core classes written in Ruby that construct their instances themselves, as
+        /// MRI's C does with rb_obj_alloc (Data.new and Data#with in ruby4.rb).
+        /// </summary>
+        public object TryAllocatePlainInstance() {
+            Func<RubyClass, object> allocator;
+            if (!TryGetPlainAllocation(out allocator)) {
+                return null;
+            }
+            return allocator != null ? allocator(this) : new RubyObject(this);
+        }
+
+        /// <summary>
         /// The construction BuildObjectConstructionNoFlow builds for a call of Class#new with <paramref name="count"/> arguments and
         /// no block, in the cases it is the allocation of a RubyObject and maybe a call of a Ruby initializer of that arity and
         /// nothing else; null otherwise.

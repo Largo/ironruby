@@ -148,7 +148,8 @@ class Date
       end
 
       def to_hash
-	@elem.reject{|k, v| /\A_/ =~ k.to_s || v.nil?}
+	# date__strptime leaves offset: nil when it does not know the zone
+	@elem.reject{|k, v| /\A_/ =~ k.to_s || (v.nil? && k != :offset)}
       end
 
     end
@@ -264,7 +265,7 @@ class Date
 				 else /\A([-+]?\d{1,})/
 				 end, '')
 #	  val = Rational($1.to_i, 10**3)
-	  val = Rational($1.to_i, 10**$1.size)
+	  val = Rational($1.to_i, 10**$1.delete('-+').size)
 	  e.sec_fraction = val
 	when 'M', 'OM'
 	  return unless str.sub!(/\A(\d{1,2})/, '')
@@ -282,12 +283,12 @@ class Date
 				 else /\A([-+]?\d{1,})/
 				 end, '')
 #	  val = Rational($1.to_i, 10**9)
-	  val = Rational($1.to_i, 10**$1.size)
+	  val = Rational($1.to_i, 10**$1.delete('-+').size)
 	  e.sec_fraction = val
 	when 'n', 't'
 	  return unless _strptime_i(str, "\s", e)
 	when 'P', 'p'
-	  return unless str.sub!(/\A([ap])(?:m\b|\.m\.)/i, '')
+	  return unless str.sub!(/\A([ap])(?:m|\.m\.)/i, '')
 	  e._merid = if $1.downcase == 'a' then 0 else 12 end
 	when 'Q'
 	  return unless str.sub!(/\A(-?\d{1,})/, '')
@@ -382,6 +383,23 @@ class Date
   private_class_method :_strptime_i
 
   def self._strptime(str, fmt='%F')
+    # StringValue, as date_s__strptime takes both (String#+ converts with #to_str, or raises
+    # MRI's TypeError: "no implicit conversion of nil into String")
+    str = '' + str unless String === str
+    fmt = '' + fmt unless String === fmt
+    # ASCII-only Strings go to the C# walk (Src/Libraries/Date/DateStrptime.cs), which answers
+    # false for what it leaves to the Ruby below. It hands back the Rationals as [n, d] and the
+    # offset as a place after the zone, so that the Hash keeps the Bag's order.
+    if String.equal?(str.class) && String.equal?(fmt.class) && str.ascii_only? && fmt.ascii_only?
+      h = __strptime_ascii(str, fmt)
+      unless false.equal?(h)
+	return h unless h
+	if (v = h[:sec_fraction]) then h[:sec_fraction] = Rational(v[0], v[1]) end
+	if Array === (v = h[:seconds]) then h[:seconds] = Rational(v[0], v[1]) end
+	h[:offset] = zone_to_diff(h[:zone]) if h.key?(:offset)
+	return h
+      end
+    end
     str = str.dup
     e = Format::Bag.new
     return unless _strptime_i(str, fmt, e)

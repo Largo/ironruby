@@ -359,6 +359,77 @@ EXPRESSIONS = <<~'RUBY'.lines.map(&:strip).reject { |l| l.empty? || l.start_with
   (ObjectSpace.undefine_finalizer(Object.new).class rescue "#{$!.class}")
   (ObjectSpace.each_object(Class).class rescue "#{$!.class}")
   (ObjectSpace.garbage_collect.class rescue "#{$!.class}")
+  # --- Data.new / #with made directly (KernelOps.DataNew, DataWith) and when they are not
+  M.new(1, "kg")
+  M.new(amount: 1, unit: "kg").frozen?
+  M.new("amount" => 1, "unit" => "kg")
+  (M.new(1) rescue "#{$!.class}: #{$!.message}")
+  (M.new(amount: 1) rescue "#{$!.class}: #{$!.message}")
+  (M.new(amount: 1, unit: 2, x: 3) rescue "#{$!.class}: #{$!.message}")
+  (M.new(1, 2, 3) rescue "#{$!.class}: #{$!.message}")
+  (M.new(1, unit: 2) rescue "#{$!.class}: #{$!.message}")
+  M.new(*[1, 2], **{})
+  E0.new.frozen?
+  E0.new.instance_variables
+  M.new(1, 2).instance_variables
+  SUB.new(1, 2)
+  ($trace = nil; OVER.new(1, 2); $trace)
+  ($trace = nil; OVER.new(1, 2).with(unit: 3); $trace)
+  AREA.new(w: 2, h: 3)
+  AREA.new(w: 2, h: 3).with(w: 4)
+  (AREA.new(w: 2, h: 3).with(area: 1) rescue "#{$!.class}: #{$!.message}")
+  M.new(1, 2).with(unit: 3)
+  M.new(1, 2).with
+  M.new(1, 2).with("unit" => 4)
+  (M.new(1, 2).with(foo: 4) rescue "#{$!.class}: #{$!.message}")
+  (M.new(1, 2).with(1) rescue "#{$!.class}: #{$!.message}")
+  (M.new(1, 2).with({unit: 4}) rescue "#{$!.class}: #{$!.message}")
+  (m = M.new(1, 2); m.with(unit: 3).equal?(m))
+  (m = M.new(1, 2); m.with(amount: 1, unit: 2).equal?(m))
+  Class.new(M).new(1, 2).class.superclass
+  (c = Class.new(M); c.new(1, 2).with(unit: 5).class == c)
+  (m = M.new(1, 2); m.singleton_class; m.with(unit: 3).singleton_methods)
+  (o = Data.define(:a) { def self.allocate = raise("no") }; o.new(1).a)
+  (o = Data.define(:a) { def freeze = raise("no") }; o.new(1).frozen?)
+  (o = Data.define(:a); o.new(1).method(:a).arity)
+  (o = Data.define(:a); o.instance_method(:a).parameters)
+  (o = Data.define(:a); [o.public_method_defined?(:a), o.instance_method(:a).owner == o])
+  (o = Data.define(:a) { def a = super * 2 }; o.new(4).a rescue $!.class)
+  (o = Data.define(:a); m = o.new(5); m.instance_variable_get(:@a))
+  # hot loops with the class changed half way: initialize, the reader, a prepended initialize
+  (o = Data.define(:a); (1..300).map { |i| o.class_eval { def initialize(a:) = super(a: a * 10) } if i == 150; o.new(i).a }.sum)
+  (o = Data.define(:a); (1..300).map { |i| o.class_eval { def initialize(**kw) = super(a: 0) } if i == 150; o.new(a: i).with(a: 1).a }.sum)
+  (o = Data.define(:a); (1..300).map { |i| o.class_eval { def a = 7 } if i == 150; o.new(i).a }.sum)
+  (o = Data.define(:a); (1..300).map { |i| o.prepend(Module.new { def initialize(a:) = super(a: -a) }) if i == 150; o.new(i).a }.sum)
+  (o = Data.define(:a); (1..300).map { |i| o.class_eval { remove_method :a } if i == 150; (o.new(i).a rescue 1) }.sum)
+  # --- Array#sum folding something that is not a number (Array#__sum_tail__)
+  [M.new(1, 2), M.new(3, 4)].sum([])
+  %w[a b c].sum("")
+  [[1], [2]].sum([0])
+  [1, 2].sum(Rational(1, 2)) { |x| x * 0.5 }
+  ([1, "a"].sum(0) rescue "#{$!.class}: #{$!.message}")
+  ([0.1] * 10).sum
+  ([0.1] * 10).sum(0) { |x| x }
+  (t = Struct.new(:v) { def +(o) = v + (o.respond_to?(:v) ? o.v : o) }; [t.new(1), 1e100, 1.0, -1e100].sum(0) rescue $!.class)
+  (t = Struct.new(:v) { def +(o) = v + (o.respond_to?(:v) ? o.v : o) }; [t.new(1), 1e100, 1.0, -1e100].sum(0) { |x| x } rescue $!.class)
+  (t = Struct.new(:v) { def +(o) = v + (o.respond_to?(:v) ? o.v : o) }; [3, t.new(1), 0.1, t.new(2), 0.2, 0.3].sum(0) rescue $!.class)
+  (t = Struct.new(:v) { def +(o) = self.class.new(v + (o.respond_to?(:v) ? o.v : o)) }; [1, 2, 0.5].sum(t.new(0)).v)
+  (t = Struct.new(:v) { def +(o) = self.class.new(v + (o.respond_to?(:v) ? o.v : o)) }; (1..300).map { |i| t.class_eval { def +(o) = 1 } if i == 150; [1, 2].sum(t.new(0)) { |x| x }.then { |r| r.is_a?(t) ? r.v : r } }.sum)
+  (["a", 1.5].sum(0.0) rescue "#{$!.class}: #{$!.message}")
+  ([1, 1.5, "a"].sum(M.new(0, 0)) { |x| x } rescue "#{$!.class}: #{$!.message}")
+  (t = Struct.new(:v) { def +(o) = v + o }; [2, 0.1, 0.2, 0.3].sum(t.new(1)) { |x| x })
+  (t = Struct.new(:v) { def +(o) = v + o }; [2, 1e100, 1.0, -1e100].sum(t.new(1)))
+  (t = Struct.new(:v) { def +(o) = v + o }; [1e100, 1.0, -1e100, 3].sum(t.new(1.5)) { |x| x })
+  (t = Struct.new(:v) { def +(o) = v + o }; [1r / 3, 0.1, 2].sum(t.new(1)))
+  # a Rational before the first Float is added exactly, and the Floats after it are compensated
+  [Rational(1, 1), 1e100, 1.0, -1e100].sum(0) { |x| x }
+  [Rational(1, 1), 1e100, 1.0, -1e100].sum
+  [1, Rational(1, 3), 1e100, 1.0, -1e100].sum
+  [Rational(1, 3), Rational(2, 3), 1].sum
+  (1..300).map { |i| [Rational(i, 7), 1e100, 1.0, -1e100].sum }.uniq.size
+  # --- a Data#initialize redefined on Data itself: Data.new and #with call it (last: it stays redefined)
+  (class Data; alias_method :__vom_init, :initialize; def initialize(**kw) = __vom_init(**kw.transform_values { _1 * 10 }); end; o = Data.define(:a); [o.new(a: 2).a, o.new(3).a, o.new(a: 1).with(a: 4).a])
+  (o = Data.define(:a, :b); (1..300).map { |i| o.new(i, 1).with(b: 2).b }.sum)
 RUBY
 
 eval(PRELUDE, TOPLEVEL_BINDING)

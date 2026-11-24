@@ -1460,7 +1460,9 @@ class Array
     result = __numeric_sum__(init)
     return result unless result.nil?
     return __float_init_sum__(init, __ary_at__(0), 1) if ::Float === init
-    super
+    # not Enumerable#sum, which goes through #each and compensates again at a Float after
+    # a value that is not a number: MRI's rb_ary_sum does neither (see __sum_tail__)
+    __array_sum__(init) { |e| e }
   end
 
   # Array#sum with a block (see there). A method of its own so that #sum without one stays
@@ -1473,6 +1475,13 @@ class Array
       i = i.succ
       if ::Integer === x && ::Integer === acc
         acc = acc + x
+        next
+      end
+      # an Integer and a Rational, or two Rationals, are added exactly, as MRI's rb_ary_sum does
+      # until its first Float (rb_rational_plus, whatever Rational#+ is now): a Rational must not
+      # take the plain fold of __sum_rest__, which leaves out the compensation at a later Float
+      if (::Rational === x || ::Integer === x) && (::Rational === acc || ::Integer === acc)
+        acc = __exact_add__(acc, x)
         next
       end
       unless ::Float === x && (::Integer === acc || ::Rational === acc)
@@ -1584,16 +1593,19 @@ class Array
   end
   private :__sum_rest__
 
-  # __sum_rest__'s fold itself, which __float_init_sum__ calls too.
+  # __sum_rest__'s fold itself, which __float_init_sum__ calls too: from the first value that is
+  # not a number on, everything is added with #+, a Float to a number too, as in MRI's rb_ary_sum
+  # (init_is_a_value: has_some_value). It was Enumerable#sum over an Enumerator of the rest,
+  # which switched to compensated Float summation again at the next Float: an Enumerator and
+  # a block call more for each value, and [2, 1e100, 1.0, -1e100].sum(x) was 4.0 where MRI's
+  # 0.0 is what the plain fold gives.
   def __sum_tail__(acc, x, i)
-    rest = ::Enumerator.new do |y|
-      y.yield(x)
-      while i < __ary_size__
-        y.yield(yield(__ary_at__(i)))
-        i = i.succ
-      end
+    while true
+      acc = acc + x
+      return acc unless i < __ary_size__
+      x = yield(__ary_at__(i))
+      i = i.succ
     end
-    rest.sum(acc)
   end
   private :__sum_tail__
 
@@ -7630,16 +7642,15 @@ class Data
       names.freeze
 
       klass = ::Class.new(self) do
-        names.each do |name|
-          define_method(name) { __ir_hidden_ivar__(name) }
-        end
-
         class << self
           def members
             __data_members__.dup
           end
 
           def new(*args, **kwargs, &block)
+            # every member given, to the class's own Data#initialize: made directly (KernelOps.DataNew)
+            instance = __ir_data_new__(::Data, args, kwargs)
+            return instance if instance
             unless args.empty?
               unless kwargs.empty?
                 ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0)")
@@ -7673,7 +7684,8 @@ class Data
         end
       end
       # klass is a new receiver: see Struct.new
-      ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :data_members, names)
+      # (and its readers, read as an attr_reader is: KernelOps.DefineData)
+      ::Kernel.instance_method(:__ir_data_define__).bind_call(klass, names)
       ::Module.instance_method(:class_eval).bind_call(klass, &block) if block
       klass
     end
@@ -7759,6 +7771,8 @@ class Data
     freeze
     nil
   end
+  # the initialize KernelOps.DataNew and DataWith stand in for: not one a program defines on Data later
+  __ir_data_initializer__
 
   def members
     __data_members__.dup
@@ -7829,11 +7843,13 @@ class Data
     result
   end
 
-  def with(*args, **kwargs)
-    unless args.empty?
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
-    end
+  # Positional arguments, a Hash among them, are the arity error a `**kwargs` method raises,
+  # in MRI's words (rb_scan_args "0:").
+  def with(**kwargs)
     return self if kwargs.empty?
+    # members named by their Symbols, for Data#initialize: copied directly (KernelOps.DataWith)
+    copy = __ir_data_with__(::Data, kwargs)
+    return copy if copy
     # MRI's rb_data_with: initialize gets to_h merged with the keywords as given (a
     # String key is not converted, an unknown one is initialize's to report).
     values = {}
