@@ -6840,8 +6840,16 @@ class String
   def each_line(*args, chomp: (no_chomp = true; false), &block)
     # the enumerator shows the chomp: given, false and nil too, as MRI's does
     return to_enum(:each_line, *args, **(no_chomp ? {} : { chomp: chomp })) unless block
+    # The common case - one String separator, no chomp:, an ASCII-compatible receiver - is
+    # where __ir_split_lines__ ends up after its checks; going there directly is a good part
+    # of the cost of a short string's each_line (URI.decode_www_form splits on "&").
+    if no_chomp && args.size == 1 && (sep = args[0]).is_a?(::String) && !sep.empty? &&
+        encoding.ascii_compatible? && (empty? || ::Encoding.compatible?(self, sep))
+      __ir_lines__(sep).each(&block)
+      return self
+    end
     lines = __ir_split_lines__(args, chomp)
-    lines.each { |line| block.call(line) }
+    lines.each(&block)
     self
   end
 
@@ -6989,30 +6997,10 @@ end
 # MatchData knew nothing about named groups - m[:name] was a TypeError about
 # converting a Symbol into an Integer - and had none of the byte-offset or
 # pattern-matching methods. The group names come from the CLR Match through the
-# three plain CLR methods added to MatchData.cs; everything else is built on
-# top of them and of #string, which is the subject the offsets refer to.
+# plain CLR methods added to MatchData.cs; everything else is built on top of
+# them and of #string, which is the subject the offsets refer to. #[] with a
+# group name is MatchDataOps' own.
 class MatchData
-  alias :__ir_index__ :[]
-
-  def [](*args)
-    if args.size == 1
-      key = args[0]
-      if key.is_a?(::Symbol) || key.is_a?(::String)
-        name = key.to_s
-        unless HasNamedGroup(name)
-          ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
-        end
-        return nil unless NamedGroupSuccess(name)
-        # sliced by the CLR offsets it has, not through String#[], which counts characters
-        return GetNamedGroupValue(name)
-      end
-      # The groups are a plain Array as far as a Range is concerned, down to
-      # md[3..1] being [] while md[-30..2] is nil.
-      return to_a[key] if key.is_a?(::Range)
-    end
-    __ir_index__(*args)
-  end
-
   # The pattern's own Regexp#names - except that MRI matched a pattern of no fixed
   # encoding against a non-ASCII subject with a copy compiled for the subject's
   # encoding, and the names come out in that one.
