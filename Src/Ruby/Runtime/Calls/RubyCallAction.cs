@@ -45,8 +45,10 @@ namespace IronRuby.Runtime.Calls {
             get { return _methodName; }
         }
 
+        // `defined?(obj.m)' answers a bool; one in a light frame (HasLightScope) answers it boxed, or RubyOps.LightScopeRequired
+        // when the rule would read the scope (MethodDefinition.LightFrameRewriter.LightIsDefined).
         public override Type/*!*/ ReturnType {
-            get { return _signature.ResolveOnly ? typeof(bool) : typeof(object); }
+            get { return _signature.ResolveOnly && !_signature.HasLightScope ? typeof(bool) : typeof(object); }
         }
 
         internal protected RubyCallAction(RubyContext context, string/*!*/ methodName, RubyCallSignature signature) 

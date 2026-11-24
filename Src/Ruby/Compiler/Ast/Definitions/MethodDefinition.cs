@@ -922,11 +922,14 @@ namespace IronRuby.Compiler.Ast {
             return !IsBodyScopeFree(false);
         }
 
-        // Declares keyword parameters, a `**rest' or `**nil'.
+        // Declares keyword parameters, a `**rest' or `**nil'. Not `...', whose signature says `**' but whose lowering is a
+        // rest and a block parameter and no keyword prologue (Parameters.ForwardsArguments): what a light frame takes as
+        // `def m(*a, &b)'. The keyword hash a call passes is bound into the rest by the method's RubyMethodInfo, whatever
+        // frame the body is compiled for.
         private bool HasKeywordParameters {
             get {
                 var signature = _parameters.Signature;
-                return signature != null && (signature.TakesKeywords || signature.RefusesKeywords);
+                return signature != null && !_parameters.ForwardsArguments && (signature.TakesKeywords || signature.RefusesKeywords);
             }
         }
 
@@ -1217,6 +1220,18 @@ namespace IronRuby.Compiler.Ast {
                 }
                 // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
+                // `defined?(_.m)', Forwardable's guard: a site that only resolves the name (MethodCall.TransformDefinedCondition)
+                // on the receiver, which is evaluated, and not the arguments. Light, it looks for a public method; anything else -
+                // a protected or a missing one, respond_to_missing? - is asked again with the scope made on demand
+                // (LightFrameRewriter.LightIsDefined).
+                var defined = node as IsDefinedExpression;
+                if (defined != null) {
+                    var definedCall = defined.Expression as MethodCall;
+                    if (definedCall == null || definedCall.Target == null || definedCall.Block != null) {
+                        return Refuse(why, "IsDefinedExpression of " + defined.Expression.GetType().Name);
+                    }
+                    return IsScopeFree(definedCall.Target, blockLiterals, why);
+                }
                 var call = node as MethodCall;
                 if (call != null) {
                     if (!LightRegexAll && HasRegexLiteral(call.Target, call.Arguments) && RegexScopeMethods.Contains(call.MethodName)) {
@@ -1833,6 +1848,9 @@ namespace IronRuby.Compiler.Ast {
                     return null;
                 }
                 var signature = action.Signature;
+                if (signature.ResolveOnly) {
+                    return LightIsDefined(node, action);
+                }
                 // A call with a block is one that passes a Proc on (`inner(&block)', IsScopeFree) unless the body has literal
                 // blocks, whose calls use the scope made on demand (BlockLiterals). The Proc is an argument like the others: the
                 // rules bind it as a block parameter whatever scope they are given, and one that reads the caller's scope answers
@@ -1850,6 +1868,39 @@ namespace IronRuby.Compiler.Ast {
                 var lightAction = RubyCallAction.Make(action.Context, action.MethodName,
                     new RubyCallSignature(signature.ArgumentCount, signature.Flags | RubyCallFlags.HasLightScope));
                 return MakeLightCall(reduced, action, lightAction, DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature));
+            }
+
+            /// <summary>
+            /// `defined?(obj.m)' (IsScopeFree), as a site that does not need the scope: the light site answers true or false
+            /// boxed, or RubyOps.LightScopeRequired where its rule would read the scope (the method is not public, or is missing
+            /// and respond_to_missing? is asked: RubyCallAction.Resolve), and the question is then asked again through the
+            /// original site with the scope made on demand.
+            /// </summary>
+            private MSA.Expression LightIsDefined(Microsoft.Scripting.Ast.LightDynamicExpression/*!*/ node, RubyCallAction/*!*/ action) {
+                var signature = action.Signature;
+                if (!LightCallsEnabled || action.Context == null || !signature.HasScope || signature.HasImplicitSelf || signature.HasLightScope ||
+                    signature.IsInteropCall || signature.IsSuperCall || signature.IsVirtualCall) {
+                    return null;
+                }
+                var reduced = node.Reduce() as MSA.DynamicExpression;
+                if (reduced == null || reduced.Type != typeof(bool) || reduced.Arguments.Count != 2 || !IsScope(reduced.Arguments[0])) {
+                    return null;
+                }
+                var lightAction = RubyCallAction.Make(action.Context, action.MethodName,
+                    RubyCallSignature.IsDefinedWithLightScope());
+                var receiver = Visit(reduced.Arguments[1]);
+                var target = Ast.Variable(receiver.Type, "#a1");
+                var result = Ast.Variable(typeof(object), "#r");
+                MakesCalls = true;
+                return Ast.Block(new[] { target, result },
+                    Ast.Assign(target, receiver),
+                    Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), AstUtils.Convert(_declaringScope, typeof(RubyScope)), target)),
+                    Ast.Condition(
+                        Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired)),
+                        AstUtils.LightDynamic(action, typeof(bool), AstUtils.Convert(_lazyScope, typeof(RubyScope)), target),
+                        Ast.Convert(result, typeof(bool))
+                    )
+                );
             }
 
             /// <summary>
