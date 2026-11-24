@@ -254,9 +254,16 @@ row "method redefined mid-loop", runs(600) { |i|
   o = C11b.new; def o.x = 1; o.go
 }
 module R11; refine(C11b) { def m = :refined }; end
-row "refined class over singletons", runs(300) { |i| o = C11b.new; o.singleton_class; o.go }
-threads = 4.times.map { |t| Thread.new { r = runs(2000) { |i| (c11_object(i + t).go rescue $!.class) }; r.map(&:first).uniq.sort_by(&:to_s) } }
-row "threads over singletons", threads.map(&:value).uniq
+# the refinement is active only where `using R11` is (Use11); C11b#go, defined outside it, is the unrefined control
+module Use11
+  using R11
+  def self.go(o) = o.m
+end
+row "refined class over singletons", runs(300) { |i| o = C11b.new; o.singleton_class; [Use11.go(o), o.go] }
+# each worker counts its calls that did not give what one thread alone gives for the same kind of object
+c11_expected = 7.times.map { |k| (c11_object(k).go rescue $!.class) }
+threads = 4.times.map { |t| Thread.new { c11_wrong = 0; 2000.times { |c11_i| c11_v = (c11_object(c11_i + t).go rescue $!.class); c11_wrong += 1 unless c11_v.equal?(c11_expected[(c11_i + t) % 7]) }; c11_wrong } }
+row "threads over singletons", [c11_expected, threads.map(&:value)]
 os = 300.times.map { |i| OpenStruct.new(a: i, b: i * 2) }
 row "ostruct readers", os.sum { |o| o.a + o.b + o[:a] + (o.respond_to?(:b) ? 1 : 0) }
 os.each_with_index { |o, i| o.c = i; def o.a = -1 if i % 5 == 0 }
