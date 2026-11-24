@@ -421,6 +421,12 @@ EXPRESSIONS = <<~'RUBY'.lines.map(&:strip).reject { |l| l.empty? || l.start_with
   (t = Struct.new(:v) { def +(o) = v + o }; [2, 1e100, 1.0, -1e100].sum(t.new(1)))
   (t = Struct.new(:v) { def +(o) = v + o }; [1e100, 1.0, -1e100, 3].sum(t.new(1.5)) { |x| x })
   (t = Struct.new(:v) { def +(o) = v + o }; [1r / 3, 0.1, 2].sum(t.new(1)))
+  # a Rational before the first Float is added exactly, and the Floats after it are compensated
+  [Rational(1, 1), 1e100, 1.0, -1e100].sum(0) { |x| x }
+  [Rational(1, 1), 1e100, 1.0, -1e100].sum
+  [1, Rational(1, 3), 1e100, 1.0, -1e100].sum
+  [Rational(1, 3), Rational(2, 3), 1].sum
+  (1..300).map { |i| [Rational(i, 7), 1e100, 1.0, -1e100].sum }.uniq.size
 RUBY
 
 eval(PRELUDE, TOPLEVEL_BINDING)

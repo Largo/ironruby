@@ -1477,6 +1477,13 @@ class Array
         acc = acc + x
         next
       end
+      # an Integer and a Rational, or two Rationals, are added exactly, as MRI's rb_ary_sum does
+      # until its first Float (rb_rational_plus, whatever Rational#+ is now): a Rational must not
+      # take the plain fold of __sum_rest__, which leaves out the compensation at a later Float
+      if (::Rational === x || ::Integer === x) && (::Rational === acc || ::Integer === acc)
+        acc = __exact_add__(acc, x)
+        next
+      end
       unless ::Float === x && (::Integer === acc || ::Rational === acc)
         # (a Float initial value ends up here at the first value: see __sum_rest__)
         return __sum_rest__(acc, x, i, &block)
