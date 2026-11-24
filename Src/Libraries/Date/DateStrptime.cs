@@ -316,9 +316,10 @@ namespace IronRuby.StandardLibrary.Date {
         private static bool IsNumDirective(char c) =>
             IsDigit(c) || "CDdeFGgHIjkLlMmNQRrSsTUuVvWwXxYy".IndexOf(c) >= 0;
 
-        private bool Literal(string a) {
-            if (_pos + a.Length <= _str.Length && string.CompareOrdinal(_str, _pos, a, 0, a.Length) == 0) {
-                _pos += a.Length;
+        // the subject at the position starts with fmt[start, length]: a token matched as itself
+        private bool Literal(string fmt, int start, int length) {
+            if (_pos + length <= _str.Length && string.CompareOrdinal(_str, _pos, fmt, start, length) == 0) {
+                _pos += length;
                 return true;
             }
             return false;
@@ -349,7 +350,7 @@ namespace IronRuby.StandardLibrary.Date {
                 } else {
                     len = 1;
                 }
-                string a = fmt.Substring(pos, len);
+                int start = pos;
                 pos += len;
 
                 if (s == null) {
@@ -357,7 +358,7 @@ namespace IronRuby.StandardLibrary.Date {
                         while (_pos < _str.Length && IsSpace(_str[_pos])) {
                             _pos++;
                         }
-                    } else if (!Literal(a)) {
+                    } else if (!Literal(fmt, start, len)) {
                         return false;
                     }
                     continue;
@@ -508,7 +509,7 @@ namespace IronRuby.StandardLibrary.Date {
                         if (!Run("%a %b %e %H:%M:%S %Z %Y")) return false;
                         break;
                     default:
-                        if (!Literal(a)) return false;
+                        if (!Literal(fmt, start, len)) return false;
                         break;
                 }
                 if (_unsupported) {

@@ -383,6 +383,10 @@ class Date
   private_class_method :_strptime_i
 
   def self._strptime(str, fmt='%F')
+    # StringValue, as date_s__strptime takes both (String#+ converts with #to_str, or raises
+    # MRI's TypeError: "no implicit conversion of nil into String")
+    str = '' + str unless String === str
+    fmt = '' + fmt unless String === fmt
     # ASCII-only Strings go to the C# walk (Src/Libraries/Date/DateStrptime.cs), which answers
     # false for what it leaves to the Ruby below. It hands back the Rationals as [n, d] and the
     # offset as a place after the zone, so that the Hash keeps the Bag's order.

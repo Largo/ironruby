@@ -25,7 +25,7 @@ def row(label)
     first = v if i == 0
     last = v
   end
-  puts "#{label}: #{first.inspect}#{first == last ? '' : " HOT #{last.inspect}"}"
+  puts "#{label}: #{first.inspect}#{first.inspect == last.inspect ? '' : " HOT #{last.inspect}"}"
 end
 
 def sp(str, fmt) = row("_strptime #{str.inspect} #{fmt.inspect}") { Date._strptime(str, fmt) }
@@ -64,7 +64,8 @@ row("_strptime binary leftover") { h = Date._strptime("2026 xx".b, "%Y"); [h, h[
 row("_strptime binary zone") { h = Date._strptime("UTC".b, "%Z"); [h, h[:zone].encoding] }
 row("_strptime us-ascii zone") { h = Date._strptime("UTC".encode("US-ASCII"), "%Z"); [h, h[:zone].encoding] }
 row("_strptime utf-16") { Date._strptime("2026".encode("UTF-16LE"), "%Y") }
-row("_strptime subclass") { h = Date._strptime(Class.new(String).new("2026 x"), "%Y"); [h, h[:leftover].class] }
+StrptimeSub = Class.new(String)   # one class for all the runs: the row compares their inspect
+row("_strptime subclass") { h = Date._strptime(StrptimeSub.new("2026 x"), "%Y"); [h, h[:leftover].class] }
 row("_strptime frozen") { Date._strptime("2026".freeze, "%Y".freeze) }
 row("_strptime int") { Date._strptime(2026, "%Y") }
 row("_strptime nil fmt") { Date._strptime("2026", nil) }
