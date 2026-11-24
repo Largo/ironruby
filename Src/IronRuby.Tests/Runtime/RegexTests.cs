@@ -944,6 +944,48 @@ one regexp: [true, false, true, true]
 utf-8 (?a)\b: [nil, 0, 0]
 ");
         }
+
+        /// <summary>
+        /// A subject in a single byte encoding is matched with that encoding's Onigmo ctype table
+        /// (RegexpCtype, generated from CRuby): Windows-1252's punctuation and its undefined 0x81,
+        /// which [^a] takes in; KOI8-R's word characters; Windows-1251's \p{Print}, which has
+        /// "\t"; the IBM code pages' lack of letters and case folds; ISO-8859-7's final sigma
+        /// and ISO-8859-9's dotted capital I under /i, the latter on ASCII text too; Windows-1252's
+        /// /\xAF/i, which does not match "\xAF". (?i) and (?-i) are followed group by group, and
+        /// [[:^upper:]]/i takes in "A" in every encoding.
+        /// </summary>
+        public void Regex_SingleByteCtype1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def enc(s, e) = s.dup.force_encoding(e)
+w = enc(""a\x93b\x94 \x85 \xA7\xAD\x80\x81"", 'Windows-1252')
+t('windows-1252') { [w.scan(/[[:punct:]]/).map(&:ord), w.scan(/[[:^print:]]/).map(&:ord), w.scan(/[^a]/).size, w =~ Regexp.new(enc(""\\s\x85"", 'Windows-1252'))] }
+t('koi8-r') { k = enc(""\x9D\xC1\xE1"", 'KOI8-R'); [k.scan(/[[:word:]]/).size, k.scan(/\w/).size, k =~ Regexp.new(enc(""\xC1\xC1"", 'KOI8-R'), Regexp::IGNORECASE)] }
+t('windows-1251') { c = enc(""\t\x80\x90"", 'Windows-1251'); [c =~ Regexp.new(enc('\p{Print}', 'Windows-1251')), c[1] =~ Regexp.new(enc(""\x90"", 'Windows-1251'), Regexp::IGNORECASE), c[2] =~ Regexp.new(enc(""\x80"", 'Windows-1251'), Regexp::IGNORECASE)] }
+t('ibm437') { d = enc(""\x80\x87\xE1"", 'IBM437'); [d.scan(/[[:alpha:]]/).size, d =~ Regexp.new(enc(""\x87"", 'IBM437'), Regexp::IGNORECASE), d.scan(/[[:^alpha:]]/).size] }
+t('greek sigma') { g = enc(""\xD3\xF2\xF3"", 'ISO-8859-7'); s = Regexp.new(enc(""\xF2"", 'ISO-8859-7'), Regexp::IGNORECASE); [g.scan(s).map(&:ord), g.scan(Regexp.new(enc(""[\xD3x]"", 'ISO-8859-7'), Regexp::IGNORECASE)).map(&:ord)] }
+t('turkish') { tr = Regexp.new(enc(""\xDD"", 'ISO-8859-9'), Regexp::IGNORECASE); [""i"" =~ tr, ""I"" =~ tr, enc(""\xDD"", 'ISO-8859-9') =~ /[a-z]/i, enc(""\xDD"", 'ISO-8859-9') =~ /i/i] }
+t('not itself') { m = enc(""\xAF\xBF"", 'Windows-1252'); [m =~ Regexp.new(enc(""\xAF"", 'Windows-1252'), Regexp::IGNORECASE), m =~ Regexp.new(enc(""\\A\xAF"", 'Windows-1252'))] }
+t('inline /i') { x = enc(""\xC9\xE9"", 'ISO-8859-1'); [x =~ Regexp.new(enc(""(?i:\xE9)"", 'ISO-8859-1')), x =~ Regexp.new(enc(""(?i)\xE9"", 'ISO-8859-1')), x =~ Regexp.new(enc(""(?-i:\xE9)"", 'ISO-8859-1'), Regexp::IGNORECASE), ""\xC9\xE9"".b =~ /(?i:\xE9)/n] }
+t('negated posix /i') { [""A"" =~ /[[:^upper:]]/i, ""A"" =~ /\P{Upper}/i, ""A"" =~ /[^[:upper:]]/i, ""\u00c9"" =~ /[[:^upper:]]/i, enc(""\xC9"", 'ISO-8859-1') =~ /[[:^upper:]]/i] }
+t('one regexp') { re = /[[:alpha:]]+/i; [re.match(w)&.to_s&.bytes, re.match(enc(""\xE1\xC1"", 'KOI8-R'))&.to_s&.bytes, re.match(""\u00e9"")&.to_s&.bytes] }
+", @"
+windows-1252: [[173], [147, 148, 133, 129], 10, 4]
+koi8-r: [3, 0, 1]
+windows-1251: [0, nil, 0]
+ibm437: [0, 1, 3]
+greek sigma: [[242], [211, 243]]
+turkish: [0, 0, nil, 0]
+not itself: [1, 0]
+inline /i: [0, 0, 1, 1]
+negated posix /i: [0, nil, nil, 0, 0]
+one regexp: [[97], [225, 193], [195, 169]]
+");
+        }
     }
 }
 

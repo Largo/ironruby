@@ -169,6 +169,7 @@ invalid definition is a build error (`IRGEN001`). To read what was generated, bu
 | `Src/Ruby/Builtins/UnicodeProperties.Generated.cs` | `Util/gen-unicode-properties.rb` | |
 | `Src/Ruby/Runtime/Utf8MacTables.Generated.cs` | `Util/gen-utf8-mac.rb` (with CRuby) | the oracle CRuby's UTF8-MAC converters change |
 | `Src/Ruby/Builtins/InspectPrintable.Generated.cs` | `Util/gen-inspect-printable.rb` (with CRuby) | the oracle CRuby's Onigmo ctype tables change |
+| `Src/Ruby/Builtins/RegexpCtype.Generated.cs` | `Util/gen-regexp-ctype.rb` (with CRuby) | the oracle CRuby's Onigmo ctype tables or case folds change (`Util/regexp-ctype-matrix.rb` checks the result) |
 | `*/AotSubclasses.Generated.cs` | `Util/aot/gen-subclasses.rb` | a library class is added |
 | `Src/Libraries/Rbs/RbsNodes.Generated.cs` | `Src/Libraries/Rbs/generate.rb` | |
 

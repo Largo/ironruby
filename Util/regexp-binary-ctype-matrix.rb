@@ -16,6 +16,8 @@
 # A row lists, for each subject encoding, which of the characters 0x80-0xFF (and 0x00-0x7F,
 # as a check that ASCII is unchanged) the pattern matches, as hex ranges.
 #
+# Util/regexp-ctype-matrix.rb does the same for every single byte encoding, byte by byte.
+#
 # The BINARY, US-ASCII and ISO-8859-1 columns and the entry points agree with CRuby 4.0; an
 # ISO-8859-1 subject is matched with Onigmo's ISO-8859-1 ctype table (its own punctuation,
 # U+00A0 as its one space above ASCII, the superscripts and fractions as word characters, and
