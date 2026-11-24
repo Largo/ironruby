@@ -449,6 +449,36 @@ namespace IronRuby.Compiler.Ast {
             // inside the arguments of a loop's OSR site (see VisitMethodCall)
             private bool _inOsrArguments;
 
+            // The nodes a body uses at several places, rewritten once each and left one node: the scope a light frame makes on
+            // demand (MethodDefinition.LightFrame.LazyScope, `#scope ?? (#scope = ...)'), used by every helper of a rescue clause,
+            // every call made again with the scope and every TracePoint hook, and the call that makes it, which the frame's filter
+            // uses too. Rewritten at each use, the call and the locals tuple made from the registers were built anew there, and
+            // were most of the rewrite's cost: a light method with a rescue clause took 1.61M instructions more than with its
+            // scope at its first call, 1.34M without the copies.
+            private Dictionary<MSA.Expression, MSA.Expression> _shared;
+
+            public override MSA.Expression Visit(MSA.Expression node) {
+                if (node == null || _inOsrArguments || node.NodeType != MSA.ExpressionType.Coalesce && !IsScopeMaking(node)) {
+                    return base.Visit(node);
+                }
+                MSA.Expression result;
+                if (_shared == null) {
+                    _shared = new Dictionary<MSA.Expression, MSA.Expression>();
+                } else if (_shared.TryGetValue(node, out result)) {
+                    return result;
+                }
+                result = base.Visit(node);
+                _shared[node] = result;
+                return result;
+            }
+
+            // a call that makes a scope on demand, with the locals tuple (see VisitMethodCall)
+            private static bool IsScopeMaking(MSA.Expression/*!*/ node) {
+                var call = node as MSA.MethodCallExpression;
+                return call != null && call.Object == null && (call.Method == Methods.CreateBlockScopeLazy ||
+                    call.Method == Methods.CreateMethodScopeLazy || call.Method == Methods.ReuseParkedScopeLazy);
+            }
+
             protected override MSA.Expression/*!*/ VisitParameter(MSA.ParameterExpression/*!*/ node) {
                 if (node == _tuple) {
                     if (_inOsrArguments) {
@@ -504,8 +534,7 @@ namespace IronRuby.Compiler.Ast {
             }
 
             protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
-                if (node.Object == null && (node.Method == Methods.CreateBlockScopeLazy || node.Method == Methods.CreateMethodScopeLazy ||
-                    node.Method == Methods.ReuseParkedScopeLazy)) {
+                if (IsScopeMaking(node)) {
                     var arguments = new MSA.Expression[node.Arguments.Count];
                     for (int i = 0; i < arguments.Length; i++) {
                         arguments[i] = (node.Arguments[i] == _tuple) ? _scope.MaterializeLocals() : Visit(node.Arguments[i]);

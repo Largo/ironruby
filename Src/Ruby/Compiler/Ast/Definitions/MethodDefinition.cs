@@ -336,7 +336,7 @@ namespace IronRuby.Compiler.Ast {
                 statements
             ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u"),
                 // a light frame makes a scope for the filter only when a MethodUnwinder passes:
-                Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope()) : (MSA.Expression)scopeVariable, unwinder),
+                Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope) : (MSA.Expression)scopeVariable, unwinder),
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  
                 // leave frame:
@@ -616,7 +616,9 @@ namespace IronRuby.Compiler.Ast {
             internal MSA.ParameterExpression/*!*/ Rfc;
             internal MSA.ParameterExpression/*!*/ Callee;
             internal MSA.Expression/*!*/ LazyScope;
-            internal Func<MSA.Expression>/*!*/ MakeScope;
+            // The making of the scope on demand: one node, which LazyScope and the frame's filter share, so that a body that keeps
+            // its locals in CLR variables rewrites it once (ScopeBuilder.TryUseRegisterLocals).
+            internal MSA.Expression/*!*/ MakeScope;
             internal Func<MSA.Expression, MSA.Expression>/*!*/ MakeScopeIfTraced;
             internal MSA.Expression/*!*/ Name;
 
@@ -1415,7 +1417,7 @@ namespace IronRuby.Compiler.Ast {
             // with a parking slot: #parked = TakeParkedScope(...); #parked != null ? ReuseParkedScopeLazy(#parked, ...) : CreateMethodScopeLazy(...)
             var parkedVariable = gen.CurrentMethod.ParkedVariable;
             light.MakeScope = (parkSlot != null)
-                ? () => Ast.Block(
+                ? Ast.Block(
                     Ast.Assign(parkedVariable, Methods.TakeParkedScope.OpCall(Ast.Constant(parkSlot), declaringScope, declaringModule)),
                     Ast.Condition(Ast.NotEqual(parkedVariable, AstUtils.Constant(null, typeof(ParkedProcs))),
                         Methods.ReuseParkedScopeLazy.OpCall(new AstExpressions {
@@ -1425,10 +1427,10 @@ namespace IronRuby.Compiler.Ast {
                         make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable)
                     )
                 )
-                : (Func<MSA.Expression>)(() => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable));
+                : make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
-            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope(), inLoop)));
+            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope, inLoop)));
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard) {
                 BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
