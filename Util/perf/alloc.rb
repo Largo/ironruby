@@ -22,6 +22,7 @@ require_relative 'awfy_dir'
 dir = awfy_dir(File.expand_path('../..', __dir__))
 lo = Integer(ENV['ALLOC_LO'] || 20)
 hi = Integer(ENV['ALLOC_HI'] || 60)
+abort "ALLOC_HI (#{hi}) must be greater than ALLOC_LO (#{lo})" unless hi > lo
 
 require 'tmpdir'
 probe = File.join(Dir.tmpdir, "ir-alloc-probe-#{Process.pid}.rb")
@@ -38,13 +39,17 @@ INNER.each do |b, inner|
   next unless only.empty? || only.include?(b)
   row = interps.map do |_, cmd|
     div = FEWER[b] || 1
-    n = [lo / div, hi / div].map do |iters|
+    # Scaled down, the two counts can meet (ALLOC_LO=20 ALLOC_HI=29 gives Havlak 2 and 2): keep them
+    # apart, or the division below is by zero.
+    b_lo = lo / div
+    b_hi = [hi / div, b_lo + 1].max
+    n = [b_lo, b_hi].map do |iters|
       out = IO.popen("LANG=C.UTF-8 #{cmd} #{"-r#{probe}".shellescape} #{File.join(dir, 'harness.rb').shellescape} #{b} #{iters} #{inner} 2>&1", &:read)
       # The probe prints from at_exit, so a run that raised - a wrong answer does - prints a count too:
       # only a run that ended with status 0 is a sample.
       out[/ALLOCATED (\d+)/, 1]&.to_i if $?.success? && out =~ /#{b}: iterations=/
     end
-    n.all? ? (n[1] - n[0]) / (hi / div - lo / div) : nil
+    n.all? ? (n[1] - n[0]) / (b_hi - b_lo) : nil
   end
   row.each_with_index { |v, k| cols[k] << v }
   printf fmt, b, *row.map { |v| v || 'FAIL' }

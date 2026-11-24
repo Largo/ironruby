@@ -1019,7 +1019,9 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("negative level ({0})", skipFrames);
             }
 
-            var frames = RubyExceptionData.CreateBacktrace(context, skipFrames);
+            // caller(n, length) and caller_locations(n, length): the frames past the last one asked for are not made
+            // (most of the cost on a deep stack, after the CLR's walk itself).
+            var frames = (length > 0) ? RubyExceptionData.CreateBacktrace(context, skipFrames, length) : RubyExceptionData.CreateBacktrace(context, skipFrames);
             if (frames.Count == 0 && skipFrames > 0 && skipFrames > RubyExceptionData.CreateBacktrace(context, 0).Count) {
                 return null;
             }
@@ -1770,16 +1772,31 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("is_a?")]
         [RubyMethod("kind_of?")]
-        public static bool IsKindOf(object self, RubyModule/*!*/ other) {
-            ContractUtils.RequiresNotNull(other, "other");
-            return other.Context.IsKindOf(self, other);
+        public static bool IsKindOf(RubyContext/*!*/ context, object self, object other) {
+            var module = RequireModule(context, other);
+            return module.Context.IsKindOf(self, module);
         }
 
         // thread-safe:
         [RubyMethod("instance_of?")]
-        public static bool IsOfClass(object self, RubyModule/*!*/ other) {
-            ContractUtils.RequiresNotNull(other, "other");
-            return other.Context.GetClassOf(self) == other;
+        public static bool IsOfClass(RubyContext/*!*/ context, object self, object other) {
+            var module = RequireModule(context, other);
+            return module.Context.GetClassOf(self) == module;
+        }
+
+        // rb_obj_is_kind_of and rb_obj_is_instance_of: an argument that is no class or module (nil
+        // included) is a TypeError of their own wording, not a failed implicit conversion to Module. A CLR type
+        // group stands for its non-generic member, as the binder's conversion to a module makes it do elsewhere.
+        private static RubyModule/*!*/ RequireModule(RubyContext/*!*/ context, object other) {
+            var module = other as RubyModule;
+            if (module == null) {
+                var typeGroup = other as Microsoft.Scripting.Actions.TypeGroup;
+                if (typeGroup != null) {
+                    return RubyOps.ConvertTypeGroupToModule(context, typeGroup);
+                }
+                throw RubyExceptions.CreateTypeError("class or module required");
+            }
+            return module;
         }
 
         [RubyMethod("extend")]

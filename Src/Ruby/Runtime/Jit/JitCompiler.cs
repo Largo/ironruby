@@ -3036,8 +3036,12 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
+        // ... and with the name, when asked for (LastRejectionDetail)
+        private string _rejectedDetail;
 
         // IR_JIT_VERBOSE and the census (JitCensus): what the last rejection was, with the method or variable name.
+        // A screen sets it to its own first rejection when it ends, after any screen of a callee it made on the way
+        // (whose refusal is that callee's, not this method's).
         [ThreadStatic] internal static string LastRejectionDetail;
 
         // The census (JitCensus) asks for more than the first refusal: with a list here, the screen of the next
@@ -3122,6 +3126,7 @@ namespace IronRuby.Runtime.Jit {
                 CollectAll = s._all;
             }
             rejectedBy = s._rejectedBy;
+            LastRejectionDetail = s._rejectedDetail;
             return ok;
         }
 
@@ -3140,7 +3145,7 @@ namespace IronRuby.Runtime.Jit {
                 }
                 if (_rejectedBy == null) {
                     _rejectedBy = kind;
-                    if (detail != null) { LastRejectionDetail = detail; }
+                    _rejectedDetail = detail;
                 }
             }
             if (_all != null) {

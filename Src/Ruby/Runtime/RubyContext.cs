@@ -4216,10 +4216,21 @@ namespace IronRuby.Runtime {
         /// was raised from, so the sink asks for it rather than printing "unknown:0".
         /// </summary>
         internal bool TryGetCurrentSourceLocation(out string path, out int line) {
+            return TryGetCurrentSourceLocation(false, out path, out line);
+        }
+
+        /// <param name="fromFrameRecords">
+        /// Read the frames from the interpreted frames and the compiled frames' records (<see cref="RubyExceptionData.GetRecordedFrames"/>)
+        /// instead of a CLR stack walk. They have every Ruby frame that can be the innermost one with a scope - the frame of
+        /// an eval - but not the library methods between them, which a location never names anyway.
+        /// </param>
+        internal bool TryGetCurrentSourceLocation(bool fromFrameRecords, out string path, out int line) {
             path = null;
             line = 0;
             try {
-                var backtrace = RubyExceptionData.CreateBacktrace(this, 0);
+                // A few frames: those without a file are passed over, and a record walk of the whole stack costs what the
+                // stack is deep.
+                var backtrace = fromFrameRecords ? RubyExceptionData.GetRecordedFrames(this, 8) : RubyExceptionData.CreateBacktrace(this, 0);
                 if (backtrace == null || backtrace.Count == 0) {
                     return false;
                 }

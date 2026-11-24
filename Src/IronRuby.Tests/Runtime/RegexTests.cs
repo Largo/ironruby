@@ -710,6 +710,247 @@ fragment: [16, #<Encoding:US-ASCII>, true]
 fragments: [RegexpError, ""encoding mismatch in dynamic regexp : US-ASCII and UTF-8""]
 ");
         }
+
+        /// <summary>
+        /// Regexp#inspect writes for the default internal encoding, or else the default external one
+        /// (rb_reg_desc), as String#inspect does: under LANG=C, Regexp.new("\u3042").inspect is
+        /// "/\\u3042/", not the character. A pattern that has to be escaped at all - a '/' in it, or
+        /// an unprintable ASCII character - has every non-ASCII character escaped, even one the result
+        /// could hold: \uXXXX in a Unicode regexp, \x{NNNN} (its bytes) in EUC-JP, \xNN for a byte.
+        /// </summary>
+        public void Regex_InspectResultEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t(ext, int = nil)
+  Encoding.default_external = ext
+  Encoding.default_internal = int
+  rs = [Regexp.new(""\u3042""), Regexp.new(""\u3042/""), Regexp.new(""\u{1F600}\x01""), Regexp.new(""\\\u3042""),
+        Regexp.new(""\xA4\xA2/"".b.force_encoding(""EUC-JP"")), Regexp.new(""\xA4\xA2"".b.force_encoding(""EUC-JP"")),
+        Regexp.new(""\xE9"".b.force_encoding(""Windows-1252"")), Regexp.new(""a\x80"".b), Regexp.new(""\u3042"", Regexp::IGNORECASE)]
+  puts ""#{ext} #{int}: "" + rs.map { |r| s = r.inspect; s.ascii_only? ? s : ""<#{s.encoding} #{s.b.unpack1('H*')}>"" }.join(' ')
+ensure
+  Encoding.default_internal = nil
+  Encoding.default_external = 'UTF-8'
+end
+t('UTF-8')
+t('US-ASCII')
+t('EUC-JP')
+t('BINARY')
+t('US-ASCII', 'UTF-8')
+", @"
+UTF-8 : <UTF-8 2fe381822f> /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ /a\x80/ <UTF-8 2fe381822f69>
+US-ASCII : /\u3042/ /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ /a\x80/ /\u3042/i
+EUC-JP : /\u3042/ /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// <EUC-JP 2fa4a22f> /\xE9/ /a\x80/ /\u3042/i
+BINARY : /\u3042/ /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ <ASCII-8BIT 2f61802f> /\u3042/i
+US-ASCII UTF-8: <UTF-8 2fe381822f> /\u3042\// /\u{1F600}\x01/ <UTF-8 2f5ce381822f> /\x{A4A2}\// /\x{A4A2}/ /\xE9/ /a\x80/ <UTF-8 2fe381822f69>
+");
+        }
+
+        /// <summary>
+        /// A non-ASCII byte right after a backslash, in a single byte encoding, does not pin the
+        /// regexp to the source's encoding (MRI's unescape_nonascii copies it "as is"), so
+        /// Regexp.new("\\\xFF".b) is US-ASCII and not fixed; it is compiled again in the encoding of
+        /// a non-ASCII string it is matched against, and fails where the byte is no character.
+        /// Util/regexp-escaped-byte-matrix.rb has the rest.
+        /// </summary>
+        public void Regex_EscapedByteEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def d(r) = [r.encoding, r.source.encoding, r.fixed_encoding?, r.options]
+r = Regexp.new(""\\\xFF"".b)
+t('escaped byte') { d(r) + [r.inspect.encoding, r =~ ""a"", r =~ ""\xFF"".b] }
+t('preceded') { d(Regexp.new(""a\\\xFF"".b)) }
+t('escaped backslash') { d(Regexp.new(""\\\\\xFF"".b)) }
+t('unescaped byte') { d(Regexp.new(""\xFF"".b)) }
+t('two bytes') { d(Regexp.new(""\\\xA4\xA2"".b)) }
+t('latin-1') { d(Regexp.new(""\\\xFF"".b.force_encoding(""ISO-8859-1""))) }
+t('euc-jp') { d(Regexp.new(""\\\xA4\xA2"".b.force_encoding(""EUC-JP""))) }
+t('euc-jp invalid') { Regexp.new(""\\\xFF"".b.force_encoding(""EUC-JP"")) }
+t('utf-8 invalid') { Regexp.new(""\\\xFF"".b.force_encoding(""UTF-8""), Regexp::IGNORECASE).encoding }
+t('noencoding') { d(Regexp.new(""\\\xFF"".b, Regexp::NOENCODING)) }
+t('noencoding latin-1') { Regexp.new(""\\\xFF"".b.force_encoding(""ISO-8859-1""), Regexp::NOENCODING) }
+t('fixedencoding') { d(Regexp.new(""\\\xFF"".b, Regexp::FIXEDENCODING)) }
+t('match latin-1') { Regexp.new(""\\\xFF"".b) =~ ""\xFF"".b.force_encoding(""ISO-8859-1"") }
+t('match utf-8') { Regexp.new(""\\\xFF"".b) =~ ""\u00FF"" }
+t('source again') { Regexp.new(r.source) }
+t('interpolated') { /#{r}/ }
+", @"
+escaped byte: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 0, #<Encoding:US-ASCII>, nil, 0]
+preceded: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 0]
+escaped backslash: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+unescaped byte: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+two bytes: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+latin-1: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 0]
+euc-jp: [#<Encoding:EUC-JP>, #<Encoding:EUC-JP>, true, 16]
+euc-jp invalid: [RegexpError, ""invalid multibyte character: /\\\xFF/""]
+utf-8 invalid: [RegexpError, ""invalid multibyte character: /\\\xFF/i""]
+noencoding: [#<Encoding:US-ASCII>, #<Encoding:US-ASCII>, false, 32]
+noencoding latin-1: [RegexpError, ""/.../n has a non escaped non ASCII character in non ASCII-8BIT script: /\\\xFF/""]
+fixedencoding: [#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, 16]
+match latin-1: 0
+match utf-8: [ArgumentError, ""regexp preprocess failed: invalid multibyte character""]
+source again: [RegexpError, ""invalid multibyte character: /\\\xFF/""]
+interpolated: [ArgumentError, ""invalid multibyte character""]
+");
+        }
+
+        /// <summary>
+        /// MRI's unescape_nonascii (RubyRegex.Preprocess) beyond an escaped byte: a comment pins the
+        /// encoding only in UTF-8, and the bytes of a # comment in extended mode are not checked;
+        /// it stops at the first thing wrong, so an escape's error comes before the bytes after it.
+        /// A US-ASCII regexp holding bytes outside ASCII writes those as \xHH in its text, is
+        /// compiled again in the encoding of the string it is matched against, makes a union fail
+        /// as rb_str_append does, and equals a regexp with the same source bytes.
+        /// </summary>
+        public void Regex_EscapedByteEncoding2() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+def d(r) = [r.encoding, r.fixed_encoding?, r.to_s.b]
+t('comment') { d(Regexp.new(""(?#\xFF)a"".b)) }
+t('comment utf-8') { d(Regexp.new(""(?#\xC3\xA9)a"".b.force_encoding(""UTF-8""))) }
+t('extended comment') { d(Regexp.new(""a # \xFF"".b, Regexp::EXTENDED)) }
+t('inline extended') { d(Regexp.new(""(?x:a # \xFF\n)\xFE"".b)) }
+t('unchecked comment') { d(Regexp.new(""a # \xFF"".b.force_encoding(""UTF-8""), Regexp::EXTENDED)) }
+t('hex escape first') { Regexp.new(""\\x\xFF"".b.force_encoding(""UTF-8"")) }
+t('control escape') { Regexp.new(""\\c\xFF"".b) }
+t('unmatched') { Regexp.new(""(?i:a"") }
+t('windows-1252') { Regexp.new(""\\\x80"".b) =~ ""\x80"".b.force_encoding(""Windows-1252"") }
+t('euro') { Regexp.new(""\\\x80"".b.force_encoding(""Windows-1252"")) =~ ""\u20AC"".encode(""Windows-1252"") }
+r = Regexp.new(""\\\xFF"".b)
+t('union') { [Regexp.union(r, ""a"").encoding, (Regexp.union(r, ""\u00FF"") rescue $!.message), (Regexp.union(""\u00FF"", r) rescue $!.message)] }
+t('union utf-8') { Regexp.union(r, /\u00FF/) }
+t('equal') { m = Regexp.new(""a # \xFF"".b, Regexp::EXTENDED); [m == Regexp.new(m.source, m.options), Marshal.load(Marshal.dump(m)).encoding] }
+", @"
+comment: [#<Encoding:US-ASCII>, false, ""(?-mix:(?#\\xFF)a)""]
+comment utf-8: [#<Encoding:UTF-8>, true, ""(?-mix:(?#\xC3\xA9)a)""]
+extended comment: [#<Encoding:US-ASCII>, false, ""(?x-mi:a # \\xFF)""]
+inline extended: [#<Encoding:BINARY (ASCII-8BIT)>, true, ""(?-mix:(?x:a # \xFF\n)\xFE)""]
+unchecked comment: [#<Encoding:UTF-8>, true, ""(?x-mi:a # \\xFF)""]
+hex escape first: [RegexpError, ""invalid hex escape: /\\x\\xFF/""]
+control escape: [RegexpError, ""too short control escape: /\\c\\xFF/""]
+unmatched: [RegexpError, ""end pattern with unmatched parenthesis: /(?i:a/""]
+windows-1252: 0
+euro: 0
+union: [#<Encoding:US-ASCII>, ""incompatible character encodings: US-ASCII and UTF-8"", ""incompatible character encodings: UTF-8 and US-ASCII""]
+union utf-8: [RegexpError, ""invalid multibyte character: /(?-mix:\\\xFF)|(?-mix:\\u00FF)/""]
+equal: [true, #<Encoding:US-ASCII>]
+");
+        }
+
+        /// <summary>
+        /// MRI's unescape_nonascii keeps one fixed encoding: a character, an escape of bytes and a
+        /// \u escape that disagree are an error, and escaped bytes outside ASCII have to make a
+        /// whole character. An interpolated regexp reads each fragment so, /n ones as BINARY, and
+        /// Regexp.union classifies a string by its encoding and ASCII content alone.
+        /// </summary>
+        public void Regex_EscapedByteEncoding3() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; r = yield; r.is_a?(Regexp) ? [r.encoding, r.fixed_encoding?] : r; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+L = ->(s) { s.encode(""ISO-8859-1"") }
+t('escape then literal') { Regexp.new(L[""\\u00E9\u00e9""]) }
+t('escape then byte') { Regexp.new(L[""\\u00E9\\xE9""]) }
+t('byte then escape') { Regexp.new('\xFF\u00e9'.b) }
+t('class') { Regexp.new('[\u00e9-\xFF]'.b) }
+t('escaped character') { Regexp.new('\xC3\xA9') }
+t('cut short') { Regexp.new('\xC3') }
+t('not a character') { Regexp.new('\xC3\x41') }
+t('meta') { Regexp.new('\M-\C-a') }
+t('surrogate') { Regexp.new('\uD800\x') }
+t('list space') { r = Regexp.new('\u{ 41 42 }'); r =~ ""AB"" }
+t('fragment') { s = '\xC3z'; /#{s}/ }
+t('fragment n') { s = '\x'; /#{s}/n }
+t('fragments') { s = '\u00e9'; /#{s}\xE9/n }
+t('union string') { Regexp.union('\M-a', L[""\u00e9""]) }
+t('retry') { r = Regexp.allocate; (r.send(:initialize, ""\u00e9"", Regexp::NOENCODING) rescue nil); r.send(:initialize, ""a""); r.source }
+t('translated') { Regexp.new('\xC3\xA9)') }
+", @"
+escape then literal: [RegexpError, ""non ASCII character in UTF-8 regexp: /\\u00E9\\xE9/""]
+escape then byte: [RegexpError, ""escaped non ASCII character in UTF-8 regexp: /\\u00E9\\xE9/""]
+byte then escape: [RegexpError, ""UTF-8 character in non UTF-8 regexp: /\\xFF\\u00e9/""]
+class: [RegexpError, ""escaped non ASCII character in UTF-8 regexp: /[\\u00e9-\\xFF]/""]
+escaped character: [#<Encoding:UTF-8>, true]
+cut short: [RegexpError, ""too short escaped multibyte character: /\\xC3/""]
+not a character: [RegexpError, ""invalid multibyte escape: /\\xC3\\x41/""]
+meta: [RegexpError, ""invalid multibyte escape: /\\M-\\C-a/""]
+surrogate: [RegexpError, ""invalid Unicode range: /\\uD800\\x/""]
+list space: 0
+fragment: [ArgumentError, ""too short escaped multibyte character""]
+fragment n: [ArgumentError, ""invalid hex escape""]
+fragments: [RegexpError, ""encoding mismatch in dynamic regexp : UTF-8 and ASCII-8BIT""]
+union string: [#<Encoding:ISO-8859-1>, true]
+retry: ""a""
+translated: [RegexpError, ""unmatched close parenthesis: /\\xC3\\xA9)/""]
+");
+        }
+
+        /// <summary>
+        /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
+        /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
+        /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET
+        /// sees U+0080-U+00FF. ISO-8859-1 and UTF-8 subjects keep their own letters, and a BINARY
+        /// regexp's \p{Punct} is [[:punct:]] even on ASCII text.
+        /// </summary>
+        public void Regex_BinaryCtype1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  v = begin; yield; rescue => e; [e.class, e.message]; end
+  puts ""#{l}: #{v.inspect}""
+end
+s = ""a\xE9b\xFF c\xC9"".b
+t('property /n') { ""\xff"".b =~ /\p{Alpha}/n }
+t('posix') { ""\xff"".b =~ Regexp.new('[[:alpha:]]'.b) }
+t('word') { ""\xff"".b =~ Regexp.new('\p{Word}'.b) }
+t('lower') { ""\xff"".b =~ Regexp.new('\p{Lower}'.b) }
+t('negated') { [""\xff"".b =~ /[[:^alpha:]]/, ""\xff"".b =~ /\P{Alpha}/n] }
+t('\w') { [""\xff"".b =~ /\w/n, ""\xff"".b =~ /(?u)\w/] }
+t('punct') { [""$"".b =~ Regexp.new('\p{Punct}'.b), ""$\xff"".b =~ /[[:punct:]]+/, ""\xab"".b =~ /[[:punct:]]/] }
+t('\b') { [s.scan(/\b./), s.split(/\b/)] }
+t('\R') { [""\x85"".b =~ /\R/, ""\r\n\x85"".b[/\R+/]] }
+t('scan') { s.scan(/[[:alpha:]]+/) }
+t('gsub') { s.gsub(/\p{^Alpha}/n, '.') }
+t('/i literal') { [""\xC9"".b =~ /\xE9/in, ""\xC9"".b =~ Regexp.new(""\xE9"".b, Regexp::IGNORECASE), ""\xE9"".b =~ /\xE9/in] }
+t('/i class') { [""\xC9"".b =~ /[\xE0-\xEF]/in, ""\xC9"".b =~ /[^\xE9]/in, ""A\xE9"".b =~ /[^a]/in, ""A\xE9"".b =~ /a/in] }
+t('/i posix') { s.scan(/[[:upper:]]+/i) }
+t('(?i)') { ""\xC9a"".b =~ /(?i:\xE9)|(?i)A/n }
+t('one regexp') { re = /[[:alpha:]]/; [re.match?(""\u00e9""), re.match?(""\xE9"".b), re.match?(""\u00e9""), re.match?(""\xE9"".dup.force_encoding(""ISO-8859-1""))] }
+t('iso-8859-1') { [""\xE9"".dup.force_encoding(""ISO-8859-1"") =~ /[[:alpha:]]/, ""\xC9"".dup.force_encoding(""ISO-8859-1"") =~ Regexp.new(""\xE9"".dup.force_encoding(""ISO-8859-1""), Regexp::IGNORECASE)] }
+t('utf-8') { [""\u00e9"" =~ /\p{Alpha}/, ""\u00e9"" =~ /\b/] }
+t('absent /i') { a = ""\xE9a"".b; [a.match(/(?~\xE9a)/in, 0)[0], a.match(/(?~\xE9a)/in, 1)[0], ""\xC9a"".b.match(/(?~\xE9a)/in)[0], a.match(/(?~\xC9a)/in)[0]] }
+", @"
+property /n: nil
+posix: nil
+word: nil
+lower: nil
+negated: [0, 0]
+\w: [nil, nil]
+punct: [0, 0, nil]
+\b: [[""a"", ""\xE9"", ""b"", ""\xFF"", ""c"", ""\xC9""], [""a"", ""\xE9"", ""b"", ""\xFF "", ""c"", ""\xC9""]]
+\R: [nil, ""\r\n""]
+scan: [""a"", ""b"", ""c""]
+gsub: ""a.b..c.""
+/i literal: [nil, nil, 0]
+/i class: [nil, 0, 1, 0]
+/i posix: [""a"", ""b"", ""c""]
+(?i): 1
+one regexp: [true, false, true, true]
+iso-8859-1: [0, 0]
+utf-8: [0, 0]
+absent /i: [""\xE9"", ""a"", ""\xC9a"", ""\xE9a""]
+");
+        }
     }
 }
 

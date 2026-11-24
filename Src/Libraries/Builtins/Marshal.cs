@@ -1620,7 +1620,16 @@ namespace IronRuby.Builtins {
                 if (encoding != null) {
                     pattern.ForceEncoding(encoding);
                 }
-                return new RubyRegex(pattern, flags);
+                // MRI makes the regexp with rb_reg_new_str, which refuses a source Regexp.new would:
+                // a US-ASCII regexp may hold bytes that are not ASCII (RubyRegex.HasLiteralNonAscii),
+                // and its source, US-ASCII too, then no longer makes a regexp.
+                try {
+                    RubyRegex.RequireValidPattern(pattern, flags);
+                    return new RubyRegex(pattern, flags);
+                } catch (RegexpError e) {
+                    RubyRegex.DescribeIn(e, Context);
+                    throw;
+                }
             }
 
             /// <summary>
