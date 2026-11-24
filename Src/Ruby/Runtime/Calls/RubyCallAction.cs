@@ -466,7 +466,8 @@ namespace IronRuby.Runtime.Calls {
             return true;
         }
 
-        internal override T BindShared<T>(object[]/*!*/ args) {
+        internal override T BindShared<T>(object[]/*!*/ args, bool beforeDispatcher, out bool deferred) {
+            deferred = false;
             RubyContext context = Context;
             if (context == null || !IsSharable) {
                 return null;
@@ -513,6 +514,12 @@ namespace IronRuby.Runtime.Calls {
             }
 
             if (shared == null) {
+                // (see RubyMetaBinder.BindDelegateNoTiming)
+                if (beforeDispatcher && member.DeclaringModule is RubyClass declaring && declaring.IsSingletonClass &&
+                    declaring == context.GetImmediateClassOf(target)) {
+                    deferred = true;
+                    return null;
+                }
                 lock (_SharedRulesLock) {
                     sharedRules = _sharedRules;
                     if (sharedRules == null || sharedRules.Length < MaxSharedRules) {
