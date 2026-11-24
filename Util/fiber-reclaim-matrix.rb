@@ -71,18 +71,20 @@ module FiberReclaimChecks
   def self.discard_enumerator(events)
     enum = build_enumerator(events)
     assert(enum.next == :parked, 'enumerator did not park')
-    fiber = enum.instance_variable_get(:@__fiber__)
+    fiber = enum.__send__(:__ir_hidden_ivar__, :@__fiber__)
     [WeakRef.new(enum), WeakRef.new(fiber), fiber.__state__.__core__]
   end
 
+  # Not Hash#each: Enumerator#next walks that one with a cursor and no fiber (Enumerator.cs);
+  # Enumerable#each_with_index over a Hash still suspends a built-in method on a fiber.
   def self.build_native_enumerator
-    { :a => 1, :b => 2 }.each
+    { :a => 1, :b => 2 }.each_with_index
   end
 
   def self.discard_native_enumerator
     enum = build_native_enumerator
-    assert(enum.next == [:a, 1], 'native enumerator did not park')
-    fiber = enum.instance_variable_get(:@__fiber__)
+    assert(enum.next == [[:a, 1], 0], 'native enumerator did not park')
+    fiber = enum.__send__(:__ir_hidden_ivar__, :@__fiber__)
     [WeakRef.new(enum), WeakRef.new(fiber), fiber.__state__.__core__]
   end
 
