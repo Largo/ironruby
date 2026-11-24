@@ -21,11 +21,12 @@
 
 N = 3000
 
-def t(label)
+# n: a probe that makes many calls of its own each time (deep recursion) is hot after a few
+def t(label, n = N)
   print label.ljust(52), ' => '
   seen = []
   begin
-    N.times do |i|
+    n.times do |i|
       v = yield i
       seen << v unless seen.include?(v)
     end
@@ -307,7 +308,9 @@ t('eval after') { f_eval_after(1, 2) }
 t('reassigning the rest parameter') { f_reassign(1) }
 t('a local after') { f_local_after(1, 2, 3) }
 t('recursion') { f_recurse(5) }
-t('deep recursion') { f_recurse(300).size }
+# 300 calls a time, each passing a longer splat on: 50 times is 15,000 calls, past every
+# threshold, where N times took minutes (the copying is quadratic, and slower than CRuby's)
+t('deep recursion', 50) { f_recurse(300).size }
 t('to_a once when the call needs the scope') { f_to_a_once(CountToA.new) }
 t('to_a once into method_missing') { f_to_a_once_mm(MM.new, CountToA.new) }
 
