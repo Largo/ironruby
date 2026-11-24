@@ -265,22 +265,18 @@ namespace IronRuby.Builtins {
             // IO.popen(cmd, "r+") reads one pipe and writes another. MRI's copy dups both (the
             // write half is a second IO tied to the first), so that the copy can close_write;
             // duplicating only the reading pipe made it a read-only IO that refused to.
-            int duplexRead, duplexWrite;
-            Stream duplex = RubyIO.TryDuplicateDuplex(source, out duplexRead, out duplexWrite);
+            int duplexRead, duplexWrite, errno;
+            Stream duplex = RubyIO.TryDuplicateDuplex(source, out duplexRead, out duplexWrite, out errno);
+            if (errno != 0) {
+                throw Posix.Error(errno, null, self.Context);
+            }
             int duplicated = (duplex != null) ? -1 : RubyIO.TryDuplicateDescriptor(source);
             if (duplex != null) {
-                if (duplexRead >= 0) {
-                    RubyProcess.SetCloseOnExec(duplexRead);
-                }
-                if (duplexWrite >= 0) {
-                    RubyProcess.SetCloseOnExec(duplexWrite);
-                }
                 stream = duplex;
                 descriptor = self.Context.AllocateFileDescriptor(stream);
             } else if (duplicated >= 0) {
-                // dup(2) hands back a descriptor without FD_CLOEXEC whatever the original had;
-                // MRI's #dup sets it, so a child never inherits a copy nobody meant to give it.
-                RubyProcess.SetCloseOnExec(duplicated);
+                // TryDuplicateDescriptor made it close-on-exec, whatever the original had, as
+                // MRI's #dup does, so a child never inherits a copy nobody meant to give it.
                 stream = new FileStream(
                     new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)duplicated, true),
                     source.Mode.CanWrite() ? (source.Mode.CanRead() ? FileAccess.ReadWrite : FileAccess.Write) : FileAccess.Read,

@@ -890,8 +890,15 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
-        private static extern int sys_dup(int fd);
+        private static readonly int F_DUPFD_CLOEXEC = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 67 : 1030;
+
+        /// <summary>
+        /// MRI's rb_cloexec_dup: dup(2) with FD_CLOEXEC set in the same call, so that a child
+        /// another thread spawns in the meantime cannot inherit the copy.
+        /// </summary>
+        private static int DupCloseOnExec(int fd) {
+            return LibcVariadic.Fcntl(fd, F_DUPFD_CLOEXEC, 0);
+        }
 
         [DllImport("libc", EntryPoint = "dup2", SetLastError = true)]
         private static extern int sys_dup2(int fd, int newFd);
@@ -968,10 +975,13 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>dup(2), so that a copy of an IO survives its original being reopened.</summary>
+        /// <summary>
+        /// dup(2), so that a copy of an IO survives its original being reopened. The copy is
+        /// close-on-exec, as MRI's #dup makes it.
+        /// </summary>
         public static int TryDuplicateDescriptor(RubyIO/*!*/ io) {
             int descriptor = io.KernelDescriptor;
-            return (descriptor < 0 || !_hasFileControl) ? -1 : sys_dup(descriptor);
+            return (descriptor < 0 || !_hasFileControl) ? -1 : DupCloseOnExec(descriptor);
         }
 
         /// <summary>
@@ -979,10 +989,13 @@ namespace IronRuby.Builtins {
         /// writing half as MRI's does (MRI's dup copies the tied write IO too). Answers null when
         /// the IO is not such a pair, or when a half it still uses has no descriptor to
         /// duplicate; the caller then falls back to duplicating the one descriptor. The new
-        /// descriptors are handed back so that the caller can make them close-on-exec.
+        /// descriptors are close-on-exec. When duplicating one fails (EMFILE), nothing is left
+        /// open, null is answered and <paramref name="errno"/> says why, for the caller to raise
+        /// as MRI's #dup does: falling back would make a copy that cannot close_write.
         /// </summary>
-        public static System.IO.Stream TryDuplicateDuplex(RubyIO/*!*/ io, out int readDescriptor, out int writeDescriptor) {
+        public static System.IO.Stream TryDuplicateDuplex(RubyIO/*!*/ io, out int readDescriptor, out int writeDescriptor, out int errno) {
             readDescriptor = writeDescriptor = -1;
+            errno = 0;
             var duplex = io.GetStream().BaseStream as DuplexStream;
             if (duplex == null || !_hasFileControl) {
                 return null;
@@ -997,14 +1010,16 @@ namespace IronRuby.Builtins {
             }
 
             if (reads) {
-                readDescriptor = sys_dup(readSource);
+                readDescriptor = DupCloseOnExec(readSource);
                 if (readDescriptor < 0) {
+                    errno = Marshal.GetLastWin32Error();
                     return null;
                 }
             }
             if (writes) {
-                writeDescriptor = sys_dup(writeSource);
+                writeDescriptor = DupCloseOnExec(writeSource);
                 if (writeDescriptor < 0) {
+                    errno = Marshal.GetLastWin32Error();
                     if (readDescriptor >= 0) {
                         sys_close(readDescriptor);
                         readDescriptor = -1;
