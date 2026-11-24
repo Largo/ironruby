@@ -1253,10 +1253,14 @@ namespace IronRuby.Builtins {
                         if (visitedLists == null) {
                             visitedLists = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
                         }
+                        // MRI joins the nested array into a string of its own first, which is then
+                        // joined like any other part: File.join("a//", ["", "b"]) is "a/b".
                         visitedLists.Add(nested, true);
-                        JoinList(toPath, nested, ref result, ref current, visitedLists);
+                        MutableString nestedResult = null;
+                        int nestedCurrent = 0;
+                        JoinList(toPath, nested, ref nestedResult, ref nestedCurrent, visitedLists);
                         visitedLists.Remove(nested);
-                        continue;
+                        str = nestedResult ?? MutableString.FrozenEmpty;
                     }
                 } else if (part == null) {
                     throw RubyExceptions.CreateImplicitConversionError("NilClass", "String");
