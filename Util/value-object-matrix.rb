@@ -427,6 +427,9 @@ EXPRESSIONS = <<~'RUBY'.lines.map(&:strip).reject { |l| l.empty? || l.start_with
   [1, Rational(1, 3), 1e100, 1.0, -1e100].sum
   [Rational(1, 3), Rational(2, 3), 1].sum
   (1..300).map { |i| [Rational(i, 7), 1e100, 1.0, -1e100].sum }.uniq.size
+  # --- a Data#initialize redefined on Data itself: Data.new and #with call it (last: it stays redefined)
+  (class Data; alias_method :__vom_init, :initialize; def initialize(**kw) = __vom_init(**kw.transform_values { _1 * 10 }); end; o = Data.define(:a); [o.new(a: 2).a, o.new(3).a, o.new(a: 1).with(a: 4).a])
+  (o = Data.define(:a, :b); (1..300).map { |i| o.new(i, 1).with(b: 2).b }.sum)
 RUBY
 
 eval(PRELUDE, TOPLEVEL_BINDING)

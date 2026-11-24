@@ -7771,6 +7771,8 @@ class Data
     freeze
     nil
   end
+  # the initialize KernelOps.DataNew and DataWith stand in for: not one a program defines on Data later
+  __ir_data_initializer__
 
   def members
     __data_members__.dup

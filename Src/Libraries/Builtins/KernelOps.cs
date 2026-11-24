@@ -2055,10 +2055,14 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // The layout Data.define stored on cls or a class above it, when cls's initialize is Data#initialize.
+        // The layout Data.define stored on cls or a class above it, when cls's initialize is Data#initialize - the
+        // prelude's own, which MarkDataInitializer recorded: a program that reopens Data and defines initialize again
+        // gets its initialize called, through the prelude's Ruby path.
         private static DataLayout GetDataLayout(RubyContext/*!*/ context, RubyClass/*!*/ cls, RubyClass/*!*/ dataClass) {
             var initializer = cls.ResolveMethod(Symbols.Initialize, VisibilityContext.AllVisible).Info;
-            if (initializer == null || initializer.DeclaringModule != dataClass) {
+            object builtIn;
+            if (initializer == null || initializer.DeclaringModule != dataClass
+                || !context.TryGetInstanceVariable(dataClass, DataInitializerName, out builtIn) || builtIn != (object)initializer) {
                 return null;
             }
             for (var c = cls; c != null && c != dataClass; c = c.SuperClass) {
@@ -2071,6 +2075,16 @@ namespace IronRuby.Builtins {
         }
 
         private static readonly string DataLayoutName = RubyUtils.GetHiddenInstanceVariableName("data_layout");
+        private static readonly string DataInitializerName = RubyUtils.GetHiddenInstanceVariableName("data_initializer");
+
+        /// <summary>
+        /// Records Data#initialize as the prelude defines it (ruby4.rb, right after the def), so that DataNew and
+        /// DataWith make an instance directly only while that is the initialize a Data class has.
+        /// </summary>
+        [RubyMethod("__ir_data_initializer__", RubyMethodAttributes.PrivateInstance)]
+        public static void MarkDataInitializer(RubyContext/*!*/ context, [NotNull]RubyClass/*!*/ self) {
+            context.SetInstanceVariable(self, DataInitializerName, self.ResolveMethod(Symbols.Initialize, VisibilityContext.AllVisible).Info);
+        }
 
         private static object NewData(RubyContext/*!*/ context, RubyClass/*!*/ cls, DataLayout/*!*/ layout, object[]/*!*/ values) {
             object instance = cls.TryAllocatePlainInstance();
