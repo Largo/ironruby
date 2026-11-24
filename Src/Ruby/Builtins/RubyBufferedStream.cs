@@ -373,6 +373,11 @@ namespace IronRuby.Builtins {
                 }
                 return ReadBufferByte();
             }
+            // MRI's getbyte fills its read buffer (io_fillbuf), which sets the room #ungetbyte
+            // has, even though the byte is read here without one.
+            if (_pushBackCapacity == 0) {
+                _pushBackCapacity = MinPushBackCapacity;
+            }
             if (_timeoutOwner != null) {
                 var one = new byte[1];
                 return BaseRead(one, 0, 1) == 1 ? one[0] : -1;
