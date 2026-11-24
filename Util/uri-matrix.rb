@@ -73,3 +73,61 @@ row("each_line enum") { "a&b".each_line("&").to_a }
 row("each_line mutate") { s = +"a&b&c"; r = []; s.each_line("&") { |l| r << l; s << "&z" if r.size == 1 }; [r, s] }
 row("each_line frozen dup") { r = []; "a&b".freeze.each_line("&") { |l| r << l.frozen? }; r }
 row("each_line $/") { r = []; "a\nb".each_line { |l| r << l }; r }
+
+# String#chomp!'s fast path (an ASCII separator other than "\n" on an ASCII receiver) and String#b
+# in C# (round 36), both on decode_www_form's path: hot, then redefined, refined and raised through.
+chobj = Object.new; def chobj.to_str = "&"; def chobj.inspect = "to_str"
+CH_RECV = ["a&", "a", "&", "", "a&&", "&a", "é&", "a\r\n", "a\n", "a\r", "ab".encode("UTF-16LE"), "a&".force_encoding("US-ASCII"),
+           "\xff&".b, "a&".b, "\xff&", SubStr.new("x&"), "a=b&".force_encoding("ISO-8859-1"), "xあ&".encode("EUC-JP")]
+CH_SEP = ["&", "&&", "", "\n", "\r", "\r\n", "a&", "é", "\xff".b, "&".encode("UTF-16LE"), "&".force_encoding("US-ASCII"),
+          "&".b, SubStr.new("&"), chobj, nil, :x, 1]
+def chomp_rows(tag)
+  CH_RECV.each do |s|
+    CH_SEP.each do |sep|
+      # these differ on the unchanged build too: CRuby checks neither the separator's encoding when
+      # the receiver is too short to end with it nor its type when the receiver is empty
+      next if (s == "a" || s == "&") && sep.encoding == Encoding::UTF_16LE rescue false
+      next if s.empty? && (sep == :x || sep == 1)
+      row("#{tag} chomp! #{s.inspect} #{sep.inspect}") { d = s.dup; r = d.chomp!(sep); [r.equal?(d), d, d.encoding.to_s, d.class, d.valid_encoding?] }
+      row("#{tag} chomp #{s.inspect} #{sep.inspect}") { r = s.chomp(sep); [r, r.encoding.to_s, r.class] }
+    end
+    row("#{tag} b #{s.inspect}") { r = s.b; [r, r.encoding.to_s, r.class, r.frozen?, r.equal?(s), r.ascii_only?] }
+  end
+  row("#{tag} frozen chomp! hit") { "a&".freeze.chomp!("&") }
+  row("#{tag} frozen chomp! miss") { "a".freeze.chomp!("&") }
+  row("#{tag} frozen chomp! empty") { "".freeze.chomp!("&") }
+  row("#{tag} b frozen") { "a".freeze.b.frozen? }
+end
+chomp_rows("cold")
+hot = 0
+3000.times { |i| d = +"k=v&"; hot += 1 if d.chomp!("&"); hot += (+"kv").chomp!("&").to_i; hot += "x#{i}".b.bytesize }
+row("hot") { hot }
+chomp_rows("hot")
+class String
+  alias __m36_chomp_bang chomp!
+  alias __m36_b b
+  def chomp!(*a) = "chomp! redefined #{a.inspect}"
+  def b = "b redefined"
+end
+row("redefined") { [(+"a&").chomp!("&"), "x".b, URI.decode_www_form("a=1&b=2")] }
+class String
+  alias chomp! __m36_chomp_bang
+  alias b __m36_b
+end
+row("restored") { [(+"a&").chomp!("&"), "x".b.encoding.to_s, URI.decode_www_form("a=1&b=2")] }
+module M36Refine
+  refine String do
+    def chomp!(*) = "refined"
+    def b = "refined b"
+  end
+end
+module M36User
+  using M36Refine
+  def self.go = [(+"a&").chomp!("&"), "x".b]
+end
+row("refined") { M36User.go }
+row("unrefined") { [(+"a&").chomp!("&"), "x".b.encoding.to_s] }
+s36 = +"a&"; def s36.chomp!(*) = "singleton"
+row("singleton") { s36.chomp!("&") }
+row("raise through") { 3.times.map { |i| begin; (i == 1 ? "a&".freeze : +"a&").chomp!("&"); rescue FrozenError => e; e.class; end } }
+chomp_rows("after")
