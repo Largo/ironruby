@@ -2991,10 +2991,16 @@ class CSV
   private_constant :BUILTIN_CONVERTERS
 
   # IronRuby: whether a parse runs only code that cannot tell which fiber it runs on: input
-  # from a StringIO (CSV.parse's), the built-in converters, a Regexp or String skip_lines.
+  # from a StringIO (CSV.parse's), the built-in converters, a plain Regexp or a String
+  # skip_lines (a String becomes a Regexp; a Regexp subclass's own match? could tell), and
+  # not under $VERBOSE (a converter's Float() can warn, and Warning.warn could tell) - and
+  # only where #read would come to CSV's own #each through Enumerable#to_a, which a subclass
+  # or a singleton method may have replaced.
   def parse_on_this_fiber?
-    @io.instance_of?(StringIO) and
-      (parser.skip_lines.nil? or parser.skip_lines.is_a?(Regexp) or parser.skip_lines.is_a?(String)) and
+    !$VERBOSE and
+      method(:each).owner.equal?(CSV) and method(:to_a).owner.equal?(Enumerable) and
+      @io.instance_of?(StringIO) and
+      (parser.skip_lines.nil? or parser.skip_lines.instance_of?(Regexp) or parser.skip_lines.is_a?(String)) and
       parser_fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } } and
       header_fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } }
   end

@@ -77,3 +77,18 @@ row("Float kept") { e = (Float("k") rescue $!); [e.message, e.backtrace.is_a?(Ar
 class String; alias_method :__csvm_inspect, :inspect; def inspect = "<#{__csvm_inspect}>"; end
 row("Float redefined inspect") { Float("r") }
 class String; alias_method :inspect, :__csvm_inspect; end
+
+# Review of round 35: CSV#read takes the fast path only where CRuby's #read -> #to_a -> #each
+# could not tell it from the enumerator: a subclass or singleton #each, a Regexp subclass's
+# match? and a Warning.warn handler under $VERBOSE (fiber-local state) each see what CRuby shows.
+class ReviewCSV < CSV; def each; return to_enum unless block_given?; super { |r| yield ["filtered"] }; end; end
+p ReviewCSV.new("raw\nx\n").read
+review_csv = CSV.new("a\nb\n"); def review_csv.each(&) = (super { |r| yield r.map(&:upcase) }); p review_csv.read
+class ReviewRe < Regexp; def match?(s) = (Thread.current[:review_csvm] ||= :seen; super); end
+p CSV.parse("#x\na\n", skip_lines: ReviewRe.new("\\A#")), Thread.current[:review_csvm].inspect
+review_old_verbose = $VERBOSE
+module Warning; class << self; alias review_orig_warn warn; def warn(m, **) = (Thread.current[:review_warned] = true); end; end
+$VERBOSE = true
+p CSV.parse("1e400,2\n", converters: :float), Thread.current[:review_warned].inspect
+$VERBOSE = review_old_verbose
+module Warning; class << self; alias warn review_orig_warn; end; end

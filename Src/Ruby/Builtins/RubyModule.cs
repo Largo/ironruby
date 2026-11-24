@@ -866,6 +866,9 @@ namespace IronRuby.Builtins {
             }
 
             _constants = (module._constants != null) ? new Dictionary<string, ConstantStorage>(module._constants) : null;
+            // a const_get of the copy made before this (an initialize_copy that reads a constant
+            // before super) found it in the empty table (RubyUtils.GetConstant)
+            ConstGetCache = null;
             _constantEncodings = (module._constantEncodings != null) ?
                 new Dictionary<string, RubyEncoding>(module._constantEncodings) : null;
             _constantLocations = (module._constantLocations != null) ?
