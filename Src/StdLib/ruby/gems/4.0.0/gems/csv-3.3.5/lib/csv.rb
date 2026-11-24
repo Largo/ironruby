@@ -2728,7 +2728,20 @@ class CSV
   #   # Raises IOError (not opened for reading)
   #   csv.read
   def read
-    rows = to_a
+    # IronRuby: a fiber switch costs tens of microseconds here (a fiber is a thread), and #each
+    # makes two per row through parser_enumerator.next. Reading every row needs no enumerator
+    # that can stop part way, so a read that starts before any row was taken has the parser
+    # yield straight into the Array - when nothing the parse runs could tell which fiber runs
+    # it (parse_on_this_fiber?). An exception leaves @parser_enumerator unset, as a raise
+    # inside #next ends that enumerator, and the next read starts a fresh parse either way;
+    # rows read to the end leave an exhausted one, so #shift and #eof? answer as after #each.
+    if @parser_enumerator.nil? and parse_on_this_fiber?
+      rows = []
+      parser.parse { |row| rows << row }
+      @parser_enumerator = [].each
+    else
+      rows = to_a
+    end
     if parser.use_headers?
       Table.new(rows, headers: parser.headers)
     else
@@ -2969,6 +2982,21 @@ class CSV
   def parser_options
     @parser_options.merge(header_fields_converter: header_fields_converter,
                           fields_converter: parser_fields_converter)
+  end
+
+  # IronRuby: the converters CSV defines itself, which #read may run without the fiber of
+  # parser_enumerator. A converter of the program's own may look at fiber-local variables or
+  # throw to a catch outside, which would tell.
+  BUILTIN_CONVERTERS = (Converters.values + HeaderConverters.values).grep(Proc).freeze
+  private_constant :BUILTIN_CONVERTERS
+
+  # IronRuby: whether a parse runs only code that cannot tell which fiber it runs on: input
+  # from a StringIO (CSV.parse's), the built-in converters, a Regexp or String skip_lines.
+  def parse_on_this_fiber?
+    @io.instance_of?(StringIO) and
+      (parser.skip_lines.nil? or parser.skip_lines.is_a?(Regexp) or parser.skip_lines.is_a?(String)) and
+      parser_fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } } and
+      header_fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } }
   end
 
   def parser_enumerator
