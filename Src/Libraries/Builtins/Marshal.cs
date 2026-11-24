@@ -33,25 +33,12 @@ namespace IronRuby.Builtins {
     [RubyModule("Marshal")]
     public class RubyMarshal {
 
-        public sealed class WriterSites : RubyCallSiteStorage {
-            public WriterSites(RubyContext/*!*/ context) : base(context) { }
-
-            private CallSite<Func<CallSite, object, object>> _marshalDump;
-            private CallSite<Func<CallSite, object, int, object>> _dump;
-
-            public CallSite<Func<CallSite, object, object>>/*!*/ MarshalDump {
-                get { return RubyUtils.GetCallSite(ref _marshalDump, Context, "marshal_dump", 0); }
-            }
-
-            public CallSite<Func<CallSite, object, int, object>>/*!*/ Dump {
-                get { return RubyUtils.GetCallSite(ref _dump, Context, "_dump", 1); }
-            }
-
-            private CallSite<Func<CallSite, object, object>> _binmode;
-
-            public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
-                get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
-            }
+        /// <summary>
+        /// The sites MRI's rb_obj_respond_to(obj, name, TRUE) needs: the writer asks it for
+        /// marshal_dump and _dump, the reader for _load.
+        /// </summary>
+        public abstract class RespondToSites : RubyCallSiteStorage {
+            protected RespondToSites(RubyContext/*!*/ context) : base(context) { }
 
             private RespondToStorage _respondTo;
 
@@ -73,7 +60,28 @@ namespace IronRuby.Builtins {
             }
         }
 
-        public sealed class ReaderSites : RubyCallSiteStorage {
+        public sealed class WriterSites : RespondToSites {
+            public WriterSites(RubyContext/*!*/ context) : base(context) { }
+
+            private CallSite<Func<CallSite, object, object>> _marshalDump;
+            private CallSite<Func<CallSite, object, int, object>> _dump;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ MarshalDump {
+                get { return RubyUtils.GetCallSite(ref _marshalDump, Context, "marshal_dump", 0); }
+            }
+
+            public CallSite<Func<CallSite, object, int, object>>/*!*/ Dump {
+                get { return RubyUtils.GetCallSite(ref _dump, Context, "_dump", 1); }
+            }
+
+            private CallSite<Func<CallSite, object, object>> _binmode;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
+                get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
+            }
+        }
+
+        public sealed class ReaderSites : RespondToSites {
             public ReaderSites(RubyContext/*!*/ context) : base(context) { }
 
             private CallSite<Func<CallSite, object, object, object>> _marshalLoad;
@@ -340,6 +348,58 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region MarshalWriter
+
+        /// <summary>
+        /// MRI's rb_obj_respond_to(obj, name, TRUE), for a name the all-visible lookup on <paramref name="immediate"/>
+        /// found no method of. A #respond_to? of the program's own is asked - with include_all true unless it takes
+        /// a single argument; otherwise (Kernel's, or none at all on a BasicObject) only a #respond_to_missing?
+        /// of the program's own can still say yes, and Kernel's answers false without being called. That is
+        /// nearly always the case, and then nothing is dispatched at all.
+        /// </summary>
+        internal static bool ObjRespondTo(RespondToSites/*!*/ sites, RubyClass/*!*/ immediate, object obj, string/*!*/ name, ref bool ranUserCode) {
+            var respondTo = immediate.GetMethodLookup("respond_to?");
+            if (!respondTo.Found || IsKernelMethod(respondTo.Info, _kernelRespondTo, ref _defaultRespondTo)) {
+                var missing = immediate.GetMethodLookup("respond_to_missing?");
+                if (!missing.Found || IsKernelMethod(missing.Info, _kernelRespondToMissing, ref _defaultRespondToMissing)) {
+                    return false;
+                }
+                ranUserCode = true;
+                var missingSite = sites.RespondToMissing;
+                return Protocols.IsTrue(missingSite.Target(missingSite, obj, sites.Context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
+            }
+
+            ranUserCode = true;
+            if (respondTo.Info.GetArity() == 1) {
+                return Protocols.RespondTo(sites.RespondTo, obj, name);
+            }
+            var site = sites.RespondToIncludeAll;
+            return Protocols.IsTrue(site.Target(site, obj, sites.Context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
+        }
+
+        private static readonly MethodInfo/*!*/ _kernelRespondTo = typeof(KernelOps).GetMethod("RespondTo");
+        private static readonly MethodInfo/*!*/ _kernelRespondToMissing = typeof(KernelOps).GetMethod("RespondToMissing");
+
+        // The last method infos found to be the Kernel methods themselves (or aliases of them).
+        private static RubyMemberInfo _defaultRespondTo, _defaultRespondToMissing;
+
+        private static bool IsKernelMethod(RubyMemberInfo method, MethodInfo/*!*/ kernelMethod, ref RubyMemberInfo lastFound) {
+            if (method == null) {
+                return false;
+            }
+            if (ReferenceEquals(method, lastFound)) {
+                return true;
+            }
+            var libraryMethod = method as RubyLibraryMethodInfo;
+            if (libraryMethod == null) {
+                return false;
+            }
+            var members = libraryMethod.GetMembers();
+            if (members.Length == 1 && members[0] == kernelMethod) {
+                lastFound = method;
+                return true;
+            }
+            return false;
+        }
 
         internal class MarshalWriter {
             private readonly BinaryWriter/*!*/ _writer;
@@ -977,58 +1037,6 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            /// <summary>
-            /// MRI's rb_obj_respond_to(obj, name, TRUE), for a name the all-visible lookup on <paramref name="immediate"/>
-            /// found no method of. A #respond_to? of the program's own is asked - with include_all true unless it takes
-            /// a single argument; otherwise (Kernel's, or none at all on a BasicObject) only a #respond_to_missing?
-            /// of the program's own can still say yes, and Kernel's answers false without being called. That is
-            /// nearly always the case, and then nothing is dispatched at all.
-            /// </summary>
-            private bool ObjRespondTo(RubyClass/*!*/ immediate, object obj, string/*!*/ name, ref bool ranUserCode) {
-                var respondTo = immediate.GetMethodLookup("respond_to?");
-                if (!respondTo.Found || IsKernelMethod(respondTo.Info, _kernelRespondTo, ref _defaultRespondTo)) {
-                    var missing = immediate.GetMethodLookup("respond_to_missing?");
-                    if (!missing.Found || IsKernelMethod(missing.Info, _kernelRespondToMissing, ref _defaultRespondToMissing)) {
-                        return false;
-                    }
-                    ranUserCode = true;
-                    var missingSite = _sites.RespondToMissing;
-                    return Protocols.IsTrue(missingSite.Target(missingSite, obj, _context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
-                }
-
-                ranUserCode = true;
-                if (respondTo.Info.GetArity() == 1) {
-                    return Protocols.RespondTo(_sites.RespondTo, obj, name);
-                }
-                var site = _sites.RespondToIncludeAll;
-                return Protocols.IsTrue(site.Target(site, obj, _context.EncodeIdentifier(name), ScriptingRuntimeHelpers.True));
-            }
-
-            private static readonly MethodInfo/*!*/ _kernelRespondTo = typeof(KernelOps).GetMethod("RespondTo");
-            private static readonly MethodInfo/*!*/ _kernelRespondToMissing = typeof(KernelOps).GetMethod("RespondToMissing");
-
-            // The last method infos found to be the Kernel methods themselves (or aliases of them).
-            private static RubyMemberInfo _defaultRespondTo, _defaultRespondToMissing;
-
-            private static bool IsKernelMethod(RubyMemberInfo method, MethodInfo/*!*/ kernelMethod, ref RubyMemberInfo lastFound) {
-                if (method == null) {
-                    return false;
-                }
-                if (ReferenceEquals(method, lastFound)) {
-                    return true;
-                }
-                var libraryMethod = method as RubyLibraryMethodInfo;
-                if (libraryMethod == null) {
-                    return false;
-                }
-                var members = libraryMethod.GetMembers();
-                if (members.Length == 1 && members[0] == kernelMethod) {
-                    lastFound = method;
-                    return true;
-                }
-                return false;
-            }
-
             private void WriteAnObject(object obj) {
                 if (_recursionLimit == 0) {
                     throw RubyExceptions.CreateArgumentError("exceed depth limit");
@@ -1070,7 +1078,7 @@ namespace IronRuby.Builtins {
                         // MRI asks for marshal_dump first, and for _dump only when there is none.
                         bool ranUserCode = false;
                         bool implementsMarshalDump = immediate.ResolveMethod("marshal_dump", VisibilityContext.AllVisible).Found
-                            || ObjRespondTo(immediate, obj, "marshal_dump", ref ranUserCode);
+                            || ObjRespondTo(_sites, immediate, obj, "marshal_dump", ref ranUserCode);
                         bool implementsDump = false;
                         if (!implementsMarshalDump) {
                             if (ranUserCode) {
@@ -1078,7 +1086,7 @@ namespace IronRuby.Builtins {
                                 immediate = _context.GetImmediateClassOf(obj);
                             }
                             implementsDump = immediate.ResolveMethod("_dump", VisibilityContext.AllVisible).Found
-                                || ObjRespondTo(immediate, obj, "_dump", ref ranUserCode);
+                                || ObjRespondTo(_sites, immediate, obj, "_dump", ref ranUserCode);
                         }
 
                         if (implementsMarshalDump) {
@@ -1429,14 +1437,24 @@ namespace IronRuby.Builtins {
                 if (words < 0) {
                     throw RubyExceptions.CreateArgumentError("negative length");
                 }
-                int dwords_lo = words / 2;
-                int dwords_hi = (words + 1) / 2;
-                uint[] bits = new uint[dwords_hi];
-                for (int i = 0; i < dwords_lo; i++) {
-                    bits[i] = _reader.ReadUInt32();
+                // MRI reads up to four 16-bit words a byte at a time (r_byte, so an IO-like source
+                // is asked for #getbyte) and a longer payload in one piece (r_bytes0). A length
+                // whose byte count does not fit in an Int32 cannot be followed by its payload.
+                byte[] data;
+                if (words <= 4) {
+                    data = new byte[words * 2];
+                    for (int i = 0; i < data.Length; i++) {
+                        data[i] = _reader.ReadByte();
+                    }
+                } else if (words > Int32.MaxValue / 2) {
+                    throw RubyExceptions.CreateArgumentError("marshal data too short");
+                } else {
+                    data = ReadBytes(words * 2);
                 }
-                if (dwords_lo != dwords_hi) {
-                    bits[dwords_lo] = _reader.ReadUInt16();
+
+                uint[] bits = new uint[(data.Length + 3) / 4];
+                for (int i = 0; i < data.Length; i++) {
+                    bits[i / 4] |= (uint)data[i] << (i % 4 * 8);
                 }
 
                 return BigIntegerCompat.Create(sign, bits);
@@ -1992,9 +2010,12 @@ namespace IronRuby.Builtins {
                 return _sites.Load.Target(_sites.Load, theClass, ReadString());
             }
 
-            // r_object checks for _load before it reads the string, with or without instance variables.
+            // r_object checks for _load before it reads the string, with or without instance variables,
+            // with rb_obj_respond_to: a _load that a respond_to_missing? promises counts.
             private void CheckLoad(RubyClass/*!*/ theClass) {
-                if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found) {
+                bool ranUserCode = false;
+                if (!Context.ResolveMethod(theClass, "_load", VisibilityContext.AllVisible).Found
+                    && !ObjRespondTo(_sites, Context.GetImmediateClassOf(theClass), theClass, "_load", ref ranUserCode)) {
                     throw RubyExceptions.CreateTypeError("class {0} needs to have method '_load'",
                         theClass.GetDisplayName(Context, false).ToString());
                 }
@@ -2233,16 +2254,20 @@ namespace IronRuby.Builtins {
                 int count = ReadInt32();
                 // A dump does not get to set the instance variables of a class or module it names: the
                 // one thing that may follow its name is the name's encoding (MRI's r_encname, then
-                // prohibit_ivar), and the error comes before anything is set.
+                // prohibit_ivar), and the error comes before anything is set. r_encname reads one entry
+                // only, so whatever the count says is left after it is rejected unread.
                 RubyModule module = obj as RubyModule;
                 if (module != null) {
-                    for (int i = 0; i < count; i++) {
+                    if (count > 0) {
                         string name = ReadIdentifier();
                         object value = ReadAnObject(false);
-                        if (ParseEncodingIVar(name, value) == null) {
-                            throw RubyExceptions.CreateTypeError("can't override instance variable of {0} '{1}'",
-                                module.IsClass ? "class" : "module", module.GetDisplayName(Context, false).ToString());
+                        if (ParseEncodingIVar(name, value) != null) {
+                            count--;
                         }
+                    }
+                    if (count > 0) {
+                        throw RubyExceptions.CreateTypeError("can't override instance variable of {0} '{1}'",
+                            module.IsClass ? "class" : "module", module.GetDisplayName(Context, false).ToString());
                     }
                     return;
                 }
