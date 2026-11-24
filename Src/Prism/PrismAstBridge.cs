@@ -2610,7 +2610,8 @@ namespace IronRuby.Prism {
 
             return new Parameters(mandatory.ToArray(), leadingMandatoryCount,
                 optional.Count > 0 ? optional.ToArray() : null, unsplat, blockParam, span) {
-                KeywordsAfterOptionals = keywordsAfterOptionals
+                KeywordsAfterOptionals = keywordsAfterOptionals,
+                ForwardsArguments = node.KeywordRest is Pm.ForwardingParameterNode
             };
         }
 
