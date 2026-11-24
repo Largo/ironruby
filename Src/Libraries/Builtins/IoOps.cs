@@ -2644,6 +2644,12 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("encoding mismatch: {0} IO with {1} RS",
                     readEncoding.Name, separator.Encoding.Name);
             }
+            if (ascii && self.Enc2 == null && !readEncoding.IsAsciiIdentity && !readEncoding.IsDummy && separator.Encoding != readEncoding) {
+                // The default separator, in a wide encoding read as it is (prepare_getline_args
+                // makes it "\n" in the IO's encoding): the byte 0x0A on its own is no line end
+                // there, but half of one or part of another character.
+                return MutableString.CreateBinary(readEncoding.StrictEncoding.GetBytes("\n"), readEncoding);
+            }
             if (ascii || self.Enc2 == null || self.Enc2.IsDummy || !self.Enc2.IsAsciiIdentity) {
                 return separator;
             }
@@ -2743,6 +2749,13 @@ namespace IronRuby.Builtins {
                 line = site.Target(site, self, line) as MutableString ?? line;
             }
             if (chomp) {
+                RubyEncoding encoding = line.Encoding;
+                if (separator != null && !separator.IsEmpty && separator.IsAscii() && separator.Encoding != encoding &&
+                    !encoding.IsAsciiIdentity && !encoding.IsDummy) {
+                    // the default separator, which a wide line ends with as a character of its own
+                    // encoding (SeparatorToRead)
+                    separator = MutableString.CreateBinary(encoding.StrictEncoding.GetBytes(separator.ConvertToString()), encoding);
+                }
                 ChompLine(line, separator);
             }
             return line;
