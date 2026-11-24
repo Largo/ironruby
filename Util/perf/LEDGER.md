@@ -948,6 +948,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `super`, `{}`, a `while` with `break`, a block passed on - which is /perf-frame's. `uniq` is not this skill's:
     its C# method alone costs what the call does (500 ns against CRuby's 230). One method per run of
     `/perf-core`. `tap` and `then` are already minimal Ruby: what they pay is gap 13.
+    Round thirty-four (see Landed, perf/time2): ASCII `Date._strptime` is C#, `strptime` 0.2-0.3
+    of its time. Left: `Date._parse` and `Time.parse` about 3x CRuby (Ruby regexps and Hash
+    building in `format.rb`), a "UT-3" style offset, UTF-16 subjects' errors, and a subclass of
+    String taking the Ruby path.
 16. **A light frame whose usual callee wants the caller's scope costs more than a frame
     with a scope**, and **the splat itself is what a forwarding wrapper still pays**. Both
     are what is left of "wrappers that splat stay out of light frames", which is done (see
@@ -1067,6 +1071,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     against 369 ns; positional creation is level at 142 against 131). And
     `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
     two parameters).
+    Round thirty-four (see Landed, perf/inv2): `Data.new`, `#with` and Data readers are direct;
+    the invoice shapes are at CRuby's time. Left: initializers taking keywords (`Product.new(sku:
+    ...)`) at about 2x CRuby, `Hash#dup`, and Struct `keyword_init` as above. And
+    `Data.singleton_methods` lists `:allocate`, which CRuby's does not (as on the baseline).
 25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
     sixteen's breakdown; its author's numbers, taken beside two other experiments at load
     2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
@@ -1202,6 +1210,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     1000 runs instead of 32, and `ERB::Escape.html_escape` is C#: `erb_result` 0.68-0.81 of its
     time. Left: an eval's own cost is about 1 ms on a template (light compile, transformation,
     bridge), and the template's body run as a method is about 8 times CRuby's.
+    Round thirty-four (see Landed, perf/erb2): the parsed tree of an evaluated text is kept, so a
+    template's parse and bridge cost 5 us instead of 72; `erb_eval` 0.77 of its time. Left: the
+    transformation (~50 us) and light compile (~80 us) of every eval.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1224,6 +1235,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the first setter through `method_missing` no longer build a rule per object's singleton
     class: `ostruct` of `app-shapes.rb` 0.56 of its time, `ostruct3` of `sdef-shapes.rb` 0.14-0.16.
     Left: `OpenStruct.new` is about 120 us against CRuby's 10, some fifteen binds per object.
+    Round thirty-four (see Landed, perf/ostr2): a shared rule's test takes in a re-versioned
+    singleton class that resolves the same: binds per OpenStruct 17 -> 4, `ostruct` 0.30-0.33 of
+    its time. Left: the four binds of per-object readers (a different method on each object);
+    the resolution in a polymorphic rule's test, which remembers one rejected version only; and
+    the lock that resolution takes inside a rule test.
 
 33. **Three differences from CRuby in interpolation**, found by the probes of
     `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
@@ -1242,6 +1258,74 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
 ## Landed
+
+- **Gate of 2026-11-24 for round thirty-four** (perf/time2, perf/inv2, perf/erb2, perf/ostr2):
+  the branch at 77f841b9 against 592c75ab, Release net10.0: **PASS** with 7289271b (below).
+  IronRuby.Tests PASSED on both trees, no failure name on either. 37 matrices in seven modes:
+  CRuby's output but for the differences the baseline has too; `strptime-matrix` differs from
+  CRuby in 20 lines against the baseline's 32 and `value-object-matrix` in 2 against 12.
+  `caller-matrix` and `block-loop-matrix` differed on the ReadyToRun host only (the known
+  `Kernel#eval` and nested `Range#each` frames). Recursion a million deep: SystemStackError in
+  both modes. ruby/spec, all five suites (32,285 examples): no failure the known list does not
+  name. The fourteen benchmarks verify; `app-shapes.rb` prints CRuby's checksums, JIT on and off.
+  Timing: AWFY, 12 iterations, both orders: geomean 0.967 and 1.015 (new/base), no benchmark
+  more than 5% slower in both. micro-table: `ivar_rw`, `abs`, `arr`, `yield`, `each4`, `poly2`,
+  `blockeach` and `selfcall` were slower in both orders; in six alternating rounds of their own
+  they are 0.96-1.08, all overlapping, and `poly2` (the shape perf/ostr2's rule test could
+  touch) 1.01 in twelve. Of the shape files, `iso_in`, `parse`, `format` and `eval_distinct`
+  looked slower in one order or both; in alternating rounds of their own, at a steady-state N,
+  they are 0.83-1.03, overlapping. `app-shapes.rb` four rounds each order: `ostruct` 0.30-0.33
+  of its time, `invoice_build` 0.41-0.46, `invoice_render` 0.40-0.43, the rest overlapping.
+  Bytes per iteration: geomean 1.007, none more than 1% but Towers (149 -> 163 KB). Start-up on
+  the ReadyToRun host, twelve alternating runs, best ms (base -> new): `-e 1` 425 -> 449 (medians
+  521 and 528), `gem --version` 585 -> 600 (medians 685 and 660), and of the gate's own runs
+  `gem list` 1436 -> 1430, `require "irb"` 1292 -> 1286, `irb` 1866 -> 1840.
+
+- **7289271b (round thirty-four, after the merge) - an attribute reader may read a hidden
+  variable.** `RubyAttributeReaderInfo` asserted a name starting with `@`; perf/inv2's Data
+  readers read the hidden `<ir>name`, so every Debug build (CI's) failed the assertion in
+  `Prelude_DataStructErrors1`. The assertion takes the hidden prefix too.
+
+- **perf/time2 (round thirty-four, 2026-11-23, ec0f1c98, merged in 1587bcd3) - ASCII-only
+  `Date._strptime` in C#** (`Src/Libraries/Date/DateStrptime.cs`). The Ruby port of 1.9's
+  `_strptime_i` cost about 18 us a call against CRuby's 1.1: a String per format token, a case
+  over sixty literals, a `sub!` with a MatchData per field. The C# walk takes a subject and a
+  format that are both ASCII-only plain Strings and answers false for anything else, which
+  `format.rb` then parses as before. Fixed on both paths: `%L`/`%N` with a sign, `%p` before a
+  letter, an unknown zone's `offset: nil` (in `Date._parse` too). `d_strptime` 0.09-0.31 of its
+  time, `strptime` 0.20-0.30, `time` of `app-shapes.rb` 0.52. `Util/strptime-matrix.rb` gains
+  69 rows; `Util/bench/time-shapes.rb` splits `time` into its parts.
+
+- **perf/inv2 (round thirty-four, 2026-11-23, 7a2d25f4, merged in ef88aec2) - `Data.new`,
+  `Data#with`, Data readers and `Array#sum`'s plain fold.** `Data.new` built a keyword Hash out
+  of positional values and splatted it into `initialize` through three `__send__`s; when the
+  class's `initialize` is Data's own and the arguments name every member, `KernelOps.DataNew`
+  makes the frozen instance directly (as MRI, calling neither `allocate` nor `freeze`), and
+  `DataWith` likewise. Readers are attribute readers of hidden variables, not `define_method`
+  blocks. `Array#sum` past a non-number is a plain `+` loop, as rb_ary_sum. `Money.new` 1083 ->
+  307 ns, `with` 1168 -> 478, `<=>` 143 -> 55; `invoice_build` 0.41-0.46 of its time,
+  `invoice_render` 0.40-0.43, near CRuby's at steady state (149 and 128 us against 128 and 126). `Util/bench/invoice-parts.rb`.
+
+- **perf/erb2 (round thirty-four, 2026-11-23, 66e5dec6, merged in acc9f9fc) - the prism trees
+  of evaluated strings are kept** (`EvalAstCache`, gap 31). Per runtime, the last 64 texts up
+  to 64 KB, keyed by text, file, line, outer locals, encoding and whether the eval is outside a
+  method; only the AST, so every eval still transforms and compiles afresh (literal identity,
+  `/o`, `END {}` and call sites stay per eval, which is what sank the compiled-code cache of
+  perf/evalc). A parse that reported anything is not kept. Parse and bridge of a template 72 ->
+  5 us; `erb_eval` 0.77-0.78 of its time, `erb_full` 0.71-0.73, `erb_result` 0.68.
+  `Util/eval-matrix.rb` rows 26-31, `Util/bench/erb-shapes.rb`.
+
+- **perf/ostr2 (round thirty-four, 2026-11-23, 39fd30bf, merged in 77f841b9) - a shared rule's
+  test takes in a new class version that resolves to its method** (gap 32). Every
+  `define_singleton_method` re-versions the object's singleton class, so each self call inside
+  `ostruct.rb` bound again (about 22 binds per `OpenStruct.new`). `RuleVersionSet.IsValidFor`
+  now resolves the call for a version it does not hold (`RubyCallAction.TryShareVersion`, as
+  `BindShared` would) and adds it when it lands on the rule's method; a call whose visibility
+  comes from the caller's scope only for a public method; one rejected version is remembered.
+  `BindShared` no longer hands out the interpreted rule after the compiled one exists, and a
+  receiver with a singleton class of its own tries the shared rule before a dispatcher at any
+  site. Binds per OpenStruct 17 -> 4; `ostruct` of `app-shapes.rb` 0.30-0.33 of its time,
+  `ostruct3_new` and `ostruct_app` 0.21-0.32. `Util/sdef-matrix.rb` section 11.
 
 - **Gate of 2026-11-23 for round thirty-three** (perf/setx, perf/erbr, perf/ostr, perf/pwalk):
   the branch at 4e349c7f against 02aa8db1, Release net10.0: **PASS** with 5f9f11ef (below).
