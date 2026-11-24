@@ -677,6 +677,146 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Whether bytes[start, start + count) stop part way through a character, read from the
+        /// start a character at a time as MRI's rb_enc_precise_mbclen does (a byte that begins
+        /// no character counts as one). The line readers stretch a byte limit that lands there.
+        /// Only UTF-8 and the multibyte encodings whose shape is known here can end inside a
+        /// character; in a single byte encoding every byte is one.
+        /// </summary>
+        /// <summary>
+        /// UTF-8 and the encodings that are UTF-8 under another name (UTF8-MAC, UTF8-DoCoMo...):
+        /// their characters have UTF-8's shape.
+        /// </summary>
+        private bool IsUtf8Shaped {
+            get { return RubyOnlyEncodings.GetTableCodePage(CodePage) == CodePageUTF8; }
+        }
+
+        public bool EndsInsideCharacter(byte[]/*!*/ bytes, int start, int count) {
+            if (count <= 0) {
+                return false;
+            }
+            if (IsUtf8Shaped) {
+                // UTF-8 synchronises itself: only the last character needs looking at
+                int head = start + count - 1;
+                while (head >= start && start + count - head < 4 && (bytes[head] & 0xC0) == 0x80) {
+                    head--;
+                }
+                if (head < start) {
+                    return false;
+                }
+                int lead = bytes[head];
+                int length = (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : 1;
+                return start + count - head < length;
+            }
+
+            // The wide Unicode encodings go by code units: a UTF-32 character is four bytes, and
+            // a UTF-16 one is two, or four when the first unit is a high surrogate. Without this
+            // a byte limit on a UTF-32 #gets cut its characters in half.
+            int codePage = StrictEncoding.CodePage;
+            if (codePage == 12000 || codePage == 12001) {
+                return count % 4 != 0;
+            }
+            if (codePage == 1200 || codePage == 1201) {
+                if (count % 2 != 0) {
+                    return true;
+                }
+                int high = bytes[start + count - (codePage == 1200 ? 1 : 2)];
+                return high >= 0xD8 && high <= 0xDB;
+            }
+
+            int end = start + count;
+            int p = start;
+            while (p < end) {
+                int length = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, p, end);
+                if (length == Int32.MinValue) {
+                    return false;
+                }
+                if (length == 0) {
+                    return true;
+                }
+                p += (length > 0) ? length : 1;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The length of the character at <paramref name="index"/> of bytes that end at
+        /// <paramref name="end"/>, or -1 if no well formed character begins there (MRI's
+        /// rb_enc_precise_mbclen, MBCLEN_CHARFOUND_P). Every byte is a character of a single
+        /// byte encoding; the Unicode encodings other than UTF-8 are not covered.
+        /// </summary>
+        public int GetCharacterLengthAt(byte[]/*!*/ bytes, int index, int end) {
+            if (index >= end) {
+                return -1;
+            }
+            if (IsUtf8Shaped) {
+                int lead = bytes[index];
+                int length = (lead < 0x80) ? 1 : (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : -1;
+                if (length <= 1 || index + length > end) {
+                    return (length == 1) ? 1 : -1;
+                }
+                try {
+                    new UTF8Encoding(false, true).GetCharCount(bytes, index, length);
+                    return length;
+                } catch (DecoderFallbackException) {
+                    return -1;
+                }
+            }
+            int result = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, index, end);
+            if (result == Int32.MinValue) {
+                return 1;
+            }
+            return (result > 0) ? result : -1;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="offset"/> bytes into bytes[start, start + count) a character
+        /// begins (MRI's rb_enc_left_char_head(s, p, e, enc) == p). In EUC-JP or Shift_JIS the
+        /// bytes of a separator can be found straddling two characters, which is no separator.
+        /// UTF-8 and the single byte encodings answer true: a well formed separator cannot
+        /// begin inside one of their characters.
+        /// </summary>
+        public bool IsCharacterBoundary(byte[]/*!*/ bytes, int start, int count, int offset) {
+            int boundary = 0;
+            return IsCharacterBoundary(bytes, start, count, offset, ref boundary);
+        }
+
+        /// <summary>
+        /// IsCharacterBoundary walking from <paramref name="boundary"/>, a character boundary at
+        /// or before <paramref name="offset"/> (both relative to <paramref name="start"/>), which
+        /// moves on to the last boundary at or before the offset. A caller that asks about
+        /// offsets in increasing order so walks the bytes once rather than once per offset.
+        /// </summary>
+        public bool IsCharacterBoundary(byte[]/*!*/ bytes, int start, int count, int offset, ref int boundary) {
+            System.Diagnostics.Debug.Assert(boundary <= offset);
+            // UTF-16 and UTF-32 go by code units (see EndsInsideCharacter): "\n" in UTF-16LE is
+            // "\x0A\x00", which the character "ੁ" followed by "䈀" also contains.
+            int codePage = StrictEncoding.CodePage;
+            if (codePage == 12000 || codePage == 12001 || codePage == 1200 || codePage == 1201) {
+                return !EndsInsideCharacter(bytes, start, offset);
+            }
+
+            int end = start + count;
+            int target = start + offset;
+            int p = start + boundary;
+            while (p < target) {
+                int length = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, p, end);
+                if (length == Int32.MinValue) {
+                    // the character is cut off by the end: it may be whole once there are more bytes
+                    boundary = p - start;
+                    return true;
+                }
+                int next = p + ((length > 0) ? length : 1);
+                if (next > target) {
+                    break;
+                }
+                p = next;
+            }
+            boundary = p - start;
+            return p == target;
+        }
+
+        /// <summary>
         /// The smallest number of bytes a character of this encoding occupies. It is 1 for
         /// everything but UTF-16 and UTF-32, whose code units are 2 and 4 bytes wide; a run of
         /// bytes that decodes to nothing still counts as one character per unit there, which is

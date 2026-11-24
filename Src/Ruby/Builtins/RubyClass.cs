@@ -848,6 +848,9 @@ namespace IronRuby.Builtins {
             if (superClass == context.ClassClass) {
                 throw RubyExceptions.CreateTypeError("can't make subclass of Class");
             }
+            if (superClass.IsUninitializedAllocation) {
+                throw RubyExceptions.CreateTypeError("can't inherit uninitialized class");
+            }
             return superClass;
         }
 

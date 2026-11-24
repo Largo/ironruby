@@ -685,8 +685,6 @@ namespace IronRuby.Runtime {
             return "an instance of " + MessageTypeName(className);
         }
 
-        private static CallSite<Func<CallSite, object, object>> _NameSite;
-
         /// <summary>
         /// What the module answers to #name, which is what MRI builds this message out of - a
         /// class can define its own #name and MRI shows that one. The built-in #name is not
@@ -708,7 +706,8 @@ namespace IronRuby.Runtime {
 
             _disableMethodMissingMessageFormatting = true;
             try {
-                var site = RubyUtils.GetCallSite(ref _NameSite, context, "name", 0);
+                // the runtime's own site: a static one would stay bound to the first runtime
+                var site = context.GetOrCreateSendSite<Func<CallSite, object, object>>("name", RubyCallSignature.WithImplicitSelf(0));
                 var name = site.Target(site, module) as MutableString;
                 return (name != null) ? name.ConvertToString() : null;
             } catch (Exception) {

@@ -98,7 +98,16 @@ namespace IronRuby.Prism {
             }
             bool timed = PhaseTimer.Enter(PhaseTimer.Bridge);
             try {
-                string code = sourceUnit.GetCode();
+                string code;
+                try {
+                    code = sourceUnit.GetCode();
+                } catch (ArgumentException e) when (e.Data[RubyContext.InvalidMagicCommentSourceKey] is byte[] source) {
+                    string message = MagicCommentErrorMessage(source, sourceUnit.Path, options.InitialLocation.Line);
+                    if (message == null) {
+                        throw;
+                    }
+                    throw new ArgumentException(message);
+                }
                 // Prism, told this is the main script, would skip a #! line without "ruby" in it to
                 // look for one that has; a binstub that names IronRuby's launcher is already Ruby.
                 if (mainScript && (commandLine & 0x20) == 0 && RubyUtils.ShebangNamesIronRuby(code)) {
@@ -286,6 +295,31 @@ namespace IronRuby.Prism {
         private void Report(string/*!*/ message, SourceSpan span, int errorCode, Severity severity) {
             _reported = true;
             _errorSink.Add(_sourceUnit, message, span, errorCode, severity);
+        }
+
+        /// <summary>
+        /// The ArgumentError MRI raises for a magic comment naming an encoding it does not know: prism's
+        /// "file:line: unknown or invalid encoding in the magic comment" followed by the line, marked under the
+        /// name, the way a syntax error's is (MRI's pm_parse_process_error). Null if prism does not see it so.
+        /// </summary>
+        private static string MagicCommentErrorMessage(byte[]/*!*/ source, string path, int startLine) {
+            int lineOffset = RubyUtils.DecodeEvalLineOffset(ref path);
+            int formatType = 1;
+            if (!Console.IsErrorRedirected) {
+                formatType = String.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")) ? 3 : 2;
+            }
+            byte[] formatted;
+            try {
+                var options = PrismParser.BuildOptionsData(path, (startLine <= 0 ? 1 : startLine) + lineOffset, null);
+                if (PrismSerialize.ErrorsFormat(source, options, formatType, out formatted) != 1) {
+                    return null;
+                }
+            } catch (Exception) {
+                return null;
+            }
+            // the buffer starts with the name of the source's encoding and a NUL
+            int start = Array.IndexOf(formatted, (byte)0) + 1;
+            return System.Text.Encoding.UTF8.GetString(formatted, start, formatted.Length - start);
         }
 
         /// <summary>
@@ -679,8 +713,12 @@ namespace IronRuby.Prism {
                 case Pm.NilNode _: return Literal.Nil(span);
                 case Pm.SelfNode _: return new SelfReference(span);
 
-                case Pm.ParenthesesNode parens:
-                    return StatementsAsExpression(parens.Body, span);
+                case Pm.ParenthesesNode parens: {
+                    var inner = StatementsAsExpression(parens.Body, span);
+                    // `(self).m` is not a call with self as the receiver: MRI only lets a private method
+                    // be called on a bare `self`, so the parentheses have to survive the unwrapping.
+                    return inner is SelfReference ? new BlockExpression(MakeStatements(inner), span) : inner;
+                }
                 case Pm.StatementsNode statements:
                     return StatementsAsExpression(statements, span);
                 case Pm.ImplicitNode implicitNode:
@@ -748,27 +786,31 @@ namespace IronRuby.Prism {
                 case Pm.EmbeddedStatementsNode embedded:
                     return StatementsAsExpression(embedded.Statements, span);
 
-                case Pm.RegularExpressionNode regex:
+                case Pm.RegularExpressionNode regex: {
                     WarnRegexp(regex.Unescaped, span);
+                    var encoding = RegexLiteralEncoding(regex);
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, _encoding), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, encoding), encoding, span) },
                         RegexOptions(regex), false, span);
-                case Pm.MatchLastLineNode matchLast:
+                }
+                case Pm.MatchLastLineNode matchLast: {
                     WarnRegexp(matchLast.Unescaped, span);
+                    var encoding = RegexLiteralEncoding(matchLast);
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, _encoding), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, encoding), encoding, span) },
                         RegexOptions(matchLast), true, span);
+                }
                 case Pm.InterpolatedRegularExpressionNode interpRegex:
-                    return new RegularExpression(StringParts(interpRegex.Parts), RegexOptions(interpRegex), span);
+                    return new RegularExpression(RegexParts(interpRegex.Parts, RegexOptions(interpRegex)), RegexOptions(interpRegex), span);
                 case Pm.InterpolatedMatchLastLineNode interpMatchLast:
-                    return new RegularExpression(StringParts(interpMatchLast.Parts), RegexOptions(interpMatchLast), true, span);
+                    return new RegularExpression(RegexParts(interpMatchLast.Parts, RegexOptions(interpMatchLast)), RegexOptions(interpMatchLast), true, span);
 
                 case Pm.CallNode call: return Call(call, span);
 
                 case Pm.LocalVariableReadNode read:
                     return CurrentScope.ResolveOrAddVariable(read.Name, span);
                 case Pm.ItLocalVariableReadNode _:
-                    return CurrentScope.ResolveOrAddVariable("it", span);
+                    return CurrentScope.ResolveOrAddVariable(ItParameterName, span);
                 case Pm.LocalVariableWriteNode write:
                     return new SimpleAssignmentExpression(
                         CurrentScope.ResolveOrAddVariable(write.Name, span), Expr(write.Value), null, span);
@@ -1302,6 +1344,61 @@ namespace IronRuby.Prism {
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// The parts of an interpolated regexp. An interpolation that is itself a plain string
+        /// literal (/a#{"b"}/) is folded into the literal text around it, as MRI's compiler does:
+        /// a regexp left with literal parts only is then built once, like /ab/, and a pattern
+        /// Onigmo rejects is a SyntaxError rather than a RegexpError. (An empty /a#{ }/ stays an
+        /// interpolation of nil, in MRI too.)
+        /// </summary>
+        private List<Expression>/*!*/ RegexParts(Pm.PmNode/*!*/[]/*!*/ parts, RubyRegexOptions options) {
+            var result = new List<Expression>();
+            foreach (var part in parts) {
+                if (part is Pm.StringNode fragment) {
+                    CheckRegexFragment(fragment, options);
+                }
+                if (part is Pm.EmbeddedStatementsNode embedded) {
+                    var body = (embedded.Statements as Pm.StatementsNode)?.Body;
+                    if (body != null && body.Length == 1 && body[0] is Pm.StringNode str) {
+                        result.Add(new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), Span(str)));
+                        continue;
+                    }
+                }
+                result.AddRange(StringParts(new[] { part }));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// MRI's compiler checks each piece of literal text of an interpolated regexp on its own
+        /// (parse_regexp_string_part): /\xc2#{ }\xa1/u is a SyntaxError although /\xc2\xa1/u is
+        /// fine. Text without escapes or non-ASCII characters has nothing to check.
+        /// </summary>
+        private void CheckRegexFragment(Pm.StringNode/*!*/ fragment, RubyRegexOptions options) {
+            if (_errorSink == null) {
+                return;
+            }
+            byte[] bytes = fragment.Unescaped;
+            if (Array.IndexOf(bytes, (byte)'\\') < 0 && Array.TrueForAll(bytes, b => b < 0x80)) {
+                return;
+            }
+            var encoding = LiteralEncoding(fragment);
+            try {
+                RubyRegex.CheckLiteralFragment(MutableString.CreateBinary(bytes, encoding), options);
+            } catch (RegexpError e) {
+                _errorSink.Add(_sourceUnit, e.Message, Span(fragment), 0, Severity.FatalError);
+            }
+        }
+
+        /// <summary>
+        /// The encoding of a regexp literal's text: binary when prism says a \x escape above 0x7f
+        /// forces it (/\x80/ in a US-ASCII file), the source encoding otherwise. MRI's
+        /// parse_regexp_encoding; a /u, /e, /s or /n option is the regexp options' business.
+        /// </summary>
+        private RubyEncoding/*!*/ RegexLiteralEncoding(Pm.PmNode/*!*/ node) {
+            return HasFlag(node, Pm.RegularExpressionFlags.ForcedBinaryEncoding) ? RubyEncoding.Binary : _encoding;
         }
 
         private ConstructedSymbol Symbol(Pm.PmNode/*!*/ node) {
@@ -1869,7 +1966,13 @@ namespace IronRuby.Prism {
                 case Pm.LocalVariableTargetNode local:
                     return CurrentScope.ResolveOrAddVariable(local.Name, span);
                 case Pm.RequiredParameterNode requiredParam:
-                    return CurrentScope.ResolveOrAddVariable(requiredParam.Name, span);
+                    // a name inside a destructured parameter |(a, b)| is a parameter of the block like
+                    // any other, and shadows an outer local of that name rather than assigning it; a
+                    // lowered signature (LowerGeneralParameters) binds the ones it has defined already
+                    LocalVariable parameter;
+                    return CurrentScope.TryGetValue(requiredParam.Name, out parameter)
+                        ? parameter
+                        : CurrentScope.AddVariable(requiredParam.Name, span);
                 case Pm.InstanceVariableTargetNode ivar:
                     return new InstanceVariable(IvarName(ivar.Name), span);
                 case Pm.GlobalVariableTargetNode gvar:
@@ -2066,12 +2169,16 @@ namespace IronRuby.Prism {
                 }
                 case Pm.ItParametersNode it: {
                     var span = Span(it);
-                    var mandatory = new LeftValue[] { DefineParameter("it", span) };
+                    // A local the block assigns to is another variable that is also called `it' (prism tells
+                    // the reads of the parameter from those of the local), so the parameter is kept under a
+                    // name of its own: `it = nil' leaves Binding#implicit_parameter_get(:it) alone, and eval
+                    // sees the local.
+                    var mandatory = new LeftValue[] { DefineParameter(ItParameterName, span) };
                     // `it` is a parameter without a name as far as #parameters is concerned
                     var declared = new[] { new RubyParameterSignature.Parameter("req", null) };
                     return new Parameters(mandatory, 1, null, null, null, span) {
                         Signature = new RubyParameterSignature(declared, 1, 0, 0, false, 0, false, false) {
-                            ImplicitParameterNames = new[] { "it" }
+                            ImplicitParameterNames = new[] { ItParameterName }
                         }
                     };
                 }
@@ -3057,6 +3164,12 @@ namespace IronRuby.Prism {
         // ---- pattern matching (case/in), lowered to tests + bindings ----
 
         private const string ForwardingRestName = "?fwd?";
+
+        /// <summary>
+        /// Where a block's `it' is kept: a compiler name, like the ones below, which no local variable can have
+        /// (see Binding#implicit_parameter_get).
+        /// </summary>
+        public const string ItParameterName = RubyParameterSignature.ItParameterName;
         internal const string AnonymousKeywordRestName = "?kwrest?";
         private const string ForwardingBlockName = "?fwdblk?";
 

@@ -177,8 +177,11 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // MRI refuses only an interned String (rb_special_singleton_class_of's FL_FSTR test):
+            // any other frozen one gets a singleton class, and defining a method in it raises
+            // FrozenError.
             var str = obj as MutableString;
-            return str == null || !str.IsFrozen;
+            return str == null || !str.IsInterned;
         }
 
         public static void RequireDefinableSingleton(object obj) {
@@ -195,8 +198,6 @@ namespace IronRuby.Runtime {
         }
 
         
-        private static CallSite<Func<CallSite, object, object>> _InstanceVariablesToInspectSite;
-
         /// <summary>
         /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
         /// array of names from a private #instance_variables_to_inspect. A name that the object
@@ -225,7 +226,9 @@ namespace IronRuby.Runtime {
                 return vars;
             }
 
-            var site = GetCallSite(ref _InstanceVariablesToInspectSite, context, "instance_variables_to_inspect", 0);
+            // the runtime's own site: a static one would stay bound to the first runtime
+            var site = context.GetOrCreateSendSite<Func<CallSite, object, object>>(
+                "instance_variables_to_inspect", RubyCallSignature.WithImplicitSelf(0));
             object names = site.Target(site, obj);
             if (names == null) {
                 return vars;
@@ -1373,7 +1376,12 @@ namespace IronRuby.Runtime {
             // an identity hash stores the string object it was given, it must not copy it;
             // neither is there a reason to copy an already frozen string
             if (str != null && !str.IsFrozen && (hash == null || !hash.ComparesByIdentity)) {
-                key = str.Duplicate(context, false, str.Clone()).Freeze();
+                // MRI's rb_hash_key_str gives a bare String key's copy from the fstring table,
+                // and so refuses it a singleton class; the copy of any other is merely frozen.
+                // It is not put in the table here (which is never swept, MRI's is), only marked.
+                var copy = str.Duplicate(context, false, str.Clone());
+                key = (str.GetType() == typeof(MutableString) && !context.HasInstanceVariables(str))
+                    ? copy.FreezeInterned() : copy.Freeze();
             } else {
                 key = CustomStringDictionary.NullToObj(key);
             }
@@ -1531,6 +1539,11 @@ namespace IronRuby.Runtime {
             return Evaluate(code, targetScope, self, module, null, file, line);
         }
 
+        private static bool StartsWithUtf8Bom(MutableString/*!*/ code) {
+            return code.Encoding.IsAsciiIdentity && code.GetByteCount() >= 3
+                && code.GetByte(0) == 0xEF && code.GetByte(1) == 0xBB && code.GetByte(2) == 0xBF;
+        }
+
         public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module,
             RubyModule lexicalConstantModule, MutableString file, int line) {
             Assert.NotNull(code, targetScope);
@@ -1547,7 +1560,9 @@ namespace IronRuby.Runtime {
 
             // we want to create a new top-level local scope:
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
-            options.EvalSourceEncoding = code.Encoding;
+            // A UTF-8 BOM opening the string makes the code UTF-8 whatever the string's encoding, as
+            // MRI's parser_prepare does (eval "\xEF\xBB\xBF..." from a binary or US-ASCII file).
+            options.EvalSourceEncoding = StartsWithUtf8Bom(code) ? RubyEncoding.UTF8 : code.Encoding;
             string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
             string sourcePath = (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path;
             byte[] bytes = code.ToByteArray();
@@ -2423,6 +2438,23 @@ namespace IronRuby.Runtime {
         public static void PushInterruptMask(RubyModule[]/*!*/ classes, int[]/*!*/ timings) {
             var masks = _interruptMasks ?? (_interruptMasks = new List<InterruptMask>());
             masks.Add(new InterruptMask { Classes = classes, Timings = timings });
+        }
+
+        /// <summary>
+        /// The current thread's masks, for a thread it creates to start with: MRI's thread_create_core
+        /// copies the creator's mask stack, so a thread made inside Thread.handle_interrupt(X => :never)
+        /// defers an X raised at it as its creator would. Null when there is none.
+        /// </summary>
+        public static object CaptureInterruptMasks() {
+            var masks = _interruptMasks;
+            return (masks == null || masks.Count == 0) ? null : masks.ToArray();
+        }
+
+        /// <summary>Gives the current (new) thread the masks <see cref="CaptureInterruptMasks"/> took.</summary>
+        public static void InheritInterruptMasks(object masks) {
+            if (masks != null) {
+                _interruptMasks = new List<InterruptMask>((InterruptMask[])masks);
+            }
         }
 
         public static void PopInterruptMask() {

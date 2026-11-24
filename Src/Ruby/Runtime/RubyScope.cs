@@ -1618,6 +1618,14 @@ namespace IronRuby.Runtime {
             InRescue = parent.InRescue;
             MethodAttributes = RubyMethodAttributes.PublicInstance;
         }
+
+        /// <summary>
+        /// This scope with <paramref name="module"/> in place of its module: the lexical scope of the
+        /// methods a clone of the module gets (see RubyModule.InitializeMembersFrom).
+        /// </summary>
+        internal RubyModuleScope/*!*/ CopyFor(RubyModule/*!*/ module) {
+            return new RubyModuleScope(_parent, module);
+        }
     }
 
     /// <summary>

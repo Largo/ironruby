@@ -1898,8 +1898,14 @@ namespace IronRuby.Builtins {
 
             if (value >= 10) {
                 // Not a group that exists, and too long to be a forward reference: Ruby re-reads
-                // the digits as an octal escape, so \10 is "\b".
+                // the digits as an octal escape, so \10 is "\b". An 8 or a 9 begins no octal
+                // escape: Onigmo's fetch_token takes it as itself, so \80 is "80".
                 _index = start;
+                if (firstDigit == '8' || firstDigit == '9') {
+                    Skip();
+                    AppendEscaped(firstDigit);
+                    return;
+                }
                 AppendEscaped(ParseSingleByteCharacterEscape(Read()));
                 return;
             }
@@ -2006,7 +2012,8 @@ namespace IronRuby.Builtins {
                 _sb.Append("(?!)");
                 return;
             }
-            _sb.Append("\\k<").Append(name).Append('>');
+            // spelled as the group is: (?<@bar>.) is a .NET group of another name
+            _sb.Append("\\k<").Append(DuplicateGroupName(name, 1)).Append('>');
         }
 
         /// <summary>
@@ -2969,7 +2976,12 @@ namespace IronRuby.Builtins {
                     // A range reaching past U+FFFF has non-BMP members, which CharacterSet emits
                     // as surrogate pairs. ActionView's token pattern is one of these:
                     // [0-9A-Za-z_\u0080-\u{10ffff}-].
-                    set = CharacterSet.MakeRange(low, high, (high < 0x10000) ? set.Text + "-" + rangeEnd.Text : null);
+                    // A '-' bound is spelled as a code unit: .NET reads [\--0] as '-', '-' and '0'
+                    // rather than as the range from '-' to '0' Onigmo makes of [--0].
+                    set = CharacterSet.MakeRange(low, high, (high >= 0x10000) ? null :
+                        (low == '-' || high == '-') ?
+                        "\\u" + low.ToString("x4", System.Globalization.CultureInfo.InvariantCulture) + "-\\u" + high.ToString("x4", System.Globalization.CultureInfo.InvariantCulture) :
+                        set.Text + "-" + rangeEnd.Text);
                 }
 
                 result = result.Union(set);

@@ -26,8 +26,11 @@ namespace IronRuby.StandardLibrary.Threading {
     /// <summary>
     /// Thread::Queue - an unbounded blocking queue. Waits are Monitor waits, so Thread#kill and
     /// Thread#raise (which are delivered with Thread.Interrupt on .NET Core) unblock them.
+    /// MRI undefines #initialize_copy, so #dup and #clone are a NoMethodError ([Bug #9440]) rather
+    /// than a second queue.
     /// </summary>
     [RubyClass("Queue", DefineIn = typeof(ThreadOps))]
+    [UndefineMethod("initialize_copy")]
     public class RubyQueue {
 
         /// <summary>MRI's #&lt;Thread::Queue:0x...&gt;, rather than the CLR type name.</summary>

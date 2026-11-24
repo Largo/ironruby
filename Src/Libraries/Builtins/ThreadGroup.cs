@@ -21,17 +21,27 @@ namespace IronRuby.Builtins {
     public class ThreadGroup {
         private bool _enclosed;
 
+        /// <summary>
+        /// MRI's thgroup_add: a frozen or enclosed group will not take a thread, and the thread's own
+        /// group will not let it go if it is frozen or enclosed - in that order, and even when the thread
+        /// is in the group already.
+        /// </summary>
         [RubyMethod("add")]
-        public static ThreadGroup/*!*/ Add([NotNull]ThreadGroup/*!*/ self, [NotNull]Thread/*!*/ thread) {
+        public static ThreadGroup/*!*/ Add(RubyContext/*!*/ context, [NotNull]ThreadGroup/*!*/ self, [NotNull]Thread/*!*/ thread) {
             ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(thread);
 
-            // An enclosed group will not let a thread leave it, and will not take one either.
-            ThreadGroup current = info.Group;
-            if (current != null && current != self && current._enclosed) {
-                throw new ThreadError("can't move from the enclosed thread group");
+            if (context.IsObjectFrozen(self)) {
+                throw new ThreadError("can't move to the frozen thread group");
             }
-            if (self._enclosed && current != self) {
+            if (self._enclosed) {
                 throw new ThreadError("can't move to the enclosed thread group");
+            }
+            ThreadGroup current = info.Group ?? Default;
+            if (context.IsObjectFrozen(current)) {
+                throw new ThreadError("can't move from the frozen thread group");
+            }
+            if (current._enclosed) {
+                throw new ThreadError("can't move from the enclosed thread group");
             }
 
             info.Group = self;

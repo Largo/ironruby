@@ -1009,6 +1009,39 @@ main
 #<NoMethodError: undefined method 'foo' for main>
 ");
         }
+
+        /// <summary>
+        /// Method#super_method stops at the entry `public :m' leaves in a module that inherits m (MRI's zsuper method
+        /// entry), whose #owner is that module, as the Method made by looking m up there says.
+        /// </summary>
+        public void SuperMethodForwarder1() {
+            TestOutput(@"
+mod = Module.new { private def foo; [:ok] end }
+obj = Object.new.extend(mod)
+class << obj; public :foo; end
+mod1 = Module.new { def foo; [:mod1] + super end }
+obj.singleton_class.prepend(mod1)
+m = obj.method(:foo)
+s = m.super_method
+p m.owner == mod1, s.owner == obj.singleton_class, s.super_method, s.call, obj.foo
+class K; private def foo; :k; end; end
+class L < K; public :foo; end
+module P; def foo; super; end; end
+L.prepend(P)
+u = L.instance_method(:foo)
+p u.owner, u.super_method.owner, u.super_method.super_method, L.new.foo
+", @"
+true
+true
+nil
+[:ok]
+[:mod1, :ok]
+P
+L
+nil
+:k
+");
+        }
     }
 
 }

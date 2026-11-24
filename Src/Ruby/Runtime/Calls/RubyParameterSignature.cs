@@ -76,6 +76,12 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public string[] ImplicitParameterNames { get; set; }
 
+        /// <summary>
+        /// The name `it' is kept under among a block's locals (and in <see cref="ImplicitParameterNames"/>), which is not
+        /// `it': a local variable the block assigns is called that.
+        /// </summary>
+        public const string ItParameterName = "?it?";
+
         /// <summary>The declared parameters, in order.</summary>
         internal Parameter[]/*!*/ Parameters {
             get { return _parameters; }

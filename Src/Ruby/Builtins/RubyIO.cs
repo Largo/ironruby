@@ -706,8 +706,27 @@ namespace IronRuby.Builtins {
             return WriteBytes(null, buffer, index, count);
         }
 
-        // TODO: transcoding
+        /// <summary>
+        /// Bytes as they are, whatever the newline mode: IO.copy_stream sets its destination to
+        /// binary mode first (io_ascii8bit_binmode). The read-ahead is given back and an
+        /// appending IO goes to the end, as for any write.
+        /// </summary>
+        public int WriteRawBytes(byte[]/*!*/ buffer, int index, int count) {
+            ContractUtils.RequiresNotNull(buffer, "buffer");
+            return WriteBytes(buffer, null, index, count, true);
+        }
+
+        public int WriteRawBytes(MutableString/*!*/ buffer, int index, int count) {
+            ContractUtils.RequiresNotNull(buffer, "buffer");
+            return WriteBytes(null, buffer, index, count, true);
+        }
+
         private int WriteBytes(byte[] bytes, MutableString str, int index, int count) {
+            return WriteBytes(bytes, str, index, count, PreserveEndOfLines);
+        }
+
+        // TODO: transcoding
+        private int WriteBytes(byte[] bytes, MutableString str, int index, int count, bool preserveEndOfLines) {
             var stream = GetWritableStream();
             UnreadPendingChars();
 
@@ -717,9 +736,9 @@ namespace IronRuby.Builtins {
 
             try {
                 if (bytes != null) {
-                    return stream.WriteBytes(bytes, index, count, PreserveEndOfLines);
+                    return stream.WriteBytes(bytes, index, count, preserveEndOfLines);
                 } else {
-                    return stream.WriteBytes(str, index, count, PreserveEndOfLines);
+                    return stream.WriteBytes(str, index, count, preserveEndOfLines);
                 }
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
@@ -871,8 +890,15 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
-        private static extern int sys_dup(int fd);
+        private static readonly int F_DUPFD_CLOEXEC = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 67 : 1030;
+
+        /// <summary>
+        /// MRI's rb_cloexec_dup: dup(2) with FD_CLOEXEC set in the same call, so that a child
+        /// another thread spawns in the meantime cannot inherit the copy.
+        /// </summary>
+        private static int DupCloseOnExec(int fd) {
+            return LibcVariadic.Fcntl(fd, F_DUPFD_CLOEXEC, 0);
+        }
 
         [DllImport("libc", EntryPoint = "dup2", SetLastError = true)]
         private static extern int sys_dup2(int fd, int newFd);
@@ -949,11 +975,70 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>dup(2), so that a copy of an IO survives its original being reopened.</summary>
+        /// <summary>
+        /// dup(2), so that a copy of an IO survives its original being reopened. The copy is
+        /// close-on-exec, as MRI's #dup makes it.
+        /// </summary>
         public static int TryDuplicateDescriptor(RubyIO/*!*/ io) {
             int descriptor = io.KernelDescriptor;
-            return (descriptor < 0 || !_hasFileControl) ? -1 : sys_dup(descriptor);
+            return (descriptor < 0 || !_hasFileControl) ? -1 : DupCloseOnExec(descriptor);
         }
+
+        /// <summary>
+        /// dup(2) of both pipes of IO.popen(cmd, "r+"), so that a copy of it can close its
+        /// writing half as MRI's does (MRI's dup copies the tied write IO too). Answers null when
+        /// the IO is not such a pair, or when a half it still uses has no descriptor to
+        /// duplicate; the caller then falls back to duplicating the one descriptor. The new
+        /// descriptors are close-on-exec. When duplicating one fails (EMFILE), nothing is left
+        /// open, null is answered and <paramref name="errno"/> says why, for the caller to raise
+        /// as MRI's #dup does: falling back would make a copy that cannot close_write.
+        /// </summary>
+        public static System.IO.Stream TryDuplicateDuplex(RubyIO/*!*/ io, out int readDescriptor, out int writeDescriptor, out int errno) {
+            readDescriptor = writeDescriptor = -1;
+            errno = 0;
+            var duplex = io.GetStream().BaseStream as DuplexStream;
+            if (duplex == null || !_hasFileControl) {
+                return null;
+            }
+
+            bool reads = io.Mode.CanRead() && duplex.Reader != null;
+            bool writes = io.Mode.CanWrite() && duplex.Writer != null;
+            int readSource = reads ? DescriptorOf(duplex.Reader.BaseStream) : -1;
+            int writeSource = writes ? DescriptorOf(duplex.Writer.BaseStream) : -1;
+            if ((reads && readSource < 0) || (writes && writeSource < 0) || (!reads && !writes)) {
+                return null;
+            }
+
+            if (reads) {
+                readDescriptor = DupCloseOnExec(readSource);
+                if (readDescriptor < 0) {
+                    errno = Marshal.GetLastWin32Error();
+                    return null;
+                }
+            }
+            if (writes) {
+                writeDescriptor = DupCloseOnExec(writeSource);
+                if (writeDescriptor < 0) {
+                    errno = Marshal.GetLastWin32Error();
+                    if (readDescriptor >= 0) {
+                        sys_close(readDescriptor);
+                        readDescriptor = -1;
+                    }
+                    return null;
+                }
+            }
+
+            StreamReader reader = reads ? new StreamReader(new DescriptorStream(readDescriptor, true, false, true)) : null;
+            StreamWriter writer = null;
+            if (writes) {
+                writer = new StreamWriter(new DescriptorStream(writeDescriptor, false, true, true));
+                writer.AutoFlush = duplex.Writer.AutoFlush;
+            }
+            return new DuplexStream(reader, writer);
+        }
+
+        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+        private static extern int sys_close(int fd);
 
         /// <summary>The operating system descriptor a stream reads and writes, or -1.</summary>
         public static int DescriptorOf(System.IO.Stream stream) {
@@ -1162,11 +1247,19 @@ namespace IronRuby.Builtins {
                 throw new NotSupportedException();
             }
 
-            int fd = NativeDescriptor;
+            // The standard streams are console streams with no descriptor of their own to report,
+            // but the kernel's 0, 1 and 2 are theirs: STDOUT.fcntl(F_GETFL) let the CLR's
+            // NotSupportedException out.
+            int fd = KernelDescriptor;
             if (fd < 0) {
                 throw new NotSupportedException();
             }
-            int result = NativeFileControl(fd, commandId, arg);
+            int result = LibcVariadic.Fcntl(fd, commandId, arg);
+            if (result < 0) {
+                // what fcntl(2) said - EINVAL for an unknown command, EBADF, EAGAIN for a lock -
+                // rather than EBADF whatever it was, as MRI's rb_sys_fail does
+                throw RubyExceptions.CreateErrno(_context, Marshal.GetLastPInvokeError(), null);
+            }
             // The descriptor's own O_APPEND is the answer wherever the kernel has one, but a
             // stream IronRuby opened in append mode without telling the kernel (the CLR
             // positions an appending FileStream itself) still reports the flag it holds.
@@ -1279,6 +1372,11 @@ namespace IronRuby.Builtins {
 
         public void PushBack(byte b) {
             GetStream().PushBack(b);            
+        }
+
+        /// <summary>#ungetc and #ungetbyte refuse to grow the read buffer past its capacity.</summary>
+        public void RequirePushBackRoom(int count) {
+            GetStream().RequirePushBackRoom(count);
         }
 
         #endregion

@@ -41,7 +41,9 @@ namespace IronRuby.Compiler.Ast {
         internal override MSA.Expression/*!*/ MakeDefinitionExpression(AstGenerator/*!*/ gen) {
             MSA.Expression transformedQualifier;
             MSA.Expression name = QualifiedName.TransformName(gen);
-            MSA.Expression transformedSuper = (_superClass != null) ? AstUtils.Box(_superClass.TransformRead(gen)) : AstUtils.Constant(null);
+            MSA.Expression transformedSuper = (_superClass != null)
+                ? (MSA.Expression)Methods.CheckSuperClass.OpCall(gen.CurrentScopeVariable, AstUtils.Box(_superClass.TransformRead(gen)))
+                : AstUtils.Constant(null);
 
             // Module#const_source_location reports the line of the `class` keyword:
             MSA.Expression sourcePath = gen.SourcePathConstant;

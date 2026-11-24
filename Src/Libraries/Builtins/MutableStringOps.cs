@@ -122,7 +122,7 @@ namespace IronRuby.Builtins {
         internal static bool NormalizeSubstringRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int begin, out int count) {
             // Ruby 2.6/2.7 beginless and endless ranges: a missing bound is the
             // start resp. the end of the string, and an open end is never exclusive.
-            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            begin = (range.Begin == null) ? 0 : IListOps.CastToRangeComponent(fixnumCast, range.Begin);
 
             begin = IListOps.NormalizeIndex(length, begin);
             if (begin < 0 || begin > length) {
@@ -135,7 +135,7 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
-            int end = IListOps.NormalizeIndex(length, Protocols.CastToFixnum(fixnumCast, range.End));
+            int end = IListOps.NormalizeIndex(length, IListOps.CastToRangeComponent(fixnumCast, range.End));
 
             count = range.ExcludeEnd ? end - begin : end - begin + 1;
             return true;
@@ -1095,7 +1095,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static MutableString GetChar(MutableString/*!*/ self, [DefaultProtocol]int index) {
+        public static MutableString GetChar(ConversionStorage<int>/*!*/ fixnumCast, RangeValuesStorage/*!*/ rangeValues,
+            MutableString/*!*/ self, object index) {
+            int i;
+            if (index is int) {
+                i = (int)index;
+            } else {
+                // rb_str_aref asks rb_range_beg_len before it converts the index: an object with
+                // #begin, #end and #exclude_end? stands for the Range it describes. The range is
+                // normalized against the length before those methods ran (MRI reads str_strlen
+                // first) and read from the string as they left it.
+                int length = GetCharacterLength(self);
+                Range range = rangeValues.TryConvert(index);
+                if (range != null) {
+                    int begin, count;
+                    if (!NormalizeSubstringRange(fixnumCast, range, length, out begin, out count)) {
+                        return null;
+                    }
+                    return (count < 0) ? self.CreateDerived() : GetSubstring(self, begin, count);
+                }
+                i = Protocols.CastToFixnum(fixnumCast, index);
+            }
+            return GetChar(self, i);
+        }
+
+        public static MutableString GetChar(MutableString/*!*/ self, int index) {
             return InExclusiveRangeNormalized(GetCharacterLength(self), ref index) ? GetCharacterSlice(self, index, 1) : null;
         }
 
@@ -1224,10 +1248,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
-            if (regex.IsEmpty) {
-                return self.CreateDerived();
-            }
-
             MatchData match = RegexpOps.Match(scope, regex, self);
             if (match == null) {
                 return null;
@@ -1289,11 +1309,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <summary>
         /// Whether the character at the index is a byte that is not valid in the string's encoding,
-        /// which EscapingEncoding holds as a lone low surrogate, U+DC80 plus the byte.
+        /// which EscapingEncoding holds as a lone low surrogate, U+DC00 plus the byte.
         /// </summary>
         private static bool IsEscapedByte(MutableString/*!*/ str, int index) {
             char c = str.GetChar(index);
-            return c >= '\uDC80' && c <= '\uDCFF' && (index == 0 || !Char.IsHighSurrogate(str.GetChar(index - 1)));
+            return c >= '\uDC00' && c <= '\uDCFF' && (index == 0 || !Char.IsHighSurrogate(str.GetChar(index - 1)));
         }
 
         [RubyMethod("ord")]
@@ -1405,9 +1425,38 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
-            [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+        public static MutableString/*!*/ ReplaceCharacter(ConversionStorage<int>/*!*/ fixnumCast, ConversionStorage<MutableString>/*!*/ stringCast,
+            RangeValuesStorage/*!*/ rangeValues, MutableString/*!*/ self, object index, object value) {
 
+            // The replacement is untyped so that a Regexp index still picks its own overload; it is
+            // converted after the index, as rb_str_aset does.
+
+            if (!(index is int)) {
+                // rb_str_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
+                // describes, and one starting outside the string is reported by its #inspect. As in
+                // MRI the range is resolved against the length before those methods ran and before
+                // the replacement is converted; the replacement goes where it says in the string as
+                // the conversion left it.
+                int length = GetCharacterLength(self);
+                Range range = rangeValues.TryConvert(index);
+                if (range != null) {
+                    if (range.Begin is int) {
+                        int begin = (int)range.Begin < 0 ? (int)range.Begin + length : (int)range.Begin;
+                        if (begin < 0 || begin > length) {
+                            throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
+                        }
+                    }
+                    int start, count;
+                    NormalizeReplacedRange(fixnumCast, range, length, out start, out count);
+                    return ReplaceSubstring(self, start, count, Protocols.CastToString(stringCast, value));
+                }
+            }
+            int i = index is int ? (int)index : Protocols.CastToFixnum(fixnumCast, index);
+            return ReplaceCharacter(self, i, Protocols.CastToString(stringCast, value));
+        }
+
+        [RubyMethod("[]=")]
+        public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self, int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
             // MRI's rb_str_update checks the encodings (rb_enc_check) before the index.
             self.RequireCompatibleEncoding(value);
 
@@ -1467,9 +1516,19 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceSubstring(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, 
             [NotNull]Range/*!*/ range, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
-            int length = GetCharacterLength(self);
+            int start, count;
+            NormalizeReplacedRange(fixnumCast, range, GetCharacterLength(self), out start, out count);
+            return ReplaceSubstring(self, start, count, value);
+        }
+
+        /// <summary>
+        /// The characters String#[]= with a Range replaces in a string of <paramref name="length"/> characters.
+        /// </summary>
+        private static void NormalizeReplacedRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length,
+            out int start, out int count) {
+
             int begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = (range.End == null) ? length : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = (range.End == null) ? length : IListOps.CastToRangeComponent(fixnumCast, range.End);
 
             int normalizedBegin = begin < 0 ? begin + length : begin;
 
@@ -1477,14 +1536,17 @@ namespace IronRuby.Builtins {
                 // MRI quotes the range as it was written, not as it was normalized - and an
                 // endless one without its missing end.
                 throw RubyExceptions.CreateRangeError("{0}{1}{2} out of range", begin,
-                    range.ExcludeEnd ? "..." : "..", (range.End == null) ? (object)"" : end);
+                    range.ExcludeEnd ? "..." : "..", range.End ?? "");
             }
 
             end = end < 0 ? end + length : end;
 
-            int count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
+            count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
             // An end before the beginning is an insertion, not a negative-length error.
-            return ReplaceSubstring(self, normalizedBegin, count < 0 ? 0 : count, value);
+            if (count < 0) {
+                count = 0;
+            }
+            start = normalizedBegin;
         }
 
         [RubyMethod("[]=")]
@@ -1780,7 +1842,12 @@ namespace IronRuby.Builtins {
         // frozen string literals and "literal".freeze come from, so -str can answer the very
         // object a literal evaluates to.
         [RubyMethod("__ir_fstring__", RubyMethodAttributes.PrivateInstance)]
-        public static MutableString/*!*/ InternFrozen(MutableString/*!*/ self) {
+        public static MutableString/*!*/ InternFrozen(RubyContext/*!*/ context, MutableString/*!*/ self) {
+            // A frozen string with a singleton class is not bare: MRI's rb_fstring answers it
+            // as it is, without putting it in the table (where it would be refused one).
+            if (self.IsFrozen && context.GetImmediateClassOf(self).IsSingletonClass) {
+                return self;
+            }
             return RubyOps.InternFrozenString(self.IsFrozen ? self : self.Clone());
         }
 
@@ -2063,6 +2130,84 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        private static bool IsWideUnicode(RubyEncoding/*!*/ encoding) {
+            switch (encoding.CodePage) {
+                case RubyEncoding.CodePageUTF16LE:
+                case RubyEncoding.CodePageUTF16BE:
+                case RubyEncoding.CodePageUTF32LE:
+                case RubyEncoding.CodePageUTF32BE:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// MRI's smart_chomp (and, with <paramref name="paragraph"/>, the loop chompped_length runs
+        /// for an empty separator) in UTF-16 and UTF-32, done on the bytes: a string of a broken
+        /// length is not a whole number of characters, and the newline MRI finds is the one at the
+        /// head of the character the last code unit's worth of bytes falls in. So "A" in UTF-16BE
+        /// is left as it is, and "\n\0x" in UTF-16LE (a newline and a stray byte) chomps to "".
+        /// </summary>
+        private static MutableString/*!*/ WideChomp(MutableString/*!*/ self, bool paragraph) {
+            byte[] bytes = self.ToByteArray();
+            RubyEncoding encoding = self.Encoding;
+            int unit = encoding.MinBytesPerChar;
+            int end = bytes.Length;
+            while (end >= unit) {
+                int head = WideLeftCharHead(bytes, end - unit, encoding);
+                bool newline = WideCodeAt(bytes, head, end, encoding) == '\n';
+                if (newline) {
+                    end = head;
+                } else if (paragraph) {
+                    break;
+                }
+                int previous = end - unit;
+                if (previous >= 0) {
+                    previous = WideLeftCharHead(bytes, previous, encoding);
+                    if (WideCodeAt(bytes, previous, end, encoding) == '\r' && (newline || !paragraph)) {
+                        end = previous;
+                    }
+                }
+                if (!paragraph) {
+                    break;
+                }
+            }
+
+            var result = self.CreateDerived();
+            result.Append(bytes, 0, end);
+            return result;
+        }
+
+        // Onigmo's left_adjust_char_head for UTF-16 and UTF-32: back to a code unit boundary, and
+        // in UTF-16 back over a high surrogate the unit there is the second half of.
+        private static int WideLeftCharHead(byte[]/*!*/ bytes, int position, RubyEncoding/*!*/ encoding) {
+            int unit = encoding.MinBytesPerChar;
+            position -= position % unit;
+            if (unit == 2 && position >= 2 && WideUnitAt(bytes, position, encoding) is int low && low >= 0xDC00 && low <= 0xDFFF) {
+                int high = WideUnitAt(bytes, position - 2, encoding);
+                if (high >= 0xD800 && high <= 0xDBFF) {
+                    position -= 2;
+                }
+            }
+            return position;
+        }
+
+        private static int WideUnitAt(byte[]/*!*/ bytes, int position, RubyEncoding/*!*/ encoding) {
+            bool bigEndian = encoding.IsBigEndianUnicode;
+            if (encoding.MinBytesPerChar == 2) {
+                return bigEndian ? (bytes[position] << 8) | bytes[position + 1] : (bytes[position + 1] << 8) | bytes[position];
+            }
+            return bigEndian
+                ? (bytes[position] << 24) | (bytes[position + 1] << 16) | (bytes[position + 2] << 8) | bytes[position + 3]
+                : (bytes[position + 3] << 24) | (bytes[position + 2] << 16) | (bytes[position + 1] << 8) | bytes[position];
+        }
+
+        // The code unit at position if a whole one fits before end, -1 if not.
+        private static int WideCodeAt(byte[]/*!*/ bytes, int position, int end, RubyEncoding/*!*/ encoding) {
+            return position + encoding.MinBytesPerChar <= end ? WideUnitAt(bytes, position, encoding) : -1;
+        }
+
         private static MutableString InternalChomp(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
             if (separator == null) {
                 return self.CloneDerived();
@@ -2070,17 +2215,28 @@ namespace IronRuby.Builtins {
 
             // Remove multiple trailing CR/LFs
             if (separator.IsEmpty) {
-                return ChompTrailingCarriageReturns(self, false);
+                return IsWideUnicode(self.Encoding) ? WideChomp(self, true) : ChompTrailingCarriageReturns(self, false);
             }
 
             // Remove single trailing CR/LFs
             MutableString result = self.CloneDerived();
+
+            // MRI's chompped_length: an explicit separator longer than the string leaves it alone,
+            // before the separator is even looked at for a newline (a UTF-32 "\n" does not chomp
+            // the two bytes of a UTF-16 one)
+            if (!defaultSeparator && separator.GetByteCount() > self.GetByteCount()) {
+                return result;
+            }
+
             int length = result.GetCharCount();
             bool newline = defaultSeparator && separator.StartsWith('\n') && separator.GetLength() == 1 ||
                 separator.GetByteCount() == separator.Encoding.MinBytesPerChar &&
                 separator.GetCharCount() == 1 && separator.GetChar(0) == '\n';
             if (!newline) {
                 self.RequireCompatibleEncoding(separator);
+            }
+            if (newline && IsWideUnicode(self.Encoding)) {
+                return WideChomp(self, false);
             }
             if (newline) {
                 if (length > 1 && result.GetChar(length - 2) == '\r' && result.GetChar(length - 1) == '\n') {
@@ -2902,6 +3058,12 @@ namespace IronRuby.Builtins {
 
             var settings = TranscodeSettings.Parse(toStr.Context, toHash, options, to);
 
+            if (toEncoding == Missing.Value && from != to) {
+                // MRI's str_transcode0: #encode without a target converts to default_internal and
+                // replaces what does not convert rather than raising
+                settings.ReplaceInvalid = settings.ReplaceUndefined = true;
+            }
+
             if (from == to && !settings.ReplaceInvalid && settings.XmlMode == 0 && settings.Newline == 0) {
                 // Nothing to do, and in particular nothing to validate: MRI does not check the
                 // bytes when the source and target encodings are the same.
@@ -2946,13 +3108,14 @@ namespace IronRuby.Builtins {
             internal MutableString Replacement;
             internal object Fallback;
             internal int XmlMode;           // 0 none, 't' text, 'a' attr
-            internal int Newline;           // 0 none, 'u' universal, 'r' cr, 'c' crlf
+            internal int Newline;           // 0 none, 'u' universal, 'l' lf, 'r' cr, 'c' crlf
 
             /// <summary>The decorators, named and ordered as MRI's error messages list them.</summary>
             internal string/*!*/ DecoratorNames() {
                 var names = new List<string>();
                 switch (Newline) {
                     case 'u': names.Add("universal_newline"); break;
+                    case 'l': names.Add("lf_newline"); break;
                     case 'c': names.Add("crlf_newline"); break;
                     case 'r': names.Add("cr_newline"); break;
                 }
@@ -3040,7 +3203,7 @@ namespace IronRuby.Builtins {
                             } else if (nlName == "crlf") {
                                 result.Newline = 'c';
                             } else if (nlName == "lf") {
-                                result.Newline = 'u';
+                                result.Newline = 'l';
                             } else {
                                 throw RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}",
                                     (object)nlName ?? context.Inspect(entry.Value));
@@ -3057,6 +3220,12 @@ namespace IronRuby.Builtins {
 
                         case "crlf_newline":
                             if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'c'; }
+                            break;
+
+                        // MRI's lf_newline decorator: CRLF and CR become LF, as with
+                        // universal_newline, under a name of its own
+                        case "lf_newline":
+                            if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'l'; }
                             break;
                     }
                 }
@@ -3318,6 +3487,10 @@ namespace IronRuby.Builtins {
                 // fall through
             }
 
+            if (from.MinBytesPerChar > 1) {
+                return DecodeWideForTranscoding(bytes, from, to, replacement);
+            }
+
             var result = new StringBuilder(bytes.Length);
             var decoder = strict.GetDecoder();
             var chars = new char[8];
@@ -3388,6 +3561,83 @@ namespace IronRuby.Builtins {
             }
 
             return from.FinishTranscodingDecode(result.ToString());
+        }
+
+        /// <summary>
+        /// UTF-16 and UTF-32 bytes that do not all decode, the way MRI's from_UTF_16BE/LE and
+        /// from_UTF_32BE/LE transcoders read them (Encoding::Converter's DecodeWideByte does the
+        /// same a byte at a time): a lone low surrogate is one invalid unit; a high surrogate
+        /// followed by anything but a low one is an invalid unit too, and what follows it is read
+        /// again (UTF-16BE knows it from the first byte after the surrogate, UTF-16LE from the
+        /// unit); a UTF-32 unit that is a surrogate or past U+10FFFF is invalid as a whole; and a
+        /// unit cut short by the end of the string is incomplete. .NET's decoder, fed a byte at a
+        /// time, takes the bytes after a bad surrogate into the error instead.
+        /// </summary>
+        private static string/*!*/ DecodeWideForTranscoding(byte[]/*!*/ bytes, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to,
+            string replacement) {
+
+            bool big = from.IsBigEndianUnicode;
+            int unitSize = from.MinBytesPerChar;
+            var result = new StringBuilder(bytes.Length / unitSize);
+            int i = 0;
+            while (i < bytes.Length) {
+                byte[] errorBytes = null, readAgain = null;
+                int length = 0;
+                bool incomplete = false;
+
+                if (i + unitSize > bytes.Length) {
+                    length = bytes.Length - i;
+                    incomplete = true;
+                } else if (unitSize == 4) {
+                    long value = big
+                        ? ((long)bytes[i] << 24) | ((long)bytes[i + 1] << 16) | ((long)bytes[i + 2] << 8) | bytes[i + 3]
+                        : ((long)bytes[i + 3] << 24) | ((long)bytes[i + 2] << 16) | ((long)bytes[i + 1] << 8) | bytes[i];
+                    if (value > 0x10ffff || value >= 0xd800 && value <= 0xdfff) {
+                        length = 4;
+                    } else {
+                        result.Append(Char.ConvertFromUtf32((int)value));
+                        i += 4;
+                        continue;
+                    }
+                } else {
+                    int unit = big ? (bytes[i] << 8) | bytes[i + 1] : (bytes[i + 1] << 8) | bytes[i];
+                    if (unit >= 0xdc00 && unit <= 0xdfff) {
+                        length = 2;
+                    } else if (unit < 0xd800 || unit > 0xdbff) {
+                        result.Append((char)unit);
+                        i += 2;
+                        continue;
+                    } else if (i + 2 >= bytes.Length) {
+                        length = bytes.Length - i;
+                        incomplete = true;
+                    } else if (big && (bytes[i + 2] < 0xdc || bytes[i + 2] > 0xdf)) {
+                        length = 2;
+                        readAgain = new[] { bytes[i + 2] };
+                    } else if (i + 3 >= bytes.Length) {
+                        length = bytes.Length - i;
+                        incomplete = true;
+                    } else {
+                        int low = big ? (bytes[i + 2] << 8) | bytes[i + 3] : (bytes[i + 3] << 8) | bytes[i + 2];
+                        if (low < 0xdc00 || low > 0xdfff) {
+                            length = 2;
+                            readAgain = new[] { bytes[i + 2], bytes[i + 3] };
+                        } else {
+                            result.Append((char)unit).Append((char)low);
+                            i += 4;
+                            continue;
+                        }
+                    }
+                }
+
+                errorBytes = new byte[length];
+                Array.Copy(bytes, i, errorBytes, 0, length);
+                if (replacement == null) {
+                    throw RubyExceptions.CreateInvalidByteSequenceError(from, FirstLegDestination(from, to), errorBytes, readAgain, incomplete);
+                }
+                result.Append(replacement);
+                i += length;
+            }
+            return result.ToString();
         }
 
         /// <summary>

@@ -332,6 +332,20 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        /// <summary>
+        /// Gives <paramref name="copy"/>, a clone of <paramref name="original"/>, the refinements the body's `def' saw
+        /// there: the copy's methods see what the original's did, not what the scope they were written in has
+        /// `using'd since (RubyModule.InitializeMembersFrom).
+        /// </summary>
+        internal void CopyDefinitionRefinements(RubyModule/*!*/ original, RubyModule/*!*/ copy) {
+            lock (this) {
+                StrongBox<RefinementActivation> record;
+                if (_definitionRefinements != null && _definitionRefinements.TryGetValue(original, out record) && record.Value != null) {
+                    GetDefinitionRefinementsNoLock(copy).Value = record.Value;
+                }
+            }
+        }
+
         private StrongBox<RefinementActivation>/*!*/ GetDefinitionRefinementsNoLock(RubyModule/*!*/ declaringModule) {
             if (_definitionRefinements == null) {
                 _definitionRefinements = new ConditionalWeakTable<RubyModule, StrongBox<RefinementActivation>>();

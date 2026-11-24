@@ -16,6 +16,7 @@
 using System;
 using MSA = System.Linq.Expressions;
 
+using System.Collections;
 using System.Collections.Generic;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -59,6 +60,13 @@ namespace IronRuby.Compiler.Ast {
         internal MSA.Expression/*!*/ TransformToYield(AstGenerator/*!*/ gen, MSA.Expression/*!*/ bfcVariable, MSA.Expression/*!*/ selfExpression) {
             var args = new List<MSA.Expression>();
             var splatted = TransformToCallInternal(gen, args);
+            // `yield x, **h': whether x may be auto-splatted depends on h being given at all (RubyOps.YieldKeywordSplat1)
+            if (args.Count == 1 && _expressions.Length == 2 && _expressions[1] is KeywordArgumentSplat) {
+                return Methods.YieldKeywordSplat1.OpCall(
+                    AstUtils.Box(args[0]), AstUtils.Convert(splatted, typeof(IList)), AstFactory.NullOfProc,
+                    AstUtils.Box(selfExpression), bfcVariable
+                );
+            }
             return AstFactory.YieldExpression(gen.Context, args, splatted, null, null, bfcVariable, selfExpression);
         }
 

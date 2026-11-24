@@ -264,6 +264,24 @@ false
             Assert(io.ReadByte() == -1);
         }
 
+        /// <summary>
+        /// A read that answers fewer bytes than were asked for, none of them a line end, is not the
+        /// end of the stream: the line goes on in the next read. Io_GetsLongLineFromPipe1 needs a
+        /// thread to be slow for this; here the stream answers short by itself.
+        /// </summary>
+        [Options(NoRuntime = true)]
+        public void File_ReadLineShortRead1() {
+            var io = new RubyBufferedStream(new ChunkedStream(B("aaaa\r\nb"), 4, 2), false, 16);
+            TestReadLine(io, true, "aaaa\r\n");
+            TestReadLine(io, true, "b");
+            TestReadLine(io, true, null);
+
+            io = new RubyBufferedStream(new ChunkedStream(B("aaaa\r\nb"), 4, 2), false, 16);
+            TestReadLine(io, false, "aaaa\n");
+            TestReadLine(io, false, "b");
+            TestReadLine(io, false, null);
+        }
+
         private void TestReadLine(RubyBufferedStream/*!*/ io, bool preserveEolns, string expected) {
             var s = io.ReadLine(RubyEncoding.Binary, preserveEolns, -1);
             Assert(s == null && expected == null || s.ToString() == expected);
@@ -867,6 +885,67 @@ utf-16 codepoint: [""A"", ""\xC3\x9F"", ""\xC3\xA9"", ""\n"", ""\xC3\xBC""]
 utf-16 getbyte: [IOError, ""byte oriented read for character buffered IO""]
 to utf-16: [""xA"", ""\x00a"", ""\x00\n""]
 us-ascii: [RangeError, ""invalid codepoint 0xE9 in US-ASCII""]
+");
+        }
+
+        /// <summary>
+        /// A seek from the current position, or a write, after a read gives the whole read buffer back to the file,
+        /// what #ungetc put in front of it included (MRI's io_unread), so it lands where #pos said the stream was. A
+        /// buffer reaching back past the start of the file is not given back. IO.copy_stream writes through its
+        /// destination IO the same way, and to the end of a file opened for appending.
+        /// </summary>
+        /// <summary>
+        /// A line longer than the read buffer that reaches a pipe in two writes is one line: a
+        /// short read is not the end of the stream (test_io's test_gets_chomp_default_rs).
+        /// </summary>
+        public void Io_GetsLongLineFromPipe1() {
+            TestOutput(@"
+[8188, 20000].each do |n|
+  r, w = IO.pipe
+  t = Thread.new { w.write('a' * n); sleep 0.2; w.write(""\r\na\r\n""); w.close }
+  first = r.gets
+  p [first.size, first.end_with?(""\r\n""), r.gets(chomp: true), r.gets]
+  t.join
+  r.close
+end
+", @"
+[8190, true, ""a"", nil]
+[20002, true, ""a"", nil]
+");
+        }
+
+        public void Io_UnreadPushedBack1() {
+            TestOutput(@"
+require 'ruby4'
+require 'tmpdir'
+dir = Dir.mktmpdir
+f = File.join(dir, 'f')
+def t(f, mode = 'w+b')
+  File.open(f, mode) { |io| io.write ""abcd\n""; io.rewind; yield io; io.rewind; p io.read }
+end
+t(f) { |io| io.read(3); io.ungetc 'c'; io.write 'Z' }
+t(f) { |io| io.read(3); io.ungetc 'xy'; io.seek(0, IO::SEEK_CUR); p io.pos }
+t(f) { |io| io.read; io.ungetc 'c'; io.write 'Z' }
+t(f) { |io| io.ungetc 'xy'; io.write 'Z' }
+t(f) { |io| io.read(2); io.ungetc 'q'; io.seek(1, IO::SEEK_CUR); p io.read(1) }
+r, w = IO.pipe
+w << 'xyz'; w.close
+t(f) { |io| io.read(3); io.ungetc 'c'; IO.copy_stream(r, io) }
+g = File.join(dir, 'g')
+File.write(g, 'foo')
+File.write(f, 'preface')
+File.open(f, 'ab') { |io| IO.copy_stream(g, io) }
+p File.read(f)
+", @"
+""abZd\n""
+1
+""abcd\n""
+""abcdZ""
+""Zbcd\n""
+""c""
+""abcd\n""
+""abxyz""
+""prefacefoo""
 ");
         }
 

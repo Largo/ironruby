@@ -197,9 +197,23 @@ namespace IronRuby.Builtins {
             InitializeFromDateTime(dateTime);
         }
 
-        // Used by derived Ruby classes.
+        // Used by derived Ruby classes, and by Time.allocate: the one Time that #initialize may
+        // still set.
         public RubyTime()
             : this(0, ExactNum.Zero, RubyTimeZoneKind.Local, ExactNum.Zero) {
+            _initialized = false;
+        }
+
+        // MRI's time_init_* (time_modify) refuses a Time whose instant has been set: "already
+        // initialized Time" ([Bug #8099]). Every constructor but the allocator's sets one.
+        private bool _initialized = true;
+
+        internal bool IsInitialized {
+            get { return _initialized; }
+        }
+
+        internal void MarkInitialized() {
+            _initialized = true;
         }
 
         public RubyTime(long ticks, DateTimeKind kind)
@@ -259,12 +273,16 @@ namespace IronRuby.Builtins {
             ResolveLocalZone();
         }
 
+        // A copy of an initialized Time is one (MRI's time_init_copy copies the whole time_object),
+        // which also makes a subclass's Time.at or Time.now refuse #initialize as MRI's does.
         internal void CopyFrom(RubyTime/*!*/ other) {
+            _initialized = other._initialized;
             _seconds = other._seconds;
             _subsec = other._subsec;
             _zoneKind = other._zoneKind;
             _fixedOffset = other._fixedOffset;
             _zoneObject = other._zoneObject;
+            _zoneDst = other._zoneDst;
             _localOffset = other._localOffset;
             _localZoneName = other._localZoneName;
             _localDst = other._localDst;
@@ -283,7 +301,7 @@ namespace IronRuby.Builtins {
         }
 
         internal RubyTime/*!*/ WithZone(RubyTimeZoneKind kind, ExactNum fixedOffset, object zoneObject) {
-            return new RubyTime(_seconds, _subsec, kind, fixedOffset) { _zoneObject = zoneObject };
+            return new RubyTime(_seconds, _subsec, kind, fixedOffset) { _zoneObject = zoneObject, _initialized = _initialized };
         }
 
         #endregion
@@ -429,7 +447,15 @@ namespace IronRuby.Builtins {
         }
 
         public bool IsDaylightSavingTime {
-            get { return _zoneKind == RubyTimeZoneKind.Local && _localDst; }
+            get { return (_zoneKind == RubyTimeZoneKind.Local && _localDst) || (_zoneObject != null && _zoneDst); }
+        }
+
+        // What the timezone object's #dst? said about this time (see RubyTimeOps.AskZoneDst).
+        private bool _zoneDst;
+
+        internal bool ZoneDst {
+            get { return _zoneDst; }
+            set { _zoneDst = value; }
         }
 
         /// <summary>The instant, in UTC.</summary>

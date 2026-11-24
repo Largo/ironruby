@@ -126,8 +126,10 @@ namespace IronRuby.Runtime {
         }
 
         private void FlushRead() {
-            if (_canSeek && (_readPos < _readLen)) {
-                Seek(this._readPos - this._readLen, SeekOrigin.Current);
+            int unread = (_readLen - _readPos) + (_surplus != null ? _surplus.Length - _surplusPos : 0);
+            _surplus = null;
+            if (_canSeek && unread > 0) {
+                Seek(-unread, SeekOrigin.Current);
             }
             _readPos = 0;
             _readLen = 0;
@@ -185,16 +187,38 @@ namespace IronRuby.Runtime {
         }
 
         private int ReadFromObject(byte[]/*!*/ buffer, int offset, int count) {
+            // What a #read gave beyond the count it was asked for comes first.
+            if (_surplus != null) {
+                int taken = Math.Min(count, _surplus.Length - _surplusPos);
+                Buffer.BlockCopy(_surplus, _surplusPos, buffer, offset, taken);
+                _surplusPos += taken;
+                if (_surplusPos == _surplus.Length) {
+                    _surplus = null;
+                }
+                return taken;
+            }
+
             // TODO: conversion
             MutableString result = (MutableString)_readSite.Target(_readSite, _obj, count);
             if (result == null) {
                 return 0;
             } else {
+                // An IO-like object's #read may answer more than it was asked for (MRI's marshal
+                // reader keeps the rest); copied whole, it ran past the end of the buffer.
                 byte[] readdata = result.ConvertToBytes();
-                Buffer.BlockCopy(readdata, 0, buffer, offset, readdata.Length);
-                return readdata.Length;
+                int length = Math.Min(readdata.Length, count);
+                Buffer.BlockCopy(readdata, 0, buffer, offset, length);
+                if (readdata.Length > count) {
+                    _surplus = readdata;
+                    _surplusPos = count;
+                }
+                return length;
             }
         }
+
+        // The bytes a #read answered beyond what was asked for, from _surplusPos on; null if none.
+        private byte[] _surplus;
+        private int _surplusPos;
 
         public override long Seek(long offset, SeekOrigin origin) {
             if (!_canSeek) {

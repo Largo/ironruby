@@ -78,12 +78,45 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        /// <summary>
+        /// String and MatchData read a range's ends the same way, but clamp one past the int range to
+        /// Int32.MaxValue - 1, since their callers add one to an inclusive end in an int.
+        /// </summary>
+        internal static int CastToRangeComponent(ConversionStorage<int>/*!*/ fixnumCast, object value) {
+            long l = CastToLongRangeEndpoint(fixnumCast, value);
+            return l > Int32.MaxValue - 1 ? Int32.MaxValue - 1 : l < Int32.MinValue ? Int32.MinValue : (int)l;
+        }
+
+        /// <summary>
+        /// MRI's rb_range_beg_len reads the endpoints with NUM2LONG, so an Integer that fits a long but not
+        /// an int is a position no list reaches rather than an error: a[0..2**63 - 1] is all of a. Such an
+        /// endpoint is clamped to the int range; one past a long is still a RangeError.
+        /// </summary>
+        private static int CastToRangeEndpoint(ConversionStorage<int>/*!*/ fixnumCast, object value) {
+            long l = CastToLongRangeEndpoint(fixnumCast, value);
+            return l > Int32.MaxValue ? Int32.MaxValue : l < Int32.MinValue ? Int32.MinValue : (int)l;
+        }
+
+        private static long CastToLongRangeEndpoint(ConversionStorage<int>/*!*/ fixnumCast, object value) {
+            if (value is long) {
+                return (long)value;
+            }
+            if (value is System.Numerics.BigInteger) {
+                var big = (System.Numerics.BigInteger)value;
+                if (big > Int64.MaxValue || big < Int64.MinValue) {
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                }
+                return (long)big;
+            }
+            return Protocols.CastToFixnum(fixnumCast, value);
+        }
+
         internal static bool NormalizeRange(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range, out int begin, out int count) {
             // A beginless range starts at 0 and an endless one runs to the end; both
             // endpoints became nil-able in 2.6/2.7 and used to raise TypeError here.
-            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            begin = (range.Begin == null) ? 0 : CastToRangeEndpoint(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int end = endless ? listCount : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = endless ? listCount : CastToRangeEndpoint(fixnumCast, range.End);
 
             begin = NormalizeIndex(listCount, begin);
 
@@ -96,10 +129,9 @@ namespace IronRuby.Builtins {
                 end = NormalizeIndex(listCount, end);
             }
 
-            count = (range.ExcludeEnd && !endless) ? end - begin : end - begin + 1;
-            if (endless) {
-                count = listCount - begin;
-            }
+            // in a long: an end of Int32.MaxValue would overflow the count
+            long longCount = (range.ExcludeEnd && !endless) ? (long)end - begin : (long)end - begin + 1;
+            count = endless ? listCount - begin : (int)Math.Max(Math.Min(longCount, Int32.MaxValue), Int32.MinValue);
             return true;
         }
 
@@ -111,16 +143,17 @@ namespace IronRuby.Builtins {
         internal static void NormalizeRangeNoClamp(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range,
             out int begin, out int count) {
 
+            // in longs, as MRI's are: the endpoints may be anything a long holds (see CastToRangeEndpoint)
             object rawBegin = range.Begin;
-            begin = (rawBegin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, rawBegin);
+            long longBegin = (rawBegin == null) ? 0 : CastToLongRangeEndpoint(fixnumCast, rawBegin);
             bool endless = range.End == null;
-            int end = endless ? -1 : Protocols.CastToFixnum(fixnumCast, range.End);
+            long end = endless ? -1 : CastToLongRangeEndpoint(fixnumCast, range.End);
             bool excludeEnd = range.ExcludeEnd && !endless;
 
-            int originalBegin = begin;
-            if (begin < 0) {
-                begin += listCount;
-                if (begin < 0) {
+            long originalBegin = longBegin;
+            if (longBegin < 0) {
+                longBegin += listCount;
+                if (longBegin < 0) {
                     throw RubyExceptions.CreateRangeError("{0}{1}{2} out of range",
                         originalBegin, excludeEnd ? "..." : "..", endless ? "" : end.ToString(CultureInfo.InvariantCulture));
                 }
@@ -129,14 +162,24 @@ namespace IronRuby.Builtins {
             if (end < 0) {
                 end += listCount;
             }
-            if (!excludeEnd) {
+            if (!excludeEnd && end < Int64.MaxValue) {
                 end++;
             }
 
-            count = end - begin;
-            if (count < 0) {
-                count = 0;
+            // compared before subtracting: a descending range from a large beginning to a very
+            // negative end would wrap around
+            long longCount = end > longBegin ? end - longBegin : 0;
+
+            // The answer is padded with nil to the range's full length; one longer than an array
+            // may be is MRI's rb_ary_store error rather than an allocation that never ends.
+            if (longCount >= MaxArraySize) {
+                throw RubyExceptions.CreateIndexError("index {0} too big", longCount - 1);
             }
+
+            // A beginning past the end only pads: it is kept as the list's length rather than cut
+            // to an int that could land inside the list.
+            begin = (int)Math.Min(longBegin, listCount);
+            count = (int)longCount;
         }
 
         private static bool InRangeNormalized(IList/*!*/ list, ref int index) {
@@ -577,7 +620,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static object GetElement(ConversionStorage<IntegerValue>/*!*/ integerConversion, IList/*!*/ self, object index) {
+        public static object GetElement(ConversionStorage<IntegerValue>/*!*/ integerConversion, RangeValuesStorage/*!*/ rangeValues,
+            ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ self, object index) {
             if (index is int) {
                 return GetElement(self, (int)index);
             }
@@ -585,6 +629,19 @@ namespace IronRuby.Builtins {
             // a redefined Float#to_int - and one outside a long is a RangeError.
             if (index is double) {
                 return GetElement(self, (double)index);
+            }
+            // rb_ary_aref1 asks rb_range_beg_len first: an object with #begin, #end and
+            // #exclude_end? indexes as the Range it describes. The range is normalized against the
+            // length before those methods ran (MRI reads RARRAY_LEN first) and read from the array
+            // as they left it.
+            int length = self.Count;
+            Range range = rangeValues.TryConvert(index);
+            if (range != null) {
+                int start, count;
+                if (!NormalizeRange(fixnumCast, length, range, out start, out count)) {
+                    return null;
+                }
+                return count < 0 ? CreateResultArray(allocateStorage, self) : GetElements(allocateStorage, self, start, count);
             }
             return GetElement(self, Protocols.CastToInteger(integerConversion, index));
         }
@@ -656,7 +713,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("at")]
         public static object At(ConversionStorage<IntegerValue>/*!*/ integerConversion, IList/*!*/ self, object index) {
-            return GetElement(integerConversion, self, index);
+            if (index is int) {
+                return GetElement(self, (int)index);
+            }
+            if (index is double) {
+                return GetElement(self, (double)index);
+            }
+            return GetElement(self, Protocols.CastToInteger(integerConversion, index));
         }
 
         #endregion
@@ -682,8 +745,8 @@ namespace IronRuby.Builtins {
             if (index >= list.Count) {
                 ExpandList(list, index);
             } else {
-                // normalize for max length
-                if (index + length > list.Count) {
+                // normalize for max length (not as index + length, which a range to Int32.MaxValue overflows)
+                if (length > list.Count - index) {
                     length = list.Count - index;
                 }
 
@@ -702,8 +765,24 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static object SetElement(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object index, object value) {
+        public static object SetElement(ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<int>/*!*/ fixnumCast,
+            RangeValuesStorage/*!*/ rangeValues, IList/*!*/ self, object index, object value) {
             RequireNotFrozen(self);
+            if (!(index is int)) {
+                // rb_ary_aset: an object with #begin, #end and #exclude_end? assigns to the Range it
+                // describes, and one reaching before the first element is reported by its #inspect.
+                // It is normalized against the length before those methods ran, as MRI's is.
+                int length = self.Count;
+                Range range = rangeValues.TryConvert(index);
+                if (range != null) {
+                    if (range.Begin is int && (int)range.Begin + length < 0) {
+                        throw RubyExceptions.CreateRangeError("{0} out of range", (object)rangeValues.Context.Inspect(index).ToString());
+                    }
+                    int start, count;
+                    RangeToStartAndCount(fixnumCast, range, length, out start, out count);
+                    return SetElement(arrayTryCast, self, start, count, value);
+                }
+            }
             int i = CastIndex(fixnumCast, index);
             RubyArray array = self as RubyArray;
             return array != null ? SetElement(array, i, value) : SetElement(self, i, value);
@@ -813,9 +892,9 @@ namespace IronRuby.Builtins {
         }
 
         private static void RangeToStartAndCount(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int start, out int count) {
-            start = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            start = (range.Begin == null) ? 0 : CastToRangeEndpoint(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int end = endless ? length : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = endless ? length : CastToRangeEndpoint(fixnumCast, range.End);
 
             int originalStart = start;
             start = start < 0 ? start + length : start;
@@ -831,7 +910,7 @@ namespace IronRuby.Builtins {
             }
 
             end = end < 0 ? end + length : end;
-            count = Math.Max(range.ExcludeEnd ? end - start : end - start + 1, 0);
+            count = (int)Math.Min(Math.Max(range.ExcludeEnd ? (long)end - start : (long)end - start + 1, 0), Int32.MaxValue);
         }
 
         #endregion
@@ -1520,7 +1599,7 @@ namespace IronRuby.Builtins {
             // start + length overflowed Int32 and produced a negative bound, after which the
             // loop below appended one element at a time until the process died. MRI reports
             // "argument too big" for a size it cannot represent; the CLR's is Int32.MaxValue.
-            if (length > 0 && (long)start + length > MaxArraySize) {
+            if (length >= 0 && (start >= MaxArraySize || length > MaxArraySize - start)) {
                 throw RubyExceptions.CreateArgumentError("argument too big");
             }
 
@@ -1553,9 +1632,9 @@ namespace IronRuby.Builtins {
         private static void FillRange(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, Range/*!*/ range,
             out int begin, out int length) {
 
-            int rawBegin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            int rawBegin = (range.Begin == null) ? 0 : CastToRangeEndpoint(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int rawEnd = endless ? self.Count - 1 : Protocols.CastToFixnum(fixnumCast, range.End);
+            int rawEnd = endless ? self.Count - 1 : CastToRangeEndpoint(fixnumCast, range.End);
 
             begin = NormalizeIndex(self, rawBegin);
             if (begin < 0) {
@@ -1563,9 +1642,10 @@ namespace IronRuby.Builtins {
             }
 
             int end = endless ? self.Count - 1 : NormalizeIndex(self, rawEnd);
+            // an end clamped to Int32.MaxValue makes a length that Fill reports as "argument too big"
             length = endless
                 ? Math.Max(0, self.Count - begin)
-                : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
+                : (int)Math.Min(Math.Max(0, (long)end - begin + (range.ExcludeEnd ? 0 : 1)), Int32.MaxValue);
         }
 
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start) {
@@ -1592,6 +1672,11 @@ namespace IronRuby.Builtins {
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start, int length) {
             RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
+
+            // as for an object (above): MRI's rb_ary_fill refuses the size before the first yield
+            if (length >= 0 && (start >= MaxArraySize || length > MaxArraySize - start)) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
+            }
 
             ExpandList(self, Math.Min(start, start + length));
 
@@ -1962,57 +2047,14 @@ namespace IronRuby.Builtins {
 
         #region values_at
 
-        /// <summary>
-        /// rb_range_values refuses an Enumerator::ArithmeticSequence before asking for #begin and
-        /// #end, so (0..2).step(2) is an index that does not convert. The class is the prelude's.
-        /// </summary>
-        private static bool IsArithmeticSequence(RubyContext/*!*/ context, object value) {
-            if (!(value is Enumerator)) {
-                return false;
-            }
-            for (RubyClass cls = context.GetClassOf(value); cls != null; cls = cls.SuperClass) {
-                if (cls.Name == "Enumerator::ArithmeticSequence") {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// rb_range_values: an object that is not an Integer but has #begin, #end and #exclude_end?
-        /// stands for the Range they describe. Null for anything else.
-        /// </summary>
-        private static Range RangeLike(RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage, object value) {
-
-            if (value == null || value is int || value is long || value is System.Numerics.BigInteger || value is bool ||
-                !Protocols.RespondTo(respondToStorage, value, "begin") ||
-                !Protocols.RespondTo(respondToStorage, value, "end") ||
-                !Protocols.RespondTo(respondToStorage, value, "exclude_end?") ||
-                IsArithmeticSequence(respondToStorage.Context, value)) {
-                return null;
-            }
-            var beginSite = beginStorage.GetCallSite("begin", 0);
-            var endSite = endStorage.GetCallSite("end", 0);
-            var excludeEndSite = excludeEndStorage.GetCallSite("exclude_end?", 0);
-            object begin = beginSite.Target(beginSite, value);
-            object end = endSite.Target(endSite, value);
-            return Range.CreateValidated(begin, end, RubyOps.IsTrue(excludeEndSite.Target(excludeEndSite, value)));
-        }
-
         [RubyMethod("values_at")]
         public static RubyArray/*!*/ ValuesAt(ConversionStorage<int>/*!*/ fixnumCast,
-            UnaryOpStorage/*!*/ allocateStorage, RespondToStorage/*!*/ respondToStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ beginStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ endStorage,
-            CallSiteStorage<Func<CallSite, object, object>>/*!*/ excludeEndStorage,
+            UnaryOpStorage/*!*/ allocateStorage, RangeValuesStorage/*!*/ rangeValues,
             IList/*!*/ self, params object[]/*!*/ values) {
             RubyArray result = new RubyArray();
 
             for (int i = 0; i < values.Length; i++) {
-                Range range = values[i] as Range ?? RangeLike(respondToStorage, beginStorage, endStorage, excludeEndStorage, values[i]);
+                Range range = rangeValues.TryConvert(values[i]);
                 if (range != null) {
                     // MRI asks for the range with errors on: a range reaching past the end of
                     // the array is padded with nil out to its full length (values_at(0..9) on a
@@ -2043,22 +2085,59 @@ namespace IronRuby.Builtins {
 
         #region join, to_s, inspect
         
-        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, List<MutableString/*!*/>/*!*/ parts, 
-            ref bool? isBinary, ref Dictionary<object, bool> seen) {
+        // nil.to_s, which is US-ASCII; it is only ever appended to the result, never handed out.
+        private static readonly MutableString/*!*/ NilJoinString = MutableString.CreateEmpty(RubyEncoding.Ascii).Freeze();
+
+        /// <summary>
+        /// The separator as it was at each gap. MRI appends it as it goes, so a #to_s that changes
+        /// it changes only the gaps after that element; the parts are put together at the end, so
+        /// each gap holds a copy, shared by the gaps until an element's conversion has run Ruby code.
+        /// </summary>
+        private sealed class JoinSeparator {
+            private readonly MutableString/*!*/ _separator;
+            private MutableString _copy;
+
+            public JoinSeparator(MutableString/*!*/ separator) {
+                _separator = separator;
+            }
+
+            public MutableString/*!*/ Current {
+                get { return _copy ?? (_copy = _separator.CloneDerived()); }
+            }
+
+            public void Invalidate() {
+                _copy = null;
+            }
+        }
+
+        private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, JoinSeparator separator,
+            List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
             // the length is read again on every step, as MRI's ary_join_1 does: a #to_str or #to_ary
             // may change the array
             for (int i = 0; i < list.Count; i++) {
-                JoinItem(conversions, list, list[i], parts, ref isBinary, ref seen);
+                if (i > 0 && separator != null) {
+                    parts.Add(separator.Current);
+                }
+                JoinItem(conversions, list, list[i], separator, parts, ref isBinary, ref seen);
             }
         }
 
-        private static void JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, List<MutableString/*!*/>/*!*/ parts,
-            ref bool? isBinary, ref Dictionary<object, bool> seen) {
+        /// <summary>
+        /// Adds the strings <paramref name="item"/> joins to, separators included, to <paramref name="parts"/>.
+        /// Returns true if the item was an array (or converted to one) and false if it became a string.
+        /// </summary>
+        private static bool JoinItem(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, object item, JoinSeparator separator,
+            List<MutableString/*!*/>/*!*/ parts, ref bool? isBinary, ref Dictionary<object, bool> seen) {
             {
                 if (item == null) {
-                    parts.Add(null);
-                    return;
+                    parts.Add(NilJoinString);
+                    return false;
+                }
+
+                // the conversions below may run Ruby code, which may change the separator
+                if (separator != null && !(item is MutableString)) {
+                    separator.Invalidate();
                 }
 
                 IList listItem = conversions.ToAry.Target(conversions.ToAry, item);
@@ -2075,15 +2154,16 @@ namespace IronRuby.Builtins {
                     }
 
                     seen.Add(item, true);
-                    JoinRecursive(conversions, listItem, parts, ref isBinary, ref seen);
+                    JoinRecursive(conversions, listItem, separator, parts, ref isBinary, ref seen);
                     seen.Remove(item);
-                    return;
+                    return true;
                 }
 
                 // try to_str first, then to_s:
                 MutableString strItem = conversions.ToStr.Target(conversions.ToStr, item) ?? conversions.ToS.Target(conversions.ToS, item);
                 parts.Add(strItem);
                 isBinary = isBinary.HasValue ? (isBinary | strItem.IsBinary) : strItem.IsBinary;
+                return false;
             }
         }
 
@@ -2108,59 +2188,49 @@ namespace IronRuby.Builtins {
                 }
                 break;
             }
+
+            var gap = (separator != null) ? new JoinSeparator(separator) : null;
+
+            // The separators go in between the elements of every array joined, nested ones included,
+            // and an empty nested array still has its neighbours separated ([[], 1].join("-") is "-1").
+            bool firstIsArray = false;
             int index = 0;
             for (; index < scanned && index < self.Count; index++) {
                 var str = self[index] as MutableString;
                 if (str == null) {
                     break;
                 }
-                JoinItem(conversions, self, str, parts, ref isBinary, ref seen);
+                if (index > 0 && separator != null) {
+                    parts.Add(gap.Current);
+                }
+                JoinItem(conversions, self, str, gap, parts, ref isBinary, ref seen);
             }
             for (; index < self.Count; index++) {
-                JoinItem(conversions, self, self[index], parts, ref isBinary, ref seen);
-            }
-            if (parts.Count == 0) {
-                return MutableString.CreateEmpty(RubyEncoding.Ascii);
+                if (index > 0 && separator != null) {
+                    parts.Add(gap.Current);
+                }
+                bool isArray = JoinItem(conversions, self, self[index], gap, parts, ref isBinary, ref seen);
+                if (index == 0) {
+                    firstIsArray = isArray;
+                }
             }
 
-            if (separator != null && separator.IsBinary != isBinary && !separator.IsAscii()) {
-                isBinary = true;
-            }
+            // The result takes the encoding of the first element when that is a string (or became one),
+            // and is US-ASCII when it is an array (MRI's ary_join_1_ary clears ary_join_1's "first").
+            // Everything after is appended the way rb_str_buf_append does it, so an empty or ASCII-only
+            // string leaves the encoding alone and the first one that is not ASCII brings its own:
+            // [[], "".force_encoding("UTF-8")].join is US-ASCII, [[], "\u3042"].join UTF-8.
+            RubyEncoding encoding = (parts.Count == 0 || firstIsArray) ? RubyEncoding.Ascii : parts[0].Encoding;
 
-            // calculate length:
-            // The result starts out in the first string's encoding, and the separator is appended
-            // to that, as in MRI: an incompatible pair is reported in that order.
-            MutableString any = null;
-            int length = (separator != null) ? (isBinary.HasValue && isBinary.Value ? separator.GetByteCount() : separator.GetCharCount()) * (parts.Count - 1) : 0;
+            int length = 0;
+            bool binary = isBinary.HasValue && isBinary.Value;
             for (int i = 0, n = parts.Count; i < n; i++) {
-                var part = parts[i];
-                if (part != null) {
-                    length += (isBinary.HasValue && isBinary.Value) ? part.GetByteCount() : part.GetCharCount();
-                    if (any == null) {
-                        any = part;
-                    }
-                }
-            }
-            any ??= separator;
-
-            if (any == null) {
-                return MutableString.CreateEmpty(RubyEncoding.Ascii);
+                length += binary ? parts[i].GetByteCount() : parts[i].GetCharCount();
             }
 
-            var result = isBinary.HasValue && isBinary.Value ? 
-                MutableString.CreateBinary(length, any.Encoding) :
-                MutableString.CreateMutable(length, any.Encoding);
-
+            var result = binary ? MutableString.CreateBinary(length, encoding) : MutableString.CreateMutable(length, encoding);
             for (int i = 0, n = parts.Count; i < n; i++) {
-                var part = parts[i];
-
-                if (separator != null && i > 0) {
-                    result.Append(separator);
-                }
-
-                if (part != null) {
-                    result.Append(part);
-                }
+                result.Append(parts[i]);
             }
 
             return result;
@@ -2211,23 +2281,21 @@ namespace IronRuby.Builtins {
                 if (handle == null) {
                     return MutableString.CreateAscii("[...]");
                 }
-                // MRI starts the result off as US-ASCII and takes the encoding of the first
-                // element's inspection, so an empty array inspects as US-ASCII rather than as
-                // binary, and ["\u3042"] keeps the element's encoding. US-ASCII gives way to any
-                // other encoding, ASCII only content or not, which is how an array of strings
-                // inspects in the encoding the answer is going to be read in.
+                // MRI's rb_ary_inspect starts the result off as US-ASCII and takes the encoding
+                // of the first element's inspection, so an empty array inspects as US-ASCII
+                // rather than as binary, and ["\u3042"] keeps the element's encoding. The later
+                // elements are appended as any string is: ASCII only text leaves the encoding
+                // alone, so [nil, "a"] is still US-ASCII.
                 MutableString str = MutableString.CreateMutable(RubyEncoding.Ascii);
                 str.Append('[');
                 bool first = true;
                 foreach (object obj in self) {
+                    var item = context.Inspect(obj);
                     if (first) {
                         first = false;
+                        str.ForceEncoding(item.Encoding);
                     } else {
                         str.Append(", ");
-                    }
-                    var item = context.Inspect(obj);
-                    if (str.Encoding == RubyEncoding.Ascii && item.Encoding != RubyEncoding.Ascii) {
-                        str.ForceEncoding(item.Encoding);
                     }
                     str.Append(item);
                 }

@@ -336,8 +336,12 @@ namespace IronRuby.Runtime {
 
             // proc whose home frame is gone (e.g. Proc#call on an orphaned block), or one running
             // on another thread than the call it would break out of (Thread.new { break }):
-            if (_proc.Converter == null || (_threadId != 0 && _threadId != Environment.CurrentManagedThreadId)) {
-                throw new LocalJumpError("break from proc-closure", "break", returnValue);
+            if (_proc.Converter == null || (_threadId != 0 && _threadId != Environment.CurrentManagedThreadId)
+                || (_proc.LocalScope.IsEmpty && !_proc.Converter.IsActiveMethod)) {
+                // A block a library method wrote in C# is MRI's C block, which breaks with rb_iter_break: called after
+                // that method has returned (Enumerable#first's, kept by an #each that stores its block), it has no
+                // frame to break to, and MRI says so as for a break anywhere else outside of one ([ruby-dev:45041]).
+                throw new LocalJumpError(_proc.LocalScope.IsEmpty ? "unexpected break" : "break from proc-closure", "break", returnValue);
             }
 
             // unwind to proc converter:

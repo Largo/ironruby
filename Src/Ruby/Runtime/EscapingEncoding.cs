@@ -41,9 +41,12 @@ namespace IronRuby.Runtime {
     /// One undecodable byte becomes one character, which is also how MRI counts them - "a\xFFb" is
     /// three characters long in UTF-8 - so character offsets agree with MRI's as well.
     ///
-    /// The range U+DC80..U+DCFF cannot occur in text decoded from any of the encodings this is
-    /// used with: UTF-8 and friends cannot encode an unpaired surrogate at all, and a single byte
-    /// encoding has no character above U+FFFF to pair one with. Validity is *not* decided here -
+    /// The range U+DC00..U+DCFF cannot occur in text decoded from any of the encodings this is
+    /// used with: UTF-8 and friends cannot encode an unpaired surrogate at all, a single byte
+    /// encoding has no character above U+FFFF to pair one with, and the strict UTF-16 and UTF-32
+    /// decoders refuse a lone surrogate. Only those last two escape a byte below 0x80: the odd
+    /// byte at the end of "A" in UTF-16BE, which has to come back as "A" and not as the three
+    /// bytes of a surrogate. Validity is *not* decided here -
     /// String#valid_encoding? still asks the strict encoding, which is what makes it able to
     /// answer false for a string this class decoded happily.
     /// </summary>
@@ -60,7 +63,7 @@ namespace IronRuby.Runtime {
         }
 
         internal static bool IsEscapedByte(char c) {
-            return c >= (char)0xDC80 && c <= (char)0xDCFF;
+            return c >= EscapeBase && c <= (char)0xDCFF;
         }
 
         /// <summary>

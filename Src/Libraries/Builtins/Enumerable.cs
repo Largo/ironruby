@@ -120,6 +120,15 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        // MRI's rb_yield_force_blockarg for one value, which Array#to_h hands its block: a lambda
+        // binds it as a plain block would (see BlockParam.YieldForceBlockArg).
+        [RubyMethod("__yield_force_blockarg__", RubyMethodAttributes.PrivateInstance)]
+        public static object YieldForceBlockArg([NotNull]BlockParam/*!*/ block, object self, object value) {
+            object result;
+            block.YieldForceBlockArg(value, out result);
+            return result;
+        }
+
         #endregion
 
         internal static object Each(CallSiteStorage<EachSite>/*!*/ each, object self, Proc/*!*/ block) {

@@ -62,6 +62,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CanRescue;
         public static MethodInfo/*!*/ CheckSplatArity { get { return _CheckSplatArity ?? (_CheckSplatArity = CallInstruction.CacheAction<System.Object, System.Int32, System.Int32, System.String>(RubyOps.CheckSplatArity)); } }
         private static MethodInfo _CheckSplatArity;
+        public static MethodInfo/*!*/ CheckSuperClass { get { return _CheckSuperClass ?? (_CheckSuperClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyClass>(RubyOps.CheckSuperClass)); } }
+        private static MethodInfo _CheckSuperClass;
         public static MethodInfo/*!*/ ClearKeywordArguments { get { return _ClearKeywordArguments ?? (_ClearKeywordArguments = CallInstruction.CacheFunc<System.Object, System.Object>(RubyOps.ClearKeywordArguments)); } }
         private static MethodInfo _ClearKeywordArguments;
         public static MethodInfo/*!*/ CompareDefaultException { get { return _CompareDefaultException ?? (_CompareDefaultException = CallInstruction.CacheFunc<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyScope, System.Boolean>(RubyOps.CompareDefaultException)); } }
@@ -752,6 +754,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _Yield3;
         public static MethodInfo/*!*/ Yield4 { get { return _Yield4 ?? (_Yield4 = CallInstruction.CacheFunc<System.Object, System.Object, System.Object, System.Object, IronRuby.Builtins.Proc, System.Object, IronRuby.Runtime.BlockParam, System.Object>(RubyOps.Yield4)); } }
         private static MethodInfo _Yield4;
+        public static MethodInfo/*!*/ YieldKeywordSplat1 { get { return _YieldKeywordSplat1 ?? (_YieldKeywordSplat1 = CallInstruction.CacheFunc<System.Object, System.Collections.IList, IronRuby.Builtins.Proc, System.Object, IronRuby.Runtime.BlockParam, System.Object>(RubyOps.YieldKeywordSplat1)); } }
+        private static MethodInfo _YieldKeywordSplat1;
         public static MethodInfo/*!*/ YieldN { get { return _YieldN ?? (_YieldN = CallInstruction.CacheFunc<System.Object[], IronRuby.Builtins.Proc, System.Object, IronRuby.Runtime.BlockParam, System.Object>(RubyOps.YieldN)); } }
         private static MethodInfo _YieldN;
         public static MethodInfo/*!*/ YieldSplat0 { get { return _YieldSplat0 ?? (_YieldSplat0 = CallInstruction.CacheFunc<System.Collections.IList, IronRuby.Builtins.Proc, System.Object, IronRuby.Runtime.BlockParam, System.Object>(RubyOps.YieldSplat0)); } }

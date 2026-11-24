@@ -2523,6 +2523,16 @@ namespace IronRuby.Runtime {
             return GetClassDisplayName(obj);
         }
 
+        /// <summary>
+        /// A module as MRI writes it into a message with %PRIsVALUE: by its own #to_s (an anonymous
+        /// class with a singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's
+        /// own #to_s is used too; one that returns no String gives the default #&lt;Class:0x...&gt;, as
+        /// string interpolation would.
+        /// </summary>
+        public string/*!*/ GetModuleMessageName(RubyModule/*!*/ module) {
+            return StringConversionSite.Target(StringConversionSite, module).ToString();
+        }
+
         private string/*!*/ GetClassName(object obj, bool display) {
             // doesn't create a RubyClass for .NET types
 
@@ -2651,6 +2661,17 @@ namespace IronRuby.Runtime {
 
         // thread-safe:
         public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result) {
+            bool notModule;
+            return TryGetModule(autoloadScope, moduleName, out result, out notModule);
+        }
+
+        /// <summary>
+        /// <paramref name="notModule"/> tells the two failures of MRI's rb_path_to_class apart: a name
+        /// that is defined but is not a class or module (a TypeError there) from one that is not
+        /// defined (an ArgumentError).
+        /// </summary>
+        public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result, out bool notModule) {
+            notModule = false;
             using (ClassHierarchyLocker()) {
                 result = _objectClass;
                 int pos = 0;
@@ -2670,6 +2691,7 @@ namespace IronRuby.Runtime {
                     }
                     result = tmp.Value as RubyModule;
                     if (result == null) {
+                        notModule = true;
                         return false;
                     } else if (pos2 < 0) {
                         return true;
@@ -3118,6 +3140,17 @@ namespace IronRuby.Runtime {
                         // the singleton class's own instance variables go too, as in rb_singleton_class_clone
                         CopyInstanceData(singleton, singletonDup, false);
 
+                        // and so does a singleton class of the singleton class that holds methods
+                        // (o.singleton_class.singleton_class.define_method), which
+                        // rb_singleton_class_clone_and_attach clones along with it
+                        var meta = singleton.ImmediateClass;
+                        if (meta.IsSingletonClass && !meta.IsDummySingletonClass && ReferenceEquals(meta.SingletonClassOf, singleton)) {
+                            var metaDup = singletonDup.GetOrCreateSingletonClass();
+                            metaDup.InitializeMembersFrom(meta);
+                            // with its instance variables, as for the singleton class above
+                            CopyInstanceData(meta, metaDup, false);
+                        }
+
                         SetInstanceSingletonOfNoLock(target, ref targetData, singletonDup);
                     }
                 }
@@ -3455,16 +3488,41 @@ namespace IronRuby.Runtime {
                 handlers = registered.ToArray();
             }
 
-            foreach (var handler in handlers) {
-                var command = handler as GlobalVariableTraceCommand;
-                if (command != null) {
-                    RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
-                } else {
-                    var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
-                    site.Target(site, handler, value);
+            // MRI's rb_gvar_set does not fire a variable's handlers while they are already running
+            // (gvar's block_trace), so that a handler may assign the variable it traces
+            // (trace_var(:$x) { $x *= 2 }) without recursing forever. MRI's flag is the variable's;
+            // without a GVL another thread's assignment should still fire, so here it is the thread's.
+            var running = _runningGlobalVariableTraces;
+            if (running == null) {
+                _runningGlobalVariableTraces = running = new List<KeyValuePair<RubyContext, string>>();
+            }
+            var entry = new KeyValuePair<RubyContext, string>(this, name);
+            if (running.Contains(entry)) {
+                return;
+            }
+
+            running.Add(entry);
+            try {
+                foreach (var handler in handlers) {
+                    var command = handler as GlobalVariableTraceCommand;
+                    if (command != null) {
+                        RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
+                    } else {
+                        var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
+                        site.Target(site, handler, value);
+                    }
                 }
+            } finally {
+                running.Remove(entry);
             }
         }
+
+        /// <summary>
+        /// The globals whose trace_var handlers this thread is running, with their runtime (several
+        /// runtimes can share a process and a thread).
+        /// </summary>
+        [ThreadStatic]
+        private static List<KeyValuePair<RubyContext, string>> _runningGlobalVariableTraces;
 
         #endregion
 
@@ -3509,12 +3567,42 @@ namespace IronRuby.Runtime {
             return _currentException = e;
         }
 
-        internal RubyArray GetCurrentExceptionBacktrace() {
-            // Under certain circumstances MRI invokes "backtrace" method, but it is quite unstable (crashes sometimes).
-            // Therefore we don't call the method and return the backtrace immediately.
+        /// <summary>
+        /// $@ is MRI's rb_get_backtrace($!): the stored backtrace unless the exception's class
+        /// overrides #backtrace, in which case whatever that answers, checked as rb_check_backtrace
+        /// does (nil, a String, or an Array of Strings).
+        /// </summary>
+        internal object GetCurrentExceptionBacktrace() {
             Exception e = _currentException;
-            return (e != null) ? RubyExceptionData.GetInstance(e).Backtrace : null;
+            if (e == null) {
+                return null;
+            }
+
+            // the exception's own singleton class too (`def e.backtrace'): MRI looks it up in CLASS_OF
+            var method = GetImmediateClassOf(e).ResolveMethod("backtrace", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo && method.DeclaringModule == ExceptionClass) {
+                return RubyExceptionData.GetInstance(e).Backtrace;
+            }
+
+            if (_backtraceSite == null) {
+                System.Threading.Interlocked.CompareExchange(ref _backtraceSite,
+                    CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "backtrace", 0)), null);
+            }
+            object backtrace = _backtraceSite.Target(_backtraceSite, e);
+            if (backtrace == null) {
+                return null;
+            }
+            if (backtrace is MutableString) {
+                return RubyArray.Create(backtrace);
+            }
+            var array = backtrace as RubyArray;
+            if (array == null || !CollectionUtils.TrueForAll(array, (item) => item is MutableString)) {
+                throw RubyExceptions.CreateTypeError("backtrace must be an Array of String or an Array of Thread::Backtrace::Location");
+            }
+            return array;
         }
+
+        private CallSite<Func<CallSite, object, object>> _backtraceSite;
 
         internal RubyArray SetCurrentExceptionBacktrace(object value) {
             // first check availability of the current exception:
@@ -5197,6 +5285,11 @@ namespace IronRuby.Runtime {
             return encoding.IsAsciiIdentity ? encoding.StrictEncoding : RubyEncoding.UTF8.StrictEncoding;
         }
 
+        /// <summary>
+        /// The key of the source bytes in the Data of the ArgumentException a magic comment naming no encoding raises.
+        /// </summary>
+        public const string InvalidMagicCommentSourceKey = "IronRuby.InvalidMagicCommentSource";
+
         private SourceCodeReader/*!*/ ReadSource(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding, string path) {
             long initialPosition = stream.Position;
             var reader = new StreamReader(stream, BinaryEncoding.Instance, true);
@@ -5222,9 +5315,18 @@ namespace IronRuby.Runtime {
             if (Tokenizer.TryParseEncodingHeader(reader, out encodingName, out line)) {
                 // A name Ruby does not know is as wrong as an encoding the comment itself could not
                 // be written in (UTF-16LE): MRI reports both as an ArgumentError, worded so.
-                var rubyEncoding = FindRubyEncoding(encodingName);
+                // "external", "locale" and the like are names Encoding.find resolves, not encodings:
+                // the parser does not know them (rb_enc_find_index there fails the same way).
+                var rubyEncoding = RubyEncoding.FindByName(encodingName);
                 if (rubyEncoding == null || !rubyEncoding.IsAsciiIdentity) {
-                    throw new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
+                    var error = new ArgumentException(String.Format("{0}:{1}: unknown or invalid encoding in the magic comment", path, line));
+                    // MRI's message goes on with prism's picture of the line, numbered from where an eval starts: the parser,
+                    // which knows that line, draws it from these bytes (PrismAstBridge.Parse).
+                    stream.Seek(initialPosition, SeekOrigin.Begin);
+                    var source = new MemoryStream();
+                    stream.CopyTo(source);
+                    error.Data[InvalidMagicCommentSourceKey] = source.ToArray();
+                    throw error;
                 }
                 rubyPreambleEncoding = rubyEncoding.StrictEncoding;
             }
