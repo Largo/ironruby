@@ -3578,6 +3578,7 @@ namespace IronRuby.Builtins {
             bool readPartial = false;
             long restorePosition = -1;
             RubyIO dstIO = null;
+            bool copied = false;
 
             try {
                 // Each side on its own: an IO (or what #to_io gives, as for a Tempfile) is read or
@@ -3611,6 +3612,7 @@ namespace IronRuby.Builtins {
                     // written through the IO, which gives back what it had read ahead and goes to
                     // the end of a file opened for appending
                     dstIO.GetWritableStream();
+                    AsciiBinmode(dstIO);
                 } else {
                     var dstPath = toPathSite.Target(toPathSite, dst);
                     if (dstPath != null) {
@@ -3700,6 +3702,7 @@ namespace IronRuby.Builtins {
                     bytesCopied += bytesRead;
                     remaining -= bytesRead;
                 }
+                copied = true;
                 return Protocols.Normalize(bytesCopied);
 
             } finally {
@@ -3712,9 +3715,31 @@ namespace IronRuby.Builtins {
                 if (ownsDst) {
                     dstStream.Dispose();
                 } else if (dstIO != null && !dstIO.Closed) {
-                    dstIO.Flush();
+                    if (copied) {
+                        dstIO.Flush();
+                    } else {
+                        // The error that stopped the copy is the one to report, not a failure to
+                        // flush what it had written before it.
+                        try {
+                            dstIO.Flush();
+                        } catch (Exception) {
+                        }
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// MRI's io_ascii8bit_binmode, which copy_stream applies to an IO it writes to: binary
+        /// mode, ASCII-8BIT and no conversion, so later writes are not transcoded either.
+        /// </summary>
+        private static void AsciiBinmode(RubyIO/*!*/ io) {
+            io.ClearPendingChars();
+            io.PreserveEndOfLines = true;
+            io.SetEncodings(RubyEncoding.Binary, null);
+            io.ConversionOptions = null;
+            // where the prelude's IO#binmode records it
+            io.Context.SetInstanceVariable(io, RubyUtils.GetCoreStateInstanceVariableName("@__binmode__"), ScriptingRuntimeHelpers.True);
         }
 
         private static bool MayNameFile(RespondToStorage/*!*/ respondTo, object obj) {
