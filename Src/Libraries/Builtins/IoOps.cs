@@ -475,10 +475,17 @@ namespace IronRuby.Builtins {
             if (options != null) {
                 info = info.AddOptions(toStr, options);
             }
+            // MRI's rb_io_reopen replaces the conversion settings only when a mode or options
+            // came with the path; reopened by path alone, the stream keeps its own.
+            bool configured = (mode != Missing.Value && mode != null) || options != null;
             if (!info.HasMode) {
                 info = new IOInfo(ReopenMode(self.Mode), info.ExternalEncoding, info.InternalEncoding);
             }
-            return Reopen(toPath, self, path, info);
+            Reopen(toPath, self, path, info);
+            if (configured) {
+                self.ConversionOptions = AddTextModeDecorator(self.Context, info, options);
+            }
+            return self;
         }
 
         /// <summary>
@@ -499,14 +506,22 @@ namespace IronRuby.Builtins {
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
-            // reopened by path, an IO answers that path (a File keeps its own)
-            if (!(io is RubyFile)) {
+            // reopened by path, an IO answers that path, and so does a File (MRI's rb_io_reopen
+            // replaces fptr->pathv), whose #lstat then looks at the new one
+            var file = io as RubyFile;
+            if (file != null) {
+                file.Path = io.Context.DecodePath(path);
+                file.PathEncoding = path.Encoding;
+            } else {
                 SetIOPath(io, path.Clone());
             }
             if (io.Closed) {
                 // Reopening a closed stream with a path is how it is brought back to life, so
                 // this one needs a descriptor again rather than the IOError a read would get.
                 io.Reset(newStream, info.Mode);
+                if (info.HasEncoding) {
+                    io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
+                }
                 return io;
             }
 
