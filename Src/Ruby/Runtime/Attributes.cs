@@ -395,6 +395,19 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
+    /// Marks the RubyScope parameter of a library method that reads from it only what a method's scope shares with the scope
+    /// the method was defined in: the runtime, the global scope, the lexical refinements (Kernel#respond_to?, Module#const_get).
+    /// A call from a light frame (RubyCallFlags.HasLightScope), which passes that declaring scope, then binds without making the
+    /// caller's scope (CallArguments.ContextScopeExpression), as the runtime helpers for instance variables do.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false)]
+    public sealed class DeclaringScopeAttribute : Attribute {
+        internal static bool IsDefinedOn(ParameterInfo/*!*/ parameter) {
+            return parameter.IsDefined(typeof(DeclaringScopeAttribute), false);
+        }
+    }
+
+    /// <summary>
     /// Marks a library method that does nothing but call another of the same type with the same parameters - named by
     /// <see cref="ClrName"/> - under another Ruby name. MRI defines `collect' and `map' as one C function under two names,
     /// and its backtrace names the frame by the name called; a backtrace here names a library frame by its CLR method, so

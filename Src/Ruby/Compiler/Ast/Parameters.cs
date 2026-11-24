@@ -79,6 +79,16 @@ namespace IronRuby.Compiler.Ast {
             set { _keywordsAfterOptionals = value; }
         }
 
+        // Set for `def m(...)' (and `def m(a, ...)'), lowered to `def m(*?fwd?, &?fwdblk?)': its signature says `*, **, &',
+        // but no prologue takes keywords apart - a keyword hash stays, marked, at the end of the rest parameter, as the
+        // method's RubyMethodInfo binds it, and calls with `...' splat it back.
+        private bool _forwardsArguments;
+
+        internal bool ForwardsArguments {
+            get { return _forwardsArguments; }
+            set { _forwardsArguments = value; }
+        }
+
         public LeftValue/*!*/[]/*!*/ Mandatory {
             get { return _mandatory; }
         }

@@ -3861,6 +3861,30 @@ NoMethodError
         }
 
         /// <summary>
+        /// A lookup through a module the unfinished copy of a module was mixed into, made in an initialize_copy
+        /// before super, finds the outer constant: once the copy has its constants that lookup is stale, in the
+        /// other module's const_get cache and at a constant site alike. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Module_CopyInvalidatesConstantLookups1() {
+            TestOutput(@"
+Y = :top
+H = Module.new
+mod = Module.new; mod.const_set(:Y, :copied)
+def mod.initialize_copy(src)
+  H.include(self)
+  H.const_get(:Y)
+  H.module_eval('Y')
+  super
+end
+mod.clone
+p H.const_get(:Y), H.module_eval('Y')
+", @"
+:copied
+:copied
+");
+        }
+
+        /// <summary>
         /// $stdout can be any object with a #write (#134). Kernel#puts forwards to $stdout.puts even when that is
         /// only the private Kernel#puts the object inherits (rb_f_puts calls it with rb_funcallv), and with $stdout
         /// as the receiver formats the lines itself and hands them to #write; it raised "private method 'puts'

@@ -161,6 +161,11 @@ namespace IronRuby.Runtime.Calls {
             return new RubyCallSignature(RubyCallFlags.HasScope | (hasImplicitSelf ? RubyCallFlags.HasImplicitSelf : RubyCallFlags.None));
         }
 
+        // `defined?(obj.m)' in a light frame (MethodDefinition.LightFrameRewriter.LightIsDefined)
+        internal static RubyCallSignature IsDefinedWithLightScope() {
+            return new RubyCallSignature(RubyCallFlags.HasScope | RubyCallFlags.HasLightScope);
+        }
+
         internal Expression/*!*/ CreateExpression() {
             return Ast.New(Methods.RubyCallSignatureCtor, AstUtils.Constant(_countAndFlags));
         }
