@@ -1482,29 +1482,14 @@ namespace IronRuby.Runtime {
             return "(eval at " + path + ":" + line + ")";
         }
 
-        public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module, MutableString file, int line) {
-            return Evaluate(code, targetScope, self, module, null, file, line);
-        }
+        private static EvalEntryPointDelegate/*!*/ CompileEval(RubyContext/*!*/ context, byte[]/*!*/ bytes, MutableString/*!*/ code,
+            string/*!*/ sourcePath, RubyCompilerOptions/*!*/ options, int line, EvalCodeCache.Key cacheKey) {
 
-        public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module,
-            RubyModule lexicalConstantModule, MutableString file, int line) {
-            Assert.NotNull(code, targetScope);
+            var source = context.CreateSourceUnit(new BinaryContentProvider(bytes), sourcePath, code.Encoding.Encoding, SourceCodeKind.File);
 
-            // the code can make a Proc, Binding or method over the scope (a block scope is then not reused)
-            targetScope.MarkCaptured();
-
-            RubyContext context = targetScope.RubyContext;
-            RubyMethodScope methodScope = targetScope.GetInnerMostMethodScope();
-
-#if DEBUG
-            Utils.Log(Interlocked.Increment(ref _stringEvalCounter).ToString() + ": " + (file != null ? file.ToString() : "?") + " : " + line, "EVAL");
-#endif
-
-            // we want to create a new top-level local scope:
-            var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
-            options.EvalSourceEncoding = code.Encoding;
-            string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
-            var source = CreateRubySourceUnit(context, code, (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path);
+            // A compile that gave a warning is not kept: MRI gives it at each eval. Another thread's
+            // warning in between only keeps this one out too.
+            int warnings = context.RuntimeErrorSink.WarningCount;
 
             Expression<EvalEntryPointDelegate> lambda;
             try {
@@ -1533,6 +1518,63 @@ namespace IronRuby.Runtime {
 
             var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context.DomainManager.Configuration.DebugMode,
                 context.Options.NoAdaptiveCompilation, context.EvalCompilationThreshold);
+            if (cacheKey != null && options.EvalCodeShareable && context.RuntimeErrorSink.WarningCount == warnings) {
+                if (context.EvalCodeCache == null) {
+                    System.Threading.Interlocked.CompareExchange(ref context.EvalCodeCache, new EvalCodeCache(), null);
+                }
+                context.EvalCodeCache.Add(cacheKey, compiled);
+            }
+            return compiled;
+        }
+
+        public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module, MutableString file, int line) {
+            return Evaluate(code, targetScope, self, module, null, file, line);
+        }
+
+        public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module,
+            RubyModule lexicalConstantModule, MutableString file, int line) {
+            Assert.NotNull(code, targetScope);
+
+            // the code can make a Proc, Binding or method over the scope (a block scope is then not reused)
+            targetScope.MarkCaptured();
+
+            RubyContext context = targetScope.RubyContext;
+            RubyMethodScope methodScope = targetScope.GetInnerMostMethodScope();
+
+#if DEBUG
+            Utils.Log(Interlocked.Increment(ref _stringEvalCounter).ToString() + ": " + (file != null ? file.ToString() : "?") + " : " + line, "EVAL");
+#endif
+
+            // we want to create a new top-level local scope:
+            var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
+            options.EvalSourceEncoding = code.Encoding;
+            string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
+            string sourcePath = (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path;
+            byte[] bytes = code.ToByteArray();
+
+            // A plain string eval of a text that keeps no state of one eval runs the code compiled at its
+            // last eval in the same place (EvalCodeCache): an ERB template evaluated at every #result.
+            EvalCodeCache.Key cacheKey = null;
+            EvalEntryPointDelegate compiled = null;
+            if (module == null && bytes.Length <= EvalCodeCache.MaxCodeLength && options.TopLevelParameterSignature == null &&
+                options.IsolatedLocalNames == null && context.Coverage == null) {
+
+                object verbose = context.Verbose;
+                cacheKey = new EvalCodeCache.Key(bytes, code.Encoding, sourcePath, line,
+                    verbose == null ? 0 : (RubyOps.IsTrue(verbose) ? 2 : 1), methodScope != null,
+                    options.EvalFrameBaseLabel, options.EvalFrameBlockLevels, options.TopLevelMethodName, options.TopLevelParameterNames,
+                    options.TopLevelHasUnsplatParameter, options.LocalNames, EvalCodeCache.ConstantModules(targetScope));
+                var cache = context.EvalCodeCache;
+                if (cache != null) {
+                    compiled = (EvalEntryPointDelegate)cache.TryGet(cacheKey);
+                }
+                options.CheckEvalCodeShareable = true;
+            }
+
+            if (compiled == null) {
+                compiled = CompileEval(context, bytes, code, sourcePath, options, line, cacheKey);
+            }
+
             var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
 
             if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {

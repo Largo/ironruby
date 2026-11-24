@@ -291,4 +291,49 @@ r = 6.times.map do |n|
 end.map(&:value)
 puts "31. threads: #{r.inspect}"
 
+# 32. state-keeping literals nested where a walk of the tree could miss them - a call's block, a
+# parallel assignment's right side, a hash value, an interpolation, a keyword argument, a lambda -
+# each a /o regexp evaluated once per eval, and regexp and range literals new objects per eval
+def kw32(k:) = k
+r = 3.times.map do |i|
+  [eval("[1].map { /b\#{i}/o }.first.source"), eval("_a, b32 = 1, /p\#{i}/o; b32.source"),
+   eval("{ k: /h\#{i}/o }[:k].source"), eval("\"\#{/s\#{i}/o.source}\""), eval("kw32(k: /k\#{i}/o).source"),
+   eval("-> { /l\#{i}/o }.call.source"), eval("[1].each_with_object([]) { |_, a| a << (i..i + 1) }.first")]
+end
+l = 2.times.map { eval("[1].map { /lit/ }.first") }
+g = 2.times.map { eval("[1].map { (1..2) }.first") }
+puts "32. nested literals: #{r.inspect} #{l[0].equal?(l[1])} #{g[0].equal?(g[1])}"
+
+# 33. a string literal is a new String at each eval of a text run hot, `.freeze' the same one
+s33 = 2500.times.map { eval("'ab'") }
+s33[0] << 'c'
+f33 = 2.times.map { eval("'fz'.freeze") }
+puts "33. string literals: #{s33.map(&:object_id).uniq.size} #{s33[1]} #{s33[0]} #{eval("'ab'")} #{f33[0].equal?(f33[1])} #{s33[5].frozen?}"
+
+# 34. the same text, file and line hot past the compilation threshold: a method it calls redefined,
+# a singleton method added to its receiver, made private, and an exception raised through it
+def m34(i) = i
+o34 = Object.new
+def o34.v = 1
+acc = 0
+bt = nil
+3000.times do |i|
+  def m34(i) = -i if i == 1000
+  (def o34.v = 2) if i == 1500
+  o34.singleton_class.send(:private, :v) if i == 2000
+  begin
+    acc += eval("m34(i) + o34.v", nil, "m34.rb", 3)
+  rescue NoMethodError => e
+    bt ||= [e.message[/private method '[^']*'/], e.backtrace[0].split('/').last]
+    acc += 1
+  end
+end
+puts "34. hot and changed: #{acc} #{bt.inspect}"
+
+# 35. a block of the same text run past the threshold in evals in two methods: its frame labels
+def l35a = eval("[1, 2].map { caller(0)[0][/'.*'/] }.uniq", nil, "l35.rb", 1)
+def l35b = eval("[1, 2].map { caller(0)[0][/'.*'/] }.uniq", nil, "l35.rb", 1)
+r = 700.times.map { |i| i.even? ? l35a : l35b }
+puts "35. labels: #{r.uniq.inspect}"
+
 puts 'end'
