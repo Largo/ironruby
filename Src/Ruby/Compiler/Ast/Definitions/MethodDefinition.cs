@@ -1581,6 +1581,8 @@ namespace IronRuby.Compiler.Ast {
 
             // The scope a helper of a body's exception handling (Body.TransformExceptionHandling, RescueClause) needs, by its name.
             private enum HandlingScope {
+                // not a helper of the exception handling
+                None,
                 // only the runtime: $! is the runtime's (RubyContext.CurrentException), not the scope's
                 Context,
                 // the frame's own: CanRescue captures the backtrace from it (its interpreted frame) and tests a LocalJumpError
@@ -1593,26 +1595,37 @@ namespace IronRuby.Compiler.Ast {
                 LeaveRescue,
             }
 
-            private static readonly Dictionary<string, HandlingScope>/*!*/ HandlingScopes = new Dictionary<string, HandlingScope> {
-                { nameof(RubyOps.GetCurrentException), HandlingScope.Context },
-                { nameof(RubyOps.SetCurrentException), HandlingScope.Context },
-                { nameof(RubyOps.GetCurrentExceptionForRescueTarget), HandlingScope.Context },
-                { nameof(RubyOps.RescuePassMayTest), HandlingScope.Context },
-                { nameof(RubyOps.RescueSiteCannotMatch), HandlingScope.Context },
-                { nameof(RubyOps.RescueDefaultCannotMatch), HandlingScope.Context },
-                { nameof(RubyOps.RescuePassCommit), HandlingScope.Context },
-                { nameof(RubyOps.SetCauseLeavingEnsure), HandlingScope.Context },
-                { nameof(RubyOps.RescuePassUnwinder), HandlingScope.Raw },
-                { nameof(RubyOps.LeaveRescue), HandlingScope.LeaveRescue },
-                { nameof(RubyOps.EnterRescue), HandlingScope.Lazy },
-                { nameof(RubyOps.CanRescue), HandlingScope.Lazy },
-                { nameof(RubyOps.CanRescueDeferTrace), HandlingScope.Lazy },
-                { nameof(RubyOps.CanRescueAfterClauses), HandlingScope.Lazy },
-                { nameof(RubyOps.SetCauseLeavingInterpretedEnsure), HandlingScope.Lazy },
-                { nameof(RubyOps.CompareException), HandlingScope.Lazy },
-                { nameof(RubyOps.CompareSplattedExceptions), HandlingScope.Lazy },
-                { nameof(RubyOps.CompareDefaultException), HandlingScope.Lazy },
-            };
+            // A switch rather than a Dictionary<string, HandlingScope>: the ReadyToRun image cannot hold the code of a framework
+            // generic over a type of its own (an enum is shared as an int, and the framework's image has no Dictionary<string, int>
+            // either), so the dictionary's methods were compiled by the JIT in each process that made a light frame.
+            private static HandlingScope GetHandlingScope(string/*!*/ name) {
+                switch (name) {
+                    case nameof(RubyOps.GetCurrentException):
+                    case nameof(RubyOps.SetCurrentException):
+                    case nameof(RubyOps.GetCurrentExceptionForRescueTarget):
+                    case nameof(RubyOps.RescuePassMayTest):
+                    case nameof(RubyOps.RescueSiteCannotMatch):
+                    case nameof(RubyOps.RescueDefaultCannotMatch):
+                    case nameof(RubyOps.RescuePassCommit):
+                    case nameof(RubyOps.SetCauseLeavingEnsure):
+                        return HandlingScope.Context;
+                    case nameof(RubyOps.RescuePassUnwinder):
+                        return HandlingScope.Raw;
+                    case nameof(RubyOps.LeaveRescue):
+                        return HandlingScope.LeaveRescue;
+                    case nameof(RubyOps.EnterRescue):
+                    case nameof(RubyOps.CanRescue):
+                    case nameof(RubyOps.CanRescueDeferTrace):
+                    case nameof(RubyOps.CanRescueAfterClauses):
+                    case nameof(RubyOps.SetCauseLeavingInterpretedEnsure):
+                    case nameof(RubyOps.CompareException):
+                    case nameof(RubyOps.CompareSplattedExceptions):
+                    case nameof(RubyOps.CompareDefaultException):
+                        return HandlingScope.Lazy;
+                    default:
+                        return HandlingScope.None;
+                }
+            }
 
             /// <summary>
             /// A helper of the body's exception handling, given the scope it needs (HandlingScope): the path that raises nothing
@@ -1622,8 +1635,11 @@ namespace IronRuby.Compiler.Ast {
             /// Null for any other call.
             /// </summary>
             private MSA.Expression VisitHandlingCall(MSA.MethodCallExpression/*!*/ node) {
-                HandlingScope use;
-                if (node.Object != null || node.Method.DeclaringType != typeof(RubyOps) || !HandlingScopes.TryGetValue(node.Method.Name, out use)) {
+                if (node.Object != null || node.Method.DeclaringType != typeof(RubyOps)) {
+                    return null;
+                }
+                var use = GetHandlingScope(node.Method.Name);
+                if (use == HandlingScope.None) {
                     return null;
                 }
                 int index = -1;
