@@ -1257,7 +1257,91 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     and copies only a plain String. The same with `h[k] = 1`. And `defined?({a: 1.nope})`
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
 
+35. **`Enumerator#next` and every other fiber switch cost 40 to 80 times CRuby's**: a fiber is
+    a thread here, and a switch is a handoff between two threads (about 20-40 us against 0.5).
+    Any library that takes items with `next` pays it twice per item: CSV#each did (round
+    thirty-five, perf/csv35, which reads without the enumerator where nothing can tell), and
+    `Enumerator::Lazy`, `Enumerator#peek` and external iteration in general still do. Also a
+    measuring trap: `app-shapes.rb` and `time-shapes.rb` time with the main thread's CPU
+    (`/proc/thread-self/schedstat`), so the work a fiber does is not counted there, and a change
+    that moves it back onto the main thread looks slower (`csv_parse` 1.37 and 0.94 of its time
+    in the round-35 gate, while process CPU fell to 0.18-0.37). `invoice-parts.rb` and
+    `csv-shapes.rb` use `CLOCK_PROCESS_CPUTIME_ID`, which counts the JIT's background threads
+    too. Untried: switching fibers without a thread (a continuation of the method JIT's own,
+    or a stackless form for the enumerators the prelude makes).
+36. **Left from round thirty-five**, each smaller than one gap of its own: `...` passed on is
+    still a splat of an Array and a block argument (`def m(...) = n(...)` allocates the rest
+    per call; the frame is light now); `URI::Generic#query=` and `merge` still run the
+    regexp-heavy checks per call (`merge` 1.1 times the round's base at N=1000, 0.87 at
+    5000: warm-up); the `const_get` cache of perf/dlg35 holds the value of a constant
+    removed after the lookup until the module's next `const_get` (a reference only: the
+    version check keeps it from being answered).
+
 ## Landed
+
+- **Gate of 2026-11-24 for round thirty-five** (perf/uri35, perf/csv35, perf/fwd35,
+  perf/dlg35): the branch at 66f10f69 against 4ed96a37, Release net10.0: **PASS**.
+  IronRuby.Tests PASSED on both trees, no failure name on either. The four new matrices
+  (`uri`, `csv`, `forwardable`, `delegate`) print CRuby's output with the JIT, with
+  `-X:NoJIT -X:NoOSR`, with `IR_LIGHT_FRAMES=0` and with `-X:NoJITCalls`; 34 existing
+  matrices (hot-shapes, jit, jit-calls, jit-const, block-given, light-rest, keyword-light,
+  super-light, rescue-light, refinement, sdef, respond-to, eval, value-object, strptime,
+  erb-escape...) in the same four modes print what the baseline prints, but for the trees'
+  paths in warnings. `defined?(o.m)` with `m` only refined, made private, and answered by
+  `respond_to_missing?`, run hot: CRuby's answers. Recursion a million deep through `def
+  m(n, ...)`, `defined?(self.m)`, `defined?(@x)`, `const_get` and `respond_to?`:
+  SystemStackError, as CRuby. ruby/spec, all five suites (32,285 examples): no failure the
+  known list does not name. The fourteen benchmarks verify. Timing: AWFY, 12 iterations,
+  both orders: geomean 0.997 and 1.006 (new/base), no benchmark more than 5% slower in both.
+  micro-table: `new2` (1.09, 1.05) and `s_any1` (1.07, 1.06) slower in both orders; in eight
+  alternating rounds of their own 1.01 and 1.03, overlapping. `app-shapes.rb`, four rounds
+  each order: `forwardable` 0.82-0.84 of its time, `delegate` 0.66-0.69, `uri` 0.75 and 1.00
+  with spreads of 200% (0.82 in eight rounds alone), `csv_parse` 1.37 and 0.94 (gap 35: the
+  timer counts the main thread only); `csv-shapes.rb` (process CPU) 0.18-0.28 of the base's
+  time. `uri-shapes.rb` at N=5000: `join` 0.86, `merge` 0.87, `decode` 0.93, `split` 0.56 at
+  N=1000. Bytes per iteration: geomean 1.003. Start-up (`-e 1`, Release, best of ten): 1.236
+  -> 1.253 s.
+
+- **perf/uri35 (round thirty-five, 2026-11-24, b7b8e063, merged in 97230205) -
+  `MatchData#[]` with a group name in C#, and `String#each_line` with one separator straight
+  to `__ir_lines__`.** The prelude's `MatchData#[](*args)` stood in front of the C# methods to
+  take names and Ranges, and its rest entry cost more than the lookup, which went through the
+  name table eight or nine times; `URI.parse` makes a dozen of those calls. `MatchDataOps` has
+  `[]` for a String and a Symbol (one table lookup, `MatchData.TryGetNamedGroupValue`) and a
+  Range overload; the prelude method is gone. `uri` of `app-shapes.rb` 0.78-0.83 of its time in
+  the round's comparison, `split` 0.56. `Util/uri-matrix.rb` (429 rows), `Util/bench/uri-shapes.rb`.
+
+- **perf/csv35 (round thirty-five, 2026-11-24, 44992656, merged in 8ad12723) - `CSV#read`
+  without a fiber, and Float()'s String error unkept.** `CSV#read` took every row through
+  `parser_enumerator.next`, two thread switches a row (gap 35); it now has the parser yield
+  into the Array when the input is a StringIO, the converters are CSV's own and `skip_lines`
+  is nil, a Regexp or a String, which nothing in the parse can tell from the fiber. A patch to
+  the installed csv gem, marked `IronRuby:` and listed in `Util/install-bundled-gems.rb`
+  (66f10f69), since a reinstall overwrites it. `Float(s) rescue s`, the `:float` converter,
+  walked the CLR stack for each String it refused; the error is `MarkUnkept` now (20 -> 3.5
+  us). `csv-shapes.rb`, process CPU: `full` 3.1-3.2 ms -> 0.66 (CRuby 0.29), `plain` 0.74-1.0
+  -> 0.25-0.29. `Util/csv-matrix.rb`, `Util/bench/csv-shapes.rb`.
+
+- **perf/fwd35 (round thirty-five, 2026-11-24, a7a80cda, merged in 8209d51d) - `def m(...)`
+  and `defined?(obj.m)` in light frames** (Forwardable's delegators are both). `...` lowers to
+  a rest and a block with no keyword prologue, but its signature said `**`, so it was refused
+  as keywords with a rest (`Parameters.ForwardsArguments`); `defined?(recv.m)` gets a light
+  resolve-only site that answers boxed, or `LightScopeRequired` for anything that is not a
+  public method, which is then asked again with the scope made on demand
+  (`LightFrameRewriter.LightIsDefined`). `forwardable` of `app-shapes.rb` 0.81-0.85 of its
+  time; a delegator call 149 -> 121 ns. `Util/forwardable-matrix.rb`, `Util/bench/fwd-shapes.rb`.
+
+- **perf/dlg35 (round thirty-five, 2026-11-24, 27b60c3c, merged in c69eac32) - a delegated
+  call: `const_get` cached, `respond_to?` and `const_get` callable from light frames,
+  `defined?(@x)` in light frames.** Delegator's `target_respond_to?` names `Object` inside a
+  BasicObject subclass, so every forwarded call ran `const_missing` and `::Object.const_get`
+  (155 ns, CRuby 30). `RubyUtils.GetConstant` keeps the last constant found per module while
+  `ConstantAccessVersion` holds (not for a deprecated constant, after Ractors start, or during
+  an autoload). A `[DeclaringScope]` parameter takes from the caller's scope only what it
+  shares with its declaring scope, so `Kernel#respond_to?` and `Module#const_get` no longer make
+  a light frame's scope; a light block hands its calls the scope made on demand once there is
+  one (refine_spec: a `using` inside `Module.new { }`). `delegate` of `app-shapes.rb` 0.66-0.70
+  of its time. `Util/delegate-matrix.rb`, `Util/bench/dlg-shapes.rb`.
 
 - **Gate of 2026-11-24 for round thirty-four** (perf/time2, perf/inv2, perf/erb2, perf/ostr2):
   the branch at 77f841b9 against 592c75ab, Release net10.0: **PASS** with 7289271b (below).
