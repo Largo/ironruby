@@ -769,16 +769,35 @@ namespace IronRuby.Builtins {
         /// begin inside one of their characters.
         /// </summary>
         public bool IsCharacterBoundary(byte[]/*!*/ bytes, int start, int count, int offset) {
+            int boundary = 0;
+            return IsCharacterBoundary(bytes, start, count, offset, ref boundary);
+        }
+
+        /// <summary>
+        /// IsCharacterBoundary walking from <paramref name="boundary"/>, a character boundary at
+        /// or before <paramref name="offset"/> (both relative to <paramref name="start"/>), which
+        /// moves on to the last boundary at or before the offset. A caller that asks about
+        /// offsets in increasing order so walks the bytes once rather than once per offset.
+        /// </summary>
+        public bool IsCharacterBoundary(byte[]/*!*/ bytes, int start, int count, int offset, ref int boundary) {
+            System.Diagnostics.Debug.Assert(boundary <= offset);
             int end = start + count;
             int target = start + offset;
-            int p = start;
+            int p = start + boundary;
             while (p < target) {
                 int length = RubyOnlyEncodings.PreciseLengthAt(StrictEncoding, bytes, p, end);
                 if (length == Int32.MinValue) {
+                    // the character is cut off by the end: it may be whole once there are more bytes
+                    boundary = p - start;
                     return true;
                 }
-                p += (length > 0) ? length : 1;
+                int next = p + ((length > 0) ? length : 1);
+                if (next > target) {
+                    break;
+                }
+                p = next;
             }
+            boundary = p - start;
             return p == target;
         }
 

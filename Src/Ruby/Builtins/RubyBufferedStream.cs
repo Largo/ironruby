@@ -755,10 +755,20 @@ namespace IronRuby.Builtins {
         /// first half of the next.
         /// </summary>
         private static bool EndsWithSeparator(MutableString/*!*/ str, byte[]/*!*/ sep, RubyEncoding/*!*/ encoding) {
+            int boundary = 0;
+            return EndsWithSeparator(str, sep, encoding, ref boundary);
+        }
+
+        /// <summary>
+        /// EndsWithSeparator for a line that only grows, with a character boundary of it kept
+        /// in <paramref name="boundary"/> from one call to the next, so that a long line with
+        /// many false matches is not walked from its start for each of them.
+        /// </summary>
+        private static bool EndsWithSeparator(MutableString/*!*/ str, byte[]/*!*/ sep, RubyEncoding/*!*/ encoding, ref int boundary) {
             int start, count;
             byte[] bytes = str.GetByteArray(out start, out count);
             return new ReadOnlySpan<byte>(bytes, start, count).EndsWith(sep) &&
-                encoding.IsCharacterBoundary(bytes, start, count, count - sep.Length);
+                encoding.IsCharacterBoundary(bytes, start, count, count - sep.Length, ref boundary);
         }
 
         public MutableString ReadLine(MutableString/*!*/ separator, RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
@@ -777,13 +787,16 @@ namespace IronRuby.Builtins {
 
             // The number of buffered bytes already searched: no separator ends within them.
             int searched = 0;
+            // A character boundary of the line before every separator candidate still to be
+            // checked; candidates come in increasing order, so the line is walked once.
+            int boundary = 0;
             while (true) {
                 int window = Math.Min(_bufferCount, limit);
 
                 // A separator that ends past the searched bytes may start up to sep.Length - 1 bytes before their end.
                 int from = Math.Max(0, searched - (sep.Length - 1));
                 int index = new ReadOnlySpan<byte>(_buffer, _bufferStart + from, window - from).IndexOf(sep);
-                while (index >= 0 && !encoding.IsCharacterBoundary(_buffer, _bufferStart, window, from + index)) {
+                while (index >= 0 && !encoding.IsCharacterBoundary(_buffer, _bufferStart, window, from + index, ref boundary)) {
                     // the separator's bytes straddle two characters: look again past them
                     int next = new ReadOnlySpan<byte>(_buffer, _bufferStart + from + index + 1, window - from - index - 1).IndexOf(sep);
                     index = (next >= 0) ? index + 1 + next : -1;
@@ -832,11 +845,12 @@ namespace IronRuby.Builtins {
 
             int extraLimit = 16;
             MutableString result = MutableString.CreateBinary(encoding);
+            int boundary = 0;
 
             do {
                 result.Append((byte)b);
 
-                if (b == sep[sep.Length - 1] && EndsWithSeparator(result, sep, encoding)) {
+                if (b == sep[sep.Length - 1] && EndsWithSeparator(result, sep, encoding, ref boundary)) {
                     break;
                 }
 
