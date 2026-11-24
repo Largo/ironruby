@@ -843,6 +843,21 @@ namespace IronRuby.Runtime {
             Assert.NotNull(globalScope, owner, name);
 
             RubyContext context = owner.Context;
+
+            // `::Object.const_get(n)' in a const_missing (Delegator's, for every `Object' its methods name) asks for the
+            // same constant of the same module again and again; CRuby's rb_const_get is a table probe or two, ours a locked
+            // walk of the ancestors. The version is read before the lookup, so a change that races with it invalidates what
+            // it stores. Not kept where a read does more than return the value: a deprecated constant warns (deprecating one
+            // moves the version), one read after Ractors start is checked, and while an autoload runs the answer depends on
+            // the thread.
+            int version = Volatile.Read(ref context.ConstantAccessVersion);
+            bool cacheable = !context.RactorsStarted;
+            var cached = owner.ConstGetCache;
+            if (cacheable && cached != null && cached.Version == version && cached.LookupObject == lookupObject &&
+                String.Equals(cached.Name, name, StringComparison.Ordinal)) {
+                return cached.Value;
+            }
+
             object value = null;
             bool found = false;
             RubyModule deprecatedOwner = null;
@@ -874,6 +889,9 @@ namespace IronRuby.Runtime {
                         constantOwner = owner.GetConstantOwnerNoLock(name) ?? context.ObjectClass;
                     }
                     RactorIsolation.CheckConstantRead(context, constantOwner, name, value);
+                }
+                if (cacheable && deprecatedOwner == null && !context.IsAutoloadInProgress) {
+                    owner.ConstGetCache = new ConstantReadCache(version, name, lookupObject, value);
                 }
                 return value;
             }

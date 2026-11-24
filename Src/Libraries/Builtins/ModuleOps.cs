@@ -1376,14 +1376,14 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("const_get")]
-        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, [DeclaringScope]RubyScope/*!*/ scope,
             RubyModule/*!*/ self, object constantName) {
             return GetConstantValue(stringCast, scope, self, constantName, true);
         }
 
         // thread-safe:
         [RubyMethod("const_get")]
-        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, [DeclaringScope]RubyScope/*!*/ scope,
             RubyModule/*!*/ self, object constantName, bool inherit) {
 
             var path = new ConstantPath(stringCast, constantName);

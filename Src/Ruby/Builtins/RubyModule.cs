@@ -288,6 +288,10 @@ namespace IronRuby.Builtins {
         private MemberTableState _constantsState = MemberTableState.Uninitialized;
         private Action<RubyModule> _constantsInitializer;
         private Dictionary<string, ConstantStorage> _constants;
+
+        // The last constant Module#const_get found from this module (RubyUtils.GetConstant), valid while the runtime's
+        // ConstantAccessVersion is the one it was found at. Replaced, never changed: read and written without a lock.
+        internal volatile ConstantReadCache ConstGetCache;
         private Dictionary<string, RubyEncoding> _constantEncodings;
 
         // names this module declared private with Module#private_constant; null until one is
