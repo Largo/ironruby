@@ -1998,7 +1998,10 @@ namespace IronRuby.Builtins {
             // An IO reopened to a File becomes a File without being a RubyFile: its path is the
             // one the IO keeps.
             if (!(self is RubyFile)) {
-                return RubyIOOps.GetIOPath(self);
+                // A copy, as MRI's rb_io_path gives (rb_str_dup): changing it must not move
+                // the path the IO's lstat and errors use.
+                MutableString path = RubyIOOps.GetIOPath(self);
+                return (path != null) ? path.Clone() : null;
             }
             return GetPath((RubyFile)self);
         }
