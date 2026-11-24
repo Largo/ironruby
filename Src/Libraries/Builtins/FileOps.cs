@@ -2129,9 +2129,10 @@ namespace IronRuby.Builtins {
                 // was opened with instead, as File.stat does there; a file renamed or deleted
                 // since it was opened cannot be stat'd this way, which is Windows' own limit too.
                 if (!Posix.IsAvailable) {
-                    var file = io as RubyFile;
-                    if (file != null && file.Path != null) {
-                        return Create(io.Context, file.Path);
+                    // FilePathOf, so that an IO reopened to a File answers from its path too.
+                    string path = FilePathOf(io);
+                    if (path != null) {
+                        return Create(io.Context, path);
                     }
                 }
 
