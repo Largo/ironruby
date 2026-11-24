@@ -1189,6 +1189,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object YieldSplat0(IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            // yield *[x] passes one argument, exactly as yield x does: a proc auto-splats an Array x
+            // and a lambda takes it whole, so ->(a, b = 0) {} gets [x, 0] rather than x taken apart.
+            // A ruby2_keywords Hash is keywords again once splatted, which only InvokeSplat knows.
+            if (splattee.Count == 1 && !(splattee[0] is Hash h && (h.IsRuby2KeywordsHash || h.IsKeywordArguments))) {
+                return Yield1(splattee[0], procArg, self, blockParam);
+            }
             object result;
             var proc = blockParam.Proc;
             RequireLambdaArity(proc, 0 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : null);
@@ -1218,6 +1224,24 @@ namespace IronRuby.Runtime {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// `yield x, **h': the splat is the one-or-zero element array of the keywords (KeywordArgumentSplat). With h empty x
+        /// is all that is passed, but by a call that had keywords, which MRI auto-splats only for a block of plain parameters
+        /// (vm_callee_setup_block_arg); any other - {|a, b = 1|}, {|a, *r|}, {|a, &amp;b|} - takes x as it is
+        /// (setup_parameters_complex allows no auto-splat for a call with keywords).
+        /// </summary>
+        [Emitted]
+        public static object YieldKeywordSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
+            if (splattee.Count == 0) {
+                var proc = blockParam.Proc;
+                var dispatcher = proc.Dispatcher;
+                if (proc.Kind != ProcKind.Lambda && (dispatcher.Arity < 0 || dispatcher.HasProcParameter || dispatcher.ChecksKeywords)) {
+                    return YieldNoAutoSplat1(arg1, procArg, self, blockParam);
+                }
+            }
+            return YieldSplat1(arg1, splattee, procArg, self, blockParam);
         }
 
         [Emitted]
@@ -1722,6 +1746,16 @@ namespace IronRuby.Runtime {
 
         private static RubyClass/*!*/ ToSuperClass(RubyContext/*!*/ ec, object superClassObject) {
             return (superClassObject != null) ? RubyClass.CheckInheritable(ec, superClassObject) : ec.ObjectClass;
+        }
+
+        /// <summary>
+        /// The superclass written after `class X &lt;`, checked before the class is looked up or made
+        /// (vm_find_or_create_class_by_id). The Define*Class helpers take null for "none written",
+        /// so `class X &lt; nil` must be refused here, where nil still means the value nil.
+        /// </summary>
+        [Emitted]
+        public static RubyClass/*!*/ CheckSuperClass(RubyScope/*!*/ scope, object superClassObject) {
+            return RubyClass.CheckInheritable(scope.RubyContext, superClassObject);
         }
 
         #endregion
@@ -3212,13 +3246,13 @@ namespace IronRuby.Runtime {
                 if (once) {
                     // Note that the user is responsible for thread synchronization
                     if (regexpCache.Value == null) {
-                        regexpCache.Value = CreateFrozen(createRegex);
+                        regexpCache.Value = CreateFrozen(createRegex, isLiteralWithoutSubstitutions);
                     }
                     return regexpCache.Value;
                 } else {
                     // In the future, we can consider caching the last Regexp. For some regexp literals 
                     // with substitution, the substition will be the same most of the time
-                    return CreateFrozen(createRegex);
+                    return CreateFrozen(createRegex, isLiteralWithoutSubstitutions);
                 }
             } catch (RegexpError e) {
                 if (isLiteralWithoutSubstitutions) {
@@ -3235,9 +3269,15 @@ namespace IronRuby.Runtime {
         /// MRI freezes a regexp literal, interpolated or not, but leaves Regexp.new unfrozen.
         /// Every literal is built through here, so this is the one place that has to do it.
         /// It does not intern them: /x/.equal?(/x/) is false in MRI too.
+        /// A literal whose bytes do not decode in its encoding (/#{"\x80"}/ in a UTF-8 file) is
+        /// refused when it is compiled, which comes out as a SyntaxError; the pieces of an
+        /// interpolated one have been checked by DynamicRegexEncoding.
         /// </summary>
-        private static RubyRegex/*!*/ CreateFrozen(Func<RubyRegex> createRegex) {
+        private static RubyRegex/*!*/ CreateFrozen(Func<RubyRegex> createRegex, bool isLiteralWithoutSubstitutions) {
             var result = createRegex();
+            if (isLiteralWithoutSubstitutions) {
+                RubyRegex.RequireValidPattern(result.Pattern);
+            }
             result.Freeze();
             return result;
         }
@@ -3268,27 +3308,27 @@ namespace IronRuby.Runtime {
         
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexM(MutableString str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringM(str1, encoding), options, str1), options); };
+            Func<RubyRegex> createRegex = delegate { var fixedEncoding = DynamicRegexEncoding(options, str1); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringM(str1, encoding), options, fixedEncoding, str1), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringLM(str1, str2, encoding), options,
+            Func<RubyRegex> createRegex = delegate { var fixedEncoding = DynamicRegexEncoding(options, MutableString.Create(str1, encoding), str2); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringLM(str1, str2, encoding), options, fixedEncoding,
                 MutableString.Create(str1, encoding), str2), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexML(MutableString str1, string/*!*/ str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringML(str1, str2, encoding), options,
+            Func<RubyRegex> createRegex = delegate { var fixedEncoding = DynamicRegexEncoding(options, str1, MutableString.Create(str2, encoding)); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringML(str1, str2, encoding), options, fixedEncoding,
                 str1, MutableString.Create(str2, encoding)), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringMM(str1, str2, encoding), options, str1, str2), options); };
+            Func<RubyRegex> createRegex = delegate { var fixedEncoding = DynamicRegexEncoding(options, str1, str2); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringMM(str1, str2, encoding), options, fixedEncoding, str1, str2), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
@@ -3301,7 +3341,39 @@ namespace IronRuby.Runtime {
         /// the option decides.
         /// </summary>
         private static MutableString/*!*/ InDynamicRegexEncoding(MutableString/*!*/ pattern, RubyRegexOptions options,
-            params MutableString[]/*!*/ fragments) {
+            RubyEncoding fixedEncoding, params MutableString[]/*!*/ fragments) {
+            if ((options & RubyRegexOptions.EncodingMask) != 0) {
+                // the option decides
+                return pattern;
+            }
+            if (fixedEncoding != null && pattern.Encoding != fixedEncoding && pattern.IsAscii()) {
+                // the concatenation may be one of the interpolated strings itself
+                pattern = pattern.Clone();
+                pattern.ForceEncoding(fixedEncoding);
+            } else if (fixedEncoding == null && !pattern.IsAscii()) {
+                // MRI appends the fragments to the first (rb_str_buf_append), so bytes outside ASCII
+                // that pin nothing - after a backslash, in a comment - keep the encoding of the
+                // fragment they came from: /#{"(?x)a # \xFF".encode("US-ASCII")}b/ is US-ASCII.
+                foreach (var fragment in fragments) {
+                    if (fragment != null && !fragment.IsAscii()) {
+                        if (fragment.Encoding != pattern.Encoding && fragment.Encoding.IsAsciiIdentity) {
+                            pattern = pattern.Clone();
+                            pattern.ForceEncoding(fragment.Encoding);
+                        }
+                        break;
+                    }
+                }
+            }
+            return pattern;
+        }
+
+        /// <summary>
+        /// The encoding the fragments of an interpolated regexp fix it to, null for none; it raises
+        /// what is wrong with a fragment. It is asked before the fragments are joined, as MRI asks:
+        /// fragments in two encodings are an "encoding mismatch in dynamic regexp", not the
+        /// concatenation's Encoding::CompatibilityError.
+        /// </summary>
+        private static RubyEncoding DynamicRegexEncoding(RubyRegexOptions options, params MutableString[]/*!*/ fragments) {
             bool extended = (options & RubyRegexOptions.Extended) != 0;
             bool binary = (options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED;
             RubyEncoding fixedEncoding = null;
@@ -3351,34 +3423,12 @@ namespace IronRuby.Runtime {
                 }
                 fixedEncoding = encoding;
             }
-            if ((options & RubyRegexOptions.EncodingMask) != 0) {
-                // the option decides
-                return pattern;
-            }
-            if (fixedEncoding != null && pattern.Encoding != fixedEncoding && pattern.IsAscii()) {
-                // the concatenation may be one of the interpolated strings itself
-                pattern = pattern.Clone();
-                pattern.ForceEncoding(fixedEncoding);
-            } else if (fixedEncoding == null && !pattern.IsAscii()) {
-                // MRI appends the fragments to the first (rb_str_buf_append), so bytes outside ASCII
-                // that pin nothing - after a backslash, in a comment - keep the encoding of the
-                // fragment they came from: /#{"(?x)a # \xFF".encode("US-ASCII")}b/ is US-ASCII.
-                foreach (var fragment in fragments) {
-                    if (fragment != null && !fragment.IsAscii()) {
-                        if (fragment.Encoding != pattern.Encoding && fragment.Encoding.IsAsciiIdentity) {
-                            pattern = pattern.Clone();
-                            pattern.ForceEncoding(fragment.Encoding);
-                        }
-                        break;
-                    }
-                }
-            }
-            return pattern;
+            return fixedEncoding;
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexN(MutableString[]/*!*/ strings, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
-            Func<RubyRegex> createRegex = delegate { return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringN(strings), options, strings), options); };
+            Func<RubyRegex> createRegex = delegate { var fixedEncoding = DynamicRegexEncoding(options, strings); return new RubyRegex(InDynamicRegexEncoding(CreateMutableStringN(strings), options, fixedEncoding, strings), options); };
             return CreateRegexWorker(options, regexpCache, false, createRegex);
         }
 
@@ -3434,7 +3484,7 @@ namespace IronRuby.Runtime {
         }
 
         private static MutableString/*!*/ InternFrozenStringLiteral(MutableString/*!*/ str) {
-            return _frozenStringLiterals.GetOrAdd(str.Freeze(), str);
+            return _frozenStringLiterals.GetOrAdd(str.FreezeInterned(), str);
         }
 
         /// <summary>
@@ -4464,15 +4514,6 @@ namespace IronRuby.Runtime {
                 && expectedClass.Version.Method == expectedVersion;
         }
 
-        // MRI formats the expected module with %PRIsVALUE, i.e. its #to_s (an anonymous class with a
-        // singleton #to_s, as EnvUtil.labeled_class makes, shows that). A named class's own #to_s is
-        // used too, so the name is only the fallback for a #to_s that returns no String.
-        private static string/*!*/ SuperExpectedModuleName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
-            var site = context.GetClassOf(module).ToStringSite;
-            var str = site.Target(site, module) as MutableString;
-            return str != null ? str.ToString() : module.GetDisplayName(context, true).ToString();
-        }
-
         // super call condition
         [Emitted]
         public static object GetSuperCallTarget(RubyScope/*!*/ scope, int targetId) {
@@ -4522,7 +4563,7 @@ namespace IronRuby.Runtime {
             var context = methodScope.RubyContext;
             if (!context.IsKindOf(currentSelf, declaringModule)) {
                 throw RubyExceptions.CreateTypeError(String.Format("self has wrong type to call super in this context: {0} (expected {1})",
-                    context.GetClassDisplayName(currentSelf), SuperExpectedModuleName(context, declaringModule)));
+                    context.GetClassDisplayName(currentSelf), context.GetModuleMessageName(declaringModule)));
             }
         }
 

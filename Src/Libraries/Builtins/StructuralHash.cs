@@ -197,7 +197,23 @@ namespace IronRuby.Builtins {
         /// and one wider than a Fixnum is perfectly legal.
         /// </summary>
         private static uint ElementHash(CallSite<Func<CallSite, object, object>>/*!*/ hashSite, ConversionStorage<IntegerValue>/*!*/ toInt, object item) {
-            object value = hashSite.Target(hashSite, item);
+            object value;
+            if (item == null || item is int || item is MutableString || item is RubySymbol || item is double || item is bool ||
+                item is IList || item is Hash) {
+                // nothing of these can lead back here, except an Array or a Hash, which enter themselves
+                value = hashSite.Target(hashSite, item);
+            } else {
+                // Any other element may have a #hash of its own that hashes a structure leading back to it
+                // (a Struct whose #hash is [x, ""].hash, its x a Struct pointing back): MRI's rb_hash marks
+                // the element as rb_exec_recursive_outer does ([ruby-core:58567] [Bug #9151]).
+                var stack = _active;
+                Enter(stack, item);
+                try {
+                    value = hashSite.Target(hashSite, item);
+                } finally {
+                    stack.RemoveAt(stack.Count - 1);
+                }
+            }
             if (value is int) {
                 return unchecked((uint)(int)value);
             }

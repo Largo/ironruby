@@ -85,6 +85,26 @@ namespace IronRuby.Builtins {
             _textOrBinarySpecified = textOrBinarySpecified;
         }
 
+        /// <summary>
+        /// MRI's validate_enc_binmode: a stream that reads an encoding that is not ASCII
+        /// compatible (UTF-16, UTF-32, ISO-2022-JP) without converting it has to be in binary
+        /// mode, since text mode's newline handling cannot see its line ends. Whether it converts
+        /// is decided as RubyIO.SetEncodings (MRI's rb_io_ext_int_to_encs) decides it: the
+        /// defaults filled in, and an internal encoding equal to the external one is none, so
+        /// "r:UTF-16LE:UTF-16LE" needs binmode and "r:UTF-16LE" with a default internal does not.
+        /// </summary>
+        public void RequireBinmodeForAsciiIncompatible(RubyContext/*!*/ context) {
+            if (!Mode.CanRead() || (Mode & IOMode.PreserveEndOfLines) != 0) {
+                return;
+            }
+            RubyEncoding external = _externalEncoding ?? context.DefaultExternalEncoding;
+            RubyEncoding @internal = (external == RubyEncoding.Binary) ? null : (_internalEncoding ?? context.DefaultInternalEncoding);
+            if ((@internal != null && @internal != external) || external.IsAsciiIdentity) {
+                return;
+            }
+            throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding needs binmode");
+        }
+
         public static IOInfo Parse(RubyContext/*!*/ context, MutableString/*!*/ modeAndEncoding) {
             if (!modeAndEncoding.IsAscii()) {
                 throw IOModeEnum.IllegalMode(modeAndEncoding.ToAsciiString());
@@ -102,10 +122,12 @@ namespace IronRuby.Builtins {
         }
 
         public IOInfo AddModeAndEncoding(RubyContext/*!*/ context, MutableString/*!*/ modeAndEncoding) {
-            IOInfo info = Parse(context, modeAndEncoding);
+            // MRI refuses a second mode before it reads it: File.open(f, "w", mode: "rw+") is
+            // "mode specified twice", not the "invalid access mode" the second one would be.
             if (_mode.HasValue) {
                 throw RubyExceptions.CreateArgumentError("mode specified twice");
             }
+            IOInfo info = Parse(context, modeAndEncoding);
 
             if (!HasEncoding) {
                 return info;

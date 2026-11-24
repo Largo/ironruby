@@ -68,6 +68,15 @@ namespace IronRuby.Builtins {
             return Reinitialize(toInt, toHash, toPath, toStr, new RubyFile(self.Context), descriptorOrPath, optionsOrMode, optionsOrPermissions, options);
         }
 
+        // MRI's rb_file_initialize refuses a File that already has a stream - open or closed -
+        // before it looks at the arguments; the prelude's File#initialize asks here first.
+        [RubyMethod("__ir_require_uninitialized__", RubyMethodAttributes.PrivateInstance)]
+        public static void RequireUninitialized(RubyIO/*!*/ self) {
+            if (self.Initialized) {
+                throw new RuntimeError("reinitializing File");
+            }
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyFile/*!*/ Reinitialize(
             ConversionStorage<int?>/*!*/ toInt,
@@ -117,6 +126,7 @@ namespace IronRuby.Builtins {
                     permissions = p.Value;
                 }
             }
+            info.RequireBinmodeForAsciiIncompatible(context);
             self.ConversionOptions = RubyIOOps.AddTextModeDecorator(context, info, options);
             
             // descriptor or path:
@@ -300,24 +310,25 @@ namespace IronRuby.Builtins {
         #region chmod, chown, lchmod, lchown, umask
 
         [RubyMethod("chmod")]
-        public static object Chmod(RubyFile/*!*/ self, [DefaultProtocol]int permission) {
+        public static object Chmod(RubyIO/*!*/ self, [DefaultProtocol]int permission) {
             self.RequireInitialized();
             if (Posix.IsAvailable) {
                 int fd = GetNativeFileDescriptor(self);
                 int errno;
                 if (fd >= 0) {
                     if (Posix.FChmod(fd, permission, out errno) != 0) {
-                        throw Posix.Error(errno, self.Path, self.Context);
+                        throw Posix.Error(errno, FilePathOf(self), self.Context);
                     }
                     return 0;
                 }
             }
-            if (self.Path == null) {
+            string path = FilePathOf(self);
+            if (path == null) {
                 // Without fchmod there is nothing to change a pathless File through; MRI's
                 // rb_file_chmod answers nil then, rather than raising.
                 return null;
             }
-            Chmod(self.Path, permission);
+            Chmod(path, permission);
             return 0;
         }
 
@@ -383,7 +394,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("chown")]
-        public static int ChangeOwner(RubyContext/*!*/ context, RubyFile/*!*/ self, object owner, object group) {
+        public static int ChangeOwner(RubyContext/*!*/ context, RubyIO/*!*/ self, object owner, object group) {
             self.RequireInitialized();
             int uid = ToUidGid(context, owner, true);
             int gid = ToUidGid(context, group, false);
@@ -393,7 +404,7 @@ namespace IronRuby.Builtins {
                 int errno;
                 if (fd >= 0) {
                     if (Posix.FChown(fd, uid, gid, out errno) != 0) {
-                        throw Posix.Error(errno, self.Path, context);
+                        throw Posix.Error(errno, FilePathOf(self), context);
                     }
                 }
             }
@@ -520,11 +531,12 @@ namespace IronRuby.Builtins {
 
         // The size is an off_t: a file of 4 GiB and more is an ordinary thing to ask for.
         [RubyMethod("truncate")]
-        public static int Truncate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyFile/*!*/ self, object length) {
+        public static int Truncate(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyIO/*!*/ self, object length) {
             long size = Protocols.CastToInteger(integerConversion, length).ToInt64();
             self.RequireWritable();
             if (size < 0) {
-                throw self.Path != null ? RubyExceptions.CreateEINVAL("Invalid argument - {0}", self.Path) : RubyExceptions.CreateEINVAL();
+                string path = FilePathOf(self);
+                throw path != null ? RubyExceptions.CreateEINVAL("Invalid argument - {0}", path) : RubyExceptions.CreateEINVAL();
             }
 
             // ftruncate(2) leaves the file offset alone; Stream.SetLength pulls it back
@@ -620,7 +632,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("basename", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ BaseName(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self,
             object path, [DefaultProtocol, NotNull, Optional]MutableString suffix) {
-            return BaseName(Protocols.CastToPath(toPath, path), suffix);
+            var strPath = Protocols.CastToPath(toPath, path);
+            // MRI's check_path_encoding: the suffix is looked for among the path's bytes, so it
+            // has to be ASCII-compatible as the path does.
+            if (suffix != null && !suffix.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError(String.Format("path name must be ASCII-compatible ({0}): \"{1}\"",
+                    suffix.Encoding.Name, suffix.ToStringWithEscapedInvalidCharacters(suffix.Encoding)));
+            }
+            return BaseName(strPath, suffix);
         }
 
         private static MutableString/*!*/ BaseName(MutableString/*!*/ path, MutableString suffix) {
@@ -905,16 +924,93 @@ namespace IronRuby.Builtins {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
             RequireUsablePathEncoding(context, pathStr);
 
-            string result = RubyUtils.ExpandPath(
-                context.Platform,
-                ExpandTilde(context, DecodePathLike(context, pathStr)),
-                (basePath == null)
-                    ? null
-                    : ExpandTilde(context, DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr)),
-                false
-            );
+            if (!IsWindows) {
+                MutableString basePathStr = (basePath != null) ? Protocols.CastToPath(toPath, basePath) : null;
+                return ExpandPathBytes(context, pathStr, basePathStr, true);
+            }
+
+            // The base is converted whatever the path, but it is only expanded - "~name" looked
+            // up - when the path needs it: MRI's expand_path ignores it beside an absolute path.
+            string expanded = ExpandTilde(context, DecodePathLike(context, pathStr));
+            string expandedBase = null;
+            if (basePath != null) {
+                string decodedBase = DecodeBasePath(context, Protocols.CastToPath(toPath, basePath), pathStr);
+                if (!RubyUtils.IsAbsolutePath(expanded)) {
+                    expandedBase = ExpandTilde(context, decodedBase);
+                }
+            }
+            string result = RubyUtils.ExpandPath(context.Platform, expanded, expandedBase, false);
 
             return EncodePathLike(context, result, pathStr);
+        }
+
+        /// <summary>
+        /// MRI's rb_file_expand_path_internal off Windows. A path is bytes there: what it holds
+        /// is kept byte for byte, whatever its encoding, and only the pieces that come from the
+        /// system - the working directory, a home directory - are the filesystem's. The result's
+        /// encoding is MRI's too: the path's beside a root, the filesystem's after a "~", and
+        /// fs_enc_check of the directory and the path otherwise (incompatible ones raise).
+        /// Decoding the path to a .NET string and encoding the result in the filesystem encoding
+        /// gave a Windows-1251 path back as UTF-8 bytes still labelled Windows-1251.
+        /// </summary>
+        private static MutableString/*!*/ ExpandPathBytes(RubyContext/*!*/ context, MutableString/*!*/ path,
+            MutableString basePath, bool expandHome) {
+
+            string bytes = BytesAsChars(path);
+            // the absolute directory a relative path is taken in, as bytes too
+            string baseBytes = null;
+            RubyEncoding encoding;
+            if (expandHome && bytes.Length > 0 && bytes[0] == '~') {
+                int slash = bytes.IndexOf('/');
+                string head = (slash < 0) ? bytes : bytes.Substring(0, slash);
+                string user = DecodePathLike(context, MutableString.CreateBinary(CharsAsBytes(head), path.Encoding));
+                MutableString home = context.EncodePath(ExpandTilde(context, user));
+                bytes = BytesAsChars(home) + ((slash < 0) ? "" : bytes.Substring(slash));
+                encoding = home.Encoding;
+            } else if (bytes.Length > 0 && bytes[0] == '/') {
+                encoding = PathEncodingCheck(MutableString.CreateAscii("/"), path);
+            } else if (basePath != null) {
+                MutableString directory = ExpandPathBytes(context, basePath, null, expandHome);
+                encoding = PathEncodingCheck(directory, path);
+                baseBytes = BytesAsChars(directory);
+            } else {
+                // MRI's append_fspath: the working directory is the filesystem's, and is converted
+                // to the path's encoding when that is what the two come to.
+                string cwd = context.Platform.CurrentDirectory;
+                MutableString directory = context.EncodePath(cwd);
+                encoding = path.Encoding;
+                if (encoding != directory.Encoding) {
+                    encoding = PathEncodingCheck(path, directory);
+                    if (encoding != directory.Encoding && !directory.IsAscii()) {
+                        try {
+                            directory = MutableString.Create(cwd, encoding).CheckEncoding();
+                        } catch (EncoderFallbackException) {
+                            // rb_str_conv_enc gives the string back as it was when it cannot
+                        }
+                    }
+                }
+                baseBytes = BytesAsChars(directory);
+            }
+
+            string result = RubyUtils.ExpandPath(context.Platform, bytes, baseBytes, false);
+            return MutableString.CreateBinary(CharsAsBytes(result), encoding);
+        }
+
+        private static string/*!*/ BytesAsChars(MutableString/*!*/ str) {
+            int count = str.GetByteCount();
+            var chars = new char[count];
+            for (int i = 0; i < count; i++) {
+                chars[i] = (char)str.GetByte(i);
+            }
+            return new String(chars);
+        }
+
+        private static byte[]/*!*/ CharsAsBytes(string/*!*/ str) {
+            var bytes = new byte[str.Length];
+            for (int i = 0; i < str.Length; i++) {
+                bytes[i] = (byte)str[i];
+            }
+            return bytes;
         }
 
         /// <summary>
@@ -1068,6 +1164,11 @@ namespace IronRuby.Builtins {
             var context = self.Context;
 
             MutableString pathStr = Protocols.CastToPath(toPath, path);
+            if (!IsWindows) {
+                MutableString basePathStr = (basePath != null) ? Protocols.CastToPath(toPath, basePath) : null;
+                return ExpandPathBytes(context, pathStr, basePathStr, false);
+            }
+
             string result = RubyUtils.ExpandPath(
                 context.Platform,
                 context.DecodePath(pathStr),
@@ -1113,27 +1214,53 @@ namespace IronRuby.Builtins {
         [RubyMethod("join", RubyMethodAttributes.PublicSingleton)]
         public static MutableString Join(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, params object[]/*!*/ parts) {
             MutableString result = null;
-            Dictionary<object, bool> visitedLists = null;
-            var worklist = new Stack<object>();
             int current = 0;
-            MutableString str;
+            JoinList(toPath, parts, ref result, ref current, null);
+            return result ?? MutableString.CreateEmpty();
+        }
 
-            Push(worklist, parts);
-            while (worklist.Count > 0) {
-                object part = worklist.Pop();
-                var list = part as IList;
-                if (list != null) {
-                    if (list.Count == 0) {
+        /// <summary>
+        /// MRI's rb_file_join over one array. The Strings in it are checked before any element
+        /// is converted, and each element is read when its turn comes rather than up front: a
+        /// #to_path may change what the array holds after it, and what it put there is joined
+        /// (and checked) - [ruby-core:48012].
+        /// </summary>
+        private static void JoinList(ConversionStorage<MutableString>/*!*/ toPath, IList/*!*/ list,
+            ref MutableString result, ref int current, Dictionary<object, bool> visitedLists) {
+
+            for (int i = 0; i < list.Count; i++) {
+                var s = list[i] as MutableString;
+                if (s != null) {
+                    try {
+                        Protocols.CheckPath(s);
+                    } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
+                        // rb_file_join reports a NUL as a plain string problem (StringValueCStr).
+                        throw RubyExceptions.CreateArgumentError("string contains null byte");
+                    }
+                }
+            }
+
+            for (int i = 0; i < list.Count; i++) {
+                object part = list[i];
+                MutableString str;
+                var nested = part as IList;
+                if (nested != null) {
+                    if (nested.Count == 0) {
                         str = MutableString.FrozenEmpty;
-                    } else if (visitedLists != null && visitedLists.ContainsKey(list)) {
+                    } else if (ReferenceEquals(nested, list) || (visitedLists != null && visitedLists.ContainsKey(nested))) {
                         throw RubyExceptions.CreateArgumentError("recursive array");
                     } else {
                         if (visitedLists == null) {
                             visitedLists = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
                         }
-                        visitedLists.Add(list, true);
-                        Push(worklist, list);
-                        continue;
+                        // MRI joins the nested array into a string of its own first, which is then
+                        // joined like any other part: File.join("a//", ["", "b"]) is "a/b".
+                        visitedLists.Add(nested, true);
+                        MutableString nestedResult = null;
+                        int nestedCurrent = 0;
+                        JoinList(toPath, nested, ref nestedResult, ref nestedCurrent, visitedLists);
+                        visitedLists.Remove(nested);
+                        str = nestedResult ?? MutableString.FrozenEmpty;
                     }
                 } else if (part == null) {
                     throw RubyExceptions.CreateImplicitConversionError("NilClass", "String");
@@ -1147,22 +1274,32 @@ namespace IronRuby.Builtins {
                 }
 
                 if (current > 0) {
-                    // Append negotiates the encodings, so the join of two EUC-JP paths
-                    // stays EUC-JP instead of decaying to binary.
+                    // MRI's fs_enc_check: the encodings have to be compatible, and where that
+                    // leaves US-ASCII the joined part's own encoding is kept, so "a" (US-ASCII)
+                    // joined with a Windows-1251 "b" is Windows-1251.
+                    RubyEncoding encoding = PathEncodingCheck(result, str);
                     AppendDirectoryName(result, str);
+                    result.ForceEncoding(encoding);
                 } else {
                     result = MutableString.CreateMutable(str.Encoding).Append(str);
                 }
                 current++;
             }
-
-            return result ?? MutableString.CreateEmpty();
         }
 
-        private static void Push(Stack<Object>/*!*/ stack, IList/*!*/ values) {
-            for (int i = values.Count - 1; i >= 0; i--) {
-                stack.Push(values[i]);
+        /// <summary>
+        /// MRI's fs_enc_check: rb_enc_check of the two paths, except that an answer of US-ASCII
+        /// gives way to the first path's encoding, or failing that the second's.
+        /// </summary>
+        private static RubyEncoding/*!*/ PathEncodingCheck(MutableString/*!*/ path1, MutableString/*!*/ path2) {
+            RubyEncoding encoding = path1.RequireCompatibleEncoding(path2);
+            if (encoding == RubyEncoding.Ascii) {
+                encoding = path1.Encoding;
+                if (encoding == RubyEncoding.Ascii) {
+                    encoding = path2.Encoding;
+                }
             }
+            return encoding;
         }
 
         private static void AppendDirectoryName(MutableString/*!*/ result, MutableString/*!*/ name) {
@@ -1206,7 +1343,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("flock")]
-        public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
+        public static object FileLock(RubyIO/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
             if (OperatingSystem.IsWindows()) {
                 return WindowsFileLock(self, operation);
@@ -1232,7 +1369,7 @@ namespace IronRuby.Builtins {
                     return 0;
                 }
                 if (errno != Posix.EWouldBlock) {
-                    throw Posix.Error(errno, self.Path, self.Context);
+                    throw Posix.Error(errno, FilePathOf(self), self.Context);
                 }
                 if (nonBlocking) {
                     // LOCK_NB on a locked file reports "would block" rather than raising
@@ -1369,7 +1506,7 @@ namespace IronRuby.Builtins {
         /// writes, so without it `gem install` of any gem with an executable failed.
         /// </summary>
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-        private static object WindowsFileLock(RubyFile/*!*/ self, int operation) {
+        private static object WindowsFileLock(RubyIO/*!*/ self, int operation) {
             var fs = self.GetStream().BaseStream as FileStream;
             if (fs == null) {
                 throw RubyExceptions.CreateEBADF();
@@ -1383,7 +1520,7 @@ namespace IronRuby.Builtins {
                     int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
                     // Unlocking a file that is not locked is not an error for flock(2).
                     if (error != ERROR_NOT_LOCKED) {
-                        throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                        throw RubyExceptions.CreateEINVAL("{0}", FilePathOf(self));
                     }
                 }
                 return 0;
@@ -1393,7 +1530,7 @@ namespace IronRuby.Builtins {
             if ((operation & Posix.LOCK_EX) != 0) {
                 flags |= LOCKFILE_EXCLUSIVE_LOCK;
             } else if ((operation & Posix.LOCK_SH) == 0) {
-                throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                throw RubyExceptions.CreateEINVAL("{0}", FilePathOf(self));
             }
 
             while (true) {
@@ -1403,7 +1540,7 @@ namespace IronRuby.Builtins {
                 }
                 int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
                 if (error != ERROR_LOCK_VIOLATION && error != ERROR_IO_PENDING) {
-                    throw RubyExceptions.CreateEINVAL("{0}", self.Path);
+                    throw RubyExceptions.CreateEINVAL("{0}", FilePathOf(self));
                 }
                 if ((operation & Posix.LOCK_NB) != 0) {
                     return false;
@@ -1655,7 +1792,7 @@ namespace IronRuby.Builtins {
         #region atime, ctime, mtime, utime
 
         [RubyMethod("atime")]
-        public static RubyTime AccessTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime AccessTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.AccessTime(RubyStatOps.Create(self));
         }
 
@@ -1666,7 +1803,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("ctime")]
-        public static RubyTime CreateTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime CreateTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.CreateTime(RubyStatOps.Create(self));
         }
 
@@ -1677,7 +1814,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("mtime")]
-        public static RubyTime ModifiedTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime ModifiedTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.ModifiedTime(RubyStatOps.Create(self));
         }
 
@@ -1796,14 +1933,27 @@ namespace IronRuby.Builtins {
             return RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false);
         }
 
-        [RubyMethod("lstat")]
         [RubyMethod("stat")]
-        public static FileSystemInfo Stat(RubyFile/*!*/ self) {
+        public static FileSystemInfo Stat(RubyIO/*!*/ self) {
             return RubyStatOps.Create(self);
         }
 
+        /// <summary>
+        /// MRI's rb_file_lstat: lstat(2) of the path the File was opened with, so a File opened
+        /// through a symbolic link describes the link. A File with no path is fstat'd.
+        /// </summary>
+        [RubyMethod("lstat")]
+        public static FileSystemInfo LStat(RubyIO/*!*/ self) {
+            self.RequireOpen();
+            string path = FilePathOf(self);
+            if (path == null) {
+                return RubyStatOps.Create(self);
+            }
+            return RubyStatOps.Create(self.Context, path, false);
+        }
+
         [RubyMethod("birthtime")]
-        public static RubyTime BirthTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+        public static RubyTime BirthTime(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             return RubyStatOps.BirthTime(RubyStatOps.Create(self));
         }
 
@@ -1813,14 +1963,20 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("size")]
-        public static object FileSize(RubyFile/*!*/ self) {
+        public static object FileSize(RubyIO/*!*/ self) {
             // fstat the descriptor rather than the path: the size of a file that has
             // since been unlinked is still readable, and a closed File raises IOError.
             self.RequireOpen();
-            return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
+            return RubyStatOps.Size(RubyStatOps.Create(self));
         }
         [RubyMethod("inspect")]
-        public static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
+        public static MutableString/*!*/ Inspect(RubyIO/*!*/ self) {
+            // an IO reopened to a File is a File that is not a RubyFile
+            var file = self as RubyFile;
+            return file != null ? Inspect(file) : RubyIOOps.Inspect(self);
+        }
+
+        private static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
             var result = MutableString.CreateMutable(self.Context.GetPathEncoding()).
                 Append("#<").
                 Append(self.Context.GetClassOf(self).GetName(self.Context)).
@@ -1838,7 +1994,34 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("path")]
         [RubyMethod("to_path")]
-        public static MutableString GetPath(RubyFile/*!*/ self) {
+        public static MutableString GetPath(RubyIO/*!*/ self) {
+            // An IO reopened to a File becomes a File without being a RubyFile: its path is the
+            // one the IO keeps.
+            if (!(self is RubyFile)) {
+                // A copy, as MRI's rb_io_path gives (rb_str_dup): changing it must not move
+                // the path the IO's lstat and errors use.
+                MutableString path = RubyIOOps.GetIOPath(self);
+                return (path != null) ? path.Clone() : null;
+            }
+            return GetPath((RubyFile)self);
+        }
+
+        /// <summary>
+        /// The path a File's methods name in their errors and lstat: an IO reopened to a File
+        /// takes that File's class without becoming a RubyFile (the CLR object cannot change
+        /// type), and MRI's File methods work on it all the same, through the descriptor and
+        /// the path it keeps.
+        /// </summary>
+        private static string FilePathOf(RubyIO/*!*/ self) {
+            var file = self as RubyFile;
+            if (file != null) {
+                return file.Path;
+            }
+            MutableString path = RubyIOOps.GetIOPath(self);
+            return (path != null) ? self.Context.DecodePath(path) : null;
+        }
+
+        private static MutableString GetPath(RubyFile/*!*/ self) {
             self.RequireInitialized();
             if (self.Path == null) {
                 return null;
@@ -1860,17 +2043,36 @@ namespace IronRuby.Builtins {
         /// is unavailable) File::Stat keeps using bare FileInfo/DirectoryInfo
         /// and the legacy approximations below.
         /// </summary>
-        internal sealed class StatInfo : FileSystemInfo {
-            internal readonly Posix.StatData Data;
+        public sealed class StatInfo : FileSystemInfo {
+            // Not readonly: File::Stat.allocate makes one with neither, which #initialize or
+            // #initialize_copy fills in later, as MRI's stat_memsize/rb_stat_init_copy do.
+            internal Posix.StatData Data;
 
             // Off Unix there is no statx result to hold, so the FileInfo/DirectoryInfo the
             // old implementation used rides along instead. File::Stat is this class either
             // way, which is what makes File.stat(...).instance_of?(File::Stat) true.
-            internal readonly FileSystemInfo Legacy;
+            internal FileSystemInfo Legacy;
 
             // Off Unix: an lstat of a symbolic link (or junction), which the BCL object cannot say
             // by itself - File.symlink? and File.lstat(...).symlink? read it.
             internal bool IsLink;
+
+            /// <summary>File::Stat.allocate: a stat of nothing yet, which every reader refuses.</summary>
+            public StatInfo() {
+                OriginalPath = FullPath = "";
+            }
+
+            internal bool IsInitialized {
+                get { return Data != null || Legacy != null; }
+            }
+
+            internal void CopyFrom(StatInfo/*!*/ other) {
+                Data = other.Data;
+                Legacy = other.Legacy;
+                IsLink = other.IsLink;
+                OriginalPath = other.OriginalPath;
+                FullPath = other.FullPath;
+            }
 
             internal StatInfo(string/*!*/ path, Posix.StatData/*!*/ data) {
                 Data = data;
@@ -1927,9 +2129,10 @@ namespace IronRuby.Builtins {
                 // was opened with instead, as File.stat does there; a file renamed or deleted
                 // since it was opened cannot be stat'd this way, which is Windows' own limit too.
                 if (!Posix.IsAvailable) {
-                    var file = io as RubyFile;
-                    if (file != null && file.Path != null) {
-                        return Create(io.Context, file.Path);
+                    // FilePathOf, so that an IO reopened to a File answers from its path too.
+                    string path = FilePathOf(io);
+                    if (path != null) {
+                        return Create(io.Context, path);
                     }
                 }
 
@@ -2076,18 +2279,54 @@ namespace IronRuby.Builtins {
 
             private static Posix.StatData D(FileSystemInfo/*!*/ self) {
                 var si = self as StatInfo;
-                return si != null ? si.Data : null;
+                return si != null ? Initialized(si).Data : null;
             }
 
             /// <summary>The System.IO object behind an off-Unix File::Stat, if there is one.</summary>
             private static FileSystemInfo L(FileSystemInfo self) {
                 var si = self as StatInfo;
-                return si != null ? si.Legacy : self;
+                return si != null ? Initialized(si).Legacy : self;
+            }
+
+            // MRI's get_stat: a File::Stat that File::Stat.allocate made and nothing filled in.
+            private static StatInfo/*!*/ Initialized(StatInfo/*!*/ self) {
+                if (!self.IsInitialized) {
+                    throw RubyExceptions.CreateTypeError("uninitialized File::Stat");
+                }
+                return self;
             }
 
             [RubyConstructor]
             public static FileSystemInfo/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
                 return Create(self.Context, Protocols.CastToPath(toPath, path));
+            }
+
+            // Only reached by an instance File::Stat.allocate made (File::Stat.new is the
+            // constructor above); MRI's rb_stat_init stats the path into it.
+            [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+            public static StatInfo/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, StatInfo/*!*/ self, object path) {
+                RubyContext context = toPath.Context;
+                FileSystemInfo info = Create(context, Protocols.CastToPath(toPath, path));
+                var stat = info as StatInfo ?? new StatInfo(info);
+                self.CopyFrom(stat);
+                return self;
+            }
+
+            // MRI's rb_stat_init_copy: the copy answers what the original does.
+            [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+            public static StatInfo/*!*/ InitializeCopy(RubyContext/*!*/ context, StatInfo/*!*/ self, object other) {
+                if (ReferenceEquals(self, other)) {
+                    return self;
+                }
+                if (context.IsObjectFrozen(self)) {
+                    throw RubyExceptions.CreateObjectFrozenError(context, self);
+                }
+                var source = other as StatInfo;
+                if (source == null || context.GetClassOf(other) != context.GetClassOf(self)) {
+                    throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
+                }
+                self.CopyFrom(source);
+                return self;
             }
 
             [RubyMethod("<=>")]
@@ -2500,6 +2739,10 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, FileSystemInfo/*!*/ self) {
+               var si = self as StatInfo;
+               if (si != null && !si.IsInitialized) {
+                   return MutableString.CreateAscii("#<" + context.GetClassName(self) + ": uninitialized>");
+               }
                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture,
                     "#<File::Stat dev={0}, ino={1}, mode={2}, nlink={3}, uid={4}, gid={5}, rdev={6}, size={7}, blksize={8}, blocks={9}, atime={10}, mtime={11}, ctime={12}>",
                     FormatDev(DeviceId(self)),

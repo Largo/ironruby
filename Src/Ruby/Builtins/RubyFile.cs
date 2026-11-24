@@ -128,7 +128,7 @@ namespace IronRuby.Builtins {
                         throw RubyExceptions.CreateErrno(context, e.HResult, path);
                     }
                     throw;
-                } catch (UnauthorizedAccessException) {
+                } catch (UnauthorizedAccessException e) {
                     // .NET reports opening a directory as an access violation; MRI
                     // distinguishes it, so only a genuine one stays EACCES (which is
                     // what UnauthorizedAccessException already maps to).
@@ -142,7 +142,9 @@ namespace IronRuby.Builtins {
                         }
                         throw RubyExceptions.CreateEISDIR(path);
                     }
-                    throw;
+                    // Named by the path, as MRI's rb_sysopen does ("Permission denied - /etc/x"),
+                    // rather than by the CLR's own sentence about it.
+                    throw new UnauthorizedAccessException("Permission denied - " + path, e);
                 } catch (ArgumentException e) {
                     throw RubyExceptions.CreateEINVAL(e.Message, e);
                 }

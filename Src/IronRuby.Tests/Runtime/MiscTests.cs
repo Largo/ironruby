@@ -1462,6 +1462,8 @@ require 'tmpdir'
 require 'fileutils'
 root = File.join(Dir.tmpdir, ""ir-chdir-#{Process.pid}"")
 FileUtils.mkdir_p(File.join(root, 'a', 'a', 'a'))
+# a chdir without a block inside a chdir block warns, as in CRuby
+$VERBOSE = nil
 Dir.chdir(File.join(root, 'a', 'a')) do
   Dir.chdir('..')
   p File.basename(File.dirname(Dir.pwd)) == File.basename(root)
@@ -1856,13 +1858,9 @@ rescue ZoneFailure => e
   p e.class
 end
 
-# 2000-16-01: the month is out of range
+# 2000-16-01: a month past December is carried into the next year, as time_mload does
 bad = [0x80000000 | (100 << 14) | (15 << 10) | (1 << 5), 0].pack('VV')
-begin
-  Time.send(:_load, bad)
-rescue TypeError => e
-  p e.message
-end
+p Time.send(:_load, bad).utc
 ", @"
 2000-01-01 12:00:00 +0100
 true
@@ -1872,7 +1870,7 @@ true
 ""XST""
 ""XST""
 ZoneFailure
-""marshaled time format differ""
+2001-04-01 00:00:00 UTC
 ");
         }
 
@@ -3622,6 +3620,47 @@ nil
         }
 
         /// <summary>
+        /// Marshal.load's checks on what a dump names, as MRI's r_object makes them: a constant that is not a class is a
+        /// TypeError, _load is looked for first, an 'S' record needs a Struct (Range's members are begin, end, excl), and a
+        /// class's instance variables are not set. The modules prepended to a singleton class, the ruby2_keywords flag
+        /// of a Hash, and an array a _dump empties are dumped as MRI dumps them. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void Marshal_LoadChecks1() {
+            TestOutput(@"
+require 'ruby4'
+class C3; def _dump(s) = ""foo""; end
+m = Marshal.dump(C3.new)
+p((Marshal.load(m) rescue $!))
+Object.send(:remove_const, :C3); C3 = nil
+p((Marshal.load(m) rescue $!))
+S1 = Struct.new(:a); s = Marshal.dump(S1.new(1))
+Object.send(:remove_const, :S1); S1 = Class.new
+p((Marshal.load(s) rescue $!))
+p((Marshal.load(""\x04\bS:\nRange\b:\x06a0:\x06b0:\x06c0"") rescue $!))
+class K; end
+p((Marshal.load(""\x04\bIc\x06K\x06:\a@ai\x06"") rescue $!)); p K.instance_variables
+module Mod1; end
+o = Object.new; o.singleton_class.prepend(Mod1)
+d = Marshal.dump(o); p d
+l = Marshal.load(d); p l.singleton_class.ancestors.first(2) == [Mod1, l.singleton_class]
+h = Hash.ruby2_keywords_hash({k: 1}); p Hash.ruby2_keywords_hash?(Marshal.load(Marshal.dump(h)))
+a = []; x = Object.new; def x._dump(l) = ($a.clear; ""x""); $a = a; a << x << nil
+p((Marshal.dump(a) rescue $!))
+", @"
+#<TypeError: class C3 needs to have method '_load'>
+#<TypeError: C3 does not refer to class/module>
+#<TypeError: class S1 not a struct>
+#<TypeError: struct Range not compatible (:a for :begin)>
+#<TypeError: can't override instance variable of class 'K'>
+[]
+""\x04\be:\tMod1e:\vObjecto;\x06\x00""
+true
+true
+#<RuntimeError: array modified during dump>
+");
+        }
+
+        /// <summary>
         /// Data.new reports a missing member before an unknown keyword, as MRI's rb_data_initialize_m does, and Data.define
         /// and Struct.new refuse only setter names (rb_is_attrset_id) as members, so `[]=` is allowed. All in the prelude.
         /// </summary>
@@ -3671,7 +3710,7 @@ E = Data.define(:a, :b)
 require 'ruby4'
 p 1.then, 1.yield_self, 1.method(:yield_self).name, 1.method(:yield_self).original_name
 p Kernel.instance_method(:then) == Kernel.instance_method(:yield_self), Kernel.instance_method(:then).parameters
-p [1, 2, 3].rfind, [1, 2, 3].rfind(nil), [1, 2, 3].rfind(1, 2), [1, 2, 3].rfind(-> { 9 }) { false }
+p [1, 2, 3].rfind, [1, 2, 3].rfind(nil), ([1, 2, 3].rfind(1, 2) rescue $!), [1, 2, 3].rfind(-> { 9 }) { false }
 p (1..2).collect_concat, (1..2).flat_map
 p [3].lazy.filter { 1 }, [3].lazy.find_all { 1 }, [3].lazy.select { 1 }
 p [3].lazy.collect { 1 }, [3].lazy.map { 1 }, [3].lazy.collect_concat { [1] }
@@ -3686,7 +3725,7 @@ true
 []
 #<Enumerator: [1, 2, 3]:rfind>
 #<Enumerator: [1, 2, 3]:rfind(nil)>
-#<Enumerator: [1, 2, 3]:rfind(1, 2)>
+#<ArgumentError: wrong number of arguments (given 2, expected 0..1)>
 9
 #<Enumerator: 1..2:collect_concat>
 #<Enumerator: 1..2:flat_map>
@@ -4033,9 +4072,10 @@ Dir.mktmpdir do |d|
   bad = File.join(d, 'bad.rb')
   File.write(bad, ""x = 1\n"" * 49 + ""x = )\n"")
   begin; load bad; rescue SyntaxError => e; p e.message.start_with?(""#{bad}:50: ""), e.path == bad; end
-  File.write(bad, ""# encoding: bogus\np 1\n"")
-  begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment"", e.backtrace.grep(/Parse/); end
+  File.binwrite(bad, ""# encoding: bogus\np 1\n"")
+  begin; load bad; rescue ArgumentError => e; p e.message == ""#{bad}:1: unknown or invalid encoding in the magic comment\n> 1 | # encoding: bogus\n    |             ^~~~~\n  2 | p 1\n"", e.backtrace.grep(/Parse/); end
 end
+begin; eval(""# coding: foo\n"", nil, 'm.rb', 3); rescue ArgumentError => e; p e.message; end
 begin; eval(""1\n1 +"", nil, 'q.rb', 3); rescue SyntaxError => e; p e.message, e.path; end
 begin; eval(""1 +"", nil, 'z.rb', -5); rescue SyntaxError => e; p e.message; end
 ", @"
@@ -4043,6 +4083,7 @@ true
 true
 true
 []
+""m.rb:3: unknown or invalid encoding in the magic comment\n> 3 | # coding: foo\n    |           ^~~\n""
 ""q.rb:4: syntax errors found\n  3 | 1\n> 4 | 1 +\n    |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n    |    ^ unexpected end-of-input; expected an expression after the operator\n""
 ""q.rb""
 ""z.rb:-5: syntax errors found\n> -5 | 1 +\n     |    ^ unexpected end-of-input, assuming it is closing the parent top level context\n     |    ^ unexpected end-of-input; expected an expression after the operator\n""

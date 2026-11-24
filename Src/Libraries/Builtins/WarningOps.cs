@@ -67,8 +67,11 @@ namespace IronRuby.Builtins {
 
             MutableString str = message as MutableString;
             if (str == null) {
-                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected String)",
-                    context.GetClassDisplayName(message));
+                throw RubyExceptions.CreateUnexpectedTypeError(context, message, "String");
+            }
+            // rb_must_asciicompat
+            if (!str.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateAsciiIncompatibleEncodingError(str.Encoding);
             }
 
             object category;

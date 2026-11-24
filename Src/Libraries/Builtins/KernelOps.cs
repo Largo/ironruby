@@ -1348,22 +1348,39 @@ namespace IronRuby.Builtins {
             }
 
             var hash = args[args.Length - 1] as Hash;
-            if (hash == null || hash.Count != 1 || !hash.IsKeywordArguments) {
+            if (hash == null || !hash.IsKeywordArguments) {
                 return false;
             }
 
+            // MRI's extract_raise_options: `cause:` is taken out of the keywords and any others are
+            // left to the exception's #initialize as one positional Hash (raise E, "k" => 1, cause: c).
+            // The call site made the hash for this call, so it is changed in place.
+            bool hasCause = false;
             foreach (var entry in hash) {
                 var key = entry.Key as RubySymbol;
-                if (key == null || key.ToString() != "cause") {
-                    return false;
+                if (key != null && key.ToString() == "cause") {
+                    cause = entry.Value;
+                    hasCause = true;
+                    break;
                 }
-                cause = entry.Value;
+            }
+            if (hasCause) {
+                foreach (var key in new List<object>(hash.Keys)) {
+                    var symbol = key as RubySymbol;
+                    if (symbol != null && symbol.ToString() == "cause") {
+                        hash.Remove(key);
+                    }
+                }
             }
 
-            var rest = new object[args.Length - 1];
-            Array.Copy(args, rest, rest.Length);
-            args = rest;
-            return true;
+            if (hash.Count == 0) {
+                var rest = new object[args.Length - 1];
+                Array.Copy(args, rest, rest.Length);
+                args = rest;
+            } else {
+                hash.IsKeywordArguments = false;
+            }
+            return hasCause;
         }
 
         private static void SetCause(RubyContext/*!*/ context, Exception/*!*/ exception, bool hasCause, object cause) {
@@ -3361,15 +3378,21 @@ namespace IronRuby.Builtins {
                 inspectedArgs[i] = Protocols.ConvertToString(tosConversion, inspect.Target(inspect, args[i]));
             }
 
-            // no dynamic dispatch to "puts":
-            foreach (var arg in inspectedArgs) {
-                PrintOps.Puts(writeStorage, writeStorage.Context.StandardOutput, arg);
-            }
+            // no dynamic dispatch to "puts"; and no interrupt check in the writes, which MRI makes
+            // under rb_uninterruptible (see RubyIOOps.Write):
+            RubyIOOps._uninterruptibleWrites++;
+            try {
+                foreach (var arg in inspectedArgs) {
+                    PrintOps.Puts(writeStorage, writeStorage.Context.StandardOutput, arg);
+                }
 
-            // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at once
-            var stdout = writeStorage.Context.StandardOutput as RubyIO;
-            if (args.Length > 0 && stdout != null) {
-                RubyIOOps.Flush(stdout);
+                // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at once
+                var stdout = writeStorage.Context.StandardOutput as RubyIO;
+                if (args.Length > 0 && stdout != null) {
+                    RubyIOOps.Flush(stdout);
+                }
+            } finally {
+                RubyIOOps._uninterruptibleWrites--;
             }
 
             if (args.Length == 0) {

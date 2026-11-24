@@ -1430,6 +1430,34 @@ y14 { |x,y,*z,&w| p [x,y,z] }
 
 
         /// <summary>
+        /// yield *[x] passes the one argument x exactly as yield x does: a lambda takes an Array x
+        /// whole rather than having it taken apart over its parameters.
+        /// </summary>
+        public void Scenario_RubyProcYieldArgs5() {
+            TestOutput(@"
+def y1; yield(*[[1, 2]]); end
+def y2(a); yield(*a); end
+p y1(&->(a) { a })
+p y1(&->(a, b = 0) { [a, b] })
+p y1(&->(a, *b) { [a, b] })
+p y1(&->(*a) { a })
+p y2([[1, 2]], &->(a, *b) { [a, b] })
+p y1 { |a, b = 0| [a, b] }
+p((y1(&->(a, b) { }) rescue $!.message))
+p y2([1, 2], &->(a, b) { [a, b] })
+", @"
+[1, 2]
+[[1, 2], 0]
+[[1, 2], []]
+[[1, 2]]
+[[1, 2], []]
+[1, 2]
+""wrong number of arguments (given 1, expected 2)""
+[1, 2]
+");
+        }
+
+        /// <summary>
         /// RHS is list, LHS is not simple, but contains splatting.
         /// </summary>
         public void Scenario_RubyBlockArgs3() {
@@ -1574,6 +1602,36 @@ nil
 ");
         }
         
+        /// <summary>
+        /// A name inside a destructured block parameter |(a, b)| is a parameter of the block and
+        /// shadows an outer local of that name, as any other parameter does.
+        /// </summary>
+        public void Scenario_RubyBlockArgs7() {
+            TestOutput(@"
+_ = 1; [[2]].each { |(_)| }; p _
+a = 1; [[2]].each { |(a)| }; p a
+b = 1; [[2, 3]].each { |(b, c)| p c }; p b
+f = 1; [[1, 2]].each { |x, (f)| p x }; p f
+g = 1; [[2, 3]].each { |(_, g)| p g }; p g
+p [[1, [2, 3]]].map { |a, (b, c)| [a, b, c] }
+def m((x, y)) = [x, y]
+x = 9
+p m([1, 2]), x
+", @"
+1
+1
+3
+1
+1
+1
+3
+1
+[[1, 2, 3]]
+[1, 2]
+9
+");
+        }
+
         public void RubyProcs1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -2298,6 +2356,82 @@ Array
 3
 10
 2
+");
+        }
+
+        /// <summary>
+        /// `yield x, **h' with h empty passes x alone, but from a call with keywords: MRI auto-splats x only for a block of
+        /// plain parameters (vm_callee_setup_block_arg), not for one with an optional, rest, block or keyword parameter.
+        /// </summary>
+        public void YieldEmptyKeywordSplat1() {
+            TestOutput(@"
+def y(h); yield [1, 2], **h; end
+h = {}
+p y(h) { |a, b| [a, b] }
+p y(h) { |a, b = 0| [a, b] }
+p y(h) { |a, *r| [a, r] }
+p y(h) { |a, &b| a }
+p y(h) { |a, k: 1| [a, k] }
+p y(h, &->(a, b = 0) { [a, b] })
+p y({x: 1}) { |a, b = 0| [a, b] }
+def z; yield [1, 2], **{}; end
+p z { |a, b = 0| [a, b] }
+", @"
+[1, 2]
+[[1, 2], 0]
+[[1, 2], []]
+[1, 2]
+[[1, 2], 1]
+[[1, 2], 0]
+[[1, 2], {x: 1}]
+[[1, 2], 0]
+");
+        }
+
+        /// <summary>
+        /// A local variable `it' that a block using `it' assigns is a variable of its own: the parameter stays what it was
+        /// for Binding#implicit_parameter_get, and eval sees the local.
+        /// </summary>
+        public void ItParameterLocal1() {
+            TestOutput(@"
+require 'ruby4'
+p(1.then { it; eval('it') rescue $!.class })
+p(1.then { it; binding.local_variables })
+p(1.then { it; it = 5; [it, binding.local_variables, binding.implicit_parameters, binding.implicit_parameter_get(:it), eval('it')] })
+p(1.then { x = it; it = 5; it += 1; [x, it] })
+p(3.then { [it, 2.then { it = 7; it }, it] })
+p proc { that = it; it = nil; [that, it] }.call(1)
+", @"
+NameError
+[]
+[5, [:it], [:it], 1, 5]
+[1, 6]
+[3, 7, 3]
+[1, nil]
+");
+        }
+
+        /// <summary>
+        /// A block a library method wrote in C# is MRI's C block: called after that method has returned, its break has
+        /// nowhere to go, which MRI calls an "unexpected break" ([ruby-dev:45041]); a Ruby block's is "from proc-closure".
+        /// </summary>
+        public void LibraryBlockOrphanBreak1() {
+            TestOutput(@"
+o = Object.new
+class << o
+  include Enumerable
+  attr_reader :block
+  def each(&block); @block = block; self; end
+end
+p o.first
+begin; o.block.call(1); rescue LocalJumpError => e; p e.message, e.reason; end
+def m; proc { break }; end
+begin; m.call; rescue LocalJumpError => e; p e.message; end
+", @"
+nil
+""unexpected break""
+:break
+""break from proc-closure""
 ");
         }
     }

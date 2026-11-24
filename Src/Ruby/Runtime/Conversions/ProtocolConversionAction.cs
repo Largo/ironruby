@@ -327,7 +327,17 @@ namespace IronRuby.Runtime.Conversions {
 
             // slow path: invoke respond_to?, to_xxx and result validation.
             // MRI (vm_respond_to) passes include_all = true unless respond_to? takes only the name.
-            bool passIncludeAll = respondToMethod.Info.GetArity() != 1;
+            int respondToArity = respondToMethod.Info.GetArity();
+            if (respondToArity > 2) {
+                // vm_respond_to: a respond_to? that would need more than (name, include_all) is refused
+                // rather than called (bug:6000).
+                metaBuilder.SetError(Ast.New(
+                    typeof(ArgumentException).GetConstructor(new[] { typeof(string) }),
+                    AstUtils.Constant(String.Format("respond_to? must accept 1 or 2 arguments (requires {0})", respondToArity))
+                ));
+                return;
+            }
+            bool passIncludeAll = respondToArity != 1;
             for (int i = conversions.Length - 1; i >= 0; i--) {
                 string toMethodName = conversions[i].ToMethodName;
                 

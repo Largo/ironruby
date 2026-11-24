@@ -119,7 +119,7 @@ module Kernel
     unless defined
       # MRI names a class or module here by its #name, anything else by its #inspect.
       receiver = (::Module === self && self.name) || inspect
-      ::Kernel.raise(::NameError, "undefined singleton method '#{name}' for '#{receiver}'")
+      ::Kernel.raise(::NameError.new("undefined singleton method '#{name}' for '#{receiver}'", name, receiver: self))
     end
     method(name)
   end unless method_defined?(:singleton_method)
@@ -1711,12 +1711,14 @@ class Array
     index && self[index]
   end unless method_defined?(:bsearch)
 
-  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args).
+  # The Enumerator shows the ifnone argument only when one was given (MRI's rb_scan_args). The
+  # arguments are counted first, as rb_scan_args counts them: rfind(1, 2) without a block is an
+  # ArgumentError, not an Enumerator.
   def rfind(*args, &block)
-    return to_enum(:rfind, *args) unless block
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
+    return to_enum(:rfind, *args) unless block
     ifnone = args[0]
     index = size - 1
     while index >= 0
@@ -2243,6 +2245,7 @@ class File
 
   # File takes a permission argument between the mode and the options.
   def initialize(*args, **opts)
+    __ir_require_uninitialized__
     if args.size > 3
       ::Kernel.raise(::ArgumentError,
                      "wrong number of arguments (given #{args.size}, expected 1..3)")
@@ -3937,9 +3940,18 @@ class String
   def undump
     s = self
     forced = nil
-    if (m = /\A(".*")(?:\.dup)?\.force_encoding\("([^"]+)"\)\z/m.match(s))
-      s = m[1]
-      forced = m[2]
+    # The '"...".force_encoding("name")' form, with an optional .dup, found with
+    # string searches: only the last .force_encoding(" can leave a name without
+    # a '"'. A greedy /\A(".*")...\z/m backtracks through all of a long string
+    # on .NET (test_undump passes a 10 MB name).
+    if s.end_with?('")') && (k = s.rindex('.force_encoding("'))
+      head = s[0, k]
+      name = s[(k + 17)...-2]
+      head = head[0...-4] if head.end_with?('".dup')
+      if head.length >= 2 && head.start_with?('"') && head.end_with?('"') && !name.include?('"')
+        s = head
+        forced = name
+      end
     end
     if s.start_with?('"') && !s.end_with?('"') && s.count('"') < 2
       ::Kernel.raise(::RuntimeError, "unterminated dumped string")
@@ -3953,14 +3965,10 @@ class String
     body = s[1...-1]
     ::Kernel.raise(::RuntimeError, "invalid dumped string") if body.nil?
     # The dumped form is plain ASCII; a NUL or a non-ASCII character in it means
-    # it did not come from #dump.
-    body.each_char do |ch|
-      if ch == "\0"
-        ::Kernel.raise(::RuntimeError, "string contains null byte")
-      elsif ch.ord > 0x7f
-        ::Kernel.raise(::RuntimeError, "non-ASCII character detected")
-      end
-    end
+    # it did not come from #dump. MRI's str_undump checks the whole string for
+    # non-ASCII first and for a NUL after, wherever each one is.
+    ::Kernel.raise(::RuntimeError, "non-ASCII character detected") unless body.ascii_only?
+    ::Kernel.raise(::RuntimeError, "string contains null byte") if body.include?("\0")
     out = +""
     unicode_escape = false
     hex_escape = false # a \x escape of a non-ASCII byte
@@ -3968,7 +3976,9 @@ class String
     while i < body.length
       c = body[i]
       if c == '"'
-        ::Kernel.raise(::RuntimeError, "invalid dumped string")
+        # MRI's str_undump ends the string at the first unescaped '"': what is
+        # left has to be the .force_encoding suffix, and here it was not.
+        ::Kernel.raise(::RuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form")
       elsif c == "\\"
         i += 1
         e = body[i]
@@ -4678,6 +4688,19 @@ class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 class << Dir
   # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
   def home(user = nil)
+    # MRI converts the name with to_str, and an empty one is the current user, as nil is.
+    unless user.nil?
+      unless user.is_a?(String)
+        raise TypeError, "no implicit conversion of #{user.class} into String" unless user.respond_to?(:to_str)
+        converted = user.to_str
+        # StringValue: what #to_str gives has to be a String (nil included, which is not "no name")
+        unless converted.is_a?(String)
+          raise TypeError, "can't convert #{user.class} to String (#{user.class}#to_str gives #{converted.class})"
+        end
+        user = converted
+      end
+      user = nil if user.empty?
+    end
     if user.nil?
       dir = ENV['HOME']
       if dir.nil? && File::ALT_SEPARATOR
@@ -4703,7 +4726,6 @@ class << Dir
       return File::ALT_SEPARATOR ? dir.tr("\\", "/") : dir.dup
     end
 
-    raise TypeError, "no implicit conversion of #{user.class} into String" unless user.is_a?(String)
     require 'etc'
     pw = (Etc.getpwnam(user) rescue nil)
     raise ArgumentError, "user #{user} doesn't exist" unless pw
@@ -5041,8 +5063,11 @@ class Array
   # block_given? per element made it 4.7x MRI), and each pair through rb_check_array_type,
   # which is Array.try_convert - an Array is taken as it is, without asking its #to_ary; a
   # #to_ary that answers something else is that method's TypeError. The index moves with
-  # #succ (see Array#sum).
-  def to_h
+  # #succ (see Array#sum). The block gets each element through rb_yield_force_blockarg, so a
+  # lambda's two parameters take a pair apart as a plain block's do (&->(k, v) { }); that path
+  # is the C# __yield_force_blockarg__, and only a lambda takes it.
+  def to_h(&block)
+    return __to_h_force_blockarg__(&block) if block && block.lambda?
     result = {}
     given = block_given?
     i = 0
@@ -5056,6 +5081,20 @@ class Array
     end
     result
   end
+
+  def __to_h_force_blockarg__(&block)
+    result = {}
+    i = 0
+    while i < __ary_size__
+      element = __yield_force_blockarg__(__ary_at__(i), &block)
+      pair = ::Array === element ? element : ::Array.try_convert(element)
+      __to_h_pair_error__(element, pair, i) unless pair && pair.size == 2
+      result[pair[0]] = pair[1]
+      i = i.succ
+    end
+    result
+  end
+  private :__to_h_force_blockarg__
 
   def __to_h_pair_error__(element, pair, index)
     unless pair
@@ -5112,31 +5151,46 @@ class Array
   # receiver's size) or any object with #each.
   alias :__zip_arrays__ :zip
 
+  # MRI's take_items: the argument is converted with rb_check_array_type and walked with
+  # rb_check_block_call, both of which reach a #to_ary or an #each that only method_missing
+  # answers, and call a private #each. With an empty receiver nothing is asked for #each.
   def zip(*others, &block)
     length = size
     converted = others.map do |other|
       if other.is_a?(Array)
         other
-      elsif other.respond_to?(:to_ary)
-        other.to_ary
-      elsif other.respond_to?(:each)
-        collected = []
-        # several yielded values make one element, as Enumerator#next would pack them;
-        # MRI's take_i stops as soon as it has the receiver's length, without asking for one
-        # more (an Enumerator.produce is called exactly that many times)
-        if length > 0
-          other.each do |*element|
-            collected << (element.size <= 1 ? element[0] : element)
-            break if collected.size >= length
+      elsif (array = ::Array.try_convert(other))
+        array
+      elsif length == 0
+        []
+      else
+        if other.respond_to?(:each, true)
+          __zip_take__(other, length)
+        else
+          begin
+            __zip_take__(other, length)
+          rescue ::NoMethodError => e
+            ::Kernel.raise if e.name != :each || !e.receiver.equal?(other)
+            ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
           end
         end
-        collected
-      else
-        raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
     end
     __zip_arrays__(*converted, &block)
   end
+
+  def __zip_take__(other, length)
+    collected = []
+    # several yielded values make one element, as Enumerator#next would pack them;
+    # MRI's take_i stops as soon as it has the receiver's length, without asking for one
+    # more (an Enumerator.produce is called exactly that many times)
+    other.__send__(:each) do |*element|
+      collected << (element.size <= 1 ? element[0] : element)
+      break if collected.size >= length
+    end
+    collected
+  end
+  private :__zip_take__
 
   private :__zip_arrays__
 end
@@ -7975,6 +8029,22 @@ class << ENV
   end
   private :__env_str__
 
+  # MRI's get_env_cstr: a name or value goes to the C library as a C string, so one with a
+  # NUL in it, or in an encoding that is not ASCII-compatible, is refused before the
+  # environment is looked at -- by the readers as well as by the writers.
+  def __env_name__(object, what = "name")
+    string = __env_str__(object)
+    encoding = string.encoding
+    unless encoding.ascii_compatible?
+      ::Kernel.raise(::ArgumentError, "bad environment variable #{what}: ASCII incompatible encoding: #{encoding}")
+    end
+    if string.include?("\0")
+      ::Kernel.raise(::ArgumentError, "bad environment variable #{what}: contains null byte")
+    end
+    string
+  end
+  private :__env_name__
+
   # setenv(3) rejects a name that is empty or contains '='. The CLR reports that as its
   # own ArgumentException; MRI reports Errno::EINVAL naming the call.
   def __env_check_name__(name)
@@ -7992,13 +8062,13 @@ class << ENV
     private :__clr_fetch__
 
     def []=(name, value)
-      name = __env_str__(name)
+      name = __env_name__(name)
       if value.nil?
         # Deleting a name setenv(3) would have rejected is a no-op, not an error.
         __clr_store__(name, nil) unless name.empty? || name.include?("=")
         return nil
       end
-      value = __env_str__(value)
+      value = __env_name__(value, "value")
       __env_check_name__(name)
       __clr_store__(name, value)
       value
@@ -8008,14 +8078,24 @@ class << ENV
   end
 
   def [](name)
-    __clr_fetch__(__env_str__(name))
+    __clr_fetch__(__env_name__(name))
+  end
+
+  def key?(name)
+    !__clr_fetch__(__env_name__(name)).nil?
+  end
+  alias :has_key? :key?
+  alias :include? :key?
+
+  def values_at(*names)
+    names.map { |name| self[name] }
   end
 
   def fetch(name, *default)
     if default.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)")
     end
-    name = __env_str__(name)
+    name = __env_name__(name)
     if block_given? && !default.empty?
       ::Kernel.warn("warning: block supersedes default value argument")
     end
@@ -8029,7 +8109,7 @@ class << ENV
   end
 
   def delete(name)
-    name = __env_str__(name)
+    name = __env_name__(name)
     value = __clr_fetch__(name)
     if value.nil?
       return block_given? ? yield(name) : nil
@@ -8047,6 +8127,11 @@ class << ENV
 
   def dup
     ::Kernel.raise(::TypeError, "Cannot dup ENV, use ENV.to_h to get a copy of ENV as a hash")
+  end
+
+  # ENV is the process's environment, which no flag can make read-only.
+  def freeze
+    ::Kernel.raise(::TypeError, "cannot freeze ENV")
   end
 
   # MRI hands back an Enumerator rather than complaining about the missing block,
@@ -8128,8 +8213,8 @@ class << ENV
     end
 
     pairs = other.map do |key, value|
-      key = __env_str__(key)
-      value = __env_str__(value)
+      key = __env_name__(key)
+      value = __env_name__(value, "value")
       __env_check_name__(key)
       [key, value]
     end
@@ -8168,7 +8253,7 @@ class << ENV
   def slice(*keys)
     result = {}
     keys.each do |key|
-      name = __env_str__(key)
+      name = __env_name__(key)
       value = __clr_fetch__(name)
       result[key] = value unless value.nil?
     end
@@ -8181,7 +8266,7 @@ class << ENV
   end
 
   def assoc(key)
-    key = __env_str__(key)
+    key = __env_name__(key)
     value = __clr_fetch__(key)
     value.nil? ? nil : [key, value]
   end
@@ -8943,6 +9028,17 @@ module Process
 
     actions.concat(copies)
     actions.concat(deferred)
+
+    # MRI closes in the child after its dup2s, and a close(2) that fails there fails the
+    # spawn or the exec: `1000 => :close` with no descriptor 1000 is EBADF. posix_spawn's
+    # close action ignores that failure, so it is found here, where a descriptor some dup2
+    # makes is open by the time its close runs.
+    targets = actions.select { |action| action[0] == SPAWN_DUP2 }.map { |action| action[1] }
+    actions.each do |action|
+      next unless action[0] == SPAWN_CLOSE
+      fd = action[1]
+      raise Errno::EBADF, "close" if !targets.include?(fd) && __native_fd__(fd) < 0
+    end
     actions
   end
 
@@ -11443,6 +11539,15 @@ class IO
 
   def readpartial(maxlen, outbuf = nil)
     maxlen = ::Kernel.Integer(maxlen)
+    # MRI's StringValue: readpartial takes no keywords, so readpartial(1, exception: false)
+    # hands it a Hash for the buffer, which is a TypeError.
+    unless outbuf.nil? || ::String === outbuf
+      converted = ::String.try_convert(outbuf)
+      unless converted
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(outbuf)} into String")
+      end
+      outbuf = converted
+    end
     ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
     if maxlen == 0
       # Even a zero-length readpartial looks at the stream, so a closed one is an error.
@@ -11501,6 +11606,18 @@ class IO
           read_end.close unless read_end.closed?
           write_end.close unless write_end.closed?
           ::Kernel.raise
+        end
+      end
+
+      # MRI's rb_io_s_pipe: binmode: true makes both ends binmode?, and without an encoding
+      # argument both read and write bytes (rb_io_ascii8bit_binmode).
+      if options && options[:binmode]
+        if args[0].nil?
+          read_end.binmode
+          write_end.binmode
+        else
+          read_end.__send__(:__ir_set_hidden_ivar__, :@__binmode__, true)
+          write_end.__send__(:__ir_set_hidden_ivar__, :@__binmode__, true)
         end
       end
 
@@ -11627,7 +11744,7 @@ class IO
         end
         byte = byte.to_str
       end
-      byte.bytes.reverse_each { |b| __ir_ungetc__(b) }
+      __ir_ungetbytes__(byte)
     end
     nil
   end unless method_defined?(:ungetbyte)
@@ -11713,15 +11830,15 @@ class IO
 
   # IO#path answers the path the stream was opened with - File overrides it with the
   # real one - and the standard streams answer the names MRI gives them. An IO built
-  # from a descriptor keeps whatever path: it was told about.
+  # from a descriptor keeps whatever path: it was told about, and IO.for_fd(0) none:
+  # the name belongs to the object, as MRI's fptr->pathv, not to the descriptor.
   def path
-    case fileno
-    when 0 then "<STDIN>"
-    when 1 then "<STDOUT>"
-    when 2 then "<STDERR>"
-    else @__io_path__
-    end
+    @__io_path__
   end unless method_defined?(:path)
+
+  { STDIN => "<STDIN>", STDOUT => "<STDOUT>", STDERR => "<STDERR>" }.each do |io, name|
+    io.__send__(:__ir_set_hidden_ivar__, :@__io_path__, name.freeze)
+  end
 
   alias :to_path :path unless method_defined?(:to_path)
 

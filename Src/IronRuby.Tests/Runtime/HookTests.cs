@@ -393,5 +393,27 @@ p names.map(&interned)
 [true, true, true, true, true, true, true, true, true]
 ");
         }
+
+        /// <summary>
+        /// A trace_var handler that assigns the variable it traces does not fire itself again (MRI's
+        /// block_trace): it used to recurse until the stack ran out. The expected output is CRuby 4.0's.
+        /// </summary>
+        public void TraceVar_AssignInHandler1() {
+            TestOutput(@"
+$x = 1
+trace_var(:$x, proc { $x *= 2 })
+$x = 5
+p $x
+untrace_var(:$x)
+log = []
+trace_var(:$y) { |v| log << v; $y = v + 1 if v < 10 }
+$y = 1
+p $y, log
+", @"
+10
+2
+[1]
+");
+        }
     }
 }

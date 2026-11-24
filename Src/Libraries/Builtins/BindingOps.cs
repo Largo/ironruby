@@ -15,6 +15,7 @@
 
 using System;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Builtins {
     [RubyClass("Binding", Extends = typeof(Binding))]
@@ -41,7 +42,7 @@ namespace IronRuby.Builtins {
             var result = new RubyArray(names != null ? names.Length : 0);
             if (names != null) {
                 foreach (var name in names) {
-                    result.Add(context.EncodeIdentifier(name));
+                    result.Add(context.EncodeIdentifier(name == RubyParameterSignature.ItParameterName ? "it" : name));
                 }
             }
             return result;
@@ -61,12 +62,17 @@ namespace IronRuby.Builtins {
                     String.Format("implicit parameter '{0}' is not defined for {1}", parameterName, context.Inspect(self))
                 );
             }
-            return self.FrameScope.GetImplicitParameterValue(parameterName);
+            return self.FrameScope.GetImplicitParameterValue(ImplicitParameterSlot(parameterName));
         }
 
         private static bool IsImplicitParameter(Binding/*!*/ self, string/*!*/ name) {
             var names = self.FrameScope.OwnImplicitParameterNames;
-            return names != null && Array.IndexOf(names, name) >= 0;
+            return names != null && Array.IndexOf(names, ImplicitParameterSlot(name)) >= 0;
+        }
+
+        // `it' is kept under a name a local variable cannot have (RubyParameterSignature.ItParameterName)
+        private static string/*!*/ ImplicitParameterSlot(string/*!*/ name) {
+            return name == "it" ? RubyParameterSignature.ItParameterName : name;
         }
 
         /// <summary>

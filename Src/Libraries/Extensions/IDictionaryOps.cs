@@ -877,18 +877,22 @@ namespace IronRuby.Builtins {
                     return MutableString.CreateAscii("{...}");
                 }
 
-                // US-ASCII until an inspected key or value brings another encoding, as for Array#inspect.
+                // MRI's inspect_i: US-ASCII, then the encoding of the first key as it is written
+                // (a Symbol key's name, any other key's inspection), with the rest appended as
+                // any string is - ASCII only text leaves the encoding alone.
                 MutableString str = MutableString.CreateMutable(RubyEncoding.Ascii);
                 str.Append('{');
                 bool first = true;
                 foreach (var entry in entries) {
+                    object key = CustomStringDictionary.ObjToNull(entry.Key);
+                    MutableString keyText = (key is RubySymbol) ? null : context.Inspect(key);
                     if (first) {
                         first = false;
+                        str.ForceEncoding((keyText ?? ((RubySymbol)key).String).Encoding);
                     } else {
                         str.Append(", ");
                     }
 
-                    object key = CustomStringDictionary.ObjToNull(entry.Key);
                     if (key is RubySymbol symbol) {
                         // MRI's symbol_key_needs_quote: bare when the symbol inspects bare and the name
                         // reads back as a label (not `a=`, `+`, `@a`, `$a`, `!`).
@@ -899,7 +903,7 @@ namespace IronRuby.Builtins {
                         AppendInspected(str, bare ? inspected.GetSlice(1) : context.Inspect(symbol.String));
                         str.Append(": ");
                     } else {
-                        AppendInspected(str, context.Inspect(key));
+                        AppendInspected(str, keyText);
                         str.Append(" => ");
                     }
                     AppendInspected(str, context.Inspect(entry.Value));
@@ -910,9 +914,6 @@ namespace IronRuby.Builtins {
         }
 
         private static void AppendInspected(MutableString/*!*/ str, MutableString/*!*/ item) {
-            if (str.Encoding == RubyEncoding.Ascii && item.Encoding != RubyEncoding.Ascii) {
-                str.ForceEncoding(item.Encoding);
-            }
             str.Append(item);
         }
         

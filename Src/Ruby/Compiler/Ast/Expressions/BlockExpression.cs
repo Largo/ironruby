@@ -40,7 +40,8 @@ namespace IronRuby.Compiler.Ast {
         internal BlockExpression(Statements/*!*/ statements, SourceSpan location)
             : base(location) {
             Assert.NotNull(statements);
-            Debug.Assert(statements.Count > 1);
+            // One statement only for a parenthesized `self` (PrismAstBridge), which must not read as a bare one.
+            Debug.Assert(statements.Count >= 1);
 
             _statements = statements;
         }

@@ -24,7 +24,12 @@ namespace IronRuby.Builtins {
     public static class MethodOps {
         [RubyMethod("==")]
         [RubyMethod("eql?")]
-        public static bool Equal(RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
+        public static bool Equal(RubyContext/*!*/ context, RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
+            // method_eq compares CLASS_OF first: a Method given a singleton method of its own is
+            // no longer equal to the one it was made like.
+            if (context.GetImmediateClassOf(self) != context.GetImmediateClassOf(other)) {
+                return false;
+            }
             // two method_missing-backed methods share one info, so only the name tells them apart
             return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info)
                 && (!self.IsMethodMissing || self.Name == other.Name);
@@ -66,6 +71,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
+            // A method only respond_to_missing? vouches for belongs to the receiver's class (its
+            // singleton class if it had one) as it was when the Method was made, which is what
+            // mnew_missing stores, not to the method_missing that would run it.
+            if (self.IsMethodMissing) {
+                return self.MethodMissingOwner;
+            }
             return self.Info.AliasOwner ?? self.Info.DeclaringModule ?? self.GetTargetClass();
         }
 
@@ -96,7 +107,7 @@ namespace IronRuby.Builtins {
             // whether or not one had been created yet, and MRI's description says so
             var module = self.Target as RubyModule;
             return UnboundMethod.ToS(context, self.Name, self.Info,
-                module != null ? module.GetOrCreateSingletonClass() : self.GetTargetClass(), "Method",
+                self.LookupModule ?? (module != null ? module.GetOrCreateSingletonClass() : self.GetTargetClass()), "Method",
                 self.IsMethodMissing);
         }
 
@@ -122,17 +133,16 @@ namespace IronRuby.Builtins {
             string name = self.Info.OriginalName ?? self.Name;
 
             var targetClass = context.GetImmediateClassOf(self.Target);
-            MethodResolutionResult result;
-            using (context.ClassHierarchyLocker()) {
-                result = targetClass.ResolveSuperMethodNoLock(name, owner);
-            }
-
+            MethodResolutionResult result = targetClass.ResolveSuperMethodForReflection(name, owner);
             return result.Found ? new RubyMethod(self.Target, result.Info, name) : null;
         }
 
         [RubyMethod("unbind")]
         public static UnboundMethod/*!*/ Unbind(RubyMethod/*!*/ self) {
-            return new UnboundMethod(self.GetTargetClass(), self.Name, self.Info, self.IsMethodMissing);
+            return new UnboundMethod(
+                self.IsMethodMissing ? self.MethodMissingOwner : self.GetTargetClass(),
+                self.Name, self.Info, self.IsMethodMissing
+            );
         }
 
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {

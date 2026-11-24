@@ -95,7 +95,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The receiver has to be a kind of the module the method is *defined* in, not of the one
+        /// The receiver has to be a kind of the method's #owner (mostly the module it is defined in), not of the one
         /// it was extracted from: Child.instance_method(:inherited_one) binds to any Parent, which
         /// constraining on Child would refuse. Since Ruby 3.0 (Feature #15608) a method whose owner
         /// is a module rather than a class binds to anything at all.
@@ -103,17 +103,28 @@ namespace IronRuby.Builtins {
         [RubyMethod("bind")]
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
-            RubyModule constraint = self._info.DeclaringModule ?? self._targetConstraint;
+            // MRI checks against the method's #owner: an alias, or a `public :m' in a subclass, binds only
+            // to instances of the class it is in
+            RubyModule constraint = GetOwner(self);
+            // a refinement's method binds to what the refinement refines (Feature #14223)
+            if (constraint.IsRefinement && constraint.RefinedModule != null) {
+                constraint = constraint.RefinedModule;
+            }
 
             if (constraint.IsClass && !context.IsKindOf(target, constraint)) {
                 throw RubyExceptions.CreateTypeError(
-                    "bind argument must be an instance of {0}", constraint.GetNonNullName(context)
+                    "bind argument must be an instance of {0}", context.GetModuleMessageName(constraint)
                 );
             }
             
-            return self._isMethodMissing
-                ? RubyMethod.CreateMethodMissing(target, self._info, self._name)
-                : new RubyMethod(target, self._info, self._name);
+            if (self._isMethodMissing) {
+                return RubyMethod.CreateMethodMissing(target, self._info, self._name, self._targetConstraint);
+            }
+            var result = new RubyMethod(target, self._info, self._name);
+            if (!constraint.IsClass) {
+                result.LookupModule = constraint;
+            }
+            return result;
         }
 
         /// <summary>
@@ -130,11 +141,7 @@ namespace IronRuby.Builtins {
             // an alias resolves super under the name the body was written with
             string name = self._info.OriginalName ?? self._name;
 
-            MethodResolutionResult result;
-            using (context.ClassHierarchyLocker()) {
-                result = self._targetConstraint.ResolveSuperMethodNoLock(name, owner);
-            }
-
+            MethodResolutionResult result = self._targetConstraint.ResolveSuperMethodForReflection(name, owner);
             return result.Found ? new UnboundMethod(self._targetConstraint, name, result.Info) : null;
         }
 
@@ -165,6 +172,9 @@ namespace IronRuby.Builtins {
         // the class the method was looked up on.
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(UnboundMethod/*!*/ self) {
+            if (self._isMethodMissing) {
+                return self._targetConstraint;
+            }
             return self._info.AliasOwner ?? self._info.DeclaringModule ?? self._targetConstraint;
         }
 
@@ -222,13 +232,13 @@ namespace IronRuby.Builtins {
                 var targetSingleton = targetModule as RubyClass;
                 var targetAttached = (targetSingleton != null && targetSingleton.IsSingletonClass) ? targetSingleton.SingletonClassOf as RubyModule : null;
                 if (attachedModule != null && targetAttached != null && !ReferenceEquals(targetAttached, attachedModule)) {
-                    result.Append(targetAttached.GetDisplayName(context, false));
+                    result.Append(InspectModule(context, targetAttached));
                     result.Append('(');
-                    result.Append(attachedModule.GetDisplayName(context, false));
+                    result.Append(InspectModule(context, attachedModule));
                     result.Append(')');
                 } else {
                     result.Append(attachedModule != null
-                        ? attachedModule.GetDisplayName(context, false)
+                        ? InspectModule(context, attachedModule)
                         : context.Inspect(attached));
                 }
                 result.Append('.');
@@ -239,10 +249,10 @@ namespace IronRuby.Builtins {
                     origin = context.GetClassOf(originSingleton.SingletonClassOf);
                 }
 
-                result.Append(origin.GetDisplayName(context, false));
+                result.Append(InspectModule(context, origin));
                 if (!ReferenceEquals(origin, declaringModule)) {
                     result.Append('(');
-                    result.Append(declaringModule.GetDisplayName(context, false));
+                    result.Append(InspectModule(context, declaringModule));
                     result.Append(')');
                 }
                 result.Append('#');
@@ -273,6 +283,16 @@ namespace IronRuby.Builtins {
 
             result.Append('>');
             return result; 
+        }
+
+        // method_inspect writes each module with rb_inspect, so an anonymous one that says what it is
+        // (EnvUtil.labeled_class) is shown by what it says rather than as #<Class:0x...>.
+        private static MutableString/*!*/ InspectModule(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            // and what its #inspect raises goes to the caller, as from rb_inspect
+            if (module.Name == null && !module.IsSingletonClass) {
+                return context.Inspect(module);
+            }
+            return module.GetDisplayName(context, false);
         }
 
         [RubyMethod("of")]

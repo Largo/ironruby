@@ -77,6 +77,13 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateArgumentError("no method name given");
         }
 
+        // rb_method_missing checks the name before anything else
+        [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
+        public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, object name, params object[]/*!*/ args) {
+            throw RubyExceptions.CreateArgumentError("method name must be a Symbol but {0} is given",
+                context.GetClassOf(name).GetNonNullName(context));
+        }
+
         #endregion
 
         #region __send__

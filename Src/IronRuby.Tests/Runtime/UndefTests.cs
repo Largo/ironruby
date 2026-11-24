@@ -321,5 +321,25 @@ false
 undefined method 'initialize' for an instance of Object
 ");
         }
+
+        /// <summary>
+        /// A call of method_missing where it has been undefined is answered as BasicObject#method_missing would answer it:
+        /// MRI's method_missing() goes to raise_method_missing with the call's own arguments.
+        /// </summary>
+        public void UndefMethodMissing1() {
+            TestOutput(@"
+c = Class.new { undef_method(:method_missing) }
+o = c.new
+begin; o.method_missing; rescue NameError, ArgumentError => e; p [e.class, e.message]; end
+begin; o.method_missing(""foo""); rescue NameError, ArgumentError => e; p [e.class, e.message]; end
+begin; o.method_missing(:foo, 1); rescue NameError, ArgumentError => e; p [e.class, e.name, e.args]; end
+begin; o.bar; rescue NameError, ArgumentError => e; p [e.class, e.name]; end
+", @"
+[ArgumentError, ""no method name given""]
+[ArgumentError, ""method name must be a Symbol but String is given""]
+[NoMethodError, :foo, [1]]
+[NoMethodError, :bar]
+");
+        }
     }
 }
