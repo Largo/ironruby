@@ -71,13 +71,19 @@ namespace IronRuby.Runtime.Calls {
         // would read the scope - its value or its expression - returns RubyOps.LightScopeRequired instead, and the method
         // makes its scope and repeats the call on an ordinary site (see CallArguments.ScopeRead).
         HasLightScope = 1024,
+
+        // CallAction only: the splatted argument is an array the call site made for this call - `f(*a, x)', `f(*a, *b)' -
+        // which nothing else refers to. A rule may then give it to the callee as its rest parameter instead of copying it
+        // (ArgsBuilder.AddCallArguments). Not a site that splats an array of the program's own (`f(*a)'), which the callee
+        // must not share.
+        HasFreshSplat = 2048,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 11;
+        private const int FlagsCount = 12;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -97,6 +103,7 @@ namespace IronRuby.Runtime.Calls {
         public bool IsVariableCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVariableCall) != 0; } }
         public bool HasSourceBlock { get { return (_countAndFlags & (uint)RubyCallFlags.HasSourceBlock) != 0; } }
         public bool HasLightScope { get { return (_countAndFlags & (uint)RubyCallFlags.HasLightScope) != 0; } }
+        public bool HasFreshSplat { get { return (_countAndFlags & (uint)RubyCallFlags.HasFreshSplat) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }
@@ -181,7 +188,7 @@ namespace IronRuby.Runtime.Calls {
                 (IsVirtualCall ? "V" : "") +
                 (HasLightScope ? "L" : HasScope ? "S" : "C") +
                 (ResolveOnly ? "?" : "," + ArgumentCount.ToString()) + 
-                (HasSplattedArgument ? "*" : "") + 
+                (HasSplattedArgument ? (HasFreshSplat ? "*+" : "*") : "") + 
                 (HasBlock ? "&" : "") + 
                 (HasRhsArgument ? "=" : "") +
             ")";
