@@ -83,6 +83,14 @@ class Q7                 # what respond_to_missing? is asked
   def method_missing(m, *a) = m == :to_s ? "<q7>" : super
 end
 [Q1, Q2, Q3, Q4, Q5, Q6, Q7].each { |c| t(c.name) { ERB::Escape.html_escape(c.new) } }
+class Q8 < BasicObject   # respond_to? defines the to_s it says yes to: found on the first call
+  def respond_to?(m, priv = false)
+    return false unless m == :to_s
+    (class << self; self; end).send(:define_method, :to_s) { "<q8>" }
+    true
+  end
+end
+t("Q8") { ERB::Escape.html_escape(Q8.new) }
 p $log
 class SubS < String; end
 plain = "no entities"

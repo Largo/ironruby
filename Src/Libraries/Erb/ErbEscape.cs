@@ -136,6 +136,9 @@ namespace IronRuby.StandardLibrary.Erb {
                         throw CannotConvert(context, value);
                     }
                     saidYes = true;
+                    // the respond_to? may have defined a singleton #to_s, which made the object a singleton class
+                    // of its own: CRuby looks the method up on the object again after the probe
+                    cls = context.GetImmediateClassOf(value);
                 }
 
                 if (!cls.ResolveMethod("to_s", VisibilityContext.AllVisible).Found) {
