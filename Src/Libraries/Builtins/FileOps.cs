@@ -126,7 +126,7 @@ namespace IronRuby.Builtins {
                     permissions = p.Value;
                 }
             }
-            info.RequireBinmodeForAsciiIncompatible();
+            info.RequireBinmodeForAsciiIncompatible(context);
             self.ConversionOptions = RubyIOOps.AddTextModeDecorator(context, info, options);
             
             // descriptor or path:
@@ -1253,10 +1253,14 @@ namespace IronRuby.Builtins {
                         if (visitedLists == null) {
                             visitedLists = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
                         }
+                        // MRI joins the nested array into a string of its own first, which is then
+                        // joined like any other part: File.join("a//", ["", "b"]) is "a/b".
                         visitedLists.Add(nested, true);
-                        JoinList(toPath, nested, ref result, ref current, visitedLists);
+                        MutableString nestedResult = null;
+                        int nestedCurrent = 0;
+                        JoinList(toPath, nested, ref nestedResult, ref nestedCurrent, visitedLists);
                         visitedLists.Remove(nested);
-                        continue;
+                        str = nestedResult ?? MutableString.FrozenEmpty;
                     }
                 } else if (part == null) {
                     throw RubyExceptions.CreateImplicitConversionError("NilClass", "String");
@@ -1994,7 +1998,10 @@ namespace IronRuby.Builtins {
             // An IO reopened to a File becomes a File without being a RubyFile: its path is the
             // one the IO keeps.
             if (!(self is RubyFile)) {
-                return RubyIOOps.GetIOPath(self);
+                // A copy, as MRI's rb_io_path gives (rb_str_dup): changing it must not move
+                // the path the IO's lstat and errors use.
+                MutableString path = RubyIOOps.GetIOPath(self);
+                return (path != null) ? path.Clone() : null;
             }
             return GetPath((RubyFile)self);
         }
@@ -2122,9 +2129,10 @@ namespace IronRuby.Builtins {
                 // was opened with instead, as File.stat does there; a file renamed or deleted
                 // since it was opened cannot be stat'd this way, which is Windows' own limit too.
                 if (!Posix.IsAvailable) {
-                    var file = io as RubyFile;
-                    if (file != null && file.Path != null) {
-                        return Create(io.Context, file.Path);
+                    // FilePathOf, so that an IO reopened to a File answers from its path too.
+                    string path = FilePathOf(io);
+                    if (path != null) {
+                        return Create(io.Context, path);
                     }
                 }
 

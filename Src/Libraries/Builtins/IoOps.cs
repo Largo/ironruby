@@ -171,7 +171,7 @@ namespace IronRuby.Builtins {
             if (!desc.HasValue) {
                 throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Integer");
             }
-            info.RequireBinmodeForAsciiIncompatible();
+            info.RequireBinmodeForAsciiIncompatible(context);
             Reinitialize(self, desc.Value, info);
             self.ConversionOptions = AddTextModeDecorator(context, info, options);
 
@@ -265,22 +265,18 @@ namespace IronRuby.Builtins {
             // IO.popen(cmd, "r+") reads one pipe and writes another. MRI's copy dups both (the
             // write half is a second IO tied to the first), so that the copy can close_write;
             // duplicating only the reading pipe made it a read-only IO that refused to.
-            int duplexRead, duplexWrite;
-            Stream duplex = RubyIO.TryDuplicateDuplex(source, out duplexRead, out duplexWrite);
+            int duplexRead, duplexWrite, errno;
+            Stream duplex = RubyIO.TryDuplicateDuplex(source, out duplexRead, out duplexWrite, out errno);
+            if (errno != 0) {
+                throw Posix.Error(errno, null, self.Context);
+            }
             int duplicated = (duplex != null) ? -1 : RubyIO.TryDuplicateDescriptor(source);
             if (duplex != null) {
-                if (duplexRead >= 0) {
-                    RubyProcess.SetCloseOnExec(duplexRead);
-                }
-                if (duplexWrite >= 0) {
-                    RubyProcess.SetCloseOnExec(duplexWrite);
-                }
                 stream = duplex;
                 descriptor = self.Context.AllocateFileDescriptor(stream);
             } else if (duplicated >= 0) {
-                // dup(2) hands back a descriptor without FD_CLOEXEC whatever the original had;
-                // MRI's #dup sets it, so a child never inherits a copy nobody meant to give it.
-                RubyProcess.SetCloseOnExec(duplicated);
+                // TryDuplicateDescriptor made it close-on-exec, whatever the original had, as
+                // MRI's #dup does, so a child never inherits a copy nobody meant to give it.
                 stream = new FileStream(
                     new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)duplicated, true),
                     source.Mode.CanWrite() ? (source.Mode.CanRead() ? FileAccess.ReadWrite : FileAccess.Write) : FileAccess.Read,
@@ -475,10 +471,17 @@ namespace IronRuby.Builtins {
             if (options != null) {
                 info = info.AddOptions(toStr, options);
             }
+            // MRI's rb_io_reopen replaces the conversion settings only when a mode or options
+            // came with the path; reopened by path alone, the stream keeps its own.
+            bool configured = (mode != Missing.Value && mode != null) || options != null;
             if (!info.HasMode) {
                 info = new IOInfo(ReopenMode(self.Mode), info.ExternalEncoding, info.InternalEncoding);
             }
-            return Reopen(toPath, self, path, info);
+            Reopen(toPath, self, path, info);
+            if (configured) {
+                self.ConversionOptions = AddTextModeDecorator(self.Context, info, options);
+            }
+            return self;
         }
 
         /// <summary>
@@ -499,14 +502,22 @@ namespace IronRuby.Builtins {
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
-            // reopened by path, an IO answers that path (a File keeps its own)
-            if (!(io is RubyFile)) {
+            // reopened by path, an IO answers that path, and so does a File (MRI's rb_io_reopen
+            // replaces fptr->pathv), whose #lstat then looks at the new one
+            var file = io as RubyFile;
+            if (file != null) {
+                file.Path = io.Context.DecodePath(path);
+                file.PathEncoding = path.Encoding;
+            } else {
                 SetIOPath(io, path.Clone());
             }
             if (io.Closed) {
                 // Reopening a closed stream with a path is how it is brought back to life, so
                 // this one needs a descriptor again rather than the IOError a read would get.
                 io.Reset(newStream, info.Mode);
+                if (info.HasEncoding) {
+                    io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
+                }
                 return io;
             }
 
@@ -2629,6 +2640,12 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("encoding mismatch: {0} IO with {1} RS",
                     readEncoding.Name, separator.Encoding.Name);
             }
+            if (ascii && self.Enc2 == null && !readEncoding.IsAsciiIdentity && !readEncoding.IsDummy && separator.Encoding != readEncoding) {
+                // The default separator, in a wide encoding read as it is (prepare_getline_args
+                // makes it "\n" in the IO's encoding): the byte 0x0A on its own is no line end
+                // there, but half of one or part of another character.
+                return MutableString.CreateBinary(readEncoding.StrictEncoding.GetBytes("\n"), readEncoding);
+            }
             if (ascii || self.Enc2 == null || self.Enc2.IsDummy || !self.Enc2.IsAsciiIdentity) {
                 return separator;
             }
@@ -2728,6 +2745,13 @@ namespace IronRuby.Builtins {
                 line = site.Target(site, self, line) as MutableString ?? line;
             }
             if (chomp) {
+                RubyEncoding encoding = line.Encoding;
+                if (separator != null && !separator.IsEmpty && separator.IsAscii() && separator.Encoding != encoding &&
+                    !encoding.IsAsciiIdentity && !encoding.IsDummy) {
+                    // the default separator, which a wide line ends with as a character of its own
+                    // encoding (SeparatorToRead)
+                    separator = MutableString.CreateBinary(encoding.StrictEncoding.GetBytes(separator.ConvertToString()), encoding);
+                }
                 ChompLine(line, separator);
             }
             return line;
@@ -3550,6 +3574,7 @@ namespace IronRuby.Builtins {
             bool readPartial = false;
             long restorePosition = -1;
             RubyIO dstIO = null;
+            bool copied = false;
 
             try {
                 // Each side on its own: an IO (or what #to_io gives, as for a Tempfile) is read or
@@ -3583,6 +3608,7 @@ namespace IronRuby.Builtins {
                     // written through the IO, which gives back what it had read ahead and goes to
                     // the end of a file opened for appending
                     dstIO.GetWritableStream();
+                    AsciiBinmode(dstIO);
                 } else {
                     var dstPath = toPathSite.Target(toPathSite, dst);
                     if (dstPath != null) {
@@ -3672,6 +3698,7 @@ namespace IronRuby.Builtins {
                     bytesCopied += bytesRead;
                     remaining -= bytesRead;
                 }
+                copied = true;
                 return Protocols.Normalize(bytesCopied);
 
             } finally {
@@ -3684,9 +3711,31 @@ namespace IronRuby.Builtins {
                 if (ownsDst) {
                     dstStream.Dispose();
                 } else if (dstIO != null && !dstIO.Closed) {
-                    dstIO.Flush();
+                    if (copied) {
+                        dstIO.Flush();
+                    } else {
+                        // The error that stopped the copy is the one to report, not a failure to
+                        // flush what it had written before it.
+                        try {
+                            dstIO.Flush();
+                        } catch (Exception) {
+                        }
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// MRI's io_ascii8bit_binmode, which copy_stream applies to an IO it writes to: binary
+        /// mode, ASCII-8BIT and no conversion, so later writes are not transcoded either.
+        /// </summary>
+        private static void AsciiBinmode(RubyIO/*!*/ io) {
+            io.ClearPendingChars();
+            io.PreserveEndOfLines = true;
+            io.SetEncodings(RubyEncoding.Binary, null);
+            io.ConversionOptions = null;
+            // where the prelude's IO#binmode records it
+            io.Context.SetInstanceVariable(io, RubyUtils.GetCoreStateInstanceVariableName("@__binmode__"), ScriptingRuntimeHelpers.True);
         }
 
         private static bool MayNameFile(RespondToStorage/*!*/ respondTo, object obj) {

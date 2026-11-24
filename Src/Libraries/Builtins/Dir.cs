@@ -164,16 +164,26 @@ namespace IronRuby.Builtins {
                 return 0;
             }
 
-            string current = pal.CurrentDirectory;
-            SetCurrentDirectory(pal, strDir);
-            ChdirEnter(context);
+            // The block is this thread's from here on (ChdirAloneBlock entered it), so a chdir in
+            // another thread fails until the directory is back, or until changing it has failed.
+            string current;
+            try {
+                current = pal.CurrentDirectory;
+                SetCurrentDirectory(pal, strDir);
+            } catch {
+                ChdirLeave(context);
+                throw;
+            }
             try {
                 object result;
                 block.Yield(dir, out result);
                 return result;
             } finally {
-                ChdirLeave(context);
-                SetCurrentDirectory(pal, current);
+                try {
+                    SetCurrentDirectory(pal, current);
+                } finally {
+                    ChdirLeave(context);
+                }
             }
         }
 
@@ -198,54 +208,49 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// MRI's chdir_alone_block_p: whether this chdir is a block of its own, after refusing it
         /// in a thread other than the one whose block is running, and warning about a chdir
-        /// without a block inside one.
+        /// without a block inside one. A block is entered (MRI's chdir_enter) here, under the
+        /// same lock as the check: MRI enters it once the directory has changed, but with no GVL
+        /// two threads could then both pass the check and both change directory. The caller
+        /// leaves it (ChdirLeave) once the directory is restored, or if changing it fails.
         /// </summary>
         private static bool ChdirAloneBlock(RubyContext/*!*/ context, bool blockGiven) {
             var chdirLock = GetChdirLock(context);
-            string path;
-            int line;
+            string path = null;
+            int line = 0;
             lock (chdirLock.Sync) {
                 if (chdirLock.Blocking == 0) {
-                    return blockGiven;
-                }
-                if (chdirLock.Thread != System.Threading.Thread.CurrentThread) {
+                    if (!blockGiven) {
+                        return false;
+                    }
+                    chdirLock.Blocking = 1;
+                    chdirLock.Thread = System.Threading.Thread.CurrentThread;
+                } else if (chdirLock.Thread != System.Threading.Thread.CurrentThread) {
                     throw RubyExceptions.CreateRuntimeError("conflicting chdir during another chdir block");
-                }
-                if (blockGiven) {
+                } else if (blockGiven) {
+                    chdirLock.Blocking++;
                     return true;
+                } else {
+                    path = chdirLock.Path;
+                    line = chdirLock.Line;
                 }
-                path = chdirLock.Path;
-                line = chdirLock.Line;
             }
+
+            if (blockGiven) {
+                // The outermost block's place is named in the warnings; finding it may walk the
+                // stack, which is not done holding the lock. Only this thread reads it meanwhile.
+                if (RubyUtils.TryGetCallerSourceLocation(context, out path, out line)) {
+                    lock (chdirLock.Sync) {
+                        chdirLock.Path = path;
+                        chdirLock.Line = line;
+                    }
+                }
+                return true;
+            }
+
             context.ReportWarning(path != null
                 ? String.Format("conflicting chdir during another chdir block\n{0}:{1}: note: previous chdir was here", path, line)
                 : "conflicting chdir during another chdir block");
             return false;
-        }
-
-        private static void ChdirEnter(RubyContext/*!*/ context) {
-            var chdirLock = GetChdirLock(context);
-            string path = null;
-            int line = 0;
-            bool outermost;
-            lock (chdirLock.Sync) {
-                outermost = chdirLock.Blocking == 0;
-            }
-            // The outermost block's place is named in the warnings; finding it may walk the stack,
-            // which is not done holding the lock.
-            if (outermost && !RubyUtils.TryGetCallerSourceLocation(context, out path, out line)) {
-                path = null;
-            }
-            lock (chdirLock.Sync) {
-                if (chdirLock.Blocking == 0) {
-                    chdirLock.Path = path;
-                    chdirLock.Line = line;
-                }
-                chdirLock.Blocking++;
-                if (chdirLock.Thread == null) {
-                    chdirLock.Thread = System.Threading.Thread.CurrentThread;
-                }
-            }
         }
 
         private static void ChdirLeave(RubyContext/*!*/ context) {
@@ -294,53 +299,64 @@ namespace IronRuby.Builtins {
                 throw Unimplemented("fchdir");
             }
 
+            // With a block, the block is this thread's from here on (ChdirAloneBlock entered it),
+            // until the directory is back or changing it has failed.
             ChdirAloneBlock(self.Context, block != null);
 
             var pal = self.Context.Platform;
-            string current = block != null ? pal.CurrentDirectory : null;
-
+            string current = null;
             int errno;
             // MRI keeps a descriptor of the directory it came from and fchdirs back to it, so the
             // block may even remove that directory without the way back failing.
             int savedFd = -1;
-            if (block != null) {
-                savedFd = Posix.Open(".", Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
-            }
-
-            if (Posix.FChDir(fd, out errno) != 0) {
-                if (savedFd >= 0) {
-                    int closeErrno;
-                    Posix.Close(savedFd, out closeErrno);
+            try {
+                if (block != null) {
+                    current = pal.CurrentDirectory;
+                    savedFd = Posix.Open(".", Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
                 }
-                throw SyscallError(errno, "fchdir");
-            }
 
-            // The process directory moved behind the PAL's back, which keeps its own idea of it.
-            SyncCurrentDirectory(pal);
+                if (Posix.FChDir(fd, out errno) != 0) {
+                    throw SyscallError(errno, "fchdir");
+                }
+
+                // The process directory moved behind the PAL's back, which keeps its own idea of it.
+                SyncCurrentDirectory(pal);
+            } catch {
+                if (block != null) {
+                    if (savedFd >= 0) {
+                        int closeErrno;
+                        Posix.Close(savedFd, out closeErrno);
+                    }
+                    ChdirLeave(self.Context);
+                }
+                throw;
+            }
 
             if (block == null) {
                 return 0;
             }
 
-            ChdirEnter(self.Context);
             try {
                 object result;
                 block.Yield(out result);
                 return result;
             } finally {
-                ChdirLeave(self.Context);
-                if (savedFd >= 0 && Posix.FChDir(savedFd, out errno) == 0) {
-                    try {
-                        SyncCurrentDirectory(pal);
-                    } catch (IOException) {
-                        // the directory we are back in no longer exists and has no path
-                    }
-                    Posix.Close(savedFd, out errno);
-                } else {
-                    if (savedFd >= 0) {
+                try {
+                    if (savedFd >= 0 && Posix.FChDir(savedFd, out errno) == 0) {
+                        try {
+                            SyncCurrentDirectory(pal);
+                        } catch (IOException) {
+                            // the directory we are back in no longer exists and has no path
+                        }
                         Posix.Close(savedFd, out errno);
+                    } else {
+                        if (savedFd >= 0) {
+                            Posix.Close(savedFd, out errno);
+                        }
+                        pal.CurrentDirectory = current;
                     }
-                    pal.CurrentDirectory = current;
+                } finally {
+                    ChdirLeave(self.Context);
                 }
             }
         }
