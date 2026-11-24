@@ -1224,8 +1224,6 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return AreScopeFree(superCall.Arguments, blockLiterals, why);
                 }
-                // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
-                // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 // `defined?(_.m)', Forwardable's guard: a site that only resolves the name (MethodCall.TransformDefinedCondition)
                 // on the receiver, which is evaluated, and not the arguments. Light, it looks for a public method; anything else -
                 // a protected or a missing one, respond_to_missing? - is asked again with the scope made on demand
@@ -1238,6 +1236,8 @@ namespace IronRuby.Compiler.Ast {
                     }
                     return IsScopeFree(definedCall.Target, blockLiterals, why);
                 }
+                // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
+                // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
                 var call = node as MethodCall;
                 if (call != null) {
                     if (!LightRegexAll && HasRegexLiteral(call.Target, call.Arguments) && RegexScopeMethods.Contains(call.MethodName)) {
