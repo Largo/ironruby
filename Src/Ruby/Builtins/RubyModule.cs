@@ -869,6 +869,13 @@ namespace IronRuby.Builtins {
             // a const_get of the copy made before this (an initialize_copy that reads a constant
             // before super) found it in the empty table (RubyUtils.GetConstant)
             ConstGetCache = null;
+            if (_constants != null && _constants.Count > 0) {
+                // So did a lookup through any module the unfinished copy was mixed into or nested
+                // under, and such a lookup may be cached in that module or at a call site: the copy's
+                // constants are new constants to all of them. A copy with none (the singleton class
+                // of an ordinary object being dup'ed) changes nothing and leaves the caches alone.
+                Context.ConstantsChanged();
+            }
             _constantEncodings = (module._constantEncodings != null) ?
                 new Dictionary<string, RubyEncoding>(module._constantEncodings) : null;
             _constantLocations = (module._constantLocations != null) ?

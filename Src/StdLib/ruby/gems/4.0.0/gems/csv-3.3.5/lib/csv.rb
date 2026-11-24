@@ -2991,18 +2991,30 @@ class CSV
   private_constant :BUILTIN_CONVERTERS
 
   # IronRuby: whether a parse runs only code that cannot tell which fiber it runs on: input
-  # from a StringIO (CSV.parse's), the built-in converters, a plain Regexp or a String
-  # skip_lines (a String becomes a Regexp; a Regexp subclass's own match? could tell), and
-  # not under $VERBOSE (a converter's Float() can warn, and Warning.warn could tell) - and
-  # only where #read would come to CSV's own #each through Enumerable#to_a, which a subclass
-  # or a singleton method may have replaced.
+  # from a StringIO (CSV.parse's) with no methods of its own (a singleton read is called by
+  # the parser), the built-in converters, a plain Regexp or a String skip_lines (a String
+  # becomes a Regexp; a Regexp subclass's own match? could tell), and not under $VERBOSE (a
+  # converter's Float() can warn, and Warning.warn could tell) - and only where #read would
+  # come to CSV's own #each through Enumerable#to_a, which a subclass or a singleton method
+  # may have replaced.
   def parse_on_this_fiber?
     !$VERBOSE and
       method(:each).owner.equal?(CSV) and method(:to_a).owner.equal?(Enumerable) and
-      @io.instance_of?(StringIO) and
+      @io.instance_of?(StringIO) and @io.singleton_methods.empty? and
       (parser.skip_lines.nil? or parser.skip_lines.instance_of?(Regexp) or parser.skip_lines.is_a?(String)) and
-      parser_fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } } and
-      header_fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } }
+      builtin_converters_only?(parser_fields_converter) and
+      builtin_converters_only?(header_fields_converter)
+  end
+
+  # IronRuby: FieldsConverter#convert puts nil_value and empty_value in place of a field before
+  # it runs the converters, and a built-in converter calls the value's encode: only nil or a
+  # plain String (the defaults are nil and "") cannot run code of the program's own there.
+  def builtin_converters_only?(fields_converter)
+    return true if fields_converter.empty?
+    fields_converter.all? { |c| BUILTIN_CONVERTERS.any? { |b| b.equal?(c) } } and
+      @base_fields_converter_options.each_value.all? { |v|
+        v.nil? or (v.instance_of?(String) and v.singleton_methods.empty?)
+      }
   end
 
   def parser_enumerator

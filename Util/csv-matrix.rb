@@ -92,3 +92,13 @@ $VERBOSE = true
 p CSV.parse("1e400,2\n", converters: :float), Thread.current[:review_warned].inspect
 $VERBOSE = review_old_verbose
 module Warning; class << self; alias warn review_orig_warn; end; end
+
+# Review of round 36: a StringIO with a singleton read (the parser calls it), and a nil_value
+# or empty_value whose encode a built-in converter calls, run on the fiber CRuby runs them on.
+Thread.current[:review_csvm2] = true
+review_io = StringIO.new("raw\n"); def review_io.read(*) = (s = super; Thread.current[:review_csvm2] ? s&.upcase : s)
+p CSV.new(review_io, row_sep: "\n", quote_char: nil).read
+review_nil = Object.new; def review_nil.encode(*) = (Thread.current[:review_csvm2] ? "2" : "1")
+p CSV.parse(",\n", converters: :integer, nil_value: review_nil)
+p CSV.parse("\"\",\"\"\n", converters: :integer, empty_value: review_nil)
+p CSV.parse(",\"\"\n", converters: :integer, nil_value: "3", empty_value: "4")
