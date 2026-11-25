@@ -2907,27 +2907,61 @@ namespace IronRuby.Builtins {
             bool skipHidden = skipHiddenRef;
             bool foundCallerSelf = foundCallerSelfRef;
             bool passedScopedExtensions = passedScopedExtensionsRef;
+            bool virtualLookup = (options & MethodLookup.Virtual) != 0;
             var refinementBuffer = new List<RubyModule>();
 
-            bool found = ForEachAncestor((module) => {
+            bool FindInRefinementsOf(RubyModule/*!*/ module) {
                 refinementBuffer.Clear();
                 refinements.GetRefinementsOf(module, refinementBuffer);
                 foreach (RubyModule refinement in refinementBuffer) {
                     // a refinement is not in anyone's ancestors, so nothing else initializes it
                     refinement.InitializeMethodsNoLock();
                     owner = refinement;
-                    if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                    if (refinement.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) {
                         return true;
                     }
                 }
+                return false;
+            }
+
+            bool FindIn(RubyModule/*!*/ module) {
                 owner = module;
                 foundCallerSelf |= module == visibility.Class;
-                if (module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                if (module.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) {
                     return true;
                 }
                 passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
                 return false;
-            });
+            }
+
+            // ForEachAncestor's walk, with the refinements of a module searched ahead of the modules prepended to it,
+            // not just ahead of the module itself: CRuby leaves a refined method's entry in the module's own method
+            // table, which comes before its prepended modules (rb_method_entry_make moves every other kind of entry to
+            // the origin), so a refinement of Integer wins over a module prepended to Integer.
+            bool FindInModules(RubyModule[]/*!*/ modules) {
+                for (int i = 0; i < modules.Length; i++) {
+                    // an included or prepended module that has modules prepended to it follows them in the list
+                    for (int j = i + 1; j < modules.Length; j++) {
+                        RubyModule[] prepends = modules[j]._prepends;
+                        if (prepends.Length > 0 && prepends[0] == modules[i] && FindInRefinementsOf(modules[j])) return true;
+                    }
+                    if (FindInRefinementsOf(modules[i]) || FindIn(modules[i])) return true;
+                }
+                return false;
+            }
+
+            bool FindInDeclared(RubyModule/*!*/ module) {
+                return FindInRefinementsOf(module) || FindInModules(module._prepends) || FindIn(module) || FindInModules(module._mixins);
+            }
+
+            bool found = false;
+            if (IsClass) {
+                for (RubyClass c = (RubyClass)this; c != null && !found; c = c.SuperClass) {
+                    found = FindInDeclared(c);
+                }
+            } else {
+                found = FindInDeclared(this);
+            }
 
             skipHiddenRef = skipHidden;
             foundCallerSelfRef = foundCallerSelf;
@@ -3176,13 +3210,16 @@ namespace IronRuby.Builtins {
             bool foundModule = false;
             bool skipHidden = false;
 
-            // `super' from inside a refinement: the refinement behaves as if it were prepended to the
-            // module it refines, so super continues at that module *inclusive* rather than skipping it.
+            // `super' from inside a refinement: the refinement is searched ahead of the module it refines and of
+            // the modules prepended to it, so super continues at the first of those *inclusive*. For a refined
+            // class that is its first prepended module (CRuby's refinement_superclass is the class itself); for a
+            // refined module it is the module, past its prepended ones (there it is the module's origin).
             RubyModule refined = callerModule.RefinedModule;
             if (refined != null) {
                 InitializeMethodsNoLock();
+                RubyModule start = (refined.IsClass && refined._prepends.Length > 0) ? refined._prepends[0] : refined;
                 if (ForEachAncestor((module) => {
-                    foundModule |= module == refined;
+                    foundModule |= module == start;
                     if (!foundModule) {
                         return false;
                     }
