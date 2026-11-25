@@ -907,6 +907,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `(a..b).each` (40 B), a literal given to an iterator that is not known to only
     yield (`upto`, `any?`, `inject`, every Ruby-level one: no slot, the old price), and
     the half of the time that is not allocation.
+    Round thirty-six (perf/pwalk36, nothing kept but `Util/bench/pwalk36-shapes.rb`):
+    `prism_walk` is this gap - a call with a literal block from inside a block on every node
+    (`o.e { |c| s += c }` in a block 146 ns, CRuby 45), plus about 50 ns where one site sees
+    sixty receiver classes (`node.accept(self)`). A dispatcher chain of 64 instead of 8 made
+    the walk about 12% faster and a megamorphic call without a block 2.2 times slower:
+    reverted. A per-site table from class to dispatcher is worth at most about 10% of the
+    walk. `Prism.parse` itself (not in the shape) is 8 times CRuby's.
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
@@ -1213,6 +1220,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Round thirty-four (see Landed, perf/erb2): the parsed tree of an evaluated text is kept, so a
     template's parse and bridge cost 5 us instead of 72; `erb_eval` 0.77 of its time. Left: the
     transformation (~50 us) and light compile (~80 us) of every eval.
+    Round thirty-six (see Landed, perf/erb36): the compiled code of an eval'd text is kept
+    when a walk of its whole tree, blocks included, finds nothing that keeps state of one
+    eval (no regexp, range, flip-flop, END, `defined?`, `super`, `yield`, `def`, `class`,
+    `module`) - the screen perf/evalc lacked. `erb_result` 0.31-0.33 of its time, `eval_small`
+    0.40. Left: the binding's locals read by name (about 300 `GetLocalVariable` per render,
+    each under a lock), and an eval of a text the screen refuses costs what it did.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1241,6 +1254,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the resolution in a polymorphic rule's test, which remembers one rejected version only; and
     the lock that resolution takes inside a rule test.
 
+    Round thirty-six (perf/ostr36, rejected, shape file kept as `Util/bench/ostr36-shapes.rb`):
+    per OpenStruct, 23 `RuleVersionSet.IsValidFor` -> `TryShareVersion` (each
+    `define_singleton_method!` re-versions the singleton class, so every self call resolves
+    again under the hierarchy lock and the set's lock; about 0.5 us each, 11 us an object),
+    4 binds (1.3 us, not the problem), 12-20 KB allocated. Moving `Ractor.shareable_proc`'s
+    two ConditionalWeakTable entries onto the Proc measured nothing. Next idea: a lock-free
+    test for a singleton class with no mixins that does not define the name itself (it
+    resolves as its superclass), at most about 10%.
 33. **Three differences from CRuby in interpolation**, found by the probes of
     `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
     (the matrix avoids them); not speed gaps. When a part's `to_s` raises, the backtrace
@@ -1256,6 +1277,39 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `h.keys[0].frozen?` is true and it is not `k`); CRuby 4.0 keeps `k` itself, unfrozen,
     and copies only a plain String. The same with `h[k] = 1`. And `defined?({a: 1.nope})`
     is `"expression"` where CRuby says nil, as both say for `defined?([1.nope])`.
+
+35. **`Enumerator#next` and every other fiber switch cost 40 to 80 times CRuby's**: a fiber is
+    a thread here, and a switch is a handoff between two threads (about 20-40 us against 0.5).
+    Any library that takes items with `next` pays it twice per item: CSV#each did (round
+    thirty-five, perf/csv35, which reads without the enumerator where nothing can tell), and
+    `Enumerator::Lazy`, `Enumerator#peek` and external iteration in general still do. Also a
+    measuring trap: `app-shapes.rb` and `time-shapes.rb` time with the main thread's CPU
+    (`/proc/thread-self/schedstat`), so the work a fiber does is not counted there, and a change
+    that moves it back onto the main thread looks slower (`csv_parse` 1.37 and 0.94 of its time
+    in the round-35 gate, while process CPU fell to 0.18-0.37). `invoice-parts.rb` and
+    `csv-shapes.rb` use `CLOCK_PROCESS_CPUTIME_ID`, which counts the JIT's background threads
+    too. Untried: switching fibers without a thread (a continuation of the method JIT's own,
+    or a stackless form for the enumerators the prelude makes).
+36. **Left from round thirty-five**, each smaller than one gap of its own: `...` passed on is
+    still a splat of an Array and a block argument (`def m(...) = n(...)` allocates the rest
+    per call; the frame is light now); `URI::Generic#query=` and `merge` still run the
+    regexp-heavy checks per call (`merge` 1.1 times the round's base at N=1000, 0.87 at
+    5000: warm-up); the `const_get` cache of perf/dlg35 holds the value of a constant
+    removed after the lookup until the module's next `const_get` (a reference only: the
+    version check keeps it from being answered).
+    Round thirty-six (see Landed, perf/uri36): at a steady state (N=10000) `uri`'s parts are at
+    CRuby's but `to_s` (1.6x) and `decode` (2.2x, now 1.5x); at N=1000 most of the 2.7x is
+    warm-up - .NET's tier-1 recompiles run on a background thread that starves under load
+    (`DOTNET_TieredCompilation=0`: `uri` about half, start-up 1.6 -> 4.4 s; rejected). Read
+    `uri` at N=5000 or not at all. Left in `decode`: `partition` 2.3x, `each_line` with a
+    block 2.2x.
+37. **Two differences from CRuby found in round thirty-six**, not speed gaps. A private
+    method called from outside on an object whose class's `method_missing` calls `super`
+    raises "undefined method" (CRuby: "private method 'x' called"; OpenStruct's
+    `new_ostruct_member!` shows it): the reason does not reach BasicObject#method_missing
+    through `super`. And `Module#dup`/`clone` copies the constants in `super` of
+    `initialize_copy`, where CRuby has copied them before it (a `const_get` in an
+    `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
 
@@ -1280,6 +1334,121 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   PASSED on both (1,334). 36 matrices in five modes: 180 same, 0 differ. ruby/spec, all five
   suites: no failure the known list does not name. `ab.rb -i` on the rescue, keyword, loop and
   regex shapes: every row 0.95-1.04. Timing not run (load average up to 76 during the gate).
+
+- **Gate of 2026-11-24 for round thirty-six** (perf/erb36, perf/uri36; the shape files of
+  perf/pwalk36 and perf/ostr36): the branch at 0aaeec12 against c17dbfe9, Release net10.0:
+  **PASS**. IronRuby.Tests PASSED on both trees, no failure name on either. 18 matrices
+  (eval, uri, binding-lvar, caller, erb-escape, refinement, refinement-binding, block-given,
+  light-rest, jit-const, jit, string-methods, sdef, raise, full-message, encode, stdre,
+  hot-shapes) in four modes print what the baseline prints, but for the trees' paths;
+  `eval-matrix` and `uri-matrix` differ from CRuby only where the baseline does (a regexp
+  warning, `undump`). Probes of the eval cache against CRuby, cold and 3000 times hot: string,
+  frozen-string, range, regexp, rational and lambda literals one object per eval or not as
+  CRuby has them, in block parameters' defaults too; `__method__`, `return`/`break`/`next`,
+  bindings, new locals, constants by lexical module, a refinement activated in the same class
+  between two evals of the same text, a method made private and `Integer#+` redefined in the
+  middle, four threads. ruby/spec, all five suites (32,285 examples): no failure the known
+  list does not name (one `Socket.tcp ... :open_timeout` example failed under the sweep's load
+  and passed alone). The fourteen benchmarks verify. Timing: AWFY, 12 iterations, both orders:
+  geomean 0.996 and 1.008, no benchmark more than 5% slower in both. micro-table: `blkattr`
+  1.10 and 1.05, in eight alternating rounds of its own 1.00. `app-shapes.rb`: `erb_result`
+  0.31-0.33, the rest overlapping or in one order only (`csv_parse` 1.24 in the order that
+  started at load 6). Shape files: `erb_eval_top` 0.32, `erb_eval` 0.60, `eval_small` 0.40;
+  `chomp!` 0.30, `b` 0.73, `decode` 0.87. Bytes per iteration: geomean 0.998. Start-up (`-e
+  1`), 24 alternating runs each: best 1252 -> 1239 ms, median 1301 -> 1292.
+
+- **196bf522 (round thirty-five's review, after the gate) - CSV#read's fast path narrowed, and
+  `const_get`'s cache cleared on a module copy.** CodeRabbit found three ways to tell the
+  fiber-free `CSV#read` from CRuby's (a subclass's or a singleton `#each`, which CRuby's
+  `#read` reaches through `#to_a`; a Regexp subclass as `skip_lines`, whose `match?` sees the
+  enumerator fiber's locals; a `Warning.warn` handler under `$VERBOSE`, reached by the `:float`
+  converter for "1e400"), and a `const_get` cache that `Module#initialize_copy` replacing the
+  table did not clear. All four checked against CRuby 4.0 and fixed; `Util/csv-matrix.rb`
+  has the three CSV cases.
+
+- **perf/erb36 (round thirty-six, 2026-11-24, 8b6d119b, merged in 1d7c6151) - the compiled
+  code of an eval'd text is kept** (`EvalCodeCache`, gap 31), the idea perf/evalc was rejected
+  for, with the screen its rejection asked for: a walk of the whole tree, call blocks and the
+  right of a parallel assignment included, refuses any text with a regexp, range,
+  flip-flop, `END`, `defined?`, `super`, `yield`, `def`, `class` or `module`. Per runtime, 64
+  entries LRU under a lock; perf/evalc's key; not for a module eval, a keyword frame, an
+  isolated proc, Coverage, or a compile that warned. Each render of a template had transformed
+  (70 us) and light-compiled (130 us) the text afresh, and its blocks never reached the
+  compiler. `erb_result` of `app-shapes.rb` 0.31-0.33 of its time (CRuby 0.20 ms against 0.37),
+  192 -> 55 KB per render. `Util/eval-matrix.rb` rows 32-35.
+
+- **perf/uri36 (round thirty-six, 2026-11-24, 680aeca0, merged in b7745600) - `String#chomp!`
+  with an ASCII separator in place, and `String#b` in C#.** `URI.decode_www_form` chomps "&"
+  off every pair: the general path built the chomped copy and compared it with self (714 ns,
+  CRuby 149); an ASCII separator other than "\n" on an ASCII receiver is now checked for
+  frozen and removed in place (0.30 of its time). `String#b` made a copy and two
+  `force_encoding` calls in the prelude (0.73). `decode` 0.87. `Util/uri-matrix.rb` gains
+  `chomp`, `chomp!` and `b` over 18 receivers and 17 separators, hot and invalidated;
+  `Util/bench/uri36-shapes.rb`.
+
+- **Gate of 2026-11-24 for round thirty-five** (perf/uri35, perf/csv35, perf/fwd35,
+  perf/dlg35): the branch at 66f10f69 against 4ed96a37, Release net10.0: **PASS**.
+  IronRuby.Tests PASSED on both trees, no failure name on either. The four new matrices
+  (`uri`, `csv`, `forwardable`, `delegate`) print CRuby's output with the JIT, with
+  `-X:NoJIT -X:NoOSR`, with `IR_LIGHT_FRAMES=0` and with `-X:NoJITCalls`; 34 existing
+  matrices (hot-shapes, jit, jit-calls, jit-const, block-given, light-rest, keyword-light,
+  super-light, rescue-light, refinement, sdef, respond-to, eval, value-object, strptime,
+  erb-escape...) in the same four modes print what the baseline prints, but for the trees'
+  paths in warnings. `defined?(o.m)` with `m` only refined, made private, and answered by
+  `respond_to_missing?`, run hot: CRuby's answers. Recursion a million deep through `def
+  m(n, ...)`, `defined?(self.m)`, `defined?(@x)`, `const_get` and `respond_to?`:
+  SystemStackError, as CRuby. ruby/spec, all five suites (32,285 examples): no failure the
+  known list does not name. The fourteen benchmarks verify. Timing: AWFY, 12 iterations,
+  both orders: geomean 0.997 and 1.006 (new/base), no benchmark more than 5% slower in both.
+  micro-table: `new2` (1.09, 1.05) and `s_any1` (1.07, 1.06) slower in both orders; in eight
+  alternating rounds of their own 1.01 and 1.03, overlapping. `app-shapes.rb`, four rounds
+  each order: `forwardable` 0.82-0.84 of its time, `delegate` 0.66-0.69, `uri` 0.75 and 1.00
+  with spreads of 200% (0.82 in eight rounds alone), `csv_parse` 1.37 and 0.94 (gap 35: the
+  timer counts the main thread only); `csv-shapes.rb` (process CPU) 0.18-0.28 of the base's
+  time. `uri-shapes.rb` at N=5000: `join` 0.86, `merge` 0.87, `decode` 0.93, `split` 0.56 at
+  N=1000. Bytes per iteration: geomean 1.003. Start-up (`-e 1`, Release, best of ten): 1.236
+  -> 1.253 s.
+
+- **perf/uri35 (round thirty-five, 2026-11-24, b7b8e063, merged in 97230205) -
+  `MatchData#[]` with a group name in C#, and `String#each_line` with one separator straight
+  to `__ir_lines__`.** The prelude's `MatchData#[](*args)` stood in front of the C# methods to
+  take names and Ranges, and its rest entry cost more than the lookup, which went through the
+  name table eight or nine times; `URI.parse` makes a dozen of those calls. `MatchDataOps` has
+  `[]` for a String and a Symbol (one table lookup, `MatchData.TryGetNamedGroupValue`) and a
+  Range overload; the prelude method is gone. `uri` of `app-shapes.rb` 0.78-0.83 of its time in
+  the round's comparison, `split` 0.56. `Util/uri-matrix.rb` (429 rows), `Util/bench/uri-shapes.rb`.
+
+- **perf/csv35 (round thirty-five, 2026-11-24, 44992656, merged in 8ad12723) - `CSV#read`
+  without a fiber, and Float()'s String error unkept.** `CSV#read` took every row through
+  `parser_enumerator.next`, two thread switches a row (gap 35); it now has the parser yield
+  into the Array when the input is a StringIO, the converters are CSV's own and `skip_lines`
+  is nil, a Regexp or a String, which nothing in the parse can tell from the fiber. A patch to
+  the installed csv gem, marked `IronRuby:` and listed in `Util/install-bundled-gems.rb`
+  (66f10f69), since a reinstall overwrites it. `Float(s) rescue s`, the `:float` converter,
+  walked the CLR stack for each String it refused; the error is `MarkUnkept` now (20 -> 3.5
+  us). `csv-shapes.rb`, process CPU: `full` 3.1-3.2 ms -> 0.66 (CRuby 0.29), `plain` 0.74-1.0
+  -> 0.25-0.29. `Util/csv-matrix.rb`, `Util/bench/csv-shapes.rb`.
+
+- **perf/fwd35 (round thirty-five, 2026-11-24, a7a80cda, merged in 8209d51d) - `def m(...)`
+  and `defined?(obj.m)` in light frames** (Forwardable's delegators are both). `...` lowers to
+  a rest and a block with no keyword prologue, but its signature said `**`, so it was refused
+  as keywords with a rest (`Parameters.ForwardsArguments`); `defined?(recv.m)` gets a light
+  resolve-only site that answers boxed, or `LightScopeRequired` for anything that is not a
+  public method, which is then asked again with the scope made on demand
+  (`LightFrameRewriter.LightIsDefined`). `forwardable` of `app-shapes.rb` 0.81-0.85 of its
+  time; a delegator call 149 -> 121 ns. `Util/forwardable-matrix.rb`, `Util/bench/fwd-shapes.rb`.
+
+- **perf/dlg35 (round thirty-five, 2026-11-24, 27b60c3c, merged in c69eac32) - a delegated
+  call: `const_get` cached, `respond_to?` and `const_get` callable from light frames,
+  `defined?(@x)` in light frames.** Delegator's `target_respond_to?` names `Object` inside a
+  BasicObject subclass, so every forwarded call ran `const_missing` and `::Object.const_get`
+  (155 ns, CRuby 30). `RubyUtils.GetConstant` keeps the last constant found per module while
+  `ConstantAccessVersion` holds (not for a deprecated constant, after Ractors start, or during
+  an autoload). A `[DeclaringScope]` parameter takes from the caller's scope only what it
+  shares with its declaring scope, so `Kernel#respond_to?` and `Module#const_get` no longer make
+  a light frame's scope; a light block hands its calls the scope made on demand once there is
+  one (refine_spec: a `using` inside `Module.new { }`). `delegate` of `app-shapes.rb` 0.66-0.70
+  of its time. `Util/delegate-matrix.rb`, `Util/bench/dlg-shapes.rb`.
 
 - **perf/lfirst (2026-11-24, 32e7e2ad and 97c5019b) - a light frame's first call costs less.**
   Light frames made start-up 2% slower than v4.0.6 (`ir -e 1`, ReadyToRun host, instructions),
