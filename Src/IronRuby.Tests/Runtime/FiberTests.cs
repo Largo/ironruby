@@ -853,6 +853,44 @@ ok
         }
 
         /// <summary>
+        /// A Thread#raise aimed at a thread on its way into the wait for a held mutex
+        /// (RubyMutex.LockContended). The raise interrupts only a thread the CLR already has in
+        /// WaitSleepJoin, so one that came after Mutex#lock had looked for a parked exception and
+        /// before Monitor.Wait had blocked woke nothing, and the thread slept on with the exception
+        /// parked: Timeout.timeout { m.lock } hung on a mutex that was never released. Raised at
+        /// once, about one thread in a hundred lost its raise.
+        /// </summary>
+        public void Thread_RaiseReachesMutexWaiter1() {
+            TestOutput(@"
+require 'ruby4'
+Thread.report_on_exception = false
+m = Mutex.new
+m.lock
+lost = 0
+400.times do
+  t = Thread.new do
+    begin
+      m.lock
+    rescue RuntimeError
+    end
+  end
+  t.raise 'x'
+  begin
+    next if t.join(5)
+  rescue RuntimeError
+    next
+  end
+  lost += 1
+  t.kill
+  t.join
+end
+p lost
+", @"
+0
+");
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,
