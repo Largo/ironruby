@@ -94,7 +94,7 @@ namespace IronRuby.Runtime.Calls {
                 if ((Signature.HasLightScope || IsObjectWithSingleton(args)) && _context != null && !_context.Options.NoAdaptiveCompilation) {
                     bool deferred;
                     if ((result = BindShared<T>(args, true, out deferred)) != null) {
-                        if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : "shared-hit";
+                        if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : PhaseTimer.BindKind ?? "shared-hit";
                         return result;
                     }
                     sharedProbed = !deferred;
@@ -133,7 +133,7 @@ namespace IronRuby.Runtime.Calls {
             }
 #endif
             if (argArray == null && !sharedProbed && (result = BindShared<T>(args, false, out _)) != null) {
-                if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : "shared-hit";
+                if (PhaseTimer.BindTrace) PhaseTimer.BindKind = PhaseTimer.BindKind == "rule" ? "shared-new" : PhaseTimer.BindKind ?? "shared-hit";
                 return result;
             }
 
