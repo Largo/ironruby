@@ -1351,6 +1351,19 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   gate-matrices (splat-pass, block-pass, hot-shapes, jit, light-rest) in seven modes with
   `off=IR_SPLAT_REST=0`: PASS (hot-shapes "baseline" in every mode, as master);
   IronRuby.Tests (parallel-tests.sh, Release): PASSED.
+  **Gate of 2026-11-25** (the branch with master e5c6a859 merged, against e5c6a859, Release
+  net10.0): **PASS**. IronRuby.Tests 1,340 PASSED on both trees, no failed or flaky name on
+  either. `gate-matrices.rb --all` (153 units, seven modes with `off=IR_SPLAT_REST=0`, R2R
+  included): PASS once `array2-matrix`'s `[1,2,3].sample(2)` row stopped printing which items
+  it chose (random on every engine, CRuby included; three DIFFs it caused on the first run).
+  `ReflectionCache.Generated.cs` regenerated with ClassInitGenerator: identical to the commit's.
+  ruby/spec, all five suites (32,680 examples): no failure the known list does not name.
+  Timing, load under 2: the fourteen benchmarks verify; AWFY 12 both orders, geomean 1.000 and
+  1.004 (new/base); Havlak 1.013 and 1.059, and in twelve alternating rounds of its own the new
+  tree was the faster in eleven (medians 4.71 against 4.78 s). micro-table both orders: geomean
+  0.972 and 0.998, no line more than 5% slower in both. Start-up on the ReadyToRun host, ten
+  alternating runs, best ms (base -> new): `-e 1` 517 -> 503, `gem --version` 693 -> 696,
+  `gem list` 1569 -> 1572.
 
 - **perf/lrebind (2026-11-24, 0d464ce0) - a shared rule's compiled target goes to its binder's
   cache.** The first-call profile counted about 160 extra binds in 200 light methods, all
