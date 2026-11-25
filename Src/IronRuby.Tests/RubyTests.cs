@@ -920,6 +920,7 @@ namespace IronRuby.Tests {
                 Refinements12,
                 Refinements13,
                 Refinements14,
+                Refinements15,
 
                 Super1,
                 SuperParameterless1,

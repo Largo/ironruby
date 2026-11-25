@@ -551,5 +551,48 @@ p Q.instance_method(:m).bind_call(C.new)
 [:Q, :P]
 ");
         }
+
+        /// <summary>
+        /// `using' at the top level refines the rest of that frame, blocks included: a block or lambda written earlier in the
+        /// same frame and called afterwards sees the refinement (MRI replaces the frame's cref, and blocks read it from the
+        /// frame), as does a define_method body made from one. A method defined before the `using' does not, and neither does
+        /// a block or define_method body written in a class body or a string class_eval that had ended by then, nor a class
+        /// body reopened after it: such a body's cref points at the one current when it was entered.
+        /// </summary>
+        public void Refinements15() {
+            TestOutput(@"
+class C; def m = [:C]; def n = [:Cn]; end
+module R; refine C do; def m = [:R]; end; end
+module R2; refine C do; def n = [:R2]; end; end
+pr = proc { C.new.m }
+p pr.call
+la = lambda { [C.new.m, C.new.send(:m), C.new.method(:m).call] }
+Object.send(:define_method, :dm) { C.new.m }
+def meth = C.new.m
+class D < C; define_method(:m) { [:D, *super()] }; define_method(:k) { C.new.m }; $dp = proc { C.new.m }; end
+module M; class N; $np = proc { C.new.m }; end; end
+C.class_eval('$ep = proc { C.new.m }')
+using R
+between = proc { [C.new.m, C.new.n] }
+using R2
+p pr.call, la.call, dm, meth
+p between.call
+p [D.new.m, D.new.k, $dp.call, $np.call, $ep.call]
+class D; p [D.new.m, C.new.m]; end
+r = nil
+3000.times { r = [pr.call, $dp.call, D.new.k, D.new.m] }
+p r
+", @"
+[:C]
+[:R]
+[[:R], [:R], [:R]]
+[:R]
+[:C]
+[[:R], [:R2]]
+[[:D, :C], [:C], [:C], [:C], [:C]]
+[[:D, :C], [:R]]
+[[:R], [:C], [:C], [:D, :C]]
+");
+        }
     }
 }
