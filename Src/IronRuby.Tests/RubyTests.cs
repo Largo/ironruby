@@ -1047,6 +1047,7 @@ namespace IronRuby.Tests {
                 Prelude_AliasNames1,
                 Visibility_DefaultScope1,
                 Main_PrivateAndInitializeCopy1,
+                Module_CopyInvalidatesConstantLookups1,
                 Kernel_PutsToStdoutWriter1,
                 Prelude_HiddenHelpers1,
                 Prelude_HiddenState1,

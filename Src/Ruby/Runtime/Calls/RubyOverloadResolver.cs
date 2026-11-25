@@ -168,7 +168,11 @@ namespace IronRuby.Runtime.Calls {
                 var info = infos[i];
 
                 if (info.ParameterType == typeof(RubyScope)) {
-                    mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaScope.Expression));
+                    if (DeclaringScopeAttribute.IsDefinedOn(info)) {
+                        mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.ContextScopeExpression));
+                    } else {
+                        mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaScope.Expression));
+                    }
                     special[i++] = true;
                 } else if (info.ParameterType == typeof(RubyContext)) {
                     mapping.AddBuilder(new ImplicitArgBuilder(info, static (resolver, _) => resolver._args.MetaContext.Expression));

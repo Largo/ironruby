@@ -121,4 +121,21 @@ namespace IronRuby.Runtime {
             Condition = new VersionAndModule(newVersion, newModule.Id);
         }
     }
+
+    /// <summary>
+    /// A constant Module#const_get found from a module (RubyModule.ConstGetCache, RubyUtils.GetConstant): immutable.
+    /// </summary>
+    internal sealed class ConstantReadCache {
+        public readonly int Version;
+        public readonly string/*!*/ Name;
+        public readonly bool LookupObject;
+        public readonly object Value;
+
+        public ConstantReadCache(int version, string/*!*/ name, bool lookupObject, object value) {
+            Version = version;
+            Name = name;
+            LookupObject = lookupObject;
+            Value = value;
+        }
+    }
 }

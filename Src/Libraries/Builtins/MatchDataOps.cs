@@ -41,6 +41,29 @@ namespace IronRuby.Builtins {
             return self.GetNthGroupValue(index);
         }
 
+        // A String or Symbol (and only those: MRI's namev_to_backref_number, not #to_str) names
+        // a group. This used to be a prelude method taking *args in front of the C# ones, and its
+        // entry cost more than the lookup: URI's RFC 3986 parser asks a MatchData for a dozen
+        // named groups per URI.
+        [RubyMethod("[]")]
+        public static MutableString GetGroup(MatchData/*!*/ self, [NotNull]MutableString/*!*/ groupName) {
+            return GetNamedGroup(self, groupName.ToString());
+        }
+
+        [RubyMethod("[]")]
+        public static MutableString GetGroup(MatchData/*!*/ self, [NotNull]RubySymbol/*!*/ groupName) {
+            return GetNamedGroup(self, groupName.ToString());
+        }
+
+        private static MutableString GetNamedGroup(MatchData/*!*/ self, string/*!*/ name) {
+            // sliced by the CLR offsets, not through String#[], which counts characters
+            MutableString value;
+            if (!self.TryGetNamedGroupValue(name, out value)) {
+                throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
+            }
+            return value;
+        }
+
         [RubyMethod("[]")]
         public static RubyArray GetGroup(MatchData/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int length) {
             if (!IListOps.NormalizeRange(self.GroupCount, ref start, ref length)) {
@@ -55,13 +78,12 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        // The groups are a plain Array as far as a Range is concerned, down to md[3..1] being []
+        // while md[-30..2] is nil.
         [RubyMethod("[]")]
-        public static RubyArray GetGroup(ConversionStorage<int>/*!*/ fixnumCast, MatchData/*!*/ self, [NotNull]Range/*!*/ range) {
-            int begin, count;
-            if (!IListOps.NormalizeRange(fixnumCast, self.GroupCount, range, out begin, out count)) {
-                return null;
-            }
-            return GetGroup(self, begin, count);
+        public static object GetGroup(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ allocateStorage,
+            MatchData/*!*/ self, [NotNull]Range/*!*/ range) {
+            return IListOps.GetElements(fixnumCast, allocateStorage, ToArray(self), range);
         }
 
         // #begin, #end and #offset report character offsets, #bytebegin, #byteend and

@@ -229,7 +229,11 @@ namespace IronRuby.Compiler.Ast {
                 var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
                 var lazy = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable,
                     Ast.Call(typeof(RubyOps).GetMethod("LightBlockScopeInLoop"), makeScope(), inLoop)));
-                var rewriter = new MethodDefinition.LightFrameRewriter(scopeVariable, lazy, null, parent, inLoop, false);
+                // The calls are handed the scope made on demand once there is one: a call that made it may have changed what
+                // the block's own scope answers - `Module.new { using R; o.respond_to?(:m) }', whose respond_to? reads only the
+                // runtime and the refinements from the scope it is given ([DeclaringScope]).
+                var callScope = Ast.Coalesce(AstUtils.Convert(scopeVariable, typeof(RubyScope)), parent);
+                var rewriter = new MethodDefinition.LightFrameRewriter(scopeVariable, lazy, null, callScope, inLoop, false);
                 var lazyParamInit = rewriter.Visit(paramInit);
                 var lazyStatements = rewriter.Visit(statements);
                 if (!rewriter.NeedsScope) {

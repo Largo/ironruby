@@ -2287,6 +2287,21 @@ namespace IronRuby.Builtins {
         }
 
         private static MutableString ChompInPlace(MutableString/*!*/ self, MutableString separator, bool defaultSeparator) {
+            // URI.decode_www_form chomps "&" off every pair: an ASCII separator other than "\n" on an
+            // ASCII receiver needs no character-boundary check and no copy, so the bytes come off in
+            // place (the general path below builds the chomped copy and compares it with self).
+            if (separator != null && !defaultSeparator && separator.IsAscii() && self.IsAscii()) {
+                int sepLength = separator.GetByteCount();
+                if (sepLength > 0 && !(sepLength == 1 && separator.GetChar(0) == '\n')) {
+                    self.RequireNotFrozen();
+                    if (!self.EndsWith(separator)) {
+                        return null;
+                    }
+                    self.Remove(self.GetByteCount() - sepLength, sepLength);
+                    return self;
+                }
+            }
+
             MutableString result = InternalChomp(self, separator, defaultSeparator);
 
             if (result.Equals(self) || result == null) {
@@ -2927,6 +2942,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("valid_encoding?")]
         public static bool ValidEncoding(MutableString/*!*/ self) {
             return !self.ContainsInvalidCharacters();
+        }
+
+        // A plain String (not the receiver's class, Ruby 3.0 and later) with the receiver's bytes in
+        // ASCII-8BIT. URI.decode_www_form calls it on every query; the prelude's version made a
+        // copy and then two force_encoding calls.
+        [RubyMethod("b")]
+        public static MutableString/*!*/ ToBinary(MutableString/*!*/ self) {
+            return MutableString.CreateBinary(self.ToByteArray(), RubyEncoding.Binary);
         }
 
         // encoding aware

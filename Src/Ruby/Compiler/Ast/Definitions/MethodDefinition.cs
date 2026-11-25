@@ -336,7 +336,7 @@ namespace IronRuby.Compiler.Ast {
                 statements
             ).Filter(unwinder = Ast.Parameter(typeof(MethodUnwinder), "#u"),
                 // a light frame makes a scope for the filter only when a MethodUnwinder passes:
-                Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope()) : (MSA.Expression)scopeVariable, unwinder),
+                Methods.IsMethodUnwinderTargetFrame.OpCall((light != null) ? Ast.Coalesce(scopeVariable, light.MakeScope) : (MSA.Expression)scopeVariable, unwinder),
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  
                 // leave frame:
@@ -616,7 +616,9 @@ namespace IronRuby.Compiler.Ast {
             internal MSA.ParameterExpression/*!*/ Rfc;
             internal MSA.ParameterExpression/*!*/ Callee;
             internal MSA.Expression/*!*/ LazyScope;
-            internal Func<MSA.Expression>/*!*/ MakeScope;
+            // The making of the scope on demand: one node, which LazyScope and the frame's filter share, so that a body that keeps
+            // its locals in CLR variables rewrites it once (ScopeBuilder.TryUseRegisterLocals).
+            internal MSA.Expression/*!*/ MakeScope;
             internal Func<MSA.Expression, MSA.Expression>/*!*/ MakeScopeIfTraced;
             internal MSA.Expression/*!*/ Name;
 
@@ -922,11 +924,14 @@ namespace IronRuby.Compiler.Ast {
             return !IsBodyScopeFree(false);
         }
 
-        // Declares keyword parameters, a `**rest' or `**nil'.
+        // Declares keyword parameters, a `**rest' or `**nil'. Not `...', whose signature says `**' but whose lowering is a
+        // rest and a block parameter and no keyword prologue (Parameters.ForwardsArguments): what a light frame takes as
+        // `def m(*a, &b)'. The keyword hash a call passes is bound into the rest by the method's RubyMethodInfo, whatever
+        // frame the body is compiled for.
         private bool HasKeywordParameters {
             get {
                 var signature = _parameters.Signature;
-                return signature != null && (signature.TakesKeywords || signature.RefusesKeywords);
+                return signature != null && !_parameters.ForwardsArguments && (signature.TakesKeywords || signature.RefusesKeywords);
             }
         }
 
@@ -1037,6 +1042,12 @@ namespace IronRuby.Compiler.Ast {
                 return Refuse(why, "nested too deep");
             }
             if (node is LocalVariable || node is Literal || node is SelfReference || node is InstanceVariable) {
+                return true;
+            }
+            // `defined?(@x)' (SimpleDelegator#__getobj__): RubyOps.IsDefinedInstanceVariable reads only the runtime from the
+            // scope, which the rewriter hands the declaring scope for (LightFrameRewriter.ScopeOperandIndex)
+            var isDefined = node as IsDefinedExpression;
+            if (isDefined != null && isDefined.Expression is InstanceVariable) {
                 return true;
             }
             var constant = node as ConstantVariable;
@@ -1214,6 +1225,18 @@ namespace IronRuby.Compiler.Ast {
                         }
                     }
                     return AreScopeFree(superCall.Arguments, blockLiterals, why);
+                }
+                // `defined?(_.m)', Forwardable's guard: a site that only resolves the name (MethodCall.TransformDefinedCondition)
+                // on the receiver, which is evaluated, and not the arguments. Light, it looks for a public method; anything else -
+                // a protected or a missing one, respond_to_missing? - is asked again with the scope made on demand
+                // (LightFrameRewriter.LightIsDefined).
+                var defined = node as IsDefinedExpression;
+                if (defined != null) {
+                    var definedCall = defined.Expression as MethodCall;
+                    if (definedCall == null || definedCall.Target == null || definedCall.Block != null) {
+                        return Refuse(why, "IsDefinedExpression of " + defined.Expression.GetType().Name);
+                    }
+                    return IsScopeFree(definedCall.Target, blockLiterals, why);
                 }
                 // `inner(&block)': the Proc is the caller's own, or made by #to_proc through a conversion site that takes no
                 // scope, and the call passes it as an argument (LightFrameRewriter.LightScopeCall)
@@ -1415,7 +1438,7 @@ namespace IronRuby.Compiler.Ast {
             // with a parking slot: #parked = TakeParkedScope(...); #parked != null ? ReuseParkedScopeLazy(#parked, ...) : CreateMethodScopeLazy(...)
             var parkedVariable = gen.CurrentMethod.ParkedVariable;
             light.MakeScope = (parkSlot != null)
-                ? () => Ast.Block(
+                ? Ast.Block(
                     Ast.Assign(parkedVariable, Methods.TakeParkedScope.OpCall(Ast.Constant(parkSlot), declaringScope, declaringModule)),
                     Ast.Condition(Ast.NotEqual(parkedVariable, AstUtils.Constant(null, typeof(ParkedProcs))),
                         Methods.ReuseParkedScopeLazy.OpCall(new AstExpressions {
@@ -1425,10 +1448,10 @@ namespace IronRuby.Compiler.Ast {
                         make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable)
                     )
                 )
-                : (Func<MSA.Expression>)(() => make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable));
+                : make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
-            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope(), inLoop)));
+            light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope, inLoop)));
 
             var rewriter = new LightFrameRewriter(scopeVariable, light.LazyScope, light.Rfc, declaringScope, inLoop, HasBlockGuard) {
                 BlockLiterals = LightBlocksEnabled && HasLightBlockLiteral(),
@@ -1579,6 +1602,8 @@ namespace IronRuby.Compiler.Ast {
 
             // The scope a helper of a body's exception handling (Body.TransformExceptionHandling, RescueClause) needs, by its name.
             private enum HandlingScope {
+                // not a helper of the exception handling
+                None,
                 // only the runtime: $! is the runtime's (RubyContext.CurrentException), not the scope's
                 Context,
                 // the frame's own: CanRescue captures the backtrace from it (its interpreted frame) and tests a LocalJumpError
@@ -1591,26 +1616,37 @@ namespace IronRuby.Compiler.Ast {
                 LeaveRescue,
             }
 
-            private static readonly Dictionary<string, HandlingScope>/*!*/ HandlingScopes = new Dictionary<string, HandlingScope> {
-                { nameof(RubyOps.GetCurrentException), HandlingScope.Context },
-                { nameof(RubyOps.SetCurrentException), HandlingScope.Context },
-                { nameof(RubyOps.GetCurrentExceptionForRescueTarget), HandlingScope.Context },
-                { nameof(RubyOps.RescuePassMayTest), HandlingScope.Context },
-                { nameof(RubyOps.RescueSiteCannotMatch), HandlingScope.Context },
-                { nameof(RubyOps.RescueDefaultCannotMatch), HandlingScope.Context },
-                { nameof(RubyOps.RescuePassCommit), HandlingScope.Context },
-                { nameof(RubyOps.SetCauseLeavingEnsure), HandlingScope.Context },
-                { nameof(RubyOps.RescuePassUnwinder), HandlingScope.Raw },
-                { nameof(RubyOps.LeaveRescue), HandlingScope.LeaveRescue },
-                { nameof(RubyOps.EnterRescue), HandlingScope.Lazy },
-                { nameof(RubyOps.CanRescue), HandlingScope.Lazy },
-                { nameof(RubyOps.CanRescueDeferTrace), HandlingScope.Lazy },
-                { nameof(RubyOps.CanRescueAfterClauses), HandlingScope.Lazy },
-                { nameof(RubyOps.SetCauseLeavingInterpretedEnsure), HandlingScope.Lazy },
-                { nameof(RubyOps.CompareException), HandlingScope.Lazy },
-                { nameof(RubyOps.CompareSplattedExceptions), HandlingScope.Lazy },
-                { nameof(RubyOps.CompareDefaultException), HandlingScope.Lazy },
-            };
+            // A switch rather than a Dictionary<string, HandlingScope>: the ReadyToRun image cannot hold the code of a framework
+            // generic over a type of its own (an enum is shared as an int, and the framework's image has no Dictionary<string, int>
+            // either), so the dictionary's methods were compiled by the JIT in each process that made a light frame.
+            private static HandlingScope GetHandlingScope(string/*!*/ name) {
+                switch (name) {
+                    case nameof(RubyOps.GetCurrentException):
+                    case nameof(RubyOps.SetCurrentException):
+                    case nameof(RubyOps.GetCurrentExceptionForRescueTarget):
+                    case nameof(RubyOps.RescuePassMayTest):
+                    case nameof(RubyOps.RescueSiteCannotMatch):
+                    case nameof(RubyOps.RescueDefaultCannotMatch):
+                    case nameof(RubyOps.RescuePassCommit):
+                    case nameof(RubyOps.SetCauseLeavingEnsure):
+                        return HandlingScope.Context;
+                    case nameof(RubyOps.RescuePassUnwinder):
+                        return HandlingScope.Raw;
+                    case nameof(RubyOps.LeaveRescue):
+                        return HandlingScope.LeaveRescue;
+                    case nameof(RubyOps.EnterRescue):
+                    case nameof(RubyOps.CanRescue):
+                    case nameof(RubyOps.CanRescueDeferTrace):
+                    case nameof(RubyOps.CanRescueAfterClauses):
+                    case nameof(RubyOps.SetCauseLeavingInterpretedEnsure):
+                    case nameof(RubyOps.CompareException):
+                    case nameof(RubyOps.CompareSplattedExceptions):
+                    case nameof(RubyOps.CompareDefaultException):
+                        return HandlingScope.Lazy;
+                    default:
+                        return HandlingScope.None;
+                }
+            }
 
             /// <summary>
             /// A helper of the body's exception handling, given the scope it needs (HandlingScope): the path that raises nothing
@@ -1620,8 +1656,11 @@ namespace IronRuby.Compiler.Ast {
             /// Null for any other call.
             /// </summary>
             private MSA.Expression VisitHandlingCall(MSA.MethodCallExpression/*!*/ node) {
-                HandlingScope use;
-                if (node.Object != null || node.Method.DeclaringType != typeof(RubyOps) || !HandlingScopes.TryGetValue(node.Method.Name, out use)) {
+                if (node.Object != null || node.Method.DeclaringType != typeof(RubyOps)) {
+                    return null;
+                }
+                var use = GetHandlingScope(node.Method.Name);
+                if (use == HandlingScope.None) {
                     return null;
                 }
                 int index = -1;
@@ -1833,6 +1872,9 @@ namespace IronRuby.Compiler.Ast {
                     return null;
                 }
                 var signature = action.Signature;
+                if (signature.ResolveOnly) {
+                    return LightIsDefined(node, action);
+                }
                 // A call with a block is one that passes a Proc on (`inner(&block)', IsScopeFree) unless the body has literal
                 // blocks, whose calls use the scope made on demand (BlockLiterals). The Proc is an argument like the others: the
                 // rules bind it as a block parameter whatever scope they are given, and one that reads the caller's scope answers
@@ -1850,6 +1892,39 @@ namespace IronRuby.Compiler.Ast {
                 var lightAction = RubyCallAction.Make(action.Context, action.MethodName,
                     new RubyCallSignature(signature.ArgumentCount, signature.Flags | RubyCallFlags.HasLightScope));
                 return MakeLightCall(reduced, action, lightAction, DispatchIntrinsics.IsLightBlockGivenSite(action.MethodName, lightAction.Signature));
+            }
+
+            /// <summary>
+            /// `defined?(obj.m)' (IsScopeFree), as a site that does not need the scope: the light site answers true or false
+            /// boxed, or RubyOps.LightScopeRequired where its rule would read the scope (the method is not public, or is missing
+            /// and respond_to_missing? is asked: RubyCallAction.Resolve), and the question is then asked again through the
+            /// original site with the scope made on demand.
+            /// </summary>
+            private MSA.Expression LightIsDefined(Microsoft.Scripting.Ast.LightDynamicExpression/*!*/ node, RubyCallAction/*!*/ action) {
+                var signature = action.Signature;
+                if (!LightCallsEnabled || action.Context == null || !signature.HasScope || signature.HasImplicitSelf || signature.HasLightScope ||
+                    signature.IsInteropCall || signature.IsSuperCall || signature.IsVirtualCall) {
+                    return null;
+                }
+                var reduced = node.Reduce() as MSA.DynamicExpression;
+                if (reduced == null || reduced.Type != typeof(bool) || reduced.Arguments.Count != 2 || !IsScope(reduced.Arguments[0])) {
+                    return null;
+                }
+                var lightAction = RubyCallAction.Make(action.Context, action.MethodName,
+                    RubyCallSignature.IsDefinedWithLightScope());
+                var receiver = Visit(reduced.Arguments[1]);
+                var target = Ast.Variable(receiver.Type, "#a1");
+                var result = Ast.Variable(typeof(object), "#r");
+                MakesCalls = true;
+                return Ast.Block(new[] { target, result },
+                    Ast.Assign(target, receiver),
+                    Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), AstUtils.Convert(_declaringScope, typeof(RubyScope)), target)),
+                    Ast.Condition(
+                        Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired)),
+                        AstUtils.LightDynamic(action, typeof(bool), AstUtils.Convert(_lazyScope, typeof(RubyScope)), target),
+                        Ast.Convert(result, typeof(bool))
+                    )
+                );
             }
 
             /// <summary>
