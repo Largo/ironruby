@@ -638,6 +638,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ShiftSplatArgument;
         public static MethodInfo/*!*/ SplatAppendItem { get { return _SplatAppendItem ?? (_SplatAppendItem = CallInstruction.CacheFunc<System.Collections.IList, System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatAppendItem)); } }
         private static MethodInfo _SplatAppendItem;
+        public static MethodInfo/*!*/ SplatCopy { get { return _SplatCopy ?? (_SplatCopy = CallInstruction.CacheFunc<System.Collections.IList, System.Int32, IronRuby.Builtins.RubyArray>(RubyOps.SplatCopy)); } }
+        private static MethodInfo _SplatCopy;
         public static MethodInfo/*!*/ SplatKeywordHash { get { return _SplatKeywordHash ?? (_SplatKeywordHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHash)); } }
         private static MethodInfo _SplatKeywordHash;
         public static MethodInfo/*!*/ SplatKeywordHashIfHash { get { return _SplatKeywordHashIfHash ?? (_SplatKeywordHashIfHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHashIfHash)); } }
@@ -654,6 +656,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _StringToMutableString;
         public static MethodInfo/*!*/ TakeBfcForBlockYield { get { return _TakeBfcForBlockYield ?? (_TakeBfcForBlockYield = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.BlockParam>(RubyOps.TakeBfcForBlockYield)); } }
         private static MethodInfo _TakeBfcForBlockYield;
+        public static MethodInfo/*!*/ TakeFreshSplat { get { return _TakeFreshSplat ?? (_TakeFreshSplat = CallInstruction.CacheFunc<System.Collections.IList, IronRuby.Builtins.RubyArray>(RubyOps.TakeFreshSplat)); } }
+        private static MethodInfo _TakeFreshSplat;
         public static MethodInfo/*!*/ TakeParkedScope { get { return _TakeParkedScope ?? (_TakeParkedScope = CallInstruction.CacheFunc<IronRuby.Runtime.ParkedScopeSlot, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Runtime.ParkedProcs>(RubyOps.TakeParkedScope)); } }
         private static MethodInfo _TakeParkedScope;
         public static MethodInfo/*!*/ TakePendingCallee { get { return _TakePendingCallee ?? (_TakePendingCallee = CallInstruction.CacheFunc<System.String, System.String>(RubyOps.TakePendingCallee)); } }

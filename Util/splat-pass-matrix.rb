@@ -362,7 +362,91 @@ t('TracePoint :call, binding of the wrapper') do
 end
 t('after the TracePoint') { [traced(1), traced_c(4)] }
 
-# ---------------------------------------------------------------- 10. refinements (last: `using' keeps every method
+# ---------------------------------------------------------------- 10. a splat the call site makes
+# `f(*a, x)' and `f(*a, *b)' pass an array the site made for the call: the rule binds once for every
+# length of it when it all goes into the callee's rest parameter, and gives the rest parameter that
+# array rather than a copy (ArgsBuilder.AddCallArguments, RubyCallFlags.HasFreshSplat). What the
+# callee keeps or changes must not be the caller's, nor another call's; a list too short for the
+# rule, a parameter after the rest, keywords and a callee redefined half way take other rules.
+
+def own(*r) = (r << :own; r)
+def p_own(a) = [own(*a, 1), a]
+def p_own_two(a, b) = [own(*a, *b), a, b]
+def p_own_same(a) = own(*a, 1).equal?(a)
+$kept = []
+def keep(*r) = ($kept << r; r)
+def p_keep(a) = ($kept.clear; keep(*a, 1); keep(*a, 2); k = $kept; [k, k[0].equal?(k[1]), a])
+def lead2(x, y, *r) = [x, y, r]
+def optr(x, y = :d, *r) = [x, y, r]
+def postr(*r, z) = [r, z]
+def kwr(*r, k: 0) = [r, k]
+def p_lead2(i) = lead2(*Array.new(i % 5) { _1 }, :z)
+def p_optr(i) = optr(*Array.new(i % 4) { _1 }, :z)
+def p_postr(i) = postr(*Array.new(i % 4) { _1 }, :q)
+def p_take_len(i) = take(*Array.new(i % 7) { _1 }, i % 3)
+def p_take_lead(i) = take(:a, *Array.new(i % 4) { _1 }, :b)
+def p_kwr(a) = [kwr(*a, 1), kwr(*a, k: 2), kwr(*a, *[{ k: 3 }])]
+def p_take_hash(a) = [take(*a, { k: 1 }), take(*a, k: 2)]
+ruby2_keywords def r2k(*r) = [take(*r, 1), take(*r, *[]), kwr(*r, *[])]
+class Redef; def go(i, a) = target(*a, i); def target(*r) = [:rest, r]; end
+class RedefSub < Redef; def target(*r) = super(*r, :sub); end
+def p_mm(a) = MM.new.nothing(*a, 1)
+def p_send(a) = send(:own, *a, 1)
+class Supered; def m(*r) = r; end
+class Supering < Supered; def m(*r) = (s = super(*r, :s); s << :t; [s, r]); end
+def ys(a) = yield(*a, 1)
+def p_ys(a) = [ys(a) { |*r| r << :b; r }, ys(a) { |x, *r| [x, r] }, ys(a) { |x, y, z, *r| [x, y, z, r] }, a]
+def p_ys_proc(a) = [ys(a, &proc { |x, *r| [x, r] }), ys(a, &lambda { |*r| r })]
+def p_lit(a) = [[*a, 1], [*a, a.last, *a], [*a.dup, a.dup.pop], a]
+def p_lit_pop(a) = (b = a.dup; [*b, b.pop])
+def dfresh(n, *a) = dfresh(n - 1, *a.first(1), n)
+def deep_fresh(n, *a) = n == 0 ? a : deep_fresh(n - 1, *a.first(2), n)
+
+t('the rest parameter is not the caller\'s array') { |i| p_own([i % 3, :x]) }
+t('two splats made into one') { |i| p_own_two([i % 2], [:y] * (i % 3)) }
+t('the rest parameter is a new array') { |i| p_own_same([1, 2]) }
+t('kept rest parameters are not shared') { |i| p_keep([i % 2, :k]) }
+t('every length, leading parameters') { |i| begin; p_lead2(i); rescue ArgumentError => e; e.message; end }
+t('every length, an optional parameter') { |i| begin; p_optr(i); rescue ArgumentError => e; e.message; end }
+t('every length, a parameter after the rest') { |i| p_postr(i) }
+t('every length into a rest parameter') { |i| p_take_len(i) }
+t('every length after a simple argument') { |i| p_take_lead(i) }
+t('keywords after the splat') { |i| p_kwr([i % 2]) }
+t('a hash after the splat') { |i| p_take_hash([i % 2]) }
+t('ruby2_keywords passed on with a splat after') { |i| r2k(i % 2, k: 1) }
+t('redefined half way') do |i|
+  Redef.class_eval { def target(x, *r) = [:lead, x, r] } if i == N / 2
+  [Redef.new.go(i % 2, [:a, :b]), RedefSub.new.go(i % 2, [:c])]
+end
+t('method_missing given the made array') { |i| p_mm([i % 2]) }
+t('send with a splat and more') { |i| p_send([i % 2]) }
+t('super with a splat and more') { |i| Supering.new.m(i % 2, :r) }
+t('yield with a splat and more') { |i| p_ys([1, 2, 3].first(i % 4)) }
+t('a proc and a lambda yielded to with a splat and more') { |i| p_ys_proc([1, 2].first(i % 3)) }
+t('array literals with a splat first') { |i| p_lit([1, 2].first(i % 3)) }
+t('array literal splat copied before the items') { |i| p_lit_pop([1, 2, 3]) }
+class PrivF
+  def go(o, *a) = o.secret(*a, 1)
+  def go_self(*a) = self.secret(*a, 1)
+  def go_implicit(*a) = secret(*a, 1)
+  private def secret(*a) = [:secret, a]
+end
+class ProtF; def go(o, *a) = o.guarded(*a, 1); protected def guarded(*a) = [:guarded, a]; end
+class PubF; def pub(*a) = [:pub, a]; def go(o, *a) = o.pub(*a, 1); end
+class PrivSubF < PubF; private :pub; end
+t('a private method with a receiver, a made splat') { begin; PrivF.new.go(PrivF.new, 1); rescue NoMethodError => e; e.message[0, 30]; end }
+t('a private method on self., a made splat') { PrivF.new.go_self(1) }
+t('a private method, implicit self, a made splat') { PrivF.new.go_implicit(1) }
+t('a protected method, a made splat') { ProtF.new.go(ProtF.new, 1) }
+t('a protected method from outside, a made splat') { begin; ProtF.new.go(Object.new, 1); rescue NoMethodError => e; e.class; end }
+t('made private in a subclass half way, a made splat') do |i|
+  o = (i < N / 2) ? PubF.new : PrivSubF.new
+  begin; PubF.new.go(o, 2); rescue NoMethodError => e; e.message[0, 30]; end
+end
+t('a made splat recursing') { |i| deep_fresh(100 + i % 3, 0).size }
+t('a made splat a million deep', 1) { dfresh(1_000_000, 0) }
+
+# ---------------------------------------------------------------- 11. refinements (last: `using' keeps every method
 # defined after it in this file out of light frames)
 
 def r_before(*a) = 1.refined_m(*a)
@@ -372,5 +456,7 @@ t('a refinement not in use where it is written') { begin; r_before(1); rescue No
 using Ref
 def r_refined(*a) = 1.refined_m(*a)
 def r_unused(*a) = 1.unused_m(*a)
+def r_refined_made(*a) = 1.refined_m(*a, :made)
 t('a refined method') { r_refined(1, 2) }
 t('a refinement that exists but is not used') { begin; r_unused(1); rescue NoMethodError => e; e.class; end }
+t('a refined method, a made splat') { |i| r_refined_made(i % 2) }

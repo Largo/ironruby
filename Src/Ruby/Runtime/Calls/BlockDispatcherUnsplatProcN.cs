@@ -176,7 +176,10 @@ namespace IronRuby.Runtime.Calls {
                 args[i] = MissingArg(i);
             }
 
-            var array = new RubyArray();
+            // the rest array is made the size it ends up: grown an item at a time, `yield(*a, x)' with a long `a' made
+            // several arrays on the way to it
+            int itemCount = splattee.Count;
+            var array = new RubyArray(Math.Max(0, argsLength - nextArg) + Math.Max(0, itemCount - nextItem));
 
             // remaining args:
             while (nextArg < argsLength) {
@@ -184,8 +187,8 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // remaining items:
-            while (nextItem < splattee.Count) {
-                array.Add(splattee[nextItem++]);
+            if (nextItem < itemCount) {
+                array.AddRange(splattee, nextItem, itemCount - nextItem);
             }
 
             // the arguments past the parameters went to the rest array: the block gets its parameters

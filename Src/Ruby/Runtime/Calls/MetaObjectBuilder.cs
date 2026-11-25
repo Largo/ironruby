@@ -462,6 +462,15 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, out int listLength, out ParameterExpression/*!*/ listVariable) {
+            AddSplattedArgumentTest(value, expression, -1, out listLength, out listVariable);
+        }
+
+        /// <param name="minLength">
+        /// -1 for a rule that holds for lists of the value's length only; otherwise the least length the rule holds for: one whose
+        /// callee takes the list's tail into its rest parameter, whatever its length (see ArgsBuilder.AddCallArguments). Without it a
+        /// site whose list grows at every call - `f(n - 1, *a, n)' recursing - built a rule for each length and never hit one.
+        /// </param>
+        internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, int minLength, out int listLength, out ParameterExpression/*!*/ listVariable) {
             // Every splatted call comes through here, whoever built the list - `f(*args)' in Ruby
             // source, Kernel#send, an Enumerator replaying the arguments it was made with. A hash
             // a ruby2_keywords method is carrying goes back to being keyword arguments at exactly
@@ -473,7 +482,12 @@ namespace IronRuby.Runtime.Calls {
             );
 
             listLength = value.Count;
-            AddCondition(Ast.Equal(Ast.Property(assignment, typeof(ICollection).GetDeclaredProperty("Count")), AstUtils.Constant(value.Count)));
+            var count = Ast.Property(assignment, typeof(ICollection).GetDeclaredProperty("Count"));
+            Debug.Assert(minLength <= value.Count);
+            AddCondition((minLength >= 0) ?
+                Ast.GreaterThanOrEqual(count, AstUtils.Constant(minLength)) :
+                Ast.Equal(count, AstUtils.Constant(value.Count))
+            );
         }
 
         #endregion

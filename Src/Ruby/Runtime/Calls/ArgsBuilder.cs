@@ -51,6 +51,7 @@ namespace IronRuby.Runtime.Calls {
         // splatted argument list length and storage:
         private int _listLength;
         private ParameterExpression _listVariable;
+        private int _restTakesListFrom = -1;
 
         public int ActualArgumentCount {
             get { return _actualArgumentCount; }
@@ -196,6 +197,29 @@ namespace IronRuby.Runtime.Calls {
             return null;
         }
 
+        /// <summary>
+        /// IR_SPLAT_REST=0 binds a rule for each length of a splatted list that goes into the callee's rest parameter, and
+        /// copies a list the call site made into the rest parameter, as before (see GetRestTakesListFrom).
+        /// </summary>
+        internal static readonly bool SplatRestEnabled = Environment.GetEnvironmentVariable("IR_SPLAT_REST") != "0";
+
+        /// <summary>
+        /// The index of the splatted list's first item that goes into the rest parameter, when every item from there to the end
+        /// does and the items before it go to parameters of their own: then the rule holds for any longer list as well, and need
+        /// not test the list's length but that it is longer than that index (see MetaObjectBuilder.AddSplattedArgumentTest).
+        /// -1 otherwise: a trailing mandatory parameter or a right-hand side takes items counted from the end; a method with
+        /// keywords reads the last item; and when the rest parameter would get none of the list, the last argument is a
+        /// parameter of its own, which a keyword hash is unmarked in (LastArgumentParameterIndex), while for a longer list it
+        /// is in the rest parameter.
+        /// </summary>
+        private int GetRestTakesListFrom(CallArguments/*!*/ args, int listLength) {
+            if (!SplatRestEnabled || !_hasUnsplatParameter || TrailingMandatoryCount > 0 || args.Signature.HasRhsArgument || _keywordSignature != null) {
+                return -1;
+            }
+            int from = Math.Max(0, _mandatoryParamCount + _optionalParamCount - args.SimpleArgumentCount);
+            return (listLength > from) ? from : -1;
+        }
+
         public void AddCallArguments(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             _callArguments = args;
 
@@ -203,7 +227,10 @@ namespace IronRuby.Runtime.Calls {
             _actualArgumentCount = args.SimpleArgumentCount;
             if (args.Signature.HasSplattedArgument) {
                 var splattedArg = args.GetSplattedMetaArgument();
-                metaBuilder.AddSplattedArgumentTest((IList)splattedArg.Value, splattedArg.Expression, out _listLength, out _listVariable);
+                var list = (IList)splattedArg.Value;
+                _restTakesListFrom = GetRestTakesListFrom(args, list.Count);
+                metaBuilder.AddSplattedArgumentTest(list, splattedArg.Expression, (_restTakesListFrom >= 0) ? _restTakesListFrom + 1 : -1,
+                    out _listLength, out _listVariable);
                 _actualArgumentCount += _listLength;
             }
             if (args.Signature.HasRhsArgument) {
@@ -265,14 +292,29 @@ namespace IronRuby.Runtime.Calls {
                         argsToUnsplat.Add(AstUtils.Box(arg));
                         start++;
                     }
-                    array = Methods.MakeArrayOpCall(argsToUnsplat);
-                    
                     int rangeStart = start - args.SimpleArgumentCount;
+
+                    // The whole list goes into the rest parameter, and the site made it for this call: it is the rest
+                    // parameter, not copied into one. `f(n - 1, *a, n)' recursing copied every level's arguments twice.
+                    if (args.Signature.HasFreshSplat && _restTakesListFrom == 0 && argsToUnsplat.Count == 0) {
+                        Debug.Assert(rangeStart == 0 && !args.Signature.HasRhsArgument);
+                        _arguments[UnsplatParameterIndex] = Methods.TakeFreshSplat.OpCall(_listVariable);
+                        _callArguments = null;
+                        _listVariable = null;
+                        return;
+                    }
+
+                    array = Methods.MakeArrayOpCall(argsToUnsplat);
                     int rangeLength = Math.Min(end - start, _listLength - rangeStart);
 
                     // splatted:
                     if (rangeLength > 0) {
-                        array = Methods.AddSubRange.OpCall(array, _listVariable, Ast.Constant(rangeStart), Ast.Constant(rangeLength));
+                        // a rule that holds for longer lists (GetRestTakesListFrom) passes on however many items there are
+                        Expression length = (_restTakesListFrom >= 0) ?
+                            Ast.Subtract(Ast.Property(_listVariable, typeof(ICollection).GetDeclaredProperty("Count")), AstUtils.Constant(rangeStart)) :
+                            AstUtils.Constant(rangeLength);
+                        Debug.Assert(_restTakesListFrom < 0 || _restTakesListFrom == rangeStart && start + rangeLength == end);
+                        array = Methods.AddSubRange.OpCall(array, _listVariable, AstUtils.Constant(rangeStart), length);
                         start += rangeLength;
                     }
 
