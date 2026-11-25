@@ -1353,8 +1353,9 @@ namespace IronRuby.Builtins {
                 // Writes currently go straight to the descriptor, so WritePending is only the
                 // state MRI uses for buffering warnings. Do not probe a pipe merely because it
                 // was written: that manufactures EPIPE after its reader has consumed the data.
-                // A failed explicit #flush is different; MRI retries it from #close.
-                if (!keepDescriptor && self.GetStream().WriteFlushFailed) {
+                // A failed explicit #flush is different; MRI retries it from #close. So is what a
+                // buffered STDOUT still holds: it is written now, and a failure is #close's.
+                if ((!keepDescriptor && self.GetStream().WriteFlushFailed) || self.HasBufferedOutput) {
                     self.Flush();
                 }
             } catch (IOException e) {
@@ -3708,6 +3709,12 @@ namespace IronRuby.Builtins {
                             dstIO.WriteRawBytes(userBuffer, 0, bytesRead);
                         } else {
                             dstIO.WriteRawBytes(buffer, 0, bytesRead);
+                        }
+                        // MRI's copy_stream writes with write(2) past the destination's buffer,
+                        // after flushing it: a buffered STDOUT (not a terminal) is written out as
+                        // each chunk arrives, so a reader waiting on it sees it.
+                        if (dstIO.HasBufferedOutput) {
+                            dstIO.Flush();
                         }
                     } else if (dstStream != null) {
                         if (userBuffer != null) {

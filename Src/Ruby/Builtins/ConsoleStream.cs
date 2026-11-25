@@ -151,19 +151,23 @@ namespace IronRuby.Builtins {
         private Stream _writeTarget;
         private bool _registeredForExit;
 
-        // Set around a #puts that writes a line and its end in one write (PrintOps.Puts).
+        // Set around a #puts that writes a line and its end in one write (PrintOps.Puts): the
+        // length of the end #puts appended as it reaches this stream - "\n", or "\r\n" after
+        // text-mode translation. A "\r" that ended the line itself stays with the line.
         [ThreadStatic]
-        internal static bool SplitBeforeLineEnd;
+        internal static int SplitBeforeLineEnd;
+
+        internal bool HasBufferedBytes {
+            get { return _writeCount > 0; }
+        }
 
         private void WriteBuffered(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
-            // The line end ("\n", or "\r\n" after text-mode translation) is the second of the two
-            // pieces MRI buffers one after the other; both go in under one lock.
-            int end = 0;
-            if (SplitBeforeLineEnd) {
-                SplitBeforeLineEnd = false;
-                if (count > 0 && buffer[offset + count - 1] == (byte)'\n') {
-                    end = (count > 1 && buffer[offset + count - 2] == (byte)'\r') ? 2 : 1;
-                }
+            // The line end is the second of the two pieces MRI buffers one after the other; both
+            // go in under one lock.
+            int end = SplitBeforeLineEnd;
+            SplitBeforeLineEnd = 0;
+            if (end > count) {
+                end = 0;
             }
             lock (_writeLock) {
                 if (_writeCount > 0 && !ReferenceEquals(_writeTarget, target)) {

@@ -128,13 +128,13 @@ namespace IronRuby.Builtins {
                     var io = (RubyIO)self;
                     bool split = io.IsBufferingWrites;
                     if (split) {
-                        RubyIO.SplitNextWriteBeforeLineEnd(true);
+                        RubyIO.SplitNextWriteBeforeLineEnd(io.LineEndLength);
                     }
                     try {
                         Protocols.Write(writeStorage, self, MutableString.Create(str).Append((byte)'\n'));
                     } finally {
                         if (split) {
-                            RubyIO.SplitNextWriteBeforeLineEnd(false);
+                            RubyIO.SplitNextWriteBeforeLineEnd(0);
                         }
                     }
                     return;

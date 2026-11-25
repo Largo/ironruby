@@ -101,6 +101,7 @@ run "gets data", 'print "a"; STDERR.print STDIN.gets; puts "b"', stdin: __FILE__
 # syswrite
 run "syswrite", 'print "a"; STDOUT.syswrite "S"; puts "b"'
 run "syswrite empty buffer", 'STDOUT.syswrite "S"; puts "b"'
+run "puts CR at the boundary", 'print "a" * 8190; STDERR.print "E"; puts "x\r"; STDERR.print "F"; exit!'
 
 # the end
 run "end", 'print "a"'
@@ -124,19 +125,19 @@ w.close
 lines = r.read.lines
 r.close
 Process.wait(pid)
-puts "threads lines: #{lines.size} #{lines.tally.sort.inspect}"
+puts "threads lines: #{lines.size} #{lines.tally.sort.inspect} #{status($?)}"
 
 # a file
 path = File.join(DIR, "out.txt")
 pid = Process.spawn(RUBY, "-e", 'STDERR.print STDOUT.sync; print "a"; STDERR.print File.size(ARGV[0]); puts "b"', path, out: path, err: File.join(DIR, "err.txt"))
 Process.wait(pid)
-puts "file: #{File.read(path).inspect} #{File.read(File.join(DIR, 'err.txt')).inspect}"
+puts "file: #{File.read(path).inspect} #{File.read(File.join(DIR, 'err.txt')).inspect} #{status($?)}"
 
 # a terminal (script(1) gives the child one): written through, sync still false
 if system("command -v script >/dev/null 2>&1")
   code = 'STDERR.print [STDOUT.sync, STDOUT.tty?].inspect; print "a"; STDERR.print "E"; print "b"'
   out = IO.popen(["script", "-qec", "#{Shellwords.escape(RUBY)} -e #{Shellwords.escape(code)}", "/dev/null"], &:read)
-  puts "terminal: #{out.inspect}"
+  puts "terminal: #{out.inspect} #{status($?)}"
 else
   puts "terminal: no script(1)"
 end
