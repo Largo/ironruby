@@ -1991,8 +1991,12 @@ namespace IronRuby.Builtins {
 
             // STDOUT holding output in its buffer (not a terminal): MRI's syswrite is a write(2)
             // that goes past it, so what the buffer holds comes out after these bytes.
-            if (count > 0 && self.TryWriteUnbuffered(val.ToByteArray(), 0, count)) {
-                return count;
+            try {
+                if (count > 0 && self.TryWriteUnbuffered(val.ToByteArray(), 0, count)) {
+                    return count;
+                }
+            } catch (IOException e) {
+                throw TranslateStreamError(e);
             }
 
             // syswrite raises Errno::EPIPE even on STDOUT (MRI signals only for buffered writes)
