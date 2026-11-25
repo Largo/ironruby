@@ -70,6 +70,15 @@ TIMEOUT = opts[:timeout]
 OUT = File.expand_path(opts[:out] || Dir.mktmpdir('gate-matrices-'))
 FileUtils.mkdir_p(OUT)
 CRUBY = ENV['CRUBY'] || 'ruby'
+# CRuby is the expectation: without a working 4.0 every unit would read `cruby!' and the run
+# would still say PASS, having compared nothing.
+begin
+  version, status = Open3.capture2(CRUBY, '-e', 'print RUBY_VERSION')
+rescue SystemCallError => e
+  abort "#{CRUBY}: #{e.message}"
+end
+abort "#{CRUBY} does not run (exit #{status.exitstatus})" unless status.success?
+abort "#{CRUBY} is Ruby #{version}; the matrices' expectation is CRuby 4.0" unless version.start_with?('4.0')
 DOTNET = ENV['DOTNET_ROOT'] || '/usr/local/dotnet'
 
 files =
