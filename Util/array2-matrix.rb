@@ -181,7 +181,7 @@ INTS.each do |n|
   show("[1,2,3].shift(#{n.inspect})") { r = [1, 2, 3]; [r.shift(n), r] }
   show("[1,2,3].rotate(#{n.inspect})") { [1, 2, 3].rotate(n) }
   show("[1,2,3] * #{n.inspect}") { [1, 2, 3] * n }
-  show("[1,2,3].sample(#{n.inspect})") { x = [1, 2, 3].sample(n); x.is_a?(Array) ? x.sort : x.class }
+  show("[1,2,3].sample(#{n.inspect})") { x = [1, 2, 3].sample(n); x.is_a?(Array) ? [x.size, x.uniq.size, (x - [1, 2, 3]).empty?] : x.class }
   show("[1,2,3].combination(#{n.inspect})") { [1, 2, 3].combination(n).to_a }
   show("[1,2,3].permutation(#{n.inspect})") { [1, 2, 3].permutation(n).to_a }
   show("[1,2,3].each_slice(#{n.inspect})") { [1, 2, 3].each_slice(n).to_a }
