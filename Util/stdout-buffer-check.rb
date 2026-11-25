@@ -50,7 +50,7 @@ check "p", 'print "a"; p; STDERR.print "E"', "aE"
 check "syswrite", 'print "a"; STDOUT.syswrite "S"; puts "b"', "-e:1: warning: syswrite for buffered IO\nSab\n"
 check "syswrite after overflow", 'print "a" * 9000; STDOUT.syswrite "S"; puts "b"', "a*9000Sb\n"
 check "reopen stderr", 'STDOUT.reopen(STDERR); STDERR.print STDOUT.sync; print "a"; STDERR.print "E"; print "b"; STDERR.print "F"', "trueaEbF"
-check "reopen pipe", 'r, w = IO.pipe; STDOUT.reopen(w); puts "x"; STDERR.print r.read_nonblock(10).inspect', "\"x\\n\""
+check "reopen pipe", 'r, w = IO.pipe; STDOUT.reopen(w); puts "x"; STDERR.print r.read_nonblock(10).delete("\r").inspect', "\"x\\n\""
 
 check "system", CHILD + 'print "a"; child "x"; puts "b"', "axb\n"
 check "exec", 'print "a"; exec RbConfig.ruby, "-e", "print %q(b)"', "b"
