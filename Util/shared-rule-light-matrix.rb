@@ -12,10 +12,8 @@
 # site's first call takes it from there without a bind. Each probe makes the rule hot from many new sites and one hot
 # site, waits for the compile, then changes the hierarchy and calls again from new sites and the hot one: a method
 # defined, redefined, removed or made private on Integer, Comparable, Kernel, Object or BasicObject, a module included
-# or prepended, and refinements (`using`) of both kinds of call, one Integer has a method for (-) and one it inherits.
-#
-# Integer#- is refined rather than Integer#+, which a module prepended above has: CRuby calls a refinement before a
-# prepended module's method, the unchanged IronRuby calls the prepended one.
+# or prepended, and refinements (`using`) of both kinds of call, one Integer has a method for (- and +) and one it
+# inherits. Integer#+ has a module prepended above, and its refinement must still win, as in CRuby.
 #
 #   IR_LIGHT_FRAMES=why ./ir.sh Util/shared-rule-light-matrix.rb 2>&1 >/dev/null | grep -a '^\[light\]'
 #
@@ -120,6 +118,7 @@ module RefZ
   refine Integer do
     def zz = :refined
     def -(o) = [:refined_minus, o]
+    def +(o) = [:refined_plus, o]
   end
 end
 
@@ -127,17 +126,23 @@ class Integer; def zz = :Integer4; end
 
 def zz_before_using(a) = a.zz
 def minus_before_using(a) = a - 1
+def plus_before_using(a) = a + 1
 
 probe("before using: zz", z, :zz_hot) { }
 probe("before using: -", "a - 1", :minus_before_using) { }
+probe("before using: +", "a + 1", :plus_before_using) { }
 
 using RefZ
 
 def zz_after_using(a) = a.zz
 def minus_after_using(a) = a - 1
+def plus_after_using(a) = a + 1
 
 r = []
-HOT.times { r << zz_before_using(3) << zz_after_using(3) << minus_before_using(3) << minus_after_using(3) }
+HOT.times do
+  r << zz_before_using(3) << zz_after_using(3) << minus_before_using(3) << minus_after_using(3)
+  r << plus_before_using(3) << plus_after_using(3) << send(fresh("a + 1"), 3)
+end
 puts "after using, methods by place".ljust(46) + " => " + r.uniq.map(&:inspect).join(', ')
 
 module RefZ
