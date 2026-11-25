@@ -846,6 +846,21 @@ namespace IronRuby.Runtime {
             Assert.NotNull(globalScope, owner, name);
 
             RubyContext context = owner.Context;
+
+            // `::Object.const_get(n)' in a const_missing (Delegator's, for every `Object' its methods name) asks for the
+            // same constant of the same module again and again; CRuby's rb_const_get is a table probe or two, ours a locked
+            // walk of the ancestors. The version is read before the lookup, so a change that races with it invalidates what
+            // it stores. Not kept where a read does more than return the value: a deprecated constant warns (deprecating one
+            // moves the version), one read after Ractors start is checked, and while an autoload runs the answer depends on
+            // the thread.
+            int version = Volatile.Read(ref context.ConstantAccessVersion);
+            bool cacheable = !context.RactorsStarted;
+            var cached = owner.ConstGetCache;
+            if (cacheable && cached != null && cached.Version == version && cached.LookupObject == lookupObject &&
+                String.Equals(cached.Name, name, StringComparison.Ordinal)) {
+                return cached.Value;
+            }
+
             object value = null;
             bool found = false;
             RubyModule deprecatedOwner = null;
@@ -877,6 +892,9 @@ namespace IronRuby.Runtime {
                         constantOwner = owner.GetConstantOwnerNoLock(name) ?? context.ObjectClass;
                     }
                     RactorIsolation.CheckConstantRead(context, constantOwner, name, value);
+                }
+                if (cacheable && deprecatedOwner == null && !context.IsAutoloadInProgress) {
+                    owner.ConstGetCache = new ConstantReadCache(version, name, lookupObject, value);
                 }
                 return value;
             }
@@ -1472,6 +1490,51 @@ namespace IronRuby.Runtime {
             return "(eval at " + path + ":" + line + ")";
         }
 
+        private static EvalEntryPointDelegate/*!*/ CompileEval(RubyContext/*!*/ context, byte[]/*!*/ bytes, MutableString/*!*/ code,
+            string/*!*/ sourcePath, RubyCompilerOptions/*!*/ options, int line, EvalCodeCache.Key cacheKey) {
+
+            var source = context.CreateSourceUnit(new BinaryContentProvider(bytes), sourcePath, code.Encoding.Encoding, SourceCodeKind.File);
+
+            // A compile that gave a warning is not kept: MRI gives it at each eval. Another thread's
+            // warning in between only keeps this one out too.
+            int warnings = context.RuntimeErrorSink.WarningCount;
+
+            Expression<EvalEntryPointDelegate> lambda;
+            try {
+                lambda = context.ParseSourceCode<EvalEntryPointDelegate>(source, options, context.RuntimeErrorSink);
+            } catch (SyntaxError e) {
+                Utils.Log(e.Message, "EVAL_ERROR");
+                Utils.Log(new String('-', 50), "EVAL_ERROR");
+                Utils.Log(source.GetCode(), "EVAL_ERROR");
+                Utils.Log(new String('-', 50), "EVAL_ERROR");
+
+                // MRI names the file and the line the error is on in front of the message, so
+                // that code which evaluated a string knows which string and where in it: the
+                // line the parser saw is not the one to name when eval started below line 1.
+                if (e.HasLineInfo && e.File != null) {
+                    // A SourceLocation cannot start before line 1, so a zero or negative starting
+                    // line was compiled from 1 and is put back here: eval with a line of -100
+                    // reports its first line as -100, which is what MRI does.
+                    int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
+                    string errorFile = e.File;
+                    DecodeEvalLineOffset(ref errorFile);
+                    throw new SyntaxError(e.Description, errorFile, reportedLine);
+                }
+                throw;
+            }
+            Debug.Assert(lambda != null);
+
+            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context.DomainManager.Configuration.DebugMode,
+                context.Options.NoAdaptiveCompilation, context.EvalCompilationThreshold);
+            if (cacheKey != null && options.EvalCodeShareable && context.RuntimeErrorSink.WarningCount == warnings) {
+                if (context.EvalCodeCache == null) {
+                    System.Threading.Interlocked.CompareExchange(ref context.EvalCodeCache, new EvalCodeCache(), null);
+                }
+                context.EvalCodeCache.Add(cacheKey, compiled);
+            }
+            return compiled;
+        }
+
         public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module, MutableString file, int line) {
             return Evaluate(code, targetScope, self, module, null, file, line);
         }
@@ -1501,35 +1564,32 @@ namespace IronRuby.Runtime {
             // MRI's parser_prepare does (eval "\xEF\xBB\xBF..." from a binary or US-ASCII file).
             options.EvalSourceEncoding = StartsWithUtf8Bom(code) ? RubyEncoding.UTF8 : code.Encoding;
             string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
-            var source = CreateRubySourceUnit(context, code, (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path);
+            string sourcePath = (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path;
+            byte[] bytes = code.ToByteArray();
 
-            Expression<EvalEntryPointDelegate> lambda;
-            try {
-                lambda = context.ParseSourceCode<EvalEntryPointDelegate>(source, options, context.RuntimeErrorSink);
-            } catch (SyntaxError e) {
-                Utils.Log(e.Message, "EVAL_ERROR");
-                Utils.Log(new String('-', 50), "EVAL_ERROR");
-                Utils.Log(source.GetCode(), "EVAL_ERROR");
-                Utils.Log(new String('-', 50), "EVAL_ERROR");
+            // A plain string eval of a text that keeps no state of one eval runs the code compiled at its
+            // last eval in the same place (EvalCodeCache): an ERB template evaluated at every #result.
+            EvalCodeCache.Key cacheKey = null;
+            EvalEntryPointDelegate compiled = null;
+            if (module == null && bytes.Length <= EvalCodeCache.MaxCodeLength && options.TopLevelParameterSignature == null &&
+                options.IsolatedLocalNames == null && context.Coverage == null) {
 
-                // MRI names the file and the line the error is on in front of the message, so
-                // that code which evaluated a string knows which string and where in it: the
-                // line the parser saw is not the one to name when eval started below line 1.
-                if (e.HasLineInfo && e.File != null) {
-                    // A SourceLocation cannot start before line 1, so a zero or negative starting
-                    // line was compiled from 1 and is put back here: eval with a line of -100
-                    // reports its first line as -100, which is what MRI does.
-                    int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
-                    string errorFile = e.File;
-                    DecodeEvalLineOffset(ref errorFile);
-                    throw new SyntaxError(e.Description, errorFile, reportedLine);
+                object verbose = context.Verbose;
+                cacheKey = new EvalCodeCache.Key(bytes, code.Encoding, sourcePath, line,
+                    verbose == null ? 0 : (RubyOps.IsTrue(verbose) ? 2 : 1), methodScope != null,
+                    options.EvalFrameBaseLabel, options.EvalFrameBlockLevels, options.TopLevelMethodName, options.TopLevelParameterNames,
+                    options.TopLevelHasUnsplatParameter, options.LocalNames, EvalCodeCache.ConstantModules(targetScope));
+                var cache = context.EvalCodeCache;
+                if (cache != null) {
+                    compiled = (EvalEntryPointDelegate)cache.TryGet(cacheKey);
                 }
-                throw;
+                options.CheckEvalCodeShareable = true;
             }
-            Debug.Assert(lambda != null);
 
-            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context.DomainManager.Configuration.DebugMode,
-                context.Options.NoAdaptiveCompilation, context.EvalCompilationThreshold);
+            if (compiled == null) {
+                compiled = CompileEval(context, bytes, code, sourcePath, options, line, cacheKey);
+            }
+
             var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
 
             if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {

@@ -2,7 +2,9 @@
 # render per unit. erb_full is result_with_hash; erb_eval evals the template's src in a fresh
 # binding (parse, bridge, transform, compile and run); erb_def runs the same src as a method
 # defined once (the body alone); erb_toplevel is new_toplevel + local_variable_set (the binding);
-# erb_new is ERB.new(t).src (the template compiler); eval_small is eval('1 + 1', fresh binding).
+# erb_new is ERB.new(t).src (the template compiler); eval_small is eval('1 + 1', fresh binding);
+# erb_eval_top evals the src in a copy of TOPLEVEL_BINDING, as #result does (perf/erb36: the
+# compiled code of the text is kept, EvalCodeCache).
 #
 #   IR_CONFIG=Release ./ir.sh Util/bench/erb-shapes.rb [shape ...]
 #   ruby Util/bench/erb-shapes.rb
@@ -25,6 +27,7 @@ ERBT = ERB.new(PAGE, trim_mode: '-')
 SRC = ERBT.src
 class Body; end
 Body.class_eval("def self.run(title, items)\n#{SRC}\nend")
+def fresh_top(title) = (b = TOPLEVEL_BINDING.dup; b.local_variable_set(:title, title); b.local_variable_set(:items, ITEMS); b)
 def fresh(title) = (b = binding; b.local_variable_set(:title, title); b.local_variable_set(:items, ITEMS); b)
 
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
@@ -40,6 +43,7 @@ def n(count) = [count * N / 1000, 1].max
 
 t("erb_full", n(300))     { |n| s = 0; n.times { |i| s += crc(ERBT.result_with_hash(title: "T#{i & 3}", items: ITEMS)) }; s }
 t("erb_eval", n(300))     { |n| s = 0; n.times { |i| s += crc(eval(SRC, fresh("T#{i & 3}"), '(erb)', 0)) }; s }
+t("erb_eval_top", n(300)) { |n| s = 0; n.times { |i| s += crc(eval(SRC, fresh_top("T#{i & 3}"), '(erb)', 0)) }; s }
 t("erb_def", n(3000))     { |n| s = 0; n.times { |i| s += crc(Body.run("T#{i & 3}", ITEMS)) }; s }
 t("erb_toplevel", n(3000)) { |n| s = 0; n.times { |i| b = ERBT.send(:new_toplevel, [:title, :items]); b.local_variable_set(:title, i); s += b.local_variable_get(:title) }; s }
 t("erb_new", n(1000))     { |n| s = 0; n.times { s += crc(ERB.new(PAGE, trim_mode: '-').src) }; s }
