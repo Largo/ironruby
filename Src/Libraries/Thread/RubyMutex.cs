@@ -128,7 +128,13 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         private void LockContended(Thread/*!*/ me, bool interruptible) {
-            lock (_syncRoot) {
+            // Not `lock`: Thread.Interrupt breaks a contended Monitor.Enter off, and the bare
+            // ThreadInterruptedException reached Ruby code instead of the Thread#raise it came for.
+            // The nudge is dropped, and what it came for is raised here before the wait.
+            using (new RubyUtils.UninterruptedLock(_syncRoot)) {
+                if (interruptible) {
+                    RubyUtils.CheckAsyncException();
+                }
                 if (_owner == me) {
                     // A fiber is a CLR thread here. If an asynchronous Thread#raise terminated
                     // the fiber in the narrow hand-off around #synchronize, reclaim its lock;
@@ -179,7 +185,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 held.Add(this);
             } else {
                 _inSharedSet = true;
-                lock (_sharedLocked) {
+                using (new RubyUtils.UninterruptedLock(_sharedLocked)) {
                     _sharedLocked.Add(this);
                 }
             }
@@ -192,11 +198,17 @@ namespace IronRuby.StandardLibrary.Threading {
             _heldPruneAt = Math.Max(16, held.Count * 2);
         }
 
-        // Called by the holder (or, for a dead holder, on its behalf) with the lock held.
+        // Called by the holder (or, for a dead holder, on its behalf) with the lock held. Every
+        // monitor taken here and in Acquired and ReleaseLocksOf is held for moments only, and is an
+        // UninterruptedLock: a Thread#raise's nudge that found the thread waiting for one broke the
+        // wait off - here before _owner was cleared, which left the mutex locked for good, or before
+        // the waiters were pulsed, which slept on; and in the `finally` that ends a Ruby thread
+        // (ReleaseLocksOf) the ThreadInterruptedException is unhandled and ends the process.
+        // Whatever the nudge came for stays parked for the next safe point.
         private void Release() {
             if (_inSharedSet) {
                 _inSharedSet = false;
-                lock (_sharedLocked) {
+                using (new RubyUtils.UninterruptedLock(_sharedLocked)) {
                     _sharedLocked.Remove(this);
                 }
             } else if (ReferenceEquals(_ownerFiber, Thread.CurrentThread)) {
@@ -214,7 +226,7 @@ namespace IronRuby.StandardLibrary.Threading {
             _ownerFiber = null;
             Interlocked.Exchange(ref _owner, null);
             if (Volatile.Read(ref _waiters) != 0) {
-                lock (_syncRoot) {
+                using (new RubyUtils.UninterruptedLock(_syncRoot)) {
                     Monitor.PulseAll(_syncRoot);
                 }
             }
@@ -238,7 +250,7 @@ namespace IronRuby.StandardLibrary.Threading {
             }
 
             RubyMutex[] shared;
-            lock (_sharedLocked) {
+            using (new RubyUtils.UninterruptedLock(_sharedLocked)) {
                 if (_sharedLocked.Count == 0) {
                     return;
                 }

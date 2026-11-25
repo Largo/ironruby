@@ -806,6 +806,53 @@ sleep 0.01 until $t.status == 'sleep' || Time.now > deadline
         }
 
         /// <summary>
+        /// A Thread#raise that reaches a thread after its block has ended, while the thread releases
+        /// the mutexes it still holds (RubyMutex.ReleaseLocksOf, in the `finally` of the thread's
+        /// start routine). The raise nudges the thread with Thread.Interrupt, and that broke off the
+        /// wait for the monitor of the set of mutexes locked inside fibers - busy here with the
+        /// fibers of the other threads - with a ThreadInterruptedException that nothing handles
+        /// there: it ended the process. The fibers of Fiber_ThreadRaiseReachesRunningFiber1 hit it
+        /// in a parallel test run on a loaded machine.
+        /// </summary>
+        public void Thread_RaiseWhileReleasingLocks1() {
+            TestOutput(@"
+require 'ruby4'
+Thread.report_on_exception = false
+stop = false
+hammers = 4.times.map do
+  Thread.new do
+    m = Mutex.new
+    Fiber.new { m.synchronize {} until stop }.resume
+  end
+end
+target = nil
+raiser = Thread.new do
+  until stop
+    t = target
+    begin
+      t.raise if t && t.alive?
+    rescue ThreadError
+    end
+  end
+end
+deadline = Time.now + 2
+until Time.now > deadline
+  target = Thread.new { nil }
+  begin
+    target.join
+  rescue RuntimeError
+  end
+end
+stop = true
+raiser.join
+hammers.each(&:join)
+puts 'ok'
+", @"
+ok
+");
+        }
+
+        /// <summary>
         /// Keywords given to Fiber#resume / #transfer reach the fiber's block as keywords and come
         /// back from Fiber.yield as a plain Hash; Fiber.schedule hands them on to the scheduler.
         /// The FiberError messages for resuming a fiber that is resumed or was left by #transfer,
