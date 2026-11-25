@@ -399,7 +399,9 @@ flags = [0, 0]; acc = [0]
 th = Thread.new do
   t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   Thread.pass while flags[1] < 100_000 && Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 < 10
-  Integer.class_eval { remove_method :times; def times; yield 98; self; end }
+  # One def replaces #times atomically; remove_method first left a moment with no Integer#times, and the loop's
+  # f.times raised NoMethodError when it ran then (CRuby too). The alias keeps -w from warning about the redefinition.
+  Integer.class_eval { alias_method :__fl_times, :times; def times; yield 98; self; end }
 ensure
   flags[0] = 1
 end

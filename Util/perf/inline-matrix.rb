@@ -358,10 +358,10 @@ when /\Atree/
     puts tree_run(t, probe, N, ->(i) { TNode.class_eval { def left; @right; end } })
   when 'tree_attr_subclass'
     puts tree_run(t, probe, N, ->(i) {
-      mid = t.root.left.right
+      mid = t.root.right.left.right
       sub = TNodeSub.new(mid.key, mid.value)
       sub.left, sub.right = mid.left, mid.right
-      t.root.left.right = sub
+      t.root.right.left.right = sub
     })
   when 'tree_attr_singleton'
     puts tree_run(t, probe, N, ->(i) { def (t.root.right.left).right; nil; end })
@@ -372,7 +372,7 @@ when /\Atree/
       t.root.right = sn.new(mid.key, mid.value, mid.left, mid.right)
     })
   when 'tree_nil_node_key'
-    puts tree_run(t, probe, N, ->(i) { t.root.left.instance_variable_set(:@key, nil) })
+    puts tree_run(t, probe, N, ->(i) { t.root.right.left.instance_variable_set(:@key, nil) })
   when 'tree_cycle'
     class T
       def find_bounded(key)
@@ -394,8 +394,8 @@ when /\Atree/
     end
     s = 0
     N.times do |i|
-      t.root.left.left = t.root if i == N / 2
-      r = t.find_bounded(V.new(-1.0, 0.0))
+      t.root.right.left.left = t.root if i == N / 2
+      r = t.find_bounded(V.new(0.5, 0.0))
       s += r.is_a?(Integer) ? r : r.value
     end
     puts s

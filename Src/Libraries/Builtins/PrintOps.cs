@@ -104,11 +104,30 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("puts")]
         public static void Puts(BinaryOpStorage/*!*/ writeStorage, object self, [NotNull]MutableString/*!*/ str) {
-            Protocols.Write(writeStorage, self, str);
-
-            if (!str.EndsWith('\n')) {
-                PutsEmptyLine(writeStorage, self);
+            if (str.EndsWith('\n')) {
+                Protocols.Write(writeStorage, self, str);
+                return;
             }
+
+            // MRI's rb_io_puts hands the line and its "\n" to one write (rb_io_writev), and an IO
+            // writes the two in one write(2). IronRuby's IO writes through at once, so two calls
+            // reached a pipe as two pieces, and a reader could see the line before its end: Git
+            // Bash's grep decides from the first piece it reads whether the input has CR LF line
+            // ends, and when that piece was a bare "42" it kept the CR that came after, so
+            // `ir -e 'puts 42' | grep -x 42` failed now and then on Windows. When the receiver is a
+            // plain IO whose #write nobody has replaced, the line goes out with its end in one
+            // write; anything else still gets the two #write calls it always did.
+            var context = writeStorage.Context;
+            if (str.Encoding.IsAsciiIdentity && self is RubyIO) {
+                RubyClass ioClass = context.GetClass(typeof(RubyIO));
+                if (ReferenceEquals(context.GetImmediateClassOf(self), ioClass) && IListOps.IsBuiltinMethod(ioClass, "write")) {
+                    Protocols.Write(writeStorage, self, MutableString.Create(str).Append((byte)'\n'));
+                    return;
+                }
+            }
+
+            Protocols.Write(writeStorage, self, str);
+            PutsEmptyLine(writeStorage, self);
         }
 
         [RubyMethod("puts")]

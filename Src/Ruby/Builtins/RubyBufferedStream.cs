@@ -309,28 +309,35 @@ namespace IronRuby.Builtins {
                 _writePending |= count > 0;
                 return count;
             } else {
-                int bytesWritten = 0;
-                int i = offset;
+                // Text mode on Windows: every LF goes out as CR LF, in the same single write as the
+                // bytes around it, as MRI's write buffer does it. Writing the CR and the LF as two
+                // one-byte writes of their own let a reader at a pipe see a line end in "\r" with the
+                // "\n" still to come; an MSYS reader such as Git Bash's grep, which drops the CR of a
+                // CR LF it reads in one piece, then kept that CR and `ir -e 'puts 42' | grep -x 42`
+                // failed now and then.
                 int end = offset + count;
-                while (i < end) {
-                    int j = i;
-                    while (j < end && buffer[j] != LF) {
-                        j++;
+                int lineFeeds = 0;
+                for (int k = offset; k < end; k++) {
+                    if (buffer[k] == LF) {
+                        lineFeeds++;
                     }
-                    BaseWrite(buffer, i, j - i);
-                    bytesWritten += j - i;
-                    _writePending = true;
-
-                    if (j < end) {
-                        _stream.WriteByte(CR);
-                        _stream.WriteByte(LF);
-                        bytesWritten += 2;
-                    }
-
-                    i = j + 1;
                 }
 
-                return bytesWritten;
+                if (lineFeeds == 0) {
+                    BaseWrite(buffer, offset, count);
+                } else {
+                    byte[] translated = new byte[count + lineFeeds];
+                    int t = 0;
+                    for (int k = offset; k < end; k++) {
+                        if (buffer[k] == LF) {
+                            translated[t++] = CR;
+                        }
+                        translated[t++] = buffer[k];
+                    }
+                    BaseWrite(translated, 0, translated.Length);
+                }
+                _writePending |= count > 0;
+                return count + lineFeeds;
             }
         }
 

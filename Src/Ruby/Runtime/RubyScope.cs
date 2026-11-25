@@ -758,7 +758,8 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// The refinements active at this lexical position.  Canonical: a scope with no `using' of its own
-        /// returns its parent's instance, and a chain with none anywhere returns
+        /// returns its parent's instance (a class or module body the one its parent had when the body was
+        /// entered - see GetEntryRefinements), and a chain with none anywhere returns
         /// <see cref="RefinementActivation.Empty"/>, so reference equality of the result is a sound (and
         /// cheap) call-site guard.
         /// </summary>
@@ -804,19 +805,36 @@ namespace IronRuby.Runtime {
                     if (definition != null) {
                         return definition;
                     }
+                } else if (!(scope is RubyBlockScope)) {
+                    var entry = GetEntryRefinements(scope);
+                    if (entry != null) {
+                        return entry;
+                    }
                 } else if (refineBlockRunning) {
-                    var blockScope = scope as RubyBlockScope;
-                    if (blockScope != null) {
-                        var blockOverride = blockScope.BlockFlowControl.Proc.RefinementOverride;
-                        if (blockOverride != null) {
-                            return blockOverride;
-                        }
+                    var blockOverride = ((RubyBlockScope)scope).BlockFlowControl.Proc.RefinementOverride;
+                    if (blockOverride != null) {
+                        return blockOverride;
                     }
                 }
                 scope = scope._parent;
             } while (scope != null);
 
             return RefinementActivation.Empty;
+        }
+
+        /// <summary>
+        /// What the enclosing scopes had in use when a class or module body, or a string module_eval, was entered;
+        /// null for any other scope. MRI's cref for such a body points at the cref current at that moment, and a later
+        /// `using' out there gives its own frame a new cref rather than changing that one, so neither the body nor a
+        /// block or define_method written in it sees the `using' (unlike a block in the frame that ran it).
+        /// </summary>
+        private static RefinementActivation GetEntryRefinements(RubyScope/*!*/ scope) {
+            var moduleScope = scope as RubyModuleScope;
+            if (moduleScope != null) {
+                return moduleScope.EntryRefinements;
+            }
+            var evalScope = scope as RubyModuleEvalScope;
+            return (evalScope != null) ? evalScope.EntryRefinements : null;
         }
 
         private RefinementActivation/*!*/ ComputeActiveRefinements() {
@@ -845,7 +863,7 @@ namespace IronRuby.Runtime {
                 }
                 outer = recorded.Value ?? ((_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty);
             } else {
-                outer = (_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty;
+                outer = GetEntryRefinements(this) ?? ((_parent != null) ? _parent.GetLexicalRefinements() : RefinementActivation.Empty);
             }
             RefinementActivation result = (UsedModules != null) ? RefinementActivation.Create(outer, UsedModules, UsedModuleSnapshots) : outer;
 
@@ -1593,6 +1611,12 @@ namespace IronRuby.Runtime {
 
     public sealed class RubyModuleScope : RubyClosureScope {
         private readonly RubyModule _module;
+        private RefinementActivation _entryRefinements;
+
+        // see RubyScope.GetEntryRefinements
+        internal RefinementActivation/*!*/ EntryRefinements {
+            get { return _entryRefinements; }
+        }
 
         public override ScopeKind Kind { get { return ScopeKind.Module; } }
         public override bool InheritsLocalVariables { get { return false; } }
@@ -1614,6 +1638,7 @@ namespace IronRuby.Runtime {
 
             // RubyModuleScope:
             _module = module;
+            _entryRefinements = parent.GetActiveRefinements();
             InLoop = parent.InLoop;
             InRescue = parent.InRescue;
             MethodAttributes = RubyMethodAttributes.PublicInstance;
@@ -1624,7 +1649,9 @@ namespace IronRuby.Runtime {
         /// methods a clone of the module gets (see RubyModule.InitializeMembersFrom).
         /// </summary>
         internal RubyModuleScope/*!*/ CopyFor(RubyModule/*!*/ module) {
-            return new RubyModuleScope(_parent, module);
+            var result = new RubyModuleScope(_parent, module);
+            result._entryRefinements = _entryRefinements;
+            return result;
         }
     }
 
@@ -1645,7 +1672,13 @@ namespace IronRuby.Runtime {
     /// </remarks>
     public sealed class RubyModuleEvalScope : RubyClosureScope {
         private readonly RubyModule _module;
+        private readonly RefinementActivation/*!*/ _entryRefinements;
         private RubyModule _lexicalConstantModule;
+
+        // see RubyScope.GetEntryRefinements
+        internal RefinementActivation/*!*/ EntryRefinements {
+            get { return _entryRefinements; }
+        }
 
         // MRI's instance_eval of a string does not create the receiver's singleton class up front:
         // until something is defined in it, the eval's cref is the receiver's class, whose own
@@ -1678,6 +1711,7 @@ namespace IronRuby.Runtime {
 
             // RubyModuleScope:
             _module = module;
+            _entryRefinements = parent.GetActiveRefinements();
             InLoop = parent.InLoop;
             InRescue = parent.InRescue;
             SetEmptyLocals();

@@ -434,9 +434,31 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString GetNamedGroupValue(string/*!*/ name) {
-            return NamedGroupSuccess(name)
-                ? _originalString.GetSlice(GetNamedGroupStart(name), GetNamedGroupLength(name))
-                : null;
+            MutableString value;
+            TryGetNamedGroupValue(name, out value);
+            return value;
+        }
+
+        /// <summary>
+        /// False if the pattern has no group of that name; otherwise the group's text, null if it
+        /// took no part in the match. One table lookup, where HasNamedGroup and GetNamedGroupValue
+        /// together made several: MatchData#[] with a name is called a dozen times per URI.parse.
+        /// </summary>
+        public bool TryGetNamedGroupValue(string/*!*/ name, out MutableString value) {
+            int[] numbers;
+            if (!GetNamedGroupTable().Numbers.TryGetValue(name, out numbers)) {
+                value = null;
+                return false;
+            }
+            Group group = null;
+            foreach (int number in numbers) {
+                var g = _match.Groups[number];
+                if (group == null || g.Success) {
+                    group = g;
+                }
+            }
+            value = group.Success ? _originalString.GetSlice(group.Index, group.Length) : null;
+            return true;
         }
 
         public int GetGroupStart(int groupIndex) {

@@ -79,6 +79,14 @@ SHIPPED = %w[
   readline
 ].freeze
 
+# Installed files IronRuby patches after installing them, each hunk marked with
+# an "IronRuby:" comment.  Reinstalling a gem overwrites its files, so after a
+# run the diff of these against the commit before shows a reverted hunk to put
+# back (or to drop, if the new version no longer needs it):
+#
+#   csv-3.3.5/lib/csv.rb  CSV#read parses without the fiber of #each when
+#                         nothing the parse runs can tell (parse_on_this_fiber?)
+
 # The bundled gems IronRuby does not ship, and why.
 SKIPPED = {
   # IronRuby implements these itself.  The gem is a C extension whose lib/ is a

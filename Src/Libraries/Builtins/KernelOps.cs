@@ -2305,7 +2305,7 @@ namespace IronRuby.Builtins {
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("respond_to?")]
         public static bool RespondTo(RespondToCacheStorage/*!*/ respondToMissingStorage,
-            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
+            [DeclaringScope]RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
 
             var context = scope.RubyContext;
             RubyClass cls = context.GetImmediateClassOf(self);

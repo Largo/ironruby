@@ -4974,9 +4974,11 @@ namespace IronRuby.Runtime {
             }
 
             // rb_cstr_to_dbl names the string as its #inspect does ("%+"PRIsVALUE), in its own encoding - of a new
-            // String made from its bytes (rb_enc_str_new_cstr), so a subclass's #inspect is not called
+            // String made from its bytes (rb_enc_str_new_cstr), so a subclass's #inspect is not called.
+            // Thrown at once, kept by nothing (as InvalidFloatValue's): a `Float(s) rescue s' then takes no walk of the stack.
             if (original != null) {
-                throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(MutableString.Create(original)).ToString());
+                throw RubyExceptionData.MarkUnkept(RubyExceptions.CreateArgumentError("invalid value for Float(): {0}",
+                    context.Inspect(MutableString.Create(original)).ToString()));
             }
             throw InvalidFloatValue(Encoding.UTF8.GetBytes(value));
         }
