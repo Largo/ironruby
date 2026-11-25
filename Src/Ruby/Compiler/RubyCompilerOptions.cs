@@ -110,5 +110,13 @@ namespace IronRuby.Compiler {
         /// not use (RubyScope.GetIsolatedLocalNames). Null otherwise.
         /// </summary>
         internal ICollection<string> IsolatedLocalNames { get; set; }
+
+        /// <summary>
+        /// Set by the eval that may keep the compiled code (EvalCodeCache): the parse then says, in
+        /// <see cref="EvalCodeShareable"/>, whether the text holds nothing that keeps state of one eval.
+        /// </summary>
+        internal bool CheckEvalCodeShareable { get; set; }
+
+        internal bool EvalCodeShareable { get; set; }
     }
 }
