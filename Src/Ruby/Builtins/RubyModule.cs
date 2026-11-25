@@ -2925,7 +2925,8 @@ namespace IronRuby.Builtins {
                     // a refinement is not in anyone's ancestors, so nothing else initializes it
                     refinement.InitializeMethodsNoLock();
                     owner = refinement;
-                    if (refinement.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) {
+                    // a super lookup goes on past a forwarder (`private :m' in a refinement), as FindIn does: it has no body to call
+                    if (refinement.TryGetMethod(name, ref skipHidden, virtualLookup, out info) && (superFrom == null || !info.IsSuperForwarder)) {
                         return true;
                     }
                 }
@@ -2957,7 +2958,11 @@ namespace IronRuby.Builtins {
                         RubyModule[] prepends = modules[j]._prepends;
                         if (prepends.Length > 0 && prepends[0] == modules[i] && FindInRefinementsOf(modules[j])) return true;
                     }
-                    if (FindInRefinementsOf(modules[i]) || FindIn(modules[i])) return true;
+                    // a module whose first prepended module comes earlier in the list had its refinements searched there, and
+                    // a super lookup from that prepended module must not find them again here
+                    RubyModule[] own = modules[i]._prepends;
+                    bool searchedAhead = own.Length > 0 && Array.IndexOf(modules, own[0], 0, i) >= 0;
+                    if ((!searchedAhead && FindInRefinementsOf(modules[i])) || FindIn(modules[i])) return true;
                 }
                 return false;
             }

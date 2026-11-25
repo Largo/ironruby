@@ -529,5 +529,27 @@ nil
 [:D0, :C1, 0]
 ");
         }
+
+        /// <summary>
+        /// super from a module prepended to an included module that is refined: the refinement is searched ahead of
+        /// the prepended module (the refined entry stays in the module's own table), so super from that prepended
+        /// module goes on to the module and does not come back to the refinement.
+        /// </summary>
+        public void Refinements14() {
+            TestOutput(@"
+module P; def m = [:P]; end
+module Q; end
+P.prepend(Q)
+class C; include P; end
+module R; refine P do; def m = [:R, *super]; end; end
+using R
+module Q; def m = [:Q, *super]; end
+p C.new.m
+p Q.instance_method(:m).bind_call(C.new)
+", @"
+[:R, :P]
+[:Q, :P]
+");
+        }
     }
 }
