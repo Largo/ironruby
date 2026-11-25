@@ -97,9 +97,12 @@ files before the `diff` below - each `> FAILED: Name` it prints is run alone onc
 to `failed.txt` if it fails again, to `flaky.txt` if it passes (an `alone-Name` that now passes
 moves from `failed.txt` to `flaky.txt`). A rerun that does not itself end with `PASSED` or a
 `Repro:` line is incomplete too, and the candidate fails the gate until one does - or run the
-whole script again, with fewer `JOBS` or on a quieter machine, until it exits 0 or 1.
-A test that failed beside the others and passed alone is in `flaky.txt` and printed
-(`BlockLoopNested1` does this about once in sixteen runs under load, on master too).
+whole script again, with fewer `JOBS` or on a quieter machine, until it exits 0 or 1. The
+driver runs a name it does not know as nothing and still prints `PASSED`, and a test marked
+`[Run]` replaces the names it is given: a rerun counts only if its output has an `Executing
+Name` line for every name on its list (the script checks this for its own runs).
+A test that failed beside the others and passed alone is in `flaky.txt` and printed (a test
+whose own threads race - `BlockLoopNested1` did, once in sixteen runs under load, until #281).
 
 `diff` the two trees' `failed.txt` and `flaky.txt`: a name only the candidate has fails the
 gate - in `flaky.txt` too, until twenty runs of it alone (`./IronRuby.Tests Name`, eight at

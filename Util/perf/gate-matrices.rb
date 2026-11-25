@@ -26,7 +26,8 @@
 #   same       NEW prints what CRuby prints
 #   baseline   NEW differs from CRuby only in lines BASE differs in too ("-3": NEW has three
 #              such lines fewer than BASE, a difference the change fixed)
-#   DIFF       NEW has a line differing from CRuby that BASE in the same mode does not: the gate
+#   DIFF       NEW has a line differing from CRuby that BASE in the same mode does not - a line
+#              CRuby prints that NEW leaves out counts as much as one NEW adds: the gate
 #              fails, unless the run is flaky - every DIFF is run twice more, alone, at the end,
 #              and one that then prints what BASE prints is reported as `flaky', not passed over
 #   died       CRuby ran to the end (exit 0), BASE and NEW did not, and NEW's output differs from
@@ -34,8 +35,8 @@
 #              so the gate cannot pass on it - fix the crash (or move the rows past it) first
 #   cruby!     CRuby itself did not exit 0: the matrix dies before its last rows, and the rows
 #              after the failure are compared by no one (round seventeen); fix the matrix
-# Exit status 1 when any run is DIFF, else 2 when any is died (the comparison is incomplete, as
-# parallel-tests.sh's 2 is), else 0. OUT/report.txt has the table, OUT/<matrix>/ every output,
+# Exit status 1 when any run is DIFF, else 2 when any is died or any matrix is cruby! (the
+# comparison is incomplete, as parallel-tests.sh's 2 is), else 0. OUT/report.txt has the table, OUT/<matrix>/ every output,
 # OUT/<matrix>/<mode>.diff the lines a DIFF is about, and OUT/times.tsv each run's seconds (also
 # kept in $TMPDIR/gate-matrices-times.tsv, or $GATE_MATRICES_TIMES, to start the slow ones first).
 require 'optparse'
@@ -232,7 +233,8 @@ File.write(File.join(OUT, 'times.tsv'), times.sort.reverse.map { |t| t.join("\t"
 times.each { |secs, name, who, mode| last[[name, who.sub(/\d\z/, ''), mode.to_s].join("\t")] = secs }
 File.write(TIMES_CACHE, last.map { |k, secs| "#{secs}\t#{k}\n" }.join) rescue nil
 
-# The lines of IR's output that are not CRuby's, as `diff' marks them, without line numbers.
+# The lines in which IR's output and CRuby's differ, as `diff' marks them, without line numbers:
+# "> x" a line IR prints and CRuby does not, "< x" a line CRuby prints and IR leaves out.
 def bad_lines(cruby, ir)
   return [] if cruby == ir
   a = File.join(Dir.tmpdir, "gm-a-#{Process.pid}-#{Thread.current.object_id}")
@@ -240,7 +242,7 @@ def bad_lines(cruby, ir)
   File.binwrite(a, cruby); File.binwrite(b, ir)
   out, status = Open3.capture2('diff', a, b)
   raise "diff #{a} #{b}: #{status}" if status.exitstatus.nil? || status.exitstatus > 1
-  out.b.lines.grep(/\A> /)
+  out.b.lines.grep(/\A[<>] /)
 ensure
   File.delete(a, b) rescue nil
 end
@@ -320,8 +322,8 @@ unless died.empty?
   died.each { |name, m| report << "  #{name} #{m}: #{File.join(OUT, name, "base-#{m}.err")}\n" }
 end
 diffs.each { |name, m| report << "DIFF #{name} #{m}: #{File.join(OUT, name, "#{m}.diff")}\n" }
-status = !diffs.empty? ? 1 : !died.empty? ? 2 : 0
-report << ["PASS\n", "FAIL\n", "INCOMPLETE (died)\n"][status]
+status = !diffs.empty? ? 1 : !died.empty? || !broken.empty? ? 2 : 0
+report << ["PASS\n", "FAIL\n", "INCOMPLETE (#{[('died' unless died.empty?), ('cruby!' unless broken.empty?)].compact.join(', ')})\n"][status]
 File.write(File.join(OUT, 'report.txt'), report)
 puts report, "(#{OUT}/report.txt)"
 exit(status)
