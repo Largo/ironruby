@@ -445,6 +445,9 @@ namespace IronRuby.Builtins {
             [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions,
             object pgroup, bool closeOthers) {
 
+            // MRI's prefork(): $stdout and $stderr are written out before the child starts, so
+            // that what the parent printed first comes first.
+            context.FlushStandardStreams(false);
             if (IsWindows) {
                 return ScriptingRuntimeHelpers.Int32ToObject(
                     WindowsSpawn.Spawn(context, file, argv, envp, actions, pgroup));
@@ -992,6 +995,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("__backquote__", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Backquote(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions) {
+            context.FlushStandardStreams(false);    // prefork(), as for spawn
             return CaptureOutput(context, file, argv, envp, actions);
         }
 

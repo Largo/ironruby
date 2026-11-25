@@ -256,6 +256,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static RubyIO/*!*/ InitializeCopy(RubyIO/*!*/ self, [NotNull]RubyIO/*!*/ source) {
             Stream stream = source.GetStream();
+            // MRI's rb_io_init_copy flushes the original first: what it buffered is written
+            // before anything the copy writes.
+            if (source.Mode.CanWrite()) {
+                FlushWrites(source);
+            }
             int descriptor;
 
             // #dup is dup(2): the copy gets a descriptor of its own, so that reopening the
@@ -360,6 +365,8 @@ namespace IronRuby.Builtins {
             // when there is some; with nothing read the text stays, as it does when a path is
             // reopened.
             self.UnreadPendingChars();
+            // and writes out what it buffers, before the descriptor names another file
+            FlushBeforeReopen(self);
 
             // MRI's reopen is dup2(2): it points *this descriptor* at the other one's file,
             // which is why everything started afterwards inherits the redirection. Pointing
@@ -499,8 +506,19 @@ namespace IronRuby.Builtins {
             return mode;
         }
 
+        /// <summary>
+        /// MRI's io_reopen and rb_io_reopen flush a writable IO first: what was written before the
+        /// reopen goes where the IO pointed then, not to the file it points to afterwards.
+        /// </summary>
+        private static void FlushBeforeReopen(RubyIO/*!*/ io) {
+            if (!io.Closed && io.Mode.CanWrite()) {
+                FlushWrites(io);
+            }
+        }
+
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
+            FlushBeforeReopen(io);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
             // reopened by path, an IO answers that path, and so does a File (MRI's rb_io_reopen
             // replaces fptr->pathv), whose #lstat then looks at the new one
@@ -1969,6 +1987,12 @@ namespace IronRuby.Builtins {
                     throw NonBlockingError(self.Context, false, "write would block");
                 }
                 return written;
+            }
+
+            // STDOUT holding output in its buffer (not a terminal): MRI's syswrite is a write(2)
+            // that goes past it, so what the buffer holds comes out after these bytes.
+            if (count > 0 && self.TryWriteUnbuffered(val.ToByteArray(), 0, count)) {
+                return count;
             }
 
             // syswrite raises Errno::EPIPE even on STDOUT (MRI signals only for buffered writes)

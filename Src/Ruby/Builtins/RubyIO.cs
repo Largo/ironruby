@@ -674,6 +674,45 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Writes the bytes with one write to the descriptor when this is the process's standard
+        /// output and it is holding output in its buffer, which they go past (IO#syswrite). False,
+        /// and nothing written, otherwise.
+        /// </summary>
+        /// <summary>
+        /// Whether this is the process's standard output holding what is written in its buffer
+        /// (not a terminal, #sync false): MRI then writes each piece of a #puts by itself
+        /// (io_writev takes the writev(2) path only for a sync IO or a terminal), so where a
+        /// line and its end land relative to the buffer's boundary is MRI's.
+        /// </summary>
+        public bool IsBufferingWrites {
+            get {
+                var console = (_stream != null) ? _stream.BaseStream as ConsoleStream : null;
+                return console != null && !_autoFlush && console.IsBuffering;
+            }
+        }
+
+        /// <summary>
+        /// The next write on this thread to a buffered standard output is a #puts line and its end
+        /// together, to be buffered as the two writes MRI makes of them (see ConsoleStream).
+        /// </summary>
+        public static void SplitNextWriteBeforeLineEnd(bool split) {
+            ConsoleStream.SplitBeforeLineEnd = split;
+        }
+
+        public bool TryWriteUnbuffered(byte[]/*!*/ buffer, int offset, int count) {
+            var console = GetStream().BaseStream as ConsoleStream;
+            if (console == null || !console.IsBuffering) {
+                return false;
+            }
+            try {
+                console.WriteUnbuffered(buffer, offset, count);
+            } catch (ObjectDisposedException) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            return true;
+        }
+
         public long Length {
             get {
                 var stream = GetStream();
@@ -938,6 +977,9 @@ namespace IronRuby.Builtins {
 
             if (target != from && sys_dup2(from, target) < 0) {
                 return false;
+            }
+            if (target == 1) {
+                ConsoleStream.StandardOutputRedirected();
             }
 
             // The descriptor now names the other IO's file. The stream that was reading the old

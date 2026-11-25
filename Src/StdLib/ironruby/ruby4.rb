@@ -9215,8 +9215,8 @@ module Process
   end
 
   # Process.exec really does replace this process: execve(2) only returns on failure.
-  # Anything Ruby still has buffered would be lost with the address space, so it is
-  # flushed first.
+  # What STDOUT still buffers is lost with the address space, as it is in MRI, whose
+  # exec makes no prefork() flush: `print "a"; exec "echo b"` prints only "b".
   def self.exec(*args)
     # MRI takes close-on-exec off every descriptor the options name before it so much as
     # looks at the command, so that one named in a redirection is still usable if the exec
@@ -9231,12 +9231,6 @@ module Process
 
     file, argv, envp, actions, _pgroup, options = __spawn_setup__(args)
     File.umask(options[:umask].to_int) if options[:umask]
-    [$stdout, $stderr].each do |io|
-      begin
-        io.flush
-      rescue StandardError
-      end
-    end
     __check__(__exec__(file, argv, envp, actions), file)
   end
 
