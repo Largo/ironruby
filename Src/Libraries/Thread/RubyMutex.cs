@@ -128,7 +128,9 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         private void LockContended(Thread/*!*/ me, bool interruptible) {
-            lock (_syncRoot) {
+            // Not `lock`: Thread.Interrupt breaks a contended Monitor.Enter off, and the bare
+            // ThreadInterruptedException reached Ruby code instead of the Thread#raise it came for.
+            using (new RubyUtils.UninterruptedLock(_syncRoot)) {
                 if (_owner == me) {
                     // A fiber is a CLR thread here. If an asynchronous Thread#raise terminated
                     // the fiber in the narrow hand-off around #synchronize, reclaim its lock;
@@ -140,27 +142,54 @@ namespace IronRuby.StandardLibrary.Threading {
                         throw new ThreadError("deadlock; recursive locking");
                     }
                 }
+            }
 
-                // Counted before each attempt, and with a full fence: a Release that clears _owner
-                // after our attempt failed is then sure to see us waiting and pulse.
-                Interlocked.Increment(ref _waiters);
-                try {
-                    while (Interlocked.CompareExchange(ref _owner, me, null) != null) {
-                        try {
-                            using (RubyUtils.BlockingWait.Enter()) {
-                                Monitor.Wait(_syncRoot);
-                            }
-                        } catch (ThreadInterruptedException) {
-                            // Thread#kill / Thread#raise nudged us; if nothing is parked the wait restarts.
-                            if (interruptible) {
-                                RubyUtils.TranslateThreadInterrupt();
+            // A Thread#kill or Thread#raise that comes before the wait has blocked is not lost
+            // (RubyUtils.BeginNudgeableWait): NudgeThread interrupts only a thread that is already
+            // in WaitSleepJoin, so one that came while this thread was on its way into Monitor.Wait -
+            // or between a PulseAll and the next Monitor.Wait, having lost the race for the lock -
+            // found nothing to wake, and the thread slept on with the exception parked: a
+            // Timeout.timeout around a lock that is never released hung. What is parked is looked
+            // at before every Monitor.Wait, and a nudge from then on pulses _syncRoot.
+            RubyUtils.BeginNudgeableWait(_syncRoot);
+            // Counted before each attempt, and with a full fence: a Release that clears _owner
+            // after an attempt failed is then sure to see us waiting and pulse.
+            Interlocked.Increment(ref _waiters);
+            try {
+                while (true) {
+                    bool interrupted = false;
+                    using (new RubyUtils.UninterruptedLock(_syncRoot)) {
+                        if (Interlocked.CompareExchange(ref _owner, me, null) == null) {
+                            Acquired(me);
+                            return;
+                        }
+                        if (!RubyUtils.PrepareNudgeableWait()) {
+                            interrupted = true;
+                        } else {
+                            try {
+                                using (RubyUtils.BlockingWait.Enter()) {
+                                    Monitor.Wait(_syncRoot);
+                                }
+                            } catch (ThreadInterruptedException) {
+                                interrupted = true;
+                            } finally {
+                                RubyUtils.NudgeableWaitDone();
                             }
                         }
                     }
-                } finally {
-                    Interlocked.Decrement(ref _waiters);
+
+                    // Thread#kill / Thread#raise nudged us: deliver what is parked outside _syncRoot,
+                    // since a safe point runs Ruby code (trap handlers, finalizers) that could wait for
+                    // the holder or another contender. If nothing is parked (or it is masked, or went
+                    // to the running fiber) the wait goes on. A ConditionVariable re-lock keeps it
+                    // parked until the lock is taken.
+                    if (interrupted && interruptible) {
+                        RubyUtils.TranslateThreadInterrupt();
+                    }
                 }
-                Acquired(me);
+            } finally {
+                Interlocked.Decrement(ref _waiters);
+                RubyUtils.EndNudgeableWait();
             }
         }
 
@@ -179,7 +208,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 held.Add(this);
             } else {
                 _inSharedSet = true;
-                lock (_sharedLocked) {
+                using (new RubyUtils.UninterruptedLock(_sharedLocked)) {
                     _sharedLocked.Add(this);
                 }
             }
@@ -192,11 +221,17 @@ namespace IronRuby.StandardLibrary.Threading {
             _heldPruneAt = Math.Max(16, held.Count * 2);
         }
 
-        // Called by the holder (or, for a dead holder, on its behalf) with the lock held.
+        // Called by the holder (or, for a dead holder, on its behalf) with the lock held. Every
+        // monitor taken here and in Acquired and ReleaseLocksOf is held for moments only, and is an
+        // UninterruptedLock: a Thread#raise's nudge that found the thread waiting for one broke the
+        // wait off - here before _owner was cleared, which left the mutex locked for good, or before
+        // the waiters were pulsed, which slept on; and in the `finally` that ends a Ruby thread
+        // (ReleaseLocksOf) the ThreadInterruptedException is unhandled and ends the process.
+        // Whatever the nudge came for stays parked for the next safe point.
         private void Release() {
             if (_inSharedSet) {
                 _inSharedSet = false;
-                lock (_sharedLocked) {
+                using (new RubyUtils.UninterruptedLock(_sharedLocked)) {
                     _sharedLocked.Remove(this);
                 }
             } else if (ReferenceEquals(_ownerFiber, Thread.CurrentThread)) {
@@ -214,7 +249,7 @@ namespace IronRuby.StandardLibrary.Threading {
             _ownerFiber = null;
             Interlocked.Exchange(ref _owner, null);
             if (Volatile.Read(ref _waiters) != 0) {
-                lock (_syncRoot) {
+                using (new RubyUtils.UninterruptedLock(_syncRoot)) {
                     Monitor.PulseAll(_syncRoot);
                 }
             }
@@ -238,7 +273,7 @@ namespace IronRuby.StandardLibrary.Threading {
             }
 
             RubyMutex[] shared;
-            lock (_sharedLocked) {
+            using (new RubyUtils.UninterruptedLock(_sharedLocked)) {
                 if (_sharedLocked.Count == 0) {
                     return;
                 }

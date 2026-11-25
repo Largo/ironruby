@@ -1191,6 +1191,8 @@ namespace IronRuby.Tests {
                 Thread_RaiseLeavesNoWakeupBehind1,
                 Fiber_ThreadRaiseInSwitchBookkeeping1,
                 Fiber_PooledThreadBelongsToItsRuntime1,
+                Thread_RaiseWhileReleasingLocks1,
+                Thread_RaiseReachesMutexWaiter1,
                 DeepNesting1,
 
                 Scenario_RubyThreads1,

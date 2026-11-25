@@ -213,7 +213,10 @@ namespace IronRuby.Builtins {
             /// with the CLR's record of the dead thread, until a gen-2 collection.
             /// </summary>
             internal static void Unregister(RubyThreadInfo/*!*/ info) {
-                lock (_mappingLock) {
+                // Called from the `finally` that ends the thread, where a Thread#raise can still
+                // reach it: a ThreadInterruptedException out of a contended `lock` would be
+                // unhandled there and end the process (RubyMutex.Release).
+                using (new RubyUtils.UninterruptedLock(_mappingLock)) {
                     // from the end: a thread that finishes is usually one of the latest
                     int index = _registered.LastIndexOf(info);
                     if (index >= 0) {
