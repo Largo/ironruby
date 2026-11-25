@@ -56,7 +56,9 @@ namespace IronRuby.Builtins {
                     break;
 
                 case ConsoleStreamType.Output:
-                    FlushWriteBuffer();
+                    if (!IsSetByHost(true)) {
+                        FlushWriteBuffer();
+                    }
                     _io.OutputWriter.Flush();
                     break;
 
@@ -78,7 +80,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         protected override void Dispose(bool disposing) {
             // STDOUT.close writes out what it holds first, as MRI's fptr_finalize does.
-            if (disposing && _consoleType == ConsoleStreamType.Output) {
+            if (disposing && _consoleType == ConsoleStreamType.Output && !IsSetByHost(true)) {
                 try {
                     FlushWriteBuffer();
                 } catch (Exception) {
@@ -123,7 +125,11 @@ namespace IronRuby.Builtins {
             Stream stream = output ? _io.OutputStream : _io.ErrorStream;
             bool setByHost = IsSetByHost(output);
             Stream target = GetUnbufferedStream(stream, output, setByHost) ?? stream;
-            if (!output || setByHost || OutputIsTerminal()) {
+            if (!output || setByHost) {
+                target.Write(buffer, offset, count);
+                return;
+            }
+            if (OutputIsTerminal() || !CanBuffer(stream, target)) {
                 FlushWriteBuffer();
                 target.Write(buffer, offset, count);
                 return;
@@ -144,12 +150,21 @@ namespace IronRuby.Builtins {
         // in pieces. Only the process's own standard output is buffered: a stream a host gave
         // SharedIO (the tests, an embedder) is written to as before, as is standard error, whose
         // #sync is true.
-        private readonly object _writeLock = new object();
-        private byte[] _writeBuffer;
-        private int _writeCount;
+        //
+        // The buffer is the process's, not this stream's: every runtime in the process
+        // (IronRuby.create_engine, a host's engines) writes descriptor 1 through a ConsoleStream of
+        // its own, and with a buffer each they reached the descriptor in the order the buffers
+        // were written out rather than the order the runtimes wrote - an inner engine's line
+        // after the outer one's that followed it, and a child started from one runtime saw what
+        // the other still held come after its own output. One buffer for the one descriptor keeps
+        // the order every write was made in, and every runtime's flush points (#flush, a child
+        // starting, the runtime's shutdown) write out all of it. Whatever is left when the last
+        // runtime is done goes out once, as the process exits.
+        private static readonly object _writeLock = new object();
+        private static byte[] _writeBuffer;
+        private static volatile int _writeCount;
         // where the buffered bytes are going: the stream that was standard output when they were written
-        private Stream _writeTarget;
-        private bool _registeredForExit;
+        private static Stream _writeTarget;
 
         // Set around a #puts that writes a line and its end in one write (PrintOps.Puts): the
         // length of the end #puts appended as it reaches this stream - "\n", or "\r\n" after
@@ -157,11 +172,23 @@ namespace IronRuby.Builtins {
         [ThreadStatic]
         internal static int SplitBeforeLineEnd;
 
+        /// <summary>Whether this is the process's standard output and the buffer holds bytes not yet written.</summary>
         internal bool HasBufferedBytes {
-            get { return _writeCount > 0; }
+            get { return _writeCount > 0 && _consoleType == ConsoleStreamType.Output && !IsSetByHost(true); }
         }
 
-        private void WriteBuffered(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
+        // A stream only the DLR's TextStream over Console.Out (a host with basic console support)
+        // is not buffered: it writes through Console.Out, which writes the buffer out first
+        // (FlushingConsoleWriter), and the two locks would be taken in both orders.
+        private static bool CanBuffer(Stream/*!*/ stream, Stream/*!*/ target) {
+            if (!ReferenceEquals(stream, target)) {
+                return true;
+            }
+            var name = stream.GetType().FullName;
+            return name != null && name.EndsWith("ConsoleStream", StringComparison.Ordinal);
+        }
+
+        private static void WriteBuffered(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
             // The line end is the second of the two pieces MRI buffers one after the other; both
             // go in under one lock.
             int end = SplitBeforeLineEnd;
@@ -180,9 +207,13 @@ namespace IronRuby.Builtins {
                     WriteBufferedNoLock(target, buffer, offset, count);
                 }
             }
+            // outside the lock: Console.SetOut takes the console's own lock
+            if (!_hooksInstalled && _writeCount > 0) {
+                InstallHooks();
+            }
         }
 
-        private void WriteBufferedNoLock(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
+        private static void WriteBufferedNoLock(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
             // MRI's io_binwrite: what still fits is appended; when it does not, or it fills the
             // buffer exactly, the buffer and the new bytes go out together in one writev(2).
             if (_writeCount + count < WriteBufferCapacity) {
@@ -190,11 +221,8 @@ namespace IronRuby.Builtins {
                     _writeBuffer = new byte[WriteBufferCapacity];
                 }
                 Buffer.BlockCopy(buffer, offset, _writeBuffer, _writeCount, count);
-                _writeCount += count;
                 _writeTarget = target;
-                if (!_registeredForExit) {
-                    RegisterForExit(this);
-                }
+                _writeCount += count;
                 return;
             }
 
@@ -212,8 +240,9 @@ namespace IronRuby.Builtins {
             target.Write(all, 0, all.Length);
         }
 
-        private void FlushWriteBuffer() {
-            if (_writeBuffer == null) {
+        /// <summary>Writes out what the process's standard output buffers, whichever runtime wrote it.</summary>
+        internal static void FlushWriteBuffer() {
+            if (_writeCount == 0) {
                 return;
             }
             lock (_writeLock) {
@@ -221,7 +250,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private void FlushWriteBufferNoLock() {
+        private static void FlushWriteBufferNoLock() {
             int count = _writeCount;
             Stream target = _writeTarget;
             _writeCount = 0;
@@ -242,48 +271,57 @@ namespace IronRuby.Builtins {
 
         /// <summary>Whether writes are held in the buffer rather than written through.</summary>
         internal bool IsBuffering {
-            get { return _consoleType == ConsoleStreamType.Output && !IsSetByHost(true) && !OutputIsTerminal(); }
+            get {
+                if (_consoleType != ConsoleStreamType.Output || IsSetByHost(true) || OutputIsTerminal()) {
+                    return false;
+                }
+                Stream stream = _io.OutputStream;
+                return CanBuffer(stream, GetUnbufferedStream(stream, true, false) ?? stream);
+            }
         }
 
-        // The process's standard output streams with something buffered; written out as the
-        // process exits, for a runtime that is never shut down (an engine a host or a script
-        // created and left). Weak: a runtime that is collected takes its stream with it.
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ConsoleStream, object> _exitFlush =
-            new System.Runtime.CompilerServices.ConditionalWeakTable<ConsoleStream, object>();
+        private static readonly object _hooksLock = new object();
+        private static volatile bool _hooksInstalled;
         private static bool _exitHandlerInstalled;
         private static volatile bool _discardAtExit;
 
-        private static void RegisterForExit(ConsoleStream/*!*/ stream) {
-            lock (_exitFlush) {
-                stream._registeredForExit = true;
-                _exitFlush.AddOrUpdate(stream, null);
+        // Installed when the buffer first holds something: the exit handler, and Console.Out's
+        // flush before each write (see FlushingConsoleWriter).
+        private static void InstallHooks() {
+            lock (_hooksLock) {
+                if (_hooksInstalled) {
+                    return;
+                }
+                _hooksInstalled = true;
                 if (!_exitHandlerInstalled) {
                     _exitHandlerInstalled = true;
-                    AppDomain.CurrentDomain.ProcessExit += (sender, e) => FlushAllAtExit();
+                    AppDomain.CurrentDomain.ProcessExit += (sender, e) => FlushAtExit();
+                }
+                try {
+                    TextWriter current = Console.Out;
+                    if (!(current is FlushingConsoleWriter)) {
+                        Console.SetOut(new FlushingConsoleWriter(current));
+                    }
+                } catch (Exception) {
+                    // output from .NET code may then overtake what Ruby buffered, as it would without this
                 }
             }
         }
 
-        private static void FlushAllAtExit() {
-            if (_discardAtExit) {
+        // What no runtime's shutdown wrote out: a runtime nobody shut down (an engine a host or a
+        // script created and left), or one that wrote after the others had shut down.
+        private static void FlushAtExit() {
+            if (_discardAtExit || _writeCount == 0) {
                 return;
             }
-            var streams = new System.Collections.Generic.List<ConsoleStream>();
-            lock (_exitFlush) {
-                foreach (var entry in _exitFlush) {
-                    streams.Add(entry.Key);
-                }
-            }
-            foreach (var stream in streams) {
-                // A thread stuck writing to a full pipe holds the lock; the process exits anyway.
-                if (stream._writeCount > 0 && System.Threading.Monitor.TryEnter(stream._writeLock, 1000)) {
-                    try {
-                        stream.FlushWriteBufferNoLock();
-                    } catch (Exception) {
-                        // the process is on its way out
-                    } finally {
-                        System.Threading.Monitor.Exit(stream._writeLock);
-                    }
+            // A thread stuck writing to a full pipe holds the lock; the process exits anyway.
+            if (System.Threading.Monitor.TryEnter(_writeLock, 1000)) {
+                try {
+                    FlushWriteBufferNoLock();
+                } catch (Exception) {
+                    // the process is on its way out
+                } finally {
+                    System.Threading.Monitor.Exit(_writeLock);
                 }
             }
         }
@@ -294,6 +332,47 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static void DiscardBufferedOutputAtExit() {
             _discardAtExit = true;
+        }
+
+        /// <summary>
+        /// Console.Out while Ruby's standard output buffers: System::Console.WriteLine from Ruby, or
+        /// a host's own output, goes to descriptor 1 too, past Ruby's buffer, and came out before
+        /// lines Ruby had printed earlier. As in a C extension that writes with printf(3) through a
+        /// FILE of its own, the order is then only kept if Ruby's buffer is written out first,
+        /// which this does before every write; with the buffer empty it costs one read of a field.
+        /// Everything else - the encoding, the line end, the writer's own flushing - is the
+        /// wrapped writer's.
+        /// </summary>
+        private sealed class FlushingConsoleWriter : TextWriter {
+            private readonly TextWriter _inner;
+
+            public FlushingConsoleWriter(TextWriter/*!*/ inner)
+                : base(inner.FormatProvider) {
+                _inner = inner;
+            }
+
+            private static void Before() {
+                // exit! and exec leave the buffer unwritten, even when .NET flushes Console.Out as it exits
+                if (_writeCount > 0 && !_discardAtExit) {
+                    FlushWriteBuffer();
+                }
+            }
+
+            public override Encoding Encoding => _inner.Encoding;
+
+            public override string NewLine {
+                get => _inner.NewLine;
+                set => _inner.NewLine = value;
+            }
+
+            public override void Write(char value) { Before(); _inner.Write(value); }
+            public override void Write(char[] buffer, int index, int count) { Before(); _inner.Write(buffer, index, count); }
+            public override void Write(ReadOnlySpan<char> buffer) { Before(); _inner.Write(buffer); }
+            public override void Write(string value) { Before(); _inner.Write(value); }
+            public override void WriteLine() { Before(); _inner.WriteLine(); }
+            public override void WriteLine(ReadOnlySpan<char> buffer) { Before(); _inner.WriteLine(buffer); }
+            public override void WriteLine(string value) { Before(); _inner.WriteLine(value); }
+            public override void Flush() { Before(); _inner.Flush(); }
         }
 
         // 0: not known yet, 1: standard output is a terminal, 2: it is not
@@ -387,6 +466,14 @@ namespace IronRuby.Builtins {
             _consoleOutputChecked = false;
             _consoleErrorChecked = false;
             _outputTerminal = 0;
+            // What the buffer still holds was written to the descriptors that are gone; the
+            // runtime that wrote it has been shut down. Console.Out is a new writer too, and is
+            // wrapped again when the buffer next holds something.
+            lock (_writeLock) {
+                _writeCount = 0;
+                _writeTarget = null;
+            }
+            _hooksInstalled = false;
         }
 
         /// <summary>

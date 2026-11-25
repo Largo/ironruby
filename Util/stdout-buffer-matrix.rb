@@ -14,7 +14,16 @@
 #     too), and on a signal Ruby handles (TERM).
 #   - It is not written out by STDOUT.sync = true (the next write is), by reading STDIN, by
 #     exit!, by exec (no prefork there), or when the process is killed.
-#   - #syswrite goes past it (and warns that it holds something).
+#   - #syswrite goes past it, and warns when the buffer holds something - not after a write
+#     too large for it, which left it empty.
+#   - #reopen(io) takes the other IO's sync with its descriptor (STDOUT onto STDERR writes
+#     through); #reopen(path) keeps the IO's own.
+#   - Every writer of descriptor 1 in the process goes through the one buffer: on IronRuby a
+#     second runtime (IronRuby.create_engine) and .NET's Console.Out, whose lines stay where
+#     they were written among Ruby's (Console.Out writes each line out at once, so what Ruby
+#     buffered before it goes first). CRuby has neither, so those cases do there what the same
+#     code in plain Ruby would - another runtime's code is eval'd, and a Console line is a
+#     write and a flush.
 #
 # Linux only (the cases run sh commands); deterministic output only.
 require 'rbconfig'
@@ -80,6 +89,10 @@ run "close", 'print "a"; STDOUT.close; STDERR.print "E"'
 # (the copy's own buffering is not compared: IronRuby writes a dup of STDOUT through)
 run "dup", 'print "a"; f = STDOUT.dup; STDERR.print "E"; f.print "b"; f.close; STDERR.print "F"'
 run "reopen file", "print 'a'; $stdout.reopen(#{File.join(DIR, 'reopen.txt').inspect}); print 'b'; $stdout.flush; STDERR.print File.read(#{File.join(DIR, 'reopen.txt').inspect})"
+run "reopen stderr", 'STDOUT.reopen(STDERR); STDERR.print STDOUT.sync; print "a"; STDERR.print "E"; print "b"; STDERR.print "F"'
+run "reopen pipe", 'r, w = IO.pipe; STDOUT.reopen(w); puts "x"; STDERR.print r.read_nonblock(10).inspect'
+run "reopen file io sync", "f = File.open(#{File.join(DIR, 'reopen2.txt').inspect}, 'w'); STDOUT.reopen(f); STDERR.print STDOUT.sync"
+run "reopen path sync", "STDOUT.sync = true; STDOUT.reopen(#{File.join(DIR, 'reopen3.txt').inspect}); STDERR.print STDOUT.sync"
 run "pos on a pipe", 'print "a"; begin; STDOUT.pos; rescue => e; STDERR.print e.class; end; STDERR.print "E"'
 
 # children
@@ -93,6 +106,19 @@ run "exec", 'print "a"; exec "echo", "x"'
 run "$stdout StringIO", 'require "stringio"; print "a"; $stdout = StringIO.new; print "b"; STDERR.print "E"; s = $stdout.string; $stdout = STDOUT; print s'
 run "$stdout StringIO system", 'require "stringio"; print "a"; $stdout = StringIO.new; system("echo", "x"); STDERR.print "E"; $stdout = STDOUT'
 
+# other writers of descriptor 1 in the process (an engine starts without the prelude: ruby4 is
+# Kernel#system's)
+ENGINE = 'def inner(code) = defined?(IronRuby.create_engine) ? (($e ||= IronRuby.create_engine.tap { |e| e.execute(%q(require "ruby4")) }).execute(code); nil) : eval(code); '
+run "engine", ENGINE + 'inner %q{puts "inner"}; puts "outer"'
+run "engine system", ENGINE + 'inner %q{puts "inner"}; puts "outer"; STDOUT.syswrite "S\n"; system("true"); STDERR.print "E"'
+run "engine spawn from inner", ENGINE + 'print "a"; inner %q{print "b"; system("echo", "x")}; puts "c"'
+run "engine at exit", ENGINE + 'puts "outer"; inner %q{print "inner"}'
+run "engine flush", ENGINE + 'print "a"; inner %q{print "b"; $stdout.flush}; STDERR.print "E"; puts "c"'
+CONSOLE = 'def clr(s) = defined?(System::Console) ? System::Console.WriteLine(s) : (STDOUT.write("#{s}\n"); STDOUT.flush); '
+run "Console.WriteLine", CONSOLE + 'puts "ruby1"; clr "clr"; puts "ruby2"'
+run "Console.WriteLine stderr", CONSOLE + 'print "a"; clr "clr"; STDERR.print "E"; puts "b"'
+run "Console.WriteLine exit!", CONSOLE + 'print "a"; clr "clr"; print "b"; exit!'
+
 # reading
 run "gets", 'print "a"; STDIN.gets; STDERR.print "E"'
 run "read", 'print "a"; STDIN.read; STDERR.print "E"'
@@ -100,6 +126,7 @@ run "gets data", 'print "a"; STDERR.print STDIN.gets; puts "b"', stdin: __FILE__
 
 # syswrite
 run "syswrite", 'print "a"; STDOUT.syswrite "S"; puts "b"'
+run "syswrite after overflow", 'print "a" * 9000; STDOUT.syswrite "S"; puts "b"'
 run "syswrite empty buffer", 'STDOUT.syswrite "S"; puts "b"'
 run "puts CR at the boundary", 'print "a" * 8190; STDERR.print "E"; puts "x\r"; STDERR.print "F"; exit!'
 
