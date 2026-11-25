@@ -141,6 +141,7 @@ namespace IronRuby.Runtime.Calls {
 
             RubyMemberInfo method;
             RubyMemberInfo methodMissing = null;
+            RefinementActivation refinements = null;
 
             // MRI bug: Uses currentDeclaringModule for method look-up so we can end up with an instance method of class C 
             // called on a target of another class. See http://redmine.ruby-lang.org/issues/show/2419.
@@ -158,7 +159,16 @@ namespace IronRuby.Runtime.Calls {
                 );
                 metaBuilder.TreatRestrictionsAsConditions = false;
 
-                method = targetClass.ResolveSuperMethodNoLock(currentMethodName, currentDeclaringModule).InvalidateSitesOnOverride().Info;
+                // CRuby resolves super under the refinements active where it is written, as it does a call
+                // (RubyCallAction.Resolve), and only a name some refinement of an ancestor has needs them. A light
+                // frame's site has none to read: a body written where something is `using'd is never one
+                // (MethodDefinition.TransformBody). defined?(super) does not see refinements (rb_method_boundp).
+                if (_lightModule == null && !_signature.ResolveOnly
+                    && targetClass.Context.IsRefinementSensitive(targetClass, currentMethodName)) {
+                    refinements = args.Scope.GetActiveRefinements();
+                }
+
+                method = targetClass.ResolveSuperMethodNoLock(currentMethodName, currentDeclaringModule, refinements).InvalidateSitesOnOverride().Info;
 
                 // A module's method bound (UnboundMethod#bind) to an object that does not include the
                 // module: MRI runs it as if the module sat just above the object's class, so super
@@ -188,6 +198,11 @@ namespace IronRuby.Runtime.Calls {
                     // MRI: method_missing is called for the targetClass, not for the super:
                     methodMissing = targetClass.ResolveMethodMissingForSite(currentMethodName, RubyMethodVisibility.None);
                 }
+            }
+
+            // the rule holds only for the refinements it was resolved under, as a call's does
+            if (refinements != null) {
+                metaBuilder.AddCondition(RubyCallAction.MakeRefinementGuard(args, refinements));
             }
 
             if (method != null) {
