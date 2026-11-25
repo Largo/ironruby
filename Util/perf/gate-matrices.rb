@@ -44,6 +44,7 @@ require 'fileutils'
 require 'tmpdir'
 require 'etc'
 require 'open3'
+require 'shellwords'
 
 DEFAULT_MODES = {
   'jit' => '',
@@ -117,7 +118,8 @@ TREES.each do |who, tree|
     env.unshift('IR_CONFIG=Release') unless env.any? { |e| e.start_with?('IR_CONFIG=') }
     path = File.join(OUT, '.launchers', "#{who}-#{mode}")
     FileUtils.mkdir_p(File.dirname(path))
-    File.write(path, "#!/bin/sh\nexec env DOTNET_ROOT=#{DOTNET} #{env.join(' ')} #{tree}/ir.sh #{args.join(' ')} \"$@\"\n")
+    words = ["DOTNET_ROOT=#{DOTNET}", *env, "#{tree}/ir.sh", *args].map(&:shellescape)
+    File.write(path, "#!/bin/sh\nexec env #{words.join(' ')} \"$@\"\n")
     File.chmod(0o755, path)
     LAUNCHERS[[who, mode]] = path
   end
@@ -253,7 +255,10 @@ def verdict(cruby, base, new)
   return ['same', []] if new == cruby
   new_bad = bad_lines(cruby, new)
   base_bad = bad_lines(cruby, base)
-  only_new = new_bad - base_bad
+  # as many of each line as NEW has beyond BASE: Array#- would drop every copy, and a row CRuby
+  # prints three times, BASE twice and NEW once would read as BASE's difference
+  left = base_bad.tally
+  only_new = new_bad.reject { |l| left[l].to_i > 0 && (left[l] -= 1; true) }
   return ['DIFF', only_new] unless only_new.empty?
   # NEW dies as BASE does (a death only NEW has is a DIFF above, by its exit line): what CRuby
   # printed after that point is checked on neither tree
