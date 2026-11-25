@@ -792,6 +792,53 @@ x
 ");
         }
 
+        private sealed class WriteRecorder : Stream {
+            public readonly List<string> Writes = new List<string>();
+
+            public override void Write(byte[] buffer, int offset, int count) {
+                Writes.Add(Encoding.ASCII.GetString(buffer, offset, count));
+            }
+
+            public override bool CanRead { get { return false; } }
+            public override bool CanSeek { get { return false; } }
+            public override bool CanWrite { get { return true; } }
+            public override void Flush() { }
+            public override long Length { get { throw new NotSupportedException(); } }
+            public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
+            public override int Read(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+            public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+            public override void SetLength(long value) { throw new NotSupportedException(); }
+        }
+
+        /// <summary>
+        /// A line and its end reach the stream in one write, as MRI's rb_io_puts (rb_io_writev) and its text-mode
+        /// conversion on Windows give them to one write(2): puts wrote the line and "\n" in two writes, and on
+        /// Windows the "\n" went out as a "\r" and a "\n" of their own, so a reader at a pipe could read a line
+        /// whose end had not all arrived - Git Bash's grep then kept the CR and `ir -e 'puts 42' | grep -x 42`
+        /// failed now and then in CI. A #write of its own on $stdout still gets the line and its end apart.
+        /// </summary>
+        public void IO_PutsOneWrite1() {
+            var recorder = new WriteRecorder();
+            Runtime.IO.SetOutput(recorder, TextWriter.Null);
+            try {
+                Engine.Execute(@"
+puts 42
+puts 'a', 'b'
+$stdout.puts 'c'
+print ""d\ne\n""
+def $stdout.write(*args) = super(*args.map { it.to_s.upcase })
+puts 'f'
+");
+            } finally {
+                Runtime.IO.RedirectToConsole();
+            }
+            string nl = Environment.OSVersion.Platform == PlatformID.Win32NT ? "\r\n" : "\n";
+            string actual = String.Join("|", recorder.Writes).Replace("\r", "\\r").Replace("\n", "\\n");
+            string expected = String.Join("|", "42" + nl, "a" + nl, "b" + nl, "c" + nl, "d" + nl + "e" + nl, "F", nl)
+                .Replace("\r", "\\r").Replace("\n", "\\n");
+            Assert(actual == expected, actual);
+        }
+
         /// <summary>
         /// IO#ungetc on a stream that converts what it reads - text mode, or an internal encoding - puts the text in
         /// a buffer of characters already converted, as MRI's rb_io_ungetc puts it in fptr->cbuf: the readers of

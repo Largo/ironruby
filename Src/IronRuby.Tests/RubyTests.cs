@@ -1375,6 +1375,7 @@ namespace IronRuby.Tests {
                 Array_HashRecursiveElement1,
                 String_DumpNonUnicode1,
                 IO_PutsRecursiveToAry1,
+                IO_PutsOneWrite1,
                 Hash_MutateInBlock1,
                 Hash_FetchErrorEllipsis1,
                 Hash_InitializeCopyIsReplace1,
