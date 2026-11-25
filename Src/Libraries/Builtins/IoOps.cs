@@ -295,6 +295,9 @@ namespace IronRuby.Builtins {
             self.SetStream(stream);
             self.SetFileDescriptor(descriptor);
             self.Mode = source.Mode;
+            // rb_io_init_copy copies fptr->mode, FMODE_SYNC with it: STDERR.dup is sync, and
+            // STDERR reopened back from it (the way a redirection is undone) stays so.
+            self.AutoFlush = source.AutoFlush;
             self.CopyEncodingsFrom(source);
             self.ConversionOptions = source.ConversionOptions;
             if (source.Timeout != null) {

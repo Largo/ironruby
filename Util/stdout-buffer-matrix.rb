@@ -89,6 +89,8 @@ run "close", 'print "a"; STDOUT.close; STDERR.print "E"'
 # (the copy's own buffering is not compared: IronRuby writes a dup of STDOUT through)
 run "dup", 'print "a"; f = STDOUT.dup; STDERR.print "E"; f.print "b"; f.close; STDERR.print "F"'
 run "reopen file", "print 'a'; $stdout.reopen(#{File.join(DIR, 'reopen.txt').inspect}); print 'b'; $stdout.flush; STDERR.print File.read(#{File.join(DIR, 'reopen.txt').inspect})"
+run "dup sync", 'STDERR.print [STDERR.dup.sync, STDOUT.dup.sync].inspect'
+run "reopen stderr back from its dup", 'e = STDERR.dup; STDERR.reopen(STDOUT); STDERR.reopen(e); STDERR.print STDERR.sync; print "a"; STDERR.print "E"'
 run "reopen stderr", 'STDOUT.reopen(STDERR); STDERR.print STDOUT.sync; print "a"; STDERR.print "E"; print "b"; STDERR.print "F"'
 run "reopen pipe", 'r, w = IO.pipe; STDOUT.reopen(w); puts "x"; STDERR.print r.read_nonblock(10).inspect'
 run "reopen file io sync", "f = File.open(#{File.join(DIR, 'reopen2.txt').inspect}, 'w'); STDOUT.reopen(f); STDERR.print STDOUT.sync"
