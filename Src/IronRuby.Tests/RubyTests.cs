@@ -917,6 +917,9 @@ namespace IronRuby.Tests {
                 Refinements9,
                 Refinements10,
                 Refinements11,
+                Refinements12,
+                Refinements13,
+                Refinements14,
 
                 Super1,
                 SuperParameterless1,
@@ -1375,6 +1378,7 @@ namespace IronRuby.Tests {
                 Array_HashRecursiveElement1,
                 String_DumpNonUnicode1,
                 IO_PutsRecursiveToAry1,
+                IO_PutsOneWrite1,
                 Hash_MutateInBlock1,
                 Hash_FetchErrorEllipsis1,
                 Hash_InitializeCopyIsReplace1,

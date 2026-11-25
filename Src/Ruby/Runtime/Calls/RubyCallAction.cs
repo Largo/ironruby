@@ -547,13 +547,21 @@ namespace IronRuby.Runtime.Calls {
                 // Or the rule is interpreted and has been compiled meanwhile: it then fails its test once, so that the site binds again
                 // and picks up the compiled one (DynamicUtils.LightBind), which the rule's binder hands out without building a rule.
                 // The shared rule is that one from now on; handing out the interpreted one again would fail and bind every call.
+                // It goes to the binder's cache too: the interpreted one stays there and fails for every site that has not run the
+                // call yet, so without the compiled one next to it each new site bound (a light site's first call of `a + 1' did).
                 RuleBuilt = false;
                 T compiled = this.LightBind<T>(args, Context.CompilationThreshold);
                 if (!RuleBuilt) {
+                    if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "shared-compiled";
+                    bool replaced = false;
                     lock (_SharedRulesLock) {
-                        if (shared.Rule == sharedRule) {
+                        if (shared.Rule == sharedRule && sharedRule != (object)compiled) {
                             shared.Rule = compiled;
+                            replaced = true;
                         }
+                    }
+                    if (replaced) {
+                        CacheTarget(compiled);
                     }
                 } else {
                     CacheTarget(compiled);
@@ -1018,7 +1026,7 @@ namespace IronRuby.Runtime.Calls {
         /// resolved under. For the scope of a method or of a block in one it reads the method's record (GetRecordScope);
         /// any other scope walks.
         /// </summary>
-        private static Expression/*!*/ MakeRefinementGuard(CallArguments/*!*/ args, RefinementActivation/*!*/ refinements) {
+        internal static Expression/*!*/ MakeRefinementGuard(CallArguments/*!*/ args, RefinementActivation/*!*/ refinements) {
             var scope = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
             var expected = Ast.Constant(refinements, typeof(RefinementActivation));
 

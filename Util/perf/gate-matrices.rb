@@ -26,18 +26,25 @@
 #   same       NEW prints what CRuby prints
 #   baseline   NEW differs from CRuby only in lines BASE differs in too ("-3": NEW has three
 #              such lines fewer than BASE, a difference the change fixed)
-#   DIFF       NEW has a line differing from CRuby that BASE in the same mode does not: the gate
+#   DIFF       NEW has a line differing from CRuby that BASE in the same mode does not - a line
+#              CRuby prints that NEW leaves out counts as much as one NEW adds: the gate
 #              fails, unless the run is flaky - every DIFF is run twice more, alone, at the end,
 #              and one that then prints what BASE prints is reported as `flaky', not passed over
+#   died       CRuby ran to the end (exit 0), BASE and NEW did not, and NEW's output differs from
+#              CRuby's no more than BASE's does: the rows after the death are compared by no one,
+#              so the gate cannot pass on it - fix the crash (or move the rows past it) first
 #   cruby!     CRuby itself did not exit 0: the matrix dies before its last rows, and the rows
 #              after the failure are compared by no one (round seventeen); fix the matrix
-# Exit status 1 when any run is DIFF. OUT/report.txt has the table, OUT/<matrix>/ every output,
+# Exit status 1 when any run is DIFF, else 2 when any is died or any matrix is cruby! (the
+# comparison is incomplete, as parallel-tests.sh's 2 is), else 0. OUT/report.txt has the table, OUT/<matrix>/ every output,
 # OUT/<matrix>/<mode>.diff the lines a DIFF is about, and OUT/times.tsv each run's seconds (also
 # kept in $TMPDIR/gate-matrices-times.tsv, or $GATE_MATRICES_TIMES, to start the slow ones first).
 require 'optparse'
 require 'fileutils'
 require 'tmpdir'
 require 'etc'
+require 'open3'
+require 'shellwords'
 
 DEFAULT_MODES = {
   'jit' => '',
@@ -65,6 +72,15 @@ TIMEOUT = opts[:timeout]
 OUT = File.expand_path(opts[:out] || Dir.mktmpdir('gate-matrices-'))
 FileUtils.mkdir_p(OUT)
 CRUBY = ENV['CRUBY'] || 'ruby'
+# CRuby is the expectation: without a working 4.0 every unit would read `cruby!' and the run
+# would still say PASS, having compared nothing.
+begin
+  version, status = Open3.capture2(CRUBY, '-e', 'print RUBY_VERSION')
+rescue SystemCallError => e
+  abort "#{CRUBY}: #{e.message}"
+end
+abort "#{CRUBY} does not run (exit #{status.exitstatus})" unless status.success?
+abort "#{CRUBY} is Ruby #{version}; the matrices' expectation is CRuby 4.0" unless version.start_with?('4.0')
 DOTNET = ENV['DOTNET_ROOT'] || '/usr/local/dotnet'
 
 files =
@@ -102,7 +118,8 @@ TREES.each do |who, tree|
     env.unshift('IR_CONFIG=Release') unless env.any? { |e| e.start_with?('IR_CONFIG=') }
     path = File.join(OUT, '.launchers', "#{who}-#{mode}")
     FileUtils.mkdir_p(File.dirname(path))
-    File.write(path, "#!/bin/sh\nexec env DOTNET_ROOT=#{DOTNET} #{env.join(' ')} #{tree}/ir.sh #{args.join(' ')} \"$@\"\n")
+    words = ["DOTNET_ROOT=#{DOTNET}", *env, "#{tree}/ir.sh", *args].map(&:shellescape)
+    File.write(path, "#!/bin/sh\nexec env #{words.join(' ')} \"$@\"\n")
     File.chmod(0o755, path)
     LAUNCHERS[[who, mode]] = path
   end
@@ -113,7 +130,13 @@ Unit = Struct.new(:name, :file, :arg)
 units = files.sort.flat_map do |f|
   base = File.basename(f, '.rb')
   if base == 'inline-matrix'
-    `#{CRUBY} #{f} list`.split.map { |c| Unit.new("#{base}.#{c}", f, c) }
+    begin
+      list, status = Open3.capture2(CRUBY, f, 'list')
+    rescue SystemCallError => e
+      abort "#{CRUBY} #{f} list: #{e.message}"
+    end
+    abort "#{CRUBY} #{f} list failed (#{status})" unless status.success?
+    list.split.map { |c| Unit.new("#{base}.#{c}", f, c) }
   else
     [Unit.new(base, f, nil)]
   end
@@ -143,8 +166,17 @@ def run(unit, who, mode, tag = nil)
   out = File.join(OUT, unit.name, "#{who}#{mode && "-#{mode}"}#{tag}")
   FileUtils.mkdir_p(File.dirname(out))
   t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  pid = Process.spawn(*command(unit, who, mode), chdir: dir, in: File::NULL,
-                      out: "#{out}.raw", err: "#{out}.err", pgroup: true)
+  begin
+    pid = Process.spawn(*command(unit, who, mode), chdir: dir, in: File::NULL,
+                        out: "#{out}.raw", err: "#{out}.err", pgroup: true)
+  rescue SystemCallError => e
+    # one job that cannot start (a missing CRUBY or launcher) is that job's output, not the end
+    # of the run; the message, with its path, goes to .err so both trees' outputs stay alike
+    File.write("#{out}.err", "#{[unit.name, who, mode].compact.join(' ')}: #{e.message}\n")
+    text = "(could not start: #{e.class})\n"
+    File.binwrite("#{out}.txt", text)
+    return [text, Process.clock_gettime(Process::CLOCK_MONOTONIC) - t]
+  end
   status = nil
   deadline = t + TIMEOUT
   loop do
@@ -203,23 +235,34 @@ File.write(File.join(OUT, 'times.tsv'), times.sort.reverse.map { |t| t.join("\t"
 times.each { |secs, name, who, mode| last[[name, who.sub(/\d\z/, ''), mode.to_s].join("\t")] = secs }
 File.write(TIMES_CACHE, last.map { |k, secs| "#{secs}\t#{k}\n" }.join) rescue nil
 
-# The lines of IR's output that are not CRuby's, as `diff' marks them, without line numbers.
+# The lines in which IR's output and CRuby's differ, as `diff' marks them, without line numbers:
+# "> x" a line IR prints and CRuby does not, "< x" a line CRuby prints and IR leaves out.
 def bad_lines(cruby, ir)
   return [] if cruby == ir
   a = File.join(Dir.tmpdir, "gm-a-#{Process.pid}-#{Thread.current.object_id}")
   b = "#{a}-b"
   File.binwrite(a, cruby); File.binwrite(b, ir)
-  `diff #{a} #{b}`.b.lines.grep(/\A> /)
+  out, status = Open3.capture2('diff', a, b)
+  raise "diff #{a} #{b}: #{status}" if status.exitstatus.nil? || status.exitstatus > 1
+  out.b.lines.grep(/\A[<>] /)
 ensure
   File.delete(a, b) rescue nil
 end
+
+EXIT0 = "(exit 0)\n"
 
 def verdict(cruby, base, new)
   return ['same', []] if new == cruby
   new_bad = bad_lines(cruby, new)
   base_bad = bad_lines(cruby, base)
-  only_new = new_bad - base_bad
+  # as many of each line as NEW has beyond BASE: Array#- would drop every copy, and a row CRuby
+  # prints three times, BASE twice and NEW once would read as BASE's difference
+  left = base_bad.tally
+  only_new = new_bad.reject { |l| left[l].to_i > 0 && (left[l] -= 1; true) }
   return ['DIFF', only_new] unless only_new.empty?
+  # NEW dies as BASE does (a death only NEW has is a DIFF above, by its exit line): what CRuby
+  # printed after that point is checked on neither tree
+  return ['died', []] if cruby.end_with?(EXIT0) && !new.end_with?(EXIT0)
   fewer = base_bad.size - new_bad.size
   [fewer > 0 ? "baseline -#{fewer}" : 'baseline', []]
 end
@@ -246,8 +289,10 @@ units.each do |u|
     v, lines = verdict(cruby, results[[u, 'base', m]], results[[u, 'new', m]])
     if v == 'DIFF'
       # alone, twice: a run that then prints what CRuby or BASE prints was the load
-      again = (1..2).map { |i| mask(run(u, 'new', m, ".again#{i}").first, varying) }
-      if again.all? { |t| verdict(cruby, results[[u, 'base', m]], t).first != 'DIFF' }
+      again = (1..2).map { |i| verdict(cruby, results[[u, 'base', m]], mask(run(u, 'new', m, ".again#{i}").first, varying)).first }
+      if again.include?('died') && !again.include?('DIFF')
+        v = 'died'      # alone it dies as BASE does: still not compared to the end
+      elsif !again.include?('DIFF')
         v = 'flaky'
         flaky << "#{u.name} #{m}"
       else
@@ -256,7 +301,7 @@ units.each do |u|
     end
     table[[u.name, m]] = v
   end
-  table[[u.name, :cruby]] = cruby.end_with?("(exit 0)\n") ? nil : 'cruby!'
+  table[[u.name, :cruby]] = cruby.end_with?(EXIT0) ? nil : 'cruby!'
 end
 
 wall = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round
@@ -272,12 +317,18 @@ units.each do |u|
 end
 counts = table.reject { |k, _| k[1] == :cruby }.values.map { |v| v.split.first }.tally
 diffs = table.select { |k, v| v == 'DIFF' }.keys
+died = table.select { |k, v| v == 'died' }.keys
 broken = table.select { |k, v| k[1] == :cruby && v }.keys.map(&:first)
 report << "\n#{counts.sort.map { |k, n| "#{n} #{k}" }.join(', ')}\n"
 report << "flaky (DIFF beside the others, BASE's output twice alone): #{flaky.join('; ')}\n" unless flaky.empty?
 report << "CRuby did not exit 0 on: #{broken.join(', ')}\n" unless broken.empty?
+unless died.empty?
+  report << "died on BASE and NEW alike where CRuby ran to the end - the rows after are compared by no one:\n"
+  died.each { |name, m| report << "  #{name} #{m}: #{File.join(OUT, name, "base-#{m}.err")}\n" }
+end
 diffs.each { |name, m| report << "DIFF #{name} #{m}: #{File.join(OUT, name, "#{m}.diff")}\n" }
-report << (diffs.empty? ? "PASS\n" : "FAIL\n")
+status = !diffs.empty? ? 1 : !died.empty? || !broken.empty? ? 2 : 0
+report << ["PASS\n", "FAIL\n", "INCOMPLETE (#{[('died' unless died.empty?), ('cruby!' unless broken.empty?)].compact.join(', ')})\n"][status]
 File.write(File.join(OUT, 'report.txt'), report)
 puts report, "(#{OUT}/report.txt)"
-exit(diffs.empty? ? 0 : 1)
+exit(status)

@@ -1313,6 +1313,28 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lrebind (2026-11-24, 0d464ce0) - a shared rule's compiled target goes to its binder's
+  cache.** The first-call profile counted about 160 extra binds in 200 light methods, all
+  `shared-hit +(L,1) :: Int32`. The cause was not Integer's version (a top-level `def` does not
+  bump it). When the shared rule's interpreted copy is compiled, the interpreted rule stays in the
+  binder's L2 cache and fails its test for good (`CachedBindingInfo.CheckCompiled`), and
+  `BindShared` stored the compiled rule in `shared.Rule` without `CacheTarget`, so every light
+  site that had not run the call yet failed in L2 and bound. It now caches the compiled rule too.
+  BindDelegate calls for 200 light methods 1438 -> 1272 (scope frames: 1273); `+(L,1)` Int32 binds
+  163 -> 1; the new `Util/shared-rule-light-matrix.rb` 409 -> 26 binds of `zz(L,0)`, part of it
+  because a stale rule left `LastInterpretedFailure` set and later binds got a wrong compiled rule
+  to rebuild. Instructions saved are small: 12K per light method (m200 light minus scope 467K ->
+  455K, ReadyToRun host, same tree with and without the patch), `-e 1` unchanged. The rest of the
+  light first-call extra (about 460K per method, linear in the method count) is runtime and JIT
+  work on the light-frame compile path, not binding: perf by DSO puts it in libcoreclr, libclrjit,
+  CoreLib, Microsoft.Dynamic and System.Linq.Expressions.
+  Found in passing, not fixed: CRuby calls a refinement of Integer#+ before a module prepended to
+  Integer; IronRuby calls the prepended module's method (light frames on and off).
+  Gate, the branch at 5b464e8c against b76d3a6f, Release net10.0: **PASS**. IronRuby.Tests
+  PASSED on both (1,334). 36 matrices in five modes: 180 same, 0 differ. ruby/spec, all five
+  suites: no failure the known list does not name. `ab.rb -i` on the rescue, keyword, loop and
+  regex shapes: every row 0.95-1.04. Timing not run (load average up to 76 during the gate).
+
 - **Gate of 2026-11-24 for round thirty-six** (perf/erb36, perf/uri36; the shape files of
   perf/pwalk36 and perf/ostr36): the branch at 0aaeec12 against c17dbfe9, Release net10.0:
   **PASS**. IronRuby.Tests PASSED on both trees, no failure name on either. 18 matrices

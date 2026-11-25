@@ -89,9 +89,19 @@ with the few slow tests first: about three minutes instead of nine (the suite co
 twenty CPU-minutes, and the old single process already used two cores). Exit 0 is `PASSED`; 1 is a failure that failed again when run alone; 2 is a run that
 is not complete - a process that did not end as the driver ends (crashed, killed, timed out:
 the OOM killer has taken this suite when other builds ran beside it) or a listed test that
-never ran. An incomplete run would compare as clean: run the lists it names again, alone.
-A test that failed beside the others and passed alone is in `flaky.txt` and printed
-(`BlockLoopNested1` does this about once in sixteen runs under load, on master too).
+never ran. An incomplete run would compare as clean, so exit 2 never passes the gate: run the
+lists it names again, alone (`./IronRuby.Tests /verbose $(cat chunks/NNN.list)`; an
+`alone-Name` is that one test, already in `failed.txt`), and merge the rerun into that tree's
+files before the `diff` below - each `> FAILED: Name` it prints is run alone once more and goes
+to `failed.txt` if it fails again, to `flaky.txt` if it passes (an `alone-Name` that now passes
+moves from `failed.txt` to `flaky.txt`). A rerun that does not itself end with `PASSED` or a
+`Repro:` line is incomplete too, and the candidate fails the gate until one does - or run the
+whole script again, with fewer `JOBS` or on a quieter machine, until it exits 0 or 1. The
+driver runs a name it does not know as nothing and still prints `PASSED`, and a test marked
+`[Run]` replaces the names it is given: a rerun counts only if its output has an `Executing
+Name` line for every name on its list (the script checks this for its own runs).
+A test that failed beside the others and passed alone is in `flaky.txt` and printed (a test
+whose own threads race - `BlockLoopNested1` did, once in sixteen runs under load, until #281).
 
 `diff` the two trees' `failed.txt` and `flaky.txt`: a name only the candidate has fails the
 gate - in `flaky.txt` too, until twenty runs of it alone (`./IronRuby.Tests Name`, eight at
@@ -112,7 +122,10 @@ trees, in empty directories of their own, and fails on a line the candidate prin
 not CRuby's and that the baseline in the same mode does not print either. A DIFF is run twice
 more alone before it is believed; one that then passes is reported `flaky`, and is judged as a
 flaky test is. `cruby!` means CRuby itself did not exit 0: the matrix dies before its last
-rows (below) and must be fixed before it proves anything. The R2R mode is skipped, and said
+rows (below) and must be fixed before it proves anything. `died` means CRuby ran to the end and
+both trees died the same way before it: the rows after are compared by no one, so the run ends
+`INCOMPLETE` with exit 2 (1 is a DIFF) and does not pass the gate - fix the crash, or move the
+rows past it, on the baseline as well. A death only the candidate has is a DIFF. The R2R mode is skipped, and said
 so, when a tree has no ReadyToRun host as new as its Release build.
 
 The files to read most closely for the code the diff touches (each header says what "same"
@@ -133,7 +146,8 @@ means):
 | calls a compiled method binds to another's typed body (on by default) | `Util/jit-calls-matrix.rb`, also with `-X:NoJITCalls` |
 
 A matrix is compared only after it is seen to end: `ruby FILE; echo $?` prints 0 and the
-output's last line is the file's last row (gate-matrices.rb checks the first half). A file that dies of the same exception under
+output's last line is the file's last row (gate-matrices.rb checks the first half, for CRuby
+as `cruby!` and for both trees as `died`; the last row is yours to check). A file that dies of the same exception under
 CRuby and under every build prints the same four times; one did in round seventeen (a
 `p [..]` after `p` had become a local), and its last rows had not run for two commits.
 And for a change that lets more bodies compile, compare the `specialized` and `declined`

@@ -364,5 +364,192 @@ p (1..100).map { mk(fake, out, o); out.last }.uniq
 [[:r2, [:r2, 1, 2], [:r2, 3]]]
 ");
         }
+
+        /// <summary>
+        /// A refinement of a class or module is searched ahead of the modules prepended to it, not only ahead of it: CRuby
+        /// keeps the refined method entry in the module's own method table, before its prepended modules. `super' from a
+        /// class's refinement continues at its first prepended module, from a module's refinement at the module itself.
+        /// Every expected line is CRuby 4.0's.
+        /// </summary>
+        public void Refinements12() {
+            TestOutput(@"
+# 1 refine + prepend (prepend before using)
+module P1; def +(o) = [:P1, super]; end
+module R1; refine Integer do; def +(o) = [:refined, o]; end; end
+Integer.prepend(P1)
+module T1; using R1; p(3 + 1); p(3.send(:+, 1)); p(3.public_send(:+, 1)); p(3.method(:+).call(1)); p 3.respond_to?(:+); end
+
+# 2 refinement calls super with prepend: where does super go?
+class C2; def m = [:C2]; end
+module P2; def m = [:P2, *super]; end
+module R2; refine C2 do; def m = [:R2, *super]; end; end
+C2.prepend(P2)
+module T2; using R2; p C2.new.m; p C2.new.send(:m); p C2.new.method(:m).call; end
+
+# 3 prepend after using
+class C3; def m = [:C3]; end
+module R3; refine C3 do; def m = [:R3, *super]; end; end
+module P3; def m = [:P3, *super]; end
+module T3; using R3; C3.prepend(P3); p C3.new.m; end
+
+# 4 include
+class C4; def m = [:C4]; end
+module I4; def m = [:I4, *super]; end
+module R4; refine C4 do; def m = [:R4, *super]; end; end
+C4.include(I4)
+module T4; using R4; p C4.new.m; end
+
+# 5 subclass receiver, prepend on superclass
+class C5; def m = [:C5]; end
+class D5 < C5; end
+module P5; def m = [:P5, *super]; end
+module R5; refine C5 do; def m = [:R5, *super]; end; end
+C5.prepend(P5)
+module T5; using R5; p D5.new.m; end
+
+# 6 subclass receiver, prepend on subclass, refine superclass
+class C6; def m = [:C6]; end
+class D6 < C6; end
+module P6; def m = [:P6, *super]; end
+module R6; refine C6 do; def m = [:R6, *super]; end; end
+D6.prepend(P6)
+module T6; using R6; p D6.new.m; end
+
+# 8 refine subclass, prepend on subclass
+class C8; def m = [:C8]; end
+class D8 < C8; def m = [:D8, *super]; end
+module P8; def m = [:P8, *super]; end
+module R8; refine D8 do; def m = [:R8, *super]; end; end
+D8.prepend(P8)
+module T8; using R8; p D8.new.m; p C8.new.m; end
+
+# 9 Integer + with super from refinement
+module P9; def -(o) = [:P9, super]; end
+module R9; refine Integer do; def -(o) = [:R9, super]; end; end
+Integer.prepend(P9)
+module T9; using R9; p(5 - 1); x = 5; p(x - 2); end
+
+# 10 without using: prepended still applies
+p(3 + 1)
+p(5 - 1)
+# 11 loop (hot path)
+module T11; using R1; s = nil; 1000.times { |i| s = i + 1 }; p s; def self.f(a) = a + 1; 200.times { f(2) }; p f(2); end
+# 12 refine an included module that has a module prepended to it
+module M10; def m = [:M10]; end
+module Q10; def m = [:Q10, *super]; end
+M10.prepend Q10
+class C10; include M10; end
+module R10; refine M10 do; def m = [:R10, *super]; end; end
+module T10; using R10; p C10.new.m; end
+
+# 13 refine a module prepended to a class, which has a module prepended to it
+class C11; def m = [:C11]; end
+module P11; def m = [:P11, *super]; end
+module Q11; def m = [:Q11, *super]; end
+P11.prepend Q11
+C11.prepend P11
+module R11; refine P11 do; def m = :R11; end; end
+module T11; using R11; p C11.new.m; end
+p C11.new.m
+", @"
+[:refined, 1]
+[:refined, 1]
+[:refined, 1]
+[:refined, 1]
+true
+[:R2, :P2, :C2]
+[:R2, :P2, :C2]
+[:R2, :P2, :C2]
+[:R3, :P3, :C3]
+[:R4, :C4]
+[:R5, :P5, :C5]
+[:P6, :C6]
+[:R8, :P8, :D8, :C8]
+[:C8]
+[:R9, [:P9, 4]]
+[:R9, [:P9, 3]]
+[:P1, 4]
+[:P9, 4]
+[:refined, 1]
+[:refined, 1]
+[:R10, :M10]
+:R11
+[:Q11, :P11, :C11]
+");
+        }
+
+        /// <summary>
+        /// super from a method written where a refinement is active resolves under it, as a call does: CRuby's
+        /// search_refined_method reads the cref of the frame that calls super. A refinement of a superclass, of one
+        /// behind an included module, of a class with a prepended module and of an ancestor module; super from
+        /// define_method's block; a method the refinement adds; defined?(super), which does not see refinements; and a
+        /// method written where nothing is used.
+        /// </summary>
+        public void Refinements13() {
+            TestOutput(@"
+class C1; def m(a = 0) = [:C1, a]; end
+module R1; refine C1 do; def m(a = 0) = [:R1, *super]; end; end
+module P2; def m = [:P2, *super]; end
+class C2; def m = [:C2]; prepend P2; end
+module R2; refine C2 do; def m = [:R2, *super]; end; end
+module A3; def m = [:A3]; end
+class C3; include A3; end
+module R3; refine A3 do; def m = [:R3, *super]; def q = :q; end; end
+class C4; def method_missing(n, *) = [:mm, n]; end
+module R4; refine C4 do; def q = [:R4]; end; end
+class D0 < C1; def m(a = 0) = [:D0, *super]; end
+module T
+  using R1; using R2; using R3; using R4
+  class D1 < C1
+    def m(a = 0) = [:D1, *super]
+  end
+  module M1; def m(a = 0) = [:M1, *super]; end
+  class E1 < C1; include M1; def m(a = 0) = [:E1, *super]; end
+  class F1 < C1; def m(a = 0) = [:F1, *super(a + 1) { }]; end
+  class D2 < C2; def m = [:D2, *super]; end
+  class D3 < C3; define_method(:m) { [:D3, *super()] }; def z = defined?(super); end
+  class D4 < C4; def q = [:D4, *super]; def z = [:D4z, *super]; end
+  p D1.new.m(1), F1.new.m(1), E1.new.m, D2.new.m, D3.new.m, D3.new.z, D4.new.q, D4.new.z
+  s = 0
+  d = D1.new
+  3000.times { |i| s += d.m(i).size }
+  p s
+end
+p D0.new.m
+", @"
+[:D1, :R1, :C1, 1]
+[:F1, :R1, :C1, 2]
+[:E1, :M1, :R1, :C1, 0]
+[:D2, :R2, :P2, :C2]
+[:D3, :R3, :A3]
+nil
+[:D4, :R4]
+[:D4z, :mm, :z]
+12000
+[:D0, :C1, 0]
+");
+        }
+
+        /// <summary>
+        /// super from a module prepended to an included module that is refined: the refinement is searched ahead of
+        /// the prepended module (the refined entry stays in the module's own table), so super from that prepended
+        /// module goes on to the module and does not come back to the refinement.
+        /// </summary>
+        public void Refinements14() {
+            TestOutput(@"
+module P; def m = [:P]; end
+module Q; end
+P.prepend(Q)
+class C; include P; end
+module R; refine P do; def m = [:R, *super]; end; end
+using R
+module Q; def m = [:Q, *super]; end
+p C.new.m
+p Q.instance_method(:m).bind_call(C.new)
+", @"
+[:R, :P]
+[:Q, :P]
+");
+        }
     }
 }

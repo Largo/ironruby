@@ -281,22 +281,46 @@ jobs:
           subsystem = data[data[0x3c, 4].unpack1("V") + 24 + 68, 2].unpack1("v")
           abort "#{ARGV[0]}: subsystem #{subsystem}" unless subsystem == 2
           RUBY
+          # The step stops at the first command that fails; say which one it was.
+          trap 'status=$?; echo "::error::smoke test: exit status $status from: $BASH_COMMAND" >&2' ERR
+          # expect_line NAME LINE COMMAND...: runs COMMAND with its standard output on a pipe and
+          # fails, naming the check and showing its exit status, output and errors, unless it
+          # exits with 0 and prints LINE as a line of its own (a CR LF line end, which IronRuby
+          # writes on Windows as CRuby does, counts as one). A bare `cmd | grep -x LINE` failed
+          # the step without a word of what the command had printed.
+          expect_line() {
+            local name=$1 line=$2 out status=0
+            shift 2
+            out=$("$@" 2> expect-stderr.txt) || status=$?
+            if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | tr -d '\r' | grep -qx -- "$line"; then
+              {
+                echo "::error::$name: exit status $status, expected a line \"$line\""
+                echo "--- stdout of $name:"; printf '%s' "$out" | od -c | sed -n '1,40p'
+                echo "--- stderr of $name:"; cat expect-stderr.txt
+              } >&2
+              return 1
+            fi
+            printf '%s\n' "$out"
+          }
           if [ "$RUNNER_OS" = Windows ]; then
             cmd //c ironruby.cmd smoke.rb
             cmd //c ironruby.cmd names.rb
             cmd //c ir.cmd -e "puts RUBY_ENGINE"
             # irb loads reline, which on Windows looks up Win32 functions through Fiddle by
             # their names without the A suffix; 4.0.2 died there, at a pipe as at a console.
-            printf 'puts 6 * 7\n' | cmd //c iirb.cmd | grep -x 42
+            irb_pipe() { printf 'puts 6 * 7\n' | cmd //c iirb.cmd; }
+            expect_line "irb at a pipe" 42 irb_pipe
             cmd //c ironruby.cmd Util/windows-desktop-check.rb
             rubyw="Src/Console/bin/Debug/$TFM/ironrubyw.exe"
             ruby subsystem.rb "$rubyw"
-            "$rubyw" -e 'require "set"; puts "ironrubyw: #{RUBY_ENGINE}"' | grep -x "ironrubyw: ironruby"
+            rubyw_pipe() { "$rubyw" -e 'require "set"; puts "ironrubyw: #{RUBY_ENGINE}"'; }
+            expect_line "ironrubyw at a pipe" "ironrubyw: ironruby" rubyw_pipe
           else
             ./ironruby smoke.rb
             ./ironruby names.rb
             ./ir.sh -e 'puts RUBY_ENGINE'
-            printf 'puts 6 * 7\n' | ./iirb.sh | grep -x 42
+            irb_pipe() { printf 'puts 6 * 7\n' | ./iirb.sh; }
+            expect_line "irb at a pipe" 42 irb_pipe
           fi
 
       # IO#write_nonblock on a socket claims only what the kernel took (#14). On Linux the

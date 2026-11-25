@@ -20,8 +20,9 @@
 #   flaky.txt     the names of tests that failed beside the others and passed alone
 #   chunks/       each process's list of tests and its log
 # Exit status: 0 all passed, 1 a test failed, 2 a process ended without the driver's last line
-# (crashed, killed, timed out) or a listed test did not run - the run is incomplete, and a
-# failed.txt without its names would compare as clean.
+# (crashed, killed, timed out) - a chunk, or a failed test's run alone - or `/list' failed, or a
+# listed test did not run: the run is incomplete, and a failed.txt without its names would
+# compare as clean.
 set -u
 cd "$(dirname "$0")/.."
 ROOT=$PWD
@@ -54,7 +55,14 @@ if grep -rqE '^\s*\[Run\]' "$ROOT/Src/IronRuby.Tests/Runtime" 2>/dev/null; then
   exit 2
 fi
 
-(cd "$TEST_DIR" && "$EXE" /list) | tr -d '\r' | grep -v '^$' > "$OUT/chunks/all.txt"
+# /list ends with exit 255 (the driver returns -1 after it); anything else is a driver that died
+# part way through the list, and a short list would pass the coverage check below as complete
+(cd "$TEST_DIR" && "$EXE" /list) > "$OUT/chunks/all.raw" 2> "$OUT/chunks/list.err" < /dev/null
+code=$?
+if [ $code -ne 255 ] && [ $code -ne 0 ]; then
+  echo "$EXE /list failed (exit $code):" >&2; cat "$OUT/chunks/list.err" >&2; exit 2
+fi
+tr -d '\r' < "$OUT/chunks/all.raw" | grep -v '^$' > "$OUT/chunks/all.txt"
 total=$(wc -l < "$OUT/chunks/all.txt")
 [ "$total" -gt 0 ] || { echo "no tests listed by $EXE /list" >&2; exit 2; }
 
@@ -83,7 +91,7 @@ export -f run_chunk
 export TEST_DIR EXE CHUNK_TIMEOUT
 
 start=$(date +%s)
-ls "$OUT"/chunks/*.list | xargs -P "$JOBS" -n 1 bash -c 'run_chunk "$1"' _
+printf '%s\0' "$OUT"/chunks/*.list | xargs -0 -P "$JOBS" -n 1 bash -c 'run_chunk "$1"' _
 wall=$(( $(date +%s) - start ))
 
 incomplete=()
@@ -108,11 +116,18 @@ missing=$(sort -u "$OUT/chunks/all.txt" | comm -23 - "$OUT/chunks/ran.txt")
 # the gate compares flaky.txt with the baseline's as well.
 tr -d '\r' < <(cat "$OUT"/chunks/*.log) | sed -n 's/^> FAILED: //p' | sort -u > "$OUT/chunks/failed-once.txt"
 : > "$OUT/failed.txt"; : > "$OUT/flaky.txt"
+# A run alone that does not end as the driver ends (crashed, timed out) proves nothing either
+# way: the test stays in failed.txt, and the run is incomplete.
 while read -r t; do
-  if (cd "$TEST_DIR" && timeout -k 30 "$CHUNK_TIMEOUT" "$EXE" /verbose "$t") > "$OUT/chunks/alone-$t.log" 2>&1 < /dev/null; then
+  log=$OUT/chunks/alone-$t.log
+  (cd "$TEST_DIR" && timeout -k 30 "$CHUNK_TIMEOUT" "$EXE" /verbose "$t") > "$log" 2>&1 < /dev/null
+  code=$?
+  last=$(tr -d '\r' < "$log" | grep -v '^\s*$' | tail -1)
+  if [ $code -eq 0 ] && [[ $last == *PASSED* ]]; then
     echo "$t" >> "$OUT/flaky.txt"
   else
     echo "> FAILED: $t" >> "$OUT/failed.txt"
+    [[ $last == Repro:* ]] || incomplete+=("alone-$t (exit $code)")
   fi
 done < "$OUT/chunks/failed-once.txt"
 
@@ -138,7 +153,7 @@ if [ -s "$OUT/failed.txt" ]; then
 fi
 if [ ${#incomplete[@]} -gt 0 ]; then
   echo "INCOMPLETE - these processes did not end as the driver ends: ${incomplete[*]}"
-  echo "(their logs are in $OUT/chunks; run their lists again, alone)"
+  echo "(their logs are in $OUT/chunks; run their lists again, alone - an alone-Name is that one test)"
   status=2
 fi
 if [ -n "$missing" ]; then
