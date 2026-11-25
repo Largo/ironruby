@@ -1313,6 +1313,58 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/splat-recursion (2026-11-24) - a splat the call site makes binds once for every length,
+  and is the callee's rest parameter.** `def f(n, *a) = n == 0 ? a : f(n - 1, *a, n)`,
+  `200.times { f(300) }`: 12.0 s against CRuby's 0.037. Cause, from `IR_BIND_TRACE=1`: the rule
+  of a splatted call tested the list's exact length (`MetaObjectBuilder.AddSplattedArgumentTest`),
+  and a light site splatting gets no precompiled dispatcher, so every level of the recursion
+  bound and compiled a rule of its own (about 150 us each, a `?` and a `rule` line per call,
+  warm or not). With that gone (one rule, `Count >= k`, when the list's tail all goes into the
+  rest parameter: no parameter after the rest, no keywords, no right-hand side, the rest given
+  at least one item) the shape was still 3-14x CRuby and worse than quadratic (n = 600 was 7x
+  n = 300): a profile put 74% of the thread in libcoreclr, which the symbols (`dotnet-symbol`)
+  named as the collector's relocation (`relocate_in_uoh_objects`, `relocate_advance_to_non_sip`),
+  and `DOTNET_GCgen0size=0x20000000` cut it 2.6x. Every level allocated four copies of its
+  arguments (`[*a, n]` copied `a` into an Array of its length and again into one of twice it to
+  add `n`; the rule copied that into the rest parameter), all alive until the recursion
+  unwinds: 1.8 collections per `f(600)`, mostly gen1. Now `[*a, x...]` is made the size it ends
+  up (`RubyOps.SplatCopy`; `[*a, a.pop]` still copies before the item is evaluated), and a site
+  whose splat is such an array (`f(*a, x)`, `f(*a, *b)`; not `f(*a)`) says so in its signature
+  (`RubyCallFlags.HasFreshSplat`, `*+` in traces), so that the rule gives the array itself to a
+  rest parameter that takes all of it (`RubyOps.TakeFreshSplat`): one copy a level. A block's
+  rest parameter from a splat (`yield(*a, x)` into `|*r|`) is made its size too, not grown an
+  item at a time. `IR_SPLAT_REST=0` turns off the rule for every length and the taking.
+  Bytes: `f(600)` 5.9 MB -> 1.48 MB, 0.24 collections. Quiet machine (load 4-7), `ab.rb`, ns per
+  call, cruby / base / off / new: `f(50)` 7,499 / 2,074,855 / 2,363,065 / 10,000;
+  `f(300)` 103,425 / 24,707,551 / 24,351,088 / 119,997; `f(600)` 273,084 / 66,622,762 /
+  59,587,666 / 594,583. The script above: 0.072 s (cold) against 12.0. Three rounds, load 3-16:
+  `g(*a, x)` with 300 items 480 / 2,079 / 1,360 / 628 (new/off 0.46), `yield(*a, 1)` into
+  `|*r|` with 300 items 480 / 3,280 / 880 / 880 (the presizing, in `off` too), with five
+  items and `f(n - 1, *a)` (one copy a level, as before) overlapping. Left: `f(n - 1, *a)` 300
+  deep is 1.75x CRuby and `f(600)` 2.2x, both the collector moving the arrays the recursion
+  keeps alive; a block's rest parameter still copies a made splat (`yield` sites carry no
+  signature to say it). Checked: Util/splat-pass-matrix.rb gains section 10 (every length
+  with leading, optional and post parameters, keywords and a hash after the splat,
+  ruby2_keywords, a kept or mutated rest parameter not shared, redefinition half way,
+  method_missing, send, super, yield, array literals, private/protected/`private :x` in a
+  subclass half way, a refinement, a made splat a million deep: SystemStackError), all CRuby's;
+  gate-matrices (splat-pass, block-pass, hot-shapes, jit, light-rest) in seven modes with
+  `off=IR_SPLAT_REST=0`: PASS (hot-shapes "baseline" in every mode, as master);
+  IronRuby.Tests (parallel-tests.sh, Release): PASSED.
+  **Gate of 2026-11-25** (the branch with master e5c6a859 merged, against e5c6a859, Release
+  net10.0): **PASS**. IronRuby.Tests 1,340 PASSED on both trees, no failed or flaky name on
+  either. `gate-matrices.rb --all` (153 units, seven modes with `off=IR_SPLAT_REST=0`, R2R
+  included): PASS once `array2-matrix`'s `[1,2,3].sample(2)` row stopped printing which items
+  it chose (random on every engine, CRuby included; three DIFFs it caused on the first run).
+  `ReflectionCache.Generated.cs` regenerated with ClassInitGenerator: identical to the commit's.
+  ruby/spec, all five suites (32,680 examples): no failure the known list does not name.
+  Timing, load under 2: the fourteen benchmarks verify; AWFY 12 both orders, geomean 1.000 and
+  1.004 (new/base); Havlak 1.013 and 1.059, and in twelve alternating rounds of its own the new
+  tree was the faster in eleven (medians 4.71 against 4.78 s). micro-table both orders: geomean
+  0.972 and 0.998, no line more than 5% slower in both. Start-up on the ReadyToRun host, ten
+  alternating runs, best ms (base -> new): `-e 1` 517 -> 503, `gem --version` 693 -> 696,
+  `gem list` 1569 -> 1572.
+
 - **perf/lrebind (2026-11-24, 0d464ce0) - a shared rule's compiled target goes to its binder's
   cache.** The first-call profile counted about 160 extra binds in 200 light methods, all
   `shared-hit +(L,1) :: Int32`. The cause was not Integer's version (a top-level `def` does not

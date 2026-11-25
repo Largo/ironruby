@@ -33,6 +33,9 @@ namespace IronRuby.Compiler.Ast {
         private readonly bool _hasBlock;
 
         public MSA.Expression SplattedArgument { get; set; }
+
+        // The splatted argument is an array made for the call (Arguments.UnsplatArguments): see RubyCallFlags.HasFreshSplat.
+        public bool SplattedArgumentIsFresh { get; set; }
         public MSA.Expression RhsArgument { get; set; }
 
         internal CallSiteBuilder(AstGenerator/*!*/ gen, MSA.Expression/*!*/ instance, MSA.Expression block) {
@@ -89,6 +92,9 @@ namespace IronRuby.Compiler.Ast {
             }
             if (IsVariableCall) {
                 flags |= RubyCallFlags.IsVariableCall;
+            }
+            if (SplattedArgument != null && SplattedArgumentIsFresh) {
+                flags |= RubyCallFlags.HasFreshSplat;
             }
             if (_hasBlock) {
                 flags |= RubyCallFlags.HasSourceBlock;

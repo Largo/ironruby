@@ -2827,6 +2827,28 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The first splat of `[*list, ...]` (an argument list or an array literal): a copy of the list with room for the
+        /// items that follow it (Arguments.UnsplatArguments). An array made empty and grown by them copied the list into
+        /// one of its length and then into one of twice its length for `f(*a, x)`.
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ SplatCopy(IList/*!*/ list, int reserve) {
+            var result = new RubyArray(list.Count + reserve);
+            result.AddRange(list);
+            return result;
+        }
+
+        /// <summary>
+        /// The splatted list of a call whose site made it for the call (RubyCallFlags.HasFreshSplat), as the callee's rest
+        /// parameter: the list itself, which nothing else refers to, rather than a copy of it (ArgsBuilder.AddCallArguments).
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ TakeFreshSplat(IList/*!*/ list) {
+            var array = list as RubyArray;
+            return (array != null && array.GetType() == typeof(RubyArray)) ? array : new RubyArray(list);
+        }
+
+        /// <summary>
         /// `[*list, item]` as a new array of the size it ends up: what `super(*rest, **kw)` passes
         /// splatted when kw is not empty (SuperCall).
         /// </summary>
