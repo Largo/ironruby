@@ -68,26 +68,69 @@ git -C <tree> diff --stat <base>...HEAD
 
 ## 2. It still computes the same thing
 
+Steps 2 and 3 are CPU-bound, not timing runs: they need no quiet machine, only one gate's
+work at a time on it. Build both trees at once (each has its own DLR copy, so their `obj/`
+do not collide), then run what follows one piece after another, each piece using every core.
+
 ```sh
-# in the candidate tree, with the DLR copy Util/perf/worktree.sh made for it
+# in each tree (the candidate with the DLR copy Util/perf/worktree.sh made for it), both at once
 set -o pipefail      # a failed build must stop here: tail's success would let the tests run on the binaries of an earlier build
 dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
   -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
-(cd Src/IronRuby.Tests/bin/Release/net10.0 && ./IronRuby.Tests /verbose > results.txt 2>&1; code=$?; echo "exit $code"; tail -1 results.txt; grep '^> FAILED' results.txt | sort > failed.txt; exit $code)
+dotnet build Src/Console/Ruby.Console.csproj -c Release -p:IronRubyTargetFrameworks=net10.0 \
+  -p:DlrSourceDir=<dlr copy>/src/core/ -p:CheckDlrPatches=false -v q | tail -3 || exit 1
+
+# then, one tree after the other
+IR_CONFIG=Release Util/parallel-tests.sh /abs/path/tests-<tree>; echo "exit $?"
 ```
 
-The run is complete only if it ends as the driver ends it: `PASSED` (exit 0), or the
-numbered list of failures followed by a `Repro: ... IronRuby.Tests.dll /verbose Name...`
-line (exit 1). A run that crashed or was killed - the OOM killer has taken this suite
-when other builds ran beside it - ends anywhere, with another exit status, may have
-printed no failure name at all, and would compare as clean: run it again, alone.
+`Util/parallel-tests.sh` runs the suite as a queue of processes of twenty tests, one per core,
+with the few slow tests first: about three minutes instead of nine (the suite costs some
+twenty CPU-minutes, and the old single process already used two cores; `DeepNesting1` alone
+is 75 s). Exit 0 is `PASSED`; 1 is a failure that failed again when run alone; 2 is a run that
+is not complete - a process that did not end as the driver ends (crashed, killed, timed out:
+the OOM killer has taken this suite when other builds ran beside it) or a listed test that
+never ran. An incomplete run would compare as clean, so exit 2 never passes the gate: run the
+lists it names again, alone (`./IronRuby.Tests /verbose $(cat chunks/NNN.list)`; an
+`alone-Name` is that one test, already in `failed.txt`), and merge the rerun into that tree's
+files before the `diff` below - each `> FAILED: Name` it prints is run alone once more and goes
+to `failed.txt` if it fails again, to `flaky.txt` if it passes (an `alone-Name` that now passes
+moves from `failed.txt` to `flaky.txt`). A rerun that does not itself end with `PASSED` or a
+`Repro:` line is incomplete too, and the candidate fails the gate until one does - or run the
+whole script again, with fewer `JOBS` or on a quieter machine, until it exits 0 or 1. The
+driver runs a name it does not know as nothing and still prints `PASSED`, and a test marked
+`[Run]` replaces the names it is given: a rerun counts only if its output has an `Executing
+Name` line for every name on its list (the script checks this for its own runs).
+A test that failed beside the others and passed alone is in `flaky.txt` and printed (a test
+whose own threads race - `BlockLoopNested1` did, once in sixteen runs under load, until #281).
 
-Do the same in the baseline checkout (its own Release test build) and `diff` the two
-`failed.txt`: a name only the candidate has fails the gate. Do not go by "one failure, as
-before" - a different test failing in place of the known one would look the same.
+`diff` the two trees' `failed.txt` and `flaky.txt`: a name only the candidate has fails the
+gate - in `flaky.txt` too, until twenty runs of it alone (`./IronRuby.Tests Name`, eight at
+a time) show it fails on the baseline as well. Do not go by "one failure, as before" - a
+different test failing in place of the known one would look the same.
 
-Then, whichever apply to the code the diff touches (each file's header says how to run it
-and what "same" means; most compare JIT/OSR on against off, or IronRuby against CRuby):
+Then the differential matrices, all of them, in every mode on both trees, against CRuby:
+
+```sh
+ruby Util/perf/gate-matrices.rb --all --out /abs/path/matrices $BASE $NEW \
+  --mode off=<the change's switch, e.g. IR_LIGHT_REGEX=0>     # one --mode per switch it adds
+```
+
+It runs each of the 99 matrices (`inline-matrix.rb` a case per process, `int-matrix.rb`
+through its driver) under CRuby twice and under as built, `-X:NoJIT -X:NoOSR`,
+`-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0` and the ReadyToRun host on both
+trees, in empty directories of their own, and fails on a line the candidate prints that is
+not CRuby's and that the baseline in the same mode does not print either. A DIFF is run twice
+more alone before it is believed; one that then passes is reported `flaky`, and is judged as a
+flaky test is. `cruby!` means CRuby itself did not exit 0: the matrix dies before its last
+rows (below) and must be fixed before it proves anything. `died` means CRuby ran to the end and
+both trees died the same way before it: the rows after are compared by no one, so the run ends
+`INCOMPLETE` with exit 2 (1 is a DIFF) and does not pass the gate - fix the crash, or move the
+rows past it, on the baseline as well. A death only the candidate has is a DIFF. The R2R mode is skipped, and said
+so, when a tree has no ReadyToRun host as new as its Release build.
+
+The files to read most closely for the code the diff touches (each header says what "same"
+means):
 
 | Touched | Run |
 |---|---|
@@ -104,7 +147,8 @@ and what "same" means; most compare JIT/OSR on against off, or IronRuby against 
 | calls a compiled method binds to another's typed body (on by default) | `Util/jit-calls-matrix.rb`, also with `-X:NoJITCalls` |
 
 A matrix is compared only after it is seen to end: `ruby FILE; echo $?` prints 0 and the
-output's last line is the file's last row. A file that dies of the same exception under
+output's last line is the file's last row (gate-matrices.rb checks the first half, for CRuby
+as `cruby!` and for both trees as `died`; the last row is yours to check). A file that dies of the same exception under
 CRuby and under every build prints the same four times; one did in round seventeen (a
 `p [..]` after `p` had become a local), and its last rows had not run for two commits.
 And for a change that lets more bodies compile, compare the `specialized` and `declined`
@@ -176,10 +220,10 @@ Sweep all five suites on the candidate, when `spec/` and `mspec/` are checked ou
 gives the pins), and check the result against the list of known failures:
 
 ```sh
-cd <tree> && IR_CONFIG=Release JOBS=4 Util/ci-sweep.sh /abs/path/out && ruby Util/sweep-check.rb /abs/path/out
+cd <tree> && IR_CONFIG=Release JOBS=$(nproc) Util/ci-sweep.sh /abs/path/out && ruby Util/sweep-check.rb /abs/path/out
 ```
 
-It takes under ten minutes on four cores (32,000 examples), reruns a crashed or hung job
+It takes under ten minutes on four cores (32,000 examples), less on more, reruns a crashed or hung job
 file by file and a new failure alone, and fails on a failing example the list does not
 name or a file with no summary line. A subset is not a substitute: the ten faults in
 `Util/perf/LEDGER.md` got past runs of `language` and a hand-picked part of `core`. The

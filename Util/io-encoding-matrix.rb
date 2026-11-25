@@ -12,7 +12,14 @@
 #   * internal_encoding is nil when it would equal the external encoding
 require 'tempfile'
 
-PATH = "/tmp/io-encoding-matrix.txt"
+# The fixture lives in a directory of this run's own. At a fixed /tmp path it was shared by
+# every run: side by side (CRuby and each IronRuby mode, as Util/perf/gate-matrices.rb runs
+# them), one run's "w" opens and File.write truncated it while another read it, and that run
+# got nil from read(2) and died before its last rows.
+require 'tmpdir'
+require 'fileutils'
+PATH = File.join(Dir.mktmpdir('io-encoding-matrix-'), "fixture.txt")
+at_exit { FileUtils.rm_rf(File.dirname(PATH)) }
 File.write(PATH, "hello\n")
 
 MODES = %w[r r+ w w+ a a+ rb rb+ wb]
