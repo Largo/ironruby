@@ -295,7 +295,7 @@ jobs:
             if [ "$status" -ne 0 ] || ! printf '%s\n' "$out" | tr -d '\r' | grep -qx -- "$line"; then
               {
                 echo "::error::$name: exit status $status, expected a line \"$line\""
-                echo "--- stdout of $name:"; printf '%s' "$out" | od -c | head -40
+                echo "--- stdout of $name:"; printf '%s' "$out" | od -c | sed -n '1,40p'
                 echo "--- stderr of $name:"; cat expect-stderr.txt
               } >&2
               return 1
