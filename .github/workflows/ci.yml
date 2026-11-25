@@ -337,6 +337,20 @@ jobs:
             ./ir.sh Util/socket-write-nonblock-check.rb
           fi
 
+      # STDOUT buffered at a pipe, as in CRuby. IronRuby.Tests gives every runtime a stream of
+      # its own, so only a real child process with a pipe for descriptor 1 reaches the buffer
+      # and its Windows half (GetFileType, the "\r\n" line end, exec's exit); the script runs
+      # such children and compares their output with CRuby's.
+      - name: Buffered STDOUT
+        timeout-minutes: 5
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd //c ir.cmd Util/stdout-buffer-check.rb
+          else
+            ./ir.sh Util/stdout-buffer-check.rb
+          fi
+
       # Src/Samples/Linq/101samples.rb, the port of Microsoft's 101 LINQ Samples, has to print
       # exactly what 101samples.expected beside it says. Nothing ran it before, and it stopped
       # parsing without anyone noticing. Its stderr counts too, so a warning fails the step.
