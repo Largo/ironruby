@@ -1,0 +1,97 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+@@ -171,6 +171,12 @@ namespace Microsoft.Scripting.Interpreter {
+         // delegate creator needs to know to compile the lambda where the CLR's JIT has stack enough.
+         private int _depth, _maxDepth;
+ 
++        // How deep try expressions have nested so far, and the deepest they went here or in a lambda
++        // nested in this one, which compiling this one compiles too: the delegate creator leaves a lambda
++        // whose try expressions nest too deep for the CLR's JIT interpreted (see
++        // LightDelegateCreator.MaxCompiledTryDepth).
++        private int _tryDepth, _maxTryDepth;
++
+         private static readonly LocalDefinition[] EmptyLocals = Array.Empty<LocalDefinition>();
+ 
+         internal LightCompiler(int compilationThreshold) {
+@@ -206,7 +212,7 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+             Debug.Assert(Instructions.CurrentStackDepth == (node.ReturnType != typeof(void) ? 1 : 0));
+ 
+-            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth };
++            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth, TryDepth = _maxTryDepth };
+         }
+ 
+         internal LightDelegateCreator CompileTop(LightLambdaExpression node) {
+@@ -224,7 +230,7 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+             Debug.Assert(Instructions.CurrentStackDepth == (node.ReturnType != typeof(void) ? 1 : 0));
+ 
+-            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth };
++            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth, TryDepth = _maxTryDepth };
+         }
+ 
+         private Interpreter MakeInterpreter(string lambdaName) {
+@@ -1140,6 +1146,14 @@ namespace Microsoft.Scripting.Interpreter {
+         }
+ 
+         private void CompileTryExpression(Expression expr) {
++            if (++_tryDepth > _maxTryDepth) {
++                _maxTryDepth = _tryDepth;
++            }
++            CompileTryExpressionNoDepth(expr);
++            _tryDepth--;
++        }
++
++        private void CompileTryExpressionNoDepth(Expression expr) {
+             var node = (TryExpression)expr;
+ 
+             BranchLabel end = Instructions.MakeLabel();
+@@ -1454,6 +1468,9 @@ namespace Microsoft.Scripting.Interpreter {
+             var node = (LambdaExpression)expr;
+             var compiler = new LightCompiler(this);
+             var creator = compiler.CompileTop(node);
++            if (compiler._maxTryDepth > _maxTryDepth) {
++                _maxTryDepth = compiler._maxTryDepth;
++            }
+ 
+             if (compiler._locals.ClosureVariables is not null) {
+                 foreach (ParameterExpression variable in compiler._locals.ClosureVariables.Keys) {
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+@@ -50,6 +50,22 @@ namespace Microsoft.Scripting.Interpreter {
+         // the light compiler would. A lambda nested deeper than this is compiled on a fresh stack.
+         private const int FreshStackTreeDepth = 400;
+ 
++        /// <summary>
++        /// How deeply the try expressions of the lambda, or of a lambda nested in it, nest, as the light compiler found it.
++        /// </summary>
++        internal int TryDepth { get; set; }
++
++        // The CLR's JIT takes time cubic in how deeply a method's protected regions nest once filters
++        // enclose them: for each block of a filter it goes through every region the filter's try encloses
++        // and walks each one's chain of enclosing regions up to the filter (BasicBlock::
++        // VisitEHEnclosedHandlerSecondPassSuccs, which every walk of the flow graph with exception edges
++        // calls; .NET 8 to 10, and .NET 11's is no better). IronRuby builds begin/rescue of filters and
++        // finallys, four or more try expressions a level: nested 500 deep in one method it spent over a
++        // minute in the JIT (DeepNesting1), interpreted 1.5 s. A lambda whose try expressions nest deeper
++        // than this - some 15 levels of begin/rescue, far deeper than code is written - stays interpreted,
++        // which is linear in its size, as are the light compiler and the interpreter.
++        internal const int MaxCompiledTryDepth = 64;
++
+         private bool HasClosure => Interpreter is not null && Interpreter.ClosureSize > 0;
+ 
+         internal bool HasCompiled => _compiled is not null;
+@@ -125,6 +141,11 @@ namespace Microsoft.Scripting.Interpreter {
+                 return;
+             }
+ 
++            // See MaxCompiledTryDepth. A lambda the light compiler could not interpret has no interpreter, and is compiled.
++            if (TryDepth > MaxCompiledTryDepth && Interpreter is not null) {
++                return;
++            }
++
+             // See FreshStackTreeDepth (and StackGuard).
+             if (TreeDepth > FreshStackTreeDepth) {
+                 StackGuard.RunOnFreshStack(CompileOnThisStack);
