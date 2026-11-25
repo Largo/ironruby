@@ -377,6 +377,9 @@ namespace IronRuby.Builtins {
             Stream redirected;
             if (RubyIO.TryRedirectDescriptor(self, source, out redirected)) {
                 self.Mode = source.Mode;
+                // io_reopen copies fptr->mode, FMODE_SYNC with it: STDOUT reopened onto STDERR
+                // writes through as STDERR does, and onto a pipe is buffered as the pipe's IO is.
+                self.AutoFlush = source.AutoFlush;
                 if (redirected != null) {
                     self.Context.SetStream(self.GetFileDescriptor(), redirected);
                     self.SetStream(redirected);
@@ -396,6 +399,7 @@ namespace IronRuby.Builtins {
             self.Context.RedirectFileDescriptor(self.GetFileDescriptor(), source.GetFileDescriptor());
             self.SetStream(source.GetStream());
             self.Mode = source.Mode;
+            self.AutoFlush = source.AutoFlush;
             CopyPath(self, source);
             return self;
         }
@@ -1811,7 +1815,7 @@ namespace IronRuby.Builtins {
             if (stream.DataBuffered || self.HasPendingChars) {
                 throw RubyExceptions.CreateIOError("sysseek for buffered IO");
             }
-            if (stream.WritePending) {
+            if (self.IsConsoleOutput ? self.HasBufferedOutput : stream.WritePending) {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("sysseek for buffered IO"));
             }
             self.Flush();
@@ -1951,9 +1955,11 @@ namespace IronRuby.Builtins {
         public static int SysWrite(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyContext/*!*/ context, RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
 
-            // MRI warns about what its write buffer holds; read-ahead is simply given back.
+            // MRI warns about what its write buffer holds; read-ahead is simply given back. For
+            // standard output that is the buffer ConsoleStream keeps, which a write too large for
+            // it has just emptied; WritePending says only that something was written.
             RubyBufferedStream stream = self.GetWritableStream();
-            if (stream.WritePending) {
+            if (self.IsConsoleOutput ? self.HasBufferedOutput : stream.WritePending) {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("syswrite for buffered IO"));
             }
 

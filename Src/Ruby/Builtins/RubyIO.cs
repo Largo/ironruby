@@ -682,11 +682,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Writes the bytes with one write to the descriptor when this is the process's standard
-        /// output and it is holding output in its buffer, which they go past (IO#syswrite). False,
-        /// and nothing written, otherwise.
-        /// </summary>
-        /// <summary>
         /// Whether this is the process's standard output holding what is written in its buffer
         /// (not a terminal, #sync false): MRI then writes each piece of a #puts by itself
         /// (io_writev takes the writev(2) path only for a sync IO or a terminal), so where a
@@ -707,6 +702,14 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>Whether this IO writes to the process's standard output or standard error stream.</summary>
+        public bool IsConsoleOutput {
+            get {
+                var console = FindConsoleStream(_stream);
+                return console != null && console.CanWrite;
+            }
+        }
+
         /// <summary>
         /// What the next #puts on this thread to a buffered standard output appends as the line's
         /// end, in bytes as they reach the stream: 1 ("\n"), 2 when text mode makes it "\r\n" (see
@@ -724,6 +727,11 @@ namespace IronRuby.Builtins {
             ConsoleStream.SplitBeforeLineEnd = lineEndLength;
         }
 
+        /// <summary>
+        /// Writes the bytes with one write to the descriptor when this is the process's standard
+        /// output and it is holding output in its buffer, which they go past (IO#syswrite). False,
+        /// and nothing written, otherwise.
+        /// </summary>
         public bool TryWriteUnbuffered(byte[]/*!*/ buffer, int offset, int count) {
             var console = FindConsoleStream(GetStream());
             if (console == null || !console.IsBuffering) {
