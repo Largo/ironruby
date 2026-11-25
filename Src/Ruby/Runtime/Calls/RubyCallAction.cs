@@ -1026,7 +1026,7 @@ namespace IronRuby.Runtime.Calls {
         /// resolved under. For the scope of a method or of a block in one it reads the method's record (GetRecordScope);
         /// any other scope walks.
         /// </summary>
-        private static Expression/*!*/ MakeRefinementGuard(CallArguments/*!*/ args, RefinementActivation/*!*/ refinements) {
+        internal static Expression/*!*/ MakeRefinementGuard(CallArguments/*!*/ args, RefinementActivation/*!*/ refinements) {
             var scope = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
             var expected = Ast.Constant(refinements, typeof(RefinementActivation));
 

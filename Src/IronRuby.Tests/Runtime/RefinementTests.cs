@@ -477,5 +477,57 @@ true
 [:Q11, :P11, :C11]
 ");
         }
+
+        /// <summary>
+        /// super from a method written where a refinement is active resolves under it, as a call does: CRuby's
+        /// search_refined_method reads the cref of the frame that calls super. A refinement of a superclass, of one
+        /// behind an included module, of a class with a prepended module and of an ancestor module; super from
+        /// define_method's block; a method the refinement adds; defined?(super), which does not see refinements; and a
+        /// method written where nothing is used.
+        /// </summary>
+        public void Refinements13() {
+            TestOutput(@"
+class C1; def m(a = 0) = [:C1, a]; end
+module R1; refine C1 do; def m(a = 0) = [:R1, *super]; end; end
+module P2; def m = [:P2, *super]; end
+class C2; def m = [:C2]; prepend P2; end
+module R2; refine C2 do; def m = [:R2, *super]; end; end
+module A3; def m = [:A3]; end
+class C3; include A3; end
+module R3; refine A3 do; def m = [:R3, *super]; def q = :q; end; end
+class C4; def method_missing(n, *) = [:mm, n]; end
+module R4; refine C4 do; def q = [:R4]; end; end
+class D0 < C1; def m(a = 0) = [:D0, *super]; end
+module T
+  using R1; using R2; using R3; using R4
+  class D1 < C1
+    def m(a = 0) = [:D1, *super]
+  end
+  module M1; def m(a = 0) = [:M1, *super]; end
+  class E1 < C1; include M1; def m(a = 0) = [:E1, *super]; end
+  class F1 < C1; def m(a = 0) = [:F1, *super(a + 1) { }]; end
+  class D2 < C2; def m = [:D2, *super]; end
+  class D3 < C3; define_method(:m) { [:D3, *super()] }; def z = defined?(super); end
+  class D4 < C4; def q = [:D4, *super]; def z = [:D4z, *super]; end
+  p D1.new.m(1), F1.new.m(1), E1.new.m, D2.new.m, D3.new.m, D3.new.z, D4.new.q, D4.new.z
+  s = 0
+  d = D1.new
+  3000.times { |i| s += d.m(i).size }
+  p s
+end
+p D0.new.m
+", @"
+[:D1, :R1, :C1, 1]
+[:F1, :R1, :C1, 2]
+[:E1, :M1, :R1, :C1, 0]
+[:D2, :R2, :P2, :C2]
+[:D3, :R3, :A3]
+nil
+[:D4, :R4]
+[:D4z, :mm, :z]
+12000
+[:D0, :C1, 0]
+");
+        }
     }
 }

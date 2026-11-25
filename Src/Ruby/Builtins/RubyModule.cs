@@ -2900,7 +2900,8 @@ namespace IronRuby.Builtins {
 
         private bool FindMethodWithRefinementsNoLock(string/*!*/ name, MethodLookup options, VisibilityContext visibility,
             RefinementActivation/*!*/ refinements, RefinementActivation.ClrExtensionScope scopedExtensions, ref bool passedScopedExtensionsRef,
-            ref bool skipHiddenRef, ref bool foundCallerSelfRef, out RubyMemberInfo infoOut, out RubyModule ownerOut) {
+            ref bool skipHiddenRef, ref bool foundCallerSelfRef, out RubyMemberInfo infoOut, out RubyModule ownerOut,
+            RubyModule superFrom = null) {
 
             RubyMemberInfo info = null;
             RubyModule owner = null;
@@ -2910,7 +2911,14 @@ namespace IronRuby.Builtins {
             bool virtualLookup = (options & MethodLookup.Virtual) != 0;
             var refinementBuffer = new List<RubyModule>();
 
+            // A super lookup (see ResolveSuperMethodNoLock) searches only what follows superFrom in this order, which leaves
+            // out the refinements of the module superFrom is or is prepended to, and goes on past a super forwarder.
+            bool searching = superFrom == null;
+
             bool FindInRefinementsOf(RubyModule/*!*/ module) {
+                if (!searching) {
+                    return false;
+                }
                 refinementBuffer.Clear();
                 refinements.GetRefinementsOf(module, refinementBuffer);
                 foreach (RubyModule refinement in refinementBuffer) {
@@ -2925,9 +2933,13 @@ namespace IronRuby.Builtins {
             }
 
             bool FindIn(RubyModule/*!*/ module) {
+                if (!searching) {
+                    searching = module == superFrom;
+                    return false;
+                }
                 owner = module;
                 foundCallerSelf |= module == visibility.Class;
-                if (module.TryGetMethod(name, ref skipHidden, virtualLookup, out info)) {
+                if (module.TryGetMethod(name, ref skipHidden, virtualLookup, out info) && (superFrom == null || !info.IsSuperForwarder)) {
                     return true;
                 }
                 passedScopedExtensions |= scopedExtensions != null && module.HasScopedExtensionMethodsNoLock(name, scopedExtensions);
@@ -3200,6 +3212,16 @@ namespace IronRuby.Builtins {
 
         // skip one method in the method resolution order (MRO)
         public MethodResolutionResult ResolveSuperMethodNoLock(string/*!*/ name, RubyModule/*!*/ callerModule) {
+            return ResolveSuperMethodNoLock(name, callerModule, null);
+        }
+
+        /// <summary>
+        /// `super' from a method of <paramref name="callerModule"/> written where <paramref name="refinements"/> are active:
+        /// CRuby resolves the super method as it does a call, under the caller's refinements (search_refined_method reads
+        /// the cref of the frame that calls super), so an active refinement of a module past the caller is searched where
+        /// a call would search it.
+        /// </summary>
+        internal MethodResolutionResult ResolveSuperMethodNoLock(string/*!*/ name, RubyModule/*!*/ callerModule, RefinementActivation refinements) {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(name, callerModule);
 
@@ -3226,6 +3248,16 @@ namespace IronRuby.Builtins {
                     owner = module;
                     return module.TryGetMethod(name, ref skipHidden, out info) && !info.IsSuperForwarder;
                 }) && info != null && !info.IsUndefined) {
+                    return new MethodResolutionResult(info, owner, true);
+                }
+                return MethodResolutionResult.NotFound;
+            }
+
+            if (refinements != null && !refinements.IsEmpty) {
+                bool foundCallerSelf = false, passedScopedExtensions = false;
+                if (FindMethodWithRefinementsNoLock(name, MethodLookup.Default, default(VisibilityContext), refinements, null,
+                    ref passedScopedExtensions, ref skipHidden, ref foundCallerSelf, out info, out owner, callerModule)
+                    && !info.IsUndefined) {
                     return new MethodResolutionResult(info, owner, true);
                 }
                 return MethodResolutionResult.NotFound;
