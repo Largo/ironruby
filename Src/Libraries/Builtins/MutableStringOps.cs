@@ -4463,15 +4463,128 @@ namespace IronRuby.Builtins {
             return pair[0];
         }
 
+        /// <summary>
+        /// IR_FAST_SEARCH=0 turns off the shortcuts searching takes (#byteindex and #byterindex with a
+        /// String needle done here rather than in ruby4.rb, Regexp#match? without a MatchData), so
+        /// that one build can be timed with and without them.
+        /// </summary>
+        internal static readonly bool FastSearchEnabled = Environment.GetEnvironmentVariable("IR_FAST_SEARCH") != "0";
+
+        // __ir_byte_search__ (ruby4.rb) for the usual call, a String needle and an Integer offset or
+        // none, done here. The helper builds a table of the byte offset of every character on every
+        // call, which is a millisecond for 10 KB of UTF-8 (MRI: 150 ns); a receiver whose characters
+        // are its bytes needs no table, and a valid UTF-8 one can count the bytes of its characters,
+        // which .NET does vectorized. The answers are the helper's, the IndexError for an offset
+        // inside a character included. False for any other call (a Regexp, a #to_str needle, an
+        // offset that is not a Fixnum, another encoding, a broken string), which the helper makes.
+        private static bool TryByteSearch(MutableString/*!*/ self, object[]/*!*/ args, bool reverse, out object result) {
+            result = null;
+            if (!FastSearchEnabled || args.Length < 1 || args.Length > 2) {
+                return false;
+            }
+            MutableString needle = args[0] as MutableString;
+            if (needle == null || (args.Length == 2 && !(args[1] is int))) {
+                return false;
+            }
+
+            ReadOnlySpan<char> chars = default(ReadOnlySpan<char>);
+            bool singleByte = self.DetectSingleByteCharacters();
+            if (!singleByte) {
+                if (self.Encoding != RubyEncoding.UTF8 || self.ContainsInvalidCharacters()) {
+                    return false;
+                }
+                self.PrepareForCharacterRead();
+                ReadOnlySpan<byte> bytes;
+                if (!self.GetCharacterData(out chars, out bytes)) {
+                    return false;
+                }
+            }
+
+            int size = singleByte ? GetCharacterLength(self) : Encoding.UTF8.GetByteCount(chars);
+            int offset = (args.Length == 2) ? (int)args[1] : (reverse ? size : 0);
+            if (offset < 0) {
+                offset += size;
+                if (offset < 0) {
+                    return true;
+                }
+            }
+            if (offset > size) {
+                // #byteindex gives up past the end, #byterindex clamps to it
+                if (!reverse) {
+                    return true;
+                }
+                offset = size;
+            }
+
+            int charOffset;
+            if (singleByte) {
+                charOffset = offset;
+            } else {
+                int clrOffset = Utf8OffsetToClrIndex(chars, offset);
+                if (clrOffset < 0) {
+                    throw RubyExceptions.CreateIndexError("offset {0} does not land on character boundary", offset);
+                }
+                charOffset = self.ToCharacterIndex(clrOffset);
+            }
+
+            object found = reverse ? LastIndexOf(self, needle, charOffset) : Index(self, needle, charOffset);
+            if (found == null || singleByte) {
+                result = found;
+                return true;
+            }
+            int foundClr = self.ToClrIndex((int)found);
+            if (foundClr > chars.Length) {
+                // the string changed under the search (another thread): the helper is the one to ask
+                return false;
+            }
+            result = ScriptingRuntimeHelpers.Int32ToObject(Encoding.UTF8.GetByteCount(chars.Slice(0, foundClr)));
+            return true;
+        }
+
+        /// <summary>
+        /// The CLR index of the character that starts <paramref name="byteOffset"/> bytes into the
+        /// UTF-8 form of <paramref name="chars"/> (valid UTF-16), or -1 when that offset is inside a
+        /// character or past the end.
+        /// </summary>
+        private static int Utf8OffsetToClrIndex(ReadOnlySpan<char> chars, int byteOffset) {
+            int bytes = 0;
+            int i = 0;
+            while (bytes < byteOffset && i < chars.Length) {
+                char c = chars[i];
+                if (c < 0x80) {
+                    bytes += 1;
+                    i += 1;
+                } else if (c < 0x800) {
+                    bytes += 2;
+                    i += 1;
+                } else if (Char.IsHighSurrogate(c) && i + 1 < chars.Length && Char.IsLowSurrogate(chars[i + 1])) {
+                    bytes += 4;
+                    i += 2;
+                } else {
+                    bytes += 3;
+                    i += 1;
+                }
+            }
+            return (bytes == byteOffset) ? i : -1;
+        }
+
         [RubyMethod("byteindex")]
         public static object ByteIndex(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, MutableString/*!*/ self, params object[]/*!*/ args) {
+            object result;
+            if (TryByteSearch(self, args, false, out result)) {
+                return result;
+            }
             return CallMatchingHelper(storage, scope, self, "__ir_byteindex__", args.Length > 0 ? args[0] : null, new RubyArray(args));
         }
 
         [RubyMethod("byterindex")]
         public static object ByteLastIndex(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, MutableString/*!*/ self, params object[]/*!*/ args) {
+            object result;
+            if (TryByteSearch(self, args, true, out result)) {
+                return result;
+            }
             return CallMatchingHelper(storage, scope, self, "__ir_byterindex__", args.Length > 0 ? args[0] : null, new RubyArray(args));
         }
 

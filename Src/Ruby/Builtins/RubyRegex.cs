@@ -1518,6 +1518,29 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Whether <see cref="MatchFromCharacter(MutableString, int, bool)"/> would find a match, for
+        /// Regexp#match?: the same checks and the same search, but the engine is only asked whether
+        /// there is one (Regex.IsMatch), so neither a Match with its groups nor a MatchData nor a
+        /// frozen copy of the input is made. A subject with a surrogate pair needs the Match to tell
+        /// a match between the two halves of a pair from one Ruby has, and takes the long way.
+        /// </summary>
+        public bool IsMatchFromCharacter(MutableString/*!*/ input, int start) {
+            if (!ToSearchStart(input, ref start, false)) {
+                return false;
+            }
+            string str;
+            bool astral;
+            Regex regex = Transform(input, out str, out astral, true);
+            if (start < 0) {
+                start += str.Length;
+            }
+            if (start < 0 || start > str.Length) {
+                return false;
+            }
+            return astral ? MatchOutsidePairs(regex, str, start).Success : regex.IsMatch(str, start);
+        }
+
+        /// <summary>
         /// The last match starting at or before Ruby character index <paramref name="start"/>.
         /// </summary>
         public MatchData LastMatchFromCharacter(MutableString/*!*/ input, int start) {
