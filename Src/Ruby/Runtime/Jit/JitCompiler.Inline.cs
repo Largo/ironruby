@@ -162,7 +162,7 @@ namespace IronRuby.Runtime.Jit {
             if (!resolved.Found) { return null; }
             var info = resolved.Info as RubyMethodInfo;
             if (info == null) { return null; }
-            if (!selfReceiver && info.Visibility != RubyMethodVisibility.Public) { return null; }
+            if (!selfReceiver && resolved.Visibility != RubyMethodVisibility.Public) { return null; }
             var stub = info.GetDelegate().Target as JitStub;
             if (stub == null) { return null; }
             var code = stub.InlinableBody(_context, cls);

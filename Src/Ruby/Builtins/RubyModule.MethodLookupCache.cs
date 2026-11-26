@@ -29,14 +29,16 @@ namespace IronRuby.Builtins {
     /// #public_method_defined? ask about.
     /// </summary>
     public sealed class CachedMethodLookup {
-        public static readonly CachedMethodLookup/*!*/ NotFound = new CachedMethodLookup(MethodResolutionResult.NotFound, RubyMethodVisibility.None);
+        public static readonly CachedMethodLookup/*!*/ NotFound = new CachedMethodLookup(MethodResolutionResult.NotFound);
 
         public readonly MethodResolutionResult Result;
-        public readonly RubyMethodVisibility Visibility;
 
-        internal CachedMethodLookup(MethodResolutionResult result, RubyMethodVisibility visibility) {
+        internal CachedMethodLookup(MethodResolutionResult result) {
             Result = result;
-            Visibility = visibility;
+        }
+
+        public RubyMethodVisibility Visibility {
+            get { return Result.Visibility; }
         }
 
         public bool Found {
@@ -164,10 +166,10 @@ namespace IronRuby.Builtins {
 
                 if (info.IsSuperForwarder) {
                     var target = ResolveSuperMethodNoLock(((SuperForwarderInfo)info).SuperName, this);
-                    return target.Found ? new CachedMethodLookup(target, info.Visibility) : CachedMethodLookup.NotFound;
+                    return target.Found ? new CachedMethodLookup(target.WithVisibility(info.Visibility)) : CachedMethodLookup.NotFound;
                 }
 
-                return new CachedMethodLookup(new MethodResolutionResult(info, this, true), info.Visibility);
+                return new CachedMethodLookup(new MethodResolutionResult(info, this, true));
             }
         }
 
@@ -181,7 +183,7 @@ namespace IronRuby.Builtins {
                 return CachedMethodLookup.NotFound;
             }
 
-            var visibility = result.Info.Visibility;
+            var visibility = result.Visibility;
             if (result.Info.IsSuperForwarder) {
                 var forwarder = (SuperForwarderInfo)result.Info;
                 result = result.Owner.ResolveSuperMethodNoLock(forwarder.SuperName, result.Owner).InvalidateSitesOnOverride();
@@ -190,7 +192,7 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            return new CachedMethodLookup(result, visibility);
+            return new CachedMethodLookup(result.WithVisibility(visibility));
         }
     }
 }

@@ -549,7 +549,7 @@ namespace IronRuby.Runtime.Jit {
             }
             var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
             if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
-                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                resolved.Visibility != RubyMethodVisibility.Public) {
                 throw Bail("new is not Class#new");
             }
             var construction = cls.TryGetObjectConstruction(argc);
@@ -620,7 +620,7 @@ namespace IronRuby.Runtime.Jit {
             }
             var custom = resolved.Found ? resolved.Info as RubyCustomMethodInfo : null;
             if (custom == null || !custom.IsInstanceConstructor || !refined.Found || refined.Info != resolved.Info ||
-                resolved.Info.Visibility != RubyMethodVisibility.Public) {
+                resolved.Visibility != RubyMethodVisibility.Public) {
                 throw Bail("Array.new is not Class#new");
             }
             // a Ruby initialize (or one from a module) is called by the generic new: Ruby code
