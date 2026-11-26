@@ -1130,7 +1130,7 @@ namespace IronRuby.Runtime {
                 language = _context;
             }
 
-            if (!DomainManager.Platform.FileExists(fullPath)) {
+            if (!DomainManager.Platform.FileExists(fullPath) || !IsReadable(fullPath)) {
                 return null;
             }
 
@@ -1142,6 +1142,20 @@ namespace IronRuby.Runtime {
                 }
             }
             return new ResolvedFile(sourceUnit, fullPath, extensionAppended ? extension : null);
+        }
+
+        /// <summary>
+        /// MRI's rb_file_load_ok: a file the process cannot open for reading is not one #require or #load
+        /// finds, so the search goes on, and one found nowhere else is a LoadError ("cannot load such
+        /// file") rather than the Errno::EACCES of the open that came later.
+        /// </summary>
+        private bool IsReadable(string/*!*/ path) {
+            try {
+                Platform.OpenInputFileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1).Dispose();
+                return true;
+            } catch (UnauthorizedAccessException) {
+                return false;
+            }
         }
 
         /// <summary>
