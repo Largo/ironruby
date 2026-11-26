@@ -1288,6 +1288,36 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     crossing costs so much: past the threshold the shape still ran at ~50-150 us a call for
     hundreds of calls before its compiled code took over (steady state is 1.7 us); that cold
     stretch, not the IL compile, is the next thing to look at.
+    2026-11-26, perf/startup (rejected, 98baf5b): lever 1 of perf/first-bind - keep the spent
+    dispatcher answering until the hot call's rule, compiled in the background, lands. Measured
+    first (R2R host, base 2f8c31c, `IR_BIND_TRACE`): the lever has shrunk since perf/first-bind
+    counted it. `gem list` builds 241 rules (80 ms of 2,942 binds' 183 ms inclusive), irb 268
+    (90 ms), and only 43 / 51 of them are hot (bound after a dispatcher spent its budget). The
+    rest are first rules with no dispatcher in front. Tried: for a hot call,
+    `LibraryDispatcher.TryBridge` builds the rule's lambda as `DynamicUtils.LightBind` does,
+    starts its compile at once, and hands the site the spent dispatcher's delegate. The
+    dispatcher makes the calls with no budget until the compiled rule lands, then declines.
+    The bind after a decline gets the compiled rule once (a thread-static, as the DLR's
+    `LastInterpretedFailure`: without that once-only guard, a compiled rule whose test fails for
+    the call is handed out again forever, and `gem list` hung). Not during the core prelude,
+    whose compiles are held back. A bridge bind costs ~170 us against ~330 for a rule bind.
+    Main-thread instructions (callgrind, `DOTNET_TieredCompilation=0`, R2R host) base -> new:
+    `-e 1` 2,091.4 -> 2,092.8 M (+0.06%, three runs each, spread 0.1 M), `gem --version` 2,271.8
+    -> 2,273.6 (+0.08%), `gem list` 3,447-3,459 -> 3,426-3,433 (-0.4..-1.0%), `require "irb"`
+    3,482 -> 3,461-3,466 (-0.5%), irb 1+1 3,709 -> 3,700 (-0.2%). All threads: `gem list` -0.9%,
+    irb -0.4%, so starting the compiles earlier costs nothing elsewhere. Wall, best of 10
+    alternating, load ~1: 360/352, 410/418, 715/701, 724/719, 782/775 ms (all within +-2%).
+    Steady state unchanged: AWFY 8 s DeltaBlue/Json/Richards within 2% (a 3 s run showed
+    DeltaBlue and Json 36% slower, which was noise), micro-table no line >5% slower in both
+    orders except s_map4, which is equal alone (medians 194.5 / 196.8 ns). Matrices
+    (shared-rule-light, hot-shapes, jit, jit-calls) in 7 modes, with `IR_HOT_BRIDGE=0` and
+    `IR_CONFIG=R2R`: PASS; hot-shapes-matrix makes 923 bridges. Rejected: 0.2-0.8% on three
+    commands, a fixed +0.06-0.08% on the two that never bridge (dispatcher and bind paths;
+    not the thread-static, which moving off the common bind path did not change), and ~210
+    lines of cross-thread hand-off. Learned: what is left of first-bind cost is the ~200 first
+    rules per tool, not hot ones, so levers 2 (`CallInstruction` per signature) and 3 (typed
+    sites rebinding what untyped ones warmed) should be measured before anything is built.
+    Their perf/first-bind sizes (9-16, 6-16 ms) are as stale as lever 1's 18-21 ms was.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
