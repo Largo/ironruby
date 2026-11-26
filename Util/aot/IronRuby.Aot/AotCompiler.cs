@@ -50,8 +50,9 @@ namespace IronRuby.Aot {
         private readonly Dictionary<string, string> _frameOwners = new();
         private readonly List<string> _entryPoints = new();
         private readonly List<MethodBuilder> _entryMethods = new();
-        // method name -> (IL offset, line) pairs, in emit order: the startup library's line table
-        private readonly Dictionary<string, List<int>> _lines = new();
+        // per file, method name -> (IL offset, line) pairs, in emit order: the startup library's line table, one per file so
+        // that formatting a frame decodes only its own file's (the whole table of a library of the tools' files is ~3 MB)
+        private readonly List<Dictionary<string, List<int>>> _lines = new();
         private Dictionary<object, FieldInfo> _wellKnownStatics;
         private int _fieldCounter;
         public readonly Dictionary<string, int> Stats = new();
@@ -126,7 +127,8 @@ namespace IronRuby.Aot {
             var paths = files.Select(Path.GetFullPath).ToArray();
             if (Library) {
                 IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = (method, offset, line) => {
-                    if (!_lines.TryGetValue(method, out var list)) _lines[method] = list = new List<int>();
+                    var lines = _lines[_lines.Count - 1];
+                    if (!lines.TryGetValue(method, out var list)) lines[method] = list = new List<int>();
                     // one entry per offset: the last sequence point emitted there wins
                     if (list.Count >= 2 && list[list.Count - 2] == offset) { list[list.Count - 1] = line; return; }
                     list.Add(offset); list.Add(line);
@@ -154,6 +156,8 @@ namespace IronRuby.Aot {
             }
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
+                // file i's methods are RubyStartup<i>'s, and so is its line table (DefineLineTable)
+                _lines.Add(new Dictionary<string, List<int>>());
                 if (Library && i > 0) {
                     _type = _module.DefineType("RubyStartup" + i, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
                     // a field of another file's type would load that type too
@@ -180,7 +184,10 @@ namespace IronRuby.Aot {
                     method.SetImplementationFlags(MethodImplAttributes.AggressiveOptimization);
                     Count("top levels too large for ReadyToRun code on arm64, left to the JIT (AggressiveOptimization)");
                 }
-                if (Library) _type.CreateType();
+                if (Library) {
+                    DefineLineTable(_lines[i]);
+                    _type.CreateType();
+                }
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
             }
@@ -206,8 +213,8 @@ namespace IronRuby.Aot {
                     typeof(PrecompiledFilesAttribute).GetConstructors()[0],
                     new object[] { recorded, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray(), DependencyIds ?? new string[0],
                         Root, RootFromLibrary, !_unrelocatable }));
-                Count("line table: methods", _lines.Count);
-                Count("line table: entries", _lines.Values.Sum(l => l.Count / 2));
+                Count("line table: methods", _lines.Sum(f => f.Count));
+                Count("line table: entries", _lines.Sum(f => f.Values.Sum(l => l.Count / 2)));
                 Save(outputPath, PEHeaderBuilder.CreateLibraryHeader(), default);
                 return;
             }
@@ -496,7 +503,6 @@ namespace IronRuby.Aot {
         /// RubyStartupIndex, the library's small entry class (the files' code is in RubyStartup&lt;i&gt;, one class per
         /// file, which is loaded when the file is), carrying the PrecompiledFilesAttribute:
         ///   Entry(i): the delegate of file i's top level, in PrecompiledFilesAttribute order;
-        ///   Lines(): the line table, "method\u0001offset,line,offset,line...\n" per method (there is no PDB).
         /// </summary>
         private void DefineStartupIndex(CustomAttributeBuilder files) {
             var index = _module.DefineType("RubyStartupIndex",
@@ -518,15 +524,23 @@ namespace IronRuby.Aot {
                 il.Emit(OpCodes.Ret);
             }
 
+            index.CreateType();
+        }
+
+        /// <summary>
+        /// RubyStartup&lt;i&gt;.&lt;lines&gt;(): the line table of file i's methods, "method\u0001offset,line,offset,line...\n" per
+        /// method (there is no PDB), read when the first frame of the file is formatted. One method per file, not one for the
+        /// library: the first call of a method resolves all of its string literals, and the table of a library with the
+        /// tools' files is ~3 MB.
+        /// </summary>
+        private void DefineLineTable(Dictionary<string, List<int>> lines) {
             var sb = new System.Text.StringBuilder();
-            foreach (var kv in _lines) {
+            foreach (var kv in lines) {
                 sb.Append(kv.Key).Append('\u0001').Append(string.Join(",", kv.Value)).Append('\n');
             }
-            var lines = index.DefineMethod("Lines", MethodAttributes.Public | MethodAttributes.Static, typeof(string), Type.EmptyTypes);
-            il = lines.GetILGenerator();
+            var il = _type.DefineMethod(PrecompiledCode.LineTableMethod, MethodAttributes.Public | MethodAttributes.Static, typeof(string), Type.EmptyTypes).GetILGenerator();
             il.Emit(OpCodes.Ldstr, sb.ToString());
             il.Emit(OpCodes.Ret);
-            index.CreateType();
         }
 
         private void Save(string outputPath, PEHeaderBuilder header, MethodDefinitionHandle entryPoint) {

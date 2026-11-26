@@ -563,7 +563,7 @@ namespace IronRuby.Runtime.Precompiled {
                 // each file's code is a class of its own (RubyStartup<i>), loaded when the file first runs
                 var entry = (Func<int, Func<RubyScope, object, object>>)index.GetMethod("Entry").CreateDelegate(
                     typeof(Func<int, Func<RubyScope, object, object>>));
-                _lineTableSource = (Func<string>)index.GetMethod("Lines").CreateDelegate(typeof(Func<string>));
+                _lineTables = new System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo>[info.Files.Length];
                 _startupAssembly = assembly;
                 _context = context;
                 if (Trace) {
@@ -636,22 +636,32 @@ namespace IronRuby.Runtime.Precompiled {
         #region Line table
 
         private static Assembly _startupAssembly;
-        private static Func<string> _lineTableSource;
-        private static System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo> _lineTable;
+        private static System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo>[] _lineTables;
+
+        /// <summary>The method of each file's class in the startup library that returns the file's line table.</summary>
+        public const string LineTableMethod = "<lines>";
 
         /// <summary>
         /// The IL offset to line map of a method of the startup library (it has no PDB): what the backtrace builder
-        /// reads for a compiled frame. Decoded from RubyStartupIndex.Lines() when the first such frame is formatted.
+        /// reads for a compiled frame. Each file's methods are in a class of its own, RubyStartup&lt;i&gt;, with a line table
+        /// of its own (LineTableMethod), decoded when the first frame of that file is formatted: one table for all files
+        /// cost every process that formatted any backtrace ~7 MB of allocation once the tools' files were in.
         /// </summary>
         internal static bool TryGetDebugInfo(MethodBase/*!*/ method, out RubyMethodDebugInfo info) {
             info = null;
-            if (_startupAssembly == null || method.DeclaringType == null || method.DeclaringType.Assembly != _startupAssembly) {
+            Type type = method.DeclaringType;
+            if (_startupAssembly == null || type == null || type.Assembly != _startupAssembly ||
+                !type.Name.StartsWith("RubyStartup", StringComparison.Ordinal) ||
+                !Int32.TryParse(type.Name.AsSpan("RubyStartup".Length), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out int file) ||
+                file >= _lineTables.Length) {
                 return false;
             }
-            var table = _lineTable;
+            var table = _lineTables[file];
             if (table == null) {
                 table = new System.Collections.Generic.Dictionary<string, RubyMethodDebugInfo>();
-                string text = _lineTableSource();
+                var source = type.GetMethod(LineTableMethod, BindingFlags.Public | BindingFlags.Static);
+                string text = source != null ? (string)source.Invoke(null, null) : "";
                 int pos = 0;
                 while (pos < text.Length) {
                     int nameEnd = text.IndexOf('\u0001', pos);
@@ -670,8 +680,8 @@ namespace IronRuby.Runtime.Precompiled {
                     table[text.Substring(pos, nameEnd - pos)] = methodInfo;
                     pos = lineEnd + 1;
                 }
-                Interlocked.CompareExchange(ref _lineTable, table, null);
-                table = _lineTable;
+                Interlocked.CompareExchange(ref _lineTables[file], table, null);
+                table = _lineTables[file];
             }
             return table.TryGetValue(method.Name, out info);
         }
