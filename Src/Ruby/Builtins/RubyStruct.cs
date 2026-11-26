@@ -338,16 +338,26 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether the struct's class was built by Struct.new(..., keyword_init: true): ruby4.rb's
-        /// Struct.new keeps the option in the class's @__keyword_init__, which is what the class's
-        /// #keyword_init? answers. A subclass has none of its own.
+        /// The keyword_init: option of Struct.new, as MRI's struct_ivar_get finds it: ruby4.rb's Struct.new keeps it in the
+        /// class's @__keyword_init__ (true, false or nil), and a subclass has the one of the nearest class above it that
+        /// has one. Nil when none has.
         /// </summary>
-        public bool IsKeywordInit {
-            get {
-                var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
+        public object KeywordInit {
+            get { return GetKeywordInit(ImmediateClass.GetNonSingletonClass()); }
+        }
+
+        private static readonly string/*!*/ _KeywordInitVariable = IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__");
+
+        public static object GetKeywordInit(RubyClass/*!*/ cls) {
+            string name = _KeywordInitVariable;
+            for (RubyClass c = cls; c != null && c.StructInfo != null; c = c.SuperClass) {
+                var data = c.TryGetInstanceData();
                 object value;
-                return data != null && data.TryGetInstanceVariable(IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__"), out value) && RubyOps.IsTrue(value);
+                if (data != null && data.TryGetInstanceVariable(name, out value)) {
+                    return value;
+                }
             }
+            return null;
         }
     }
 }

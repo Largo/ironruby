@@ -89,9 +89,10 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        // Struct#initialize. The overwhelmingly common call - one positional value per member, the
+        // Struct#initialize. The overwhelmingly common calls - one positional value per member, the
         // last of them not a Hash that could be keywords, on a class not built with keyword_init:
-        // true - stores the values right here, which is what keeps Point.new(1, 2) cheap. Every
+        // true; or keywords that all name members, to a class whose keyword_init is not false -
+        // store the values right here, which is what keeps Point.new(1, 2) cheap. Every
         // other call goes to Struct#__struct_initialize_slow__ in ruby4.rb with the positional
         // arguments as one array and the keywords, if any, as a Hash - as a
         // `def initialize(*args, **kwargs)' would have received them. The keywords arrive here as
@@ -99,7 +100,7 @@ namespace IronRuby.Builtins {
         // stays a positional argument (MRI's rb_struct_initialize_m tells them apart the same way).
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         [ReceivesKeywords]
-        public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slowPath,
+        public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object, object, object>>/*!*/ slowPath,
             RubyStruct/*!*/ self, params object[]/*!*/ items) {
 
             // MRI's rb_struct_modify comes first: re-initializing a frozen struct is a FrozenError
@@ -109,20 +110,36 @@ namespace IronRuby.Builtins {
             }
 
             int count = self.ItemCount;
-            if (items.Length == count && (count == 0 || !(items[count - 1] is IronRuby.Builtins.Hash)) && !self.IsKeywordInit) {
+            object keywordInit = self.KeywordInit;
+            if (items.Length == count && (count == 0 || !(items[count - 1] is IronRuby.Builtins.Hash)) && !RubyOps.IsTrue(keywordInit)) {
                 self.SetValues(items);
                 return null;
             }
 
             int positional = items.Length;
-            Hash keywords = null;
-            if (positional > 0) {
-                var hash = items[positional - 1] as Hash;
-                if (hash != null && hash.IsKeywordArguments) {
-                    // a plain copy: the flag would make it the slow path's keywords again
-                    keywords = new Hash(hash);
-                    positional--;
+            Hash keywordHash = positional > 0 ? items[positional - 1] as Hash : null;
+            bool hasKeywords = keywordHash != null && keywordHash.IsKeywordArguments;
+
+            if (FastStruct) {
+                // MRI's rb_struct_initialize_m: no arguments clears every member, whatever keyword_init says.
+                if (positional == 0) {
+                    self.SetValues(new object[count]);
+                    return null;
                 }
+                // Keywords alone, to a struct whose keyword_init is true or nil; or one Hash argument to a
+                // keyword_init: true struct, which takes it as the keywords. Every key that names a member is
+                // stored here and the rest cleared; a key that names none goes to the slow path for its error.
+                if (positional == 1 && keywordHash != null && (hasKeywords ? !(keywordInit is bool && !(bool)keywordInit) : RubyOps.IsTrue(keywordInit))
+                    && TryInitializeFromKeywords(self, keywordHash)) {
+                    return null;
+                }
+            }
+
+            Hash keywords = null;
+            if (hasKeywords) {
+                // a plain copy: the flag would make it the slow path's keywords again
+                keywords = new Hash(keywordHash);
+                positional--;
             }
 
             // Without the prelude (the test harness runs the libraries alone) there is no slow path:
@@ -135,8 +152,47 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            var site = slowPath.GetCallSite("__struct_initialize_slow__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
-            return site.Target(site, self, new RubyArray(items, 0, positional), keywords);
+            var site = slowPath.GetCallSite("__struct_initialize_slow__", new RubyCallSignature(3, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, new RubyArray(items, 0, positional), keywords, keywordInit);
+        }
+
+        /// <summary>
+        /// IR_FAST_STRUCT=0 sends every Struct#initialize but a positional one per member to the slow path in ruby4.rb,
+        /// as before keyword arguments were stored here.
+        /// </summary>
+        internal static readonly bool FastStruct = Environment.GetEnvironmentVariable("IR_FAST_STRUCT") != "0";
+
+        // struct_hash_set_i: a Symbol or String key names a member (rb_struct_pos); false, storing nothing, when a key
+        // names none, for the slow path to raise "unknown keywords" with all of them.
+        private static bool TryInitializeFromKeywords(RubyStruct/*!*/ self, Hash/*!*/ keywords) {
+            var values = new object[self.ItemCount];
+            foreach (var entry in keywords) {
+                string name;
+                var symbol = entry.Key as RubySymbol;
+                if (symbol != null) {
+                    name = symbol.ToString();
+                } else {
+                    var str = entry.Key as MutableString;
+                    if (str == null) {
+                        return false;
+                    }
+                    name = str.ConvertToString();
+                }
+                int index;
+                if (!self.TryGetIndex(name, out index)) {
+                    return false;
+                }
+                values[index] = entry.Value;
+            }
+            self.SetValues(values);
+            return true;
+        }
+
+        // Struct.new's classes' #keyword_init? (ruby4.rb): MRI's struct_ivar_get, which a subclass answers with the
+        // keyword_init: of the struct class above it.
+        [RubyMethod("__keyword_init__", RubyMethodAttributes.PrivateSingleton)]
+        public static object GetKeywordInit(RubyClass/*!*/ self) {
+            return RubyStruct.GetKeywordInit(self);
         }
 
         // The plain store, for __struct_initialize_slow__.
