@@ -1144,6 +1144,19 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site once pays only that; and whether the warm pool can be the default for
     `gem` and `irb`. The gate times these commands now (perf-gate, step 4), so the
     work on the tiers cannot make them worse unseen.
+    2026-11-26, perf/startup-library-tools: the startup library holds the tools' files
+    (irb, reline, prism's Ruby side, RubyGems' commands and what `gem list` requires: 215
+    files, from `Util/aot/startup-files.rb`, which lists what the commands load). R2R host,
+    against master 206f2b93, instructions (perf stat, all threads, best of 3): `-e 1` 1,524
+    -> 1,513 M, `gem --version` 2,109 -> 1,764 M, `gem list` 6,615 -> 3,860 M, irb (`echo
+    exit`) 6,996 -> 4,057 M. Wall, best of 7 alternating, load 20 (not quiet): `-e 1` 885 /
+    891, `gem --version` 1425 / 1128, `gem list` 2964 / 2373, `echo exit | irb` 3430 / 2347,
+    `echo 1+1 | irb` 4276 / 2339 ms. The first `Prism.parse` after `require "prism"` (the
+    `Loader#load_nodes` first call) went from ~1.9 s to ~0.15 s at that load: with
+    serialize.rb precompiled, most of what perf/big-method-first-call attacks is gone.
+    The library grows from 32.9 to 117.6 MB; a single line table for all files made `-e 1`
+    11% dearer and is now one per file. Left: the 91 gemspecs (~245 ms of `gem list`), which
+    `Gem::Specification.load` evals with its own binding, so the library cannot serve them.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
