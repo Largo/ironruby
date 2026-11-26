@@ -1466,8 +1466,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   JIT compiles 11.6% -> 11.9% (3,296 -> 3,370), maybe 10.3% -> 10.5% (2,923 -> 2,981), never
   78.1% -> 77.6% (22,157 -> 22,025), light frames unchanged (Src/StdLib + AWFY, 28,376 methods;
   132 methods moved up - 74 to `compiles`, 58 to `maybe` - none down) - census only, not gated.
-  `HashConstructor` alone 136 -> 0 of its kind left (non-plain keys and literals of more than
-  five pairs stay refused). Moved: mostly `initialize` methods that set `@h = {}`, `to_h` and
+  `HashConstructor` refused at all 977 -> 331, alone 136 -> 5 (keys that are not plain literals,
+  and literals of more than five pairs, stay refused). Moved: mostly `initialize` methods that set `@h = {}`, `to_h` and
   `marshal_dump` methods returning `{key: @ivar, ...}`, and `opts = {}` defaults; in the prelude
   `NilClass#to_h`, `ObjectSpace::WeakKeyMap#initialize`, `GC.latest_compact_info`; none of AWFY.
   Of the 58 to `maybe`: 33 wait for a call, 12 for a constant, 10 for an index on a parameter
