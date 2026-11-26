@@ -1144,6 +1144,54 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site once pays only that; and whether the warm pool can be the default for
     `gem` and `irb`. The gate times these commands now (perf-gate, step 4), so the
     work on the tiers cannot make them worse unseen.
+    2026-11-26, perf/startup-library-tools: the startup library holds the tools' files
+    (irb, reline, prism's Ruby side, RubyGems' commands and what `gem list` requires: 215
+    files, from `Util/aot/startup-files.rb`, which lists what the commands load). R2R host,
+    against master 206f2b93, instructions (perf stat, all threads, best of 3): `-e 1` 1,524
+    -> 1,513 M, `gem --version` 2,109 -> 1,764 M, `gem list` 6,615 -> 3,860 M, irb (`echo
+    exit`) 6,996 -> 4,057 M. Wall, best of 7 alternating, load 20 (not quiet): `-e 1` 885 /
+    891, `gem --version` 1425 / 1128, `gem list` 2964 / 2373, `echo exit | irb` 3430 / 2347,
+    `echo 1+1 | irb` 4276 / 2339 ms. The first `Prism.parse` after `require "prism"` (the
+    `Loader#load_nodes` first call) went from ~1.9 s to ~0.15 s at that load: with
+    serialize.rb precompiled, most of what perf/big-method-first-call attacks is gone.
+    The library grows from 32.9 to 117.6 MB; a single line table for all files made `-e 1`
+    11% dearer and is now one per file. Left: the 91 gemspecs (~245 ms of `gem list`), which
+    `Gem::Specification.load` evals with its own binding, so the library cannot serve them.
+    2026-11-26, perf/rubygems-boot: what RubyGems costs `-e 1` (master 7bc00726, R2R host;
+    `-e 1` 478 ms best of 20, `--disable-gems` ~340). Perf with jitdump, 4 runs, main thread
+    inside gem_prelude's `require "rubygems"`: 146 ms CPU profiled (~122-139 unprofiled; the
+    file-open timeline puts rubygems.rb -> error_highlight.rb at 139 ms median of 7). By whose
+    code runs: rubygems.rb's own top level 72 (of which: the default-spec cache 21 -
+    `ironruby_load_default_specs` reading and `Marshal.load`ing 57 KB / 1,484 names 10, the
+    glob of 62 gemspecs 6, their stamp 2, the cache file name 2, activation 1; stack walks for
+    `require_relative` and `__dir__` 19; the require wrapper chain and loader for ~25 requires
+    10), specification.rb's class body 20 (Struct.new, the attribute table), requirement.rb 17
+    (Gem::Version constants: `compute_sort_key`), rbconfig.rb 11, specification_record.rb 9,
+    platform.rb 8 (Gem::Platform constants), the rest 10. By activity: binding call sites ~53
+    (545 outermost binds more than `--disable-gems`, phase timer +50 ms), running compiled Ruby
+    and the runtime under it (first calls of R2R methods, type loads) ~70, .NET JIT 20, GC 18,
+    kernel 18. Nothing is parsed but kernel_require.rb (eval'd, 4.5 KB, ~5 ms) and the defs
+    the method JIT re-parses at their first call (12 ms, `def body` phases). Lazy RubyGems
+    (TruffleRuby's lazy-rubygems: `autoload :Gem`, a `require` that loads RubyGems on a
+    LoadError) is out: `$LOADED_FEATURES`, `Kernel#require`'s owner and the default gems'
+    activation would differ from CRuby's, which loads the same 30 files at boot.
+    The fix taken: precompiled code notes where it calls `require_relative` and `__dir__` (as
+    it does for const_set and autoload), and those two, now library methods handed the
+    caller's scope, pass the file to their Ruby halves; others still walk the stack.
+    `caller(0, 1)` from compiled code was a CLR walk of the whole stack, 0.1 ms at the top and
+    0.6 ms eighty frames down, ~50 times in `-e 1` and 160 times in `require "irb"` (all now
+    noted). Stack-walk samples in `-e 1` 93-106 -> 2-6; allocation 27.6 -> 25.4 MB. R2R, best
+    of 10 alternating, every output checked, load 2.3: `-e 1` 488 / 488 (20 rounds: 478 ->
+    459, CPU 449 -> 438), `gem --version` 583 -> 550, `gem list` 1078 -> 1032, `require
+    "irb"` 1020 -> 1044, `echo 1+1 | irb` 1138 -> 1133 ms; instructions (all threads, best):
+    1,515 -> 1,486, 1,766 -> 1,735, 3,893 -> 3,783, 3,862 -> 3,899, 4,171 -> 4,185 M. The
+    irb ones are +1%: its walks are gone (-8 M), and one gen0 collection there became a gen1
+    (+37 M in `gc_heap`), with 3 MB less allocated. With the next commit (a noted call's
+    arguments evaluated before its note, so that `autoload :X, File.expand_path("x", __dir__)`
+    keeps its const_source_location), best of 10 at load 15: 1,516 -> 1,485, 1,763 -> 1,730,
+    3,799 -> 3,765, 3,852 -> 3,830, 4,126 -> 4,122 M. Left, largest first: binding (gap 26's
+    "cheaper first binds"); the class bodies' constants; the default-spec cache, whose map
+    could be read on the first `find_default_spec` instead of at boot.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -1343,6 +1391,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   block bodies' own transform (two rewrites over each body, LightFrameRewriter and
   RegisterLocalsRewriter, are 57% of a block's transform), and an enclosing light frame's
   rewriters walking every nested block body again.
+
+- **perf/compile-cold-stretch (2026-11-26) - the launchers give the youngest generation 128 MB, so
+  start-up runs without collections (gap 26).** Asked: why a call costs 50-150 us for hundreds of
+  calls after it crosses the compile threshold (PR #294's probe, steady state 1.7 us). Measured,
+  per call, the edge probe (`m(a) + k(h, i)`, one process): (1) the 50-150 us was the Release
+  build, whose IronRuby and DLR code runs as Tier-0 JIT output: interpreted calls cost 56 us there,
+  22 us with `DOTNET_TieredCompilation=0`, and 8-18 us on the R2R host, which is what ships and
+  what `ir.sh` runs. Nothing in the threshold logic itself costs per call: past it each call reads
+  `_compiled`/`HasCompiled` and goes on interpreting, with no lock or wait. (2) On the R2R host at
+  threshold 200 the calls in the window cost ~25 us against ~12-18 before it: the background
+  compiles (a profile: 1.6 cores of pool threads for 40 ms, 55% of it RyuJIT optimizing the
+  DynamicMethods of lambdas and rules) share the physical cores with the main thread
+  (`taskset -c 0-3`, one hyperthread per core: 16-18 us), with run-to-run noise from tiered PGO.
+  (3) A compiled lambda's call sites start cold: the interpreter's sites are untyped
+  (`Func<CallSite, object, ...>`) and the compiled code's are typed (`RubyScope`, `int`, `Proc`,
+  `MutableString` arguments), so the binder's rule cache, keyed by delegate type, never hands the
+  compiled code the rules the interpreter warmed up: every site binds again (0.1-0.7 ms each),
+  runs the new rule interpreted for another threshold of calls and then compiles a duplicate (a
+  trace of the probe at 200: `k`'s five sites rebound at call ~300 and their rules compiled at
+  ~520). In `gem list` it is small (4 lambdas compile; 111 of 514 binds are typed). Not fixed;
+  the next lever for warm-up. (4) The biggest single part of #294's probe cost on the R2R host
+  was the collector: the process's first gen2 collection (~18-20 ms) moved into the timed window
+  (with no collection, N=2000 cost +8 ms instead of +20). That led here: the CLR sizes gen0 for
+  short-lived garbage (~6 MB on this box), while what IronRuby allocates as it starts lives as
+  long as the process, so each collection copies it again. `gem list` (93 MB allocated): 16 gen0,
+  5 gen1, 2 gen2, 120 ms paused; irb 27 and 144 ms; `-e 1` 5 and 32 ms. `ironruby` and
+  `ironruby.cmd` now set `DOTNET_GCgen0size=0x8000000` unless it is set (the runtimeconfig has
+  no knob for it: `System.GC.Gen0Size` is not read on .NET 10.0.15): `gem list` and `-e 1` run
+  with no collection, irb with one (a gen2 the large-object heap's budget starts;
+  `System.GC.LOHThreshold` = 4 MB in the runtimeconfig removes it too - not taken, left for a
+  measurement of its own). Start-up, R2R host, `bench.rb 10`, load 1.2-1.6, median ms base ->
+  new: `-e 1` 481 -> 459, `gem --version` 572 -> 539, `gem list` 1046 -> 958, irb exit 1131 ->
+  1085, irb 1+1 1140 -> 1093. Peak RSS `-e 1` 109 -> 116 MB, `gem list` 174 -> 228. AWFY 12,
+  both orders, load 0.6-1.3: geomean new/base 0.926 and 0.940; Havlak -25%, Storage -9/-19%,
+  DeltaBlue -6/-10%, Json -9/-10%, none slower in both orders. micro-table both orders: no line
+  slower in both; the four slower in one order (locattr, sqrtw, blkattr, s_times4) timed alone,
+  6 alternating rounds: 0.96, 1.00, 0.97, 0.97. Edge probe, R2R, medians of 6, ms, base / new /
+  #294 alone (from an earlier run of its own) / #294 on this: N=100 23.7 / 23.5 / 16.3 / 16.9; 300 24.0 / 24.6 / 23.4 / 24.0;
+  600 25.1 / 27.1 / 30.5 / 34.2; 2000 33.1 / 33.9 / 55.9 / 39.9; 20000 114.2 / 100.9 / 117.5 /
+  108.8. So #294 on top of this still fails the 5% rule at N=600 and 2000 (parts 2 and 3 above).
 
 - **perf/splat-recursion (2026-11-24) - a splat the call site makes binds once for every length,
   and is the callee's rest parameter.** `def f(n, *a) = n == 0 ? a : f(n - 1, *a, n)`,

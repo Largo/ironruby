@@ -35,6 +35,9 @@ namespace IronRuby.Aot.Compiler {
         /// <summary>The implementation flags of the method a nested lambda is compiled to (IronRuby.Aot: AggressiveOptimization).</summary>
         internal static Func<LambdaExpression, MethodImplAttributes> MethodImplFlags;
 
+        /// <summary>Called with the method a nested lambda was compiled to, once its IL is complete (IronRuby.Aot: its size).</summary>
+        internal static Action<MethodBuilder> MethodCompiled;
+
         internal void EmitConstantArray<T>(T[] array) {
             // Emit as runtime constant if possible
             // if not, emit into IL
@@ -130,6 +133,7 @@ namespace IronRuby.Aot.Compiler {
             // 2. emit the lambda
             // Since additional ILs are always emitted after the lambda's body, should not emit with tail call optimization.
             impl.EmitLambdaBody(_scope, false, CompilationFlags.EmitAsNoTail);
+            if (impl._method is MethodBuilder compiled) MethodCompiled?.Invoke(compiled);
 
             // 3. emit the delegate creation in the outer lambda
             EmitDelegateConstruction(impl);

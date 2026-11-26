@@ -1204,6 +1204,50 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Kernel#require_relative and #__dir__ are written in Ruby (__require_relative__ and __dir_of__ in ruby4.rb), and
+        /// work from the file of their caller: these entries hand it over when precompiled code noted it for the call
+        /// (PrecompiledCode.TakeNotedCallerPath), and nil otherwise, for the Ruby half to take from the stack as before.
+        /// Taking it from caller(0, 1) costs a CLR stack walk as deep as the requires nested at that point, and the
+        /// startup library alone makes some 50 such calls in `ir -e 1'.
+        /// </summary>
+        [RubyMethod("require_relative", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object RequireRelative(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, object path) {
+            var site = storage.GetCallSite("__require_relative__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, path, NotedCallerPath(scope));
+        }
+
+        // Kernel.require_relative and Kernel.__dir__: methods of their own, which a backtrace names "Kernel.require_relative"
+        // as MRI's does (see SingletonToInteger).
+        [RubyMethod("require_relative", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("RequireRelative")]
+        public static object SingletonRequireRelative(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, object path) {
+            return RequireRelative(storage, scope, self, path);
+        }
+
+        [RubyMethod("__dir__", RubyMethodAttributes.PrivateInstance)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static object GetDirectory(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self) {
+            var site = storage.GetCallSite("__dir_of__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, NotedCallerPath(scope));
+        }
+
+        [RubyMethod("__dir__", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("GetDirectory")]
+        public static object SingletonGetDirectory(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self) {
+            return GetDirectory(storage, scope, self);
+        }
+
+        private static MutableString NotedCallerPath(RubyScope/*!*/ scope) {
+            string path = IronRuby.Runtime.Precompiled.PrecompiledCode.TakeNotedCallerPath(scope);
+            return (path != null) ? scope.RubyContext.EncodePath(path) : null;
+        }
+
+        /// <summary>
         /// Where a source file that has run was when it started - see
         /// RubyContext.RegisterSourceFileLocation - or nil. Private, and not part of MRI's Kernel.
         /// </summary>

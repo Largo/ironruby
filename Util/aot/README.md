@@ -330,11 +330,32 @@ builds are unaffected, because the check is behind `!IsDynamicCodeSupported`.
 ## D. The startup library (`IronRuby.Startup.dll`)
 
 Part A's compiler, aimed at `ir`'s own startup: `IronRuby.Aot startup` compiles the Ruby files
-every `ir` process loads (`startup-files.txt`: ruby4.rb, rbconfig, gem_prelude, rubygems and the
-rest of `ir -e 1`, plus `rubygems/path_support.rb` and a few commonly required libraries such as
-json, set, pp, optparse, fileutils, time) into a library that sits next to IronRuby.dll in the
-R2R host's directory. Requiring one of its files then runs the compiled top level instead of
-parsing, bridging, transforming and LightCompiling the source.
+`ir` loads at startup and the command-line tools load before they answer (`startup-files.txt`:
+ruby4.rb, rbconfig, gem_prelude, rubygems and the rest of `ir -e 1`; a few commonly required
+libraries such as json, set, pp, optparse, time; what `gem --version` and `gem list` load -
+RubyGems' command files, the vendored optparse, uri, net-http, resolv, timeout and securerandom,
+openssl.rb, socket.rb; and what irb loads - irb, reline, prism's Ruby side) into a library that
+sits next to IronRuby.dll in the R2R host's directory. Requiring one of its files then runs the
+compiled top level instead of parsing, bridging, transforming and LightCompiling the source.
+
+The list is measured, not picked: `ruby Util/aot/startup-files.rb` runs `ir -e 1`, a require of
+the common libraries, `gem --version`, `gem list` and `echo exit | irb` with the library off and
+`IR_STARTUP_DLL_TRACE=1`, and writes every file of `Src/StdLib` they compile from source, in the
+order they load them (214 files). `--check` says whether the list is still that (a new irb or
+RubyGems that loads other files); `check-startup.sh --list` runs it. Left out, and said so in the
+list: fileutils.rb and tmpdir.rb (below), and every file that uses refinements (irb/completion.rb). Gemspecs are not files that are required but strings
+`Gem::Specification.load` evals with its own binding, so the library has nothing to offer them.
+
+What compiled code does not run as the interpreter does is enforced, not just listed (part A's
+"Not run"). Refinements: a file that calls `using`, `refine` or `import_methods` (or sends one by
+name) anywhere is left out of the library by the compiler, which says so in the build output
+(`left out ...: refinements`), and by startup-files.rb, which asks the compiler
+(`IronRuby.Aot unsupported file...`). Compiled, the refined methods were missing:
+irb/completion.rb refines Binding with `eval_methods`, and Tab completion in irb raised
+NoMethodError. `eval` and `binding`, `define_method`, string `instance_eval` and TracePoint run
+the same compiled; `check-startup.sh` compiles a library of `startup-fixtures/` to check that,
+and that the fixture with refinements is left out. Coverage, `-d` and tracing turn the library
+off (below).
 
 ```sh
 dotnet build Src/Console/Ruby.Console.csproj -c Release -p:DlrSourceDir=...  # the R2R host, with its library
@@ -397,12 +418,21 @@ Where it is built:
   level calls in turn (`AotCompiler.SplitTopLevel`; the largest is ~380 KB of arm64 code). A
   `return` from the top level inside a chunk is noted and taken after the chunk. Unnamed, the
   chunks are left out of backtraces, so an error raised by ruby4.rb's own top level while it
-  loads would show the line of the top level's call of the chunk; nothing else changes. Should a
-  top level of 128 KB of IL remain, it is left to the JIT (`AggressiveOptimization`, which
-  crossgen2 skips; the JIT at run time knows the method's address), and the compiler refuses a
-  library in which crossgen2 still made a method over 1 MB (it reads crossgen2's `--map`).
-  `IR_AOT_SPLIT=1` splits on any target (to test it on x64), `IR_AOT_SPLIT=0` and
-  `IR_AOT_LARGE_JIT=0` turn the two off, to see the check fail.
+  loads would show the line of the top level's call of the chunk; nothing else changes. A method
+  or block of 128 KB of IL or more is left to the JIT (`AggressiveOptimization`, which crossgen2
+  skips; the JIT at run time knows the method's address): only prism/serialize.rb's
+  `load_nodes` (368 KB of IL, 1.6 MB of arm64 code), CRuby's branch of an
+  `if RUBY_ENGINE == "ruby"`, which IronRuby never runs. A file whose top level remains that
+  large is left out of the library (said in the build output, its code left to the JIT and never
+  run): prism/node.rb (934 KB of IL, its class bodies inlined into the top level, which the
+  split does not reach) and the vendored resolv.rb (189 KB). Left to the JIT, node.rb's top level
+  made `echo exit | irb` 1,972 ms against 1,177 ms with the file compiled from source (x64, an
+  arm64-like library: `IR_AOT_SPLIT=1 IR_AOT_LARGE_JIT=1`). x64 keeps all of them as ReadyToRun
+  code. The compiler refuses a library in which crossgen2 still made a method over 1 MB (it reads
+  crossgen2's `--map`): `load_nodes`, when only top levels were left to the JIT, left the
+  osx-arm64 archives without a library. `IR_AOT_SPLIT=1` and `IR_AOT_LARGE_JIT=1` do the same on any target
+  (to test them on x64), `IR_AOT_SPLIT=0` and `IR_AOT_LARGE_JIT=0` turn the two off, to see the
+  check fail.
 - **Never** for the NativeAOT host, which has no assembly files and cannot load code, or for the
   IL Debug and Release builds, which have no library next to them.
 
@@ -419,7 +449,8 @@ How it stays correct:
   are compiled from source too: a file required after `Coverage.start` is in `Coverage.result`
   (it was missing with the library before).
 - There is no PDB. The compiler records each sequence point's IL offset, and the library carries
-  the line table (`RubyStartupIndex.Lines()`), which the backtrace builder reads. Backtraces
+  the line table (each file's class has its own, `RubyStartup<i>.<lines>()`, read when a frame of that file
+  is first formatted), which the backtrace builder reads. Backtraces
   through rubygems code match the interpreted ones. That includes a `require` LoadError's: a
   compiled catch site is now skipped as a frame, not as the first frame reported, which had
   dropped the caller of gem_compat.rb's `Kernel#require` block. The same happened without the
@@ -456,8 +487,13 @@ How it stays correct:
 - `const_set` and `autoload` record their caller's location (`const_source_location`, "previous
   definition was here"). Compiled code would need a CLR stack walk for that, about 0.2 ms each.
   Instead, the compiler puts `PrecompiledCode.NoteCallLocation(scope, file, line)` before each
-  such call (19 in the startup files), and clears the note when the call returns. Both methods
-  take the caller's scope, which only the noted call can match. Not covered: constants that
+  such call (82 in the startup files), and clears the note when the call returns. Both methods
+  take the caller's scope, which only the noted call can match; in a block, the scope argument
+  is an expression, which the call evaluates once into a temporary (socket.rb's `Socket::EAI_*`
+  and the vendored URI's constants, 64 in all, were reported at the line of the program's
+  `require`). A call the compiler did not note (a `send`) gets no location while a compiled top
+  level runs and has entered no interpreted frame since it started: the nearest interpreted frame
+  is then the `require`'s, not the caller's. Not covered: constants that
   ruby4.rb itself makes with `const_set` or `autoload` (`Errno::*`, the `Set` autoload) have no
   location, as C-defined ones in MRI. Without the library they were reported at
   gem_prelude.rb:9, the line that requires ruby4.rb.
@@ -468,12 +504,19 @@ How it stays correct:
   Its constants are static fields, each made the first time the code needs it (`k ?? (k =
   init)`, unsynchronized). Two threads that first run the same code together may each make one
   (a call site, a frozen literal); that is harmless, as each is equivalent.
-- `Util/aot/check-startup.sh` (about 5 s) checks what the library must not change. It runs
+- A file edited after the library was built is compiled from source, correctly but as slowly as
+  without the library (an edited ruby4.rb took `ir -e 1` from 486 to 564 ms), and nothing in a
+  normal run says so. `IR_STARTUP_DLL_TRACE=1 ir -e 1` checks every file of the library at start
+  and names the stale ones (`IronRuby.Startup: stale: ...`, then `N of M files stale`), and
+  `Util/aot/check-startup.sh` fails on any. A Release build or `Util/aot/build-startup.sh`
+  rebuilds it.
+- `Util/aot/check-startup.sh` (about 10 s) checks what the library must not change. It runs
   `startup-checks.rb` with and without the library and compares: coverage after a run-time
   `Coverage.start`, the frame labels above, frozen literals of a def compiled from source,
   interpolation, and other threads' backtraces through `loop`, `Set#each`, `Monitor#synchronize`,
-  `MonitorMixin#mon_synchronize` and `then` (19 lines, the same). It also checks that a copy of
-  the tree elsewhere uses the library, and that `load` of an edited library file runs the edit.
+  `MonitorMixin#mon_synchronize` and `then`, and irb's Tab completion. It also checks that a copy
+  of the tree elsewhere uses the library, that `load` of an edited library file runs the edit, and
+  that a library of `startup-fixtures/` prints the same and leaves out the file with refinements.
 
 Call sites. Every dynamic site of the saved code is a static `CallSite<T>` made with the runtime's
 binder, and it binds on first execution as interpreted code does. The sites have the interpreter's
@@ -522,7 +565,11 @@ Peak RSS grows by 6 MB, or by 14 MB once json is loaded. That is a transient pea
 `require "json"`, the process holds 100 MB RSS with the library and 105 MB without it (39 against
 43 MB anonymous).
 
-The library is 32.5 MB (ReadyToRun) for 46 files. spec/language passes with it (80 files, 2934
+The library was 32.5 MB (ReadyToRun) for 46 files; with the tools' files it is 116.6 MB for 214
+(prism/node.rb, ~1 MB of source, is the largest after ruby4.rb), and a build that changed one of
+them spends a minute or two more on it. The size costs a process nothing it does not run: the
+image is mapped, and `ir -e 1` runs no more instructions with it (1,513 M against 1,524 M with
+the 46-file library). Measured with the 46 files: spec/language passes with it (80 files, 2934
 examples, 5563 expectations, 0 failures, 0 errors). So do spec/core/thread, fiber, enumerator,
 exception, module, kernel, process, set and argf and spec/library/coverage, monitor, time,
 tmpdir, delegate, optionparser, stringio, date, tempfile, pp, rubygems and rbconfig, with the same
@@ -609,8 +656,10 @@ Also measured, and not worth pursuing:
   weeks for Ruby-to-Ruby calls. It removes most run-time rule creation, which is the startup
   and NativeAOT bottleneck.
 - **Correctness breadth.** Only 5 samples plus the prelude were run.
-  - Not run: specs, `eval`/`binding` in compiled code, `define_method`, refinements,
-    coverage, TracePoint (compiled with `SavePath` set, which turns off OSR and coverage).
+  - Not run: specs, refinements (the startup library leaves such files out, part D), coverage
+    (it turns the startup library off), TracePoint (compiled with `SavePath` set, which turns off
+    OSR and coverage). `eval`/`binding`, `define_method` and TracePoint in the startup library
+    are checked (`check-startup.sh`, `startup-fixtures/`).
   - Frame labels come from lexical nesting and may be wrong for methods defined through
     `class_eval` and similar. (The startup library compiles such a `def` from its source; see
     part D.)

@@ -934,6 +934,13 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // A precompiled top level is running and has entered no interpreted frame since it started: the nearest
+            // interpreted frame is the one that required its file, not this call's caller, which is compiled code
+            // that noted no location (PrecompiledCode.NoteCallLocation), and whose frames are not in a backtrace.
+            if (Precompiled.PrecompiledCode.IsRunningAboveInterpretedFrames) {
+                return false;
+            }
+
             // Fast path: the interpreter's frame chain already knows where we are; a CLR stack walk
             // with file info costs ~1ms and this is called once per Module#const_set.
             if (RubyStackTraceBuilder.TryGetInterpretedFrameLocation(out sourcePath, out sourceLine)) {

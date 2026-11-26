@@ -50,8 +50,9 @@ namespace IronRuby.Aot {
         private readonly Dictionary<string, string> _frameOwners = new();
         private readonly List<string> _entryPoints = new();
         private readonly List<MethodBuilder> _entryMethods = new();
-        // method name -> (IL offset, line) pairs, in emit order: the startup library's line table
-        private readonly Dictionary<string, List<int>> _lines = new();
+        // per file, method name -> (IL offset, line) pairs, in emit order: the startup library's line table, one per file so
+        // that formatting a frame decodes only its own file's (the whole table of a library of the tools' files is ~3 MB)
+        private readonly List<Dictionary<string, List<int>>> _lines = new();
         private Dictionary<object, FieldInfo> _wellKnownStatics;
         private int _fieldCounter;
         public readonly Dictionary<string, int> Stats = new();
@@ -126,7 +127,8 @@ namespace IronRuby.Aot {
             var paths = files.Select(Path.GetFullPath).ToArray();
             if (Library) {
                 IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = (method, offset, line) => {
-                    if (!_lines.TryGetValue(method, out var list)) _lines[method] = list = new List<int>();
+                    var lines = _lines[_lines.Count - 1];
+                    if (!lines.TryGetValue(method, out var list)) lines[method] = list = new List<int>();
                     // one entry per offset: the last sequence point emitted there wins
                     if (list.Count >= 2 && list[list.Count - 2] == offset) { list[list.Count - 1] = line; return; }
                     list.Add(offset); list.Add(line);
@@ -139,21 +141,47 @@ namespace IronRuby.Aot {
                     return MethodImplAttributes.AggressiveOptimization;
                 };
             }
-            // each file parsed first: the frame labels of one file's methods depend on what the others do with its modules
-            var asts = new SourceUnitTree[paths.Length];
-            var units = new SourceUnit[paths.Length];
-            var unitOptions = new RubyCompilerOptions[paths.Length];
-            var extended = new HashSet<string>();
-            for (int i = 0; i < paths.Length; i++) {
-                var unit = units[i] = _context.CreateFileUnit(paths[i]);
-                bool isMain = mainFile != null && paths[i] == Path.GetFullPath(mainFile);
-                var options = unitOptions[i] = new RubyCompilerOptions() { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
-                asts[i] = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
-                if (asts[i] == null) throw new InvalidOperationException("syntax error in " + paths[i]);
-                new ExtendWalker(extended).Walk(asts[i]);
+            // see LargeMethodsJittedOver: a method or block that large, as a file's top level (below)
+            var fileMethods = new List<MethodBuilder>();
+            var tooLarge = new HashSet<int>();
+            if (Library && LargeMethodsJittedOver > 0) {
+                IronRuby.Aot.Compiler.LambdaCompiler.MethodCompiled = method => {
+                    fileMethods.Add(method);
+                    int size = method.GetILGenerator().ILOffset;
+                    if (size < LargeMethodsJittedOver) return;
+                    method.SetImplementationFlags(MethodImplAttributes.AggressiveOptimization);
+                    Count("methods and blocks too large for ReadyToRun code on arm64, left to the JIT (AggressiveOptimization)");
+                    Console.Error.WriteLine($"too large for ReadyToRun code, left to the JIT: {method.Name} ({size:N0} bytes of IL)");
+                };
             }
+            // each file parsed first: the frame labels of one file's methods depend on what the others do with its modules
+            var parsed = new List<(string Path, SourceUnit Unit, RubyCompilerOptions Options, SourceUnitTree Ast)>();
+            var extended = new HashSet<string>();
+            foreach (var path in paths) {
+                var unit = _context.CreateFileUnit(path);
+                bool isMain = mainFile != null && path == Path.GetFullPath(mainFile);
+                var options = new RubyCompilerOptions() { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
+                var tree = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
+                if (tree == null) throw new InvalidOperationException("syntax error in " + path);
+                // a library leaves out a file whose compiled code would not do what its source does; requiring it then
+                // compiles it from source, as without the library
+                if (Library && UnsupportedFinder.Find(tree) is string why) {
+                    LeftOut.Add((path, why));
+                    Console.Error.WriteLine($"left out {path}: {why}");
+                    continue;
+                }
+                parsed.Add((path, unit, options, tree));
+                new ExtendWalker(extended).Walk(tree);
+            }
+            paths = parsed.Select(f => f.Path).ToArray();
+            var units = parsed.Select(f => f.Unit).ToArray();
+            var unitOptions = parsed.Select(f => f.Options).ToArray();
+            var asts = parsed.Select(f => f.Ast).ToArray();
+            parsed.Clear();
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
+                // file i's methods are RubyStartup<i>'s, and so is its line table (DefineLineTable)
+                _lines.Add(new Dictionary<string, List<int>>());
                 if (Library && i > 0) {
                     _type = _module.DefineType("RubyStartup" + i, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
                     // a field of another file's type would load that type too
@@ -176,11 +204,27 @@ namespace IronRuby.Aot {
                 _entryMethods.Add(method);
                 ExpressionCompiler.CompileToMethod(rewritten, method);
                 // see LargeMethodsJittedOver
-                if (LargeMethodsJittedOver > 0 && method.GetILGenerator().ILOffset >= LargeMethodsJittedOver) {
+                int topLevelSize = method.GetILGenerator().ILOffset;
+                if (LargeMethodsJittedOver > 0 && topLevelSize >= LargeMethodsJittedOver) {
                     method.SetImplementationFlags(MethodImplAttributes.AggressiveOptimization);
-                    Count("top levels too large for ReadyToRun code on arm64, left to the JIT (AggressiveOptimization)");
+                    if (Library) {
+                        // Left to the JIT, a top level this large costs more than the library saves on it (prism/node.rb's,
+                        // 934 KB of IL, made irb 850 ms slower than with the file compiled from source; measured on x64): the
+                        // file is left out, and its methods' code too (crossgen2 skips them; their IL stays, never run).
+                        foreach (var m in fileMethods) m.SetImplementationFlags(MethodImplAttributes.AggressiveOptimization);
+                        tooLarge.Add(i);
+                        string why = $"its top level is {topLevelSize:N0} bytes of IL, too large for ReadyToRun code on arm64, and more than it saves left to the JIT";
+                        LeftOut.Add((paths[i], why));
+                        Console.Error.WriteLine($"left out {paths[i]}: {why}");
+                    } else {
+                        Count("top levels too large for ReadyToRun code on arm64, left to the JIT (AggressiveOptimization)");
+                    }
                 }
-                if (Library) _type.CreateType();
+                fileMethods.Clear();
+                if (Library) {
+                    DefineLineTable(_lines[i]);
+                    _type.CreateType();
+                }
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
             }
@@ -200,14 +244,16 @@ namespace IronRuby.Aot {
                 if (chunks != 0) throw new NotSupportedException("a startup library initializes its constants lazily");
                 IronRuby.Aot.Compiler.LambdaCompiler.LineRecorder = null;
                 IronRuby.Aot.Compiler.LambdaCompiler.MethodImplFlags = null;
+                IronRuby.Aot.Compiler.LambdaCompiler.MethodCompiled = null;
                 // the files relative to the tree, if they are in it
                 var recorded = paths.Select(p => RootPrefix != null && p.StartsWith(RootPrefix, StringComparison.Ordinal) ? p.Substring(RootPrefix.Length) : p).ToArray();
                 DefineStartupIndex(new CustomAttributeBuilder(
                     typeof(PrecompiledFilesAttribute).GetConstructors()[0],
-                    new object[] { recorded, _entryPoints.ToArray(), paths.Select(PrecompiledCode.HashFile).ToArray(), DependencyIds ?? new string[0],
+                    // a file left out after it was compiled (tooLarge) has no hash: its code is not used
+                    new object[] { recorded, _entryPoints.ToArray(), paths.Select((p, i) => tooLarge.Contains(i) ? null : PrecompiledCode.HashFile(p)).ToArray(), DependencyIds ?? new string[0],
                         Root, RootFromLibrary, !_unrelocatable }));
-                Count("line table: methods", _lines.Count);
-                Count("line table: entries", _lines.Values.Sum(l => l.Count / 2));
+                Count("line table: methods", _lines.Sum(f => f.Count));
+                Count("line table: entries", _lines.Sum(f => f.Values.Sum(l => l.Count / 2)));
                 Save(outputPath, PEHeaderBuilder.CreateLibraryHeader(), default);
                 return;
             }
@@ -243,7 +289,8 @@ namespace IronRuby.Aot {
         public bool LoopMethodsJitted = Environment.GetEnvironmentVariable("IR_AOT_LOOP_JIT") != "0";
 
         /// <summary>
-        /// A file's top level of at least this many bytes of IL is left to the JIT (AggressiveOptimization: crossgen2 does not
+        /// A method of at least this many bytes of IL - a file's top level, or a method or block (prism/serialize.rb's
+        /// load_nodes, ~370 KB of IL, 1.6 MB of arm64 code) - is left to the JIT (AggressiveOptimization: crossgen2 does not
         /// compile it); 0 compiles every one. For an arm64 library (StartupCommand): RyuJIT's arm64 code for a method over
         /// 1 MB - ruby4.rb's top level is ~480 KB of IL and 2.1 MB of code - reaches the method's read-only data with
         /// adrp+add computed as if it knew the method's place in the image, which in a ReadyToRun image it does not: the
@@ -251,7 +298,11 @@ namespace IronRuby.Aot {
         /// and linux alike; the osx-arm64 archive of 58099b4e died on a Symbol made of them). The JIT at run time knows
         /// where the method is, and gets it right - but JITting a method this large costs more startup than the library
         /// saves (osx-arm64: `ir -e 1` 698 ms with it, 467 ms without), so SplitTopLevel comes first, and this is only
-        /// what keeps a top level it could not split correct.
+        /// what keeps a top level it could not split correct - in a program. A library leaves such a file out instead
+        /// (prism/node.rb's top level, 934 KB of IL with its class bodies, which SplitTopLevel does not split: left to the JIT,
+        /// irb took 850 ms more, measured on x64), so it is compiled from source as without the library. The methods and
+        /// blocks this large are run seldom if at all (load_nodes is CRuby's branch of an `if RUBY_ENGINE == "ruby"`; IronRuby
+        /// runs the other), so the JIT's cost is not paid at startup.
         /// </summary>
         public int LargeMethodsJittedOver;
 
@@ -496,7 +547,6 @@ namespace IronRuby.Aot {
         /// RubyStartupIndex, the library's small entry class (the files' code is in RubyStartup&lt;i&gt;, one class per
         /// file, which is loaded when the file is), carrying the PrecompiledFilesAttribute:
         ///   Entry(i): the delegate of file i's top level, in PrecompiledFilesAttribute order;
-        ///   Lines(): the line table, "method\u0001offset,line,offset,line...\n" per method (there is no PDB).
         /// </summary>
         private void DefineStartupIndex(CustomAttributeBuilder files) {
             var index = _module.DefineType("RubyStartupIndex",
@@ -518,15 +568,23 @@ namespace IronRuby.Aot {
                 il.Emit(OpCodes.Ret);
             }
 
+            index.CreateType();
+        }
+
+        /// <summary>
+        /// RubyStartup&lt;i&gt;.&lt;lines&gt;(): the line table of file i's methods, "method\u0001offset,line,offset,line...\n" per
+        /// method (there is no PDB), read when the first frame of the file is formatted. One method per file, not one for the
+        /// library: the first call of a method resolves all of its string literals, and the table of a library with the
+        /// tools' files is ~3 MB.
+        /// </summary>
+        private void DefineLineTable(Dictionary<string, List<int>> lines) {
             var sb = new System.Text.StringBuilder();
-            foreach (var kv in _lines) {
+            foreach (var kv in lines) {
                 sb.Append(kv.Key).Append('\u0001').Append(string.Join(",", kv.Value)).Append('\n');
             }
-            var lines = index.DefineMethod("Lines", MethodAttributes.Public | MethodAttributes.Static, typeof(string), Type.EmptyTypes);
-            il = lines.GetILGenerator();
+            var il = _type.DefineMethod(PrecompiledCode.LineTableMethod, MethodAttributes.Public | MethodAttributes.Static, typeof(string), Type.EmptyTypes).GetILGenerator();
             il.Emit(OpCodes.Ldstr, sb.ToString());
             il.Emit(OpCodes.Ret);
-            index.CreateType();
         }
 
         private void Save(string outputPath, PEHeaderBuilder header, MethodDefinitionHandle entryPoint) {
@@ -612,7 +670,7 @@ namespace IronRuby.Aot {
                 if (node is Microsoft.Scripting.Ast.LightDynamicExpression && node.Type == typeof(object) &&
                     node.Reduce() is DynamicExpression reduced && reduced.Type == typeof(object) && reduced.Arguments.Count <= MaxUntypedSiteArguments) {
                     var args = Visit(reduced.Arguments);
-                    return _c.NoteCallLocation(reduced.Binder, args, file, line, _c.UntypedDynamic(reduced.Binder, args));
+                    return _c.NoteCallLocation(reduced.Binder, args, file, line, a => _c.UntypedDynamic(reduced.Binder, a));
                 }
                 return Visit(node.Reduce());
             }
@@ -634,46 +692,80 @@ namespace IronRuby.Aot {
                 int line = _line;
                 var args = Visit(node.Arguments);
                 var siteExpr = _c.SiteField(node.DelegateType, node.Binder);
-                var site = Expression.Variable(siteExpr.Type, "#site");
-                var invokeArgs = new List<Expression> { site };
-                invokeArgs.AddRange(args);
-                return _c.NoteCallLocation(node.Binder, args, file, line, Expression.Block(node.Type, new[] { site },
-                    Expression.Assign(site, siteExpr),
-                    Expression.Invoke(Expression.Field(site, "Target"), invokeArgs)));
+                return _c.NoteCallLocation(node.Binder, args, file, line, a => {
+                    var site = Expression.Variable(siteExpr.Type, "#site");
+                    var invokeArgs = new List<Expression> { site };
+                    invokeArgs.AddRange(a);
+                    return Expression.Block(node.Type, new[] { site },
+                        Expression.Assign(site, siteExpr),
+                        Expression.Invoke(Expression.Field(site, "Target"), invokeArgs));
+                });
             }
         }
 
-        // the builtins that record where they were called from (RubyUtils.TryGetCallerSourceLocation)
-        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload" };
+        // the builtins that record or need where they were called from (RubyUtils.TryGetCallerSourceLocation,
+        // PrecompiledCode.TakeNotedCallerPath)
+        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload", "require_relative", "__dir__" };
 
         /// <summary>
-        /// A call of Module#const_set or #autoload records its caller's location, which compiled code only has on the
-        /// CLR stack: the call says where it is first (PrecompiledCode.NoteCallLocation), with the scope the method is
-        /// then called from. Not in the Ruby half of the core library, whose frames report their caller's location.
+        /// A call of Module#const_set or #autoload records its caller's location, and Kernel#require_relative and #__dir__
+        /// work from their caller's file, which compiled code only has on the CLR stack: the call says where it is first
+        /// (PrecompiledCode.NoteCallLocation), with the scope the method is then called from. Not in the Ruby half of the
+        /// core library, whose frames report their caller's location.
+        /// <paramref name="makeCall"/> makes the call from its arguments. The scope argument is evaluated once: a method's is
+        /// a parameter, a block's an expression (the block's scope out of its closure), which is held in a temporary.
         /// </summary>
-        private Expression NoteCallLocation(CallSiteBinder binder, IList<Expression> args, string file, int line, Expression call) {
+        private Expression NoteCallLocation(CallSiteBinder binder, IList<Expression> args, string file, int line, Func<IList<Expression>, Expression> makeCall) {
             if (!(binder is RubyCallAction action) || !_locationRecordingMethods.Contains(action.MethodName) || !action.Signature.HasScope ||
                 args.Count == 0 || file == null || line <= 0 || RubyStackTraceBuilder.IsInternalFile(file)) {
-                return call;
+                return makeCall(args);
             }
+            var variables = new List<ParameterExpression>();
+            var setup = new List<Expression>();
             var scope = args[0];
             while (scope is UnaryExpression u && u.NodeType == ExpressionType.Convert) {
                 scope = u.Operand;
             }
             if (!(scope is ParameterExpression)) {
-                return call;
+                var held = Expression.Variable(args[0].Type, "#scope");
+                variables.Add(held);
+                setup.Add(Expression.Assign(held, args[0]));
+                args = new List<Expression>(args) { [0] = held };
+                scope = held;
             }
-            Count("const_set/autoload calls noting their location");
+            // The arguments are evaluated before the note, in their order: a noted call among them
+            // (`autoload :X, File.expand_path("x", __dir__)`) would take or clear this call's note first. Once one is
+            // held, so is every one before it: an argument passed as a variable (a local, a temporary) would be read at
+            // the call, after a later argument assigned to it (`const_set(n, (n = :Y; v))`).
+            var heldArgs = new List<Expression>(args);
+            int last = heldArgs.Count - 1;
+            while (last > 0 && (heldArgs[last] is ParameterExpression || heldArgs[last] is ConstantExpression)) {
+                last--;
+            }
+            for (int i = 1; i <= last; i++) {
+                if (!(heldArgs[i] is ConstantExpression)) {
+                    var held = Expression.Variable(heldArgs[i].Type, "#arg" + i);
+                    variables.Add(held);
+                    setup.Add(Expression.Assign(held, heldArgs[i]));
+                    heldArgs[i] = held;
+                }
+            }
+            args = heldArgs;
+            var call = makeCall(args);
+            Count("const_set/autoload/require_relative/__dir__ calls noting their location");
             var note = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
                 Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
                 Expression.Constant(line));
-            // a call that went elsewhere (a receiver's own const_set) leaves no note for a later one
+            // In a finally: a call that went elsewhere (a receiver's own const_set), or raised before it took the note (an
+            // invalid constant name), leaves no note for a later one - an eval in this scope - nor keeps the scope alive.
             var clear = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.ClearCallLocation)));
             if (call.Type == typeof(void)) {
-                return Expression.Block(note, call, clear);
+                return Expression.Block(variables, setup.Append(Expression.TryFinally(Expression.Block(note, call), clear)));
             }
             var result = Expression.Variable(call.Type, "#noted");
-            return Expression.Block(call.Type, new[] { result }, note, Expression.Assign(result, call), clear, result);
+            variables.Add(result);
+            return Expression.Block(call.Type, variables,
+                setup.Append(Expression.TryFinally(Expression.Block(typeof(void), note, Expression.Assign(result, call)), clear)).Append(result));
         }
 
         // DynamicInstructionN.CreateUntypedInstruction's limit
@@ -1170,6 +1262,58 @@ namespace IronRuby.Aot {
         internal static string LocationKey(MethodDefinition def) => def.Location.Start.Index + ":" + def.Location.End.Index + ":" + def.Name;
 
         #endregion
+
+        /// <summary>The files a library left out, and why: for what they use (UnsupportedFinder), or a top level too large (LargeMethodsJittedOver).</summary>
+        public readonly List<(string Path, string Reason)> LeftOut = new();
+
+        /// <summary>
+        /// What compiled code does not run as the interpreter does (README part A, "Not run"), so that a file using it stays
+        /// out of the startup library: refinements. A call of `using', `refine' or `import_methods' (or one sent by name)
+        /// anywhere in the file; the refined methods were missing in compiled code (irb/completion.rb's Binding#eval_methods,
+        /// and Tab completion raised NoMethodError). The rest of that list is either checked to run the same (eval and
+        /// binding, define_method and TracePoint: check-startup.sh) or turns the library off (coverage, -d, tracing).
+        /// </summary>
+        internal sealed class UnsupportedFinder : Walker {
+            private static readonly HashSet<string> _refinementMethods = new() { "using", "refine", "import_methods" };
+            private static readonly HashSet<string> _sends = new() { "send", "__send__", "public_send" };
+            private string _why;
+
+            public static string Find(SourceUnitTree tree) {
+                var finder = new UnsupportedFinder();
+                finder.Walk(tree);
+                return finder._why;
+            }
+
+            /// <summary>
+            /// IronRuby.Aot unsupported file.rb... : prints "file: why" for each file a library would leave out for what it
+            /// uses (startup-files.rb leaves them out of startup-files.txt).
+            /// </summary>
+            public static int Run(string[] files) {
+                var context = AotHost.CreateContext(out _);
+                foreach (var file in files) {
+                    var path = Path.GetFullPath(file);
+                    var tree = IronRuby.Prism.PrismAstBridge.Parse(context.CreateFileUnit(path), new RubyCompilerOptions(), ErrorSink.Default);
+                    if (tree == null) {
+                        Console.Error.WriteLine("syntax error in " + path);
+                        return 1;
+                    }
+                    if (Find(tree) is string why) Console.WriteLine(path + ": " + why);
+                }
+                return 0;
+            }
+
+            public override bool Enter(MethodCall node) {
+                string name = node.MethodName;
+                if (_sends.Contains(name) && node.Arguments?.Expressions is { Length: > 0 } args && args[0] is SymbolLiteral symbol) {
+                    name = symbol.Value as string ?? name;
+                }
+                if (_why == null && _refinementMethods.Contains(name)) {
+                    _why = $"refinements (`{name}' at line {node.Location.Start.Line}), which compiled code does not run";
+                }
+                if (node.Block is BlockDefinition block) block.Walk(this);
+                return true;
+            }
+        }
 
         // the modules `extend M' names, by their last segment
         private sealed class ExtendWalker : Walker {
