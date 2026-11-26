@@ -622,6 +622,16 @@ namespace IronRuby.Runtime.Jit {
                     return null;
                 }
 
+                // An arm left out under a constant is left out for as long as the entry finds the constant unchanged. A
+                // loop runs on past the entry: one of the body's own has to deopt at its safe point when the constant is
+                // reassigned (MethodLoopSafePointSlow, which a body that may not deopt goes on from with what it was
+                // compiled with), so the body is one that can, which only a pure body may be (below). A callee's loop
+                // deopts by the callee's own rule, which is not this body's, so a body that calls one stays generic.
+                if (c._droppedArm) {
+                    if (c._calleeLoop) { return Declined("a statement left out under a constant, and a callee with a loop"); }
+                    if (c._hasLoop) { c._canDeopt = true; }
+                }
+
                 // Writes held back that the body cannot keep (JitCompiler.Sink.cs): compile it storing them where they are.
                 if (c._sunk != null && c._sinkObstacle != null) {
                     // an Integer variable written in both representations: another round holding it as a long
@@ -1551,6 +1561,8 @@ namespace IronRuby.Runtime.Jit {
         // arms together, so _deoptAfterEffect sees each path as it runs, not one arm's write as
         // coming before the other arm's deopt.
         private MSA.Expression/*!*/ EmitIf(IfExpression/*!*/ node, out JT type) {
+            MSA.Expression guarded;
+            if (TryEmitConstantGuarded(node, out guarded, out type)) { return guarded; }
             var clauses = node.ElseIfClauses;
             int n = (clauses != null) ? clauses.Count : 0;
             bool hasElse = n > 0 && clauses[n - 1].Condition == null;
@@ -1587,6 +1599,8 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitUnless(UnlessExpression/*!*/ node, out JT type) {
+            MSA.Expression guarded;
+            if (TryEmitConstantGuarded(node, out guarded, out type)) { return guarded; }
             var test = Ast.Not(EmitCondition(node.Condition));
             bool pureAfterTest = _pure;
             JT thenType;
@@ -1607,6 +1621,64 @@ namespace IronRuby.Runtime.Jit {
             }
             _pure &= pureAfterThen;
             return Join(test, thenExpr, thenType, elseExpr, elseType, out type);
+        }
+
+        /// <summary>
+        /// `x if C', `x unless C', `if C then x else y end' (IR_JIT_DEADCONST): the arm the constant's value makes dead
+        /// is not emitted at all, and neither is the test. The constant is folded as any other read of it is
+        /// (ResolveConstant), so the entry finds out that it changed (JitStub.RevalidateConstants) and the arm runs
+        /// again from the next call; an outlined loop hands itself back at its next safe point when it is reassigned
+        /// (RubyContext.ConstantReassigned), and a method body with a loop is made to deopt there (TryCompile:
+        /// _droppedArm). False when the node is not such a guard, or the value is one a non-main Ractor may not
+        /// read, which EmitConstant checks where it is read.
+        /// </summary>
+        private bool TryEmitConstantGuarded(RExpr/*!*/ node, out MSA.Expression result, out JT type) {
+            result = null;
+            type = JT.None;
+            ConstantVariable guard;
+            Statements whenTrue, whenFalse;
+            if (!JitRuntime.DeadConstants || !ConstantGuard(node, out guard, out whenTrue, out whenFalse)) { return false; }
+            object value = ResolveConstant(guard);
+            if (!RactorIsolation.IsTriviallyShareable(value)) { return false; }
+            _droppedArm = true;
+            var live = RubyOps.IsTrue(value) ? whenTrue : whenFalse;
+            if (live == null || live.Count == 0) {
+                type = JT.Obj;
+                result = Ast.Constant(null, typeof(object));
+            } else {
+                result = EmitRegion(live, out type);
+            }
+            return true;
+        }
+
+        // An arm was left out under a constant (TryEmitConstantGuarded).
+        private bool _droppedArm;
+
+        /// <summary>
+        /// `if C ... [else ...] end' or `unless C ... [else ...] end', without an elsif, whose condition is a constant the
+        /// compiler folds (`C', `::C', `A::B'): <paramref name="whenTrue"/> is what runs when the constant is truthy and
+        /// <paramref name="whenFalse"/> what runs when it is not (either may be null: nothing). The screen (JitScreen)
+        /// and the compiler ask it of the same nodes.
+        /// </summary>
+        internal static bool ConstantGuard(RExpr/*!*/ node, out ConstantVariable guard, out Statements whenTrue, out Statements whenFalse) {
+            guard = null;
+            whenTrue = whenFalse = null;
+            var ifExpr = node as IfExpression;
+            if (ifExpr != null) {
+                var clauses = ifExpr.ElseIfClauses;
+                if (clauses != null && clauses.Count > 0 && (clauses.Count != 1 || clauses[0].Condition != null)) { return false; }
+                guard = ifExpr.Condition as ConstantVariable;
+                whenTrue = ifExpr.Body;
+                whenFalse = (clauses != null && clauses.Count == 1) ? clauses[0].Statements : null;
+            } else {
+                var unless = node as UnlessExpression;
+                if (unless == null) { return false; }
+                if (unless.ElseClause != null && unless.ElseClause.Condition != null) { return false; }
+                guard = unless.Condition as ConstantVariable;
+                whenTrue = (unless.ElseClause != null) ? unless.ElseClause.Statements : null;
+                whenFalse = unless.Statements;
+            }
+            return guard != null && JitScreen.IsFoldableConstant(guard);
         }
 
         /// <summary>
@@ -3077,6 +3149,9 @@ namespace IronRuby.Runtime.Jit {
         // when screening a callee, which may call nothing itself.
         private Func<string, bool, bool> _isLeafCallee;
 
+        // What a constant guarding a statement is now (CanEverCompile's constantTruth); null: not known.
+        private Func<ConstantVariable, bool?> _constantTruth;
+
         /// <summary>
         /// False when no assignment of parameter types could ever make TryCompile succeed for
         /// this body. <paramref name="rejectedBy"/> names the node kind that decided it.
@@ -3089,11 +3164,15 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>
         /// <paramref name="otherUses"/>: the locals the body reads other than as the value of an
         /// instance variable or element assignment, or assigns.
+        /// <paramref name="constantTruth"/>: what a constant guarding a statement is now (JitCompiler.ConstantGuard): true
+        /// or false, or null if it could not be folded; null when the values are not known (the census, the precompiled
+        /// library), in which case a guard of one arm is taken for a switch that is off.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, Func<string, bool, bool> isLeafCallee,
-            out string rejectedBy, out HashSet<string> otherUses) {
+            out string rejectedBy, out HashSet<string> otherUses, Func<ConstantVariable, bool?> constantTruth = null) {
             var s = new JitScreen(ast, keywords);
             s._isLeafCallee = isLeafCallee;
+            s._constantTruth = constantTruth;
             otherUses = s._otherUses;
             s._all = CollectAll;
             CollectAll = null;
@@ -3288,6 +3367,20 @@ namespace IronRuby.Runtime.Jit {
                 return WalkCondition(cond.Condition) && Walk(cond.TrueExpression) && Walk(cond.FalseExpression);
             }
 
+            // `x if C', `x unless C', `if C then x else y end' (JitCompiler.TryEmitConstantGuarded): only the arm the
+            // constant's value leaves alive is emitted. Not knowing the value, a guard of one arm is a switch that is
+            // off (`trace(x) if TRACING'), as it is where the census meets it; a guard of two arms has both walked.
+            ConstantVariable guard;
+            Statements whenTrue, whenFalse;
+            if (JitRuntime.DeadConstants && JitCompiler.ConstantGuard(node, out guard, out whenTrue, out whenFalse)) {
+                if (_constantTruth != null) {
+                    bool? truth = _constantTruth(guard);
+                    if (truth.HasValue) { return WalkStatements(truth.Value ? whenTrue : whenFalse); }
+                } else if (whenTrue == null || whenFalse == null) {
+                    return true;
+                }
+            }
+
             var ifExpr = node as IfExpression;
             if (ifExpr != null) {
                 var clauses = ifExpr.ElseIfClauses;
@@ -3460,6 +3553,11 @@ namespace IronRuby.Runtime.Jit {
         // An assignment of something other than a local of the method was walked (Walk): an effect, which the walk's
         // order puts before what is walked after it.
         private bool _effectWalked;
+
+        /// <summary>A constant JitCompiler.ResolveConstant may fold (WalkConstant).</summary>
+        internal static bool IsFoldableConstant(ConstantVariable/*!*/ node) {
+            return WalkConstant(node);
+        }
 
         /// <summary>Mirrors JitCompiler.ResolveConstant: `C', `::C', and `A::B' qualified by constants.</summary>
         private static bool WalkConstant(ConstantVariable/*!*/ node) {

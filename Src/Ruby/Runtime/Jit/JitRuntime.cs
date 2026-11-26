@@ -40,6 +40,13 @@ namespace IronRuby.Runtime.Jit {
         internal static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_JIT_VERBOSE") == "1";
 
         /// <summary>
+        /// IR_JIT_DEADCONST (on unless =0): a statement guarded by a constant whose value makes it dead when the body is
+        /// compiled - `trace(x) if TRACING' with TRACING false - is left out of the typed body and of a loop's copy, under
+        /// the constant's revalidation (JitCompiler.TryEmitConstantGuarded), and the screen does not refuse the body for it.
+        /// </summary>
+        internal static readonly bool DeadConstants = Environment.GetEnvironmentVariable("IR_JIT_DEADCONST") != "0";
+
+        /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
         internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
