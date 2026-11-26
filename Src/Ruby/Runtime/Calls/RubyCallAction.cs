@@ -115,7 +115,43 @@ namespace IronRuby.Runtime.Calls {
                 LibraryDispatcher.GetRuleCompilationThreshold(this, args[targetIndex], context) : context.CompilationThreshold;
         }
 
+        /// <summary>
+        /// IR_SPENT_DISPATCHER=0 interprets the rule of a hot call until its compiled code is ready, as before, rather than have a
+        /// dispatcher answer the call meanwhile (see BindWhileCompiling). Settable for tests.
+        /// </summary>
+        internal static bool DispatchWhileCompiling = Environment.GetEnvironmentVariable("IR_SPENT_DISPATCHER") != "0";
+
+        /// <summary>
+        /// A call is hot once a dispatcher has spent its budget on calls like it (see LibraryDispatcher.IsHot), and its rule is compiled
+        /// after two calls (in the background). It was light-compiled too, to answer those calls and the few more made before the
+        /// compiled rule was ready: 189 rules of `gem list' and 221 of irb, 30 and 35 ms of light compiles that served a handful of
+        /// calls each. Instead, a new dispatcher for the call - as the first calls had - answers it, and the calls after it, while the
+        /// rule is built now and compiled in the background; once the compiled rule is in the binder's cache the dispatcher is spent,
+        /// and the sites that miss it find the compiled rule there. The dispatcher tests what the spent one did: a call it does not take
+        /// (a changed class, other types of arguments) goes to the site's update, as it would from the interpreted rule.
+        /// </summary>
+        internal override T BindWhileCompiling<T>(object[]/*!*/ args) {
+            RubyContext context = Context;
+            int targetIndex = Signature.HasScope ? 1 : 0;
+            if (!DispatchWhileCompiling || context == null || targetIndex >= args.Length ||
+                !LibraryDispatcher.IsHot(this, args[targetIndex])) {
+                return null;
+            }
+            var result = BindPrecompiled(typeof(T), args, true) as T;
+            var dispatcher = (result as Delegate)?.Target as LibraryDispatcher;
+            if (dispatcher == null) {
+                return null;
+            }
+            dispatcher.AnswerUntilCompiled(this, BindRuleLambda<T>(args));
+            return result;
+        }
+
         protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
+            return BindPrecompiled(delegateType, args, false);
+        }
+
+        // hot: the call is hot, and a LibraryDispatcher is made for it all the same (see BindWhileCompiling)
+        private object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args, bool hot) {
             // IsVariableCall only decides which error a call that finds no method raises; a dispatcher
             // is only made for a method that was found, and hands every other case back to the
             // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
@@ -211,7 +247,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // The first calls go through a LibraryDispatcher, rather than a rule, until the call is hot:
-            bool mayDispatch = LibraryDispatcher.MayDispatch(this, target);
+            bool mayDispatch = hot || LibraryDispatcher.MayDispatch(this, target);
 
             // the rule has to check for an ignored block (see BuildCall)
             if (Signature.HasSourceBlock && RequiresUnusedBlockCheck(method.Info)) {

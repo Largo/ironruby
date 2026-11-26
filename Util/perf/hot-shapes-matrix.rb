@@ -979,3 +979,38 @@ fwout = []
   end
 end
 fwout.each { |r| p r }
+
+# A hot library call (one a dispatcher has spent its budget on) is answered by a new dispatcher while its rule is compiled in
+# the background (RubyCallAction.BindWhileCompiling); IR_SPENT_DISPATCHER=hold never lets the compiled rule land, =0 interprets
+# the rule as before. Run hot, right after the calls turn hot (the budget is 32 calls in a method) and later: the method
+# redefined and restored, arguments of other types, a receiver of a subclass that later gets a method of its own and loses
+# it, a library method replaced by a Ruby one, and four threads on two sites.
+class SDStr < String; end
+class SDCall
+  def cat(s, x) = s + x
+  def idx(a, i) = a[i]
+  def len(s) = s.length
+  def scoped(a, b) = (a.size; [a & b, binding.local_variable_get(:b)][0])
+  def kw(h, k) = h.fetch(k, :dflt)
+end
+sdc = SDCall.new; sdout = []
+600.times do |i|
+  s = (i % 50 == 49) ? SDStr.new("t") : "s"
+  x = (i == 45 || i == 301) ? 7 : "x"
+  row = [(sdc.cat(s, x) rescue :typeerr), sdc.idx([1, 2, 3], i % 4), (sdc.idx({1 => :h}, 1) if i % 97 == 0),
+         sdc.len(i % 61 == 0 ? [1, 2] : "abc"), sdc.scoped([1, 2, 3], [2, 3, i % 4]), sdc.kw({a: i}, i.even? ? :a : :b)]
+  sdout << [i, row] if i % 37 == 0 || (i > 30 && i < 50) || (i > 199 && i < 206) || (i > 298 && i < 304)
+  case i
+  when 40 then class String; alias_method :__sd_plus, :+; def +(o) = :redef; end
+  when 42 then class String; alias_method :+, :__sd_plus; end
+  when 120 then class Array; alias_method :__sd_aref, :[]; def [](i) = [:aref, i]; end
+  when 160 then class Array; alias_method :[], :__sd_aref; end
+  when 200 then class SDStr; def +(o) = [:sd, o]; end
+  when 250 then class Integer; alias_method :__sd_and, :&; end; class Array; def &(o) = :amp; end
+  when 400 then class SDStr; remove_method :+; end
+  when 450 then class Hash; def fetch(*) = :hfetch; end
+  end
+end
+sdout.each { |r| p r }
+sdts = 4.times.map { |t| Thread.new { r = 0; 3000.times { |i| r += sdc.len(t.even? ? "ab" : [1, 2, 3]) + sdc.idx([t, i], 0) }; r } }
+p sdts.map(&:value)

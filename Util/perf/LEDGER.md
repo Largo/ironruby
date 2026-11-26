@@ -1384,6 +1384,45 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/spent-dispatcher (2026-11-26) - a hot call is answered by a dispatcher, not a light-compiled
+  rule, until its rule's background compile lands (gap 26).** perf/first-bind counted 189 / 221
+  rules of `gem list` / irb bound after a library dispatcher spent its budget (threshold 2, 30 /
+  35 ms) on 4bae83f3. On f81fc19f (after #294 gave required files' calls a budget of 200) they are
+  4 / 61 / 64 for `-e 1` / `gem list` / irb, 0.8 / 14.7 / 14.1 ms of bind inclusive (`IR_BIND_TRACE`,
+  a `rule-hot` kind added for them), so the lever is a quarter of the estimate. Taken
+  (`RubyCallAction.BindWhileCompiling`): the bind of a hot call makes a new LibraryDispatcher for
+  it (BindPrecompiled with the hot test skipped, so it accepts the call it is made for), builds
+  the rule's lambda as `DynamicUtils.LightBind` would and does not light-compile it. The
+  dispatcher answers the call and the next ones; at the fourth, where the interpreted rule's
+  count would have run out (`InterpretedCallSiteTest` counts threshold + 1 down), it starts the
+  compile on the thread pool - not while the core prelude holds compiles back, where it counts
+  again as `CheckCompiled` does - and renews its budget while the compile runs. The compiled rule
+  goes to the binder's cache, then the dispatcher is spent; a site that misses it finds the rule
+  there. Its guards are the first-call dispatcher's: a changed class or other argument types go to
+  the site's update. `IR_SPENT_DISPATCHER=0` keeps the interpreted rule, `=hold` never compiles
+  (the dispatcher answers for good, for the matrices). The first version started the compile at
+  the bind and skipped only the prelude's own thread: `-e 1` then started the thread pool for 4
+  rules the old path never compiled (+14 M instructions, 5 threads more) - the compile has to
+  start where the old one did. Bind trace after: `rule-bg` 5 / 62 / 64 at 140 / 115 / 112 us
+  (the hot rule was 200-240); binds 2,815 -> 2,765 and 2,756 -> 2,700 (no rebind to collect a
+  compiled target). Bind inclusive (phase timer, 10 alternating, median): `-e 1` 106.9 -> 106.6,
+  `gem list` 175.2 -> 169.8, irb 174.7 -> 169.0 ms. Instructions (all threads, least of 3): 1,321
+  -> 1,322, 1,469 -> 1,463, 2,495 -> 2,482, 2,816 -> 2,802 M. Wall, `bench.rb 10`, load 1.4,
+  median: `-e 1` 458 -> 454, `gem --version` 518 -> 519, `gem list` 913 -> 897, irb exit 987 ->
+  981, irb 1+1 1001 -> 1001. Checked: IronRuby.Tests PASSED on both (LibraryDispatcherBudget1/2
+  pin the old path; LibraryDispatcherSpent1 the new one, held and compiled); gate-matrices --all
+  with `off` and `hold` modes: no DIFF but thread-backtrace-matrix's main-thread row (timing, 88
+  on both trees six times alone); hot-shapes-matrix gains a section (library calls turning hot
+  at sites with and without a scope, the method redefined and restored right after, other
+  argument types, a subclass receiver that gains and loses its own method, a library method
+  replaced, four threads) - CRuby's output in every mode; spec sweep's six new failures (Set
+  compare_by_identity) fail on master too; AWFY geomean new/base 1.006 and 1.020 across the two
+  orders, four more rounds of the five lines that looked slower with an `off` column (same
+  binary, old path) 0.983 / 1.013 / 1.014 / 1.004, off at the same; micro-table no line 5% apart
+  in both orders. Next levers: `CallInstruction` without a generic type per signature (9-16 ms
+  on 4bae83f3); the typed/untyped duplicate rules (6-16 ms); the remaining 172 / 196 ordinary
+  rule binds of `gem list` / irb (67 ms), most of them run 3-31 times.
+
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R
   host with the startup library; `IR_BIND_TRACE`, `IR_PHASE_TIMES`, perf with jitdump classing

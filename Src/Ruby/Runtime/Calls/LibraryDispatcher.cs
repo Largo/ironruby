@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation.
  *
@@ -853,6 +853,16 @@ namespace IronRuby.Runtime.Calls {
         // A spent dispatcher is kept by its binder (see IsHot) - with the latest others whose class has not changed since (a dispatcher
         // of a class that changed takes no calls ever again, see IsCurrent).
         private void OnSpent() {
+            if (_awaitingRule) {
+                if (_compileRule != null && _binder.Context.Loader.HoldsBackCompilation) {
+                    // as the interpreted rule does (CachedBindingInfo.CheckCompiled): count again, compile once the hold is released
+                    _remaining = MinAsyncCompilationThreshold + 2;
+                } else {
+                    _remaining = GetInitialBudget(_binder.Context);
+                    Interlocked.Exchange(ref _compileRule, null)?.Invoke();
+                }
+                return;
+            }
             while (true) {
                 var spent = Volatile.Read(ref _binder.SpentDispatchers);
                 var kept = new List<LibraryDispatcher>(MaxSpentDispatchers) { this };
@@ -866,6 +876,39 @@ namespace IronRuby.Runtime.Calls {
                 if (Interlocked.CompareExchange(ref _binder.SpentDispatchers, kept.ToArray(), spent) == spent) {
                     return;
                 }
+            }
+        }
+
+        // IR_SPENT_DISPATCHER=hold: the rule is built but never compiled, so the dispatcher answers the hot call for good - for tests
+        // of the dispatcher's own guards over many calls (Util/perf/gate-matrices.rb --mode). Settable for tests.
+        internal static bool HoldCompiledRules = Environment.GetEnvironmentVariable("IR_SPENT_DISPATCHER") == "hold";
+
+        // Set while the dispatcher answers a hot call whose rule is compiled in the background (see AnswerUntilCompiled):
+        private volatile bool _awaitingRule;
+
+        // Starts the compile of the rule, until it is started:
+        private Action _compileRule;
+
+        /// <summary>
+        /// Has the dispatcher answer its calls until the rule is compiled (see RubyCallAction.BindWhileCompiling). The compile starts
+        /// at the call the interpreted rule would have started it at - the fourth: a rule of threshold N counts N + 1 calls down before
+        /// it compiles (ScriptingRuntimeHelpers.InterpretedCallSiteTest) - so a rule that is called less often is not compiled, as it
+        /// was not, nor while the loading of the core prelude holds compilations back. The budget is renewed while the compile runs. The compiled rule goes to the
+        /// binder's cache before the dispatcher is spent, so a site that misses the dispatcher then finds it there. A thread spending
+        /// the budget at the same time may renew it once more, which only puts off the switch. If the compile fails the dispatcher
+        /// keeps answering, as an interpreted rule does then.
+        /// </summary>
+        internal void AnswerUntilCompiled<T>(RubyCallAction/*!*/ binder, System.Linq.Expressions.Expression<T>/*!*/ rule) where T : class {
+            Debug.Assert(binder == _binder);
+            _awaitingRule = true;
+            _remaining = MinAsyncCompilationThreshold + 2;
+            if (!HoldCompiledRules) {
+                _compileRule = () => System.Threading.Tasks.Task.Run(() => {
+                    binder.CacheCompiledRule(rule.Compile());
+                    _awaitingRule = false;
+                    Volatile.Write(ref _remaining, 0);
+                    OnSpent();
+                });
             }
         }
 

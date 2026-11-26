@@ -137,9 +137,73 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
+            if (argArray == null && (result = BindWhileCompiling<T>(args)) != null) {
+                ChainDispatcher(site, result);
+                if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "rule-bg";
+                CacheTarget(result);
+                return result;
+            }
+
+            int threshold = (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold;
+            result = this.LightBind<T>(args, threshold);
+            if (PhaseTimer.BindTrace && threshold != context.CompilationThreshold && PhaseTimer.BindKind == "rule") PhaseTimer.BindKind = "rule-hot";
             CacheTarget(result);
             return result;
+        }
+
+        /// <summary>
+        /// For a call that is hot already (see <see cref="GetRuleCompilationThreshold"/>): a dispatcher that answers the call while the
+        /// rule, built now, is compiled in the background, or null.
+        /// </summary>
+        internal virtual T BindWhileCompiling<T>(object[]/*!*/ args) where T : class {
+            return null;
+        }
+
+        /// <summary>
+        /// The site's rule for the arguments, as the lambda <see cref="DynamicUtils.LightBind"/> makes of it: the binding's test, its
+        /// expression if the test holds, the site's update otherwise. Compiled, it is the delegate an interpreted rule is replaced by.
+        /// </summary>
+        internal Expression<T>/*!*/ BindRuleLambda<T>(object[]/*!*/ args) where T : class {
+            var prms = RuleLambda<T>.Parameters;
+            var target = DynamicMetaObject.Create(args[0], prms[1]); // 1 is skipping CallSite
+            var rest = new DynamicMetaObject[args.Length - 1];
+            for (int i = 0; i < rest.Length; i++) {
+                rest[i] = DynamicMetaObject.Create(args[i + 1], prms[i + 2]);
+            }
+            var binding = Bind(target, rest);
+            return Expression.Lambda<T>(
+                Expression.Condition(binding.Restrictions.ToExpression(), AstUtils.Convert(binding.Expression, RuleLambda<T>.Update.Type), RuleLambda<T>.Update),
+                "CallSite.Target",
+                true,
+                prms
+            );
+        }
+
+        /// <summary>
+        /// Adds a compiled rule to the binder's cache, where a site that misses its own rules finds it (CallSiteBinder's cache is locked).
+        /// </summary>
+        internal void CacheCompiledRule<T>(T/*!*/ rule) where T : class {
+            CacheTarget(rule);
+        }
+
+        private static class RuleLambda<T> where T : class {
+            internal static readonly System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>/*!*/ Parameters;
+            internal static readonly Expression/*!*/ Update;
+
+            static RuleLambda() {
+                var methodParams = typeof(T).GetMethod("Invoke").GetParameters();
+                var prms = new ParameterExpression[methodParams.Length];
+                var invokeArgs = new Expression[methodParams.Length];
+                for (int i = 0; i < prms.Length; i++) {
+                    prms[i] = Expression.Parameter(methodParams[i].ParameterType);
+                    invokeArgs[i] = (i == 0) ? (Expression)Expression.Convert(prms[i], typeof(CallSite<T>)) : prms[i];
+                }
+                Parameters = new System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>(prms);
+                Update = Expression.Block(
+                    Expression.Label(CallSiteBinder.UpdateLabel),
+                    Expression.Invoke(Expression.Property(invokeArgs[0], typeof(CallSite<T>).GetProperty("Update")), invokeArgs)
+                );
+            }
         }
 
         // Links a precompiled dispatcher to the one the site holds now, if that serves receivers this one does not (see MemberDispatcher.Next).
