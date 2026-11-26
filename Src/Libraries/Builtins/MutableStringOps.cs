@@ -4509,29 +4509,47 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            int size = singleByte ? GetCharacterLength(self) : Encoding.UTF8.GetByteCount(chars);
-            int offset = (args.Length == 2) ? (int)args[1] : (reverse ? size : 0);
-            if (offset < 0) {
-                offset += size;
-                if (offset < 0) {
-                    return true;
-                }
-            }
-            if (offset > size) {
-                // #byteindex gives up past the end, #byterindex clamps to it
-                if (!reverse) {
-                    return true;
-                }
-                offset = size;
-            }
-
             int charOffset;
             if (singleByte) {
+                int size = GetCharacterLength(self);
+                int offset = (args.Length == 2) ? (int)args[1] : (reverse ? size : 0);
+                if (offset < 0) {
+                    offset += size;
+                    if (offset < 0) {
+                        return true;
+                    }
+                }
+                if (offset > size) {
+                    // #byteindex gives up past the end, #byterindex clamps to it
+                    if (!reverse) {
+                        return true;
+                    }
+                    offset = size;
+                }
                 charOffset = offset;
             } else {
-                int clrOffset = Utf8OffsetToClrIndex(chars, offset);
-                if (clrOffset < 0) {
-                    throw RubyExceptions.CreateIndexError("offset {0} does not land on character boundary", offset);
+                // The UTF-8 size of the whole string is counted only for an offset from the end:
+                // the walk to a positive offset finds out by itself whether it is past the end.
+                int clrOffset;
+                if (args.Length < 2) {
+                    clrOffset = reverse ? chars.Length : 0;
+                } else {
+                    int offset = (int)args[1];
+                    if (offset < 0) {
+                        offset += Encoding.UTF8.GetByteCount(chars);
+                        if (offset < 0) {
+                            return true;
+                        }
+                    }
+                    clrOffset = Utf8OffsetToClrIndex(chars, offset);
+                    if (clrOffset == -2) {
+                        if (!reverse) {
+                            return true;
+                        }
+                        clrOffset = chars.Length;
+                    } else if (clrOffset < 0) {
+                        throw RubyExceptions.CreateIndexError("offset {0} does not land on character boundary", offset);
+                    }
                 }
                 charOffset = self.ToCharacterIndex(clrOffset);
             }
@@ -4552,8 +4570,8 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// The CLR index of the character that starts <paramref name="byteOffset"/> bytes into the
-        /// UTF-8 form of <paramref name="chars"/> (valid UTF-16), or -1 when that offset is inside a
-        /// character or past the end.
+        /// UTF-8 form of <paramref name="chars"/> (valid UTF-16): -1 when that offset is inside a
+        /// character, -2 when it is past the end.
         /// </summary>
         private static int Utf8OffsetToClrIndex(ReadOnlySpan<char> chars, int byteOffset) {
             int bytes = 0;
@@ -4574,7 +4592,7 @@ namespace IronRuby.Builtins {
                     i += 1;
                 }
             }
-            return (bytes == byteOffset) ? i : -1;
+            return (bytes == byteOffset) ? i : (bytes < byteOffset) ? -2 : -1;
         }
 
         [RubyMethod("byteindex")]
