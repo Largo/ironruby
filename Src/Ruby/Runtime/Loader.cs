@@ -764,9 +764,11 @@ namespace IronRuby.Runtime {
                         } else if (foreign) {
                             _corePreludeThread = null;
                         }
+                        EnterFile();
                         try {
                             loaded = Execute(globalScope, compiledCode);
                         } finally {
+                            ExitFile();
                             if (corePrelude) {
                                 _corePreludeThread = null;
                             } else if (foreign) {
@@ -1347,12 +1349,22 @@ namespace IronRuby.Runtime {
             }
         }
 
-        // Set while the core prelude (gem_prelude.rb and everything it requires, or ruby4.rb) loads,
-        // on whichever thread: RubyContext.CompilationThreshold reads it.
-        private volatile bool _loadingCorePrelude;
+        // How many files this thread is running the top level of: the core prelude, a require, a load,
+        // an autoload, the main script (RubyCommandLine.RunFile). RubyContext.CompilationThreshold reads it.
+        // Per thread and not per runtime: it only picks a compilation threshold, which changes no result.
+        [ThreadStatic]
+        private static int _loadDepth;
 
-        internal bool LoadingCorePrelude {
-            get { return _loadingCorePrelude; }
+        internal static bool IsLoadingFile {
+            get { return _loadDepth > 0; }
+        }
+
+        internal static void EnterFile() {
+            _loadDepth++;
+        }
+
+        internal static void ExitFile() {
+            _loadDepth--;
         }
 
         /// <summary>
@@ -1363,7 +1375,6 @@ namespace IronRuby.Runtime {
             // the prelude, rubygems and the rest of startup compiled ahead of time, if there is such a library
             IronRuby.Runtime.Precompiled.PrecompiledCode.TryRegisterStartupLibrary(_context);
             _corePreludeLoaderThread = Thread.CurrentThread;
-            _loadingCorePrelude = true;
             PhaseTimer.MarkPrelude(true);
             // The prelude's hot code is mostly not the program's: compiling it on another thread while the prelude
             // loads only competes with the loading (the compilations of `ir -e 1' took ~180 ms of CPU). What is
@@ -1372,7 +1383,6 @@ namespace IronRuby.Runtime {
             try {
                 LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
             } finally {
-                _loadingCorePrelude = false;
                 PhaseTimer.MarkPrelude(false);
                 _corePreludeLoaderThread = null;
                 holdCompilation.Dispose();
