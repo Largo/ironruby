@@ -1183,6 +1183,9 @@ namespace IronRuby.Runtime.Jit {
             var arrayLiteral = node as ArrayConstructor;
             if (arrayLiteral != null) { return EmitArrayLiteral(arrayLiteral, out type); }
 
+            var hashLiteral = node as HashConstructor;
+            if (hashLiteral != null) { return EmitHashLiteral(hashLiteral, out type); }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -1321,6 +1324,52 @@ namespace IronRuby.Runtime.Jit {
             }
             type = JT.Obj;
             return IronRuby.Compiler.Methods.MakeArrayOpCall(values);
+        }
+
+        /// <summary>
+        /// `{}', `{a: x}', `{"k" => v, 1 => w}': the Hash the generic body makes (HashConstructor.TransformReadCore), keys and
+        /// values evaluated in order, built by the same code (JitRuntime.NewHash, NewSymbolHash1..3). Only with keys the
+        /// runtime's comparer hashes itself (IsPlainLiteralKeyed): then building it runs no Ruby code - no #hash, no #eql? -
+        /// and has no effect anything could observe, so it is no obstacle to a deopt, no way into deep recursion and no
+        /// call that needs a stack check. A String key is copied and frozen by the helper, as the generic body's is.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitHashLiteral(HashConstructor/*!*/ node, out JT type) {
+            var maplets = node.Maplets;
+            if (node.IsKeywordArguments || maplets.Length > MaxArrayLiteral || !IsPlainLiteralKeyed(node)) {
+                throw Bail("hash literal");
+            }
+            var values = new List<MSA.Expression>(1 + 2 * maplets.Length);
+            values.Add(Ast.Constant(_context));
+            bool symbols = maplets.Length > 0 && maplets.Length <= 3;
+            foreach (var maplet in maplets) {
+                if (!(maplet.Key is SymbolLiteral)) { symbols = false; }
+                JT t;
+                var key = Emit(maplet.Key, out t);
+                values.Add(Coerce(key, t, JT.Obj));
+                var value = Emit(maplet.Value, out t);
+                values.Add(Coerce(value, t, JT.Obj));
+            }
+            type = JT.Obj;
+            if (symbols) {
+                return Ast.Call(JitRuntime.M("NewSymbolHash" + maplets.Length), values);
+            }
+            values.RemoveAt(0);
+            return Ast.Call(JitRuntime.M("NewHash"), Ast.Constant(_context), Ast.NewArrayInit(typeof(object), values));
+        }
+
+        /// <summary>
+        /// HashConstructor.HasPlainLiteralKeys: a Symbol or String literal, or nil, true, false or a Fixnum literal - or,
+        /// alone, any other numeric literal (two Float or Bignum literals of one value are told apart by #eql?).
+        /// </summary>
+        internal static bool IsPlainLiteralKeyed(HashConstructor/*!*/ node) {
+            foreach (var maplet in node.Maplets) {
+                if (maplet.Key is SymbolLiteral || maplet.Key is StringLiteral) { continue; }
+                var literal = maplet.Key as Literal;
+                if (literal == null) { return false; }
+                object value = literal.Value;
+                if (!(value == null || value is bool || value is int) && node.Maplets.Length > 1) { return false; }
+            }
+            return true;
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -3231,9 +3280,139 @@ namespace IronRuby.Runtime.Jit {
             if (_all != null) {
                 // the census's screen: note it and go on as if it had been taken (CollectAll)
                 if (detail != null && !_all.Contains(detail)) { _all.Add(detail); }
+                CensusChildren.Screen(this, node as RExpr);
                 return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// The census's screen goes on into the operands of a node it has refused: a refusal that returns without walking
+        /// them (`@x ||= compute', `{k => f(v)}', `"#{f(x)}"', `a..f(b)', the final refusal of a kind the screen does not
+        /// know) would otherwise leave their own refusals uncounted, and the node would be reported as the only thing in
+        /// the way of a method that has a call behind it. Each child expression is screened as a statement would be. Not
+        /// the children of a call (its arguments and block are the call's own question: a call with a block is counted as
+        /// one refusal), of a block, lambda or definition (another scope), or of a Body (WalkClausesForCensus). Only with
+        /// CollectAll: the real screen has stopped at its first refusal and never gets here.
+        /// </summary>
+        private sealed class CensusChildren : Walker {
+            private readonly JitScreen/*!*/ _screen;
+            private readonly RExpr/*!*/ _root;
+
+            private CensusChildren(JitScreen/*!*/ screen, RExpr/*!*/ root) {
+                _screen = screen;
+                _root = root;
+            }
+
+            internal static void Screen(JitScreen/*!*/ screen, RExpr node) {
+                if (node == null || node is MethodCall || node is SuperCall || node is YieldCall || node is Body ||
+                    node is LambdaDefinition || node is DefinitionExpression) { return; }
+                node.Walk(new CensusChildren(screen, node));
+            }
+
+            private bool Visit(object/*!*/ node) {
+                if (ReferenceEquals(node, _root)) { return true; }
+                // An assignment's target is not read: only the expressions inside it are (`a[i] = v', `o.x = v').
+                var simple = _root as SimpleAssignmentExpression;
+                var parallel = _root as ParallelAssignmentExpression;
+                if ((simple != null && ReferenceEquals(node, simple.Left)) || (parallel != null && ReferenceEquals(node, parallel.Left))) {
+                    ScreenTarget((LeftValue)node);
+                    return false;
+                }
+                if (node is BlockDefinition || node is LambdaDefinition || node is DefinitionExpression || node is SourceUnitTree) { return false; }
+                var expr = node as RExpr;
+                if (expr == null) { return true; }      // an argument list, a maplet, a clause: go on to the expressions in it
+                _screen.Walk(expr);
+                return false;
+            }
+
+            private void ScreenTarget(RExpr/*!*/ target) {
+                var compound = target as CompoundLeftValue;
+                if (compound != null) {
+                    foreach (var item in compound.LeftValues) { ScreenTarget(item); }
+                    return;
+                }
+                var element = target as ArrayItemAccess;
+                if (element != null) {
+                    _screen.Walk(element.Array);
+                    foreach (var arg in element.Arguments.Expressions) { _screen.Walk(arg); }
+                    return;
+                }
+                var attribute = target as AttributeAccess;
+                if (attribute != null) { _screen.Walk(attribute.Qualifier); }
+                // a variable, or a splat of one: nothing is read
+            }
+
+            public override bool Enter(SourceUnitTree/*!*/ node) { return Visit(node); }
+            public override bool Enter(BlockDefinition/*!*/ node) { return Visit(node); }
+            public override bool Enter(BlockReference/*!*/ node) { return Visit(node); }
+            public override bool Enter(Body/*!*/ node) { return Visit(node); }
+            public override bool Enter(Maplet/*!*/ node) { return Visit(node); }
+            public override bool Enter(Parameters/*!*/ node) { return Visit(node); }
+            public override bool Enter(Arguments/*!*/ node) { return Visit(node); }
+            public override bool Enter(SplattedArgument/*!*/ node) { return Visit(node); }
+            public override bool Enter(KeywordArgumentsTest/*!*/ node) { return Visit(node); }
+            public override bool Enter(KeywordParameterRead/*!*/ node) { return Visit(node); }
+            public override bool Enter(SplatParameterRead/*!*/ node) { return Visit(node); }
+            public override bool Enter(KeywordSplatMerge/*!*/ node) { return Visit(node); }
+            public override bool Enter(ClassDefinition/*!*/ node) { return Visit(node); }
+            public override bool Enter(ModuleDefinition/*!*/ node) { return Visit(node); }
+            public override bool Enter(SingletonDefinition/*!*/ node) { return Visit(node); }
+            public override bool Enter(MethodDefinition/*!*/ node) { return Visit(node); }
+            public override bool Enter(LambdaDefinition/*!*/ node) { return Visit(node); }
+            public override bool Enter(AndExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(ArrayConstructor/*!*/ node) { return Visit(node); }
+            public override bool Enter(AssignmentExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(IsDefinedExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(BlockExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(CaseExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(ConditionalExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(ForLoopExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(HashConstructor/*!*/ node) { return Visit(node); }
+            public override bool Enter(IfExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(Literal/*!*/ node) { return Visit(node); }
+            public override bool Enter(StringLiteral/*!*/ node) { return Visit(node); }
+            public override bool Enter(SymbolLiteral/*!*/ node) { return Visit(node); }
+            public override bool Enter(EncodingExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(MethodCall/*!*/ node) { return Visit(node); }
+            public override bool Enter(MatchExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(NotExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(OrExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(RangeExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(RangeCondition/*!*/ node) { return Visit(node); }
+            public override bool Enter(RegularExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(RegularExpressionCondition/*!*/ node) { return Visit(node); }
+            public override bool Enter(RescueExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(SelfReference/*!*/ node) { return Visit(node); }
+            public override bool Enter(StringConstructor/*!*/ node) { return Visit(node); }
+            public override bool Enter(SuperCall/*!*/ node) { return Visit(node); }
+            public override bool Enter(UnlessExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(WhileLoopExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(YieldCall/*!*/ node) { return Visit(node); }
+            public override bool Enter(ArrayItemAccess/*!*/ node) { return Visit(node); }
+            public override bool Enter(AttributeAccess/*!*/ node) { return Visit(node); }
+            public override bool Enter(ClassVariable/*!*/ node) { return Visit(node); }
+            public override bool Enter(CompoundLeftValue/*!*/ node) { return Visit(node); }
+            public override bool Enter(ConstantVariable/*!*/ node) { return Visit(node); }
+            public override bool Enter(AstGlobalVariable/*!*/ node) { return Visit(node); }
+            public override bool Enter(InstanceVariable/*!*/ node) { return Visit(node); }
+            public override bool Enter(LocalVariable/*!*/ node) { return Visit(node); }
+            public override bool Enter(Placeholder/*!*/ node) { return Visit(node); }
+            public override bool Enter(RegexMatchReference/*!*/ node) { return Visit(node); }
+            public override bool Enter(MemberAssignmentExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(ParallelAssignmentExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(SimpleAssignmentExpression/*!*/ node) { return Visit(node); }
+            public override bool Enter(AliasStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(ShutdownHandlerStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(UndefineStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(BreakStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(NextStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(RedoStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(RetryStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(ReturnStatement/*!*/ node) { return Visit(node); }
+            public override bool Enter(RescueClause/*!*/ node) { return Visit(node); }
+            public override bool Enter(WhenClause/*!*/ node) { return Visit(node); }
+            public override bool Enter(ElseIfClause/*!*/ node) { return Visit(node); }
         }
 
         /// <summary>Mirrors JitCompiler.EmitBody.</summary>
@@ -3474,6 +3653,17 @@ namespace IronRuby.Runtime.Jit {
                 if (retArgs == null || retArgs.Expressions.Length == 0) { return true; }
                 if (retArgs.Expressions.Length != 1) { return No(node); }
                 return Walk(retArgs.Expressions[0]);
+            }
+
+            // `{k => v}' with plain literal keys (JitCompiler.EmitHashLiteral): any other object, never an operand
+            var hashLiteral = node as HashConstructor;
+            if (hashLiteral != null) {
+                if (hashLiteral.IsKeywordArguments || hashLiteral.Maplets.Length > JitCompiler.MaxArrayLiteral || _inOperand != 0 ||
+                    !JitCompiler.IsPlainLiteralKeyed(hashLiteral)) { return No(node); }
+                foreach (var maplet in hashLiteral.Maplets) {
+                    if (!Walk(maplet.Key) || !Walk(maplet.Value)) { return false; }
+                }
+                return true;
             }
 
             var arrayLiteral = node as ArrayConstructor;

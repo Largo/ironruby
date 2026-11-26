@@ -1647,6 +1647,61 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   fourteen benchmarks has one. Look at the order in `ConstantsStillHold` and at `Folded` being set
   before `LoopGuard.Set` publishes the epoch.
 
+- **perf/jitscreen (2026-11-26) - a Hash literal in a body the method JIT compiles** (`{}`,
+  `{a: x}`, `{"k" => v}`, `opts = {}`) - census only, not gated. The screen refused every Hash
+  literal, the largest line of "JIT never, one thing only" that is not a call once the census
+  counts honestly (first commit below). `EmitHashLiteral` makes the Hash the generic body makes
+  (`HashConstructor.TransformReadCore`): keys and values in order, through the same code
+  (`JitRuntime.NewHash`, `NewSymbolHash1..3`, the bodies of `RubyOps.MakeHash` and
+  `MakeSymbolHash1..3` with the compiled-for runtime's comparer). Only with keys the comparer
+  hashes itself (`IsPlainLiteralKeyed`, the generic body's `HasPlainLiteralKeys`: Symbol and
+  String literals, nil, true, false, a Fixnum, or one other numeric literal alone): building it
+  then runs no Ruby code - no `#hash`, no `#eql?` - so it is no effect a deopt could repeat, no
+  way into deep recursion and no call that needs a stack check (fault eleven under "Faults the
+  gate missed" was `{self => 0}`). Up to five pairs; not a keyword-arguments hash, not an
+  operand of a binary operator.
+  JIT compiles 11.6% -> 11.9% (3,296 -> 3,370), maybe 10.3% -> 10.5% (2,923 -> 2,981), never
+  78.1% -> 77.6% (22,157 -> 22,025), light frames unchanged (Src/StdLib + AWFY, 28,376 methods;
+  132 methods moved up - 74 to `compiles`, 58 to `maybe` - none down) - census only, not gated.
+  `HashConstructor` refused at all 977 -> 331, alone 136 -> 5 (keys that are not plain literals,
+  and literals of more than five pairs, stay refused). Moved: mostly `initialize` methods that set `@h = {}`, `to_h` and
+  `marshal_dump` methods returning `{key: @ivar, ...}`, and `opts = {}` defaults; in the prelude
+  `NilClass#to_h`, `ObjectSpace::WeakKeyMap#initialize`, `GC.latest_compact_info`; none of AWFY.
+  Of the 58 to `maybe`: 33 wait for a call, 12 for a constant, 10 for an index on a parameter
+  the census types as an Integer, 3 the census already calls "declined once typed".
+  **The one exception to the rules, for the gate:** a trace of `Util/bench/app-shapes.rb`
+  specializes 114 -> 116 methods (`Date::Format::Bag#initialize`, `Playlist#initialize`), but
+  declines 29 -> 30 after the pre-screen: `CSV::FieldsConverter#initialize(options={})`, whose
+  `{}` default was all that kept it out, is declined for a call of `need_static_convert?` on
+  self after its instance-variable writes - gap 1's wall, which the unchanged build hits the
+  same way for the same method with `options=nil` ("a deopt after an effect (call need?)"). It
+  pays the declined stub's delegate hop per call. (Its `declined` line says "no reason recorded":
+  the per-count path does not record its reason.) AWFY traces (Json, Richards, DeltaBlue, CD,
+  3 x 10): 82 specialized and 19 declined on both builds; `census.rb -c` 225 agree, 0 differ;
+  on app-shapes the same 15 screen differences as the baseline.
+  Instructions a call (`Util/perf/callgrind/count.sh`, `Util/bench/jit-hash-shapes.rb`, new):
+  `{}` 2248 -> 1839 (0.82), `{a: x, b: x + 1}` 3317 -> 2666 (0.80), `{"k" => x}` 3452 -> 3104
+  (0.90), an initialize storing `{}`, `[]` and an argument 3021 -> 2607 (0.86), `(x, opts = {})`
+  called without opts 14878 -> 2027 (0.14), the control `[x, x + 1]` 1961 -> 1960. Timed
+  (`ab.rb`, six and eight rounds, spreads of 10-25% beside other experiments): `opts = {}` 0.74
+  and 0.80, `{}` 0.87 and 0.92 (overlapping), the rest overlapping (the initialize 1.13 and
+  1.06 with overlapping rounds, 0.86 by instructions).
+  Checked: `Util/jit-hash-matrix.rb` (new, 31 rows: a new Hash per evaluation, Symbol keys 1, 2,
+  3 and 5, String keys copied and frozen, mixed and Float keys, nested literals, an instance
+  variable store, `@m ||= {}`, `opts = {}` fresh per call and given, a Bignum and a Float value,
+  a literal after an effect and a deopt, 2,000-deep recursion through a literal, redefinition, a
+  frozen self; every `hl_*` method but one specialized under `IR_JIT_VERBOSE=1`), and jit,
+  jit-calls, jit-const, hash-literal, jit-scan, jit-strlit, ivar, jit-construct, jit-rescue:
+  CRuby's output and the unchanged build's with the JIT on, `-X:NoJIT -X:NoOSR`,
+  `-X:NoJITCalls`, and the unchanged build's with `IR_LIGHT_FRAMES=0`. hot-shapes and
+  inline-matrix (one case per process) print the unchanged build's output in every mode; each
+  differs from CRuby in one row on both builds (`FrozenError` for
+  `Encoding::CompatibilityError`; "Object must be of type Int32" for a NoMethodError).
+  Tried and left: `NewHash*` among the helpers a body with held-back stores may call (the
+  trace says "stores not held back ... a call of JitRuntime.NewSymbolHash1"), as round
+  strlit's literal makers were; not tried here.
+  For the gate: no IronRuby.Tests or spec run; the decline above.
+
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
   `$/`, `$!` or `$x = v` kept 258 methods out of light frames by themselves (Kernel#puts among them,

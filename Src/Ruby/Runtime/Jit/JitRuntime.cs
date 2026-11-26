@@ -1265,6 +1265,35 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- reflection handles the compiler emits ---------------------------------------
 
+        // `{k => v, ...}' in a typed body (JitCompiler.EmitHashLiteral): the Hash RubyOps.MakeHash and MakeSymbolHash1..3
+        // make, of the comparer of the runtime the body was compiled for. The keys are plain literals (a Symbol, String,
+        // Integer, nil, true or false), which the comparer hashes without calling #hash: no Ruby code runs.
+        public static object NewHash(RubyContext/*!*/ context, object[]/*!*/ items) {
+            return RubyUtils.SetHashElements(context, new Hash(context.EqualityComparer, items.Length / 2), items);
+        }
+
+        public static object NewSymbolHash1(RubyContext/*!*/ context, object key1, object value1) {
+            var result = Hash.CreateUnlinked(context.EqualityComparer, 1);
+            result.AppendUnlinked(key1, value1);
+            return result;
+        }
+
+        public static object NewSymbolHash2(RubyContext/*!*/ context, object key1, object value1, object key2, object value2) {
+            var result = Hash.CreateUnlinked(context.EqualityComparer, 2);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            return result;
+        }
+
+        public static object NewSymbolHash3(RubyContext/*!*/ context, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = Hash.CreateUnlinked(context.EqualityComparer, 3);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            result.AppendUnlinked(key3, value3);
+            return result;
+        }
+
         internal static MethodInfo/*!*/ M(string/*!*/ name) {
             return typeof(JitRuntime).GetMethod(name, BindingFlags.Public | BindingFlags.Static);
         }
