@@ -7815,6 +7815,50 @@ begin; pass(1, **1); rescue TypeError => e; p e.message; end
         }
 
         /// <summary>
+        /// IR_KWREST_IN_PLACE: a rest parameter that takes a call's keyword hash unmarks the call's own hash instead of
+        /// storing a copy (RubyOps.NormalizeRestArgument); it stays positional when passed on or kept, the caller's hash
+        /// is never the one, and a ruby2_keywords method still gets a marked copy (Util/kwrest-call-matrix.rb).
+        /// </summary>
+        public void Method_KeywordHashIntoRest1() {
+            TestOutput(@"
+require 'ruby4'
+def takes_kw(*a, **kw) = [a, kw]
+def rest(*a) = a
+def pass_on(*a) = takes_kw(*a)
+def keep(*a) = a.last
+ruby2_keywords def r2k(*a) = takes_kw(*a)
+ruby2_keywords def r2k_last(*a) = a.last
+h = {k: 1}
+p rest(1, k: 2), pass_on(1, k: 2), takes_kw(*rest(k: 3))
+kept = keep(k: 4)
+p takes_kw(kept), takes_kw(*[kept]), kept.frozen?
+r = keep(**h)
+r[:x] = 1
+p r, h, keep(h).equal?(h), pass_on(h)
+p r2k(1, k: 2), r2k(1, {k: 2}), Hash.ruby2_keywords_hash?(r2k_last(k: 1)), Hash.ruby2_keywords_hash?(keep(k: 1))
+p 40.times.map { |i| pass_on(i % 2, k: i % 3) }.uniq.size, rest(1, **{}), rest(**nil)
+", @"
+[1, {k: 2}]
+[[1, {k: 2}], {}]
+[[{k: 3}], {}]
+[[{k: 4}], {}]
+[[{k: 4}], {}]
+false
+{k: 1, x: 1}
+{k: 1}
+true
+[[{k: 1}], {}]
+[[1], {k: 2}]
+[[1, {k: 2}], {}]
+true
+false
+6
+[1]
+[]
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any

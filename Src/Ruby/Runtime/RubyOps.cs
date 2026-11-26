@@ -2748,12 +2748,34 @@ namespace IronRuby.Runtime {
             if (hash == null || !hash.IsKeywordArguments) {
                 return args;
             }
+            return NormalizeRestKeywords(args, last, hash, ruby2Keywords);
+        }
+
+        // Out of line, so that the test above - all that a call without keywords runs - stays as small as it was.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static RubyArray/*!*/ NormalizeRestKeywords(RubyArray/*!*/ args, int last, Hash/*!*/ hash, bool ruby2Keywords) {
+            // The hash is the call's own, as ClearKeywordArguments relies on for any other parameter: every hash marked
+            // as keyword arguments is made for one call (MakeKeywordArgumentsHash, KeywordSplatArgument's copy, the
+            // copies of SplatRuby2Keywords and RestoreRuby2Keywords; PassOnKeywordRest hands on one the method stops
+            // holding). So the mark comes off in place, which is all a copy was for - except on the runtime's shared,
+            // frozen empty hash, and for a ruby2_keywords method, whose copy carries a mark of its own (gap 38).
+            if (KwRestInPlaceEnabled && !ruby2Keywords && hash.GetType() == typeof(Hash) && !hash.IsFrozen) {
+                hash.IsKeywordArguments = false;
+                hash.IsOmittedKeywords = false;
+                return args;
+            }
 
             var copy = new Hash(hash);
             copy.IsRuby2KeywordsHash = ruby2Keywords;
             args[last] = copy;
             return args;
         }
+
+        /// <summary>
+        /// IR_KWREST_IN_PLACE=0 makes a rest parameter that takes a call's keyword hash store a copy of it again, unmarked,
+        /// instead of unmarking the call's own (see NormalizeRestArgument).
+        /// </summary>
+        internal static readonly bool KwRestInPlaceEnabled = Environment.GetEnvironmentVariable("IR_KWREST_IN_PLACE") != "0";
 
         /// <summary>
         /// A `*args' at a call site. A hash a ruby2_keywords method is passing along goes back to
