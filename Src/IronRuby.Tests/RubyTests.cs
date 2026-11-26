@@ -873,6 +873,7 @@ namespace IronRuby.Tests {
                 Visibility7,
                 VisibilityCaching1,
                 VisibilityCaching2,
+                VisibilityCaching3,
                 DefineMethodVisibility1,
                 DefineMethodVisibility2B,
                 AliasedMethodVisibility1,

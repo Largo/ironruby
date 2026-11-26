@@ -195,7 +195,7 @@ namespace IronRuby.Runtime.Calls {
                 clrTest = (target != null && !(target is IRubyObject)) ? GetClrReceiverTest(targetClass, _methodName) : ClrReceiverTest.None;
             }
 
-            if (!method.Found || method.Info.IsProtected && !Signature.HasImplicitSelf) {
+            if (!method.Found || method.Visibility == RubyMethodVisibility.Protected && !Signature.HasImplicitSelf) {
                 return null;
             }
 
@@ -438,7 +438,8 @@ namespace IronRuby.Runtime.Calls {
             } else {
                 return false;
             }
-            if (member.IsProtected || member.GetType() != typeof(RubyLibraryMethodInfo) && member.GetType() != typeof(RubyMethodInfo)) {
+            if ((isMissing ? member.Visibility : method.Visibility) == RubyMethodVisibility.Protected ||
+                member.GetType() != typeof(RubyLibraryMethodInfo) && member.GetType() != typeof(RubyMethodInfo)) {
                 return false;
             }
 
@@ -989,7 +990,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // Whenever the current self's class changes we need to invalidate the rule, if a protected method is being called.
-            if (method.Info != null && method.Info.IsProtected && visibilityContext.Class != null) {
+            if (method.Info != null && method.Visibility == RubyMethodVisibility.Protected && visibilityContext.Class != null) {
                 // We don't need to compare versions, just the class objects (super-class relationship cannot be changed).
                 // Since we don't want to hold on a class object (to make it collectible) we compare references to the version handlers.
                 metaBuilder.AddCondition(Ast.Equal(

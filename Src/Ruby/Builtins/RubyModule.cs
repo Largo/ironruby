@@ -2860,8 +2860,8 @@ namespace IronRuby.Builtins {
                     if ((options & MethodLookup.ReturnForwarder) != 0) {
                         result = new MethodResolutionResult(info, owner, true);
                     } else {
-                        // start again with owner's super ancestor and ignore visibility:
-                        result = owner.ResolveSuperMethodNoLock(((SuperForwarderInfo)info).SuperName, owner);
+                        // start again with owner's super ancestor and ignore its visibility: the forwarder's is the call's
+                        result = owner.ResolveSuperMethodNoLock(((SuperForwarderInfo)info).SuperName, owner).WithVisibility(info.Visibility);
                     }
                 } else {
                     result = new MethodResolutionResult(info, owner, true);
