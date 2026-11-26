@@ -734,10 +734,16 @@ namespace IronRuby.Aot {
                 scope = held;
             }
             // The arguments are evaluated before the note, in their order: a noted call among them
-            // (`autoload :X, File.expand_path("x", __dir__)`) would take or clear this call's note first.
+            // (`autoload :X, File.expand_path("x", __dir__)`) would take or clear this call's note first. Once one is
+            // held, so is every one before it: an argument passed as a variable (a local, a temporary) would be read at
+            // the call, after a later argument assigned to it (`const_set(n, (n = :Y; v))`).
             var heldArgs = new List<Expression>(args);
-            for (int i = 1; i < heldArgs.Count; i++) {
-                if (!(heldArgs[i] is ParameterExpression || heldArgs[i] is ConstantExpression)) {
+            int last = heldArgs.Count - 1;
+            while (last > 0 && (heldArgs[last] is ParameterExpression || heldArgs[last] is ConstantExpression)) {
+                last--;
+            }
+            for (int i = 1; i <= last; i++) {
+                if (!(heldArgs[i] is ConstantExpression)) {
                     var held = Expression.Variable(heldArgs[i].Type, "#arg" + i);
                     variables.Add(held);
                     setup.Add(Expression.Assign(held, heldArgs[i]));
@@ -750,15 +756,16 @@ namespace IronRuby.Aot {
             var note = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
                 Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
                 Expression.Constant(line));
-            // a call that went elsewhere (a receiver's own const_set) leaves no note for a later one
+            // In a finally: a call that went elsewhere (a receiver's own const_set), or raised before it took the note (an
+            // invalid constant name), leaves no note for a later one - an eval in this scope - nor keeps the scope alive.
             var clear = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.ClearCallLocation)));
-            setup.Add(note);
             if (call.Type == typeof(void)) {
-                return Expression.Block(variables, setup.Append(call).Append(clear));
+                return Expression.Block(variables, setup.Append(Expression.TryFinally(Expression.Block(note, call), clear)));
             }
             var result = Expression.Variable(call.Type, "#noted");
             variables.Add(result);
-            return Expression.Block(call.Type, variables, setup.Append(Expression.Assign(result, call)).Append(clear).Append(result));
+            return Expression.Block(call.Type, variables,
+                setup.Append(Expression.TryFinally(Expression.Block(typeof(void), note, Expression.Assign(result, call)), clear)).Append(result));
         }
 
         // DynamicInstructionN.CreateUntypedInstruction's limit

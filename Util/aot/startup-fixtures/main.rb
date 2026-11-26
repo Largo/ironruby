@@ -5,3 +5,4 @@ p StartupFixture.evals, StartupFixture.binding_set, StartupFixture.defined, Star
 p %i[A B C].map { |c| StartupFixture.const_source_location(c)&.then { |f, l| [File.basename(f), l] } }
 p StartupFixture.const_source_location(:Later)&.then { |f, l| [File.basename(f), l] }
 p((StartupFixtureRefinements.shout rescue $!), (StartupFixtureRefinements.twice rescue $!))
+p StartupFixture.noted_argument_order(1), StartupFixture.failed_notes
