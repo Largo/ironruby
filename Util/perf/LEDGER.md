@@ -1536,16 +1536,27 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     is 67-94 ns against CRuby's 226-234 (`Util/bench/extiter-shapes.rb`). Its end was the cost
     left - a StopIteration thrown from C# took the catch-site walk, 22 us against CRuby's 0.8 -
     and perf/extiter (Landed) defers that walk; perf/extiter2 (Landed) gives `map`, `collect`,
-    `select`, `filter`, `find_all` and `reject` cursors of their own. Still on a fiber, 5-10 us of
-    process CPU per `next` against 0.22-0.36: `with_index` / `each_with_index` / `with_object` on
-    an enumerator, `each_with_object`, `filter_map` and `flat_map` (the prelude's), Hash#select and
-    #reject (Hash's own, whose result is a Hash), `Enumerator::Lazy`, `Enumerator.produce`
-    (generators of the prelude, which run Ruby code between two values: a cursor would call blocks
-    under its lock) and `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6
-    us of CPU (two threads spinning), so the prelude's machinery around it is not where the time
-    is. Untried: a cursor over a cursor for `with_index` (the prelude would have to mark the
-    generator it makes with its source and offset); switching fibers without a thread (a
-    continuation of the method JIT's own).
+    `select`, `filter`, `find_all` and `reject` cursors of their own, and perf/extiter3 (Landed)
+    `with_index`, `each_with_index` and `with_object` on an enumerator, and Enumerable#
+    each_with_index over a Hash, a Range or a Struct. Still on a fiber, 5-16 us of process CPU
+    per `next` against 0.25-0.37: `each_with_object` and `with_object` over a source with no
+    cursor, `filter_map` and `flat_map` (the prelude's), Hash#select and #reject (Hash's own, whose
+    result is a Hash), `Enumerator::Lazy`, `Enumerator.produce` (generators of the prelude, which
+    run Ruby code between two values: a cursor would call blocks under its lock) and
+    `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two
+    threads spinning), so the prelude's machinery around it is not where the time is; an
+    abandoned fiber-backed enumerator costs about 0.55 ms (its thread). Untried: switching fibers
+    without a thread (a continuation of the method JIT's own).
+    Two differences from CRuby in `with_index` / `with_object` enumerators, with or without a
+    cursor, left as they were (the matrix leaves them out, with a comment): MRI's enumerator calls
+    the source's method itself, so a singleton #each on the source enumerator is not called (here
+    it is), and it calls #with_index by name, so redefining Enumerator#with_index after the
+    enumerator is made changes it (here the generator it made stays).
+    A trap found on the way: a local in the prelude's #with_index that held the enumerator it
+    returns kept every abandoned one alive - the generator block closes over the method's scope,
+    its fiber's thread is a root - and 2,000 of them ran the process out of memory
+    (`IR_FAST_NEXT=0`); the enumerator is returned without a local.
+
 36. **Left from round thirty-five**, each smaller than one gap of its own: `...` passed on is
     still a splat of an Array and a block argument (`def m(...) = n(...)` allocates the rest
     per call; the frame is light now); `URI::Generic#query=` and `merge` still run the
@@ -1604,6 +1615,36 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   twenty alternating runs each: best 865 -> 881, median 937 -> 942 (the 779 was one fast run).
   This container refuses perf_event_open, so there is no `ab.rb -i` here; perf/lsite's
   `Util/perf/callgrind/count.sh` counts instructions instead.
+- **perf/extiter3 (2026-11-26) - `with_index`, `each_with_index` and `with_object` enumerators
+  take `next` on a cursor over their source's (gap 35)** - not gated. Base 1efd7e6 (the merged
+  branch at 2f8c31c with perf/extiter2). The prelude's Enumerator#with_index (and so
+  #each_with_index) and #with_object made without a block are generators; they now mark the
+  enumerator they return with its source and offset or memo (`__iter_index_source__`), and
+  `TryCreateCursor` gives a marked one, while its generator is the one marked and its #each the
+  built-in one, an `IndexCursor` over the source's own cursor (any cursor: Array, Hash, Range,
+  times, each_slice, map / select, another with_index): [value, index] or [value, memo], what
+  the block answers handed on to the source's suspended yield (MRI's with_index_i and
+  with_object_i answer it). Enumerable#each_with_index has one too now over a Hash, a Range or a
+  Struct (it had only Array's). An offset that is not a Fixnum, a copy (#dup), and a generator
+  replaced by #initialize keep the fiber. Two prelude fixes go with it, in every mode: the
+  generator of #with_index answered `i += 1` to its source, so `[1, 2].map.with_index` fed `:q`
+  collected [2, 3] (CRuby [:q, nil]) and `select.with_index` kept everything; and #with_object's
+  StopIteration#result was the source's answer, not the memo. `IR_FAST_NEXT=0` leaves the new
+  cursors to the fiber. `ab.rb -r 6`, ns per `next`, CRuby / base / off / new: `[1000].each.
+  with_index` 267 / 10798 / 6302 / 325 (0.05 of off), a Hash's `each_with_index` 335 / 12397 /
+  8468 / 304, `map.with_index` 283 / 6826 / 6448 / 368, `each.with_object` 250 / 5714 / 6183 /
+  204; perf/extiter's and perf/extiter2's shapes level with base. In that run `lazy_next` read
+  2.42 and `zip_enum` 1.28 of off; alone over six rounds every control overlapped, and over
+  eight `lazy_next` was 0.97 and `zip_enum` 0.99. `Util/extiter-matrix.rb` (222 probes: offsets
+  nil, negative, Float, #to_int, Bignum, at the Fixnum edge; every source; results; feed through
+  map / select / reject; nesting; each_slice; a generator source; peek and next_values; loop;
+  rewind; mutation; dup; #initialize again; a subclass's #each redefined; threads) prints CRuby's
+  output on new and off, and the base's on all but the 8 probes the prelude fixes correct;
+  enum-next-, block-loop-, hash-order-, raise-, full-message-, enum-, enumerable2- and jit-matrix
+  are the same on base, new and off. spec/core/enumerator, kernel/loop_spec, spec/core/hash and
+  spec/core/enumerable: 1,541 examples, the same one error in all three (Hash.try_convert's
+  known `into`/`to` wording); 117 named IronRuby.Tests (Enumerator*, Enumerable*, Array*, Hash*,
+  Loop*, Fiber*, Backtrace*, Exception*, Raise*, Rescue*) pass.
 
 - **perf/extiter2 (2026-11-26) - `map`, `collect`, `select`, `filter`, `find_all` and `reject`
   enumerators take `next` on a cursor, with no fiber (gap 35)** - not gated. Base: the merged
