@@ -1086,9 +1086,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     and a BINARY needle (wrong answers); all three are dealt with. **Still open:** `s.index('"')` not
     found in 10 KB is 198 ns against 109 (profile: 59% in `PackedSpanHelpers.IndexOf`,
     the search over 20 KB of UTF-16; the rest is the call) - only a receiver held as bytes
-    would close it; `#start_with?` 134 / 212 ns against 55 / 90 (its caller makes a
-    `RubyMethodScope`, since the method takes the scope for a Regexp prefix's `$~`: gap 16
-    / a scope-free overload); `#byteindex` on UTF-8 found late is 1.3 us against 117 ns
+    would close it; `#start_with?` 134 / 212 ns against 55 / 90 (done in round two, see
+    Landed: perf/strsearch2); `#byteindex` on UTF-8 found late is 1.3 us against 117 ns
     (the UTF-8 length of the prefix, `Encoding.UTF8.GetByteCount`, 1.1 us over 10 KB of
     mixed text), and from a positive offset other than 0 it walks the characters to it, so a
     strscan-style loop of byte offsets over UTF-8 text is quadratic where CRuby's is not.
@@ -1449,6 +1448,36 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/strsearch2 (2026-11-26) - `#start_with?` with one String prefix takes no scope; an
+  ASCII prefix is compared in place (gap 21, round two)** - not gated. Commit dc1d136 on
+  `claude/perf-strsearch`, based on the merged branch 2f8c31c. `start_with?` had one overload,
+  which takes the caller's scope to store `$~` for a Regexp prefix, so a light frame calling it
+  with a String made its scope on the call (`RubyOps.LightScopeRequired`) and called again. A
+  second overload takes one MutableString and no scope (not switchable: an overload is
+  registered or not); a Regexp, a `#to_str` object or several prefixes still take the first. An
+  ASCII prefix of two bytes or more on an ASCII-compatible receiver is compared as characters or
+  bytes where both strings are, instead of `GetByteCount`/`GetByte` per byte (which also switch
+  a non-ASCII receiver held as characters to bytes); `IR_FAST_SEARCH=0` turns that off. The
+  census moved nothing (28,376 methods). Callgrind (`Util/perf/callgrind/count.sh`, N=20000),
+  instructions a call, base / off / new: sw1_a 3,473 / 2,645 / 2,724, sw3_a 4,704 / 3,862 / 2,850,
+  sw1_u 3,434 / 2,625 / 2,685, sw3_u 4,185 / 3,341 / 2,818, sw1_b 3,331 / 2,522 / 2,601, sw3_b
+  4,278 / 3,434 / 2,862; controls idx1_a_e, short_idx, size within 0.6%. The in-place compare
+  costs the same for any length (about 2,790), so a one-byte prefix keeps the byte loop; the
+  check that decides it costs about 80 instructions there (+3% against off, overlapping in
+  time). Time, four alternating rounds, ns, CRuby / base / off / new:
+
+      sw1_a  54.4 / 122.4 /  63.8 /  65.3     sw3_a  85.7 / 194.4 / 138.0 /  88.9  (0.64 of off)
+      sw1_u  51.9 / 119.8 /  60.0 /  62.8     sw3_u  92.3 / 167.1 / 107.2 /  90.8  (0.85)
+      sw1_b  52.0 / 119.9 /  67.6 /  67.5     sw3_b 105.6 / 179.9 / 115.8 / 101.0  (0.87)
+      controls overlap: idx1_a_e 67.2 -> 66.9, short_idx 84.5 -> 87.9, size 48.0 -> 47.2
+
+  Checked: `Util/string-search-matrix.rb` with 1,255 more `start_with?` rows (Shift_JIS trail
+  bytes, EUC-JP, broken UTF-8 leads and continuations, BINARY, UTF-16, several prefixes, a
+  Regexp among them, nil, none; 57,489 rows) prints CRuby 4.0's output on the base and on this
+  build in both modes; spec/core/string (3,963 examples) and spec/library/stringscanner (240):
+  the same on both builds, 0 failures, one error on both (`String.try_convert ... raises
+  TypeError if it's not a kind of String`, run as a directory).
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
