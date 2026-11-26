@@ -1113,6 +1113,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Round of 2026-11-26 (see Landed, perf/dmethjit, not gated): taken; `bm1` 51 -> 26.5 ns against
     CRuby's 24. Left: bodies over captured locals, `block_given?`/`yield` or `super`, and calls with a
     block or a splat, which still take the rule.
+    Round of 2026-11-26, second (see Landed, perf/dmethjit2, not gated): bodies that read captured
+    locals, and setters called as `o.x = v`, taken (`{ @h[name] }` 69.8 -> 53.3 ns, a `def` 49.7).
+    Left: bodies that write a captured local (4 of 154 in the stdlib and gems), `yield`/`super`, and
+    the `*args, &block` forwarders.
 24. **Struct with `keyword_init: true`: creating an object is 3.2 times CRuby** (1162
     against 369 ns; positional creation is level at 142 against 131). And
     `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
@@ -1449,6 +1453,54 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/dmethjit2 (2026-11-26) - a define_method body that reads captured locals, and setters, in the
+  method JIT (gap 23)** - not gated. Chosen by a survey of the 154 `define_method` blocks in the
+  standard library and the bundled gems (Prism, by parameters and what the body does with the
+  enclosing scopes' locals): 66 have plain or no parameters and *read* a captured local with nothing
+  else in the way (`{ @options[name] }`, `{ params[name] }`, `{ code }`, `{ @major_version >= v }`,
+  `{ |v| @h[name] = v }`), against 17 that read none (what round one took); 4 write one; the
+  `*args, &block` bodies of delegate.rb (`__send__(mid, *args, &block)`) are calls the typed compiler
+  takes in no method, and forwardable generates `def`s with `...`, not define_method.
+  - The change: BlockDefinition keeps the tree of a block that *assigns* no enclosing local
+    (`AssignedOuterVariableNames`), not only one that uses none. `JitBlockMethod.ResolveCaptured`
+    finds each local the block reads in the scope as many levels up from the Proc's `LocalScope` as the
+    lexical depths say, checking that no scope between declares the name (`RubyScope.TryGetLocalSlot`);
+    the def it hands the JIT is a `BlockMethodDefinition` that knows those slots, and the screen
+    (`JitScreen`) and `JitCompiler.EmitLocalRead` take a read of one as a call of
+    `JitBlockMethod.ReadCaptured` - the value in the scope's locals at that moment, an object, as the
+    block's own closure reads it (ScopeBuilder.CreateScope) - where they bail for any other def. And the
+    rule of `RubyLambdaMethodInfo` sends an assignment call (`o.x = v`, `o[k] = v`) to the stub too,
+    its value as the last argument (as `Methods.Yield` passes it): a setter never reached the stub.
+  - Instructions a call (`Util/perf/callgrind/count.sh`, N=20000; master 2f8c31c, new): `bmcapt`
+    (`x + captured`) 1921 -> 1255 (0.65), `bmh` (`{ @h[name] }`) 2592 -> 1892 (0.73; the `def` 1799),
+    `bmhset` 2359 -> 1713 (0.73; the `def` 1639), `bmconst` (`{ code }`) 1877 -> 1366 (0.73),
+    `bmscaled` (`{ |x| x * k }`, k a parameter of the method that called define_method) 2300 -> 1693
+    (0.74); the `def` controls 1.000.
+  - Time (`ab.rb -r 6` on a loaded machine, ns; CRuby / master / switch off / new, new over master):
+    `bmcapt` 31.8 / 63.5 / 64.7 / 40.0 (0.62), `bmh` 35.7 / 69.8 / 72.6 / 53.3 (0.76; the `def` 49.7),
+    `bmhset` 47.3 / 65.1 / 64.8 / 43.9 (0.67; the `def` 43.2), `bmconst` 27.6 / 57.3 / 57.7 / 37.6
+    (0.66), `bmscaled` 33.9 / 75.6 / 74.0 / 49.4 (0.65); `def` controls 0.93-0.99 (overlap).
+  - Traces: `Util/bench/app-shapes.rb` and AWFY Richards, DeltaBlue, Json, CD specialize and decline
+    exactly what master does (113/29, 78/19): none of their hot methods is such a body. In the matrix 15
+    more define_method methods are specialized and two more are wrapped and declined (`flag ? x : -x`,
+    the compiler has no `-@`; `recv.helper(x)` on a captured receiver).
+  - Matrices, CRuby against master against new, with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_JIT_DMETH=0`: `Util/dmeth-jit-matrix.rb` (41 rows now: a name captured per
+    iteration with its reader and writer, a captured local of a method's scope, two levels up, a captured
+    receiver, a captured flag another method changes, a captured value changed through Binding to a
+    Float, a Bignum and a String, block-local shadowing, threads, assignment calls), `dmeth-matrix`,
+    `jit-matrix`, `jit-calls-matrix`, `block-given-matrix`: identical to CRuby. `inline-matrix` (one
+    case per process): new identical to master (both differ from CRuby in `tree_int_key`, as before).
+    IronRuby.Tests: the 141 registered tests that use define_method or instance_method or are named for
+    the JIT pass.
+  - Also, a commit of its own: two define_method methods from the same Proc (or its dup, or its
+    lambda) are `==` with equal hashes, as in CRuby (`DefineMethodEquality1`), which round one found.
+  - For the gate: a captured local is read through the scope object found when the stub was made; a
+    scope whose locals tuple were replaced after that (a reused or parked scope) would be read where
+    the block's closure also reads it, per call, but that equivalence rests on ScopeBuilder's closure
+    code. More block literals keep their tree on the dispatcher with the JIT on (any that assigns no
+    enclosing local).
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,

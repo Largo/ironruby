@@ -217,12 +217,14 @@ namespace IronRuby.Runtime.Calls {
 
             // -X:JIT: plain arguments, as many as the block takes, go to the stub of the method JIT, whose generic body is
             // the call below (JitBlockMethod). An omitted optional argument is passed as the default sentinel, as to a def's.
-            if (!args.Signature.HasBlock && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument) {
+            // The value of an assignment call (o.x = v, o[k] = v) is its last argument, as the rule passes it (Methods.Yield).
+            if (!args.Signature.HasBlock && !args.Signature.HasSplattedArgument) {
                 var jit = GetJit();
                 if (jit.Trampoline != null) {
                     var simple = args.GetSimpleArgumentExpressions();
+                    var rhs = args.Signature.HasRhsArgument ? args.GetRhsArgumentExpression() : null;
                     int jitArity = jit.Ast.Parameters.Mandatory.Length + jit.Ast.Parameters.Optional.Length;
-                    if (simple.Count <= jitArity) {
+                    if (simple.Count + (rhs != null ? 1 : 0) <= jitArity) {
                         var jitArgs = new Ast[2 + jitArity];
                         jitArgs[0] = AstUtils.Box(args.TargetExpression);
                         jitArgs[1] = IronRuby.Compiler.Ast.AstFactory.NullOfProc;
@@ -235,6 +237,10 @@ namespace IronRuby.Runtime.Calls {
                         // BlockDispatcher.Positional unmarks it)
                         if (k > 0) {
                             jitArgs[1 + k] = Methods.ClearKeywordArguments.OpCall(jitArgs[1 + k]);
+                        }
+                        if (rhs != null) {
+                            jitArgs[2 + k] = AstUtils.Box(rhs);
+                            k++;
                         }
                         for (; k < jitArity; k++) {
                             jitArgs[2 + k] = Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"));
