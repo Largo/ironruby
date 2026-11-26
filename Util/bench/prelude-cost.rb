@@ -316,6 +316,15 @@ class Lx
   def x_qual; self.class::C; end
 end
 
+# keywords beside a rest (IR_LIGHT_KEYWORD_REST) and a hash passed on as keywords (IR_LIGHT_KEYWORD_SPLAT): kr_kw, the
+# same keyword without the rest, was a light frame before; the others kept a scope
+class Kr
+  def kw(a, k: 1) = a + k
+  def rest(*a, k: 1) = a.size + k
+  def inner(*a, **o) = a.size + o.size
+  def pass(*a, **o) = inner(*a, **o)
+end
+
 def cpu
   File.read("/proc/thread-self/schedstat").to_i / 1e9
 rescue SystemCallError
@@ -469,3 +478,11 @@ t("x_const", N) { |n| i = 0; s = 0; while i < n; s += lx.x_const; i += 1; end; s
 t("x_cv", N) { |n| i = 0; s = 0; while i < n; s += lx.x_cv; i += 1; end; s }
 t("x_defc", N) { |n| i = 0; s = 0; while i < n; s += lx.x_defc; i += 1; end; s }
 t("x_qual", N) { |n| i = 0; s = 0; while i < n; s += lx.x_qual; i += 1; end; s }
+
+# keywords beside a rest, and passed on
+kr = Kr.new
+kl = "ab"
+t("kr_kw", N) { |n| i = 0; s = 0; while i < n; s += kr.kw(i, k: 2); i += 1; end; s }
+t("kr_rest", N) { |n| i = 0; s = 0; while i < n; s += kr.rest(i, k: 2); i += 1; end; s }
+t("kr_pass", N) { |n| i = 0; s = 0; while i < n; s += kr.pass(i, k: 2); i += 1; end; s }
+t("kr_lines", N) { |n| i = 0; s = 0; while i < n; kl.each_line(chomp: true) { |l| s += l.size }; i += 1; end; s }

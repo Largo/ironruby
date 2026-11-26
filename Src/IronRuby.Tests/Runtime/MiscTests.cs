@@ -7771,6 +7771,50 @@ false
         }
 
         /// <summary>
+        /// IR_LIGHT_KEYWORD_REST and IR_LIGHT_KEYWORD_SPLAT: keywords beside a rest or post parameter, bound out of one splat
+        /// (PrismAstBridge.LowerGeneralParameters), and a hash passed on as keywords, in a light frame
+        /// (Util/keyword-rest-light-matrix.rb).
+        /// </summary>
+        public void Method_LightFrameKeywordRest1() {
+            TestOutput(@"
+def rk(*a, k: 1); [a, k]; end
+def post(x, *r, z, k: 0); [x, r, z, k]; end
+def opt(x, y = x + 1, *r, k: y); [x, y, r, k]; end
+def inner(*a, **o); o[:seen] = true unless o.empty?; [a, o]; end
+def pass(*a, **o); inner(*a, **o); end
+class B; def m(a, **o) = [:b, a, o]; end
+class S < B; def m(a, **o); [:s, super]; end; end
+arr = [1, 2, 3]
+h = {k: 5}
+p rk, rk(1, k: 2), rk({k: 3}), post(1, 2), post(*arr, k: 4), arr, opt(1), opt(1, 5, 6, k: 7)
+p pass(1, **h), h, pass(**nil), pass(1, **{}), S.new.m(1, j: 2), S.new.m(1)
+p 40.times.map { |i| rk(*[i] * (i % 3), k: i % 2).flatten.size }.uniq
+begin; post(1); rescue ArgumentError => e; p e.message; end
+begin; rk(j: 1); rescue ArgumentError => e; p e.message; end
+begin; pass(1, **1); rescue TypeError => e; p e.message; end
+", @"
+[[], 1]
+[[1], 2]
+[[{k: 3}], 1]
+[1, [], 2, 0]
+[1, [2], 3, 4]
+[1, 2, 3]
+[1, 2, [], 2]
+[1, 5, [6], 7]
+[[1], {k: 5, seen: true}]
+{k: 5}
+[[], {}]
+[[1], {}]
+[:s, [:b, 1, {j: 2}]]
+[:s, [:b, 1, {}]]
+[1, 2, 3]
+""wrong number of arguments (given 1, expected 2+)""
+""unknown keyword: :j""
+""no implicit conversion of Integer into Hash""
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any
