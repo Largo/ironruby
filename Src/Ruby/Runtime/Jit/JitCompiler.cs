@@ -1182,6 +1182,9 @@ namespace IronRuby.Runtime.Jit {
             var arrayLiteral = node as ArrayConstructor;
             if (arrayLiteral != null) { return EmitArrayLiteral(arrayLiteral, out type); }
 
+            var hashLiteral = node as HashConstructor;
+            if (hashLiteral != null) { return EmitHashLiteral(hashLiteral, out type); }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -1320,6 +1323,52 @@ namespace IronRuby.Runtime.Jit {
             }
             type = JT.Obj;
             return IronRuby.Compiler.Methods.MakeArrayOpCall(values);
+        }
+
+        /// <summary>
+        /// `{}', `{a: x}', `{"k" => v, 1 => w}': the Hash the generic body makes (HashConstructor.TransformReadCore), keys and
+        /// values evaluated in order, built by the same code (JitRuntime.NewHash, NewSymbolHash1..3). Only with keys the
+        /// runtime's comparer hashes itself (IsPlainLiteralKeyed): then building it runs no Ruby code - no #hash, no #eql? -
+        /// and has no effect anything could observe, so it is no obstacle to a deopt, no way into deep recursion and no
+        /// call that needs a stack check. A String key is copied and frozen by the helper, as the generic body's is.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitHashLiteral(HashConstructor/*!*/ node, out JT type) {
+            var maplets = node.Maplets;
+            if (node.IsKeywordArguments || maplets.Length > MaxArrayLiteral || !IsPlainLiteralKeyed(node)) {
+                throw Bail("hash literal");
+            }
+            var values = new List<MSA.Expression>(1 + 2 * maplets.Length);
+            values.Add(Ast.Constant(_context));
+            bool symbols = maplets.Length > 0 && maplets.Length <= 3;
+            foreach (var maplet in maplets) {
+                if (!(maplet.Key is SymbolLiteral)) { symbols = false; }
+                JT t;
+                var key = Emit(maplet.Key, out t);
+                values.Add(Coerce(key, t, JT.Obj));
+                var value = Emit(maplet.Value, out t);
+                values.Add(Coerce(value, t, JT.Obj));
+            }
+            type = JT.Obj;
+            if (symbols) {
+                return Ast.Call(JitRuntime.M("NewSymbolHash" + maplets.Length), values);
+            }
+            values.RemoveAt(0);
+            return Ast.Call(JitRuntime.M("NewHash"), Ast.Constant(_context), Ast.NewArrayInit(typeof(object), values));
+        }
+
+        /// <summary>
+        /// HashConstructor.HasPlainLiteralKeys: a Symbol or String literal, or nil, true, false or a Fixnum literal - or,
+        /// alone, any other numeric literal (two Float or Bignum literals of one value are told apart by #eql?).
+        /// </summary>
+        internal static bool IsPlainLiteralKeyed(HashConstructor/*!*/ node) {
+            foreach (var maplet in node.Maplets) {
+                if (maplet.Key is SymbolLiteral || maplet.Key is StringLiteral) { continue; }
+                var literal = maplet.Key as Literal;
+                if (literal == null) { return false; }
+                object value = literal.Value;
+                if (!(value == null || value is bool || value is int) && node.Maplets.Length > 1) { return false; }
+            }
+            return true;
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -3603,6 +3652,17 @@ namespace IronRuby.Runtime.Jit {
                 if (retArgs == null || retArgs.Expressions.Length == 0) { return true; }
                 if (retArgs.Expressions.Length != 1) { return No(node); }
                 return Walk(retArgs.Expressions[0]);
+            }
+
+            // `{k => v}' with plain literal keys (JitCompiler.EmitHashLiteral): any other object, never an operand
+            var hashLiteral = node as HashConstructor;
+            if (hashLiteral != null) {
+                if (hashLiteral.IsKeywordArguments || hashLiteral.Maplets.Length > JitCompiler.MaxArrayLiteral || _inOperand != 0 ||
+                    !JitCompiler.IsPlainLiteralKeyed(hashLiteral)) { return No(node); }
+                foreach (var maplet in hashLiteral.Maplets) {
+                    if (!Walk(maplet.Key) || !Walk(maplet.Value)) { return false; }
+                }
+                return true;
             }
 
             var arrayLiteral = node as ArrayConstructor;
