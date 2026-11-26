@@ -2161,6 +2161,53 @@ p Math.cbrt(-27.0), Math.cbrt(27.0), Math.gamma(3.0), Math.gamma(23.0), Math.erf
 1.0
 ");
         }
+
+        /// <summary>
+        /// Math.log of two arguments as MRI's rb_math_log: both converted and checked, the pole first (a zero x is -Infinity,
+        /// NaN for a zero base; a zero base -0.0), then log2(x) / log2(base) plus the shifted-out bits over log2(base) - so a base
+        /// of 1 is NaN, and the bits are a size_t. atan2 converts its second argument first, and so does hypot (gcc's order of
+        /// its arguments). Math.sqrt of a Complex is its principal root. Util/math-matrix.rb.
+        /// </summary>
+        public void Math_LogBaseAndOrder1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l) = (puts ""#{l}: #{(yield rescue ""#{$!.class}: #{$!.message}"").inspect}"")
+[[0, Float::NAN], [0, 2], [0, 0], [2, 1], [0.5, 0], [0.5, Float::INFINITY], [10.0, 2.0], [1.0e-16, 2.0],
+ [Float::INFINITY, 0], [Float::NAN, 0], [Float::NAN, -1], [Float::NAN, ""1""], [2**2000, 2], [2, 2**2000], [8, 2]].each do |x, b|
+  t(""log(#{x.inspect[0, 12]}, #{b.inspect[0, 12]})"") { Math.log(x, b) }
+end
+t(""atan2('1', nil)"") { Math.atan2(""1"", nil) }
+t(""atan2(nil, '1')"") { Math.atan2(nil, ""1"") }
+t(""hypot('1', nil)"") { Math.hypot(""1"", nil) }
+t(""hypot(:s, '1')"") { Math.hypot(:s, ""1"") }
+[Complex(1, 0), Complex(1, 1), Complex(-4, 0), Complex(-4, -0.0), Complex(3, 4)].each { |c| t(""sqrt(#{c})"") { Math.sqrt(c) } }
+", @"
+log(0, NaN): -Infinity
+log(0, 2): -Infinity
+log(0, 0): NaN
+log(2, 1): NaN
+log(0.5, 0): -0.0
+log(0.5, Infinity): 0.0
+log(10.0, 2.0): 3.321928094887362
+log(1.0e-16, 2.0): -53.150849518197795
+log(Infinity, 0): -0.0
+log(NaN, 0): -0.0
+log(NaN, -1): ""Math::DomainError: Numerical argument is out of domain - log""
+log(NaN, ""1""): ""TypeError: can't convert String into Float""
+log(114813069527, 2): 2000.0
+log(2, 114813069527): 3.5474507834056826e+17
+log(8, 2): 3.0
+atan2('1', nil): ""TypeError: can't convert nil into Float""
+atan2(nil, '1'): ""TypeError: can't convert String into Float""
+hypot('1', nil): ""TypeError: can't convert nil into Float""
+hypot(:s, '1'): ""TypeError: can't convert String into Float""
+sqrt(1+0i): (1.0+0.0i)
+sqrt(1+1i): (1.09868411346781+0.4550898605622274i)
+sqrt(-4+0i): (0.0+2.0i)
+sqrt(-4-0.0i): (0.0-2.0i)
+sqrt(3+4i): (2.0+1.0i)
+");
+        }
     
         /// <summary>
         /// An Errno message built with the error's own text in it is not prefixed with that text

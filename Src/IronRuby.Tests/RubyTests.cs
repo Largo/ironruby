@@ -1013,6 +1013,7 @@ namespace IronRuby.Tests {
                 Sprintf_CharacterSingleByte1,
                 Float_NegativeZero1,
                 Math_CLibrary1,
+                Math_LogBaseAndOrder1,
                 Errno_MessageNotDoubled1,
                 Process_ClockGetTime1,
                 Process_ThreadCpuTime1,
