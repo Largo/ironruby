@@ -890,3 +890,59 @@ def hs_writers
   p r
 end
 hs_writers
+
+# Light-scope sites that call library methods take a library dispatcher for their first calls (no rule), as sites with a
+# scope do, unless the method takes the caller's scope; and a site of a light method that calls a module's or a class's
+# singleton method takes one too. Hot, with the method redefined and restored under the site, made private on a subclass
+# (`private :x`) and on the module's singleton class, a singleton method added to the module, a module prepended to it,
+# a refinement of the method where the caller is written, method_missing, a library method that reads the scope
+# (block_given?, binding, local_variables) and receivers of many classes and modules at one site.
+module LDMod; def self.f(x) = x + 1; end
+class LDStr < String; end
+class LDMiss; def method_missing(n, *a) = [:mm, n, a]; def respond_to_missing?(*) = true; end
+class LDCall
+  def band(a, b) = a & b
+  def slice(s) = s[1, 2]
+  def join(a) = File.join(a, "x")
+  def exist(a) = File.exist?(a)
+  def hset(h, k) = (h[k] = k)
+  def fetch(a, i) = a.fetch(i) { :none }
+  def up(s) = s.upcase
+  def modf(x) = LDMod.f(x)
+  def nm(m) = m.name
+  def miss(o) = o.upcase
+  def bg = block_given?
+  def lv(a) = local_variables
+  def bnd(a) = binding.local_variable_get(:a)
+end
+module LDRefine; refine(Integer) { def ^(o) = :refined }; end
+using LDRefine
+class LDCall
+  def bxor(a, b) = a ^ b
+end
+ldc = LDCall.new; ldh = {}; ldmods = [Integer, String, Comparable, Kernel, LDMod, LDStr, Hash]
+ldout = []
+20_000.times do |i|
+  row = [ldc.band(i, 12), ldc.slice("hello#{i % 3}"), ldc.join("d#{i % 2}"), ldc.exist("/nonexistent#{i % 2}"),
+         ldc.hset(ldh, i % 4), ldc.fetch([1, 2], i % 3), (ldc.up(i.odd? ? LDStr.new("ab") : "cd") rescue :nomethod),
+         (ldc.modf(i) rescue :nomethod), ldc.nm(ldmods[i % 7]), (ldc.miss(i.odd? ? LDMiss.new : "q") rescue :nomethod),
+         ldc.bg, ldc.bg { 1 }, ldc.lv(i), ldc.bnd(i % 5), ldc.bxor(i, 1)]
+  ldout << [i, row] if i % 1000 == 7 || (i > 9_995 && i < 10_010)
+  case i
+  when 3001 then class Integer; alias_method :__ld_and, :&; def &(o); :redef; end; end
+  when 4001 then class Integer; alias_method :&, :__ld_and; end
+  when 5001 then class LDStr; private :upcase; end
+  when 6001 then def LDMod.f(x) = x * 10
+  when 7001 then LDMod.singleton_class.prepend(Module.new { def f(x) = [:pre, super] })
+  when 8001 then class << LDMod; private :f; end
+  when 9001 then class << LDMod; public :f; end
+  when 10001 then def String.name = :strname
+  when 11001 then class << File; alias_method :__ld_join, :join; def join(*a) = a.join("+"); end
+  when 12001 then class << File; alias_method :join, :__ld_join; end
+  when 13001 then class LDMiss; def upcase = :defined; end
+  when 14001 then class Hash; alias_method :__ld_aset, :[]=; def []=(k, v); __ld_aset(k, [v]); end; end
+  when 15001 then class Hash; alias_method :[]=, :__ld_aset; end
+  end
+end
+ldout.each { |r| p r }
+p ldh
