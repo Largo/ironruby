@@ -1,8 +1,11 @@
 #!/bin/sh
-# Regenerates Build/startup.mibc, the profile crossgen2 uses for the release's composite
-# ReadyToRun image (package-release.sh), from a trace of the published R2R host starting up.
+# Regenerates Build/startup.mibc, the profile crossgen2 uses for the composite ReadyToRun image
+# of the R2R host (Ruby.Console.csproj, publish-r2r.sh) and of the release (package-release.sh),
+# from a trace of the published R2R host starting up.
 #
 #   Util/make-startup-mibc.sh            # needs an R2R host (Util/publish-r2r.sh)
+#
+#   Util/make-startup-mibc.sh --check    # whether it still covers startup (exit 1 if not)
 #
 # The profile tells crossgen2 which methods startup runs, among them the generic
 # instantiations it cannot see statically (FuncCallInstruction<...> and friends, made with
@@ -19,6 +22,21 @@
 set -e
 IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 export DOTNET_ROOT="${DOTNET_ROOT:-/usr/local/dotnet}"
+# --check: the methods `ir -e 1` JITs at Tier0 on the R2R host, which the profile is compiled into (generic
+# instantiations and framework methods; not the dynamic methods of rules and lambdas). ~40 with a profile made from
+# the current code, ~150 with none; package-release.sh prints the same count for each archive.
+if [ "$1" = --check ]; then
+  log="$(mktemp)"
+  IR_CONFIG=R2R IR_SERVER=0 DOTNET_JitStdOutFile="$log" DOTNET_JitDisasmSummary=1 "$IR_ROOT/ir.sh" -e 1
+  n=$(grep "JIT compiled" "$log" | grep -v "dynamicClass" | grep -c "Tier0" || true)
+  rm -f "$log"
+  echo "ir -e 1 JITs $n methods at Tier0 (Build/startup.mibc of $(git -C "$IR_ROOT" log -1 --format=%cs -- Build/startup.mibc))"
+  if [ "$n" -gt 60 ]; then
+    echo "the startup profile looks stale: regenerate it (Util/make-startup-mibc.sh), then rebuild the R2R host"
+    exit 1
+  fi
+  exit 0
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # JIT, loader and R2R entry-point events: what dotnet-pgo needs to see every method startup runs
