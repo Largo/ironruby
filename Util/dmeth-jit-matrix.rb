@@ -239,4 +239,64 @@ module KM
 end
 row "31. constants in Class.new", [hot { |i| kc.kk(i) }, hot { |i| KM::KC.new.kk(i) }]
 
+# Captured locals read by the body (not written): the shapes stdlib and gems write most.
+class C2
+  def initialize = (@h = { a: 1, b: 2, c: 3 })
+  %i[a b c].each do |name|
+    define_method(name) { @h[name] }
+    define_method(:"#{name}=") { |v| @h[name] = v }
+  end
+  def self.scaled(name, k) = define_method(name) { |x| x * k }
+  scaled(:times2, 2)
+  scaled(:times3, 3)
+  outer = 10
+  [1, 2].each do |inner|
+    define_method(:"two_up#{inner}") { |x| x + outer + inner }
+  end
+  recv = Object.new
+  def recv.helper(x) = x * 7
+  define_method(:cap_recv) { |x| recv.helper(x) }
+  flag = nil
+  define_method(:cap_cond) { |x| flag ? x : -x }
+  define_method(:set_flag) { |v| flag = v }
+  val = 1
+  define_method(:cap_val) { |x| val + x }
+  BIND = binding
+  shadow = 100
+  define_method(:shadowed) { |x; shadow| shadow = x; shadow + 1 }
+  define_method(:shadow_outer) { shadow }
+  code = 404
+  define_method(:status_code) { code }
+end
+c2 = C2.new
+row "32. captured name per iteration", [hot { c2.a }, hot { c2.b }, hot { |i| c2.c = i; c2.c }]
+row "33. captured in a method scope", [hot { |i| c2.times2(i) }, hot { |i| c2.times3(i) }]
+row "34. two levels up", [hot { |i| c2.two_up1(i) }, hot { |i| c2.two_up2(i) }]
+row "35. captured receiver", [hot { |i| c2.cap_recv(i) }]
+r1 = hot { |i| c2.cap_cond(i) }
+c2.set_flag(true)
+row "36. captured flag changed by another method", [r1, hot { |i| c2.cap_cond(i) }]
+r1 = hot { |i| c2.cap_val(i) }
+C2::BIND.local_variable_set(:val, 2.5)
+r2 = hot { |i| c2.cap_val(i) }
+C2::BIND.local_variable_set(:val, 2**64)
+r3 = hot { |i| c2.cap_val(i) }
+C2::BIND.local_variable_set(:val, "s")
+row "37. captured value changes type", [r1, r2, r3, err { c2.cap_val(1) }]
+row "38. block-local shadowing", [hot { |i| c2.shadowed(i) }, hot { c2.shadow_outer }]
+row "39. a captured constant value", [hot { c2.status_code }]
+ths = 4.times.map { |t| Thread.new { s = 0; 20_000.times { |i| s += c2.times3(i) + c2.two_up2(t) }; s } }
+row "40. threads", ths.map(&:value)
+
+# Assignment calls of define_method setters: the value of `o.x = v' is v whatever the method returns.
+class C3
+  def initialize = (@h = {})
+  define_method(:x=) { |v| @h[:x] = v; :ignored }
+  define_method(:[]=) { |k, v| @h[k] = v * 2; :ignored }
+  define_method(:[]) { |k| @h[k] }
+  attr_reader :h
+end
+c3 = C3.new
+row "41. assignment calls", [hot { |i| c3.x = i }, hot { |i| (c3[i % 3] = i) + c3[i % 3] }, c3.h, c3.send(:x=, 5), err { c3.send(:x=) }]
+
 puts 'end'

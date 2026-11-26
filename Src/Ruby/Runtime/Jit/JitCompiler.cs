@@ -1516,7 +1516,14 @@ namespace IronRuby.Runtime.Jit {
         private JitRuntime.InterpolationSite _interpolationSite;
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
-            if (_loop == null && local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
+            if (_loop == null && local.DefinitionLexicalDepth != _scopeDepth) {
+                // a local a define_method body reads from an enclosing scope: read from there, each time (JitBlockMethod)
+                var blockMethod = _ast as JitBlockMethod.BlockMethodDefinition;
+                var captured = (blockMethod != null) ? blockMethod.GetCaptured(local) : null;
+                if (captured == null) { throw JitBailout.Instance; }
+                type = JT.Obj;
+                return Ast.Call(JitBlockMethod.ReadCapturedMethod, Ast.Constant(captured));
+            }
             MSA.ParameterExpression p;
             if (!TryLookup(Key(local), out p, out type)) {
                 KeyValuePair<MSA.ParameterExpression, JT> loaded;
@@ -3293,8 +3300,12 @@ namespace IronRuby.Runtime.Jit {
         // the `while'/`until' loops around the node being walked, whose break and next Emit takes
         private int _loops;
 
+        // a define_method body's def, which may read the locals it captured (JitBlockMethod); null for a def
+        private readonly JitBlockMethod.BlockMethodDefinition _blockMethod;
+
         private JitScreen(MethodDeclaration/*!*/ ast, JitKeywords keywords) {
             _scopeDepth = ast.DefinedScope.Depth;
+            _blockMethod = ast as JitBlockMethod.BlockMethodDefinition;
             _methodName = ast.Name;
             // a method with keywords is never called directly from its typed body (EmitCall)
             _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
@@ -3653,10 +3664,11 @@ namespace IronRuby.Runtime.Jit {
 
             var local = node as LocalVariable;
             if (local != null) {
-                // A local from an enclosing scope is never read from a typed body. (Emit also
-                // bails on a read before any assignment, which is a flow property: say yes.)
+                // A local from an enclosing scope is never read from a typed body, but by a define_method
+                // body that captured it (JitBlockMethod). (Emit also bails on a read before any assignment,
+                // which is a flow property: say yes.)
                 _otherUses.Add(local.Name);
-                return local.DefinitionLexicalDepth == _scopeDepth || No(node);
+                return local.DefinitionLexicalDepth == _scopeDepth || _blockMethod != null && _blockMethod.GetCaptured(local) != null || No(node);
             }
 
             var assign = node as SimpleAssignmentExpression;

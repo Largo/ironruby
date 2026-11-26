@@ -1153,6 +1153,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Round of 2026-11-26 (see Landed, perf/dmethjit, not gated): taken; `bm1` 51 -> 26.5 ns against
     CRuby's 24. Left: bodies over captured locals, `block_given?`/`yield` or `super`, and calls with a
     block or a splat, which still take the rule.
+    Round of 2026-11-26, second (see Landed, perf/dmethjit2, not gated): bodies that read captured
+    locals, and setters called as `o.x = v`, taken (`{ @h[name] }` 69.8 -> 53.3 ns, a `def` 49.7).
+    Left: bodies that write a captured local (4 of 154 in the stdlib and gems), `yield`/`super`, and
+    the `*args, &block` forwarders.
 24. **Struct with `keyword_init: true`: creating an object is 3.2 times CRuby** (1162
     against 369 ns; positional creation is level at 142 against 131). And
     `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
@@ -1709,6 +1713,91 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   deopts if that class's reader is another variable), and at "a fast path that decides from a resolved
   method": the candidate's method is resolved on the candidate class with the lookup's visibility
   (`InlinableCallee`), and a subclass never takes the inlined body (exact class check).
+- **perf/jitsettle (2026-11-26) - a retired entry's cool-down costs nothing per call** - not gated.
+  A method whose typed body keeps failing (`x + 1` called with an Integer and a Float in turn) ran
+  10-16% slower than with the JIT off, as a `def` and as a define_method method. What it does per call,
+  from a trace (`IR_JIT_VERBOSE=1`, a phase-by-phase timing of 12.5 million calls): after the first
+  windows of 16 deopts the entry is retired and retried 8 times, cooling down 8, 16, ... 1024 ms - about
+  2 s in all before it settles for good - and all that time the fast slot held the cooling stand-in
+  (`Cool`): a counter decremented on every call, a random pick, and one call in 8 timed with two
+  `Stopwatch` reads, though only the last 16 samples are used, once, when the cool-down ends. Steady
+  state: 115 ns a call against 101 with `-X:NoJIT`.
+  - The change (`JitStub.StartResting`): a retirement puts the generic body itself in the fast slot,
+    as a settled method has it, and a `System.Threading.Timer` ends the cool-down by starting the probe
+    the stub already had (`StartCooling(0, ProbeCalls, 0)`: 32 generic calls, each timed), whose
+    `CoolDownCheck` puts the entry back. A generation count makes a timer left from an earlier rest do
+    nothing; `GenericCompiled` installs the compiled generic body during a rest too. The probes before
+    any retirement, the retire rule and the retry schedule are unchanged; a body that deopts rarely is
+    never retired, so it never rests. `IR_JIT_REST=0` brings back the counted cool-down.
+  - Time (`Util/bench/jit-settle-shapes.rb`, `ab.rb -r 6`, ns; -X:NoJIT / base / new, new over base):
+    `mixed_def` 95.9 / 112.7 / 97.5 (0.87), `mixed_dm` 119.8 / 127.6 / 117.9 (0.92), `rare_def` (a Float
+    on one call in 1000) 70.0 / 61.9 / 61.9 (1.00), controls `plain_def`, `ivar_def`, `two_def`,
+    `plain_dm` 0.96-0.99 (overlap). Phase by phase the `def` goes from 115 to about 100 ns, level with
+    `-X:NoJIT`, and the run of 12.5 million calls ends 0.2-0.5 s sooner.
+  - Instructions (`Util/perf/callgrind/count.sh`, N=20000): the controls and `rare_def` 1.000;
+    `mixed_def` 0.987, `mixed_dm` 1.000 - the cool-down is counted in milliseconds, of which valgrind's
+    20,000 calls see little: the clock is this change's measure.
+  - AWFY (all 14, `harness.rb B 5 10`, IR_JIT_VERBOSE=1): 138 specialized, 29 declined, 15 kept, no
+    retirement and one probe's retry on both builds - none of the benchmarks retires an entry, so the
+    change does not reach them.
+  - Matrices, CRuby against base (3b28a0c) against new, with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_JIT_REST=0`: jit, jit-calls, jit-const, dmeth-jit identical to CRuby;
+    hot-shapes, inline (one case per process) and int-matrix (through int-matrix.py, `.hash` lines left
+    out: they are seeded per process) identical to base, each with the rows that differ from CRuby on
+    base too (FrozenError for Encoding::CompatibilityError; "Object must be of type Int32";
+    `(2**100).equal?(2**100)` and the size of `Integer.instance_methods(false)`). IronRuby.Tests: the 20
+    named for the JIT pass.
+  - For the gate: a timer thread now takes the stub's lock (EndRest) - a stub retired while its
+    runtime shuts down has a timer pending for up to a second; and the retry needs only the timer and
+    32 calls, where it needed 1024 calls and the cool-down.
+
+- **perf/dmethjit2 (2026-11-26) - a define_method body that reads captured locals, and setters, in the
+  method JIT (gap 23)** - not gated. Chosen by a survey of the 154 `define_method` blocks in the
+  standard library and the bundled gems (Prism, by parameters and what the body does with the
+  enclosing scopes' locals): 66 have plain or no parameters and *read* a captured local with nothing
+  else in the way (`{ @options[name] }`, `{ params[name] }`, `{ code }`, `{ @major_version >= v }`,
+  `{ |v| @h[name] = v }`), against 17 that read none (what round one took); 4 write one; the
+  `*args, &block` bodies of delegate.rb (`__send__(mid, *args, &block)`) are calls the typed compiler
+  takes in no method, and forwardable generates `def`s with `...`, not define_method.
+  - The change: BlockDefinition keeps the tree of a block that *assigns* no enclosing local
+    (`AssignedOuterVariableNames`), not only one that uses none. `JitBlockMethod.ResolveCaptured`
+    finds each local the block reads in the scope as many levels up from the Proc's `LocalScope` as the
+    lexical depths say, checking that no scope between declares the name (`RubyScope.TryGetLocalSlot`);
+    the def it hands the JIT is a `BlockMethodDefinition` that knows those slots, and the screen
+    (`JitScreen`) and `JitCompiler.EmitLocalRead` take a read of one as a call of
+    `JitBlockMethod.ReadCaptured` - the value in the scope's locals at that moment, an object, as the
+    block's own closure reads it (ScopeBuilder.CreateScope) - where they bail for any other def. And the
+    rule of `RubyLambdaMethodInfo` sends an assignment call (`o.x = v`, `o[k] = v`) to the stub too,
+    its value as the last argument (as `Methods.Yield` passes it): a setter never reached the stub.
+  - Instructions a call (`Util/perf/callgrind/count.sh`, N=20000; master 2f8c31c, new): `bmcapt`
+    (`x + captured`) 1921 -> 1255 (0.65), `bmh` (`{ @h[name] }`) 2592 -> 1892 (0.73; the `def` 1799),
+    `bmhset` 2359 -> 1713 (0.73; the `def` 1639), `bmconst` (`{ code }`) 1877 -> 1366 (0.73),
+    `bmscaled` (`{ |x| x * k }`, k a parameter of the method that called define_method) 2300 -> 1693
+    (0.74); the `def` controls 1.000.
+  - Time (`ab.rb -r 6` on a loaded machine, ns; CRuby / master / switch off / new, new over master):
+    `bmcapt` 31.8 / 63.5 / 64.7 / 40.0 (0.62), `bmh` 35.7 / 69.8 / 72.6 / 53.3 (0.76; the `def` 49.7),
+    `bmhset` 47.3 / 65.1 / 64.8 / 43.9 (0.67; the `def` 43.2), `bmconst` 27.6 / 57.3 / 57.7 / 37.6
+    (0.66), `bmscaled` 33.9 / 75.6 / 74.0 / 49.4 (0.65); `def` controls 0.93-0.99 (overlap).
+  - Traces: `Util/bench/app-shapes.rb` and AWFY Richards, DeltaBlue, Json, CD specialize and decline
+    exactly what master does (113/29, 78/19): none of their hot methods is such a body. In the matrix 15
+    more define_method methods are specialized and two more are wrapped and declined (`flag ? x : -x`,
+    the compiler has no `-@`; `recv.helper(x)` on a captured receiver).
+  - Matrices, CRuby against master against new, with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_JIT_DMETH=0`: `Util/dmeth-jit-matrix.rb` (41 rows now: a name captured per
+    iteration with its reader and writer, a captured local of a method's scope, two levels up, a captured
+    receiver, a captured flag another method changes, a captured value changed through Binding to a
+    Float, a Bignum and a String, block-local shadowing, threads, assignment calls), `dmeth-matrix`,
+    `jit-matrix`, `jit-calls-matrix`, `block-given-matrix`: identical to CRuby. `inline-matrix` (one
+    case per process): new identical to master (both differ from CRuby in `tree_int_key`, as before).
+    IronRuby.Tests: the 141 registered tests that use define_method or instance_method or are named for
+    the JIT pass.
+  - Also, a commit of its own: two define_method methods from the same Proc (or its dup, or its
+    lambda) are `==` with equal hashes, as in CRuby (`DefineMethodEquality1`), which round one found.
+  - For the gate: a captured local is read through the scope object found when the stub was made; a
+    scope whose locals tuple were replaced after that (a reused or parked scope) would be read where
+    the block's closure also reads it, per call, but that equivalence rests on ScopeBuilder's closure
+    code. More block literals keep their tree on the dispatcher with the JIT on (any that assigns no
+    enclosing local).
 
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and

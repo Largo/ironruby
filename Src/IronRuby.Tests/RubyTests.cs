@@ -363,6 +363,7 @@ namespace IronRuby.Tests {
                 MethodToProc1,
                 DefineMethod1,
                 DefineMethod2,
+                DefineMethodEquality1,
                 DefineMethodBlockBreak1,
                 ProcPosition1,
                 

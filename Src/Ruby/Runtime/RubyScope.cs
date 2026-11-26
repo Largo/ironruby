@@ -390,6 +390,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The slot of a local this scope declares - not `it' or _1.._9, nor one eval added - which the method JIT reads a
+        /// local captured by a define_method body from (JitBlockMethod.ReadCaptured), as the block's own closure does.
+        /// </summary>
+        internal bool TryGetLocalSlot(string/*!*/ name, out int index) {
+            EnsureBoxes();
+            index = -1;
+            return StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name);
+        }
+
+        /// <summary>The value of the local in a slot TryGetLocalSlot gave, as the locals hold it now.</summary>
+        internal object GetLocalSlotValue(int index) {
+            return GetLocalValue(index);
+        }
+
         private bool IsImplicitParameter(string/*!*/ name) {
             var names = OwnImplicitParameterNames;
             return names != null && Array.IndexOf(names, name) >= 0;

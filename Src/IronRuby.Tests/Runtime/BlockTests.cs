@@ -1954,6 +1954,36 @@ NoMethodError
         }
 
         /// <summary>
+        /// Methods made by define_method from the same Proc - or a copy of it, or its lambda - are the same method, as in
+        /// MRI (rb_method_definition_eq compares the procs): == and hash agree. One block literal run in two scopes makes two.
+        /// </summary>
+        public void DefineMethodEquality1() {
+            TestOutput(@"
+class W
+  PR = proc { |x| x }
+  define_method(:n1, &PR)
+  define_method(:n2, &PR)
+  define_method(:n3, &PR.dup)
+  define_method(:n4, PR)
+  define_method(:l1, LA = ->(x) { x })
+  define_method(:l2, LA)
+  [1, 2].each { |i| define_method(:""m#{i}"") { |x| x } }
+  define_method(:o1) { |x| x }
+  alias o2 o1
+  def d1(x) = x
+  define_method(:d2, instance_method(:d1))
+end
+im = W.method(:instance_method).unbind.bind(W)
+p [im.(:n1) == im.(:n2), im.(:n1) == im.(:n3), im.(:n1) == im.(:n4), im.(:l1) == im.(:l2), im.(:m1) == im.(:m2), im.(:o1) == im.(:o2), im.(:d1) == im.(:d2)]
+w = W.new
+p [w.method(:n1) == w.method(:n2), w.method(:n1).hash == w.method(:n2).hash, im.(:n1).hash == im.(:n2).hash, im.(:n1).eql?(im.(:n2))]
+", @"
+[true, true, true, true, false, true, true]
+[true, true, true, true]
+");
+        }
+
+        /// <summary>
         /// A call of a define_method method is the frame a break from its literal block ends, wherever the
         /// body passes the block on to - as a def method's call is - on the first calls and on later ones.
         /// </summary>
