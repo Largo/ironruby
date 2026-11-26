@@ -5392,6 +5392,24 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jitplain (2026-11-26) - the per-receiver test of perf/jitaref for the typed body's other
+  core operations: nothing to take.** The other operations (`Array#[]=`, `fetch`, `size`, `first`,
+  `last`, `push`/`<<`, `==`, `Hash#[]`/`[]=`/`fetch`/`key?`, `String#size`/`==`/`[]`, the
+  Integer and Float operators) still use the class-wide `HasPlainInstances`, so the question was
+  which of them a real run turns off. `Util/perf/plain-probe.rb` (new) prints, at exit, every core
+  class whose `ClrSingletonMethods` or `HasAdoptedInstances` is set. In app-shapes, `gem list`, a
+  run requiring csv, json, set, optparse, uri, net/http, erb and logger, and all fourteen AWFY
+  benchmarks: only Array is ever touched, with the names `[]` (CSV's `NO_QUOTED_FIELDS`, which
+  perf/jitaref took), `getopts`, `initialize`, `options`, `options=`, `order!`, `parse!`,
+  `permute!` (optparse extends `ARGV` with `OptionParser::Arguable`) and `resolve_feature_path`
+  (`$LOAD_PATH`'s, in every process); no `method_missing`, no adopted instance, and Hash, String,
+  Symbol, Range, Proc, Time, Regexp, MatchData, nil, true, false, Integer and Float untouched. None
+  of those names is an operation the typed body takes, so no class-wide test fails for one in these
+  runs and a per-receiver test would change nothing they do. Not built. What would make it worth
+  building: a library that gives one String or Hash a singleton method of an operator's name, or a
+  `method_missing` (DelegateClass and SimpleDelegator do not: they are Ruby objects); the probe
+  finds it.
+
 - **perf/jitconst (2026-11-26) - "JIT maybe: constant without a scope" is the census's, not the
   runtime's; nothing to let in.** The census's second "maybe" line (455 methods of Src/StdLib +
   AWFY on 9d2c89a: ENV 19, Array 12, Integer 11, URI 11, AF_INET 8, BN 7) comes from
