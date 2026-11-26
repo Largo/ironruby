@@ -1288,6 +1288,86 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     crossing costs so much: past the threshold the shape still ran at ~50-150 us a call for
     hundreds of calls before its compiled code took over (steady state is 1.7 us); that cold
     stretch, not the IL compile, is the next thing to look at.
+    2026-11-26, perf/startup (rejected, 98baf5b): lever 1 of perf/first-bind - keep the spent
+    dispatcher answering until the hot call's rule, compiled in the background, lands. Measured
+    first (R2R host, base 2f8c31c, `IR_BIND_TRACE`): the lever has shrunk since perf/first-bind
+    counted it. `gem list` builds 241 rules (80 ms of 2,942 binds' 183 ms inclusive), irb 268
+    (90 ms), and only 43 / 51 of them are hot (bound after a dispatcher spent its budget). The
+    rest are first rules with no dispatcher in front. Tried: for a hot call,
+    `LibraryDispatcher.TryBridge` builds the rule's lambda as `DynamicUtils.LightBind` does,
+    starts its compile at once, and hands the site the spent dispatcher's delegate. The
+    dispatcher makes the calls with no budget until the compiled rule lands, then declines.
+    The bind after a decline gets the compiled rule once (a thread-static, as the DLR's
+    `LastInterpretedFailure`: without that once-only guard, a compiled rule whose test fails for
+    the call is handed out again forever, and `gem list` hung). Not during the core prelude,
+    whose compiles are held back. A bridge bind costs ~170 us against ~330 for a rule bind.
+    Main-thread instructions (callgrind, `DOTNET_TieredCompilation=0`, R2R host) base -> new:
+    `-e 1` 2,091.4 -> 2,092.8 M (+0.06%, three runs each, spread 0.1 M), `gem --version` 2,271.8
+    -> 2,273.6 (+0.08%), `gem list` 3,447-3,459 -> 3,426-3,433 (-0.4..-1.0%), `require "irb"`
+    3,482 -> 3,461-3,466 (-0.5%), irb 1+1 3,709 -> 3,700 (-0.2%). All threads: `gem list` -0.9%,
+    irb -0.4%, so starting the compiles earlier costs nothing elsewhere. Wall, best of 10
+    alternating, load ~1: 360/352, 410/418, 715/701, 724/719, 782/775 ms (all within +-2%).
+    Steady state unchanged: AWFY 8 s DeltaBlue/Json/Richards within 2% (a 3 s run showed
+    DeltaBlue and Json 36% slower, which was noise), micro-table no line >5% slower in both
+    orders except s_map4, which is equal alone (medians 194.5 / 196.8 ns). Matrices
+    (shared-rule-light, hot-shapes, jit, jit-calls) in 7 modes, with `IR_HOT_BRIDGE=0` and
+    `IR_CONFIG=R2R`: PASS; hot-shapes-matrix makes 923 bridges. Rejected: 0.2-0.8% on three
+    commands, a fixed +0.06-0.08% on the two that never bridge (dispatcher and bind paths;
+    not the thread-static, which moving off the common bind path did not change), and ~210
+    lines of cross-thread hand-off. Learned: what is left of first-bind cost is the ~200 first
+    rules per tool, not hot ones, so levers 2 (`CallInstruction` per signature) and 3 (typed
+    sites rebinding what untyped ones warmed) should be measured before anything is built.
+    Their perf/first-bind sizes (9-16, 6-16 ms) are as stale as lever 1's 18-21 ms was.
+    2026-11-26, perf/startup2 (no change; this split is gap 26's new starting point). Base
+    79a2c30. Asked: are perf/first-bind's levers 2 and 3 still there, and where do `-e 1` and
+    `gem list` spend their time now. Measured with a throwaway build: `IR_BIND_TRACE` marking typed
+    and untyped rules, a stopwatch on uncached `CallInstruction.Create`, timestamps with main-thread
+    `JitInfo` at the start-up milestones, and `strace -f --seccomp-bpf -e openat` for file times.
+    The machine was ~40% slower than in perf/startup: `-e 1` took 505 ms here, 360 ms there, on
+    both trees. Only relative numbers carry over.
+    - Lever 3 (typed sites rebinding what untyped ones warmed): gone. `gem list` binds 48 typed
+      rules and one of them duplicates an untyped one (0.7 ms). Lever 2 (`CallInstruction` per
+      signature): 174 / 263 uncached creates in `-e 1` / `gem list`, 66 / 106 of them through
+      MakeGenericType and Activator. 11 / 16 ms all in, JIT included: under 2% of `gem list`.
+      `CallInstruction.ReadyToRun.cs` already roots the common shapes. Lever 1: perf/startup above.
+    - The first rule of a process (`private`, in the prelude) still costs ~12 ms. Typed rules cost
+      ~1 ms each in `-e 1` (22 rules, 25 ms), against ~0.45 ms for untyped ones.
+    - Split of `-e 1`, R2R host, ms from `Main` (fastest of three; main-thread JIT ms / methods in
+      brackets): to `Host.Run` 9; to the RubyContext ctor 23 (8 / 49); LoadBuiltins 40 (9 / 87);
+      to LoadCorePrelude 13; registering the startup library 4; the core prelude with RubyGems
+      248 (69 / 495); to exit 16. The runtime starts ~40 ms before `Main`. `--disable-gems -e 1`
+      takes 358 ms against 511, so RubyGems is ~150 ms. `gem list`: pre-prelude ~129, prelude
+      ~380, then the command ~515 ms. Under strace, the command spends ~285 ms requiring what
+      `list_command` needs (spec_fetcher -> remote_fetcher -> net/http, socket, openssl, zlib,
+      resolv, securerandom: ~60 files; CRuby requires the same ones), then ~200 ms on the 93
+      gemspecs (median 1.3 ms each; the 245 ms perf/startup-library-tools gave them includes the
+      requires that happen between them).
+    - JIT on the main thread (`System.Runtime.JitInfo`, normal tiering): the R2R host spends
+      120-143 ms on 749 methods in `-e 1` and 180-190 ms on 1,015 in `gem list`. Of `-e 1`'s, 334
+      are plain Tier0 compiles of BCL generics the framework image lacks (Dictionary and
+      ConcurrentDictionary over ValueTuple and over IronRuby types, SearchValues...). 75 are
+      "Instrumented Tier0" compiles of large methods (93 KB of code). 31 are IronRuby methods
+      compiled FullOpts, and 20 are rules or lambdas.
+    - The release image (`Util/package-release.sh`: self-contained, composite, startup profile)
+      JITs 216 methods in 59 ms for `-e 1` and 376 in 106 ms for `gem list`. Wall, best of 6
+      alternating, R2R host / release: `-e 1` 505 / 375, `gem --version` 593 / 457, `gem list`
+      992 / 847, `require "irb"` 1041 / 831, irb 1+1 1112 / 935 ms. So the host the gate's
+      start-up rule times (perf-gate step 4) pays ~130-210 ms more than what is released, most
+      of it in JIT. A change that moves JIT shows on the R2R host far more than in a release.
+    - `DOTNET_TieredPGO=0` takes the instrumented compiles away: main-thread JIT -20 ms in `-e 1`
+      on both images, -10 to -17 ms in `gem list`. AWFY 8 s geomean 1.188, NBody -26%, Havlak
+      -30%. Rejected.
+    - `RubyStackTraceBuilder.FindCopyingClasses` (the table of modules that classes copy in)
+      reflects over every type in IronRuby.Libraries the first time a backtrace holds a copied
+      module's method: 9 ms once per process in `gem list`, `require "irb"` and irb (not in
+      `-e 1` or `gem --version`). It also loads AngleSharp.dll and System.Net.Sockets.dll. In
+      `gem list` it is optparse's rescued exception in `Gem::Command#handles?`. The source
+      generator sees every `[Includes(Copy = true)]` and could emit the table. That is ~1%, a
+      small fix for whoever is nearby.
+    No lever reaches 3% of `gem list` on its own. What is left is spread over the prelude and
+    RubyGems' own Ruby (binds ~100 ms inclusive in `-e 1`, the running of precompiled code), the
+    files `gem list` requires, and the JIT, which the release image already halves. A next attempt
+    should measure on the release image, or say why the R2R host stands in for it.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
