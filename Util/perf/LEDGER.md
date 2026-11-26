@@ -1418,15 +1418,17 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     each_cons over those, while the method is the unredefined one, with no fiber; a `next` there
     is 67-94 ns against CRuby's 226-234 (`Util/bench/extiter-shapes.rb`). Its end was the cost
     left - a StopIteration thrown from C# took the catch-site walk, 22 us against CRuby's 0.8 -
-    and perf/extiter (Landed) defers that walk. Still on a fiber, 5-10 us of process CPU per
-    `next` against 0.22-0.36: `map` / `select` / `each_with_object` enumerators (no cursor for
-    them yet: a cursor could keep the fed values for StopIteration#result), `with_index`,
-    `Enumerator::Lazy`, `Enumerator.produce` (generators of the prelude, which run Ruby code
-    between two values: a cursor would call blocks under its lock) and `Enumerator.new`. A raw
-    fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two threads spinning), so the
-    prelude's machinery around it is not where the time is. Untried: cursors for `map` and
-    `select` over an Array; a cursor over a cursor for `with_index`; switching fibers without a
-    thread (a continuation of the method JIT's own).
+    and perf/extiter (Landed) defers that walk; perf/extiter2 (Landed) gives `map`, `collect`,
+    `select`, `filter`, `find_all` and `reject` cursors of their own. Still on a fiber, 5-10 us of
+    process CPU per `next` against 0.22-0.36: `with_index` / `each_with_index` / `with_object` on
+    an enumerator, `each_with_object`, `filter_map` and `flat_map` (the prelude's), Hash#select and
+    #reject (Hash's own, whose result is a Hash), `Enumerator::Lazy`, `Enumerator.produce`
+    (generators of the prelude, which run Ruby code between two values: a cursor would call blocks
+    under its lock) and `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6
+    us of CPU (two threads spinning), so the prelude's machinery around it is not where the time
+    is. Untried: a cursor over a cursor for `with_index` (the prelude would have to mark the
+    generator it makes with its source and offset); switching fibers without a thread (a
+    continuation of the method JIT's own).
 36. **Left from round thirty-five**, each smaller than one gap of its own: `...` passed on is
     still a splat of an Array and a block argument (`def m(...) = n(...)` allocates the rest
     per call; the frame is light now); `URI::Generic#query=` and `merge` still run the
@@ -1449,6 +1451,33 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/extiter2 (2026-11-26) - `map`, `collect`, `select`, `filter`, `find_all` and `reject`
+  enumerators take `next` on a cursor, with no fiber (gap 35)** - not gated. Base: the merged
+  branch at 2f8c31c, which has perf/extiter. An enumerator of Array's own #map / #collect /
+  #select / #filter / #reject, or of Enumerable's #map / #collect / #select / #filter /
+  #find_all / #reject over a receiver whose #each a cursor walks (Range, Hash#map and
+  #find_all, Struct, Integer#times' enumerator), runs on a cursor once the methods involved
+  are checked to be the built-in ones (`IsBuiltinMethod`, as for the other cursors): the
+  element comes from the source's cursor, and what the suspended block would have answered -
+  the value fed with #feed, or nil - is kept for StopIteration#result (`ExternalCursor.Resume`,
+  `Result`): the answers for #map, the elements answered true for #select (Array's re-read
+  after the block, MRI's rb_ary_elt), false for #reject (Array's as yielded). No Ruby code runs
+  in the cursor. `IR_FAST_NEXT=0` leaves them to the fiber (and undoes perf/extiter too).
+  `Util/bench/extiter-shapes.rb`, `ab.rb -r 6`, ns per `next`, CRuby / base / off / new:
+  `[1000].map` 245 / 9412 / 9944 / 92 (0.01 of off), `select` 226 / 5024 / 5123 / 77,
+  `(1..1000).map` 259 / 5174 / 9478 / 102, a Hash's `find_all` 365 / 7427 / 7727 / 369 (0.05);
+  the cursor shapes of perf/extiter level with base. The fiber controls read 1.1-2.3 times off
+  in that run, after shapes that no longer start a fiber; alone (`-- ewi_next lazy_next
+  produce generator`, six rounds) 0.95-1.02, all overlapping. `Util/extiter-matrix.rb` (178
+  probes now: each method over each source, with and without #feed, fed before the first
+  `next` and after the last, `peek`, `next_values`, `loop`, `rewind`, mutation during the
+  iteration, a subclass, a singleton's and a redefined method and #each, threads) prints
+  CRuby's output on base, new and off; enum-next-, block-loop-, hash-order-, raise-,
+  full-message-, enum- and jit-matrix are the same on base, new and off. spec/core/enumerator,
+  kernel/loop_spec and the array and enumerable map / collect / select / filter / find_all /
+  reject specs (540 examples) pass in all three; 95 named IronRuby.Tests (Enumerator*,
+  Enumerable*, Array*, Loop*, Fiber*, Backtrace*, Exception*, Raise*, Rescue*) pass.
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,

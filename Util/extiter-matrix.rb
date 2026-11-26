@@ -470,3 +470,67 @@ def deep_later(e)
 end
 probe("bt_cause_deep") { e = [1].each; e.next; deep_d1(e); deep_later(e) }
 probe("bt_cause_deep_hot") { r = nil; 100.times { e = [1].each; e.next; deep_d1(e); r = deep_later(e) }; r }
+
+# --- collecting methods (#map, #select, #reject...) taken with #next: results from what was fed ------
+def fed_result(e, feeds)
+  out = []
+  feeds.each { |f| out << e.next; e.feed(f) unless f.nil? }
+  [out, stop_of(e).result]
+end
+probe("coll_ary_map")      { fed_result([1, 2, 3].map, [:a, nil, :c]) }
+probe("coll_ary_collect")  { fed_result([1, 2].collect, [nil, 5]) }
+probe("coll_ary_select")   { fed_result([1, 2, 3].select, [true, false, 1]) }
+probe("coll_ary_filter")   { fed_result([1, 2, 3].filter, [nil, :x, nil]) }
+probe("coll_ary_reject")   { fed_result([1, 2, 3].reject, [true, nil, false]) }
+probe("coll_ary_find_all") { fed_result([1, 2, 3].find_all, [true, nil, 2]) }
+probe("coll_range_map")    { fed_result((1..3).map, [:a, :b, nil]) }
+probe("coll_range_select") { fed_result((1..4).select, [true, false, true, nil]) }
+probe("coll_range_reject") { fed_result((1...3).reject, [nil, true]) }
+probe("coll_range_find_all") { fed_result((1..2).find_all, [1, nil]) }
+probe("coll_hash_map")     { fed_result({ a: 1, b: 2 }.map, [:x, :y]) }
+probe("coll_hash_find_all"){ fed_result({ a: 1, b: 2 }.find_all, [true, nil]) }
+probe("coll_hash_select")  { fed_result({ a: 1, b: 2 }.select, [true, nil]) }
+probe("coll_hash_reject")  { fed_result({ a: 1, b: 2 }.reject, [true, nil]) }
+probe("coll_struct_map")   { S2 = Struct.new(:p, :q) unless defined?(S2); fed_result(S2.new(1, 2).map, [:m, nil]) }
+probe("coll_times_map")    { fed_result(3.times.map, [:a, :b, :c]) }
+probe("coll_empty")        { [stop_of([].map).result, stop_of([].select).result, stop_of((1...1).map).result] }
+probe("coll_no_feed")      { [stop_of([1, 2].map).result, stop_of([1, 2].select).result, stop_of([1, 2].reject).result] }
+probe("coll_feed_first")   { e = [1, 2].map; e.feed :early; [e.next, e.next, stop_of(e).result] }
+probe("coll_feed_last")    { e = [1, 2].map; e.next; e.next; e.feed :last; stop_of(e).result }
+probe("coll_peek")         { e = [1, 2].select; [e.peek, e.next, e.peek].tap { e.feed true; e.next }; stop_of(e).result }
+probe("coll_next_values")  { e = { a: 1 }.map; [e.peek_values, e.next_values] }
+probe("coll_hash_next_values") { e = { a: 1 }.find_all; [e.peek_values, e.next_values] }
+probe("coll_range_nv")     { e = (1..2).map; [e.next_values, e.peek_values] }
+probe("coll_loop")         { e = [1, 2].map; loop { e.feed(e.next * 10) } }
+probe("coll_loop_select")  { e = [1, 2, 3, 4].select; loop { v = e.next; e.feed v.even? } }
+probe("coll_again")        { e = [1].map; e.next; e.feed :f; s1 = (e.next rescue $!); s2 = (e.next rescue $!); [s1.result, s2.result, s2.cause.equal?(s1)] }
+probe("coll_result_fresh") { e = [1].map; r1 = stop_of(e).result; e.rewind; r2 = stop_of(e).result; [r1, r2, r1.equal?(r2)] }
+probe("coll_rewind_mid")   { e = [1, 2].map; e.next; e.feed :a; e.rewind; e.next; e.feed :b; e.next; stop_of(e).result }
+probe("coll_append")       { a = [1, 2]; e = a.map; out = [e.next]; a << 3; out << e.next << e.next; [out, stop_of(e).result] }
+probe("coll_shrink_select") { a = [1, 2, 3]; e = a.select; e.next; e.feed true; e.next; a.clear; e.feed true; [(e.next rescue :stop), (e.next rescue $!.result)] }
+probe("coll_replace_select") { a = [1, 2, 3]; e = a.select; e.next; a[0] = :z; e.feed true; e.next; a[1] = :w; e.feed true; e.next; stop_of(e).result }
+probe("coll_replace_reject") { a = [1, 2]; e = a.reject; e.next; a[0] = :z; e.next; stop_of(e).result }
+probe("coll_hash_mutate_value") { h = { a: 1 }; e = h.find_all; v = e.next; v << :extra; e.feed true; stop_of(e).result }
+probe("coll_range_select_value") { e = (1..2).select; v = e.next; e.feed true; e.next; [v, stop_of(e).result] }
+probe("coll_subclass")     { c = Class.new(Array); r = stop_of(c.new([1, 2]).select).result; [r, r.class == Array] }
+probe("coll_redef_map") do
+  c = Class.new(Array) { def map; return to_enum(:map) unless block_given?; super { |x| yield(x) }.reverse; end }
+  e = c.new([1, 2]).map
+  e.next; e.feed :a; e.next; e.feed :b
+  stop_of(e).result
+end
+probe("coll_singleton_select") { a = [1, 2]; def a.select; yield 9; [:own]; end; e = a.select; [e.next, stop_of(e).result] }
+probe("coll_each_redef_range") { r = (1..2); def r.each; yield :x; self; end; e = r.map; [e.next, stop_of(e).result] }
+probe("coll_hash_each_redef") { h = { a: 1 }; def h.each; yield [:q, 0]; self; end; e = h.map; [e.next, stop_of(e).result] }
+probe("coll_map_redef_after") do
+  k = Class.new(Array)
+  e = k.new([1, 2]).map
+  k.class_eval { def map; return to_enum(:map) unless block_given?; [:late]; end }
+  [e.next, stop_of(e).result]
+end
+probe("coll_with_index")   { e = [5, 6].map.with_index(1); [e.next, e.next] }
+probe("coll_size")         { [[1, 2].map.size, (1..3).select.size, { a: 1 }.map.size] }
+probe("coll_dup_started")  { e = [1, 2].map; e.next; (e.dup rescue "#{$!.class}: #{$!.message}") }
+probe("coll_thread")       { e = [1, 2].select; e.next; Thread.new { begin; e.next; rescue => x; "#{x.class}: #{x.message}"; end }.value }
+probe("coll_frozen_feed")  { e = [1].map; e.next; e.freeze; (e.feed(1) rescue $!.class) }
+probe("coll_inspect")      { e = [1, 2].select; e.next; e.inspect }
