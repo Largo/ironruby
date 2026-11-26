@@ -6699,9 +6699,23 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ from, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
 
             bool anyCharacterMaps;
-            self.RequireNotFrozen();
+            if (RequireTranslatable(self, from, to)) {
+                return null;
+            }
             Translate(self, from, to, true, false, out anyCharacterMaps);
             return anyCharacterMaps ? self : null;
+        }
+
+        // MRI's tr_trans: an empty string is nil, frozen or not; then the encodings of the two sets are checked against the
+        // string's, and only then is the string required to be modifiable. True for the empty string.
+        private static bool RequireTranslatable(MutableString/*!*/ self, MutableString/*!*/ from, MutableString/*!*/ to) {
+            if (self.IsEmpty) {
+                return true;
+            }
+            self.RequireCompatibleEncoding(from);
+            self.RequireCompatibleEncoding(to);
+            self.RequireNotFrozen();
+            return false;
         }
 
         // encoding aware, TODO: KCODE
@@ -6718,7 +6732,9 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ from, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
 
             bool anyCharacterMaps;
-            self.RequireNotFrozen();
+            if (RequireTranslatable(self, from, to)) {
+                return null;
+            }
             Translate(self, from, to, true, true, out anyCharacterMaps);
             return anyCharacterMaps ? self : null;
         }

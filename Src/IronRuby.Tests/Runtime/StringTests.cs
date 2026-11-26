@@ -760,6 +760,37 @@ UTF-8 f09f9880: [128512, Integer, [128512], [128512, 128512], 128512]
         }
 
         /// <summary>
+        /// #tr! and #tr_s! (MRI's tr_trans): an empty string is nil, frozen or not; the sets' encodings are checked
+        /// against the string's before the string is required to be modifiable.
+        /// </summary>
+        public void String_TranslateCheckOrder1() {
+            TestOutput(@"
+f = ""abc"".freeze; e = """".freeze; u = ""b"".encode(""UTF-16LE"").freeze
+[-> { f.tr!(""x"", ""y"") }, -> { f.tr!(""a"", ""y"") }, -> { e.tr!(""a"", ""b"") }, -> { u.tr!(""b"", ""x"") },
+ -> { f.tr_s!(""x"", ""y"") }, -> { e.tr_s!(""a"", ""b"") }, -> { u.tr_s!(""b"", ""x"") }, -> { f.tr!("""", ""y"") },
+ -> { f.delete!(""x"") }, -> { e.delete!(""x"") }, -> { f.squeeze! }, -> { e.squeeze! }, -> { u.delete!(""x"") }, -> { u.squeeze!(""x"") },
+ -> { u.count(""x"") }, -> { f.tr!(1, 2) }].each { |l| p((l.call rescue $!)) }
+", @"
+#<FrozenError: can't modify frozen String: ""abc"">
+#<FrozenError: can't modify frozen String: ""abc"">
+nil
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<FrozenError: can't modify frozen String: ""abc"">
+nil
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<FrozenError: can't modify frozen String: ""abc"">
+#<FrozenError: can't modify frozen String: ""abc"">
+nil
+#<FrozenError: can't modify frozen String: ""abc"">
+#<FrozenError: can't modify frozen String: """">
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<TypeError: no implicit conversion of Integer into String>
+");
+        }
+
+        /// <summary>
         /// Integer#chr and String#&lt;&lt; with an Integer, in the multibyte encodings: MRI's rb_enc_uint_chr takes the
         /// bytes of the number and accepts them when they are exactly one well formed character of the encoding -
         /// "invalid codepoint" when they are not, "out of char range" when the number is wider than the encoding's
