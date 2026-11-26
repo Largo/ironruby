@@ -1384,6 +1384,52 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
+  methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R
+  host with the startup library; `IR_BIND_TRACE`, `IR_PHASE_TIMES`, perf with jitdump classing
+  each bind sample by the path it took, and a throwaway instrumented DLR that timed the rule's
+  build and compile, counted each interpreted rule's hits and timed `CallInstruction.Create`).
+  Binds, `-e 1` / `gem list` / irb: 1,060 / 3,164 / 3,116, 111 / 216 / 221 ms inclusive. A
+  precompiled dispatcher serves 927 / 2,371 / 2,270 of them at 59 / 35 / 39 us; a rule is built
+  for 133 / 514 / 564 at 430 / 251 / 231 us - 12-18% of the binds, 51-60% of the time. Under
+  bind, perf ms: the rule's LightCompile 23 / 58 / 61 (`CallInstruction.SlowCreate`'s
+  MakeGenericType, Activator and CreateDelegate for each new method signature 9 / 14 / 16 of
+  it), making the rule's lambda and delegate 8 / 13 / 13 (a FullOpts stub JIT'd per new
+  delegate type), overload resolution 9 / 21 / 25, the expression tree 6 / 16 / 19, lookup 6 /
+  12 / 9; on the dispatcher path the library dispatcher and its call plan 24 / 34 / 39, the
+  callee def's own first compile 17 / 24 / 38 (not binding), lookup 12 / 17 / 21. In `-e 1`
+  ~45% of it is the runtime running code for the first time (prestub, R2R fixups, type loads);
+  the first rule of a process costs ~10 ms. Rule build against compile: 21 / 32, 47 / 72, 46 /
+  71 ms. How often a rule runs before the IL replaces it: once 25% / 10% / 13% (23 / 27 / 28
+  ms), 3-31 times most of the rest; 189 / 221 of the tools' rules are hot ones (bound after a
+  dispatcher spent its budget, threshold 2: 30 / 35 ms) whose LightCompile serves the handful of
+  calls until their background compile lands. Finding 3 of #295 at start-up: typed rules whose
+  binder also bound an untyped one, 1.3 / 6.4 / 16.3 ms. Rule binds by site: light-scope sites
+  66 / 142 / 160 (15 / 27 / 28 ms) - a light site took no library dispatcher, since it has only
+  the declaring scope to pass, nor any dispatcher for a call on a module's singleton class.
+  Taken: the light site takes the library dispatcher unless the overload takes the scope
+  (`LibraryCallPlan.ReadsScope`: block_given?, binding, local_variables, const_get keep the rule
+  that hands the call back), and a module's singleton class (File.join, Gem.dir) no longer
+  keeps a light site off the dispatchers. Rule binds 133 -> 90, 514 -> 436, 564 -> 483; bind
+  inclusive (phase timer, median of 3) `-e 1` 111.7 -> 106.3, `gem list` 214.5 -> 206.4 ms.
+  Instructions (all threads, least of 3): 1,336 -> 1,321, 1,508 -> 1,486, 3,213 -> 3,176, 3,705
+  -> 3,674 M. Wall, `bench.rb 10`, load 0.9-1.5, median ms: `-e 1` 454 -> 449, `gem --version`
+  521 -> 530 (best 505 -> 502, CPU 505 -> 484), `gem list` 965 -> 950, irb exit 1079 -> 1052,
+  irb 1+1 1103 -> 1087. AWFY geomean new/base 0.985 and 1.016 (both orders, none slower in both;
+  Storage -13% and +0.5%); micro-table: symcase 6%/9% slower in the two orders, the same alone
+  (six alternating processes: medians 41.4 / 41.2 ns); `s_each*`, `s_times*`, `veach*` 5-19%
+  faster in both (their light sites' hot rules are now compiled at threshold 2). Checked:
+  hot-shapes-matrix gains a section (library calls at light sites and module singleton calls,
+  hot, with the method redefined, made private on a subclass and on the singleton class, a
+  singleton method and a prepended module on the module, a refinement, method_missing, and
+  block_given?/binding/local_variables) - CRuby's output on both trees in every mode;
+  gate-matrices --all no DIFF but thread-backtrace-matrix's main-thread row, which prints line
+  87 or 88 by timing on both trees (88 on both, six runs each, alone); IronRuby.Tests PASSED on
+  both; the sweep's six new failures (Set compare_by_identity) fail on master too. Next levers,
+  by size: the hot rules' LightCompile (keep the spent dispatcher answering until the
+  background-compiled rule lands, 18-21 ms of the tools); `CallInstruction` without a generic
+  type per signature (9-16 ms); the typed/untyped duplicate (6-16 ms, and warm-up).
+
 - **perf/big-method-first-call (2026-11-26) - a lambda literal is light-compiled at its first
   call, not with the method it is written in.** irb's first syntax check cost ~300 ms, nearly
   all the first `Prism.parse` (205 ms; the second 1 ms). Not `Serialize::Loader#load_nodes`'

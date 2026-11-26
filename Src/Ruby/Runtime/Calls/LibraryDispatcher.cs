@@ -473,6 +473,21 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// Whether the overload takes the caller's scope. A site with a light scope has only the declaring one to give it, so
+        /// its rule reads the scope (CallArguments.ScopeRead) and such a call is not made without one.
+        /// </summary>
+        internal bool ReadsScope {
+            get {
+                foreach (var p in _parameters) {
+                    if (p.Kind == Kind.Scope) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Whether the rule of a call of this overload - its only one - tests the type of the argument at <paramref name="index"/> (the
         /// positional arguments, then a params array's items), passed to the site as a <paramref name="siteType"/>: the overload
         /// resolver restricts an argument to its type unless the parameter takes anything of the site's type (OverloadResolver.
@@ -1450,7 +1465,7 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
-            if (plan == null || !plan.Accepts(target, signature.HasBlock, block, callArgs)) {
+            if (plan == null || signature.HasLightScope && plan.ReadsScope || !plan.Accepts(target, signature.HasBlock, block, callArgs)) {
                 return null;
             }
 

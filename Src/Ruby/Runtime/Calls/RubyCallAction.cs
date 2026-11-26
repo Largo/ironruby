@@ -203,7 +203,10 @@ namespace IronRuby.Runtime.Calls {
             // one every few calls is better off with the shared rule (RubyMetaBinder tries it first). Not so a method define_method
             // made of a block (LambdaMethodCall, which reads no scope), the kind OpenStruct defines on each object's singleton class:
             // no rule is shared for it, so the first calls of each go through a LibraryDispatcher (below) rather than a rule each.
-            if (light && targetClass.IsSingletonClass && method.Info.GetType() != typeof(RubyLambdaMethodInfo)) {
+            // A module's singleton class is that module's for good, though, and the next module a site meets finds the shared rule as
+            // well: a method called on a module or a class (File.join, Gem.dir) has a dispatcher of its own, as it has at a site with
+            // a scope.
+            if (light && targetClass.IsSingletonClass && method.Info.GetType() != typeof(RubyLambdaMethodInfo) && !(target is RubyModule)) {
                 return null;
             }
 
@@ -280,11 +283,18 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            // At a light site only the first calls of a method define_method made of a block go on (see above); every other method
-            // the dispatchers above do not call is left to the rule.
+            // At a light site the first calls of a method define_method made of a block go on (see above), and so do those of a
+            // library method whose overload takes no scope (LibraryDispatcher.TryCreate refuses one that does): the rule of such a
+            // call reads nothing the declaring scope does not give it either. Every other method the dispatchers above do not
+            // call is left to the rule. A light frame calls the core library's methods (Integer#&, String#[], File.join...) often
+            // from sites that run a few times at start-up, each of which built and interpreted a rule (~150 us) before.
             if (light) {
-                return (method.Info is RubyLambdaMethodInfo) ?
-                    LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args) :
+                if (method.Info is RubyLambdaMethodInfo) {
+                    return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args);
+                }
+                var lightLibraryMethod = method.Info as RubyLibraryMethodInfo;
+                return (lightLibraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(lightLibraryMethod)) ?
+                    LibraryDispatcher.TryCreate(this, delegateType, Signature, lightLibraryMethod, targetClass, target, clrTest, version, args) :
                     null;
             }
 
