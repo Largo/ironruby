@@ -984,11 +984,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     about the floor for one shape there. Tried and rejected (perf/lsite, see Rejected): a
     site that has answered `LightScopeRequired` remembers it and skips the light site from
     then on - the light site is +7 of the +232 instructions a light `gsub` pays; the rest is
-    the late scope's arm in the body and the light frame's exit. Untried: a light method
-    that has made its scope late once enters through its scoped body from then on (a
-    per-method memory, compiled twice); or the prelude gives such a method's rare path a
-    method of its own, so that the common path stays without a splat or a scope-reading
-    callee (`/perf-core`).
+    the late scope's arm in the body and the light frame's exit. Also tried and rejected
+    (perf/lsite2): a light method that has made its scope late once forwards, at the top of
+    its compiled body, to a scoped twin compiled from the same AST - the twin costs what a
+    scoped method does, but the forward costs what it saves (the light lambda's prologue,
+    which zeroes its locals before the first test, +158, and the delegate hop, +56).
+    Untried: calls reach the twin without entering the light lambda - the method's delegate
+    replaced and its rules rebound (not through `MethodsUpdated`, which invalidates all
+    compiled code), with a policy for a method that needs its scope only sometimes; or the
+    prelude gives such a method's rare path a method of its own, so that the common path
+    stays without a splat or a scope-reading callee (`/perf-core`).
     The second: `w_splat` is 366 ns against 188 for the bare call (CRuby 194 and 71), and
     still about 185 B a call more than the block-passing wrapper: the rest Array the
     caller's rule builds and its unpacking into the callee. Untried: a rule for a splat
@@ -4584,6 +4589,58 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/lsite2 (/perf-step, 2026-11-26) - a light method that has made its scope late
+  enters through a scoped twin from then on** (gap 16; switch `IR_LIGHT_TWIN`, `=verbose`
+  names each twin). Built on the merged branch at 2f8c31c. A `LightFrameTwin`, a constant of
+  each compiled light body (not one compiled ahead of time, nor under Coverage), is told by
+  the late scope's node (`LightFrame.MakeScope`) that the body made its scope; the first time
+  that happens in compiled code (an interpreted body has had few calls) it transforms the
+  same AST for the same declaring scope and module with `scopedTwin` (everything a body that
+  may be light gets, parked scopes included, but the light frame), compiles it to IL and
+  publishes it. The light body's lambda becomes `frame == null && twin.Twin != null ?
+  Twin(self, block, args...) : <body>`, the test outside its `CompiledFrameExpression`, so a
+  backtrace has the twin's frame only. Behaviour and backtraces matched CRuby
+  (`light-remember-matrix` and the others below).
+  - First cut light-compiled the twin (`RubyScriptCode.CompileLambda`): the forward then went
+    through the `LightLambda` stand-in on every call, and every late scope at start-up compiled
+    a twin (56 methods by `ir -e` of the shape file: `Gem::Version#canonical_segments`,
+    `Enumerable#each_with_index`, `Kernel#__require_relative__`...). Twins are now compiled to
+    IL and only from compiled light code: two (`H#gsub`, `H#eqt`) in the same run.
+  - **Numbers** (instructions a call, `Util/perf/callgrind/count.sh`, N=20,000; twin off ->
+    on): `gsub` all 12,948 -> 12,933 (on 12,715: all/on 1.017), `split` 11,037 -> 11,099
+    (1.027), `case when /z/` 8,946 -> 8,863 (1.028), `=~ /d/` 6,061 -> 6,016 (1.026);
+    controls `size` and `tilde` unchanged, `match?` 4,047 -> 4,079, `Pathname#+` 99,960 ->
+    100,486 (`Pathname#+` got a twin: it needs its scope on some calls only, and now pays a
+    scope and the forward on all of them). core-small (`IR_LIGHT_FRAMES=0` / twin off / on):
+    `inject_sym` 9,232 / 9,133 / 9,333, `zip` 13,131 / 13,132 / 13,229, `inject` with a block
+    10,258 / 10,279 / 10,284, `minmax` 4,757 / 4,504 / 4,531.
+  - **Why: the forward costs what it saves.** callgrind with the CLR's perf map, one `gsub`
+    section, twin on against `on` (scope at entry): +214 a call, all of it the forward - the
+    light lambda +158, a delegate hop +56; the twin's own costs are `on`'s to the instruction
+    (`CreateMethodScope`, `LeaveMethodFrame`, the body). The light lambda pays its prologue
+    before its first test: the CLR zeroes its locals (each call site's `#a`/`#r` temporaries,
+    the tuple, `#rfc`, `#callee`...) whatever path it takes, and that is most of what a light
+    frame that makes its scope late loses. A forward placed anywhere in the light body cannot
+    win; the calls have to reach the twin without it. The delegate rules call is
+    `RubyMethodBody.GetDelegate`'s, baked into call plans (`RubyMethodCallPlan._method`) and
+    dispatchers, behind the JIT's stub until it settles; the one way to make every site
+    rebind, `RubyModule.MethodsUpdated`, bumps the global method version and invalidates all
+    compiled code (`RubyUtils.InvalidateCompiledCode`), too much to pay per twin. Nor is "the
+    first late scope" a policy: `Pathname#+` shows a method that needs its scope now and
+    then losing its light frame for good.
+  - **And it was not right.** light-remember, regex-light, block-given, global-light and
+    lexical-light printed CRuby 4.0's output on the baseline and the candidate, each as
+    built, with `IR_LIGHT_TWIN=0`, `IR_LIGHT_FRAMES=0`, `IR_LIGHT_REGEX=all`, `-X:NoJIT
+    -X:NoOSR` and `-X:NoJITCalls`, and hot-shapes the baseline's (its known
+    `Encoding::CompatibilityError`). light-rest did not, wherever the twin was on (as built,
+    `IR_LIGHT_REGEX=all`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`): `def frame_locations(*a);
+    caller_locations(0, 1)[0].label; end` answered `"Kernel#caller_locations"` as well as
+    `"Object#frame_locations"` once the twin took over - a frame counted that should not be
+    (the forwarding CLR frame, or the twin's call of `caller_locations` made through another
+    site than the light body's late call). A twin would have to answer frame questions as the
+    method it stands in for; the matrix caught it, keep it in any next attempt.
+    Not run: `IR_CONFIG=R2R` start-up, census (nothing kept).
 
 - **perf/lsite (/perf-step, 2026-11-26) - a light site that remembers it needed the scope**
   (gap 16; switch `IR_LIGHT_REMEMBER`). In `LightFrameRewriter.MakeLightCall`, each site
