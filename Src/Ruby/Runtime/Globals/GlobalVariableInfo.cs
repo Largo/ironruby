@@ -34,6 +34,10 @@ namespace IronRuby.Runtime {
             get { return _isDefined; }
         }
 
+        internal override bool ReadsScope {
+            get { return false; }
+        }
+
         public override object GetValue(RubyContext/*!*/ context, RubyScope scope) {
             return _value;
         }

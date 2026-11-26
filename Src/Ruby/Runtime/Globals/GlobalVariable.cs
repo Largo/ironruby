@@ -34,6 +34,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         public virtual bool IsDefined { get { return true; } }
 
+        /// <summary>
+        /// Whether reading or assigning the variable may use the scope it is given for more than its runtime, which a light frame
+        /// cannot give it: the frame hands the declaring scope (RubyOps.ReadLightGlobalVariable). A variable of a kind this assembly
+        /// does not know, a host's or a library's, is taken to.
+        /// </summary>
+        internal virtual bool ReadsScope { get { return true; } }
+
         public abstract object GetValue(RubyContext/*!*/ context, RubyScope scope);
         public abstract void SetValue(RubyContext/*!*/ context, RubyScope scope, string/*!*/ name, object value);
 

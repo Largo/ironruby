@@ -7710,6 +7710,71 @@ false
         }
 
         /// <summary>
+        /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
+        /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
+        /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any
+        /// assignment while a trace_var handler is registered. Util/global-light-matrix.rb has the full matrix. Expected output
+        /// is CRuby 4.0's.
+        /// </summary>
+        public void Method_LightFrameGlobal1() {
+            TestOutput(@"
+require 'ruby4'
+$g = 1
+$m = nil
+$l = nil
+def r; $g; end
+def w(v); $g = v; end
+def op; $g += 1; end
+def orr(v); $h ||= v; end
+def out; $stdout.equal?(STDOUT); end
+def dflt(sep = $/); sep; end
+def defd; [defined?($g), defined?($never_set_anywhere)]; end
+def ro; $! = 1; end
+def bad_out; $stdout = 5; end
+def seen; v = $g; [v, binding.local_variable_get(:v)]; end
+def no_match; $m; end
+def late_line(v); $l = v; $_; end
+p r, w(2), r, op, orr(5), orr(6), out, dflt, defd
+begin; ro; rescue NameError => e; p e.message; end
+begin; bad_out; rescue TypeError => e; p e.message; end
+p seen, no_match, late_line(3)
+alias $m $~
+alias $l $_
+'top' =~ /top/
+p no_match, $~[0], late_line('x'), $_
+log = []
+trace_var(:$g) { |v| log << v }
+w(7); op
+untrace_var(:$g)
+p log, 40.times.map { |i| w(i); r }.sum
+def deep(n); $depth = n; deep(n + 1); end
+begin; deep(0); rescue SystemStackError; p :stack; end
+", @"
+1
+2
+2
+3
+5
+5
+true
+""\n""
+[""global-variable"", nil]
+""$! is a read-only variable""
+""$stdout must have write method, Integer given""
+[3, 3]
+nil
+nil
+nil
+""top""
+""x""
+nil
+[7, 8]
+780
+:stack
+");
+        }
+
+        /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
         /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
         /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no

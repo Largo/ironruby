@@ -554,6 +554,13 @@ namespace IronRuby.Compiler.Ast {
         private static readonly bool LightRegexAll = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") == "all";
 
         /// <summary>
+        /// IR_LIGHT_GLOBALS=0 keeps every method that reads or writes a global variable out of light frames. Otherwise `$x',
+        /// `$x = v' and `defined?($x)' are scope-free for every name but `$~' and `$_', which are the frame's own (see
+        /// IsLightGlobal and LightFrameRewriter.VisitGlobalVariableCall).
+        /// </summary>
+        internal static readonly bool LightGlobalsEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_GLOBALS") != "0";
+
+        /// <summary>
         /// IR_LIGHT_BREAK=0 keeps every method with a `break', `next' or `redo' in a `while'/`until' loop of its body out of
         /// light frames (see IsScopeFree).
         /// </summary>
@@ -723,7 +730,7 @@ namespace IronRuby.Compiler.Ast {
             if (body == null || HasHandling(body) && !LightRescueEnabled) {
                 return false;
             }
-            if (IsLargeWithMultipleAssignment() || HasScopeReadingSuper()) {
+            if (IsLargeWithMultipleAssignment() || IsLargeWithGlobal() || HasScopeReadingSuper()) {
                 return false;
             }
             return IsBodyScopeFree(false) || LightBlocksEnabled && IsBodyScopeFree(true);
@@ -757,6 +764,18 @@ namespace IronRuby.Compiler.Ast {
             }
             var counter = WalkCalls();
             return counter.HasMultipleAssignment && counter.Calls > MaxMultipleAssignmentCalls;
+        }
+
+        // A body that reads or writes a global and makes more than MaxMultipleAssignmentCalls calls keeps its scope, for the
+        // reason above: such bodies were all kept out of light frames until globals were let in, and the one measured lost as
+        // one - the prelude's String#__ir_split_lines__ (`$/' and some forty calls), whose light lambda was 17,890 bytes of IL
+        // against 7,652 with its scope, made `"a\nb\n".lines' 1.10 times slower (six alternating rounds, spread 4-6%).
+        private bool IsLargeWithGlobal() {
+            if (!LightGlobalsEnabled) {
+                return false;
+            }
+            var counter = WalkCalls();
+            return counter.HasGlobal && counter.Calls > MaxMultipleAssignmentCalls;
         }
 
         // The names of the library methods of Kernel, BasicObject, Module, Enumerable, String, Symbol and Regexp that read their
@@ -809,6 +828,9 @@ namespace IronRuby.Compiler.Ast {
             internal int Calls;
             internal bool HasMultipleAssignment;
             internal bool HasSuperCall;
+            internal bool HasGlobal;
+
+            public override bool Enter(GlobalVariable/*!*/ node) { HasGlobal = true; return true; }
 
             // the walker visits only the left side of a multiple assignment: the calls of the right side count too
             public override bool Enter(ParallelAssignmentExpression/*!*/ node) {
@@ -897,6 +919,9 @@ namespace IronRuby.Compiler.Ast {
             }
             if (IsLargeWithMultipleAssignment()) {
                 return "multiple assignment in a body of more than " + MaxMultipleAssignmentCalls + " calls";
+            }
+            if (IsLargeWithGlobal()) {
+                return "global variable in a body of more than " + MaxMultipleAssignmentCalls + " calls";
             }
             if (HasScopeReadingSuper()) {
                 return "super in " + _name + " (the library method reads its caller's scope)";
@@ -1050,6 +1075,16 @@ namespace IronRuby.Compiler.Ast {
             if (isDefined != null && isDefined.Expression is InstanceVariable) {
                 return true;
             }
+            // `$stdout', `$VERBOSE', `defined?($x)': the runtime's, read through the declaring scope (IsLightGlobal);
+            // RubyOps.IsDefinedGlobalVariable reads only the runtime from its scope, for any name
+            var global = node as GlobalVariable;
+            if (global != null) {
+                return IsLightGlobal(global) || why != null && Refuse(why, LightGlobalsEnabled ?
+                    "GlobalVariable " + global.FullName + " (the frame's own)" : "GlobalVariable (IR_LIGHT_GLOBALS=0)");
+            }
+            if (isDefined != null && isDefined.Expression is GlobalVariable && LightGlobalsEnabled) {
+                return true;
+            }
             var constant = node as ConstantVariable;
             if (constant != null) {
                 return IsCachedConstant(constant) || Refuse(why, "ConstantVariable with an expression qualifier");
@@ -1060,7 +1095,8 @@ namespace IronRuby.Compiler.Ast {
                 if (!IsScopeFree(assignment.Right, blockLiterals, why)) {
                     return false;
                 }
-                if (assignment.Left is LocalVariable || assignment.Left is InstanceVariable) {
+                if (assignment.Left is LocalVariable || assignment.Left is InstanceVariable ||
+                    assignment.Left is GlobalVariable && IsLightGlobal((GlobalVariable)assignment.Left)) {
                     return assignment.Operation == null || LightCallsEnabled || Refuse(why, "operator assignment (IR_LIGHT_CALLS=0)");
                 }
                 // `o.x = v', `a[i] = v' (and their op-assigns): calls of x= and []=
@@ -1354,6 +1390,10 @@ namespace IronRuby.Compiler.Ast {
             if (target is LocalVariable || target is InstanceVariable || target is Placeholder) {
                 return true;
             }
+            var global = target as GlobalVariable;
+            if (global != null && IsLightGlobal(global)) {
+                return true;
+            }
             var compound = target as CompoundLeftValue;
             if (compound != null) {
                 foreach (var nested in compound.LeftValues) {
@@ -1375,6 +1415,17 @@ namespace IronRuby.Compiler.Ast {
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
             }
             return why != null && Refuse(why, "multiple assignment to " + target.GetType().Name);
+        }
+
+        /// <summary>
+        /// A global a light frame reads and writes without its scope: any but `$~' (the match) and `$_' (the last line read), which
+        /// live in the frame (RubyScope.GetInnerMostClosureScope), so that a method naming them keeps its scope as it would make it for
+        /// them anyway. Every other global is the runtime's (SpecialGlobalVariableInfo, GlobalVariableInfo). A name can still turn out
+        /// to denote one of the two - an alias, English.rb's `$LAST_MATCH_INFO' - which the frame finds out when it reads or writes it,
+        /// and then makes its scope (LightFrameRewriter.VisitGlobalVariableCall).
+        /// </summary>
+        private static bool IsLightGlobal(GlobalVariable/*!*/ global) {
+            return LightGlobalsEnabled && global.Name != "~" && global.Name != "_";
         }
 
         // A, ::A, A::B::C - the reads ConstantVariable.MakeCachedRead makes - not {expr}::A
@@ -1458,7 +1509,8 @@ namespace IronRuby.Compiler.Ast {
                 BlockParameter = LightBlockGivenEnabled ? blockParameter : null,
                 SuperModule = LightSuperEnabled ? ConstantValue(declaringModule) as RubyModule : null,
                 SuperName = _name,
-                Handling = LightRescueEnabled
+                Handling = LightRescueEnabled,
+                Context = gen.Context
             };
             var rewritten = rewriter.Visit(statements);
             if (LightFramesVerbose) {
@@ -1533,6 +1585,10 @@ namespace IronRuby.Compiler.Ast {
             // scope they need (see VisitHandlingCall). Not a block's frame, whose body has none (MethodDefinition.IsScopeFree).
             internal bool Handling;
 
+            // The runtime the body is compiled in, if known: a global whose name already denotes a variable of the frame's when the
+            // body is compiled - English.rb's `$LAST_MATCH_INFO', required before - keeps the scope (see VisitGlobalVariableCall).
+            internal RubyContext Context;
+
             // The OSR sites handed the declaring scope (see VisitMethodCall): marked as in a light frame once the body is one.
             internal readonly List<IronRuby.Runtime.Osr.OsrLoopSite>/*!*/ OsrSites = new List<IronRuby.Runtime.Osr.OsrLoopSite>();
 
@@ -1563,6 +1619,9 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (method == Methods.SetInstanceVariable) {
                     return 2;
+                }
+                if (LightGlobalsEnabled && method == Methods.IsDefinedGlobalVariable) {
+                    return 0;
                 }
                 if (LightHashEnabled && (method == Methods.MakeHash || method == Methods.MakeSymbolHash1 ||
                     method == Methods.MakeSymbolHash2 || method == Methods.MakeSymbolHash3)) {
@@ -1684,11 +1743,79 @@ namespace IronRuby.Compiler.Ast {
                 return Ast.Call(node.Method, arguments);
             }
 
+            private static readonly MethodInfo/*!*/ _ReadLightGlobalVariable = typeof(RubyOps).GetMethod("ReadLightGlobalVariable");
+            private static readonly MethodInfo/*!*/ _GetLightGlobalVariable = typeof(RubyOps).GetMethod("GetLightGlobalVariable");
+            private static readonly MethodInfo/*!*/ _SetLightGlobalVariable = typeof(RubyOps).GetMethod("SetLightGlobalVariable");
+            private static readonly FieldInfo/*!*/ _LightScopeRequired = typeof(RubyOps).GetField("LightScopeRequired");
+
+            /// <summary>
+            /// `$x', `$x ||= v', `$x = v' (RubyOps.ReadCachedGlobalVariable, GetCachedGlobalVariable, SetCachedGlobalVariable) in a light
+            /// frame: read and written by RubyOps.ReadLightGlobalVariable and its siblings, through the declaring scope, which has the
+            /// runtime. They do nothing and answer LightScopeRequired when the name denotes a variable of the frame's - `$~' or `$_'
+            /// under another name (an alias) - or when the scope may be read for something else (a trace_var handler, a Ractor's
+            /// isolation); the frame then makes its scope and does it again with the helper the body was compiled with, as a call
+            /// does whose rule reads the scope. The value assigned is evaluated once, before either. The frame keeps its stack check
+            /// (MakesCalls): some variables run Ruby code when they are read or assigned (ARGF.filename for $FILENAME, #respond_to?
+            /// for $stdout, the trace_var handlers), which may call the method again, as a constant read may call const_missing.
+            /// Null for any other call.
+            /// </summary>
+            private MSA.Expression VisitGlobalVariableCall(MSA.MethodCallExpression/*!*/ node) {
+                MethodInfo light;
+                int scopeIndex;
+                if (node.Method == Methods.ReadCachedGlobalVariable) {
+                    light = _ReadLightGlobalVariable;
+                    scopeIndex = 0;
+                } else if (node.Method == Methods.GetCachedGlobalVariable) {
+                    light = _GetLightGlobalVariable;
+                    scopeIndex = 0;
+                } else if (node.Method == Methods.SetCachedGlobalVariable) {
+                    light = _SetLightGlobalVariable;
+                    scopeIndex = 1;
+                } else {
+                    return null;
+                }
+                if (node.Object != null || node.Arguments.Count != scopeIndex + 2 || !IsScope(node.Arguments[scopeIndex]) ||
+                    !(node.Arguments[scopeIndex + 1] is MSA.ConstantExpression)) {
+                    return null;
+                }
+                // A name that denotes `$~' or `$_' now, an alias made before the method's first call, would make the scope on demand
+                // at every read or write: the frame makes it at its entry instead, as it did before.
+                var globalSite = ((MSA.ConstantExpression)node.Arguments[scopeIndex + 1]).Value as GlobalVariableSite;
+                IronRuby.Runtime.GlobalVariable current;
+                if (globalSite == null || Context != null && Context.TryGetGlobalVariable(globalSite.Name, out current) && current.ReadsScope) {
+                    NeedsScope = true;
+                    return node;
+                }
+                MakesCalls = true;
+                var site = node.Arguments[scopeIndex + 1];
+                var declaringScope = AstUtils.Convert(_declaringScope, typeof(RubyScope));
+                var lazyScope = AstUtils.Convert(_lazyScope, typeof(RubyScope));
+                var result = Ast.Variable(typeof(object), "#global");
+                if (scopeIndex == 0) {
+                    return Ast.Block(new[] { result },
+                        Ast.Assign(result, Ast.Call(light, declaringScope, site)),
+                        Ast.Condition(Ast.ReferenceEqual(result, Ast.Field(null, _LightScopeRequired)), Ast.Call(node.Method, lazyScope, site), result)
+                    );
+                }
+                var value = Ast.Variable(typeof(object), "#global-value");
+                return Ast.Block(new[] { value, result },
+                    Ast.Assign(value, AstUtils.Convert(Visit(node.Arguments[0]), typeof(object))),
+                    Ast.Assign(result, Ast.Call(light, value, declaringScope, site)),
+                    Ast.Condition(Ast.ReferenceEqual(result, Ast.Field(null, _LightScopeRequired)), Ast.Call(node.Method, value, lazyScope, site), result)
+                );
+            }
+
             protected override MSA.Expression/*!*/ VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
                 if (Handling) {
                     var handling = VisitHandlingCall(node);
                     if (handling != null) {
                         return handling;
+                    }
+                }
+                if (LightGlobalsEnabled) {
+                    var global = VisitGlobalVariableCall(node);
+                    if (global != null) {
+                        return global;
                     }
                 }
                 // (a block's body, BlockDefinition.TransformLightCalls, has no flow-control frame of its own: _rfc is null)

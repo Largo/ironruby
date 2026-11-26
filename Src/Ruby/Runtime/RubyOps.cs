@@ -3101,6 +3101,76 @@ namespace IronRuby.Runtime {
             return value;
         }
 
+        /// <summary>
+        /// ReadCachedGlobalVariable in a light frame (MethodDefinition.LightFrameRewriter.VisitGlobalVariableCall), given the
+        /// declaring scope, which has the frame's runtime and nothing else of the frame's. LightScopeRequired, having read nothing,
+        /// when the variable would read more of its scope than the runtime - `$~' or `$_' under another name, an alias such as
+        /// English.rb's `$LAST_MATCH_INFO' - or a non-main Ractor's isolation may: the frame then makes its scope and calls
+        /// ReadCachedGlobalVariable with it. What is read is the variable the decision was made for, not one looked up again,
+        /// which another thread may have aliased in between.
+        /// </summary>
+        public static object ReadLightGlobalVariable(RubyScope/*!*/ declaringScope, GlobalVariableSite/*!*/ site) {
+            var context = declaringScope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return LightScopeRequired;
+            }
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                return plain.Value;
+            }
+            if (variable != null) {
+                return variable.ReadsScope ? LightScopeRequired : context.GetGlobalVariableValue(variable, declaringScope);
+            }
+            if (context.Verbose is bool && (bool)context.Verbose) {
+                context.ReportWarning(String.Format("global variable '${0}' not initialized", site.Name), true);
+            }
+            return null;
+        }
+
+        /// <summary>GetCachedGlobalVariable in a light frame: see ReadLightGlobalVariable.</summary>
+        public static object GetLightGlobalVariable(RubyScope/*!*/ declaringScope, GlobalVariableSite/*!*/ site) {
+            var context = declaringScope.RubyContext;
+            if (context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return LightScopeRequired;
+            }
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                return plain.Value;
+            }
+            if (variable != null) {
+                return variable.ReadsScope ? LightScopeRequired : context.GetGlobalVariableValue(variable, declaringScope);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// SetCachedGlobalVariable in a light frame: see ReadLightGlobalVariable. LightScopeRequired, having assigned nothing, also
+        /// while any trace_var handler is registered (a String handler is evaluated in a scope), and for a name that denotes no
+        /// variable yet, which SetGlobalVariable creates by its name. An ordinary global is assigned in place, any other variable
+        /// that reads no more than the runtime through the general path, minus the lookup by name.
+        /// </summary>
+        public static object SetLightGlobalVariable(object value, RubyScope/*!*/ declaringScope, GlobalVariableSite/*!*/ site) {
+            var context = declaringScope.RubyContext;
+            if (context.AnyGlobalVariableTraced || context.RactorsStarted && !site.IsCoreLibrary && RactorIsolation.IsNonMain(context)) {
+                return LightScopeRequired;
+            }
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                plain.Assign(value);
+                // a handler registered since the test above: it is evaluated in a scope of its own (KernelOps.TraceVariable)
+                context.GlobalVariableAssigned(declaringScope, site.Name, value);
+                return value;
+            }
+            if (variable == null || variable.ReadsScope) {
+                return LightScopeRequired;
+            }
+            context.SetGlobalVariableValue(variable, declaringScope, site.Name, value);
+            return value;
+        }
+
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;

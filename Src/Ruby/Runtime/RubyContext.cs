@@ -3404,6 +3404,20 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// What SetGlobalVariable does for its name, to a variable a GlobalVariableSite found, minus the lookup: a light frame
+        /// decides from the variable that the scope it gives is enough (RubyOps.SetLightGlobalVariable), and a lookup made again
+        /// could find another one, aliased since.
+        /// </summary>
+        internal void SetGlobalVariableValue(GlobalVariable/*!*/ variable, RubyScope scope, string/*!*/ name, object value) {
+            lock (GlobalVariablesLock) {
+                variable.SetValue(this, scope, name, value);
+            }
+            if (_anyGlobalVariableTraced) {
+                FireGlobalVariableTraces(scope, name, value);
+            }
+        }
+
+        /// <summary>
         /// Runs the Kernel#trace_var handlers of a global that has just been assigned outside
         /// SetGlobalVariable (which runs them itself).
         /// </summary>

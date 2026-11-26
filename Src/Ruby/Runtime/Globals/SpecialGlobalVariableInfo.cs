@@ -25,6 +25,24 @@ namespace IronRuby.Runtime {
             _id = id;
         }
 
+        // $~ and the variables made from it, and $_: the innermost method's or eval's (RubyScope.GetInnerMostClosureScope), not the
+        // runtime's. Each of the rest reads the runtime only.
+        internal override bool ReadsScope {
+            get {
+                switch (_id) {
+                    case GlobalVariableId.MatchData:
+                    case GlobalVariableId.MatchLastGroup:
+                    case GlobalVariableId.PreMatch:
+                    case GlobalVariableId.PostMatch:
+                    case GlobalVariableId.EntireMatch:
+                    case GlobalVariableId.LastInputLine:
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+        }
+
         /// <summary>
         /// $&lt; is ARGF, which the standard library defines in Ruby - later than the context is
         /// built, so the constant is read when the variable is asked for rather than cached at
