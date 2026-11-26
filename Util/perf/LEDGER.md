@@ -1359,8 +1359,23 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     that moves it back onto the main thread looks slower (`csv_parse` 1.37 and 0.94 of its time
     in the round-35 gate, while process CPU fell to 0.18-0.37). `invoice-parts.rb` and
     `csv-shapes.rb` use `CLOCK_PROCESS_CPUTIME_ID`, which counts the JIT's background threads
-    too. Untried: switching fibers without a thread (a continuation of the method JIT's own,
-    or a stackless form for the enumerators the prelude makes).
+    too.
+    The stackless form this entry listed as untried was already there (2026-11-26, perf/extiter
+    found it): `Enumerator.cs`'s ExternalCursor walks Array#each / each_index / reverse_each /
+    each_with_index, Hash#each / each_pair / each_key / each_value, Integer#times / upto /
+    downto, an Integer Range, String#each_byte / each_char, Struct#each and each_slice /
+    each_cons over those, while the method is the unredefined one, with no fiber; a `next` there
+    is 67-94 ns against CRuby's 226-234 (`Util/bench/extiter-shapes.rb`). Its end was the cost
+    left - a StopIteration thrown from C# took the catch-site walk, 22 us against CRuby's 0.8 -
+    and perf/extiter (Landed) defers that walk. Still on a fiber, 5-10 us of process CPU per
+    `next` against 0.22-0.36: `map` / `select` / `each_with_object` enumerators (no cursor for
+    them yet: a cursor could keep the fed values for StopIteration#result), `with_index`,
+    `Enumerator::Lazy`, `Enumerator.produce` (generators of the prelude, which run Ruby code
+    between two values: a cursor would call blocks under its lock) and `Enumerator.new`. A raw
+    fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two threads spinning), so the
+    prelude's machinery around it is not where the time is. Untried: cursors for `map` and
+    `select` over an Array; a cursor over a cursor for `with_index`; switching fibers without a
+    thread (a continuation of the method JIT's own).
 36. **Left from round thirty-five**, each smaller than one gap of its own: `...` passed on is
     still a splat of an Array and a block argument (`def m(...) = n(...)` allocates the rest
     per call; the frame is light now); `URI::Generic#query=` and `merge` still run the
@@ -1383,6 +1398,36 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/extiter (2026-11-26) - the StopIteration that ends a cursor's external iteration defers
+  its stack walk, and `loop` reads its result without exposing it (gap 35)** - not gated. A
+  `next` over a built-in source (Array, Hash, Range, Integer#times...) runs on a cursor with no
+  fiber already, at 67-94 ns against CRuby's 226-234; what each such iteration still paid was
+  its end: a StopIteration thrown from C# took the catch-site walk of the whole CLR stack (22-24 us,
+  CRuby 0.8), where one Kernel#raise makes defers it until the exception is exposed
+  (RubyExceptionData.TryDeferCatchSite, RaisedUnkept). Now the cursor's StopIteration is marked
+  unkept (`RubyExceptionData.MarkUnkept`) unless a TracePoint is enabled; the first one, which the
+  cursor keeps as the cause of those after it, takes the walk when it is handed out as a cause
+  (`RubyExceptionData.ExposeCatchSite`, public now). And Kernel#loop rescues StopIteration
+  without `=> stop`, which exposed it, reading the result through `Enumerator.__rescued_stop_result__`
+  (`$!` read with `RubyContext.CurrentExceptionNoExpose`, public now), unless #result is not
+  the prelude's (registered with `__iter_cursor_method__`), when it calls it as before. Switch:
+  `IR_FAST_NEXT=0`. `ruby Util/perf/ab.rb -r 6 Util/bench/extiter-shapes.rb` (new), ns per
+  `next`, CRuby / base f81fc19 / off / new, new/off: 4-element Array drained with
+  `begin/rescue` 1395 / 6275 / 6243 / 1265 (0.20), the same with `loop { e.next }` 1414 / 7028
+  / 7052 / 1730 (0.25), `next` again after the end 766 / 23764 / 23893 / 3882 (0.16), Hash of
+  100 271.9 against 474.8 (0.57), Array and Range of 1000 and `peek` 0.77-0.79; the controls,
+  which keep their fiber (map, select, with_index, lazy, produce, Enumerator.new; 5-11 us against
+  0.22-0.36) and zip, overlap (spreads up to 120% on the fiber rows). `Util/extiter-matrix.rb`
+  (new, 131 probes: every cursor source, results, causes and their backtraces with the first end
+  dropped in a frame that has returned, `loop` with a subclass's, a singleton's and a redefined
+  #result, TracePoint, threads, mutation during the iteration, redefinition before and after the
+  enumerator is made) prints CRuby's output on base, new and new with the switch off;
+  enum-next-, enum-, enumerable2-, block-loop-, loop-light-, full-message-, raise-, jit-raise-,
+  hash-order- and jit-matrix the same on base and new. spec/core/enumerator +
+  kernel/loop_spec (443 examples) and spec/core/exception + enumerable + language/rescue_spec
+  (846) pass on both; 72 named IronRuby.Tests (Enumerator_*, Loop*, Backtrace*, Exception*,
+  Raise*, Rescue*) pass.
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R

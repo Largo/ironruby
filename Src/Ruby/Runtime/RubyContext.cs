@@ -3568,9 +3568,10 @@ namespace IronRuby.Runtime {
 
         /// <summary>
         /// $! for code that only keeps it to restore it later, or to throw it on out of the frame that caught it, which completes
-        /// its backtrace itself.
+        /// its backtrace itself - or that reads it without handing it to anything that could keep it (Kernel#loop takes the
+        /// result of the StopIteration it rescued, Enumerator.__rescued_stop_result__).
         /// </summary>
-        internal Exception CurrentExceptionNoExpose {
+        public Exception CurrentExceptionNoExpose {
             get { return _currentException; }
         }
 

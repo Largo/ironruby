@@ -6849,6 +6849,7 @@ class StopIteration
   def result
     @__result__
   end
+  ::Enumerator.__iter_cursor_method__(self, :result)
 end
 
 module Kernel
@@ -6873,8 +6874,9 @@ module Kernel
     return to_enum(:loop) { ::Float::INFINITY } unless block_given?
     begin
       yield while true
-    rescue ::StopIteration => stop
-      stop.result
+    rescue ::StopIteration
+      # stop.result, without the `=> stop` that would take the walk of the stack for a backtrace nobody reads
+      ::Enumerator.__rescued_stop_result__
     end
   end
 end
