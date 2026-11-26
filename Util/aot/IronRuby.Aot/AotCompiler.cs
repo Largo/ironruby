@@ -733,6 +733,18 @@ namespace IronRuby.Aot {
                 args = new List<Expression>(args) { [0] = held };
                 scope = held;
             }
+            // The arguments are evaluated before the note, in their order: a noted call among them
+            // (`autoload :X, File.expand_path("x", __dir__)`) would take or clear this call's note first.
+            var heldArgs = new List<Expression>(args);
+            for (int i = 1; i < heldArgs.Count; i++) {
+                if (!(heldArgs[i] is ParameterExpression || heldArgs[i] is ConstantExpression)) {
+                    var held = Expression.Variable(heldArgs[i].Type, "#arg" + i);
+                    variables.Add(held);
+                    setup.Add(Expression.Assign(held, heldArgs[i]));
+                    heldArgs[i] = held;
+                }
+            }
+            args = heldArgs;
             var call = makeCall(args);
             Count("const_set/autoload/require_relative/__dir__ calls noting their location");
             var note = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),

@@ -89,6 +89,8 @@ threads.each_value(&:kill)
 stdlib = ->(s) { s.to_s.sub(%r{.*/Src/StdLib/}, "") }
 puts "Gem::RUBYGEMS_DIR: " + stdlib.(Gem::RUBYGEMS_DIR)
 puts "Gem.autoload?(:Installer): " + stdlib.(Gem.autoload?(:Installer))
+# ... and an autoload whose path argument calls __dir__ still records where the autoload is (its own noted location).
+puts "Gem.const_source_location(:Installer): " + Gem.const_source_location(:Installer).map(&stdlib).join(":")
 puts "Gem.ironruby_stdlib_dirs: " + Gem.ironruby_stdlib_dirs.map(&stdlib).join(" ")
 before = $LOADED_FEATURES.size
 require "rubygems/commands/list_command"
