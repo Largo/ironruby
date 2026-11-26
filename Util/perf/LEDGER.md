@@ -800,10 +800,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    see Landed, perf/lightre: one passed to `gsub`, `=~`, `split`, `when` and the like stays out);
    nor a class variable, a `defined?` of a constant or a constant qualified by an expression
    (`@@x`, `defined?(A::B)`, `self.class::C`; `IR_LIGHT_LEXICAL=0`, see Landed, perf/lexical);
+   nor keywords beside a rest or post parameter (`def warn(*msgs, uplevel: nil)`;
+   `IR_LIGHT_KEYWORD_REST=0`) nor a hash passed on as keywords (`g(*a, **o)`;
+   `IR_LIGHT_KEYWORD_SPLAT=0`, both see Landed, perf/lexical2);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
    Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb, Util/hash-literal-matrix.rb,
-   Util/masgn-matrix.rb, Util/regex-light-matrix.rb and Util/lexical-light-matrix.rb are their
-   matrices.
+   Util/masgn-matrix.rb, Util/regex-light-matrix.rb, Util/lexical-light-matrix.rb and
+   Util/keyword-rest-light-matrix.rb are their matrices.
    What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
    them not light). By its first table: keyword parameters 1,257 (37 of them the
    prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
@@ -1450,6 +1453,61 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lexical2 (/perf-step, 2026-11-26, on 2f8c31c) - keywords beside a rest or post
+  parameter, and a hash passed on as keywords, in light frames (`IR_LIGHT_KEYWORD_REST`,
+  `IR_LIGHT_KEYWORD_SPLAT`, gap 9)** - census only, not gated. Chosen over the other "not a
+  light frame" lines of the census of 2f8c31c because it is the one the prelude has: 24 of its
+  101 methods (`String#each_line`, `String#lines`, `IO#initialize`, `File#initialize`,
+  `Data#initialize`, `Kernel#open`, `IO.readlines`, `Enumerator.produce`), against 2 of the 71
+  LambdaDefinition methods (whose Proc makes the scope anyway) and 4 `defined?` of anything else;
+  "body needs its scope after the rewrite" (104) is many causes. perf/lkw had left the line out
+  without an attempt ("the general lowering binds the positionals out of one splat with helpers
+  `IsScopeFree` does not take").
+  - The lowering is `def m(*?args?)` and a prologue of `SplatParameterRead`s
+    (PrismAstBridge.LowerGeneralParameters): one runtime call each on the hidden local, none
+    taking the scope but `PopKeywordArguments`, which reads the runtime's equality comparer for
+    the empty hash of a call without keywords. The rest Array is bound by the RubyMethodInfo in
+    either frame, so the prologue empties the same call-owned Array (the matrix checks that the
+    caller's splatted Array and double-splatted Hash are left alone). A signature a
+    parameterless `super` cannot rebuild by name (an anonymous rest with posts) keeps its copy
+    of the splat (`SuperSplat`) and its scope.
+  - That alone: +58. 30 more then passed the filter and failed in the rewriter because they pass
+    `**opts` on - the shape perf/lkw also named ("a body that passes `**opts` on (52)") and that
+    every light-frame candidate had: `KeywordArgumentSplat`'s helpers (`SplatKeywordHash`,
+    `SplatKeywordHashIfHash`, `KeywordSplatArgument`, `PassOnKeywordRest`) read only the
+    runtime's equality comparer. `IR_LIGHT_KEYWORD_SPLAT` alone +70; both +158. `a: 1, **h`
+    (KeywordSplatMerge, 19 methods) is still refused by `IsScopeFree`.
+  - Census (Src/StdLib + AWFY, 28,376 methods): light frames 26,535 -> 26,693 (93.5% -> 94.1%),
+    158 moved up, none down; JIT compiles / maybe / never unchanged (3,296 / 2,923 / 22,157);
+    "body needs its scope after the rewrite" 104 -> 34. No AWFY method moved. `-c` on a
+    Richards trace 0 differ.
+  - Instructions a call (`Util/perf/callgrind/count.sh` through `ab.rb -i -r 1 -n 20000`, both
+    switches off -> on, new shapes in `prelude-cost.rb`): `kr_rest` (`def rest(*a, k: 1)`)
+    5,720 -> 5,325 (0.93), `kr_pass` (`pass(*a, **o) = inner(*a, **o)`) 12,272 -> 11,359
+    (0.93), `kr_lines` (`"ab".each_line(chomp: true) { }`) 17,670 -> 17,436 (0.99); the
+    controls `kr_kw` (`def kw(a, k: 1)`, light before) and `x_const` 1.00. Below perf-frame's
+    15% bar for a shape: the scope was not most of what these calls cost. `kr_rest` is still
+    3.4 times `kr_kw`; the next step for this shape is the lowering itself - binding the
+    positionals in the calling convention, as `def m(a, b = 1, k: 2)` already is
+    (`KeywordsAfterOptionals`), instead of out of one splat - not the frame. Not timed.
+  - `Util/keyword-rest-light-matrix.rb` (new: the signatures, binding errors, positional Hash,
+    `**nil`, defaults, binding, local_variables, block_given?, zsuper with a rest and with
+    `**rest`, super_method, send, Method#call, to_proc, arity and parameters, redefinition,
+    TracePoint, `**h` with nil, `{}`, to_hash, non-Hashes, the caller's Hash not aliased, and
+    String#each_line, #lines, Data#initialize, Array#sample, Kernel#warn) prints CRuby 4.0's
+    output on the unchanged build, and on the change by default, with either switch off, with
+    `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` and R2R; the keyword, lexical,
+    jit, jit-calls, block-given, light-rest, splat-pass and hash-literal matrices agree with the
+    baseline and CRuby. IronRuby.Tests `Method_LightFrameKeywordRest1` (new) and 102 named
+    tests pass.
+  - Two separate commits fix what perf/lexical found: `defined?(@@x)` and
+    `class_variable_defined?` answer true for a class variable an ancestor overtook
+    (`RubyModule.IsClassVariableDefined`, MRI's rb_cvar_defined), and a method defined in a
+    `refine` block reads the class variables of the module around it (the class-variable walk
+    passes over a refinement, as vm_get_cvar_base passes over a cref pushed by an eval). Tests
+    `ClassVariables_DefinedOvertaken1` and `ClassVariables_Refinement1` have CRuby's output;
+    `Util/lexical-light-matrix.rb` probes both again and prints CRuby's output in every mode.
+
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
   `$/`, `$!` or `$x = v` kept 258 methods out of light frames by themselves (Kernel#puts among them,
@@ -1535,7 +1593,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   jit-calls-matrix, block-given-matrix and light-rest-matrix agree with the baseline and CRuby;
   census `-c` on a Richards trace 0 differ; IronRuby.Tests `Method_LightFrameLexical1` (new)
   and 45 named class-variable, constant and light-frame tests pass. Found on the way, not
-  fixed (they differ on master too, so the matrix leaves them out): `defined?(@@x)` raises the
+  fixed here (fixed in perf/lexical2, and the matrix probes both again): `defined?(@@x)` raises the
   "overtaken" RuntimeError where CRuby answers "class variable"; `@@x` in a method of a `refine`
   block resolves to the refinement, CRuby to the module around it. And CRuby 4.0.10 crashes
   reading a class variable removed after its inline cache was warmed (a dangling cache), so the
