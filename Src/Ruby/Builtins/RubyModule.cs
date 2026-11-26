@@ -937,6 +937,7 @@ namespace IronRuby.Builtins {
             }
             _mixins = ArrayUtils.Copy(module._mixins);
             _prepends = ArrayUtils.Copy(module._prepends);
+            _inheritedLookups = null;
 
             // dependentModules - skip
             // tracker - skip, .NET members not copied
@@ -2485,6 +2486,7 @@ namespace IronRuby.Builtins {
 
             InitializeMethodsNoLock();
             _methods[name] = method;
+            _inheritedLookups = null;
 
             if (IsHelperName(name)) {
                 if (_context.Loader.IsLoadingCorePrelude) {
@@ -2590,6 +2592,7 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
             Debug.Assert(_methods != null);
             _methods.Add(name, method);
+            _inheritedLookups = null;
         }
 
         /// <summary>
@@ -2598,6 +2601,7 @@ namespace IronRuby.Builtins {
         internal bool RemoveMethodNoCacheInvalidation(string/*!*/ name) {
             Context.RequiresClassHierarchyLock();
             Debug.Assert(_methods != null);
+            _inheritedLookups = null;
             return _methods.Remove(name);
         }
 
@@ -2635,6 +2639,7 @@ namespace IronRuby.Builtins {
                         }
 
                         _methods.Remove(name);
+                        _inheritedLookups = null;
 
                         if (_refinedModule != null) {
                             _context.RefinedMethodChanged(_refinedModule, name);
@@ -3378,6 +3383,7 @@ namespace IronRuby.Builtins {
                     TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
                     TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
                     _methods.Add(name, method);
+                    _inheritedLookups = null;
                     return true;
                 }
             }
@@ -3939,6 +3945,7 @@ namespace IronRuby.Builtins {
             }
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
+            _inheritedLookups = null;
             _context.ConstantsChanged();
         }
 
@@ -4024,6 +4031,7 @@ namespace IronRuby.Builtins {
                 var expanded = SpliceBefore(oldMixins, mixinIndex, added);
                 if (expanded.Length != oldMixins.Length) {
                     MixinsUpdated(oldMixins, _mixins = expanded);
+                    _inheritedLookups = null;
                 }
             }
 
@@ -4033,6 +4041,7 @@ namespace IronRuby.Builtins {
                 var expanded = SpliceBefore(old, prependIndex, added);
                 if (expanded.Length != old.Length) {
                     PrependsUpdated(old, _prepends = expanded);
+                    _inheritedLookups = null;
                 }
             }
 
@@ -4086,6 +4095,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
+            _inheritedLookups = null;
             _context.ConstantsChanged();
 
             if (!IsClass) {
@@ -4132,6 +4142,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
+            _inheritedLookups = null;
             _context.ConstantsChanged();
 
             if (!IsClass) {

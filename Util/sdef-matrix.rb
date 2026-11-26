@@ -270,5 +270,71 @@ os.each_with_index { |o, i| o.c = i; def o.a = -1 if i % 5 == 0 }
 row "ostruct after writers", os.sum { |o| o.a + o.c + o.to_h.size }
 row "ostruct dig/==", [os[3].dig(:a), os[3] == os[3].dup, os[5].delete_field(:a), (os[5].a rescue $!.class), os[1].frozen?, os[1].freeze.frozen?, (begin; os[1].a = 2; rescue => e; e.class; end)]
 
+# ---------------------------------------------------------------- 12. lookups on a singleton class that its superclass's cache answers
+# A singleton class with no modules of its own finds what its superclass finds for a name it has no entry for. Each row asks
+# (respond_to?, method_defined?, a call, a hook) on objects whose singleton class has just been made or re-versioned, then changes
+# what the object, its singleton class or its class has, and asks again.
+class C12
+  def a = :a
+  def pv = :pv
+  private :pv
+  def pt = :pt
+  protected :pt
+end
+class C12S < C12; private :a; end
+module M12; def m12 = :m12; end
+module P12; def a = [:pre, super]; end
+module E12
+  def self.extended(o) = o.instance_variable_set(:@e12, true)
+  def e12 = :e12
+end
+def rt12(o, n) = [o.respond_to?(n), o.respond_to?(n, true)]
+# the answers of n calls of one site, counted: [answer, how many], in order of first appearance
+def tally12(n = 300) = n.times.map { |i| yield i }.tally.to_a
+row "name nobody asked for", tally12(300) { |i| o = C12.new; o.singleton_class; a = o.respond_to?(:a); n = :"u12_#{i}"
+  o.define_singleton_method(n) { i }; [a, o.respond_to?(n), o.public_send(n) == i, o.singleton_class.method_defined?(n)] }
+row "def o.x after lookups", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :"d12_#{i}"); o.instance_eval("def d12_#{i} = 1")
+  r + rt12(o, :"d12_#{i}") }
+row "asked, then defined", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :late12); (def o.late12 = 1) if i.odd?
+  r + rt12(o, :late12) + [o.singleton_class.method_defined?(:late12), (o.late12 rescue $!.class)] }
+row "undef and remove in singleton", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :a); sc = o.singleton_class
+  if i % 3 == 0 then sc.send(:undef_method, :a) elsif i % 3 == 1 then (def o.a = :own); sc.send(:remove_method, :a) end
+  r + rt12(o, :a) + [(o.a rescue $!.class)] }
+row "private in singleton", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :a); o.singleton_class.send(:private, :a) if i.even?
+  r + rt12(o, :a) + [(o.a rescue $!.class), o.send(:a)] }
+row "private and protected", tally12(200) { |i| o = C12.new; o.singleton_class; rt12(o, :pv) + rt12(o, :pt) + [(o.pv rescue $!.class), (o.pt rescue $!.class)] }
+row "forwarder in subclass", tally12(300) { |i| o = C12S.new; o.singleton_class; r = rt12(o, :a); o.singleton_class.send(:public, :a) if i % 4 == 0
+  r + rt12(o, :a) + [(o.a rescue $!.class)] }
+row "respond_to_missing? added", tally12(300) { |i| o = C12.new; o.singleton_class
+  C12.class_eval { def respond_to_missing?(n, p = false) = n == :ghost12 || super } if i == 150
+  rt12(o, :ghost12) }
+row "method_missing added", tally12(300) { |i| o = C12.new; o.singleton_class
+  C12.class_eval { def method_missing(n, *a) = n == :ghost12b ? :mm : super } if i == 150
+  [(o.ghost12b rescue $!.class), o.respond_to?(:ghost12b)] }
+$c12_added = []
+row "singleton_method_added hook", tally12(300) { |i| o = C12.new; o.singleton_class; o.respond_to?(:a)
+  C12.class_eval { def singleton_method_added(n) = $c12_added << n } if i == 150
+  o.define_singleton_method(:h12) { 1 }; $c12_added.include?(:h12) }
+row "include and prepend later", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :m12) + [o.a]
+  o.singleton_class.include(M12) if i % 3 == 0; o.singleton_class.prepend(P12) if i % 3 == 1
+  r + rt12(o, :m12) + [o.a, o.singleton_class.method_defined?(:m12)] }
+row "extend with extended", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :e12); o.extend(E12) if i.odd?
+  r + rt12(o, :e12) + [(o.e12 rescue $!.class), o.instance_variable_get(:@e12)] }
+module R12; refine(C12) { def a = :refined }; end
+module Use12
+  using R12
+  def self.go(o) = [o.a, o.respond_to?(:a)]
+end
+row "refined over singletons", tally12(300) { |i| o = C12.new; o.singleton_class; (def o.a = :own) if i % 5 == 0; Use12.go(o) + [o.a] }
+row "class gains method later", tally12(300) { |i| o = C12.new; o.singleton_class; r = rt12(o, :gain12)
+  C12.class_eval { def gain12 = :g } if i == 150; r + rt12(o, :gain12) }
+# two threads define and remove singleton methods on one object and ask after each, while a third asks about its class's method
+s12 = C12.new; s12.singleton_class
+t12 = 2.times.map { |t| Thread.new { bad = 0; 1500.times { |k| n = :"th#{t}_#{k % 7}"
+  s12.define_singleton_method(n) { k }; bad += 1 unless s12.respond_to?(n) && s12.public_send(n) == k
+  s12.singleton_class.send(:remove_method, n); bad += 1 if s12.respond_to?(n) }; bad } }
+t12 << Thread.new { bad = 0; 6000.times { bad += 1 unless s12.respond_to?(:a) && s12.a == :a && !s12.respond_to?(:pv) }; bad }
+row "threads define while one asks", t12.map(&:value)
+
 $stderr.puts "jit=#{defined?(IronRuby) ? 'ironruby' : 'cruby'}"
 puts "end"
