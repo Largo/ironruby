@@ -842,10 +842,34 @@ namespace IronRuby.Runtime {
             if (!IsRefinedHere(scope, value, "to_s")) {
                 return null;
             }
+            // MRI's objtostring takes a Symbol's name while Symbol#to_s is the built-in one, refined or not (vm_objtostring:
+            // check_method_basic_definition); a redefined Symbol#to_s is called as any other, under the refinements.
+            if (value is RubySymbol && IsBuiltinSymbolToS(context)) {
+                return null;
+            }
             var site = context.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object>>(
                 "to_s", new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
             return ToSDefaultConversion(context, value, site.Target(site, scope, value));
+        }
+
+        private static bool IsBuiltinSymbolToS(RubyContext/*!*/ context) {
+            var symbolClass = context.GetClass(typeof(RubySymbol));
+            RubyMemberInfo method;
+            using (context.ClassHierarchyLocker()) {
+                method = symbolClass.ResolveMethodNoLock("to_s", VisibilityContext.AllVisible).Info;
+            }
+            // the library's Symbol#to_s (SymbolOps.ToString), not another library method aliased as to_s
+            if (!(method is RubyLibraryMethodInfo) || method.DeclaringModule != symbolClass) {
+                return false;
+            }
+            var members = method.GetMembers();
+            var clrMethod = (members.Length == 1) ? members[0] as MethodInfo : null;
+            if (clrMethod == null || clrMethod.Name != "ToString") {
+                return false;
+            }
+            var parameters = clrMethod.GetParameters();
+            return parameters.Length == 1 && parameters[0].ParameterType == typeof(RubySymbol);
         }
 
         /// <summary>

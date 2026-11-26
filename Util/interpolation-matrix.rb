@@ -301,8 +301,8 @@ def r_after(x) = "#{x}"
 t('defined before using') { [r_before(1), r_before(:s), r_before(nil), r_before(Shown.new)] }
 t('defined before, subclass') { r_before(ShownSub.new) }
 t('a nested def run again after using') { r_nested(1) }
-# (not a Symbol: CRuby interpolates one without asking a refined #to_s, IronRuby asks it)
 t('defined after using') { [r_after(1), r_after(nil), r_after(Shown.new)] }
+t('a Symbol, defined after using (no refined #to_s asked)') { [r_after(:s), "#{:s}", (x = :t; "#{x}")] }
 t('defined after, subclass') { r_after(ShownSub.new) }
 t('a refinement that exists but is not used') { r_after(1.5) }
 t('at the call site') { [r_before(2), "#{2}"] }

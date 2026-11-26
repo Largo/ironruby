@@ -620,5 +620,30 @@ r = nil
 [0, [[1, 2], [0], [1]]]
 ");
         }
+
+        /// <summary>
+        /// "#{sym}" is the Symbol's name while Symbol#to_s is the built-in one, even under a refinement of it (MRI's
+        /// vm_objtostring); a redefined Symbol#to_s is called as any other to_s, refinements included.
+        /// </summary>
+        public void Refinements17() {
+            TestOutput(@"
+module R
+  refine(Symbol) { def to_s = ""refined"" }
+  refine(Integer) { def to_s = ""ri"" }
+end
+using R
+x = :s; s = +""str""
+p ""#{x}"", ""#{:t}"", ""#{s}"", ""#{1}"", x.to_s
+Symbol.alias_method :to_s, :inspect
+p ""#{x}""
+", @"
+""s""
+""t""
+""str""
+""ri""
+""refined""
+""refined""
+");
+        }
     }
 }
