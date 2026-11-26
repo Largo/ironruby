@@ -613,6 +613,8 @@ namespace IronRuby.Builtins {
                 return pid;
             }
 
+            // MRI's exec writes nothing out that STDOUT buffers; nor does the exit here.
+            RubyContext.DiscardBufferedOutputAtExit();
             IntPtr handle;
             if (!Forget(pid, out handle)) {
                 Environment.Exit(0);

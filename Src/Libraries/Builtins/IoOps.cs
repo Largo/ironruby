@@ -256,6 +256,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static RubyIO/*!*/ InitializeCopy(RubyIO/*!*/ self, [NotNull]RubyIO/*!*/ source) {
             Stream stream = source.GetStream();
+            // MRI's rb_io_init_copy flushes the original first: what it buffered is written
+            // before anything the copy writes.
+            if (source.Mode.CanWrite()) {
+                FlushWrites(source);
+            }
             int descriptor;
 
             // #dup is dup(2): the copy gets a descriptor of its own, so that reopening the
@@ -290,6 +295,9 @@ namespace IronRuby.Builtins {
             self.SetStream(stream);
             self.SetFileDescriptor(descriptor);
             self.Mode = source.Mode;
+            // rb_io_init_copy copies fptr->mode, FMODE_SYNC with it: STDERR.dup is sync, and
+            // STDERR reopened back from it (the way a redirection is undone) stays so.
+            self.AutoFlush = source.AutoFlush;
             self.CopyEncodingsFrom(source);
             self.ConversionOptions = source.ConversionOptions;
             if (source.Timeout != null) {
@@ -360,6 +368,8 @@ namespace IronRuby.Builtins {
             // when there is some; with nothing read the text stays, as it does when a path is
             // reopened.
             self.UnreadPendingChars();
+            // and writes out what it buffers, before the descriptor names another file
+            FlushBeforeReopen(self);
 
             // MRI's reopen is dup2(2): it points *this descriptor* at the other one's file,
             // which is why everything started afterwards inherits the redirection. Pointing
@@ -370,6 +380,9 @@ namespace IronRuby.Builtins {
             Stream redirected;
             if (RubyIO.TryRedirectDescriptor(self, source, out redirected)) {
                 self.Mode = source.Mode;
+                // io_reopen copies fptr->mode, FMODE_SYNC with it: STDOUT reopened onto STDERR
+                // writes through as STDERR does, and onto a pipe is buffered as the pipe's IO is.
+                self.AutoFlush = source.AutoFlush;
                 if (redirected != null) {
                     self.Context.SetStream(self.GetFileDescriptor(), redirected);
                     self.SetStream(redirected);
@@ -389,6 +402,7 @@ namespace IronRuby.Builtins {
             self.Context.RedirectFileDescriptor(self.GetFileDescriptor(), source.GetFileDescriptor());
             self.SetStream(source.GetStream());
             self.Mode = source.Mode;
+            self.AutoFlush = source.AutoFlush;
             CopyPath(self, source);
             return self;
         }
@@ -499,8 +513,19 @@ namespace IronRuby.Builtins {
             return mode;
         }
 
+        /// <summary>
+        /// MRI's io_reopen and rb_io_reopen flush a writable IO first: what was written before the
+        /// reopen goes where the IO pointed then, not to the file it points to afterwards.
+        /// </summary>
+        private static void FlushBeforeReopen(RubyIO/*!*/ io) {
+            if (!io.Closed && io.Mode.CanWrite()) {
+                FlushWrites(io);
+            }
+        }
+
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
+            FlushBeforeReopen(io);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
             // reopened by path, an IO answers that path, and so does a File (MRI's rb_io_reopen
             // replaces fptr->pathv), whose #lstat then looks at the new one
@@ -1335,8 +1360,9 @@ namespace IronRuby.Builtins {
                 // Writes currently go straight to the descriptor, so WritePending is only the
                 // state MRI uses for buffering warnings. Do not probe a pipe merely because it
                 // was written: that manufactures EPIPE after its reader has consumed the data.
-                // A failed explicit #flush is different; MRI retries it from #close.
-                if (!keepDescriptor && self.GetStream().WriteFlushFailed) {
+                // A failed explicit #flush is different; MRI retries it from #close. So is what a
+                // buffered STDOUT still holds: it is written now, and a failure is #close's.
+                if ((!keepDescriptor && self.GetStream().WriteFlushFailed) || self.HasBufferedOutput) {
                     self.Flush();
                 }
             } catch (IOException e) {
@@ -1792,7 +1818,7 @@ namespace IronRuby.Builtins {
             if (stream.DataBuffered || self.HasPendingChars) {
                 throw RubyExceptions.CreateIOError("sysseek for buffered IO");
             }
-            if (stream.WritePending) {
+            if (self.IsConsoleOutput ? self.HasBufferedOutput : stream.WritePending) {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("sysseek for buffered IO"));
             }
             self.Flush();
@@ -1932,9 +1958,11 @@ namespace IronRuby.Builtins {
         public static int SysWrite(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyContext/*!*/ context, RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
 
-            // MRI warns about what its write buffer holds; read-ahead is simply given back.
+            // MRI warns about what its write buffer holds; read-ahead is simply given back. For
+            // standard output that is the buffer ConsoleStream keeps, which a write too large for
+            // it has just emptied; WritePending says only that something was written.
             RubyBufferedStream stream = self.GetWritableStream();
-            if (stream.WritePending) {
+            if (self.IsConsoleOutput ? self.HasBufferedOutput : stream.WritePending) {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("syswrite for buffered IO"));
             }
 
@@ -1969,6 +1997,16 @@ namespace IronRuby.Builtins {
                     throw NonBlockingError(self.Context, false, "write would block");
                 }
                 return written;
+            }
+
+            // STDOUT holding output in its buffer (not a terminal): MRI's syswrite is a write(2)
+            // that goes past it, so what the buffer holds comes out after these bytes.
+            try {
+                if (count > 0 && self.TryWriteUnbuffered(val.ToByteArray(), 0, count)) {
+                    return count;
+                }
+            } catch (IOException e) {
+                throw TranslateStreamError(e);
             }
 
             // syswrite raises Errno::EPIPE even on STDOUT (MRI signals only for buffered writes)
@@ -3680,6 +3718,12 @@ namespace IronRuby.Builtins {
                             dstIO.WriteRawBytes(userBuffer, 0, bytesRead);
                         } else {
                             dstIO.WriteRawBytes(buffer, 0, bytesRead);
+                        }
+                        // MRI's copy_stream writes with write(2) past the destination's buffer,
+                        // after flushing it: a buffered STDOUT (not a terminal) is written out as
+                        // each chunk arrives, so a reader waiting on it sees it.
+                        if (dstIO.HasBufferedOutput) {
+                            dstIO.Flush();
                         }
                     } else if (dstStream != null) {
                         if (userBuffer != null) {

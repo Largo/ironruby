@@ -177,6 +177,7 @@ namespace IronRuby.StandardLibrary.Pty {
             [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions,
             object pgroup, bool closeOthers) {
 
+            context.FlushStandardStreams(false);    // MRI forks, after prefork()
             int master, slave;
             string slaveName;
             GetDevice(false, out master, out slave, out slaveName);

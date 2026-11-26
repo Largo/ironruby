@@ -56,6 +56,9 @@ namespace IronRuby.Builtins {
                     break;
 
                 case ConsoleStreamType.Output:
+                    if (!IsSetByHost(true)) {
+                        FlushWriteBuffer();
+                    }
                     _io.OutputWriter.Flush();
                     break;
 
@@ -76,6 +79,14 @@ namespace IronRuby.Builtins {
         /// The descriptor itself stays open, as it did before.
         /// </summary>
         protected override void Dispose(bool disposing) {
+            // STDOUT.close writes out what it holds first, as MRI's fptr_finalize does.
+            if (disposing && _consoleType == ConsoleStreamType.Output && !IsSetByHost(true)) {
+                try {
+                    FlushWriteBuffer();
+                } catch (Exception) {
+                    // nobody is left to tell
+                }
+            }
             if (disposing && _consoleType == ConsoleStreamType.Input) {
                 var raw = _rawInput;
                 if (raw != null) {
@@ -112,8 +123,295 @@ namespace IronRuby.Builtins {
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             bool output = _consoleType == ConsoleStreamType.Output;
             Stream stream = output ? _io.OutputStream : _io.ErrorStream;
+            bool setByHost = IsSetByHost(output);
+            Stream target = GetUnbufferedStream(stream, output, setByHost) ?? stream;
+            if (!output || setByHost) {
+                target.Write(buffer, offset, count);
+                return;
+            }
+            if (OutputIsTerminal() || !CanBuffer(stream, target)) {
+                FlushWriteBuffer();
+                target.Write(buffer, offset, count);
+                return;
+            }
+            WriteBuffered(target, buffer, offset, count);
+        }
+
+        #region Write buffer
+
+        // MRI's IO_WBUF_CAPA_MIN.
+        private const int WriteBufferCapacity = 8192;
+
+        // MRI keeps what is written to standard output in a buffer of its own (fptr->wbuf) unless
+        // the descriptor is a terminal (FMODE_TTY) or #sync is set, and writes it out when it fills,
+        // on #flush, before a child process is started and as the process exits - but not on
+        // exit!, and not when the process is killed. Writing every #print and #puts through at once
+        // made output of many small writes cost a write(2) each, and let a reader at a pipe see it
+        // in pieces. Only the process's own standard output is buffered: a stream a host gave
+        // SharedIO (the tests, an embedder) is written to as before, as is standard error, whose
+        // #sync is true.
+        //
+        // The buffer is the process's, not this stream's: every runtime in the process
+        // (IronRuby.create_engine, a host's engines) writes descriptor 1 through a ConsoleStream of
+        // its own, and with a buffer each they reached the descriptor in the order the buffers
+        // were written out rather than the order the runtimes wrote - an inner engine's line
+        // after the outer one's that followed it, and a child started from one runtime saw what
+        // the other still held come after its own output. One buffer for the one descriptor keeps
+        // the order every write was made in, and every runtime's flush points (#flush, a child
+        // starting, the runtime's shutdown) write out all of it. Whatever is left when the last
+        // runtime is done goes out once, as the process exits.
+        private static readonly object _writeLock = new object();
+        private static byte[] _writeBuffer;
+        private static volatile int _writeCount;
+        // where the buffered bytes are going: the stream that was standard output when they were written
+        private static Stream _writeTarget;
+
+        // Set around a #puts that writes a line and its end in one write (PrintOps.Puts): the
+        // length of the end #puts appended as it reaches this stream - "\n", or "\r\n" after
+        // text-mode translation. A "\r" that ended the line itself stays with the line.
+        [ThreadStatic]
+        internal static int SplitBeforeLineEnd;
+
+        /// <summary>Whether this is the process's standard output and the buffer holds bytes not yet written.</summary>
+        internal bool HasBufferedBytes {
+            get { return _writeCount > 0 && _consoleType == ConsoleStreamType.Output && !IsSetByHost(true); }
+        }
+
+        // A stream only the DLR's TextStream over Console.Out (a host with basic console support)
+        // is not buffered: it writes through Console.Out, which writes the buffer out first
+        // (FlushingConsoleWriter), and the two locks would be taken in both orders.
+        private static bool CanBuffer(Stream/*!*/ stream, Stream/*!*/ target) {
+            if (!ReferenceEquals(stream, target)) {
+                return true;
+            }
+            var name = stream.GetType().FullName;
+            return name != null && name.EndsWith("ConsoleStream", StringComparison.Ordinal);
+        }
+
+        private static void WriteBuffered(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
+            // The line end is the second of the two pieces MRI buffers one after the other; both
+            // go in under one lock.
+            int end = SplitBeforeLineEnd;
+            SplitBeforeLineEnd = 0;
+            if (end > count) {
+                end = 0;
+            }
+            lock (_writeLock) {
+                if (_writeCount > 0 && !ReferenceEquals(_writeTarget, target)) {
+                    FlushWriteBufferNoLock();
+                }
+                if (end > 0 && end < count) {
+                    WriteBufferedNoLock(target, buffer, offset, count - end);
+                    WriteBufferedNoLock(target, buffer, offset + count - end, end);
+                } else {
+                    WriteBufferedNoLock(target, buffer, offset, count);
+                }
+            }
+            // outside the lock: Console.SetOut takes the console's own lock
+            if (!_hooksInstalled && _writeCount > 0) {
+                InstallHooks();
+            }
+        }
+
+        private static void WriteBufferedNoLock(Stream/*!*/ target, byte[]/*!*/ buffer, int offset, int count) {
+            // MRI's io_binwrite: what still fits is appended; when it does not, or it fills the
+            // buffer exactly, the buffer and the new bytes go out together in one writev(2).
+            if (_writeCount + count < WriteBufferCapacity) {
+                if (_writeBuffer == null) {
+                    _writeBuffer = new byte[WriteBufferCapacity];
+                }
+                Buffer.BlockCopy(buffer, offset, _writeBuffer, _writeCount, count);
+                _writeTarget = target;
+                _writeCount += count;
+                return;
+            }
+
+            if (_writeCount == 0) {
+                target.Write(buffer, offset, count);
+                return;
+            }
+
+            byte[] all = new byte[_writeCount + count];
+            Buffer.BlockCopy(_writeBuffer, 0, all, 0, _writeCount);
+            Buffer.BlockCopy(buffer, offset, all, _writeCount, count);
+            // Forgotten before the write: if it fails (EPIPE) the bytes are not tried again at exit.
+            _writeCount = 0;
+            _writeTarget = null;
+            target.Write(all, 0, all.Length);
+        }
+
+        /// <summary>Writes out what the process's standard output buffers, whichever runtime wrote it.</summary>
+        internal static void FlushWriteBuffer() {
+            if (_writeCount == 0) {
+                return;
+            }
+            lock (_writeLock) {
+                FlushWriteBufferNoLock();
+            }
+        }
+
+        private static void FlushWriteBufferNoLock() {
+            int count = _writeCount;
+            Stream target = _writeTarget;
+            _writeCount = 0;
+            _writeTarget = null;
+            if (count > 0 && target != null) {
+                target.Write(_writeBuffer, 0, count);
+            }
+        }
+
+        /// <summary>
+        /// IO#syswrite: one write(2) to the descriptor, past whatever the buffer holds, as in MRI.
+        /// </summary>
+        internal void WriteUnbuffered(byte[]/*!*/ buffer, int offset, int count) {
+            bool output = _consoleType == ConsoleStreamType.Output;
+            Stream stream = output ? _io.OutputStream : _io.ErrorStream;
             (GetUnbufferedStream(stream, output, IsSetByHost(output)) ?? stream).Write(buffer, offset, count);
         }
+
+        /// <summary>Whether writes are held in the buffer rather than written through.</summary>
+        internal bool IsBuffering {
+            get {
+                if (_consoleType != ConsoleStreamType.Output || IsSetByHost(true) || OutputIsTerminal()) {
+                    return false;
+                }
+                Stream stream = _io.OutputStream;
+                return CanBuffer(stream, GetUnbufferedStream(stream, true, false) ?? stream);
+            }
+        }
+
+        private static readonly object _hooksLock = new object();
+        private static volatile bool _hooksInstalled;
+        private static bool _exitHandlerInstalled;
+        private static volatile bool _discardAtExit;
+
+        // Installed when the buffer first holds something: the exit handler, and Console.Out's
+        // flush before each write (see FlushingConsoleWriter).
+        private static void InstallHooks() {
+            lock (_hooksLock) {
+                if (_hooksInstalled) {
+                    return;
+                }
+                _hooksInstalled = true;
+                if (!_exitHandlerInstalled) {
+                    _exitHandlerInstalled = true;
+                    AppDomain.CurrentDomain.ProcessExit += (sender, e) => FlushAtExit();
+                }
+                try {
+                    TextWriter current = Console.Out;
+                    if (!(current is FlushingConsoleWriter)) {
+                        Console.SetOut(new FlushingConsoleWriter(current));
+                    }
+                } catch (Exception) {
+                    // output from .NET code may then overtake what Ruby buffered, as it would without this
+                }
+            }
+        }
+
+        // What no runtime's shutdown wrote out: a runtime nobody shut down (an engine a host or a
+        // script created and left), or one that wrote after the others had shut down.
+        private static void FlushAtExit() {
+            if (_discardAtExit || _writeCount == 0) {
+                return;
+            }
+            // A thread stuck writing to a full pipe holds the lock; the process exits anyway.
+            if (System.Threading.Monitor.TryEnter(_writeLock, 1000)) {
+                try {
+                    FlushWriteBufferNoLock();
+                } catch (Exception) {
+                    // the process is on its way out
+                } finally {
+                    System.Threading.Monitor.Exit(_writeLock);
+                }
+            }
+        }
+
+        /// <summary>
+        /// exit! and exec: MRI's _exit(2) and execve(2) leave whatever standard output had
+        /// buffered unwritten, and so does this process when it exits now.
+        /// </summary>
+        internal static void DiscardBufferedOutputAtExit() {
+            _discardAtExit = true;
+        }
+
+        /// <summary>
+        /// Console.Out while Ruby's standard output buffers: System::Console.WriteLine from Ruby, or
+        /// a host's own output, goes to descriptor 1 too, past Ruby's buffer, and came out before
+        /// lines Ruby had printed earlier. As in a C extension that writes with printf(3) through a
+        /// FILE of its own, the order is then only kept if Ruby's buffer is written out first,
+        /// which this does before every write; with the buffer empty it costs one read of a field.
+        /// Everything else - the encoding, the line end, the writer's own flushing - is the
+        /// wrapped writer's.
+        /// </summary>
+        private sealed class FlushingConsoleWriter : TextWriter {
+            private readonly TextWriter _inner;
+
+            public FlushingConsoleWriter(TextWriter/*!*/ inner)
+                : base(inner.FormatProvider) {
+                _inner = inner;
+            }
+
+            private static void Before() {
+                // exit! and exec leave the buffer unwritten, even when .NET flushes Console.Out as it exits
+                if (_writeCount > 0 && !_discardAtExit) {
+                    FlushWriteBuffer();
+                }
+            }
+
+            public override Encoding Encoding => _inner.Encoding;
+
+            public override string NewLine {
+                get => _inner.NewLine;
+                set => _inner.NewLine = value;
+            }
+
+            public override void Write(char value) { Before(); _inner.Write(value); }
+            public override void Write(char[] buffer, int index, int count) { Before(); _inner.Write(buffer, index, count); }
+            public override void Write(ReadOnlySpan<char> buffer) { Before(); _inner.Write(buffer); }
+            public override void Write(string value) { Before(); _inner.Write(value); }
+            public override void WriteLine() { Before(); _inner.WriteLine(); }
+            public override void WriteLine(ReadOnlySpan<char> buffer) { Before(); _inner.WriteLine(buffer); }
+            public override void WriteLine(string value) { Before(); _inner.WriteLine(value); }
+            public override void Flush() { Before(); _inner.Flush(); }
+        }
+
+        // 0: not known yet, 1: standard output is a terminal, 2: it is not
+        private static int _outputTerminal;
+
+        /// <summary>
+        /// MRI's FMODE_TTY for descriptor 1, which it checks as the stream is set up: a terminal is
+        /// written to at once. Known again after a dup2 onto the descriptor (IO#reopen).
+        /// </summary>
+        private static bool OutputIsTerminal() {
+            int known = _outputTerminal;
+            if (known == 0) {
+                bool terminal = true;
+                try {
+                    if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+                        // A missing handle (ironrubyw) or a pipe whose reader has gone says
+                        // FILE_TYPE_UNKNOWN; neither is worth holding output back for.
+                        int type = Win32Console.GetFileType(Win32Console.GetStdHandle(Win32Console.STD_OUTPUT_HANDLE));
+                        terminal = type == Win32Console.FILE_TYPE_CHAR || type == Win32Console.FILE_TYPE_UNKNOWN;
+                    } else if (Environment.OSVersion.Platform == PlatformID.Unix || Environment.OSVersion.Platform == PlatformID.MacOSX) {
+                        terminal = sys_isatty(1) == 1;
+                    }
+                } catch (Exception) {
+                    terminal = true;
+                }
+                _outputTerminal = known = terminal ? 1 : 2;
+            }
+            return known == 1;
+        }
+
+        /// <summary>Descriptor 1 now names another file (IO#reopen's dup2); it may or may not be a terminal.</summary>
+        internal static void StandardOutputRedirected() {
+            _outputTerminal = 0;
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "isatty")]
+        private static extern int sys_isatty(int fd);
+
+        #endregion
 
         private static Stream _rawInput;
         private static bool _rawInputChecked;
@@ -167,6 +465,15 @@ namespace IronRuby.Builtins {
             _consoleError = null;
             _consoleOutputChecked = false;
             _consoleErrorChecked = false;
+            _outputTerminal = 0;
+            // What the buffer still holds was written to the descriptors that are gone; the
+            // runtime that wrote it has been shut down. Console.Out is a new writer too, and is
+            // wrapped again when the buffer next holds something.
+            lock (_writeLock) {
+                _writeCount = 0;
+                _writeTarget = null;
+            }
+            _hooksInstalled = false;
         }
 
         /// <summary>
@@ -283,6 +590,12 @@ namespace IronRuby.Builtins {
 
             [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
             internal static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint mode);
+
+            internal const int FILE_TYPE_UNKNOWN = 0;
+            internal const int FILE_TYPE_CHAR = 2;
+
+            [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+            internal static extern int GetFileType(IntPtr handle);
 
             [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
             internal static extern bool WriteConsoleW(IntPtr hConsoleOutput, char[] buffer, int charsToWrite, out int charsWritten, IntPtr reserved);

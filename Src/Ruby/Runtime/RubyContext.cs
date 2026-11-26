@@ -5053,9 +5053,52 @@ namespace IronRuby.Runtime {
                     PerfTrack.DumpStats(output);
                 }
             }
-            ExecuteShutdownHandlers();
+            try {
+                ExecuteShutdownHandlers();
+            } finally {
+                // MRI writes out what standard output and standard error buffer as the last thing
+                // before the process exits: after the at_exit handlers, and after the report of
+                // the exception that ended the program.
+                FlushStandardStreams(true);
+            }
 
             _currentException = null;
+        }
+
+        /// <summary>
+        /// Writes out what $stdout and $stderr hold - MRI's prefork(), before it starts a child,
+        /// so that a child's output does not overtake what the parent printed first. At exit
+        /// (<paramref name="atExit"/>) the original STDOUT and STDERR too, whatever $stdout is now.
+        /// A failure is not reported: there is nobody to report it to at exit, and MRI's spawn
+        /// goes ahead regardless.
+        /// </summary>
+        public void FlushStandardStreams(bool atExit) {
+            FlushStandardStream(StandardOutput);
+            FlushStandardStream(StandardErrorOutput);
+            if (atExit) {
+                FlushStandardStream(InitialStandardOutput);
+                FlushStandardStream(InitialStandardErrorOutput);
+            }
+        }
+
+        private static void FlushStandardStream(object stream) {
+            var io = stream as RubyIO;
+            if (io == null || io.Closed || !io.Mode.CanWrite()) {
+                return;
+            }
+            try {
+                io.Flush();
+            } catch (Exception) {
+                // see FlushStandardStreams
+            }
+        }
+
+        /// <summary>
+        /// exit! and a Windows exec: as MRI's _exit(2) and execve(2), the process ends without
+        /// writing out what standard output still buffers.
+        /// </summary>
+        public static void DiscardBufferedOutputAtExit() {
+            ConsoleStream.DiscardBufferedOutputAtExit();
         }
 
         #endregion

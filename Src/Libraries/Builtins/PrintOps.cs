@@ -121,7 +121,22 @@ namespace IronRuby.Builtins {
             if (str.Encoding.IsAsciiIdentity && self is RubyIO) {
                 RubyClass ioClass = context.GetClass(typeof(RubyIO));
                 if (ReferenceEquals(context.GetImmediateClassOf(self), ioClass) && IListOps.IsBuiltinMethod(ioClass, "write")) {
-                    Protocols.Write(writeStorage, self, MutableString.Create(str).Append((byte)'\n'));
+                    // A buffered STDOUT: MRI writes the line and its end as two pieces into the
+                    // buffer when it is not sync, so the buffer can fill between them. The one write
+                    // keeps another thread's line from landing between the two here, where no GVL
+                    // does that; the stream is told where MRI's second piece starts.
+                    var io = (RubyIO)self;
+                    bool split = io.IsBufferingWrites;
+                    if (split) {
+                        RubyIO.SplitNextWriteBeforeLineEnd(io.LineEndLength);
+                    }
+                    try {
+                        Protocols.Write(writeStorage, self, MutableString.Create(str).Append((byte)'\n'));
+                    } finally {
+                        if (split) {
+                            RubyIO.SplitNextWriteBeforeLineEnd(0);
+                        }
+                    }
                     return;
                 }
             }

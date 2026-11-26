@@ -3162,6 +3162,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("exit!", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("exit!", RubyMethodAttributes.PublicSingleton)]
         public static void TerminateExecution(RubyContext/*!*/ context, object self, int exitCode) {
+            // _exit(2): what STDOUT still buffers is not written, as in MRI
+            RubyContext.DiscardBufferedOutputAtExit();
             context.DomainManager.Platform.TerminateScriptExecution(exitCode);
         }
 
@@ -3386,9 +3388,10 @@ namespace IronRuby.Builtins {
                     PrintOps.Puts(writeStorage, writeStorage.Context.StandardOutput, arg);
                 }
 
-                // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at once
+                // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at
+                // once - with no arguments too (rb_p_result)
                 var stdout = writeStorage.Context.StandardOutput as RubyIO;
-                if (args.Length > 0 && stdout != null) {
+                if (stdout != null) {
                     RubyIOOps.Flush(stdout);
                 }
             } finally {

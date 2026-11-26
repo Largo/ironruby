@@ -231,17 +231,24 @@ namespace IronRuby.Builtins {
                 if (Closed) {
                     return null;
                 }
-                // A copy that could not dup(2) the descriptor - #dup of a console stream on
-                // Windows - wraps the original's buffered stream in one of its own, so the
-                // console may be more than one buffer down.
-                Stream stream = GetStream().BaseStream;
-                RubyBufferedStream buffered;
-                while ((buffered = stream as RubyBufferedStream) != null) {
-                    stream = buffered.BaseStream;
-                }
-                var console = stream as ConsoleStream;
+                var console = FindConsoleStream(GetStream());
                 return console != null ? console.StreamType : (ConsoleStreamType?)null;
             } 
+        }
+
+        // A copy that could not dup(2) the descriptor - #dup of a console stream on Windows -
+        // wraps the original's buffered stream in one of its own, so the console may be more
+        // than one buffer down.
+        private static ConsoleStream FindConsoleStream(RubyBufferedStream stream) {
+            if (stream == null) {
+                return null;
+            }
+            Stream inner = stream.BaseStream;
+            RubyBufferedStream buffered;
+            while ((buffered = inner as RubyBufferedStream) != null) {
+                inner = buffered.BaseStream;
+            }
+            return inner as ConsoleStream;
         }
 
         internal static bool IsConsoleDescriptor(int fileDescriptor) {
@@ -674,6 +681,72 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Whether this is the process's standard output holding what is written in its buffer
+        /// (not a terminal, #sync false): MRI then writes each piece of a #puts by itself
+        /// (io_writev takes the writev(2) path only for a sync IO or a terminal), so where a
+        /// line and its end land relative to the buffer's boundary is MRI's.
+        /// </summary>
+        public bool IsBufferingWrites {
+            get {
+                var console = FindConsoleStream(_stream);
+                return console != null && !_autoFlush && console.IsBuffering;
+            }
+        }
+
+        /// <summary>Whether this is standard output and its buffer holds bytes not yet written.</summary>
+        public bool HasBufferedOutput {
+            get {
+                var console = FindConsoleStream(_stream);
+                return console != null && console.HasBufferedBytes;
+            }
+        }
+
+        /// <summary>Whether this IO writes to the process's standard output or standard error stream.</summary>
+        public bool IsConsoleOutput {
+            get {
+                var console = FindConsoleStream(_stream);
+                return console != null && console.CanWrite;
+            }
+        }
+
+        /// <summary>
+        /// What the next #puts on this thread to a buffered standard output appends as the line's
+        /// end, in bytes as they reach the stream: 1 ("\n"), 2 when text mode makes it "\r\n" (see
+        /// ConsoleStream).
+        /// </summary>
+        public int LineEndLength {
+            get { return PreserveEndOfLines ? 1 : 2; }
+        }
+
+        /// <summary>
+        /// The next write on this thread to a buffered standard output is a #puts line and its end
+        /// together, to be buffered as the two writes MRI makes of them (see ConsoleStream).
+        /// </summary>
+        public static void SplitNextWriteBeforeLineEnd(int lineEndLength) {
+            ConsoleStream.SplitBeforeLineEnd = lineEndLength;
+        }
+
+        /// <summary>
+        /// Writes the bytes with one write to the descriptor when this is the process's standard
+        /// output and it is holding output in its buffer, which they go past (IO#syswrite). False,
+        /// and nothing written, otherwise.
+        /// </summary>
+        public bool TryWriteUnbuffered(byte[]/*!*/ buffer, int offset, int count) {
+            var console = FindConsoleStream(GetStream());
+            if (console == null || !console.IsBuffering) {
+                return false;
+            }
+            // the write(2) blocks on a full pipe, so IO#timeout is waited out before it
+            WaitForStream(false);
+            try {
+                console.WriteUnbuffered(buffer, offset, count);
+            } catch (ObjectDisposedException) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            return true;
+        }
+
         public long Length {
             get {
                 var stream = GetStream();
@@ -938,6 +1011,9 @@ namespace IronRuby.Builtins {
 
             if (target != from && sys_dup2(from, target) < 0) {
                 return false;
+            }
+            if (target == 1) {
+                ConsoleStream.StandardOutputRedirected();
             }
 
             // The descriptor now names the other IO's file. The stream that was reading the old
