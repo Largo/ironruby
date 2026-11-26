@@ -847,6 +847,7 @@ namespace IronRuby.Tests {
                 Exception_RescueRefinedCaseEquality1,
 
                 ClassVariables1,
+                ClassVariables_DefinedOvertaken1,
                 UnqualifiedConstants2,
 
                 AliasMethodLookup1,

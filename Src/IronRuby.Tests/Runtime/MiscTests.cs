@@ -846,6 +846,37 @@ y.foo
 ");
         }
 
+        /// <summary>
+        /// defined?(@@x) and Module#class_variable_defined? answer true for a class variable an ancestor has overtaken,
+        /// as MRI's rb_cvar_defined does; reading it still raises.
+        /// </summary>
+        public void ClassVariables_DefinedOvertaken1() {
+            TestOutput(@"
+class OB; end
+class OS < OB
+  @@ov = :sub
+  def d = defined?(@@ov)
+  def r = @@ov
+end
+p OS.new.d, OS.class_variable_defined?(:@@ov)
+OB.class_variable_set(:@@ov, :base)
+p OS.new.d, OS.class_variable_defined?(:@@ov), OB.class_variable_defined?(:@@ov)
+begin; OS.new.r; rescue RuntimeError => e; p e.message; end
+begin; OS.class_variable_get(:@@ov); rescue RuntimeError => e; p e.message; end
+p OS.class_variable_defined?(:@@none), defined?(OS)
+", @"
+""class variable""
+true
+""class variable""
+true
+true
+""class variable @@ov of OS is overtaken by OB""
+""class variable @@ov of OS is overtaken by OB""
+false
+""constant""
+");
+        }
+
         public void Scenario_RubyThreads1() { 
             AssertOutput(delegate() {
                 CompilerTest(@"
