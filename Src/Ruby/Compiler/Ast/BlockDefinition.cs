@@ -414,10 +414,11 @@ namespace IronRuby.Compiler.Ast {
                 blockDispatcher.LoopInfo = BlockLoopInfo.TryCreate(this, gen.Context, _definedScope.Depth,
                     gen.SourcePath + ":" + Location.Start.Line);
             }
-            if (outerVariables == null && !hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval &&
+            if (assignedOuterVariables == null && !hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval &&
                 IronRuby.Runtime.Jit.JitBlockMethod.Enabled && gen.Context.RubyOptions.Jit && IsJitMethodShape()) {
-                // -X:JIT: a block over none of the enclosing scope's locals may become the body of a method
-                // (define_method), which the method JIT can take as it takes a def's (JitBlockMethod)
+                // -X:JIT: a block that assigns none of the enclosing scopes' locals may become the body of a method
+                // (define_method), which the method JIT can take as it takes a def's (JitBlockMethod); those it reads
+                // the typed body reads from the scopes, as the block does
                 blockDispatcher.JitAst = this;
             }
 

@@ -144,11 +144,22 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
             var info = other as RubyLambdaMethodInfo;
-            return info != null && info._bodyId == _bodyId;
+            return info != null && (info._bodyId == _bodyId || SameProc(info._block, _block));
+        }
+
+        // Two methods made by define_method from the same Proc - or a copy of it, or its lambda - are the same method
+        // in MRI (rb_method_definition_eq compares the procs with Proc#==): the same block literal over the same scope
+        // (ProcOps.Equal). One literal run in two scopes (`[1, 2].each { |i| define_method(:"m#{i}") { } }') makes two.
+        private static bool SameProc(Proc/*!*/ a, Proc/*!*/ b) {
+            if (a.SymbolName != null || b.SymbolName != null) {
+                return a.SymbolName == b.SymbolName;
+            }
+            return a.Dispatcher == b.Dispatcher && a.LocalScope == b.LocalScope;
         }
 
         public override int GetEquivalenceHashCode() {
-            return _bodyId;
+            // as ProcOps.GetHash: what SameProc compares
+            return (_block.SymbolName != null) ? _block.SymbolName.GetHashCode() : _block.Dispatcher.GetHashCode() ^ _block.LocalScope.GetHashCode();
         }
 
         public string/*!*/ DefinitionName {
@@ -206,12 +217,14 @@ namespace IronRuby.Runtime.Calls {
 
             // -X:JIT: plain arguments, as many as the block takes, go to the stub of the method JIT, whose generic body is
             // the call below (JitBlockMethod). An omitted optional argument is passed as the default sentinel, as to a def's.
-            if (!args.Signature.HasBlock && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument) {
+            // The value of an assignment call (o.x = v, o[k] = v) is its last argument, as the rule passes it (Methods.Yield).
+            if (!args.Signature.HasBlock && !args.Signature.HasSplattedArgument) {
                 var jit = GetJit();
                 if (jit.Trampoline != null) {
                     var simple = args.GetSimpleArgumentExpressions();
+                    var rhs = args.Signature.HasRhsArgument ? args.GetRhsArgumentExpression() : null;
                     int jitArity = jit.Ast.Parameters.Mandatory.Length + jit.Ast.Parameters.Optional.Length;
-                    if (simple.Count <= jitArity) {
+                    if (simple.Count + (rhs != null ? 1 : 0) <= jitArity) {
                         var jitArgs = new Ast[2 + jitArity];
                         jitArgs[0] = AstUtils.Box(args.TargetExpression);
                         jitArgs[1] = IronRuby.Compiler.Ast.AstFactory.NullOfProc;
@@ -224,6 +237,10 @@ namespace IronRuby.Runtime.Calls {
                         // BlockDispatcher.Positional unmarks it)
                         if (k > 0) {
                             jitArgs[1 + k] = Methods.ClearKeywordArguments.OpCall(jitArgs[1 + k]);
+                        }
+                        if (rhs != null) {
+                            jitArgs[2 + k] = AstUtils.Box(rhs);
+                            k++;
                         }
                         for (; k < jitArity; k++) {
                             jitArgs[2 + k] = Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"));
