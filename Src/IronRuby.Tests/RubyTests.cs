@@ -1138,6 +1138,7 @@ namespace IronRuby.Tests {
                 Method_LightFrameBlockGiven1,
                 Method_LightFrameRest1,
                 Method_LightFrameGlobal1,
+                Method_LightFrameLexical1,
                 Method_ParkedScope1,
                 Method_ParkedScopeLeak1,
                 Method_LightFrameBlockPass1,

@@ -7775,6 +7775,50 @@ nil
         }
 
         /// <summary>
+        /// IR_LIGHT_LEXICAL: class variables, defined? of a constant and {expr}::C in a light frame are looked up from the
+        /// declaring scope, which is where a method scope's lexical chain starts (Util/lexical-light-matrix.rb).
+        /// </summary>
+        public void Method_LightFrameLexical1() {
+            TestOutput(@"
+require 'ruby4'
+class A
+  @@x = 1
+  C = 2
+  def r; @@x; end
+  def w(v); @@x = v; end
+  def oa; @@y ||= 3; end
+  def d; [defined?(@@x), defined?(@@no), defined?(C), defined?(Nope), defined?(A::C), defined?(self.class::C)]; end
+  def q(m); m::C; end
+  def s; self.class::C; end
+  class << self; def sr; @@x; end; end
+end
+class B < A; C = 4; def br; @@x; end; end
+def top; @@x; end
+a = A.new
+p a.r, a.w(5), a.r, B.new.br, A.sr, a.oa, a.d, B.new.d
+p 40.times.map { |i| [A, B][i % 2].new.s }.uniq, a.q(B)
+begin; a.q(1); rescue TypeError => e; p e.message; end
+begin; top; rescue RuntimeError => e; p e.message; end
+A.class_eval { def e; @@x; end }
+begin; a.e; rescue RuntimeError => e; p e.message; end
+", @"
+1
+5
+5
+5
+5
+3
+[""class variable"", nil, ""constant"", nil, ""constant"", ""constant""]
+[""class variable"", nil, ""constant"", nil, ""constant"", ""constant""]
+[2, 4]
+4
+""1 is not a class/module""
+""class variable access from toplevel""
+""class variable access from toplevel""
+");
+        }
+
+        /// <summary>
         /// BigDecimal against CRuby 4.0's bigdecimal 4.0.1: a Rational operand of a comparison is expanded as
         /// for arithmetic (== used to recurse through Rational#== until the stack overflowed), #power and #**
         /// take any real exponent and a precision, round takes half:, and a BigDecimal is frozen and has no

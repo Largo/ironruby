@@ -590,6 +590,13 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightRescueEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_RESCUE") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_LEXICAL=0 keeps every method with a class variable (`@@x', `@@x = v', `defined?(@@x)'), a `defined?' of a
+        /// constant (`defined?(A)', `defined?(A::B)', `defined?(x::A)') or a constant qualified by an expression
+        /// (`self.class::A') out of light frames (see IsScopeFree and LightFrameRewriter.ScopeOperandIndex).
+        /// </summary>
+        internal static readonly bool LightLexicalEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_LEXICAL") != "0";
+
         // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
         // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
         // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
@@ -1085,6 +1092,36 @@ namespace IronRuby.Compiler.Ast {
             if (isDefined != null && isDefined.Expression is GlobalVariable && LightGlobalsEnabled) {
                 return true;
             }
+            // `@@x', `@@x = v', `defined?(@@x)', `defined?(A)', `defined?(A::B)', `defined?(x::A)', `x::A' (IR_LIGHT_LEXICAL):
+            // their helpers (RubyOps.GetClassVariable, IsDefinedClassVariable, IsDefinedUnqualifiedConstant,
+            // GetExpressionQualifiedConstant...) read the runtime, the global scope and the lexical chain from the scope. A method
+            // scope has no module (Module is null) and is no instance_eval scope, so the walks of RubyScope.GetInnerMostModule
+            // and TryResolveConstantNoLock pass over it to its parent, the declaring scope, which the rewriter hands them
+            // (LightFrameRewriter.ScopeOperandIndex). `defined?(x::A)' evaluates x in a try that answers nil for any exception.
+            if (LightLexicalEnabled) {
+                if (node is ClassVariable || isDefined != null && isDefined.Expression is ClassVariable) {
+                    return true;
+                }
+                var lexicalConstant = (isDefined != null) ? isDefined.Expression as ConstantVariable : node as ConstantVariable;
+                if (lexicalConstant != null) {
+                    return IsScopeFreeQualifier(lexicalConstant, blockLiterals, why);
+                }
+                var lexicalAssignment = node as SimpleAssignmentExpression;
+                if (lexicalAssignment != null && lexicalAssignment.Left is ClassVariable) {
+                    // `@@x += 1' is a call of + between a read and a write
+                    return IsScopeFree(lexicalAssignment.Right, blockLiterals, why) &&
+                        (lexicalAssignment.Operation == null || LightCallsEnabled || Refuse(why, "operator assignment (IR_LIGHT_CALLS=0)"));
+                }
+            } else if (why != null) {
+                var lexicalAssignment = node as SimpleAssignmentExpression;
+                var lexical = (isDefined != null) ? isDefined.Expression :
+                    (lexicalAssignment != null && lexicalAssignment.Left is ClassVariable) ? lexicalAssignment.Left : node;
+                if (lexical is ClassVariable || lexical is ConstantVariable && (isDefined != null || !IsCachedConstant((ConstantVariable)lexical))) {
+                    return Refuse(why, (isDefined != null ? "IsDefinedExpression of " : lexical != node ? "assignment to " : "") +
+                        lexical.GetType().Name + (isDefined == null && lexical is ConstantVariable ? " with an expression qualifier" : "") +
+                        " (IR_LIGHT_LEXICAL=0)");
+                }
+            }
             var constant = node as ConstantVariable;
             if (constant != null) {
                 return IsCachedConstant(constant) || Refuse(why, "ConstantVariable with an expression qualifier");
@@ -1434,6 +1471,15 @@ namespace IronRuby.Compiler.Ast {
             return qualifier == null || (qualifier is ConstantVariable && IsCachedConstant((ConstantVariable)qualifier));
         }
 
+        // IR_LIGHT_LEXICAL: A, ::A, A::B::C, or {expr}::A::B whose expr is scope-free (see IsScopeFree)
+        private static bool IsScopeFreeQualifier(ConstantVariable/*!*/ constant, bool blockLiterals, StrongBox<string> why) {
+            var qualifier = constant.Qualifier;
+            while (qualifier is ConstantVariable) {
+                qualifier = ((ConstantVariable)qualifier).Qualifier;
+            }
+            return qualifier == null || IsScopeFree(qualifier, blockLiterals, why);
+        }
+
         private static bool AreScopeFree(Statements statements, bool blockLiterals, StrongBox<string> why) {
             if (statements != null) {
                 foreach (var statement in statements) {
@@ -1622,6 +1668,18 @@ namespace IronRuby.Compiler.Ast {
                 }
                 if (LightGlobalsEnabled && method == Methods.IsDefinedGlobalVariable) {
                     return 0;
+                }
+                // class variables and constants qualified by an expression: the runtime, the global scope and the lexical chain
+                // (see IsScopeFree, IR_LIGHT_LEXICAL)
+                if (LightLexicalEnabled) {
+                    if (method == Methods.GetClassVariable || method == Methods.TryGetClassVariable ||
+                        method == Methods.IsDefinedClassVariable) {
+                        return 0;
+                    }
+                    if (method == Methods.SetClassVariable || method == Methods.GetExpressionQualifiedConstant ||
+                        method == Methods.IsDefinedExpressionQualifiedConstant) {
+                        return 1;
+                    }
                 }
                 if (LightHashEnabled && (method == Methods.MakeHash || method == Methods.MakeSymbolHash1 ||
                     method == Methods.MakeSymbolHash2 || method == Methods.MakeSymbolHash3)) {

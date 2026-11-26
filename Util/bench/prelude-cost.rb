@@ -305,6 +305,17 @@ class H
   def n_none; @a.n_none; end
 end
 
+# lexical lookups: a constant read (x_const, a light frame before IR_LIGHT_LEXICAL) against a class variable,
+# a `defined?' of a constant and a constant qualified by an expression (each kept a scope before it)
+class Lx
+  C = 1
+  @@cv = 1
+  def x_const; C; end
+  def x_cv; @@cv; end
+  def x_defc; defined?(C) ? 1 : 0; end
+  def x_qual; self.class::C; end
+end
+
 def cpu
   File.read("/proc/thread-self/schedstat").to_i / 1e9
 rescue SystemCallError
@@ -451,3 +462,10 @@ t("n_optnil", N) { |n| i = 0; s = 0; while i < n; s += h.n_optnil; i += 1; end; 
 t("n_splat0", N) { |n| i = 0; s = 0; while i < n; s += h.n_splat0; i += 1; end; s }
 t("n_opt0", N) { |n| i = 0; s = 0; while i < n; s += h.n_opt0; i += 1; end; s }
 t("n_optnil0", N) { |n| i = 0; s = 0; while i < n; s += h.n_optnil0; i += 1; end; s }
+
+# lexical lookups
+lx = Lx.new
+t("x_const", N) { |n| i = 0; s = 0; while i < n; s += lx.x_const; i += 1; end; s }
+t("x_cv", N) { |n| i = 0; s = 0; while i < n; s += lx.x_cv; i += 1; end; s }
+t("x_defc", N) { |n| i = 0; s = 0; while i < n; s += lx.x_defc; i += 1; end; s }
+t("x_qual", N) { |n| i = 0; s = 0; while i < n; s += lx.x_qual; i += 1; end; s }
