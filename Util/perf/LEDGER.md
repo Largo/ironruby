@@ -1215,6 +1215,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     crossing costs so much: past the threshold the shape still ran at ~50-150 us a call for
     hundreds of calls before its compiled code took over (steady state is 1.7 us); that cold
     stretch, not the IL compile, is the next thing to look at.
+    2026-11-26, perf/composite-r2r: the R2R host is now the release's configuration
+    (self-contained composite with the framework and a current startup profile): `-e 1`
+    449 -> 389 ms median, the tools -10% (Landed). JIT at `-e 1` 500 -> 133 methods; what is
+    left is coreclr preparing first-run methods and types (~170 ms profiled), runtime init
+    (~93) and binding (~117).
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -1383,6 +1388,51 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/composite-r2r (2026-11-26) - the R2R host is built as the release is: self-contained,
+  one composite ReadyToRun image of IronRuby and the framework, compiled with a startup profile
+  made now (gap 26).** Asked: what the release's composite image with a current
+  `Build/startup.mibc` does for `ir -e 1` (458 ms against a target of 350), measured like for
+  like. Every configuration published from the same IL into a tree of its own, each with its
+  startup library built against it (`0 of 214 files stale`), R2R mode, master f81fc19f.
+  Instructions: `perf stat`, all threads, least of 3; JIT: `DOTNET_JitDisasmSummary`, all /
+  Tier0 not counting dynamic methods; wall: `bench.rb 10` alternating, load 1.6-2.6, median ms.
+  Framework-dependent per-assembly (master's dev host): 1,436 M, 500 / 403, `-e 1` 449,
+  `gem --version` 515, `gem list` 911, irb exit 984, irb 1+1 1012. With the new profile: 1,431
+  M, 482. Framework-dependent composite of IronRuby's assemblies alone, new profile: 1,432 M,
+  482. Self-contained per-assembly: 1,437 M, 500; 457 / 528 / 902 / 990 / 1012. Self-contained
+  composite, no profile: 1,277 M, 243 / 146; 405 / 464 / 810 / 897 / 906. The same with the
+  2 Nov profile (what `package-release.sh linux-x64` ships; its own check says `ir -e 1` 380 ms
+  with the startup library, 537 without): 1,235 M, 197 / 100; 384 / 446 / 804 / 893 / 914. With
+  a profile made now: 1,216 M, 133 / 36; 383 / 443 / 801 / 890 / 895. So the framework in the
+  version bubble does most of it (-11% instructions), the profile the rest (-3% current, -2%
+  stale); the profile alone does nothing outside a composite with the framework. A profile
+  traced from the composite host itself is as good (1,218 M, 39), so make-startup-mibc.sh can
+  keep tracing whatever R2R host the tree has. Taken: the Release build's R2R host and
+  publish-r2r.sh build that configuration (IR_COMPOSITE=0 publish-r2r.sh the old one), with the
+  profile regenerated; package-release.sh prints the Tier0 count of `ir -e 1` (warning above 60
+  on GitHub Actions) and `make-startup-mibc.sh --check` gives it for a tree. Cost: the host is
+  235 MB on disk instead of 140 (116 MB of either is the startup library), its publish ~35 s
+  instead of ~10; the archive is unchanged (104 MB). Base -> new, `bench.rb 10`, load 1.0-1.3:
+  `-e 1` 449 -> 389 (best 437 -> 360, CPU 410 -> 340), `gem --version` 522 -> 454, `gem list`
+  900 -> 799, irb exit 979 -> 877, irb 1+1 1009 -> 906; `--disable-gems -e 1` best 311 -> 265.
+  Gate: IronRuby.Tests PASSED on both (same failed and flaky lists; the IL is the same);
+  gate-matrices --all in r2r mode PASS (35 baseline, 119 same); micro-table on the R2R hosts in
+  both orders, no line slower in both; AWFY 12 on the R2R hosts, geomean new/base 0.999 and
+  0.999, none slower than 5% in both (Permute +0.7% / +4%). Where `-e 1`'s main thread goes now
+  (perf with jitdump, profiled CPU ms, framework-dependent -> composite): 537 -> 445; JIT 79 ->
+  36 (15 of it the IL compile of rules and lambdas, 22 IronRuby methods marked
+  AggressiveOptimization that ReadyToRun never precompiles, the rest P/Invoke and instantiating
+  stubs); coreclr runtime work (prestub, type loads, fixups) 193 -> 168; kernel (page faults
+  of the mapped images) 104 -> 103; by phase, runtime init 117 -> 93, binding 141 -> 117,
+  running Ruby 134 -> 109. `DOTNET_TieredPGO=0` takes another 3.6% of `-e 1`'s instructions;
+  not taken, since steady state is what PGO is for. What 350 needs beyond this (-35 ms): runtime
+  init's own work (`BuiltinsLibraryInitializer.LoadModules`, ~27 ms, done lazily per module),
+  fewer distinct methods and types touched by the first binds (the 168 ms of coreclr work is
+  per method and type run for the first time, not per instruction), or the warm pool.
+  `IR_PHASE_TIMES` puts 33-45 ms under "prism native parse" on the composite host against 3
+  on the other; perf with jitdump finds 4 ms there on both, so it is not parse time (not
+  explained; the wall total agrees with `bench.rb`).
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R
