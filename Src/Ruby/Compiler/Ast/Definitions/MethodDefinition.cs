@@ -200,9 +200,11 @@ namespace IronRuby.Compiler.Ast {
         /// <summary>
         /// <paramref name="allowLightFrame"/>: whether the body may be a light frame (see TransformLightFrame),
         /// whose scope description is an object constant - so not where the body is compiled ahead of time.
+        /// <paramref name="scopedTwin"/>: the body of a light frame's scoped twin (LightFrameTwin): everything a body that may be
+        /// light gets but the light frame.
         /// </summary>
         private MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ declaringModule,
-            string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements, bool allowLightFrame) {
+            string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements, bool allowLightFrame, bool scopedTwin = false) {
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
 
             // a body built on demand adds its locals to the scope: build it before they are allocated
@@ -303,13 +305,15 @@ namespace IronRuby.Compiler.Ast {
                 statements = Ast.Block(optionalsInitialization, statements);
                 optionalsInitialization = AstUtils.Empty();
             }
-            if (allowLightFrame && LightFramesEnabled && definitionRefinements == null && gen.Profiler == null && !gen.TraceEnabled &&
+            LightFrameTwin twin = null;
+            if (allowLightFrame && !scopedTwin && LightFramesEnabled && definitionRefinements == null && gen.Profiler == null && !gen.TraceEnabled &&
                 !gen.CompilerOptions.IsEval && !scope.HasClosures && IsLightFrameCandidate()) {
+                twin = MakeTwin(gen, declaringScope, declaringModule, frameLabel);
                 light = TransformLightFrame(gen, scope, scopeVariable, selfParameter, blockParameter, declaringScope, declaringModule,
-                    visiblePrameterCountAndSignatureFlags, parkSlot, ref statements);
+                    visiblePrameterCountAndSignatureFlags, parkSlot, twin, ref statements);
             }
             if ((LightFramesWhy || gen.Census != null) && light == null) {
-                string why = !(allowLightFrame && LightFramesEnabled) ? "not allowed" :
+                string why = !(allowLightFrame && LightFramesEnabled) ? "not allowed" : scopedTwin ? "a light frame's scoped twin" :
                     definitionRefinements != null ? "refinements" : gen.Profiler != null ? "profiler" : gen.TraceEnabled ? "trace" :
                     gen.CompilerOptions.IsEval ? "eval" : scope.HasClosures ? "defines a closure (block literal)" :
                     WhyNotLightFrameCandidate() ?? "body needs its scope after the rewrite";
@@ -443,7 +447,75 @@ namespace IronRuby.Compiler.Ast {
 
             gen.LeaveMethodDefinition();
 
-            return CreateLambda(encodedName, parameters, new CompiledFrameExpression(body, encodedName, Location.Start.Line));
+            var lambda = CreateLambda(encodedName, parameters, new CompiledFrameExpression(body, encodedName, Location.Start.Line));
+            if (twin != null) {
+                lambda = ForwardToTwin(lambda, twin, light != null);
+            }
+            return lambda;
+        }
+
+        /// <summary>
+        /// IR_LIGHT_TWIN=0 keeps a light frame that makes its scope late light for good (see LightFrameTwin): otherwise its compiled
+        /// code calls the method compiled with its scope from its first late scope on.
+        /// </summary>
+        internal static readonly bool LightTwinEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_TWIN") != "0";
+
+        private static readonly MethodInfo/*!*/ _ScopeMadeLate = typeof(LightFrameTwin).GetMethod(nameof(LightFrameTwin.ScopeMadeLate));
+
+        /// <summary>
+        /// The twin a light body compiles when it first makes its scope late: the same method, for the same declaring scope and
+        /// module, with its scope. Null where the body has no such twin: the switch is off, the declaring scope and module are not
+        /// constants (a body compiled ahead of time), or the method's calls are counted for Coverage.
+        /// </summary>
+        private LightFrameTwin MakeTwin(AstGenerator/*!*/ gen, MSA.Expression/*!*/ declaringScopeExpression, MSA.Expression/*!*/ declaringModuleExpression,
+            string/*!*/ frameLabel) {
+            var declaringScope = ConstantValue(declaringScopeExpression) as RubyScope;
+            var declaringModule = ConstantValue(declaringModuleExpression) as RubyModule;
+            if (!LightTwinEnabled || declaringScope == null || declaringModule == null || gen.Coverage != null || gen.MethodCoverage != null ||
+                gen.Census != null) {
+                return null;
+            }
+            var context = gen.Context;
+            var document = gen.Document;
+            var encoding = gen.Encoding;
+            return new LightFrameTwin(frameLabel, () => {
+                MSA.LambdaExpression lambda;
+                // the AST is the light body's, which other compilations of the method transform too (RubyMethodBody locks itself)
+                lock (this) {
+                    var twinGen = new AstGenerator(context, new RubyCompilerOptions(), document, encoding, false);
+                    lambda = TransformBody(twinGen, ExactConstant(declaringScope, typeof(RubyScope)), ExactConstant(declaringModule, typeof(RubyModule)),
+                        frameLabel, null, true, true);
+                }
+                // to IL at once, not light-compiled: only a compiled light body asks for it, after enough calls to compile it
+                return lambda.Compile();
+            });
+        }
+
+        /// <summary>
+        /// `Twin != null ? Twin(self, block, args...) : body' at the light body's entry, outside its frame's record, so that a
+        /// backtrace has the twin's frame and not this one's - and only in compiled code (an interpreted frame is in a backtrace
+        /// whatever it does). Not for a body whose parameters come in an object[] (CreateLambda): it keeps no twin.
+        /// </summary>
+        private static MSA.LambdaExpression/*!*/ ForwardToTwin(MSA.LambdaExpression/*!*/ lambda, LightFrameTwin/*!*/ twin, bool isLight) {
+            if (!isLight || lambda.Type == typeof(Func<object, Proc, object[], object>)) {
+                twin.Disable();
+                return lambda;
+            }
+            twin.DelegateType = lambda.Type;
+            var twinField = Ast.Field(Ast.Constant(twin), nameof(LightFrameTwin.Twin));
+            return Ast.Lambda(lambda.Type,
+                Ast.Condition(
+                    Ast.AndAlso(
+                        Ast.ReferenceEqual(EnterInterpretedFrameExpression.Instance, AstUtils.Constant(null, typeof(Microsoft.Scripting.Interpreter.InterpretedFrame))),
+                        Ast.ReferenceNotEqual(twinField, AstUtils.Constant(null, typeof(Delegate)))
+                    ),
+                    Ast.Invoke(Ast.Convert(twinField, lambda.Type), lambda.Parameters),
+                    lambda.Body,
+                    lambda.ReturnType
+                ),
+                lambda.Name,
+                lambda.Parameters
+            );
         }
 
         #region Light frames
@@ -1512,7 +1584,8 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         private LightFrame TransformLightFrame(AstGenerator/*!*/ gen, ScopeBuilder/*!*/ scope, MSA.ParameterExpression/*!*/ scopeVariable,
             MSA.Expression/*!*/ selfParameter, MSA.Expression/*!*/ blockParameter, MSA.Expression/*!*/ declaringScope,
-            MSA.Expression/*!*/ declaringModule, int visibleParameterCountAndSignatureFlags, ParkedScopeSlot parkSlot, ref MSA.Expression/*!*/ statements) {
+            MSA.Expression/*!*/ declaringModule, int visibleParameterCountAndSignatureFlags, ParkedScopeSlot parkSlot, LightFrameTwin twin,
+            ref MSA.Expression/*!*/ statements) {
 
             var names = scope.GetVariableNamesExpression() as MSA.ConstantExpression;
             if (names == null) {
@@ -1546,6 +1619,10 @@ namespace IronRuby.Compiler.Ast {
                     )
                 )
                 : make(Methods.CreateMethodScopeLazy, scope.LocalsTupleVariable);
+            if (twin != null) {
+                // the first late scope compiles the scoped twin the next calls go to (LightFrameTwin)
+                light.MakeScope = Ast.Block(Ast.Call(Ast.Constant(twin), _ScopeMadeLate, EnterInterpretedFrameExpression.Instance), light.MakeScope);
+            }
             light.MakeScopeIfTraced = locals => make(Methods.CreateMethodScopeIfTraced, locals);
             var inLoop = scope.DefineHiddenVariable("#in-loop", typeof(bool));
             light.LazyScope = Ast.Coalesce(scopeVariable, Ast.Assign(scopeVariable, Ast.Call(_LightScopeInLoop, light.MakeScope, inLoop)));
