@@ -747,6 +747,7 @@ namespace IronRuby.Builtins {
             internal RubyMemberInfo EachSlice;
             internal RubyMemberInfo EachCons;
             internal RubyMemberInfo StopIterationResult;
+            internal RubyMemberInfo LazyEach;
         }
 
         private static readonly object _preludeMethodsKey = new object();
@@ -766,6 +767,8 @@ namespace IronRuby.Builtins {
                 var methods = GetPreludeMethods(context);
                 if (name == "each_with_index") {
                     methods.EachWithIndex = method.Info;
+                } else if (name == "each" && module.Name == "Enumerator::Lazy") {
+                    methods.LazyEach = method.Info;
                 } else if (name == "each") {
                     methods.StructEach = method.Info;
                 } else if (name == "each_slice") {
@@ -1047,6 +1050,19 @@ namespace IronRuby.Builtins {
                 context.SetInstanceVariable(source, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), generator);
             }
             return source;
+        }
+
+        /// <summary>
+        /// Whether a lazy enumerator's #next may run its #each on a copy of it (the prelude's Lazy#__enum_iteration_source__):
+        /// it is an Enumerator::Lazy and nothing more (no singleton class, no subclass), and its #each is the prelude's, which
+        /// reads only the instance variables the copy is given. The fiber then holds no reference to the lazy the program
+        /// has, and an abandoned one is reclaimed (its handle collected) as an Enumerator's is. IR_FAST_NEXT=0 keeps the lazy.
+        /// </summary>
+        [RubyMethod("__iter_detachable_lazy__", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsDetachableLazy(RubyContext/*!*/ context, object self, object lazy) {
+            RubyMemberInfo expected = GetPreludeMethods(context).LazyEach;
+            return _fastNext && expected != null && context.GetImmediateClassOf(lazy) == expected.DeclaringModule &&
+                IsPreludeMethod(context, lazy, "each", expected);
         }
 
         private static bool IsBuiltinMethod(RubyContext/*!*/ context, object target, string/*!*/ name, Type/*!*/ declaringType, params string[]/*!*/ clrNames) {

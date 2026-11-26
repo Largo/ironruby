@@ -583,3 +583,46 @@ probe("wo_map")           { e = [1, 2].map.with_object(:m); e.next; e.feed :f; [
 probe("wo_hash")          { drain({ a: 1 }.each.with_object(0)) }
 probe("wo_memo_mutated")  { m = []; e = [1, 2].each.with_object(m); e.next[1] << :x; [e.next, m] }
 probe("wo_block_form")    { [[1, 2].each.with_object([]) { |x, m| m << x }, [1, 2].each.with_index(1) { |x, i| x * i }, [1, 2].map.with_index(1) { |x, i| x * i }] }
+
+# --- Enumerator::Lazy taken with #next: the fiber walks a copy of a plain lazy ------------------------
+def lz(e, n = 4) = n.times.map { (e.next rescue :stop) }
+probe("lz_map")          { lz([1, 2, 3].lazy.map { |x| x * 2 }) }
+probe("lz_select_map")   { lz((1..Float::INFINITY).lazy.select(&:even?).map(&:succ)) }
+probe("lz_reject")       { lz((1..6).lazy.reject(&:odd?)) }
+probe("lz_take")         { lz((1..).lazy.take(2)) }
+probe("lz_take_while")   { lz((1..).lazy.take_while { |x| x < 3 }) }
+probe("lz_drop")         { lz((1..5).lazy.drop(3)) }
+probe("lz_drop_while")   { lz((1..5).lazy.drop_while { |x| x < 4 }) }
+probe("lz_filter_map")   { lz((1..5).lazy.filter_map { |x| x * 2 if x.odd? }) }
+probe("lz_flat_map")     { lz([[1, 2], [3]].lazy.flat_map { |x| x }) }
+probe("lz_zip")          { lz([1, 2].lazy.zip([3, 4])) }
+probe("lz_uniq")         { lz([1, 1, 2].lazy.uniq) }
+probe("lz_compact")      { lz([1, nil, 2].lazy.compact) }
+probe("lz_with_index")   { lz([:a, :b].lazy.with_index(1)) }
+probe("lz_ewi")          { lz([:a, :b].lazy.each_with_index) }
+probe("lz_chunk_while")  { lz([1, 2, 4, 5].lazy.chunk_while { |a, b| b == a + 1 }) }
+probe("lz_slice_when")   { lz([1, 2, 4].lazy.slice_when { |a, b| b != a + 1 }) }
+probe("lz_chunk")        { lz([1, 1, 2].lazy.chunk { |x| x.odd? }) }
+probe("lz_grep")         { lz(%w[a bb c].lazy.grep(/b/)) }
+probe("lz_plain")        { lz([1, 2].lazy) }
+probe("lz_hash")         { lz({ a: 1, b: 2 }.lazy.map { |k, v| [v, k] }) }
+probe("lz_hash_plain")   { lz({ a: 1 }.lazy) }
+probe("lz_new")          { lz(Enumerator::Lazy.new([1, 2, 3]) { |y, x| y << x * 10 if x != 2 }) }
+probe("lz_eager")        { lz([1, 2].lazy.map { |x| x + 1 }.eager) }
+probe("lz_result")       { [stop_of([1, 2].lazy).result, stop_of([1, 2].lazy.map { |x| x }).result] }
+probe("lz_peek")         { e = [1, 2].lazy.map { |x| x * 3 }; [e.peek, e.next, e.peek, e.next, (e.peek rescue :stop)] }
+probe("lz_next_values")  { e = { a: 1 }.lazy; [e.peek_values, e.next_values] }
+probe("lz_rewind")       { e = (1..3).lazy.map { |x| x * 2 }; e.next; e.rewind; [e.next, e.next] }
+probe("lz_loop")         { e = (1..3).lazy.select(&:odd?); r = []; loop { r << e.next }; r }
+probe("lz_state_fresh")  { e = [1, 2, 2, 3].lazy.uniq; a = [e.next, e.next, e.next]; e.rewind; [a, e.next, e.next] }
+probe("lz_force_after")  { e = [1, 2, 3].lazy.map { |x| x * 2 }; e.next; [e.first(2), e.to_a, e.next] }
+probe("lz_inspect")      { e = [1, 2].lazy.map { |x| x }; e.next; e.inspect }
+probe("lz_size")         { e = [1, 2].lazy.map { |x| x }; e.next; e.size }
+probe("lz_feed")         { e = [1, 2].lazy.map { |x| x }; e.next; e.feed :f; [e.next, (e.next rescue $!.result)] }
+probe("lz_singleton_each") { e = [1, 2].lazy.map { |x| x * 2 }; def e.each(*); yield :own; :r; end; [e.next, (e.next rescue $!.result)] }
+probe("lz_subclass")     { c = Class.new(Enumerator::Lazy) { def each(*) = super { |x| yield x.to_s } }; e = c.new([1, 2]) { |y, x| y << x }; [e.next, e.next] }
+probe("lz_ivar_after")   { e = [1, 2].lazy.map { |x| x }; e.next; e.instance_variable_set(:@mine, 1); [e.next, e.instance_variables.include?(:@mine)] }
+probe("lz_frozen")       { e = [1].lazy.map { |x| x }.freeze; (e.next rescue $!.class) }
+probe("lz_dup_fresh")    { e = [1, 2].lazy.map { |x| x * 5 }; d = e.dup; [d.next, e.next] }
+probe("lz_thread")       { e = [1, 2].lazy.map { |x| x }; e.next; Thread.new { begin; e.next; rescue => x; "#{x.class}: #{x.message}"; end }.value }
+probe("lz_raises")       { e = [1, 2].lazy.map { |x| x == 2 ? raise(ArgumentError, "two") : x }; [e.next, (e.next rescue "#{$!.class}: #{$!.message}"), e.next] }
