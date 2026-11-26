@@ -762,6 +762,22 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    each call evaluates the literal once and the frame's slot is empty. `n != 0` goes
    through `BasicObject#!=` (gap 10), and `Object::GetType` at 4.9% is `swap`'s type
    guards, by that experiment's reading of the profile.
+   Round perf/permute (2026-11-26, on 2e9521f) measured what is left and where (see Rejected): the
+   block-loop tier never tries this block (runs of 1-6), and would decline it at `call: swap/2` (no
+   bound call in a block copy; `leaf/1` alone says the same) and then at `permute(n1)`, a recursive call
+   of a method that has no typed body; and since `swap` writes elements, then `permute` is called, then
+   `swap` runs again, any deopt after the first `swap` re-runs it - the effect rule declines the block
+   even with both calls bound. The method JIT declines `permute` written with a `while` too, at "a
+   deopt after an effect (call permute at line 44)". Yet that `while` version runs Permute in 2.39 s
+   against 4.10 s as written (CRuby 2.66 s, `harness.rb Permute 20 100`) as generic code: the gap is
+   the call with a literal block. Per call, `__send__`-driven, ns: a plain call 30, the same with any
+   literal block - `n.downto(0) { }`, `(n + 1).times { }`, `n.tap { }`, a Ruby method that yields once -
+   160-170 (CRuby 62 and 94-133); per iteration of `downto` IronRuby is at CRuby (52 against 59 ns with
+   a call in the block). It is not the bytes (360 B a call, 288 of them the scope, Proc and BlockParam):
+   parking them for `downto` took them away and no time (below). So the next attempt is the entry of a
+   call with a literal block - what the rule, the BlockParam and the block's frame do per call, without
+   allocating - which is /perf-frame's kind of work, and which every iterator call pays, not only
+   Permute's. Not the loop tier.
 5. **Rules bake the interpreted LightLambda of a method the JIT never wraps**
    (`LightLambda::Run*`, ~1% of Richards' `schedule`): a rule-level read of the body's
    current delegate, as b78ec3f5 did for stubs, would remove the hop once the body is
@@ -4800,6 +4816,19 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/permute (2026-11-26, on 2e9521f) - `[BlockNotKept]` on Integer#upto and #downto, and both off
+  `NeverParkedIterators`** (gap 4). Round eight's `[BlockNotKept]` alone changed nothing, since the
+  Proc was made again on every call; parked scopes (later) reuse a method's literal-block Proc and
+  scope where the iterator is `[BlockNotKept]`, as `times` and `each` are. With both: a `downto` call
+  with a literal block allocates 72 B instead of 360, Permute 53.8 MB an iteration instead of 124.5
+  (0.43, `alloc.rb`); time unchanged (`n.downto(0) { }` 161 against 164 ns, Permute 3.76-4.06 s
+  against 3.81-4.05); instructions (`callgrind/count.sh`, `Util/bench/permute-shapes.rb`, new/base):
+  `permute` 1.043, `dt_call` 1.023, controls `permute_while`, `tm_call`, `wh_call` 1.000. Parking
+  costs more instructions than the allocation it saves. Reverted; the shapes and two block-loop-matrix
+  cases (a `swap` on self redefined half way through a hot `downto`, a singleton `swap` on the
+  receiver; CRuby's output on the unchanged build with the JIT on, off and without JIT calls) kept.
+  What was learned is under gap 4.
 
 - **perf/lsite2 (/perf-step, 2026-11-26) - a light method that has made its scope late
   enters through a scoped twin from then on** (gap 16; switch `IR_LIGHT_TWIN`, `=verbose`
