@@ -960,6 +960,52 @@ error
 ");
         }
 
+        /// <summary>
+        /// `protected :size' in a subclass leaves an entry that forwards to the inherited public size. A call the
+        /// subclass may make must not leave behind a rule (a shared one, a dispatcher) that lets another caller in:
+        /// the visibility is the forwarder's, not the method's it reaches.
+        /// </summary>
+        public void VisibilityCaching3() {
+            TestOutput(@"
+class PB < Array
+  protected :size
+  def other(o) = o.size
+end
+class PR < Object
+  def size = 4
+end
+class PS < PR
+  protected :size
+  def other(o) = o.size
+end
+class Unrel
+  def call(o) = o.size
+end
+pb = PB.new([1, 2, 3])
+ps = PS.new
+puts pb.other(pb), ps.other(ps)
+puts((Unrel.new.call(pb) rescue 'nme'), (Unrel.new.call(ps) rescue 'nme'))
+puts((pb.size rescue 'nme'), (ps.size rescue 'nme'))
+puts pb.respond_to?(:size), pb.send(:size), (pb.public_send(:size) rescue 'nme')
+class PB
+  public :size
+end
+puts Unrel.new.call(pb), pb.size
+", @"
+3
+4
+nme
+nme
+nme
+nme
+false
+3
+nme
+3
+3
+");
+        }
+
         public void Visibility1() {
             AssertOutput(() => CompilerTest(@"
 class A

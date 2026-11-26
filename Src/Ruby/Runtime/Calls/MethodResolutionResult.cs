@@ -27,8 +27,16 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyMemberInfo _info;
         private readonly RubyModule _owner;
         private readonly bool _visible;
+        private readonly RubyMethodVisibility _visibility;
 
         public RubyMemberInfo Info { get { return _info; } }
+
+        /// <summary>
+        /// The visibility the lookup found, which is not always Info's: `protected :m' or `private :m' in a subclass
+        /// leaves an entry there that only forwards to the inherited m, and the resolution follows it to a method whose
+        /// own visibility is still public.
+        /// </summary>
+        public RubyMethodVisibility Visibility { get { return _visibility; } }
         public RubyModule Owner { get { return _owner; } }
 
         public bool Found {
@@ -36,14 +44,24 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public RubyMethodVisibility IncompatibleVisibility {
-            get { return (_info == null || _visible) ? RubyMethodVisibility.None : _info.Visibility; }
+            get { return (_info == null || _visible) ? RubyMethodVisibility.None : _visibility; }
         }
 
-        public MethodResolutionResult(RubyMemberInfo/*!*/ info, RubyModule/*!*/ owner, bool visible) {
+        public MethodResolutionResult(RubyMemberInfo/*!*/ info, RubyModule/*!*/ owner, bool visible)
+            : this(info, owner, visible, info.Visibility) {
+        }
+
+        private MethodResolutionResult(RubyMemberInfo/*!*/ info, RubyModule/*!*/ owner, bool visible, RubyMethodVisibility visibility) {
             Assert.NotNull(info, owner);
             _info = info;
             _owner = owner;
             _visible = visible;
+            _visibility = visibility;
+        }
+
+        /// <summary>This result, as reached through a forwarder of the given visibility.</summary>
+        internal MethodResolutionResult WithVisibility(RubyMethodVisibility visibility) {
+            return (_info == null) ? this : new MethodResolutionResult(_info, _owner, _visible, visibility);
         }
 
         internal MethodResolutionResult InvalidateSitesOnOverride() {

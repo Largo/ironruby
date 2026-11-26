@@ -947,6 +947,39 @@ end
 ldout.each { |r| p r }
 p ldh
 
+# `protected :x` or `private :x` in a subclass leaves an entry there that only forwards to the inherited public x: the
+# call's visibility is the forwarder's, not that of the method it reaches. A site in the subclass may call x on another
+# instance; one in an unrelated class, in a module mixed into both, or at the top level may not - not after the allowed
+# site has bound (a rule shared across sites, a library dispatcher, the JIT), not hot, not from a method with a scope.
+# Hot, with `public :x` and back in the middle; for a Ruby superclass and for Array, Hash and String.
+class FWBase; def size = 3; end
+class FWR < FWBase; protected :size; def other(o) = o.size; def sc(o) = (_ = binding; o.size); end
+class FWA < Array; protected :size; def other(o) = o.size; def sc(o) = (_ = binding; o.size); end
+class FWH < Hash; private :size; def other(o) = (o.size rescue :nme); def mine = size; end
+class FWS < String; protected :length; def other(o) = o.length; end
+module FWMix; def mix(o) = (o.size rescue :nme); end
+class FWR; include FWMix; end
+class FWUnrel
+  include FWMix
+  def call(o) = (o.size rescue :nme)
+  def sc(o) = (_ = binding; o.size rescue :nme)
+  def len(o) = (o.length rescue :nme)
+end
+fwr = FWR.new; fwa = FWA.new([1, 2]); fwh = FWH.new.merge!(a: 1); fws = FWS.new("abcd"); fwu = FWUnrel.new
+fwout = []
+20_000.times do |i|
+  row = [fwr.other(fwr), fwu.call(fwr), fwr.sc(fwr), fwu.sc(fwr), fwr.mix(fwr), fwu.mix(fwr),
+         fwa.other(fwa), fwu.call(fwa), fwa.sc(fwa), fwu.sc(fwa), (fwa.size rescue :nme),
+         fwh.other(fwh), fwh.mine, fwu.call(fwh), fws.other(fws), fwu.len(fws), fwu.call([1]),
+         fwa.respond_to?(:size), (fwa.public_send(:size) rescue :nme), fwa.send(:size)]
+  fwout << [i, row] if i % 1000 == 7 || (i > 9_995 && i < 10_010)
+  case i
+  when 10001 then class FWA; public :size; end; class FWR; public :size; end
+  when 12001 then class FWA; protected :size; end; class FWR; protected :size; end
+  end
+end
+fwout.each { |r| p r }
+
 # A hot library call (one a dispatcher has spent its budget on) is answered by a new dispatcher while its rule is compiled in
 # the background (RubyCallAction.BindWhileCompiling); IR_SPENT_DISPATCHER=hold never lets the compiled rule land, =0 interprets
 # the rule as before. Run hot, right after the calls turn hot (the budget is 32 calls in a method) and later: the method
