@@ -372,6 +372,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("unlink", RubyMethodAttributes.PublicSingleton)]
         public static int RemoveDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname) {
             string strDir = self.Context.DecodePath(Protocols.CastToPath(toPath, dirname));
+            if (Posix.IsAvailable) {
+                // rmdir(2) itself, as File.delete calls unlink(2): .NET reports rmdir's EACCES, EPERM and
+                // EROFS as a bare IOException, and ToRubyException's guess at what that meant -
+                // Directory.Exists, which is false when the parent cannot be searched - said ENOENT for
+                // a directory in a parent without permissions. The kernel's errno is what MRI raises.
+                int errno;
+                if (Posix.RmDir(strDir, out errno) != 0) {
+                    throw Posix.Error(errno, strDir, self.Context);
+                }
+                return 0;
+            }
             // rmdir(2) does not follow a symbolic link: on a link to a directory it is ENOTDIR,
             // where the BCL's delete removed the link.
             if (GetEntryKind(strDir, false) == EntryKind.NotDirectory) {

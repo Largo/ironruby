@@ -270,6 +270,9 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "mkdir", SetLastError = true)]
         private static extern int sys_mkdir(byte[] path, int mode);
 
+        [DllImport("libc", EntryPoint = "rmdir", SetLastError = true)]
+        private static extern int sys_rmdir(byte[] path);
+
         [DllImport("libc", EntryPoint = "rename", SetLastError = true)]
         private static extern int sys_rename(byte[] oldPath, byte[] newPath);
 
@@ -371,6 +374,10 @@ namespace IronRuby.Builtins {
 
         internal static int MkDir(string path, int mode, out int errno) {
             return Run(() => sys_mkdir(ToPath(path), mode), out errno);
+        }
+
+        internal static int RmDir(string path, out int errno) {
+            return Run(() => sys_rmdir(ToPath(path)), out errno);
         }
 
         internal static int Chmod(string path, int mode, out int errno) {
