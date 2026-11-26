@@ -1046,7 +1046,8 @@ namespace IronRuby.Aot {
                         Expression.Constant(range.Begin), Expression.Constant(range.End), Expression.Constant(range.ExcludeEnd));
 
                 case IStrongBox box when value.GetType().IsGenericType && value.GetType().GetGenericTypeDefinition() == typeof(StrongBox<>):
-                    if (box.Value != null) throw new NotSupportedException("StrongBox holding " + box.Value.GetType());
+                    // a light site's memory that has been set (LightFrameRewriter.MakeLightCall) starts empty again: it is only a hint
+                    if (box.Value != null && box.Value != RubyOps.LightScopeRequired) throw new NotSupportedException("StrongBox holding " + box.Value.GetType());
                     hint = "cache";
                     return Expression.New(value.GetType());
 
