@@ -824,6 +824,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    whose call does not); `defined?(@x)` is refused.
    A method with both a literal block and a passed one still makes its scope
    for the passed one's call (LightScopeCall leaves calls with a block to BlockLiterals).
+   Global variables went in in round thirty-seven (perf/lglobal, `IR_LIGHT_GLOBALS`,
+   `Util/global-light-matrix.rb`, see Landed): every name but `$~` and `$_`; a global in a body
+   of more than 24 calls still keeps its scope (the masgn limit, measured again on
+   `String#__ir_split_lines__`).
 
 10. **`!=` outside the method JIT is two dispatches**: `BasicObject#!=` calls `==`
     through a site shared by every `!=` in the runtime, so that site is polymorphic. 2.9%
@@ -1383,6 +1387,57 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
+  census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
+  `$/`, `$!` or `$x = v` kept 258 methods out of light frames by themselves (Kernel#puts among them,
+  on every call of `puts`). Only `$~` and `$_` (and what is derived from `$~`) live in the frame
+  (RubyScope.GetInnerMostClosureScope); every other global is the runtime's (SpecialGlobalVariableInfo,
+  GlobalVariableInfo). So a light frame now reads and writes any global but those two names through
+  the declaring scope: `RubyOps.ReadLightGlobalVariable`, `GetLightGlobalVariable` and
+  `SetLightGlobalVariable` take the place of the cached helpers (LightFrameRewriter.VisitGlobalVariableCall),
+  and `defined?($x)` hands `IsDefinedGlobalVariable` the declaring scope. A name can still denote `$~` or
+  `$_` - an alias, English.rb's `$LAST_MATCH_INFO` - so the helpers decide from the variable the site
+  finds (`GlobalVariable.ReadsScope`, true for a kind this assembly does not know) and answer
+  `LightScopeRequired`, having done nothing, when it would read the frame; the frame then makes its
+  scope and does it again with the cached helper, the value assigned evaluated once. The same while a
+  trace_var handler is registered, for a non-main Ractor, and for an assignment that creates the
+  global. What is read or assigned is the variable the decision was made for
+  (`RubyContext.SetGlobalVariableValue`), not one looked up again, which another thread may have
+  aliased in between. A name that already denotes `$~` or `$_` when the body is compiled keeps the
+  scope (the rewriter is given the runtime): reading English's alias light made the scope at every
+  read, 1.43x. The frame keeps its stack check: `$FILENAME` asks ARGF.filename, `$stdout = o` asks
+  `o.respond_to?(:write)`, and a trace_var handler runs Ruby, any of which may call the method again.
+  A global in a body of more than 24 calls keeps its scope (the masgn limit): `String#__ir_split_lines__`
+  (`$/` and some forty calls) was 17,890 bytes of IL light against 7,652 with its scope, and
+  `"a\nb\n".lines` 1.10x slower in six alternating rounds alone; 25 methods are held back by it.
+  `IR_LIGHT_GLOBALS=0` turns it off.
+  Light frames 91.7% -> 92.6% (26,019 -> 26,257), light blocks unchanged, JIT unchanged (Src/StdLib +
+  AWFY, 28,376 methods; 238 methods moved up, none down). Of the prelude: Kernel#puts,
+  Exception.to_tty?, Process.last_status, Process::Status.wait, GC::Profiler.report,
+  Enumerator::Generator#initialize; none of AWFY's. `census.rb -c` on traces of
+  `Util/bench/app-shapes.rb` (920 methods called) and of the matrix (175): light frames 0 differ;
+  declined 29 and specialized 115 on both trees.
+  Timed (`ab.rb -r 6`, `Util/bench/global-shapes.rb`, pinned, load 0.5-1.8; this container has no
+  perf counters, so no `-i`), ns a call, off -> on: `defined?($g)` 91.7 -> 60.4 (0.66), `def m(sep =
+  $/)` 94.1 -> 63.9 (0.68), `$stdout.equal?(STDOUT)` 95.6 -> 72.0-83.9 (0.71-0.88), `$VERBOSE` 79.9 ->
+  72.0 (0.84-0.90), `x + $g` 80.0 -> 47.9-71.9 (0.56-0.90), `puts` to a null writer alone 358.7 ->
+  316.4 (0.88, overlap); `$g` alone and `$g = v` are compiled by the method JIT either way (overlap);
+  controls (an ivar, a method that names `$~`) overlap. `lines` and the alias read looked 1.3-1.5x
+  slower late in the sequential script and are the same alone (0.97, 1.00) and as a pair (the same
+  minimum on both trees): a state of the process, as round eight describes.
+  Checked: `Util/global-light-matrix.rb` (new: reads and writes of plain and special globals,
+  read-only ones, `$stdout` to a writer and to something without #write, `||=`, `&&=`, op-assign,
+  parallel assignment; `$~`, `$_` and aliases of them made before and after the methods were compiled,
+  in a block, in another thread, with print; trace_var with a block, a String and a handler that
+  assigns its own variable; defined?; send, bind_call, define_method, binding, eval, raise, `$!` in a
+  rescue, caller, a million deep, TracePoint) prints CRuby's output on the baseline and on the
+  candidate as built, `IR_LIGHT_GLOBALS=0`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, `-X:NoJIT
+  -X:NoOSR`, `-X:NoJITCalls` and the R2R host. gate-matrices.rb on 14 matrices (global-light,
+  block-given, block-scope-reuse, jit, keyword-light, light-rest, loop-light, masgn, hot-shapes,
+  regex-light, rescue-light, shared-rule-light, splat-pass, super-light) in those seven modes: PASS,
+  90 same, 8 baseline (hot-shapes in every mode and regex-light under R2R, as on master).
+  `Method_LightFrameGlobal1` (new) and 27 named global tests pass.
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R
