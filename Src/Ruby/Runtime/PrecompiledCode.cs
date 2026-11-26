@@ -506,6 +506,18 @@ namespace IronRuby.Runtime.Precompiled {
         }
 
         /// <summary>
+        /// The file precompiled code noted for a call of Kernel#require_relative or #__dir__ it made from
+        /// <paramref name="scope"/> (NoteCallLocation), or null: then the caller is somewhere else, and only the stack says
+        /// where. Those two used to take their caller's file from caller(0, 1), a CLR stack walk as deep as the nested
+        /// requires (0.1-0.6 ms), some 50 times in `ir -e 1' alone.
+        /// </summary>
+        public static string TakeNotedCallerPath(RubyScope scope) {
+            string path;
+            int line;
+            return TryTakeCallLocation(scope, out path, out line) ? path : null;
+        }
+
+        /// <summary>
         /// Called by precompiled code right after the call it noted the location of (NoteCallLocation) returns: a call that
         /// did not reach Module#const_set or #autoload leaves nothing behind for a later one, nor keeps the scope alive.
         /// </summary>

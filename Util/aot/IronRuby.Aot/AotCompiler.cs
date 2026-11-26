@@ -703,13 +703,15 @@ namespace IronRuby.Aot {
             }
         }
 
-        // the builtins that record where they were called from (RubyUtils.TryGetCallerSourceLocation)
-        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload" };
+        // the builtins that record or need where they were called from (RubyUtils.TryGetCallerSourceLocation,
+        // PrecompiledCode.TakeNotedCallerPath)
+        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload", "require_relative", "__dir__" };
 
         /// <summary>
-        /// A call of Module#const_set or #autoload records its caller's location, which compiled code only has on the
-        /// CLR stack: the call says where it is first (PrecompiledCode.NoteCallLocation), with the scope the method is
-        /// then called from. Not in the Ruby half of the core library, whose frames report their caller's location.
+        /// A call of Module#const_set or #autoload records its caller's location, and Kernel#require_relative and #__dir__
+        /// work from their caller's file, which compiled code only has on the CLR stack: the call says where it is first
+        /// (PrecompiledCode.NoteCallLocation), with the scope the method is then called from. Not in the Ruby half of the
+        /// core library, whose frames report their caller's location.
         /// <paramref name="makeCall"/> makes the call from its arguments. The scope argument is evaluated once: a method's is
         /// a parameter, a block's an expression (the block's scope out of its closure), which is held in a temporary.
         /// </summary>
@@ -732,7 +734,7 @@ namespace IronRuby.Aot {
                 scope = held;
             }
             var call = makeCall(args);
-            Count("const_set/autoload calls noting their location");
+            Count("const_set/autoload/require_relative/__dir__ calls noting their location");
             var note = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
                 Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
                 Expression.Constant(line));

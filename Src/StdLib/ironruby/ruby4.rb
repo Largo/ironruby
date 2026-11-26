@@ -181,12 +181,13 @@ end
 module Kernel
   private
 
-  def require_relative(path)
-    # caller(0), not caller: this method's own frame is reported with its caller's file and
-    # line, and where the CLR stack cannot be walked (AOT-compiled browser-wasm) the frame of a
-    # method the DLR has compiled is missing altogether - caller(1) would then skip the caller.
+  # Kernel#require_relative (KernelOps) passes the caller's file if precompiled code noted it.
+  def __require_relative__(path, caller_path)
+    # caller(0), not caller: Kernel#require_relative's frame is reported with its caller's file
+    # and line, and where the CLR stack cannot be walked (AOT-compiled browser-wasm) the frame of
+    # a method the DLR has compiled is missing altogether - caller(1) would then skip the caller.
     # One frame is made, not the whole backtrace's.
-    caller_path = caller(0, 1).first.split(/:\d/, 2).first
+    caller_path ||= caller(0, 1).first.split(/:\d/, 2).first
     # Relative to where the file really is: through a symlink, the link's target, and for a
     # file run by a relative path, where it was before any chdir.
     if !File.file?(caller_path) || File.symlink?(caller_path)
@@ -200,12 +201,11 @@ module Kernel
     # replaces, so gem activation still happens) rather than calling self.require.
     ::Kernel.instance_method(:require).bind(self).
       call(File.expand_path(path, File.dirname(location || caller_path)))
-  end unless private_method_defined?(:require_relative)
+  end
 
-  # Like #require, this is both a private instance method and a public singleton
-  # method on Kernel -- Kernel.require_relative(path) is a documented call.
-  module_function :require_relative
-  private :require_relative
+  # Kernel.require_relative(path) is a documented call, which needs the helper on Kernel too.
+  module_function :__require_relative__
+  private :__require_relative__
 end
 
 class Ractor
@@ -2413,9 +2413,9 @@ end
 module Kernel
   private
 
-  def __dir__
-    file = caller(0, 1).first   # see require_relative
-    file = file.split(/:\d/, 2).first if file
+  # Kernel#__dir__ (KernelOps) passes the caller's file if precompiled code noted it.
+  def __dir_of__(file)
+    file ||= caller(0, 1).first&.split(/:\d/, 2)&.first   # see __require_relative__
     # Only a real file has a directory. Code that came from a string - an eval, the console -
     # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at
     # wherever the process happens to be.
@@ -2426,7 +2426,7 @@ module Kernel
     # An eval told a file name that is not a real file answers that name's directory as given.
     return File.dirname(file) unless File.file?(file)
     File.dirname(File.expand_path(file))
-  end unless private_method_defined?(:__dir__)
+  end
 
   # Kernel#readline and #readlines read ARGF, as #gets does.
   def readline(*args)
@@ -2437,7 +2437,7 @@ module Kernel
     ::ARGF.readlines(*args)
   end unless private_method_defined?(:readlines)
 
-  module_function :__dir__, :readline, :readlines
+  module_function :__dir_of__, :readline, :readlines
 end
 
 class Hash
