@@ -40,6 +40,12 @@ namespace IronRuby.Compiler.Ast {
         // if the block has more parameters object[] is used:
         internal const int MaxBlockArity = BlockDispatcher.MaxBlockArity;
 
+        /// <summary>
+        /// IR_NESTED_PROCS=0: a block literal with a literal nested in it never reuses its Proc, and the nested literal does not
+        /// clear the enclosing Procs' reuse (see Transform, reusesProc).
+        /// </summary>
+        internal static readonly bool NestedProcsEnabled = Environment.GetEnvironmentVariable("IR_NESTED_PROCS") != "0";
+
         private readonly Parameters/*!*/ _parameters;
         private readonly Statements/*!*/ _body;
         private readonly LexicalScope/*!*/ _definedScope;
@@ -323,14 +329,25 @@ namespace IronRuby.Compiler.Ast {
             bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
                 !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
-            // The same holds for the Proc of the literal (see BlockDispatcher.ReusesProc).
-            bool reusesProc = !isLambda && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+            // The same held for the Proc of the literal (see BlockDispatcher.ReusesProc), but a nested literal's Proc is not made
+            // on every call: when the block runs as an iterator's outlined loop, the nested iterator's loop runs in place and makes
+            // none (BlockLoopSite, NestedBlockLoop). So the nested literal's Proc, when it is made, keeps this one from being made
+            // again (RubyOps.KeepEnclosingProcs) - and so from being parked - and a call that made
+            // none leaves this Proc - and the method's scope, if every literal of the method's own reuses its Proc - for the next
+            // call (NBody's `advance': a scope and two Procs per call). IR_NESTED_PROCS=0 keeps the old rule.
+            bool hasNestedBlock = gen.CurrentBlock.HasNestedBlock;
+            bool reusesProc = !isLambda && !hasNestedReturn && (NestedProcsEnabled || !hasNestedBlock) &&
                 !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
             // (a method all of whose literals reuse their Procs may park its scope with them: MethodDefinition.ParkedScopesEnabled)
-            gen.CurrentMethod.BlockLiteralCount++;
-            if (!reusesProc) {
-                gen.CurrentMethod.HasUnreusableBlock = true;
+            // A literal nested in a block keeps the enclosing literals' Procs from being made again (KeepEnclosingProcs below), and
+            // so the method's scope from being parked, on a call that made it: only the literals the
+            // method's scope makes have their Procs parked, and only they count.
+            if (!(NestedProcsEnabled && gen.CurrentBlock.ParentBlock != null)) {
+                gen.CurrentMethod.BlockLiteralCount++;
+                if (!reusesProc) {
+                    gen.CurrentMethod.HasUnreusableBlock = true;
+                }
             }
 
             body = gen.Traceable
@@ -438,6 +455,10 @@ namespace IronRuby.Compiler.Ast {
                 instantiateReusable = Methods.InstantiateParkedBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable,
                     dispatcher, gen.CurrentMethod.ParkedVariable, AstUtils.Constant(gen.CurrentMethod.ParkProcVariables.Count));
                 gen.CurrentMethod.ParkProcVariables.Add(previousProc);
+                if (hasNestedBlock && blockDispatcher.LoopInfo != null) {
+                    // the calls before the loop is outlined make the nested Proc and so cannot park (see BlockLoopInfo.ParkSlot)
+                    blockDispatcher.LoopInfo.ParkSlot = parkSlot;
+                }
             } else if (reusesProc) {
                 instantiateReusable = Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher);
             }
@@ -456,6 +477,11 @@ namespace IronRuby.Compiler.Ast {
                     )
                 )
             );
+            if (NestedProcsEnabled && gen.CurrentBlock != null) {
+                // a literal nested in a block (the enclosing block's HasNestedBlock): its Proc holds the scope it is made in, and that
+                // block's Proc may be reused (see reusesProc above)
+                instance = Methods.KeepEnclosingProcs.OpCall(instance, gen.CurrentScopeVariable);
+            }
             return reusesProc ? Ast.Assign(previousProc, instance) : instance;
         }
 
