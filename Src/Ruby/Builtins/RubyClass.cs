@@ -18,6 +18,7 @@ using System.Linq.Expressions;
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Dynamic;
 using System.Reflection;
@@ -2037,13 +2038,8 @@ namespace IronRuby.Builtins {
             } else {
                 // TODO: we need more refactoring of RubyMethodGroupInfo.BuildCall to be able to inline this:
                 metaBuilder.Result = AstUtils.LightDynamic(
-                    RubyCallAction.Make(args.RubyContext, "initialize",
-                        new RubyCallSignature(
-                            args.Signature.ArgumentCount, 
-                            (args.Signature.Flags & ~RubyCallFlags.IsInteropCall) | RubyCallFlags.HasImplicitSelf
-                        )
-                    ),
-                    args.GetCallSiteArguments(instanceVariable)
+                    RubyCallAction.Make(args.RubyContext, "initialize", new RubyCallSignature(args.Signature.ArgumentCount, flags)),
+                    siteArguments
                 );
             }
 
@@ -2051,6 +2047,18 @@ namespace IronRuby.Builtins {
                 // PropagateRetrySingleton(instance = new <type>(), instance.initialize(<args>))
                 metaBuilder.Result = Methods.PropagateRetrySingleton.OpCall(
                     Ast.Assign(instanceVariable, instanceExpr),
+                // The call is Class#new's, not the caller's: MRI's rb_obj_call_init calls initialize with no refinement active,
+                // so the site does not take the caller's scope, whose refinements would reach initialize (a refined
+                // Struct#initialize did, once the rule was compiled). No library initialize takes the scope, and the action is
+                // bound to the context, so nothing takes the scope's place.
+                var flags = (args.Signature.Flags & ~RubyCallFlags.IsInteropCall) | RubyCallFlags.HasImplicitSelf;
+                ReadOnlyCollection<Expression> siteArguments;
+                if (args.Signature.HasScope) {
+                    siteArguments = args.GetBoundCallSiteArguments(instanceVariable);
+                    flags &= ~(RubyCallFlags.HasScope | RubyCallFlags.HasLightScope);
+                } else {
+                    siteArguments = args.GetCallSiteArguments(instanceVariable);
+                }
                     metaBuilder.Result
                 );
 

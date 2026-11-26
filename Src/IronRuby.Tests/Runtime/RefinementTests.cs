@@ -594,5 +594,31 @@ p r
 [[:R], [:C], [:C], [:D, :C]]
 ");
         }
+
+        /// <summary>
+        /// Class#new calls initialize as MRI's rb_obj_call_init does, with no refinement active: a refinement of initialize
+        /// active where new is called is not seen, whether the class's initialize is Ruby's or a library's (Struct#initialize,
+        /// Array#initialize) and whether the rule of new is interpreted or compiled (a Struct's was, after 200 calls).
+        /// </summary>
+        public void Refinements16() {
+            TestOutput(@"
+S = Struct.new(:a, :b)
+class A < Array; end
+class C; def initialize(*a) = (@a = a); attr_reader :a; end
+module R
+  refine(S) { def initialize(*) = super(:refined, :init) }
+  refine(A) { def initialize(*) = super(2, :r) }
+  refine(C) { def initialize(*) = super(:r) }
+end
+module U
+  using R
+  def self.make = [S.new(1, 2).to_a, A.new(1, 0).to_a, C.new(1).a]
+end
+r = nil
+300.times { |i| x = U.make; (p [i, x]; r = x) if x != r }
+", @"
+[0, [[1, 2], [0], [1]]]
+");
+        }
     }
 }
