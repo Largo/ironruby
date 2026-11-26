@@ -291,7 +291,9 @@ namespace IronRuby.Runtime.Calls {
             // from sites that run a few times at start-up, each of which built and interpreted a rule (~150 us) before.
             if (light) {
                 if (method.Info is RubyLambdaMethodInfo) {
-                    return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args);
+                    // (by the name it is called by: an alias's is __callee__'s)
+                    return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args,
+                        name: _methodName);
                 }
                 var lightLibraryMethod = method.Info as RubyLibraryMethodInfo;
                 return (lightLibraryMethod != null && !TracePoint.CCallTracing && !DispatchIntrinsics.IsSend(lightLibraryMethod)) ?
@@ -307,7 +309,8 @@ namespace IronRuby.Runtime.Calls {
 
             // and so do those of a method define_method made of a block
             if (method.Info is RubyLambdaMethodInfo) {
-                return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args);
+                return LibraryDispatcher.TryCreateRubyCall(this, delegateType, Signature, method.Info, targetClass, target, clrTest, version, args,
+                    name: _methodName);
             }
 
             // The first calls of a library method from a site go without a rule. A rule built for a call is used for one

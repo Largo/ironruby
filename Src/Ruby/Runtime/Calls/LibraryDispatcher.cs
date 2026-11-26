@@ -1275,7 +1275,7 @@ namespace IronRuby.Runtime.Calls {
             if (method is RubyMethodInfo) {
                 plan = RubyMethodCallPlan.TryCreate((RubyMethodInfo)method, argumentCount, name ?? ((RubyMethodInfo)method).DefinitionName);
             } else if (method is RubyLambdaMethodInfo && splatCount < 0) {
-                plan = LambdaMethodCall.TryCreate((RubyLambdaMethodInfo)method, argumentCount);
+                plan = LambdaMethodCall.TryCreate((RubyLambdaMethodInfo)method, argumentCount, name);
             } else {
                 plan = null;
             }

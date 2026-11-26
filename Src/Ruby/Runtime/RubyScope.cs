@@ -938,7 +938,8 @@ namespace IronRuby.Runtime {
                         return callee ? methodScope.CalleeName : methodScope.DefinitionName;
 
                     case ScopeKind.BlockMethod:
-                        return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DefinitionName;
+                        var proc = ((RubyBlockScope)scope).BlockFlowControl.Proc;
+                        return (callee ? proc.CalleeName : null) ?? proc.Method.DefinitionName;
 
                     case ScopeKind.TopLevel:
                         return null;
