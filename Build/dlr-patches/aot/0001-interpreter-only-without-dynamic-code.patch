@@ -167,8 +167,8 @@ index d239963..ea82dd0 100644
 +#endif
 +
          private bool TryGetCompiled() {
-             // Use the compiled delegate if available.
-             if (_delegateCreator.HasCompiled) {
+             // A nested lambda light-compiled when it first runs (LightCompiler.CompileOnFirstCall); one the light compiler
+             // cannot interpret is compiled.
 diff --git a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
 index 42f3361..f58fece 100644
 --- a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
