@@ -5393,6 +5393,33 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/ensure (2026-11-26) - the catch-and-rethrow of an `ensure` clause that jumps (#213 item 3):
+  measured, not built - real code almost never has such a frame on a raise's path.** Compiled, an
+  `ensure` already lets an exception go through a CLR filter (`EnsureGuardExpression`,
+  `RubyOps.PassEnsure`); a clause with a jump in it - a call with a block, `yield`, zsuper,
+  `return`/`break`/`next`/`retry` (`Body.EnsureJumpFinder`, `GotoFinder`) - is made a catch of
+  everything and a throw again by the DLR's FlowControlRewriter, and its guard gets frame depth -1,
+  so an exception whose backtrace is still to be taken is caught there.
+  Cost (`Util/bench/ensure-jump-shapes.rb`, new, us per raise rescued, IronRuby / CRuby): one frame
+  plain 12.5 / 0.79, calling a block 55 / 0.99, yielding 61 / 0.87; twenty frames plain 28 / 2.3,
+  block 119 / 4.2, yield 112 / 3.1. So the first such frame costs about 43 us - the backtrace taken
+  eagerly where the plain ensure defers it - and each further one about 4.5 us, the rethrow.
+  How often: the prelude's 24 `ensure` clauses have no jump; of 276 in `Src/StdLib/ironruby` and
+  `ruby/4.0`, 25 do, all in cold code - socket helpers (4), bundler's DSL, CLI and settings (6),
+  open3 (2), irb (2), resolv, mkmf, rdoc, rubygems, puma (2), pty, msgpack, bigdecimal. A raise
+  through the frames real code puts around it (`Util/bench/raise-through-shapes.rb`, new, us,
+  IronRuby / CRuby): bare 8.1 / 0.59, Monitor#synchronize 11.7 / 0.67, Mutex#synchronize 11.8 /
+  0.68, File.open with a block 16.3 / 2.1, Array#each 16.0 / 0.69, Integer#times 15.9, Hash#each
+  16.2, loop 17.3, tap 14.8 - none carries the ~43 us of a jump-ensure. The rethrow is real but off
+  the paths that raise; a DLR patch for it (Build/dlr-patches) was not written.
+  Found instead: **`Timeout.timeout` with a raise in its block costs 152-164 us against CRuby's 3.1**
+  (9.2 / 2.0 without the raise). Its own ensure (`request.finished`) has no jump; the path has
+  `return yield(sec)` from a Proc inside a begin/ensure, and `Error.handle_timeout`'s `rescue
+  ExitException => e` with `raise` again (a class list by constant, so a catch and a backtrace, then a
+  re-raise). Pieces of it measured alone: a `rescue E2 => e` frame 12.3 us, a Proc with `return
+  yield` and an ensure 15-31, the two together 44: they do not add up to 155, so the rest is still to
+  be found. That is the next step here, not the ensure rethrow.
+
 - **perf/jitbind (2026-11-26) - binding a call on another receiver (a parameter, an ivar, a local
   whose class the profile knows) to the callee's typed body, with a generic call as the fallback:
   counted, not built - nothing it would take stops there.** The three methods gap 1 names: DeltaBlue's
