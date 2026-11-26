@@ -604,7 +604,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    (`trace(...) if TRACING`) dropped under the constant's version, for Richards'
    `schedule` (7.5% self, the largest generic body of the benchmark); behind it the loop
    tier still refuses `schedule`'s `while` for its calls on another receiver, so find
-   out first what compiles once the screen lets it through. And two that the rounds
+   out first what compiles once the screen lets it through. Done in perf/deadconst (see Landed): the
+   screen lets `schedule` through and nothing compiles - it is called once per iteration, so it is the loop
+   tier's, which still stops at `[osr] emitter: call: is_task_holding_or_waiting/0`; the next step for it
+   is calls on another receiver in an outlined loop. And two that the rounds
    above keep running into: held-back writes that reach through a bound callee (a
    caller whose only effects are its callee's writes to the same self: `read_required_char`
    -> `read_char` -> `read`, `set_nesting_level` -> `set_is_root`), and attribute writes
@@ -1259,6 +1262,15 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the name cannot tell a constant that shadows the folded one from any other of that name.
     The next attempt keys on where the constant was found (the modules of the folded lookup's
     path), and is measured on a loop beside a thread that defines the same name elsewhere.
+    Another, found in round perf/deadconst (2026-11-26) and open on master: a typed method body
+    whose `while` folds a constant and has nothing else that may deopt goes on with the old value
+    after another thread reassigns it (`x = 0.0; while x < n; return :seen if DF; x += 1.0; end;
+    :limit`, warmed with DF false, then DF reassigned 0.1 s into `spin(2.0e9)`: CRuby `:seen`,
+    IronRuby `:limit`). Its safe point sees the move, but `MethodLoopSafePointSlow` deopts only a body
+    that may deopt (`JitLoopGuard.MayDeopt`), and this one has no deopt of its own (an Int counter's
+    overflow check gives most loops one). perf/deadconst makes such a body deopt where it left an arm
+    out; for a folded value in general the same (`_canDeopt` for a pure body with a loop that folded a
+    constant) is untried, and an impure body would have to be declined for it.
 30. **`Binding#local_variable_get`, `_set`, `_defined?` and `local_variables` are an
     `eval` of source text each** (the prelude, `class Binding`): 436 us for a set against
     0.1 on CRuby. `ERB#result_with_hash` sets one per key (237 times CRuby), irb sets `_`
@@ -1383,6 +1395,57 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/deadconst (/perf-step, 2026-11-26, master f81fc19) - a statement guarded by a constant whose
+  value makes it dead is left out of the typed body and of a loop's copy (gap 1)** - census only, not gated.
+  `trace(x) if TRACING`, `log(x) unless QUIET`, `if C then a else b end` without an elsif, where C is a
+  constant the compiler folds (`C`, `::C`, `A::B`): `JitCompiler.TryEmitConstantGuarded` resolves it as
+  any folded read (`ResolveConstant`, so the entry's revalidation, gap 29, covers it) and emits only the
+  arm its value leaves alive, without the test. The screen asks the same question of the same nodes
+  (`JitCompiler.ConstantGuard`): `JitStub.Wrap` hands it the constant's value now, looked up in the
+  declaring scope as the compiler will (`JitFoldedConstant.Resolve`), and it walks only the live arm; the
+  census and the precompiled library, which have no values, take a guard of one arm for a switch that is
+  off. A loop runs on past the entry, so a method body with a loop (its own or an iterator's block) that
+  left something out is made one that may deopt (`_canDeopt`): its safe point then deopts when the constant
+  is reassigned (`MethodLoopSafePointSlow`), which only a pure body may (otherwise it is declined, as any
+  loop in a body that can deopt and has an effect); a body that binds a callee with a loop is declined.
+  An outlined loop needs nothing: a reassignment moves the code epoch (`RubyContext.ConstantReassigned`)
+  and its safe point hands it back. Switch: `IR_JIT_DEADCONST=0`.
+  Census (Src/StdLib + AWFY, 28,376 methods): never 22,159 -> 22,157, maybe 2,921 -> 2,923; 2 methods
+  moved up, none down - `Scheduler#schedule` (never at `MethodCall trace (self)` -> maybe at "constant
+  without a scope: NO_TASK", the census's usual stop) and RSS `ListenerMixin#tag_end` (`p ... if DEBUG`).
+  The census cannot see a constant's value, so it was judged by a run and by shapes. Richards traced
+  (3 x 10): the screen no longer rejects `schedule`, and nothing else changed - `schedule` is called once
+  per iteration and never reaches the method JIT's threshold, and its `while` is still refused by the
+  loop tier at its first call on another receiver: `[osr] emitter: call: is_task_holding_or_waiting/0`,
+  `richards.rb:260: not specializable` (behind it `@current_task.link` and `.run_task`; `trace` was never
+  the loop tier's first obstacle). `declined ... (passed the pre-screen)` 6 -> 6; `census -c`: 49 agree,
+  0 differ, 16 specialized all compiles/maybe, 6 declined all maybe. No AWFY benchmark is expected to move.
+  `Util/bench/deadconst-shapes.rb` (new), `ab.rb -r 4` by time (this container has no instruction
+  counter: `-i` printed nothing), CRuby / base / new ns: `m_dead` (a call on self under a false
+  constant, then `x + @k`) 27.3 / 61.2 / 51.3 = 0.84; `m_dead2` (a nil and a qualified guard) 35.5 / 59.6
+  / 50.4 = 0.85; `mloop_dead` (the guard in a method's `while`, 8 iterations a call) 223.6 / 240.0 / 60.3 =
+  0.25; `loop_dead` (in a long loop, the loop tier's) 17.9 / 34.8 / 2.8 = 0.08; their controls without
+  the guard `m_plain` 1.02, `mloop_plain` 0.99, `loop_plain` 1.03, all overlap; each guarded shape is now
+  at its control.
+  Checked: `Util/deadconst-matrix.rb` (new, 22 rows): between calls the guard reassigned true or false,
+  `unless`, if/else both ways, qualified, nil set to 0, removed (NameError), shadowed lexically and through
+  a superclass, set to an equal false again, the `if`'s value assigned, in a bound callee, in a method's
+  `while`, in a `times` block, a live guard turned off; and another thread reassigning it while a compiled
+  loop runs: a method's `while` (Int and Float counters), a top-level `while` (OSR), a `times` block, a
+  method called in a loop. CRuby's output on the unchanged build, and on the new one with the JIT on,
+  `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` and the switch off. With the loop rule taken out, the Float row
+  answers `:limit` (it is the row that tests it: an Int counter's overflow makes the body one that may
+  deopt anyway). jit, jit-calls, block-loop, osr-array, jit-const matrices and inline-matrix (one case per
+  process) print the same on base and new in all four modes, CRuby's but for inline-matrix's
+  `tree_int_key`, which differs on every IronRuby build (documented in the matrix). IronRuby.Tests Jit*
+  (16) pass.
+  For the gate: a method that folded a constant in a `while` and has nothing else that may deopt keeps the
+  constant's old value after another thread reassigns it, on master too (gap 29); this change fixes it
+  only where an arm is left out. The screen's lookup runs at each `def`'s first call, under the class
+  hierarchy lock, once per guard. Look hardest at the loop rule (`TryCompile`, `_droppedArm`) and at a
+  dropped arm after a call of a bound callee that runs generic code which reassigns the constant - the
+  same question every folded constant already raises, not timed or probed beyond row 13.
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R

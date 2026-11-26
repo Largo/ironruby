@@ -1659,9 +1659,10 @@ namespace IronRuby.Runtime.Jit {
 
         // The static part of Wrap's decision; rejectedBy is set when the screen (not the parameter list) refused the body.
         // isLeafCallee: the census's answer in place of the declaring module's (CensusScreen).
+        // constantTruth: what a constant guarding a statement is now (JitScreen.CanEverCompile); null where it is not known.
         private static bool Screen(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule declaringModule, out JitKeywords keywords, out bool[] hasDefault,
             out object[] defaults, out bool perCount, out bool[] storedOnly, out int arity, out string rejectedBy,
-            Func<string, bool, bool> isLeafCallee = null) {
+            Func<string, bool, bool> isLeafCallee = null, Func<ConstantVariable, bool?> constantTruth = null) {
             keywords = null;
             hasDefault = null;
             defaults = null;
@@ -1723,7 +1724,7 @@ namespace IronRuby.Runtime.Jit {
                 (isLeafCallee != null) ? isLeafCallee : (declaringModule != null)
                     ? (name, onSelf) => IsLeafMethod(declaringModule, name, onSelf) ||
                         (onSelf && context.RubyOptions.JitCalls && IsCallableMethod(declaringModule, name, 0))
-                    : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses)) {
+                    : (Func<string, bool, bool>)((name, onSelf) => true), out rejectedBy, out otherUses, constantTruth)) {
                 return false;
             }
 
@@ -1898,7 +1899,18 @@ namespace IronRuby.Runtime.Jit {
             bool perCount;
             int arity;
             string rejectedBy;
-            if (!Screen(ast, context, declaringModule, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy)) {
+            // A constant guarding a statement is looked up where the compiler will fold it (JitCompiler.TryEmitConstantGuarded):
+            // a guard that leaves the statement dead now does not keep the method out. One that cannot be folded is
+            // walked as any condition; without the scope none can be.
+            Func<ConstantVariable, bool?> constantTruth = guard => {
+                object value;
+                RubyModule owner;
+                if (declaringScope == null || JitFoldedConstant.Resolve(context, declaringScope, guard, out value, out owner) != null ||
+                    !RactorIsolation.IsTriviallyShareable(value)) { return null; }
+                return RubyOps.IsTrue(value);
+            };
+            if (!Screen(ast, context, declaringModule, out keywords, out hasDefault, out defaults, out perCount, out storedOnly, out arity, out rejectedBy,
+                null, constantTruth)) {
                 if (rejectedBy != null) {
                     JitRuntime.RecordScreenRejection(rejectedBy);
                     if (JitRuntime.Verbose) {
