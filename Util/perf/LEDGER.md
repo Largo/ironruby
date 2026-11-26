@@ -1450,8 +1450,44 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
+  perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
+  perf/jitbody's census fix): the branch `claude/happy-gauss-95wm2j` at 2f8c31c against master
+  f81fc19, Release net10.0, four cores: **PASS**.
+  IronRuby.Tests (`parallel-tests.sh`): 1,347 tests on the candidate, 1,345 on the baseline, every one
+  executed, no failed or flaky name on either. The script says INCOMPLETE and exits 2 on both trees
+  because it reads the driver's `Current culture: ` banner (an empty culture name in this container)
+  as a test; every listed test had an `Executing` line and every process ended `PASSED`.
+  `gate-matrices.rb --all` in 13 modes (the six default ones, and each switch off: `IR_LIGHT_GLOBALS`,
+  `IR_LIGHT_LEXICAL`, `IR_JIT_DEADCONST`, `IR_FAST_SEARCH`, `IR_FAST_NEXT`, `IR_FAST_STRUCT`,
+  `IR_JIT_DMETH`): 1,699 same, 403 baseline, no DIFF of the change's. callable-parameters-matrix's
+  `method(:puts).to_proc.source_location` is a prelude line on both trees (nil in CRuby) and moved from
+  ruby4.rb:13514 to 13519 because the merges added five lines above Kernel#puts; thread-backtrace-matrix's
+  main-thread row prints line 87 or 88 by timing on both trees (88, CRuby's, in six runs of each alone).
+  ffi-matrix was `cruby!` until the ffi gem was installed for CRuby, then baseline in every mode.
+  A probe file for the gate's questions - a million deep through a light frame that reads a global, one
+  with a class variable, a define_method body and a keyword Struct initialize (SystemStackError);
+  private, protected and `private :x` in a subclass around define_method bodies; redefinition, a
+  singleton method and remove_method half way; `$!` around the cursor's deferred StopIteration, loop's
+  result, the cause and nested loops; keyword Struct new, unknown and String keys; a global read in a
+  hot loop and assigned from another thread - prints CRuby's output on the candidate with the JIT on
+  and off (master differs in String keys, which perf/struct fixed).
+  ruby/spec, all five suites (32,285 examples): no failure the known list does not name. One job
+  (spec/core/thread in one process) hung once under the sweep's load; ci-sweep ran its files one at a
+  time, all with summaries, and the batch then passed nine times out of nine (seven on the candidate,
+  two on master, 17-21 s each).
+  AWFY, 8 iterations: all fourteen verify. Timing at load about 1: micro-table in both orders, no line
+  more than 5% slower in both (`rangelit` 1.05 / 1.04, `veach1` 1.04 / 1.02; `empty` 1.22, `cmp` 1.19,
+  `poly2` 1.10 and `veach100` 1.08 in one order only). AWFY 12 in both orders: geomean new/base 0.988
+  and 0.993, none more than 5% slower in both (NBody 1.016 / 1.059; Havlak 0.91 / 1.11).
+  Start-up on the R2R host, best of ten alternating, base -> new ms: `-e 1` 451 -> 439, `gem --version`
+  472 -> 444, `gem list` 779 -> 874, `require "irb"` 871 -> 857, irb 1+1 1012 -> 999; `gem list` again,
+  twenty alternating runs each: best 865 -> 881, median 937 -> 942 (the 779 was one fast run).
+  This container refuses perf_event_open, so there is no `ab.rb -i` here; perf/lsite's
+  `Util/perf/callgrind/count.sh` counts instructions instead.
+
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
-  census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
+  census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
   `$/`, `$!` or `$x = v` kept 258 methods out of light frames by themselves (Kernel#puts among them,
   on every call of `puts`). Only `$~` and `$_` (and what is derived from `$~`) live in the frame
   (RubyScope.GetInnerMostClosureScope); every other global is the runtime's (SpecialGlobalVariableInfo,
@@ -1539,10 +1575,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   "overtaken" RuntimeError where CRuby answers "class variable"; `@@x` in a method of a `refine`
   block resolves to the refinement, CRuby to the module around it. And CRuby 4.0.10 crashes
   reading a class variable removed after its inline cache was warmed (a dangling cache), so the
-  matrix does not remove one. - census only, not gated
+  matrix does not remove one. - census only when merged, gated 2026-11-26 (round thirty-seven's gate entry)
 
 - **perf/deadconst (/perf-step, 2026-11-26, master f81fc19) - a statement guarded by a constant whose
-  value makes it dead is left out of the typed body and of a loop's copy (gap 1)** - census only, not gated.
+  value makes it dead is left out of the typed body and of a loop's copy (gap 1)** - census only when merged, gated 2026-11-26 (round thirty-seven's gate entry).
   `trace(x) if TRACING`, `log(x) unless QUIET`, `if C then a else b end` without an elsif, where C is a
   constant the compiler folds (`C`, `::C`, `A::B`): `JitCompiler.TryEmitConstantGuarded` resolves it as
   any folded read (`ResolveConstant`, so the entry's revalidation, gap 29, covers it) and emits only the
@@ -1593,8 +1629,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   same question every folded constant already raises, not timed or probed beyond row 13.
 
 - **perf/strsearch (2026-11-26) - `#byteindex`/`#byterindex` with a String needle in C#,
-  `Regexp#match?` without a MatchData, and two searches that answered wrong (gap 21)** - not
-  gated. Commits ba4a151, c9a4e7c, 95d5891 on `claude/perf-strsearch`; switch
+  `Regexp#match?` without a MatchData, and two searches that answered wrong (gap 21)** - gated 2026-11-26
+  (round thirty-seven's gate entry). Commits ba4a151, c9a4e7c, 95d5891 on `claude/perf-strsearch`; switch
   `IR_FAST_SEARCH=0` (both speed-ups; the fixes are not switched). The census does not see a
   library method's speed (0 methods moved, 28,376); judged by time, since this container has
   no instruction counter: `Util/perf/ab.rb -r 4 Util/bench/strsearch-shapes.rb`, CRuby / master
@@ -1631,7 +1667,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   stringio/gets_spec.rb: 0 failures; 62 named MutableString/Regex IronRuby.Tests pass.
 
 - **perf/extiter (2026-11-26) - the StopIteration that ends a cursor's external iteration defers
-  its stack walk, and `loop` reads its result without exposing it (gap 35)** - not gated. A
+  its stack walk, and `loop` reads its result without exposing it (gap 35)** - gated 2026-11-26 (round thirty-seven's gate entry). A
   `next` over a built-in source (Array, Hash, Range, Integer#times...) runs on a cursor with no
   fiber already, at 67-94 ns against CRuby's 226-234; what each such iteration still paid was
   its end: a StopIteration thrown from C# took the catch-site walk of the whole CLR stack (22-24 us,
@@ -1660,7 +1696,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   (846) pass on both; 72 named IronRuby.Tests (Enumerator_*, Loop*, Backtrace*, Exception*,
   Raise*, Rescue*) pass.
 
-- **perf/struct (2026-11-26, 0cfab5c..37eae81, not gated) - Struct keyword arguments stored in
+- **perf/struct (2026-11-26, 0cfab5c..37eae81, gated 2026-11-26) - Struct keyword arguments stored in
   C#; a new struct class made without moving the global method version, its readers and its first
   constructions without rules (gaps 24 and 19).** Four commits, one switch (`IR_FAST_STRUCT=0`).
   (1) `Struct#initialize` (RubyStructOps.Initialize) stores keywords whose keys all name members
@@ -1710,7 +1746,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `Hash#dup` are untouched.
 
 - **perf/dmethjit (2026-11-26) - the method JIT takes the body of a method made by `define_method`
-  (gap 23)** - not gated. `JitBlockMethod` (Runtime/Jit) takes a block as the `def` it would be
+  (gap 23)** - gated 2026-11-26 (round thirty-seven's gate entry). `JitBlockMethod` (Runtime/Jit) takes a block as the `def` it would be
   when nothing in it tells the two apart: BlockDefinition keeps its tree on the dispatcher
   (`BlockDispatcher.JitAst`) when the block reads and writes none of the enclosing scope's locals,
   has a def's parameters (plain mandatory, then optional; no rest, post, block or keyword one) and
