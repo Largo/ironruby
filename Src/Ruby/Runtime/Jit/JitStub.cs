@@ -1878,6 +1878,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private JitCode Named(JitCode code, long epoch, int version, int constantVersion) {
             if (code != null) {
+                code.LoopGuard.Folded = code.FoldedConstants;
                 code.LoopGuard.Set(epoch, version, code.UsesConstants ? _context : null, constantVersion);
             }
             if (code != null && _frameName != null) {

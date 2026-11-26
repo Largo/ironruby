@@ -275,4 +275,85 @@ r25 = o25.spin(2.0e9)
 t25.join
 puts "25. a method's while that cannot deopt otherwise, reassigned by another thread: #{[w25, r25].inspect}"
 
+# ---------------------------------------------------------------- 3. a folded value in a running loop (gap 29)
+
+# Not a guard: the constant is a value the loop computes with. A method's typed body folds it, and its loop's safe
+# point sees the reassignment move the code epoch; a body with nothing else that may deopt went on with the old
+# value until it returned (CRuby's next read answers the new one).
+STEP26 = 1.0
+class P26 < Probe
+  def spin(n)
+    x = 0.0
+    while x < n
+      x += STEP26
+    end
+    x > n ? :seen : :limit
+  end
+end
+o26 = P26.new
+w26 = nil
+WARM.times { w26 = o26.spin(5.0) }
+t26 = Thread.new { sleep 0.1; reassign(Object, :STEP26, 1.0e12) }
+r26 = o26.spin(2.0e9)
+t26.join
+puts "26. a folded step in a method's while, reassigned by another thread: #{[w26, r26].inspect}"
+
+LIM27 = 2.0e9
+class P27 < Probe
+  def spin(k)
+    x = 0.0
+    while x < LIM27
+      x += k
+    end
+    x < 2.0e9 ? :seen : :limit
+  end
+end
+o27 = P27.new
+w27 = nil
+WARM.times { w27 = o27.spin(1.0e9) }
+t27 = Thread.new { sleep 0.1; reassign(Object, :LIM27, 0.0) }
+r27 = o27.spin(1.0)
+t27.join
+puts "27. a folded bound of a method's while, reassigned by another thread: #{[w27, r27].inspect}"
+
+# The same with an effect in the loop (a Float instance variable written): a body that cannot be restarted.
+STEP28 = 1.0
+class P28 < Probe
+  def spin(n)
+    @acc = 0.0
+    x = 0.0
+    while x < n
+      @acc += 0.5
+      x += STEP28
+    end
+    x > n ? :seen : :limit
+  end
+end
+o28 = P28.new
+w28 = nil
+WARM.times { w28 = o28.spin(5.0) }
+t28 = Thread.new { sleep 0.1; reassign(Object, :STEP28, 1.0e12) }
+r28 = o28.spin(2.0e9)
+t28.join
+puts "28. a folded step in a while with an effect, reassigned by another thread: #{[w28, r28].inspect}"
+
+# Another constant reassigned again and again while the loop runs: the answer is the folded one's.
+STEP29 = 1.0
+OTHER29 = 0
+class P29 < Probe
+  def spin(n)
+    x = 0.0
+    while x < n
+      x += STEP29
+    end
+    x
+  end
+end
+o29 = P29.new
+WARM.times { o29.spin(5.0) }
+t29 = Thread.new { 200.times { |k29| reassign(Object, :OTHER29, k29) } }
+r29 = o29.spin(2.0e7)
+t29.join
+puts "29. another constant reassigned while a folded loop runs: #{r29.inspect}"
+
 puts "end"

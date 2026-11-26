@@ -622,15 +622,16 @@ namespace IronRuby.Runtime.Jit {
                     return null;
                 }
 
-                // An arm left out under a constant is left out for as long as the entry finds the constant unchanged. A
-                // loop runs on past the entry: one of the body's own has to deopt at its safe point when the constant is
-                // reassigned (MethodLoopSafePointSlow, which a body that may not deopt goes on from with what it was
-                // compiled with), so the body is one that can, which only a pure body may be (below). A callee's loop
-                // deopts by the callee's own rule, which is not this body's, so a body that calls one stays generic.
-                if (c._droppedArm) {
-                    if (c._calleeLoop) { return Declined("a statement left out under a constant, and a callee with a loop"); }
-                    if (c._hasLoop) { c._canDeopt = true; }
-                }
+                // A folded constant - a value, or an arm left out under one - holds for as long as the entry finds it
+                // unchanged. A loop runs on past the entry, and CRuby's next read sees a reassignment another thread
+                // made meanwhile: a constant folded in a loop of the body's own, or after one, is looked up again at the
+                // loop's safe point when the code epoch moves (MethodLoopSafePointSlow), and if it changed the body
+                // deopts there. So the body is one that may deopt, which only a pure body may be (below: one with an
+                // effect is declined, as a loop that can deopt in a body with an effect always is). A callee's loop
+                // looks only at the callee's constants, so a body that folds one after calling such a callee stays
+                // generic. (Gap 29: such a body that had nothing else to deopt for went on with the old value.)
+                if (c._foldedAfterCalleeLoop) { return Declined("a constant folded after a call of a callee with a loop"); }
+                if (c._foldedInLoop) { c._canDeopt = true; }
 
                 // Writes held back that the body cannot keep (JitCompiler.Sink.cs): compile it storing them where they are.
                 if (c._sunk != null && c._sinkObstacle != null) {
@@ -1628,8 +1629,7 @@ namespace IronRuby.Runtime.Jit {
         /// is not emitted at all, and neither is the test. The constant is folded as any other read of it is
         /// (ResolveConstant), so the entry finds out that it changed (JitStub.RevalidateConstants) and the arm runs
         /// again from the next call; an outlined loop hands itself back at its next safe point when it is reassigned
-        /// (RubyContext.ConstantReassigned), and a method body with a loop is made to deopt there (TryCompile:
-        /// _droppedArm). False when the node is not such a guard, or the value is one a non-main Ractor may not
+        /// (RubyContext.ConstantReassigned), and a method body's loop deopts there (TryCompile: _foldedInLoop). False when the node is not such a guard, or the value is one a non-main Ractor may not
         /// read, which EmitConstant checks where it is read.
         /// </summary>
         private bool TryEmitConstantGuarded(RExpr/*!*/ node, out MSA.Expression result, out JT type) {
@@ -1640,7 +1640,6 @@ namespace IronRuby.Runtime.Jit {
             if (!JitRuntime.DeadConstants || !ConstantGuard(node, out guard, out whenTrue, out whenFalse)) { return false; }
             object value = ResolveConstant(guard);
             if (!RactorIsolation.IsTriviallyShareable(value)) { return false; }
-            _droppedArm = true;
             var live = RubyOps.IsTrue(value) ? whenTrue : whenFalse;
             if (live == null || live.Count == 0) {
                 type = JT.Obj;
@@ -1651,8 +1650,10 @@ namespace IronRuby.Runtime.Jit {
             return true;
         }
 
-        // An arm was left out under a constant (TryEmitConstantGuarded).
-        private bool _droppedArm;
+        // A constant was folded in or after a loop of the body's own (ResolveConstant), or after a call of a callee with
+        // one: what TryCompile makes the body deopt for, or declines.
+        private bool _foldedInLoop;
+        private bool _foldedAfterCalleeLoop;
 
         /// <summary>
         /// `if C ... [else ...] end' or `unless C ... [else ...] end', without an elsif, whose condition is a constant the

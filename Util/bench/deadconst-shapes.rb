@@ -11,6 +11,7 @@ $stdout.sync = true
 TRACING = false
 DEBUG_LEVEL = nil
 module Conf; VERBOSE = false; end
+FSTEP = 0.5
 
 class Stepper
   attr_reader :traced
@@ -45,6 +46,29 @@ class Stepper
       i += 1
     end
     s
+  end
+
+  # a Float loop folding a constant: nothing else in it may deopt, so it is the kind of body that is now made one that
+  # may (at its loop's safe point, when a constant is reassigned: gap 29)
+  def fsum_const(n)
+    x = 0.0
+    i = 0.0
+    while i < n
+      x += FSTEP
+      i += 1.0
+    end
+    x
+  end
+
+  # control: the step a parameter
+  def fsum_plain(n, step)
+    x = 0.0
+    i = 0.0
+    while i < n
+      x += step
+      i += 1.0
+    end
+    x
   end
 
   # control
@@ -83,6 +107,8 @@ t("m_plain", N) { |n| i = 0; s = 0; while i < n; s += o.step_plain(i); i += 1; e
 # a method with a short loop, called hot: the method JIT's (per call: 8 iterations)
 t("mloop_dead", N / 4) { |n| i = 0; s = 0; while i < n; s += o.sum_dead(8); i += 1; end; s + o.traced }
 t("mloop_plain", N / 4) { |n| i = 0; s = 0; while i < n; s += o.sum_plain(8); i += 1; end; s + o.traced }
+t("mfloop_const", N / 4) { |n| i = 0; s = 0.0; while i < n; s += o.fsum_const(8.0); i += 1; end; s }
+t("mfloop_plain", N / 4) { |n| i = 0; s = 0.0; while i < n; s += o.fsum_plain(8.0, 0.5); i += 1; end; s }
 # a long loop run once: the loop tier's (OSR); its sum stays an Integer the loop's copy keeps as an int
 t("loop_dead", N * 4) { |n| i = 0; s = 0; while i < n; trace(i) if TRACING; s += i & 7; i += 1; end; s }
 t("loop_plain", N * 4) { |n| i = 0; s = 0; while i < n; s += i & 7; i += 1; end; s }
