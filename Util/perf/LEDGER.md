@@ -1384,6 +1384,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/compile-cold-stretch (2026-11-26) - the launchers give the youngest generation 128 MB, so
+  start-up runs without collections (gap 26).** Asked: why a call costs 50-150 us for hundreds of
+  calls after it crosses the compile threshold (PR #294's probe, steady state 1.7 us). Measured,
+  per call, the edge probe (`m(a) + k(h, i)`, one process): (1) the 50-150 us was the Release
+  build, whose IronRuby and DLR code runs as Tier-0 JIT output: interpreted calls cost 56 us there,
+  22 us with `DOTNET_TieredCompilation=0`, and 8-18 us on the R2R host, which is what ships and
+  what `ir.sh` runs. Nothing in the threshold logic itself costs per call: past it each call reads
+  `_compiled`/`HasCompiled` and goes on interpreting, with no lock or wait. (2) On the R2R host at
+  threshold 200 the calls in the window cost ~25 us against ~12-18 before it: the background
+  compiles (a profile: 1.6 cores of pool threads for 40 ms, 55% of it RyuJIT optimizing the
+  DynamicMethods of lambdas and rules) share the physical cores with the main thread
+  (`taskset -c 0-3`, one hyperthread per core: 16-18 us), with run-to-run noise from tiered PGO.
+  (3) A compiled lambda's call sites start cold: the interpreter's sites are untyped
+  (`Func<CallSite, object, ...>`) and the compiled code's are typed (`RubyScope`, `int`, `Proc`,
+  `MutableString` arguments), so the binder's rule cache, keyed by delegate type, never hands the
+  compiled code the rules the interpreter warmed up: every site binds again (0.1-0.7 ms each),
+  runs the new rule interpreted for another threshold of calls and then compiles a duplicate (a
+  trace of the probe at 200: `k`'s five sites rebound at call ~300 and their rules compiled at
+  ~520). In `gem list` it is small (4 lambdas compile; 111 of 514 binds are typed). Not fixed;
+  the next lever for warm-up. (4) The biggest single part of #294's probe cost on the R2R host
+  was the collector: the process's first gen2 collection (~18-20 ms) moved into the timed window
+  (with no collection, N=2000 cost +8 ms instead of +20). That led here: the CLR sizes gen0 for
+  short-lived garbage (~6 MB on this box), while what IronRuby allocates as it starts lives as
+  long as the process, so each collection copies it again. `gem list` (93 MB allocated): 16 gen0,
+  5 gen1, 2 gen2, 120 ms paused; irb 27 and 144 ms; `-e 1` 5 and 32 ms. `ironruby` and
+  `ironruby.cmd` now set `DOTNET_GCgen0size=0x8000000` unless it is set (the runtimeconfig has
+  no knob for it: `System.GC.Gen0Size` is not read on .NET 10.0.15): `gem list` and `-e 1` run
+  with no collection, irb with one (a gen2 the large-object heap's budget starts;
+  `System.GC.LOHThreshold` = 4 MB in the runtimeconfig removes it too - not taken, left for a
+  measurement of its own). Start-up, R2R host, `bench.rb 10`, load 1.2-1.6, median ms base ->
+  new: `-e 1` 481 -> 459, `gem --version` 572 -> 539, `gem list` 1046 -> 958, irb exit 1131 ->
+  1085, irb 1+1 1140 -> 1093. Peak RSS `-e 1` 109 -> 116 MB, `gem list` 174 -> 228. AWFY 12,
+  both orders, load 0.6-1.3: geomean new/base 0.926 and 0.940; Havlak -25%, Storage -9/-19%,
+  DeltaBlue -6/-10%, Json -9/-10%, none slower in both orders. micro-table both orders: no line
+  slower in both; the four slower in one order (locattr, sqrtw, blkattr, s_times4) timed alone,
+  6 alternating rounds: 0.96, 1.00, 0.97, 0.97. Edge probe, R2R, medians of 6, ms, base / new /
+  #294 alone (from an earlier run of its own) / #294 on this: N=100 23.7 / 23.5 / 16.3 / 16.9; 300 24.0 / 24.6 / 23.4 / 24.0;
+  600 25.1 / 27.1 / 30.5 / 34.2; 2000 33.1 / 33.9 / 55.9 / 39.9; 20000 114.2 / 100.9 / 117.5 /
+  108.8. So #294 on top of this still fails the 5% rule at N=600 and 2000 (parts 2 and 3 above).
+
 - **perf/splat-recursion (2026-11-24) - a splat the call site makes binds once for every length,
   and is the callee's rest parameter.** `def f(n, *a) = n == 0 ? a : f(n - 1, *a, n)`,
   `200.times { f(300) }`: 12.0 s against CRuby's 0.037. Cause, from `IR_BIND_TRACE=1`: the rule

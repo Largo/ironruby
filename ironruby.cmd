@@ -8,6 +8,8 @@ rem   set RUBY_EXE=%CD%\ironruby.cmd
 rem
 setlocal
 set "IR_ROOT=%~dp0"
+rem 128 MB for the youngest generation, as in ironruby (which says why).
+if "%DOTNET_GCgen0size%"=="" set "DOTNET_GCgen0size=0x8000000"
 if "%IR_ROOT:~-1%"=="\" set "IR_ROOT=%IR_ROOT:~0,-1%"
 
 rem IR_CONFIG=Release runs the optimized build instead. Debug stays the default,

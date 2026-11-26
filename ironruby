@@ -23,6 +23,17 @@ if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
   export DOTNET_ROOT
 fi
 
+# The CLR sizes the youngest generation for programs whose allocations mostly die young:
+# about 6 MB here. Almost everything IronRuby allocates while it starts (the prelude, ASTs,
+# methods, rules) lives as long as the process, so each of those collections copies it all
+# again: `gem list` made 23 collections and paused 120 ms in them, irb 27 and 144 ms. With
+# 128 MB the tools start without one, and steady-state code collects less often.
+# (Only the environment sets it: the runtimeconfig has no knob for it.)
+if [ -z "$DOTNET_GCgen0size" ]; then
+  DOTNET_GCgen0size=0x8000000
+  export DOTNET_GCgen0size
+fi
+
 # IronRuby's own library (the core prelude and what MRI implements as C
 # extensions) comes first, then Ruby 4.0's standard library. -X:StdLib puts them
 # on $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where MRI keeps its own
