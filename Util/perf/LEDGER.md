@@ -1569,9 +1569,19 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     result is a Hash), `Enumerator::Lazy`, `Enumerator.produce` (generators of the prelude, which
     run Ruby code between two values: a cursor would call blocks under its lock) and
     `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two
-    threads spinning), so the prelude's machinery around it is not where the time is; an
-    abandoned fiber-backed enumerator costs about 0.55 ms (its thread). Untried: switching fibers
-    without a thread (a continuation of the method JIT's own).
+    threads spinning), so the prelude's machinery around it is not where the time is.
+    **An abandoned fiber-backed enumerator** costs 1.1-1.6 ms of process CPU to make and take one
+    value from (starting its thread), and its thread and about 60 KB stay until the handle's
+    finalizer unwinds it (FiberRegistration, ThreadOps.Fiber.cs). That needs nothing on the
+    fiber's side to reach the handle, and a blocked thread's stack is a GC root: since
+    perf/extiter4 (Landed) a lazy made elsewhere, or whose blocks are Symbol#to_procs, is
+    reclaimed as an Enumerator's generator is, but a block that runs on the fiber and closes over
+    a scope holding the enumerator (`e = xs.lazy.map { |x| ... }; e.next`, the same with
+    `Enumerator.new { |y| ... }`) keeps it for the life of the process: 10,000 of them are 10,018
+    threads and 640 MB after GC (CRuby: 2 threads, 17 MB; `Util/bench/extiter-abandoned.rb`). Only
+    a fiber that is not a thread gets past that. Untried: switching fibers without a thread (a
+    continuation of the method JIT's own); a smaller stack for fiber threads (the memory, not the
+    thread).
     Two differences from CRuby in `with_index` / `with_object` enumerators, with or without a
     cursor, left as they were (the matrix leaves them out, with a comment): MRI's enumerator calls
     the source's method itself, so a singleton #each on the source enumerator is not called (here
@@ -1622,6 +1632,40 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/extiter4 (2026-11-26) - an abandoned lazy enumerator's fiber is reclaimed: its #next walks
+  a copy (gap 35)** - not gated. Base 3bf570d (the round-37 branch at 79a2c30 with
+  perf/extiter3). Measured first (`Util/bench/extiter-abandoned.rb`, new: 10,000 enumerators
+  abandoned after one `next`, threads and RSS after three `GC.start`s): every lazy kind kept its
+  thread for good on the base - 10,018 threads, 634-715 MB - where a generator Enumerator made in
+  a method was reclaimed (18 threads). The fiber of an Enumerator gets a detached copy to run
+  (`__enum_iteration_source__`), so nothing on the fiber's thread reaches the enumerator, its
+  @__fiber__ or the handle, and the handle's finalizer unwinds the thread; a Lazy, an Enumerator
+  subclass, got itself, and the thread's `source.each` kept it alive. Now an Enumerator::Lazy that
+  is nothing more (no singleton class, no subclass) and whose #each is the prelude's
+  (`Enumerator.__iter_detachable_lazy__`, the prelude's Lazy#each registered with
+  `__iter_cursor_method__`) gives its fiber a copy made with `Lazy.allocate` and the seven
+  instance variables Lazy#each reads. Base -> new, threads and RSS after GC: a lazy made in a
+  method 10,018 / 639 MB -> 18 / 325 MB, a lazy of Symbol#to_procs in a local 10,018 / 709 ->
+  18 / 344, one made in a method and held in a local 10,018 / 715 -> 18 / 333. Not reached, and
+  not reachable while a fiber is a thread: a block that runs on the fiber and closes over the scope
+  holding the enumerator (`e = xs.lazy.map { |x| ... }; e.next`; `Enumerator.new { }` alike),
+  10,018 threads before and after. `IR_FAST_NEXT=0` gives the lazy itself, as before. Time per
+  enumerator unchanged (1.1-1.4 ms, the thread's start); `ab.rb -r 8`, alone, `lazy_next` 0.98 of
+  off, `generator` overlapping (1.30 and 1.48 in a run of six shapes, after shapes that use a
+  fiber only when switched off). `Util/extiter-matrix.rb` (262 probes, 40 new: next / peek /
+  rewind / loop / feed over every Lazy operation, chunk's deferred block, Lazy.new, eager, a
+  singleton #each, a subclass, instance variables set after the copy, frozen, dup, threads, an
+  exception in the block) prints CRuby's output on base, new and off; enum-next-, block-loop-,
+  hash-order-, raise-, full-message-, enum- and enumerable2-matrix the same on all three.
+  spec/core/enumerator, hash, enumerable, fiber and kernel/loop_spec: 1,729 examples, the same one
+  error in all three (Hash.try_convert's `into`/`to`). 125 named IronRuby.Tests (Enumerator*,
+  Enumerable*, Lazy*, Loop*, Fiber*, Thread*, Hash*, Backtrace*, Exception*, Raise*, Rescue*)
+  pass in five verbose runs on base and new and four plain runs of new. One more plain run of new
+  aborted on an unhandled ThreadInterruptedException in a new thread's start (RubyThreadInfo.Lookup,
+  interrupted by Thread#raise's delivery), and one of four plain runs of base failed
+  `Fiber_ThreadRaiseInSwitchBookkeeping1`: Thread#raise around thread and fiber starts is flaky on
+  both.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy

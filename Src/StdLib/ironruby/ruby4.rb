@@ -6012,6 +6012,31 @@ class Enumerator
       block ? lazy.each(&block) : lazy
     end
 
+    # Enumerator#next walks the lazy on a fiber, a thread here, that runs #each: given this lazy, the
+    # thread kept it alive and with it the fiber's handle, so an abandoned lazy's fiber was never
+    # reclaimed. A plain Lazy's #each reads nothing but these, so the fiber gets a copy, as an
+    # Enumerator's gets one (Enumerator#__enum_iteration_source__, Enumerator.cs).
+    ::Enumerator.__iter_cursor_method__(self, :each)
+
+    def __enum_iteration_source__
+      return self unless ::Enumerator.__iter_detachable_lazy__(self)
+      Lazy.allocate.__send__(:__lazy_detach__, @__generator__, @__size__, @__lazy_source__, @__lazy_generator__,
+                             @__deferred__, @__packed_pairs__, @__inspect__)
+    end
+    private :__enum_iteration_source__
+
+    def __lazy_detach__(generator, size, source, source_generator, deferred, packed_pairs, inspect)
+      @__generator__ = generator
+      @__size__ = size
+      @__lazy_source__ = source
+      @__lazy_generator__ = source_generator
+      @__deferred__ = deferred
+      @__packed_pairs__ = packed_pairs
+      @__inspect__ = inspect
+      self
+    end
+    private :__lazy_detach__
+
     # Enumerator#+ chains eagerly; a lazy receiver stays lazy, as in MRI:
     # (1..).lazy + [1] is an Enumerator::Lazy over an Enumerator::Chain.
     def +(other)
