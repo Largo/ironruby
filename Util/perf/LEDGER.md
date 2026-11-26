@@ -1186,7 +1186,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     "irb"` 1020 -> 1044, `echo 1+1 | irb` 1138 -> 1133 ms; instructions (all threads, best):
     1,515 -> 1,486, 1,766 -> 1,735, 3,893 -> 3,783, 3,862 -> 3,899, 4,171 -> 4,185 M. The
     irb ones are +1%: its walks are gone (-8 M), and one gen0 collection there became a gen1
-    (+37 M in `gc_heap`), with 3 MB less allocated. Left, largest first: binding (gap 26's
+    (+37 M in `gc_heap`), with 3 MB less allocated. With the next commit (a noted call's
+    arguments evaluated before its note, so that `autoload :X, File.expand_path("x", __dir__)`
+    keeps its const_source_location), best of 10 at load 15: 1,516 -> 1,485, 1,763 -> 1,730,
+    3,799 -> 3,765, 3,852 -> 3,830, 4,126 -> 4,122 M. Left, largest first: binding (gap 26's
     "cheaper first binds"); the class bodies' constants; the default-spec cache, whose map
     could be read on the first `find_default_spec` instead of at boot.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
