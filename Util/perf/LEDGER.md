@@ -1492,6 +1492,44 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitsettle (2026-11-26) - a retired entry's cool-down costs nothing per call** - not gated.
+  A method whose typed body keeps failing (`x + 1` called with an Integer and a Float in turn) ran
+  10-16% slower than with the JIT off, as a `def` and as a define_method method. What it does per call,
+  from a trace (`IR_JIT_VERBOSE=1`, a phase-by-phase timing of 12.5 million calls): after the first
+  windows of 16 deopts the entry is retired and retried 8 times, cooling down 8, 16, ... 1024 ms - about
+  2 s in all before it settles for good - and all that time the fast slot held the cooling stand-in
+  (`Cool`): a counter decremented on every call, a random pick, and one call in 8 timed with two
+  `Stopwatch` reads, though only the last 16 samples are used, once, when the cool-down ends. Steady
+  state: 115 ns a call against 101 with `-X:NoJIT`.
+  - The change (`JitStub.StartResting`): a retirement puts the generic body itself in the fast slot,
+    as a settled method has it, and a `System.Threading.Timer` ends the cool-down by starting the probe
+    the stub already had (`StartCooling(0, ProbeCalls, 0)`: 32 generic calls, each timed), whose
+    `CoolDownCheck` puts the entry back. A generation count makes a timer left from an earlier rest do
+    nothing; `GenericCompiled` installs the compiled generic body during a rest too. The probes before
+    any retirement, the retire rule and the retry schedule are unchanged; a body that deopts rarely is
+    never retired, so it never rests. `IR_JIT_REST=0` brings back the counted cool-down.
+  - Time (`Util/bench/jit-settle-shapes.rb`, `ab.rb -r 6`, ns; -X:NoJIT / base / new, new over base):
+    `mixed_def` 95.9 / 112.7 / 97.5 (0.87), `mixed_dm` 119.8 / 127.6 / 117.9 (0.92), `rare_def` (a Float
+    on one call in 1000) 70.0 / 61.9 / 61.9 (1.00), controls `plain_def`, `ivar_def`, `two_def`,
+    `plain_dm` 0.96-0.99 (overlap). Phase by phase the `def` goes from 115 to about 100 ns, level with
+    `-X:NoJIT`, and the run of 12.5 million calls ends 0.2-0.5 s sooner.
+  - Instructions (`Util/perf/callgrind/count.sh`, N=20000): the controls and `rare_def` 1.000;
+    `mixed_def` 0.987, `mixed_dm` 1.000 - the cool-down is counted in milliseconds, of which valgrind's
+    20,000 calls see little: the clock is this change's measure.
+  - AWFY (all 14, `harness.rb B 5 10`, IR_JIT_VERBOSE=1): 138 specialized, 29 declined, 15 kept, no
+    retirement and one probe's retry on both builds - none of the benchmarks retires an entry, so the
+    change does not reach them.
+  - Matrices, CRuby against base (3b28a0c) against new, with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_JIT_REST=0`: jit, jit-calls, jit-const, dmeth-jit identical to CRuby;
+    hot-shapes, inline (one case per process) and int-matrix (through int-matrix.py, `.hash` lines left
+    out: they are seeded per process) identical to base, each with the rows that differ from CRuby on
+    base too (FrozenError for Encoding::CompatibilityError; "Object must be of type Int32";
+    `(2**100).equal?(2**100)` and the size of `Integer.instance_methods(false)`). IronRuby.Tests: the 20
+    named for the JIT pass.
+  - For the gate: a timer thread now takes the stub's lock (EndRest) - a stub retired while its
+    runtime shuts down has a timer pending for up to a second; and the retry needs only the timer and
+    32 calls, where it needed 1024 calls and the cool-down.
+
 - **perf/dmethjit2 (2026-11-26) - a define_method body that reads captured locals, and setters, in the
   method JIT (gap 23)** - not gated. Chosen by a survey of the 154 `define_method` blocks in the
   standard library and the bundled gems (Prism, by parameters and what the body does with the
