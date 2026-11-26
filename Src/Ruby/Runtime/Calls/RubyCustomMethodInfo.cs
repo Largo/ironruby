@@ -121,5 +121,27 @@ namespace IronRuby.Runtime.Calls {
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return this;
         }
+
+        /// <summary>A Struct member's reader.</summary>
+        internal bool IsStructReader { get { return _structMember >= 0 && _arity == 0; } }
+
+        /// <summary>
+        /// A Struct member's reader called with nothing: a dispatcher that reads the member, as the rule does (RubyStruct's
+        /// CreateGetter). The rule's generator is a closure made per member of each struct class, so no rule is shared between
+        /// two classes, and without this the first call of a getter on each new class built and interpreted one (gap 19).
+        /// </summary>
+        internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
+            if (!IsStructReader || !RubyStruct.FastStruct || !(target is RubyStruct) ||
+                signature.ArgumentCount != 0 || signature.HasRhsArgument || signature.HasBlock || signature.HasSplattedArgument ||
+                !signature.HasScope) {
+                return null;
+            }
+            // the site's (scope, receiver) as RubyObjectAttributeReaderDispatcherWithScope takes them, typed or untyped
+            if (delegateType != typeof(Func<System.Runtime.CompilerServices.CallSite, RubyScope, object, object>) &&
+                delegateType != typeof(Func<System.Runtime.CompilerServices.CallSite, object, object, object>)) {
+                return null;
+            }
+            return new RubyStructReaderDispatcher(_structMember, version);
+        }
     }
 }

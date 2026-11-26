@@ -414,4 +414,28 @@ namespace IronRuby.Runtime.Calls {
             }
         }
     }
+
+    /// <summary>A Struct member's reader (RubyCustomMethodInfo.GetDispatcher): the member at its index, for a receiver of the class the call resolved for.</summary>
+    public sealed class RubyStructReaderDispatcher : MemberDispatcher {
+        private readonly int _index;
+
+        internal RubyStructReaderDispatcher(int index, int version) {
+            _index = index;
+            Version = version;
+        }
+
+        public override object/*!*/ CreateDelegate(bool isUntyped) {
+            return isUntyped ?
+                (object)new Func<CallSite, object, object, object>(Invoke<object>) :
+                (object)new Func<CallSite, RubyScope, object, object>(Invoke<RubyScope>);
+        }
+
+        public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self) {
+            var s = self as RubyStruct;
+            if (s != null && s.ImmediateClass.Version.Method == Version) {
+                return RubyStruct.GetValue(s, _index);
+            }
+            return Miss<Func<CallSite, TScope, object, object>>(callSite)(callSite, scope, self);
+        }
+    }
 }
