@@ -4377,7 +4377,16 @@ namespace IronRuby.Builtins {
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol, Optional]int start) {
 
             // A Regexp has to interpret characters, so unlike #index with a String this one does
-            // refuse a receiver whose bytes are not valid in its encoding, the way MRI does.
+            // refuse a receiver whose bytes are not valid in its encoding, the way MRI does - but
+            // only once the offset is inside the string: rb_str_index_m answers nil (and clears $~)
+            // for one outside it first.
+            if (start != 0) {
+                int length = GetCharacterLength(self);
+                if (start < 0 ? start + length < 0 : start > length) {
+                    scope.GetInnerMostClosureScope().CurrentMatch = null;
+                    return null;
+                }
+            }
             RequireValidEncoding(self);
 
             MatchData match = regex.MatchFromCharacter(self, start, true);

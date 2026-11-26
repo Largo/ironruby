@@ -1462,18 +1462,29 @@ namespace IronRuby.Builtins {
         /// Ruby's pos argument - Regexp#match(str, pos), String#index(re, pos), #match? - is a
         /// character index, negative from the end, while Match and LastMatch take the index
         /// space the regex runs in: the CLR chars of the string. Answers false when the
-        /// position is outside the string.
+        /// position is outside the string - before the regex is made for the input, which checks
+        /// its encoding: MRI answers nil (false) for /é/.match?(binary, 100) and does not raise.
         /// </summary>
         private bool ToSearchStart(MutableString/*!*/ input, ref int start, bool clamp) {
-            if (start == 0 || input.KnowsCharIndexIsClrIndex) {
+            if (start == 0) {
                 return true;
+            }
+            if (input.KnowsCharIndexIsClrIndex) {
+                return ToSearchStart(input.GetCharCount(), ref start, clamp);
             }
             input.PrepareForCharacterRead();
             if (!input.HasSurrogatePairs()) {
-                return true;
+                return ToSearchStart(input.GetCharCount(), ref start, clamp);
             }
 
-            int length = input.GetCharacterCount();
+            if (!ToSearchStart(input.GetCharacterCount(), ref start, clamp)) {
+                return false;
+            }
+            start = input.ToClrIndex(start);
+            return true;
+        }
+
+        private static bool ToSearchStart(int length, ref int start, bool clamp) {
             if (start < 0) {
                 start += length;
                 if (start < 0) {
@@ -1486,8 +1497,6 @@ namespace IronRuby.Builtins {
                 }
                 start = length;
             }
-
-            start = input.ToClrIndex(start);
             return true;
         }
 
