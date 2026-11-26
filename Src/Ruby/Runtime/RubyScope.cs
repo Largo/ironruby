@@ -1783,6 +1783,11 @@ namespace IronRuby.Runtime {
         // (and catches a LambdaUnwinder aimed at this scope), 2 once it has finished.
         internal byte LambdaReturnState;
 
+        // The last Procs of the block literals in the body, kept with the scope for the call that reuses it (a Proc for one
+        // literal, a Proc[] for more; see RubyOps.ParkNestedProc), and the thread that kept them. Not cleared by Reinitialize.
+        internal object ParkedNested;
+        internal int ParkedNestedThreadId;
+
         public override string[] OwnImplicitParameterNames {
             get {
                 var signature = _blockFlowControl.Proc.Dispatcher.ParameterSignature;

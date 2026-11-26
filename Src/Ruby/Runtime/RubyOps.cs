@@ -746,6 +746,96 @@ namespace IronRuby.Runtime {
             return scope.BlockFlowControl.ParkScope(scope);
         }
 
+        // A block that holds block literals - `a.each { |x| x.each_child { |c| s += c } }' - made a scope, and a Proc and a
+        // BlockParam per literal, on every call: the literals' Procs are over the block's scope, so it could not be reused. It
+        // is now, when each literal is written in the block's own body and reuses its Proc (BlockDispatcher.ReusesProc): at
+        // the normal end of a call that kept the scope on its BlockParam (LeaveReusableBlockScope), the last Proc of each
+        // literal is kept with the scope if nothing but the block's frame holds it (Proc.IsReusableAndInactive: given to light
+        // frames and [BlockNotKept] iterators only, and no scope it ran in captured); otherwise the scope is not kept either. The
+        // next call that takes the scope makes those Procs again for the literals. A Proc of a literal that the same call
+        // replaced may be held anywhere and reaches the scope: it marks the scope captured. IR_PARKED_BLOCK_SCOPES=0 turns it off.
+
+        /// <summary>
+        /// InstantiateReusableBlock of a literal (the index-th) written in the body of a block: the Proc kept with the block's
+        /// scope by the call that last used the scope, if there is one.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Proc InstantiateNestedParkedBlock(Proc previous, RubyBlockScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            int index) {
+            if (previous == null && scope.ParkedNested == null) {
+                return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            }
+            return InstantiateNestedParkedBlockSlow(previous, scope, self, dispatcher, index);
+        }
+
+        private static Proc InstantiateNestedParkedBlockSlow(Proc previous, RubyBlockScope/*!*/ scope, object self,
+            BlockDispatcher/*!*/ dispatcher, int index) {
+            if (previous != null) {
+                if (previous.TryReuse()) {
+                    return previous;
+                }
+                scope.IsCaptured = true;
+            } else {
+                Proc proc;
+                var parked = scope.ParkedNested;
+                var procs = parked as Proc[];
+                if (procs != null) {
+                    proc = procs[index];
+                    procs[index] = null;
+                } else {
+                    proc = (Proc)parked;
+                    scope.ParkedNested = null;
+                }
+                if (proc != null) {
+                    proc.ReuseParked(self, scope.ParkedNestedThreadId != Environment.CurrentManagedThreadId);
+                    if (proc.TryReuse()) {
+                        return proc;
+                    }
+                }
+            }
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        /// <summary>
+        /// Keeps the last Proc of the index-th of <paramref name="count"/> literals of a block with the block's scope, which
+        /// LeaveReusableBlockScope has kept on the BlockParam; false if something else may hold the Proc (UnparkBlockScope then
+        /// takes the scope back). A literal the call did not reach keeps what was kept.
+        /// </summary>
+        [Emitted]
+        public static bool ParkNestedProc(RubyBlockScope/*!*/ scope, int index, int count, Proc proc) {
+            if (proc == null) {
+                return true;
+            }
+            if (!proc.IsReusableAndInactive) {
+                return false;
+            }
+            int threadId = Environment.CurrentManagedThreadId;
+            if (count == 1) {
+                scope.ParkedNested = proc;
+            } else {
+                var procs = scope.ParkedNested as Proc[];
+                if (procs == null) {
+                    scope.ParkedNested = procs = new Proc[count];
+                } else if (scope.ParkedNestedThreadId != threadId) {
+                    // the Procs another thread kept carry its BlockParams: one ParkedNestedThreadId is for all of them
+                    Array.Clear(procs, 0, procs.Length);
+                }
+                procs[index] = proc;
+            }
+            scope.ParkedNestedThreadId = threadId;
+            return true;
+        }
+
+        /// <summary>
+        /// A block scope LeaveReusableBlockScope kept on its BlockParam that cannot be reused after all: a Proc of a literal
+        /// in the block may be held elsewhere (ParkNestedProc).
+        /// </summary>
+        [Emitted]
+        public static void UnparkBlockScope(RubyBlockScope/*!*/ scope) {
+            scope.BlockFlowControl.TakeReusableScope();
+        }
+
         [Emitted]
         public static RubyBlockScope/*!*/ CreateBlockScopeLazy(MutableTuple locals, string[] variableNames,
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
