@@ -76,10 +76,6 @@ namespace IronRuby.Builtins {
         // if this class is a struct represents its layout:
         private readonly RubyStruct.Info _structInfo;
 
-        // TODO: thread safe?
-        // whether initialize_copy can be called (the class has just been duplicated):
-        private bool _isUninitializedCopy; 
-
         // Class.allocate: MRI's class has no superclass yet and can't be instantiated.
         private bool _isUninitializedAllocation;
 
@@ -781,22 +777,13 @@ namespace IronRuby.Builtins {
 
             using (Context.ClassHierarchyLocker()) {
                 RubyClass result = Duplicate(null);
-                result._isUninitializedCopy = true;
+                // the members are copied before #dup or #clone calls initialize_copy, as MRI 4.0's init_copy does (see
+                // RubyModule's Duplicate); Class has no initialize_copy of its own, and Kernel's leaves a class that already
+                // exists as it is (#138). The copy has no name.
+                result.InitializeMembersFrom(this);
+                result.Name = null;
                 return result;
             }
-        }
-
-        public void InitializeClassCopy(RubyClass/*!*/ rubyClass) {
-            if (!_isUninitializedCopy) {
-                // MRI 4.0: a class that already exists is left as it is, no TypeError (#138)
-                return;
-            }
-            _isUninitializedCopy = false;
-
-            InitializeModuleCopy(rubyClass);
-
-            // MRI clears the name in initialize_copy:
-            Name = null;
         }
 
         /// <summary>

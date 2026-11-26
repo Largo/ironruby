@@ -1249,6 +1249,7 @@ namespace IronRuby.Tests {
                 Clone1,
                 Dup1,
                 CloneConstantLookup1,
+                ModuleCopyBeforeInitializeCopy1,
                 Structs1,
                 MetaModules1,
                 MetaModulesDuplication1,
