@@ -1623,6 +1623,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitaref (2026-11-26) - `a[i]` in a typed body after some Array has a singleton `[]`**
+  - trace only, not gated (the census cannot see it: it loads no library). The side finding of
+  perf/jitconst: app-shapes declined `OptionParser.top` (`@stack[-1]`) and `.base`, and rejected
+  `Gem::Requirement#none?`, all at "[] on a RubyArray". The typed body takes `recv[i]` with any
+  Integer index already (negative from the end, out of range nil: `JitRuntime.IndexInt`); in
+  isolation `top` is specialized. What turned it off is CSV: `csv/fields_converter.rb` defines
+  `def NO_QUOTED_FIELDS.[](_index)` on one Array, which puts `[]` in Array's
+  `ClrSingletonMethods`, and `HasPlainInstances` then says no for the class for the rest of the
+  process - every program that requires `csv` lost Array element reads in every typed body whose
+  receiver is not a typed Array parameter.
+  Now, while `Array#[]` is the public library method and Array has no adopted instances, a class
+  that only lost `HasPlainInstances` compiles the read with `IndexIntChecked` / `IndexLongChecked` /
+  `IndexObjChecked`: for an exact `RubyArray` receiver they ask whether this object has a singleton
+  class - the generic site's own test (`RubyOps.IsClrNonSingletonRuleValid`, an instance-data
+  lookup) - and deopt if it has, so the generic body dispatches to its method; any other receiver
+  goes to the existing helpers. A singleton defined after the compile moves Array's method version,
+  which the body's entry checks. A refinement of `Array#[]`, a redefinition, a subclass's own `[]`
+  and an adopted instance are refused or deopt as before.
+  Traces: app-shapes specialized 117 -> 119 (`OptionParser.top`, `OptionParser.base`), declined
+  after the pre-screen 30 -> 28; Json, Richards, DeltaBlue, CD and Havlak (3 x 10) the same on both
+  builds. `census.rb -d` 0 methods changed. `Gem::Requirement#none?` now stops at its second
+  obstacle, `@requirements[0] == DefaultRequirement` ("== on a receiver of unknown type"): Array#==
+  calls `==` on the elements (Ruby code), and an identity shortcut (true for the same object,
+  deopt otherwise) would deopt on every requirement that is not the default; left.
+  Instructions a call with CSV loaded (`Util/perf/callgrind/count.sh`,
+  `Util/bench/jit-aref-shapes.rb`, new): `@a[-1]` 2336 -> 1778 (0.76), `@a[i]` 2582 -> 2021
+  (0.78); `x[0]` on an Array parameter 2116 -> 2116 (the typed parameter path, unaffected), the
+  control `@a.size` 1523 -> 1523.
+  Checked: `Util/jit-aref-matrix.rb` (new, 24 rows: reads before and after one Array gets a
+  singleton `[]`, from bodies compiled before and after it, negative and out-of-range indexes, a
+  frozen Array, `dup` (no singleton) and `clone` (singleton kept) of the special Array, a singleton
+  `method_missing`, a subclass's own `[]`, Hash, String and nil receivers, an Array given its
+  singleton after the body compiled, a refinement, `Array#[]` redefined and restored), and jit,
+  jit-calls, jit-scan, osr-array and csv: CRuby's output and the unchanged build's with the JIT on,
+  `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`, and the unchanged build's with `IR_LIGHT_FRAMES=0`;
+  hot-shapes the unchanged build's in every mode with its known one-row difference from CRuby.
+  For the gate: an instance-data lookup per read for Arrays once the class has a singleton `[]`
+  anywhere - the cost the generic site pays in the same state; the other element methods (`[]=`,
+  `fetch`, `size`...) still use the class-wide test.
+
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
   (`IR_KWREST_IN_PLACE`, gap 38's first cost)** - instructions only, not gated. A keyword

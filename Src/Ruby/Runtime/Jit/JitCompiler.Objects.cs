@@ -1247,11 +1247,34 @@ namespace IronRuby.Runtime.Jit {
                 return Ast.Call(JitRuntime.M("StringIndex"), recv, Ast.Convert(index, typeof(long)));
             }
             bool arrays, hashes;
+            if (!IsPlainLibraryMethod(ArrayClass, "[]") && IsArrayIndexCheckedPerReceiver()) {
+                // some Array has a singleton `[]' or method_missing (CSV's NO_QUOTED_FIELDS): this one is asked (IndexIntChecked)
+                hashes = IsPlainLibraryMethod(HashClass, "[]") && IsPublic(HashClass, "[]") && IsPlainLibraryMethod(HashClass, "default")
+                    && KeyLookupIsPlain();
+                RequireCollectionReceiver(receiver, true, hashes, "[]");
+                _canDeopt = true;
+                type = JT.Obj;
+                return Ast.Call(JitRuntime.M(helper + "Checked"), Ast.Constant(_context), recv, index, Ast.Constant(hashes));
+            }
             RequireElementMethod("[]", "default", out arrays, out hashes);
             RequireCollectionReceiver(receiver, arrays, hashes, "[]");
             _canDeopt = true;
             type = JT.Obj;
             return Ast.Call(JitRuntime.M(helper), recv, index, Ast.Constant(arrays), Ast.Constant(hashes));
+        }
+
+        /// <summary>
+        /// Array#[] is the public library method and no Array is adopted by a Ruby class, but some Array has had a singleton
+        /// `[]' or method_missing, so the class no longer answers for its instances (HasPlainInstances): each receiver is
+        /// asked whether it has a singleton class, as the generic call site asks it (RubyOps.IsClrNonSingletonRuleValid).
+        /// A singleton defined later moves Array's method version, which a body compiled before it checks at its entry.
+        /// </summary>
+        private bool IsArrayIndexCheckedPerReceiver() {
+            var array = ArrayClass;
+            if (!IsBuiltinMethod(array, "[]") || !IsPublic(array, "[]")) { return false; }
+            using (_context.ClassHierarchyLocker()) {
+                return !array.HasAdoptedInstances;
+            }
         }
 
         internal static bool IsHashQuery(string/*!*/ name, int argc) {

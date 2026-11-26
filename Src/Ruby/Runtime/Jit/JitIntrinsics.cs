@@ -531,6 +531,31 @@ namespace IronRuby.Runtime.Jit {
             throw Deopt();
         }
 
+        // `a[i]' once some Array has had a singleton `[]' or `method_missing' (JitCompiler.EmitIndexRead): Array#[] for an
+        // Array without a singleton class, the test the generic site makes (RubyOps.IsClrNonSingletonRuleValid); an Array
+        // with one deopts, and the generic body dispatches to its method.
+        private static bool HasSingletonClass(RubyContext/*!*/ context, object/*!*/ recv) {
+            RubyInstanceData data;
+            RubyClass immediate;
+            return context.TryGetClrTypeInstanceData(recv, out data) && (immediate = data.ImmediateClass) != null &&
+                (immediate.IsSingletonClass || immediate.IsRubyClass);
+        }
+
+        public static object IndexIntChecked(RubyContext/*!*/ context, object recv, int index, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(RubyArray) && HasSingletonClass(context, recv)) { throw Deopt(); }
+            return IndexInt(recv, index, true, hashes);
+        }
+
+        public static object IndexLongChecked(RubyContext/*!*/ context, object recv, long index, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(RubyArray) && HasSingletonClass(context, recv)) { throw Deopt(); }
+            return IndexLong(recv, index, true, hashes);
+        }
+
+        public static object IndexObjChecked(RubyContext/*!*/ context, object recv, object index, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(RubyArray) && HasSingletonClass(context, recv)) { throw Deopt(); }
+            return IndexObj(recv, index, true, hashes);
+        }
+
         public static object IndexLong(object recv, long index, bool arrays, bool hashes) {
             if (index >= Int32.MinValue && index <= Int32.MaxValue) {
                 return IndexInt(recv, (int)index, arrays, hashes);
