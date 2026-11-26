@@ -1010,6 +1010,7 @@ namespace IronRuby.Tests {
                 Puma_Tls1,
                 Sprintf_MriTieRounding1,
                 Sprintf_CharacterBytes1,
+                Sprintf_CharacterSingleByte1,
                 Float_NegativeZero1,
                 Math_CLibrary1,
                 Errno_MessageNotDoubled1,

@@ -379,9 +379,13 @@ namespace IronRuby.Builtins {
             }
 
             if (encoding.IsSingleByteCharacterSet || encoding.StrictEncoding.IsSingleByte) {
-                // onigenc_single_byte_code_to_mbc
+                // onigenc_single_byte_code_to_mbc. CRuby 4.0's codelen has no length for a code above 0xFF (ONIGERR_INVALID_CODE_POINT_VALUE):
+                // "invalid character", but for BINARY and US-ASCII, whose %c rb_str_format writes as a byte ("256 out of char range").
                 if (code > 0xff) {
-                    throw OutOfCharRange(code);
+                    if (encoding == RubyEncoding.Binary || encoding == RubyEncoding.Ascii) {
+                        throw OutOfCharRange(code);
+                    }
+                    return null;
                 }
                 return new[] { (byte)code };
             }

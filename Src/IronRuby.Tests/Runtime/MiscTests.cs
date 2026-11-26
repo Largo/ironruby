@@ -2055,6 +2055,46 @@ UTF-8 [65] true
         }
 
         /// <summary>
+        /// %c of a code above 0xFF in a single byte encoding: CRuby 4.0's codelen has no length for it, so format raises
+        /// "invalid character", but for BINARY and US-ASCII, which put a byte ("256 out of char range"). Util/format-c-matrix.rb.
+        /// </summary>
+        public void Sprintf_CharacterSingleByte1() {
+            TestOutput(@"
+%w[ISO-8859-1 Windows-1252 IBM437 KOI8-R US-ASCII BINARY].each do |e|
+  [0x41, 0xe9, 0x100, 0x3042].each do |c|
+    r = begin; s = ""%c"".encode(e) % c; [s.encoding.name, s.bytes]; rescue => x; ""#{x.class}: #{x.message}""; end
+    puts ""#{e} #{c.to_s(16)}: #{r.inspect}""
+  end
+end
+", @"
+ISO-8859-1 41: [""ISO-8859-1"", [65]]
+ISO-8859-1 e9: [""ISO-8859-1"", [233]]
+ISO-8859-1 100: ""ArgumentError: invalid character""
+ISO-8859-1 3042: ""ArgumentError: invalid character""
+Windows-1252 41: [""Windows-1252"", [65]]
+Windows-1252 e9: [""Windows-1252"", [233]]
+Windows-1252 100: ""ArgumentError: invalid character""
+Windows-1252 3042: ""ArgumentError: invalid character""
+IBM437 41: [""IBM437"", [65]]
+IBM437 e9: [""IBM437"", [233]]
+IBM437 100: ""ArgumentError: invalid character""
+IBM437 3042: ""ArgumentError: invalid character""
+KOI8-R 41: [""KOI8-R"", [65]]
+KOI8-R e9: [""KOI8-R"", [233]]
+KOI8-R 100: ""ArgumentError: invalid character""
+KOI8-R 3042: ""ArgumentError: invalid character""
+US-ASCII 41: [""US-ASCII"", [65]]
+US-ASCII e9: [""ASCII-8BIT"", [233]]
+US-ASCII 100: ""RangeError: 256 out of char range""
+US-ASCII 3042: ""RangeError: 12354 out of char range""
+BINARY 41: [""ASCII-8BIT"", [65]]
+BINARY e9: [""ASCII-8BIT"", [233]]
+BINARY 100: ""RangeError: 256 out of char range""
+BINARY 3042: ""RangeError: 12354 out of char range""
+");
+        }
+
+        /// <summary>
         /// MRI's dtoa settles a rounding it cannot tell from a tie in double arithmetic by the
         /// parity of the last digit, whatever the exact binary value: "%.2f" % 2.675 is 2.68
         /// although the double is below 2.675, and "%.1f" % 99.45 is 99.4 although it is above.
