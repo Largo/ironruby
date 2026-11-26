@@ -1426,6 +1426,7 @@ namespace IronRuby.Tests {
                 String_ToIntAsciiIncompatible1,
                 String_UndumpUnicodeEncoding1,
                 String_OrdWide1,
+                Integer_ChrSingleByte1,
                 String_TranslateCheckOrder1,
                 Integer_ChrMultibyte1,
                 String_Cesu8_1,

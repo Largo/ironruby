@@ -760,6 +760,41 @@ UTF-8 f09f9880: [128512, Integer, [128512], [128512, 128512], 128512]
         }
 
         /// <summary>
+        /// A code above 0xFF in a single byte encoding is "invalid codepoint 0x100 in US-ASCII" to Integer#chr and to
+        /// String#&lt;&lt; (CRuby 4.0's onigmo: ONIGERR_INVALID_CODE_POINT_VALUE), but "256 out of char range" for #&lt;&lt; onto a BINARY or
+        /// US-ASCII string (rb_str_concat) and for #chr with no argument and no default_internal (Util/chr-matrix.rb).
+        /// </summary>
+        public void Integer_ChrSingleByte1() {
+            TestOutput(@"
+[-> { 256.chr(""US-ASCII"") }, -> { 0x110000.chr(""UTF-8"") }, -> { -1.chr }, -> { 256.chr }, -> { (2**32).chr(""UTF-8"") },
+ -> { 0xd800.chr(""UTF-8"") }, -> { """".b << 256 }, -> { ""a"".encode(""ISO-8859-1"") << 300 }, -> { (2**40).chr(""UTF-8"") },
+ -> { 256.chr(""ISO-8859-1"") }, -> { 0x80.chr(""US-ASCII"") }, -> { 0x100.chr(""Windows-1252"") }, -> { 0x81.chr(""Windows-1252"") },
+ -> { 0xffff_ffff.chr(""ISO-8859-1"") }, -> { 0x1_0000_0000.chr(""ISO-8859-1"") }, -> { 0x8140.chr(""Shift_JIS"") }, -> { 0xffff.chr(""Shift_JIS"") },
+ -> { $VERBOSE = nil; Encoding.default_internal = ""US-ASCII""; 256.chr }, -> { 0x80.chr }].each { |l| p((l.call rescue $!)) }
+", @"
+#<RangeError: invalid codepoint 0x100 in US-ASCII>
+#<RangeError: 1114112 out of char range>
+#<RangeError: -1 out of char range>
+#<RangeError: 256 out of char range>
+#<RangeError: 4294967296 out of char range>
+#<RangeError: invalid codepoint 0xD800 in UTF-8>
+#<RangeError: 256 out of char range>
+#<RangeError: invalid codepoint 0x12C in ISO-8859-1>
+#<RangeError: 1099511627776 out of char range>
+#<RangeError: invalid codepoint 0x100 in ISO-8859-1>
+#<RangeError: invalid codepoint 0x80 in US-ASCII>
+#<RangeError: invalid codepoint 0x100 in Windows-1252>
+""\x81""
+#<RangeError: invalid codepoint 0xFFFFFFFF in ISO-8859-1>
+#<RangeError: 4294967296 out of char range>
+""\x{8140}""
+#<RangeError: invalid codepoint 0xFFFF in Shift_JIS>
+#<RangeError: invalid codepoint 0x100 in US-ASCII>
+""\x80""
+");
+        }
+
+        /// <summary>
         /// #tr! and #tr_s! (MRI's tr_trans): an empty string is nil, frozen or not; the sets' encodings are checked
         /// against the string's before the string is required to be modifiable.
         /// </summary>
@@ -979,16 +1014,16 @@ UTF-32BE 110000 chr: RangeError: invalid codepoint 0x110000 in UTF-32BE
 UTF-32BE 110000 <<: RangeError: invalid codepoint 0x110000 in UTF-32BE
 UTF-32BE 7fffffff chr: RangeError: invalid codepoint 0x7FFFFFFF in UTF-32BE
 UTF-32BE 7fffffff <<: RangeError: invalid codepoint 0x7FFFFFFF in UTF-32BE
-UTF-32BE 80000000 chr: 80000000
-UTF-32BE 80000000 <<: 80000000
+UTF-32BE 80000000 chr: RangeError: invalid codepoint 0x80000000 in UTF-32BE
+UTF-32BE 80000000 <<: RangeError: invalid codepoint 0x80000000 in UTF-32BE
 UTF-32BE 100000000 chr: RangeError: 4294967296 out of char range
 UTF-32BE 100000000 <<: RangeError: 4294967296 out of char range
 UTF-32BE 10000000000000000 chr: RangeError: bignum out of char range
 UTF-32BE 10000000000000000 <<: RangeError: bignum out of char range
 UTF-32BE -1 chr: RangeError: -1 out of char range
 UTF-32BE -1 <<: RangeError: -1 out of char range
-UTF-32LE 81308130 chr: 30813081
-UTF-32LE 81308130 <<: 30813081
+UTF-32LE 81308130 chr: RangeError: invalid codepoint 0x81308130 in UTF-32LE
+UTF-32LE 81308130 <<: RangeError: invalid codepoint 0x81308130 in UTF-32LE
 UTF-32LE 100000000 chr: RangeError: 4294967296 out of char range
 UTF-32LE 100000000 <<: RangeError: 4294967296 out of char range
 UTF-32LE 10000000000000000 chr: RangeError: bignum out of char range
@@ -1007,7 +1042,7 @@ UTF-16LE -1 chr: RangeError: -1 out of char range
 UTF-16LE -1 <<: RangeError: -1 out of char range
 US-ASCII 80 chr: RangeError: invalid codepoint 0x80 in US-ASCII
 US-ASCII 80 <<: 80
-US-ASCII 100 chr: RangeError: 256 out of char range
+US-ASCII 100 chr: RangeError: invalid codepoint 0x100 in US-ASCII
 US-ASCII 100 <<: RangeError: 256 out of char range
 US-ASCII 100000000 chr: RangeError: 4294967296 out of char range
 US-ASCII 100000000 <<: RangeError: 4294967296 out of char range

@@ -837,7 +837,16 @@ namespace IronRuby.Builtins {
             }
             // (ToChr may refuse the code: the frozen check comes first, as above)
             self.RequireNotFrozen();
+            RequireByteCode(self, (uint)c);
             return self.Append(Integer.ToChr(self.Encoding, self.Encoding, c));
+        }
+
+        // MRI's rb_str_concat takes a code onto a BINARY or US-ASCII string as a byte, and one above 0xFF is "256 out of char
+        // range" there, where Integer#chr in those encodings says "invalid codepoint 0x100 in ASCII-8BIT".
+        private static void RequireByteCode(MutableString/*!*/ self, uint c) {
+            if (c > 0xff && (self.Encoding == RubyEncoding.Binary || self.Encoding == RubyEncoding.Ascii)) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
         }
 
         [RubyMethod("<<")]
@@ -849,6 +858,7 @@ namespace IronRuby.Builtins {
             // a character where the encoding has one that wide: 0x8431A430 in GB18030. A wider
             // one that is still a Fixnum in MRI is named in the message.
             if (c.Sign > 0 && c <= UInt32.MaxValue) {
+                RequireByteCode(self, (uint)c);
                 return self.Append(Integer.ToChr(self.Encoding, self.Encoding, (uint)c));
             }
             if (c >= -((BigInteger)1 << 62) && c < ((BigInteger)1 << 62)) {
@@ -6694,18 +6704,6 @@ namespace IronRuby.Builtins {
         }
 
         // encoding aware, TODO: KCODE
-        [RubyMethod("tr!")]
-        public static MutableString Translate(MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ from, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
-
-            bool anyCharacterMaps;
-            if (RequireTranslatable(self, from, to)) {
-                return null;
-            }
-            Translate(self, from, to, true, false, out anyCharacterMaps);
-            return anyCharacterMaps ? self : null;
-        }
-
         // MRI's tr_trans: an empty string is nil, frozen or not; then the encodings of the two sets are checked against the
         // string's, and only then is the string required to be modifiable. True for the empty string.
         private static bool RequireTranslatable(MutableString/*!*/ self, MutableString/*!*/ from, MutableString/*!*/ to) {
@@ -6716,6 +6714,18 @@ namespace IronRuby.Builtins {
             self.RequireCompatibleEncoding(to);
             self.RequireNotFrozen();
             return false;
+        }
+
+        [RubyMethod("tr!")]
+        public static MutableString Translate(MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ from, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
+
+            bool anyCharacterMaps;
+            if (RequireTranslatable(self, from, to)) {
+                return null;
+            }
+            Translate(self, from, to, true, false, out anyCharacterMaps);
+            return anyCharacterMaps ? self : null;
         }
 
         // encoding aware, TODO: KCODE
