@@ -516,6 +516,16 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// <see cref="ResolveCatchSite(Exception)"/> for a library that keeps an exception it threw as one nothing had kept
+        /// (<see cref="MarkUnkept"/>) and hands it to Ruby code later: an Enumerator's external iteration keeps the StopIteration
+        /// of its end, to be the cause of the ones it raises after it. The walk is taken from where this is called, which has the
+        /// catching frame's callers below it for as long as that frame lives.
+        /// </summary>
+        public static void ExposeCatchSite(Exception exception) {
+            ResolveCatchSite(exception);
+        }
+
         internal static bool IsCatchSitePending(Exception/*!*/ exception) {
             var data = TryGetInstance(exception);
             return data != null && data._pendingCatchSite != null;

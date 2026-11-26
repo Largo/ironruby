@@ -579,6 +579,7 @@ namespace IronRuby.Builtins {
             internal RubyMemberInfo StructEach;
             internal RubyMemberInfo EachSlice;
             internal RubyMemberInfo EachCons;
+            internal RubyMemberInfo StopIterationResult;
         }
 
         private static readonly object _preludeMethodsKey = new object();
@@ -604,6 +605,8 @@ namespace IronRuby.Builtins {
                     methods.EachSlice = method.Info;
                 } else if (name == "each_cons") {
                     methods.EachCons = method.Info;
+                } else if (name == "result") {
+                    methods.StopIterationResult = method.Info;
                 }
             }
             return null;
@@ -904,7 +907,29 @@ namespace IronRuby.Builtins {
 
             // get_next_values: the end is raised once as such, and from then on as a new StopIteration
             // whose cause is the first one
-            throw first ? stop : CreateStopIteration(context, cursor.Receiver, stop);
+            if (first) {
+                throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(stop) : stop;
+            }
+            // the first one is handed to Ruby code now (Exception#cause): if it was rescued and dropped, the walk for its
+            // backtrace is still to be taken, and is taken here, as close to where it was rescued as there is
+            RubyExceptionData.ExposeCatchSite(stop);
+            var again = CreateStopIteration(context, cursor.Receiver, stop);
+            throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(again) : again;
+        }
+
+        // IR_FAST_NEXT=0 throws the StopIteration of a cursor as before, the stack walked as soon as a frame rescues it.
+        private static readonly bool _fastNext = Environment.GetEnvironmentVariable("IR_FAST_NEXT") != "0";
+
+        /// <summary>
+        /// The StopIteration a cursor throws is one nothing can have kept, as one Kernel#raise makes (RaisedUnkept): it is made
+        /// here, of the built-in class, with no Ruby code run, and thrown at once. So the frame that rescues it may leave the walk
+        /// of the stack below it - most of what a raise costs here, and an iteration ends with one - until the exception is
+        /// exposed, and a `loop { e.next }` or a `rescue StopIteration` that drops it never takes the walk. The first one the cursor
+        /// does keep, to be the cause of the ones after it, and takes the walk when it hands it out as one (CursorStep). Not while a
+        /// TracePoint is enabled, which may see it go by and keep it.
+        /// </summary>
+        private static bool ThrowsUnkept() {
+            return _fastNext && TracePoint.ActiveEvents == 0;
         }
 
         private static StopIteration/*!*/ CreateStopIteration(RubyContext/*!*/ context, object result, StopIteration cause) {
@@ -991,6 +1016,26 @@ namespace IronRuby.Builtins {
             self._feedValue = value;
             self._hasFeed = true;
             return null;
+        }
+
+        /// <summary>
+        /// Kernel#loop's `rescue StopIteration => stop; stop.result`, without the `=> stop`: that hands the exception to Ruby code,
+        /// which takes the walk of the stack for its backtrace (RubyExceptionData.TryDeferCatchSite), and the walk is most of what
+        /// ending a `loop { e.next }` costs. The result is read here from the exception being rescued ($!), which nothing sees;
+        /// unless #result is not the prelude's own (redefined, or a subclass's or a singleton's), which is then called with the
+        /// exception, exposed first as `=> stop` would have.
+        /// </summary>
+        [RubyMethod("__rescued_stop_result__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetRescuedStopResult(CallSiteStorage<Func<CallSite, object, object>>/*!*/ resultStorage, RubyClass/*!*/ self) {
+            RubyContext context = resultStorage.Context;
+            Exception stop = context.CurrentExceptionNoExpose;
+            object result;
+            if (_fastNext && stop is StopIteration &&
+                IsPreludeMethod(context, stop, "result", GetPreludeMethods(context).StopIterationResult)) {
+                return context.TryGetInstanceVariable(stop, RubyUtils.GetCoreStateInstanceVariableName("@__result__"), out result) ? result : null;
+            }
+            var site = resultStorage.GetCallSite("result", 0);
+            return site.Target(site, context.CurrentException);
         }
 
         /// <summary>
