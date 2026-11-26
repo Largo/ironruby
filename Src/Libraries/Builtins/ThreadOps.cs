@@ -1691,7 +1691,18 @@ namespace IronRuby.Builtins {
             // WaitSleepJoin, so a thread spinning on `Thread.pass until ...` - which is how the
             // specs wait for each other - reported its status as "sleep" instead of "run".
             if (!Thread.Yield()) {
-                Thread.Sleep(0);
+                // Windows' Thread.Yield (SwitchToThread) fails whenever no other thread is ready to run
+                // on this processor, so a spinning `Thread.pass until ...` sleeps here most of the time.
+                // A Thread#raise's nudge (RubyUtils.NudgeThread) that finds the thread in this Sleep, or
+                // latches just after it and goes off in the next one, throws ThreadInterruptedException:
+                // out of Thread.pass it reached Ruby code past any Thread.handle_interrupt mask, and a bare
+                // `rescue` caught it. The nudge only says something is parked: look at it as the safe
+                // point above does, which leaves a masked exception parked.
+                try {
+                    Thread.Sleep(0);
+                } catch (ThreadInterruptedException) {
+                    RubyUtils.CheckAsyncException(false);
+                }
             }
         }
 
