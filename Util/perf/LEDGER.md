@@ -762,6 +762,22 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    each call evaluates the literal once and the frame's slot is empty. `n != 0` goes
    through `BasicObject#!=` (gap 10), and `Object::GetType` at 4.9% is `swap`'s type
    guards, by that experiment's reading of the profile.
+   Round perf/permute (2026-11-26, on 2e9521f) measured what is left and where (see Rejected): the
+   block-loop tier never tries this block (runs of 1-6), and would decline it at `call: swap/2` (no
+   bound call in a block copy; `leaf/1` alone says the same) and then at `permute(n1)`, a recursive call
+   of a method that has no typed body; and since `swap` writes elements, then `permute` is called, then
+   `swap` runs again, any deopt after the first `swap` re-runs it - the effect rule declines the block
+   even with both calls bound. The method JIT declines `permute` written with a `while` too, at "a
+   deopt after an effect (call permute at line 44)". Yet that `while` version runs Permute in 2.39 s
+   against 4.10 s as written (CRuby 2.66 s, `harness.rb Permute 20 100`) as generic code: the gap is
+   the call with a literal block. Per call, `__send__`-driven, ns: a plain call 30, the same with any
+   literal block - `n.downto(0) { }`, `(n + 1).times { }`, `n.tap { }`, a Ruby method that yields once -
+   160-170 (CRuby 62 and 94-133); per iteration of `downto` IronRuby is at CRuby (52 against 59 ns with
+   a call in the block). It is not the bytes (360 B a call, 288 of them the scope, Proc and BlockParam):
+   parking them for `downto` took them away and no time (below). So the next attempt is the entry of a
+   call with a literal block - what the rule, the BlockParam and the block's frame do per call, without
+   allocating - which is /perf-frame's kind of work, and which every iterator call pays, not only
+   Permute's. Not the loop tier.
 5. **Rules bake the interpreted LightLambda of a method the JIT never wraps**
    (`LightLambda::Run*`, ~1% of Richards' `schedule`): a rule-level read of the body's
    current delegate, as b78ec3f5 did for stubs, would remove the hop once the body is
@@ -1182,6 +1198,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     475 ns a level at depth 10 and 552 at depth 1000. Narrow things to try: let
     `Dictionary#at` compile (type a call on a local assigned in the loop); the per-call
     cost of `(a..b).each { |i| yield ... }` (gap 14); `loop` through gap 22.
+    `Dictionary#at` compiles since perf/havlak (see Landed): Havlak's declines are
+    `Vector#remove_first` (a deopt after an effect) and `split_bucket` (an attribute write
+    on a receiver nothing samples - the same kind of local, `current` walking a chain; the
+    write would need what the read now has, a name from a class the call was inlined for or
+    from the classes that define the writer).
 26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
     thing that has to stay fast while the tiers stay on by default, and it is not fast).
     2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
@@ -1644,6 +1665,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     both builds. IronRuby.Tests `Method_KeywordHashIntoRest1` (new; passes with the switch
     off too) and 50 named keyword, method, splat, send and super tests pass. Not timed; no
     R2R run.
+- **perf/havlak (/perf-step, 2026-11-26, on 819a368) - a call on a local the profile has no sample of
+  is inlined for the classes that define the method, under checks of their class (gap 25)** - not
+  gated. som.rb's `Dictionary#at` (Havlak's `IdentityDictionary`) declined at `call: match/2`: `e`
+  comes from `get_bucket(hash)`, a call, so `TrySample` has nothing for it, and the inliner, which
+  checks a class at a call on a parameter, had no class to check. Now `UnsampledCallees` takes the
+  classes, constants of Object, that define a method of the name themselves whose typed body is
+  inlinable now (`InlinableCallee`): one, or two with the same parameter and return types, each under
+  a check of its exact class (the inliner's two-class path, `IsOfClass`/`GuardClass`), and anything
+  else deopts - a subclass, a singleton class, a class whose method has no such body,
+  method_missing; the entry's method version check covers a redefinition, and a private or
+  protected method is not inlinable for an explicit receiver. A candidate still being profiled is
+  waited for only when no other is ready. An attribute read of the same local (`e.value`, `e.next`)
+  takes the variable's name from the class the call was inlined for and reads through
+  `ReadSelfAttr`, which binds to the class it meets and deopts where the name is not that variable's
+  reader; its value is an object. Switch: `IR_JIT_UNSAMPLED=0`.
+  Census (Src/StdLib + AWFY): 0 methods changed (it has no specialized callees to inline). Havlak
+  traced (`harness.rb Havlak 1 3`): `Dictionary/at` specialized (`hash`, `get_bucket` and
+  `IdEntry#match` inlined), declines after the pre-screen 3 -> 2, deopts 0, invalidations 0;
+  `census -c` 88 agree, 0 differ. The other thirteen benchmarks traced (3 x 1): the same JIT and OSR
+  decisions on both builds; all fourteen verify (CD at `3 100`: its inner count 1 is not a valid
+  one, on either build or CRuby). `Util/bench/havlak-shapes.rb` (new; som.rb's Dictionary with
+  `Entry#match`), instructions a call (`callgrind/count.sh`, new/base): `at_first` 0.611, `at_chain`
+  (behind one entry) 0.571, `at_miss` 0.538, the control `chain_len` (the same loop calling nothing on
+  the local) 1.000; time on a quiet machine, ns: 142 -> 88, 172 -> 104, 180 -> 100, control 147 ->
+  148. Havlak, `harness.rb Havlak 6 1`, three pairs in separate processes, the order turned in the
+  second: base 23.55, 22.37, 22.19 s, new 22.34, 21.62, 21.74 (0.965, new faster in each pair, inside
+  the benchmark's swing).
+  Checked: `Util/unsampled-matrix.rb` (new, 16 cases, one per process: entries of another class with
+  a match of its own half way, two classes both inlinable, `match` and `value` redefined, a singleton
+  `match` and `value`, method_missing, a subclass, a subclass with `private :value`, `value` and
+  `match` made private, `match` protected and removed, the entries frozen, the buckets emptied) prints
+  CRuby's output on the unchanged build and on the new one with the JIT on, `-X:NoJIT -X:NoOSR`,
+  `-X:NoJITCalls` and `IR_JIT_UNSAMPLED=0`; every case specializes `at` with `match` inlined. jit,
+  jit-calls, jit-const, ivar, deadconst matrices print CRuby's in all four modes; hot-shapes and
+  inline the baseline's (their known rows: a FrozenError where IronRuby raises
+  Encoding::CompatibilityError, and `tree_int_key`, on every build with the JIT on or off).
+  IronRuby.Tests Jit*, Loop*, Inline* (21) pass.
+  For the gate: the candidates are found by enumerating Object's constants under the hierarchy lock
+  at each compile of such a call (compile time only); a class not a constant of Object (nested in a
+  module) is not a candidate, so such a call stays uninlined. Look at the attribute read's name being
+  taken from the first candidate while the receiver may be of the second (ReadSelfAttr re-binds, and
+  deopts if that class's reader is another variable), and at "a fast path that decides from a resolved
+  method": the candidate's method is resolved on the candidate class with the lookup's visibility
+  (`InlinableCallee`), and a subclass never takes the inlined body (exact class check).
 
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
@@ -5153,6 +5218,18 @@ after master (#228 to #233) had been merged into both trees.
   have no positionals before the rest, so there was nothing to bind in the convention
   anyway. Learned: compare keyword shapes with the method JIT off (or check that it declined
   both), and with a control that passes the same Hash positionally.
+- **perf/permute (2026-11-26, on 2e9521f) - `[BlockNotKept]` on Integer#upto and #downto, and both off
+  `NeverParkedIterators`** (gap 4). Round eight's `[BlockNotKept]` alone changed nothing, since the
+  Proc was made again on every call; parked scopes (later) reuse a method's literal-block Proc and
+  scope where the iterator is `[BlockNotKept]`, as `times` and `each` are. With both: a `downto` call
+  with a literal block allocates 72 B instead of 360, Permute 53.8 MB an iteration instead of 124.5
+  (0.43, `alloc.rb`); time unchanged (`n.downto(0) { }` 161 against 164 ns, Permute 3.76-4.06 s
+  against 3.81-4.05); instructions (`callgrind/count.sh`, `Util/bench/permute-shapes.rb`, new/base):
+  `permute` 1.043, `dt_call` 1.023, controls `permute_while`, `tm_call`, `wh_call` 1.000. Parking
+  costs more instructions than the allocation it saves. Reverted; the shapes and two block-loop-matrix
+  cases (a `swap` on self redefined half way through a hot `downto`, a singleton `swap` on the
+  receiver; CRuby's output on the unchanged build with the JIT on, off and without JIT calls) kept.
+  What was learned is under gap 4.
 
 - **perf/lsite2 (/perf-step, 2026-11-26) - a light method that has made its scope late
   enters through a scoped twin from then on** (gap 16; switch `IR_LIGHT_TWIN`, `=verbose`
