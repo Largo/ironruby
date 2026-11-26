@@ -5352,6 +5352,32 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/jitconst (2026-11-26) - "JIT maybe: constant without a scope" is the census's, not the
+  runtime's; nothing to let in.** The census's second "maybe" line (455 methods of Src/StdLib +
+  AWFY on 9d2c89a: ENV 19, Array 12, Integer 11, URI 11, AF_INET 8, BN 7) comes from
+  `ResolveConstant` bailing when `_constantScope` is null, and the census calls
+  `JitCompiler.TryCompile` with no scope at all (it runs no program, so there is no declaring
+  scope to look a constant up in). A real compile gets the stub's declaring scope and folds the
+  constant, revalidated at entry (perf/constrev). Traces: app-shapes calls 10 of these methods and
+  specializes 4 (`ERB#make_compiler`, `ERB::Compiler::Scanner#initialize`,
+  `Gem::Specification#platform`, `Shop::Product#tax_rate`); two are declined for something else
+  (`OptionParser.top` and `Gem::Requirement#none?`, both at "[] on a RubyArray": `@stack[-1]`,
+  `@requirements[0] == ...`), four never turn hot. Fourteen AWFY benchmarks (2 x 5): 118
+  specialized, and no rejection or decline anywhere names a constant, autoload or a deprecated
+  constant (`JitFoldedConstant.Resolve`'s failures).
+  What stands behind the constant, found with a census-only probe (not kept: an unresolved
+  constant emitted as an opaque object, and a body that then compiled reported as "constant
+  only"): of the 455, 221 still stop at the constant, using it where the value is needed (a class
+  for `new`, `when`, `::X`, a receiver such as `ENV[k]`), 183 have nothing else behind it - they
+  compile once a run resolves the constant to a value the body can type - and about 50 stop next at
+  a call or another profile question. So the line is a census blind spot, not a refusal: a step
+  that made the census resolve constants would change its verdicts, not what runs. The runtime
+  questions of gap 29 (a later constant shadowing a folded one, autoload in flight,
+  `const_missing`, private constants) were not touched.
+  Also found: two of app-shapes' methods are declined at "[] on a RubyArray" for an element read
+  with a negative index or of an Array instance variable compared with `==` - a typed-body
+  question for another step.
+
 - **perf/lexical3 (/perf-step, 2026-11-26, on 3cabf57) - bind the positionals of `def m(a, *r,
   k: 1)` in the calling convention instead of out of one splat** (the idea perf/lexical2's entry
   named), rejected by measurement before any code. The premise was `kr_rest` 5,325
