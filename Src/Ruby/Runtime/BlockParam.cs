@@ -481,8 +481,6 @@ namespace IronRuby.Runtime {
         }
         
         [Emitted]
-        // AggressiveOptimization: see RubyOps.Yield0.
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static BlockParam/*!*/ CreateBfcForYield(Proc proc) {
             if (proc != null) {
                 return new BlockParam(proc, BlockCallerKind.Yield);
@@ -523,7 +521,6 @@ namespace IronRuby.Runtime {
         /// takes the BlockParam of its last call too, with the scope that call parked on it (BlockParam.ParkScope).
         /// </summary>
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static BlockParam/*!*/ CreateBfcForBlockNotKept(Proc/*!*/ proc) {
             Assert.NotNull(proc);
             if (proc.Kind != ProcKind.Block) {
@@ -583,7 +580,6 @@ namespace IronRuby.Runtime {
         /// does (TakeBfcForProcCall), with the same conditions.
         /// </summary>
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static BlockParam/*!*/ TakeBfcForBlockYield(Proc proc) {
             if (proc != null && proc.CallBlockParam != null && proc.Kind != ProcKind.Lambda) {
                 var reused = System.Threading.Interlocked.Exchange(ref proc.CallBlockParam, null);
@@ -612,14 +608,12 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static BlockParam/*!*/ CreateBfcForProcCall(Proc/*!*/ proc) {
             Assert.NotNull(proc);
             return new BlockParam(proc, BlockCallerKind.Call) { IsActiveLambdaCall = proc.Kind == ProcKind.Lambda };
         }
         
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static BlockParam/*!*/ CreateBfcForLibraryMethod(Proc/*!*/ proc) {
             Assert.NotNull(proc);
             bool isProcConverter;
@@ -636,7 +630,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] 
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static void LeaveProcConverter(BlockParam/*!*/ bfc) {
             Debug.Assert(bfc.Proc != null);
             if (bfc.IsLibProcConverter) {
