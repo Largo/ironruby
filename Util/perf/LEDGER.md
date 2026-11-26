@@ -1451,6 +1451,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy`, where CRuby has copied them before it (a `const_get` in an
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
+38. **A keyword call into a method with a rest parameter, and the keyword prologue, outside
+    the method JIT** (perf/lexical3, measured with `Util/perf/callgrind/count.sh`, instructions
+    a call, shapes in `prelude-cost.rb`; the method JIT specializes a trivial keyword method,
+    so these are the costs of every keyword method it does not take). A rest method given a
+    keyword call pays about 1,400 more than given the same Hash positionally:
+    a rest method `def r(*a) = a.size + 1` called `(i)` 2,559 (`kr_plain_rest`), and
+    `v_hash_into_rest` called `(i, 2)` 2,638, `(i, KH)` 2,762,
+    `(i, {k: 2})` 3,416, `(i, k: 2)` 4,815 - and a keyword method with a rest the same
+    (`def v_unused(*a, k: 1) = 3` 4,798, `kr_rest` 5,325), so it is the call into the rest,
+    not that method's prologue. Without a rest parameter the keyword call costs what the
+    literal does (`def v_two(a, b)`, JIT off: positional 1,745, `{k: 2}` 2,404, `k: 2`
+    2,435). Suspects, not yet bisected: `RubyOps.NormalizeRestArgument` (a non-keyword rest
+    method keeps a copy of the hash) and what the rule for a site with a keyword hash does
+    for a rest callee (`ArgsBuilder` with a keyword signature takes no `GetRestTakesListFrom`
+    path, `RubyMethodInfo.GetDispatcher` none for a rest). Separately, the keyword prologue of
+    `def kw(a, k: 1) = a + k` costs about 1,300-1,500 with the JIT off (4,017 against
+    `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
+
 ## Landed
 
 - **perf/lexical2 (/perf-step, 2026-11-26, on 2f8c31c) - keywords beside a rest or post
@@ -1487,9 +1505,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (0.93), `kr_lines` (`"ab".each_line(chomp: true) { }`) 17,670 -> 17,436 (0.99); the
     controls `kr_kw` (`def kw(a, k: 1)`, light before) and `x_const` 1.00. Below perf-frame's
     15% bar for a shape: the scope was not most of what these calls cost. `kr_rest` is still
-    3.4 times `kr_kw`; the next step for this shape is the lowering itself - binding the
-    positionals in the calling convention, as `def m(a, b = 1, k: 2)` already is
-    (`KeywordsAfterOptionals`), instead of out of one splat - not the frame. Not timed.
+    3.4 times `kr_kw`; the next step for this shape was thought to be the lowering itself -
+    binding the positionals in the calling convention - which perf/lexical3 measured and
+    rejected: `kr_kw` was specialized by the method JIT, and the cost is the keyword call into
+    a rest and the keyword prologue (gap 38). Not timed.
   - `Util/keyword-rest-light-matrix.rb` (new: the signatures, binding errors, positional Hash,
     `**nil`, defaults, binding, local_variables, block_given?, zsuper with a rest and with
     `**rest`, super_method, send, Method#call, to_proc, arity and parameters, redefinition,
@@ -4606,6 +4625,21 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/lexical3 (/perf-step, 2026-11-26, on 3cabf57) - bind the positionals of `def m(a, *r,
+  k: 1)` in the calling convention instead of out of one splat** (the idea perf/lexical2's entry
+  named), rejected by measurement before any code. The premise was `kr_rest` 5,325
+  instructions against `kr_kw` 1,557. But `kr_kw` is specialized by the method JIT (4,017 with
+  `-X:NoJIT`), and the splat lowering costs about nothing net: `def v_unused(*a, k: 1) = 3`
+  (the whole lowering and prologue, nothing used) 4,798 against `def v_hash_into_rest(*a)`
+  given the same keyword call 4,815, and against a rest method of the same shape called with
+  one positional, 2,559. What a keyword call to such a method pays is the call into the rest
+  (about 1,400 over a positional Hash) and, in every keyword method outside the JIT, the
+  keyword prologue (about 1,300-1,500): gap 38, with the shapes in `prelude-cost.rb`. The
+  prelude's methods of this shape (`String#each_line`, `#lines`, `Kernel#warn`, `IO.read`)
+  have no positionals before the rest, so there was nothing to bind in the convention
+  anyway. Learned: compare keyword shapes with the method JIT off (or check that it declined
+  both), and with a control that passes the same Hash positionally.
 
 - **perf/lsite (/perf-step, 2026-11-26) - a light site that remembers it needed the scope**
   (gap 16; switch `IR_LIGHT_REMEMBER`). In `LightFrameRewriter.MakeLightCall`, each site
