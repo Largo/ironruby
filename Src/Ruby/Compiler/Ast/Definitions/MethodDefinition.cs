@@ -554,13 +554,6 @@ namespace IronRuby.Compiler.Ast {
         private static readonly bool LightRegexAll = Environment.GetEnvironmentVariable("IR_LIGHT_REGEX") == "all";
 
         /// <summary>
-        /// IR_LIGHT_REMEMBER=0 has a light frame's call ask its light site every time (see LightFrameRewriter.MakeLightCall):
-        /// otherwise a site whose rule has once answered RubyOps.LightScopeRequired goes straight to the scope and the
-        /// ordinary site from then on.
-        /// </summary>
-        internal static readonly bool LightRememberEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_REMEMBER") != "0";
-
-        /// <summary>
         /// IR_LIGHT_BREAK=0 keeps every method with a `break', `next' or `redo' in a `while'/`until' loop of its body out of
         /// light frames (see IsScopeFree).
         /// </summary>
@@ -1974,36 +1967,13 @@ namespace IronRuby.Compiler.Ast {
                 var result = Ast.Variable(typeof(object), "#r");
                 temps[0] = result;
                 MakesCalls = true;
-                MSA.Expression lightCall = AstUtils.LightDynamic(lightAction, typeof(object), lightArgs);
-                MSA.Expression memory = null;
-                if (LightRememberEnabled) {
-                    // A site whose rule has answered RubyOps.LightScopeRequired once remembers it (gap 16): from then on the frame
-                    // makes its scope and calls through the ordinary site without asking the light one, whose answer would most
-                    // likely be the same - `s.gsub(/b/, "x")', whose callee stores the caller's $~, would otherwise pay for the light
-                    // call on every call as well as for the scope. The memory is a box of the site, shared by every invocation,
-                    // every thread and every runtime that runs this body; it is only ever set, and only to the marker. A stale read
-                    // costs no more than the ask it skips or makes, and the ordinary site with the scope is what the light one
-                    // stands in for, so a receiver whose method would not have needed the scope gets the right answer too, only a
-                    // scope it did not need. The light path pays one node for it (`memory ?? light'), which matters while the body
-                    // is interpreted; the store is on the path that makes the scope anyway (in a block's frame also for its
-                    // `block_given?', which that frame answers through the scope every time).
-                    memory = Ast.Field(AstUtils.Constant(new StrongBox<object>(null)), "Value");
-                    lightCall = Ast.Coalesce(memory, lightCall);
-                }
-                body.Add(Ast.Assign(result, lightCall));
+                body.Add(Ast.Assign(result, AstUtils.LightDynamic(lightAction, typeof(object), lightArgs)));
                 MSA.Expression needsScope = Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightScopeRequired));
-                MSA.Expression fullCall = AstUtils.LightDynamic(action, typeof(object), fullArgs);
-                if (memory != null) {
-                    fullCall = Ast.Block(
-                        Ast.IfThen(Ast.ReferenceEqual(memory, AstUtils.Constant(null)), Ast.Assign(memory, AstUtils.Constant(RubyOps.LightScopeRequired))),
-                        fullCall
-                    );
-                }
                 if (blockGiven && BlockParameter == null) {
                     // a block's frame has the method's block only through its scope: the call, as for any rule that reads it
                     needsScope = Ast.OrElse(needsScope, Ast.ReferenceEqual(result, AstUtils.Constant(RubyOps.LightBlockGiven)));
                 }
-                MSA.Expression value = Ast.Condition(needsScope, fullCall, result);
+                MSA.Expression value = Ast.Condition(needsScope, AstUtils.LightDynamic(action, typeof(object), fullArgs), result);
                 if (blockGiven && BlockParameter != null) {
                     // `block_given?' that is Kernel's (DispatchIntrinsics.TryBuildBlockGiven): whether the frame was given a
                     // block, which is what Kernel#block_given? reads from the scope this frame would have to make for it -
