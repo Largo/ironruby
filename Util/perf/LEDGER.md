@@ -1870,6 +1870,60 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   build in both modes; spec/core/string (3,963 examples) and spec/library/stringscanner (240):
   the same on both builds, 0 failures, one error on both (`String.try_convert ... raises
   TypeError if it's not a kind of String`, run as a directory).
+- **perf/lframe (/perf-frame, 2026-11-26) - a cheaper method entry: the alias name and the
+  traced test** (switch `IR_LIGHT_ENTRY`, on unless `=0`) - instructions only, not gated.
+  Built on 2f8c31c. What gap 16's profiles left on every light frame, looked at on its own
+  with `Util/bench/frame-cost.rb` (new: a method that does nothing, one, three calls, a yield,
+  `block_given?`, and `String#bytesplice`), `-X:NoJIT` so that the generic bodies run.
+  - **Not the prologue.** perf/lsite2 put the light lambda's +158 down to zeroing its locals;
+    `DOTNET_JitDisasm` of the light `H#gsub` says otherwise: two 64-byte stores. What the
+    lambda pays up front is its closure constants (each load a bounds check and a
+    `CHKCASTCLASS` helper call), the frame record (`PrecompiledFrames.Enter`) and the
+    entry's helpers. So no `SkipLocalsInit` (the runtime compiles with the BCL's
+    `LambdaExpression.Compile`, which has no such switch, and the DLR patch set has nothing
+    to patch) and no DLR patch.
+  - **The alias name.** A call through an alias leaves the name it was called by in a
+    thread-static for the method's entry to take (`MarkAliasCall`, `TakePendingCallee`,
+    `CreateMethodScope`). Every entry tested a flag first, `_aliasCallSeen`, which start-up
+    sets for good (RubyGems and the prelude call aliases), so every entry of every method,
+    light or scoped, read the thread-static - a call into the runtime from a DynamicMethod:
+    `TakePendingCallee` 26 + `TakePendingCalleeSlow` 34 instructions a call in the `fc`
+    profile. The flag is now a count of the threads that have a name pending: raised by the
+    alias call when its thread had none, lowered by the entry that takes one, so an entry
+    reads the thread-static only while some thread has a name pending. A thread that dies
+    with one pending leaves the count up, which only costs the reads it costs today.
+  - **The traced test.** A light frame without register locals called
+    `CreateMethodScopeIfTraced` (nine arguments) on every entry to learn that no TracePoint
+    listens; the test is now inline, as `EnterWithRegisterLocals` has it.
+  - Left as they were: `EnterLightMethod` and `LeaveLightMethodFrame` already inline their
+    fast paths (the slow exit only for a block or a scope), and the frame record is every
+    compiled frame's, tuned before (#168).
+  - **Numbers** (instructions a call, `Util/perf/callgrind/count.sh`, N=20,000; switch off ->
+    on). frame-cost, light frames: `f0` 1,572 -> 1,435 (0.913), `f1` 1,656 -> 1,591 (0.961),
+    `fc` 2,553 -> 2,314 (0.906), `fc3` 4,280 -> 3,693 (0.863), `fy` 2,412 -> 2,347 (0.973),
+    `fbg` 1,932 -> 1,795 (0.929), `bytesplice` 27,120 -> 26,907 (0.992); the same with
+    `IR_LIGHT_FRAMES=0` (the alias count only): 0.945-0.974, `bytesplice` 0.991. Default mode,
+    regex-shapes: 0.977-0.993, `size` 1.000; core-small: `tap` 0.931, `then` 0.945, `minmax`
+    0.969, `inject_sym` 0.973, `inject` 0.975, `sum_blk` 0.980, `zip` 0.985, `max_by` 0.984,
+    `each`/`each_with_index` 0.991. No shape counts more. No timing run (the counter is the
+    measure here; the gate owes the clock).
+  - Checked: `Util/light-entry-matrix.rb` (new: `__callee__` and `__method__` through `alias`
+    and `alias_method` into light and scoped methods, `define_method`, `send`, `public_send`,
+    `Method#call`, `bind_call`, method_missing; an alias call that raises ArgumentError before
+    its method is entered and then ordinary calls; alias calls as arguments of alias calls;
+    recursion through an alias; four threads calling aliases and names; TracePoint `:call`'s
+    `method_id`/`callee_id`; a million-deep recursion through a light frame, and through an
+    alias: SystemStackError, and the process goes on) and light-rest, block-given,
+    global-light, lexical-light, keyword-light, regex-light, rescue-light, super-light,
+    parked-scope, caller, light-remember and hot-shapes: the candidate prints what the
+    baseline prints in all 78 runs (each as built, `IR_LIGHT_ENTRY=0`, `IR_LIGHT_FRAMES=0`,
+    `IR_LIGHT_REGEX=all`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls`), and CRuby's but where the
+    baseline differs too: caller's library frames, hot-shapes' FrozenError, and
+    light-entry's `define_method` body called through an alias, whose `__callee__` is the
+    definition's name on both builds (CRuby: the alias's) - a fault of master, not of this.
+    IronRuby.Tests: the 11 of AliasTests, `Backtrace_ArityCalleeFrame1` and the ten
+    `Method_LightFrame*`: PASSED. The census cannot see this (no method changes verdict).
+    Not run: `IR_CONFIG=R2R` start-up, the suite, a sweep, AWFY (owed to the gate).
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
