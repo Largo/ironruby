@@ -476,7 +476,9 @@ obj.f");
         /// </summary>
         public void LibraryDispatcherBudget1() {
             int saved = LibraryDispatcher.BudgetOverride;
+            bool savedBridge = RubyCallAction.DispatchWhileCompiling;
             LibraryDispatcher.BudgetOverride = 3;
+            RubyCallAction.DispatchWhileCompiling = false;   // the rule, not a dispatcher, answers a hot call (see LibraryDispatcherSpent1)
             try {
                 var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
                 var sites = new CallSite<Func<CallSite, object, object>>[6];
@@ -504,6 +506,7 @@ obj.f");
                 Assert(CallsThroughDispatcher(sites[3], sym, "Ab"));
             } finally {
                 LibraryDispatcher.BudgetOverride = saved;
+                RubyCallAction.DispatchWhileCompiling = savedBridge;
             }
         }
 
@@ -513,7 +516,9 @@ obj.f");
         /// </summary>
         public void LibraryDispatcherBudget2() {
             int saved = LibraryDispatcher.BudgetOverride;
+            bool savedBridge = RubyCallAction.DispatchWhileCompiling;
             LibraryDispatcher.BudgetOverride = 3;
+            RubyCallAction.DispatchWhileCompiling = false;
             try {
                 var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
                 var site = CallSite<Func<CallSite, object, object>>.Create(binder);
@@ -530,6 +535,59 @@ obj.f");
                 }
             } finally {
                 LibraryDispatcher.BudgetOverride = saved;
+                RubyCallAction.DispatchWhileCompiling = savedBridge;
+            }
+        }
+
+        /// <summary>
+        /// A hot call (its dispatcher spent) is answered by a new dispatcher while its rule is compiled in the background; once the
+        /// compiled rule is in the binder's cache the dispatcher is spent, and the site and the binder's other sites call the rule. Held
+        /// (the compile never starts), the dispatcher answers for good and still misses a receiver of another class.
+        /// </summary>
+        public void LibraryDispatcherSpent1() {
+            int saved = LibraryDispatcher.BudgetOverride;
+            bool savedBridge = RubyCallAction.DispatchWhileCompiling, savedHold = LibraryDispatcher.HoldCompiledRules;
+            LibraryDispatcher.BudgetOverride = 3;
+            RubyCallAction.DispatchWhileCompiling = true;
+            try {
+                foreach (bool hold in new[] { true, false }) {
+                    LibraryDispatcher.HoldCompiledRules = hold;
+                    var binder = new RubyCallAction(Context, "swapcase", RubyCallSignature.Simple(0));
+                    var site = CallSite<Func<CallSite, object, object>>.Create(binder);
+                    var str = MutableString.CreateAscii("aB");
+                    var sym = Context.CreateAsciiSymbol("aB");
+                    for (int i = 0; i < 3; i++) {
+                        Assert(CallsThroughDispatcher(site, str, "Ab"));
+                    }
+                    var spent = site.Target.Target;
+
+                    // hot: a new dispatcher, past the calls that start the compile
+                    for (int i = 0; i < 10; i++) {
+                        Assert(CallsThroughDispatcher(site, str, "Ab"));
+                    }
+                    Assert(site.Target.Target != spent);
+
+                    if (hold) {
+                        for (int i = 0; i < 1000; i++) {
+                            Assert(CallsThroughDispatcher(site, str, "Ab"));
+                        }
+                        Assert(CallsThroughDispatcher(site, sym, "Ab"));
+                        continue;
+                    }
+
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    while (CallsThroughDispatcher(site, str, "Ab")) {
+                        Assert(watch.ElapsedMilliseconds < 30000);
+                        System.Threading.Thread.Sleep(1);
+                    }
+                    Assert(!CallsThroughDispatcher(site, str, "Ab"));
+                    var other = CallSite<Func<CallSite, object, object>>.Create(binder);
+                    Assert(!CallsThroughDispatcher(other, str, "Ab"));
+                }
+            } finally {
+                LibraryDispatcher.BudgetOverride = saved;
+                RubyCallAction.DispatchWhileCompiling = savedBridge;
+                LibraryDispatcher.HoldCompiledRules = savedHold;
             }
         }
 

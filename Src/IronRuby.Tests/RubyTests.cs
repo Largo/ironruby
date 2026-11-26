@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -131,6 +131,7 @@ namespace IronRuby.Tests {
                 MethodCallCaching_MethodMissing5,
                 LibraryDispatcherBudget1,
                 LibraryDispatcherBudget2,
+                LibraryDispatcherSpent1,
                 LibraryMethodNilBlock1,
                 CoerceRespondTo1,
 

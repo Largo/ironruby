@@ -880,8 +880,8 @@ namespace IronRuby.Runtime.Calls {
         }
 
         // IR_SPENT_DISPATCHER=hold: the rule is built but never compiled, so the dispatcher answers the hot call for good - for tests
-        // of the dispatcher's own guards over many calls (Util/perf/gate-matrices.rb --mode).
-        private static readonly bool HoldCompiledRules = Environment.GetEnvironmentVariable("IR_SPENT_DISPATCHER") == "hold";
+        // of the dispatcher's own guards over many calls (Util/perf/gate-matrices.rb --mode). Settable for tests.
+        internal static bool HoldCompiledRules = Environment.GetEnvironmentVariable("IR_SPENT_DISPATCHER") == "hold";
 
         // Set while the dispatcher answers a hot call whose rule is compiled in the background (see AnswerUntilCompiled):
         private volatile bool _awaitingRule;

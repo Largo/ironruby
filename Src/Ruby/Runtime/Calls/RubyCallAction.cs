@@ -117,9 +117,9 @@ namespace IronRuby.Runtime.Calls {
 
         /// <summary>
         /// IR_SPENT_DISPATCHER=0 interprets the rule of a hot call until its compiled code is ready, as before, rather than have a
-        /// dispatcher answer the call meanwhile (see BindWhileCompiling).
+        /// dispatcher answer the call meanwhile (see BindWhileCompiling). Settable for tests.
         /// </summary>
-        private static readonly bool DispatchWhileCompiling = Environment.GetEnvironmentVariable("IR_SPENT_DISPATCHER") != "0";
+        internal static bool DispatchWhileCompiling = Environment.GetEnvironmentVariable("IR_SPENT_DISPATCHER") != "0";
 
         /// <summary>
         /// A call is hot once a dispatcher has spent its budget on calls like it (see LibraryDispatcher.IsHot), and its rule is compiled
