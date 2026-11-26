@@ -357,6 +357,34 @@ p t.chars.map(&:ord)
         /// through the selector's sets and ranges as before.
         /// </summary>
         /// <summary>
+        /// String#<<, #concat and #prepend check that the receiver can be modified before they look at what they are given
+        /// (MRI's rb_str_concat, rb_str_update): a frozen string raises FrozenError rather than the encoding, range or
+        /// conversion error the argument would bring. #insert checks the encodings first, as MRI's does.
+        /// </summary>
+        public void String_AppendFrozenFirst1() {
+            TestOutput(@"
+require 'ruby4'
+c = ""b"".encode(""UTF-16LE"").freeze
+[-> { c << ""x"" }, -> { c.concat(""x"") }, -> { c.prepend(""x"") }, -> { c.prepend(1) }, -> { c << -1 },
+ -> { c << 2**80 }, -> { c << 0x110000 }, -> { ""b"".freeze.prepend(Object.new) }, -> { c.insert(0, ""x"") },
+ -> { c.dup << ""x"" }].each { |l| p((l.call rescue $!)) }
+d = +""ab""; d << ""c"" << 0x64; p d
+", @"
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<FrozenError: can't modify frozen String: ""b"">
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-16LE and UTF-8>
+""abcd""
+");
+        }
+
+        /// <summary>
         /// A carry out of a wrapped digit or letter skips over a separator to the next
         /// alphanumeric only when the two are of the same kind (rb_str_succ).
         /// </summary>

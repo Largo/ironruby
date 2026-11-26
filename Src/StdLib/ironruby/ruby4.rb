@@ -3899,6 +3899,8 @@ class String
   private :__ir_rpartition__
 
   def prepend(*others)
+    # MRI's rb_str_update checks the receiver before it converts or looks at what is prepended
+    __ir_require_unfrozen__
     others = others.map do |o|
       # #to_str only: MRI will not call #to_s to find something to prepend.
       converted = o.is_a?(::String) ? o : ::String.try_convert(o)

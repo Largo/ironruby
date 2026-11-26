@@ -169,6 +169,7 @@ namespace IronRuby.Tests {
                 String_CharacterBoundaries1,
                 String_NonCharacter1,
                 String_SuccSeparators1,
+                String_AppendFrozenFirst1,
                 String_CountDeleteSqueeze1,
                 String_CountDeleteSqueeze2,
                 String_CountDeleteSqueeze3,

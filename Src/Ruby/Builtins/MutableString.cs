@@ -800,7 +800,13 @@ namespace IronRuby.Builtins {
         /// <param name="whole">True if all of <paramref name="other"/> is added, false for a part of it.</param>
         /// <param name="appendCount">How many of <paramref name="other"/>'s items are added (see FrozenOrCopyOnWrite).</param>
         private void MutateAppend(MutableString/*!*/ other, bool whole, int appendCount) {
-            RubyEncoding newEncoding = RequireCompatibleEncoding(other);
+            RubyEncoding newEncoding = GetCompatibleEncoding(other);
+            if (newEncoding == null) {
+                // MRI's rb_str_append checks that the receiver can be modified before the encodings (str_modify_keep_cr in
+                // rb_enc_cr_str_buf_cat): a frozen string raises FrozenError whatever it is given.
+                RequireNotFrozen();
+                throw RubyExceptions.CreateEncodingCompatibilityError(_encoding, other.Encoding);
+            }
 
             // an empty string is ASCII and has no surrogates, whether or not that has been worked out:
             bool isEmpty = _content.IsEmpty;

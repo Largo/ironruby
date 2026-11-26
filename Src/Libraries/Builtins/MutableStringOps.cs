@@ -788,6 +788,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, int c) {
             if (c < 0) {
+                // MRI's rb_str_concat checks the receiver first: a frozen string raises FrozenError whatever it is given
+                self.RequireNotFrozen();
                 throw RubyExceptions.CreateRangeError("{0} out of char range", c);
             }
 
@@ -807,12 +809,16 @@ namespace IronRuby.Builtins {
                 self.ForceEncoding(RubyEncoding.Binary);
                 return self.Append((byte)c);
             }
+            // (ToChr may refuse the code: the frozen check comes first, as above)
+            self.RequireNotFrozen();
             return self.Append(Integer.ToChr(self.Encoding, self.Encoding, c));
         }
 
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
+            self.RequireNotFrozen();
+
             // A code above the int range is still a number of 32 bits to MRI's rb_str_concat, and
             // a character where the encoding has one that wide: 0x8431A430 in GB18030. A wider
             // one that is still a Fixnum in MRI is named in the message.
