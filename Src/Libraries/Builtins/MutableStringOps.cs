@@ -699,6 +699,32 @@ namespace IronRuby.Builtins {
             return self.Replace(other);
         }
 
+        /// <summary>
+        /// String#dup, MRI's rb_str_dup_m: a bare string - of class String itself, with no singleton class and no instance
+        /// variables - is copied as it is (str_duplicate: the content and the encoding, neither frozen nor chilled) without
+        /// calling initialize_dup or initialize_copy, whatever they are; any other goes through Kernel#dup (rb_obj_dup), which
+        /// calls them. IR_FAST_DUP=0 sends every string through Kernel#dup.
+        /// </summary>
+        [RubyMethod("dup")]
+        public static object/*!*/ Duplicate(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
+            CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
+            MutableString/*!*/ self) {
+
+            if (FastDup && self.GetType() == typeof(MutableString) && IsBare(allocateStorage.Context, self)) {
+                return self.CreateInstance().Replace(self);
+            }
+            return KernelOps.Duplicate(initializeCopyStorage, allocateStorage, self);
+        }
+
+        private static readonly bool FastDup = Environment.GetEnvironmentVariable("IR_FAST_DUP") != "0";
+
+        // BARE_STRING_P: no instance variables and the class String itself (the caller has seen the CLR type is MutableString,
+        // so the class is String unless the string has a singleton class).
+        private static bool IsBare(RubyContext/*!*/ context, MutableString/*!*/ self) {
+            return !context.HasInstanceVariables(self) && !context.GetImmediateClassOf(self).IsSingletonClass;
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ Reinitialize(MutableString/*!*/ self, [NotNull]byte[] other) {
             self.Clear();
