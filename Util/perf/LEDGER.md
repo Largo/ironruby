@@ -1110,6 +1110,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Tried in round thirty-one (see Rejected, perf/dmeth): without the method JIT the call is
     only about 1.15 times a `def`'s, and a pooled BlockParam and a direct rule bought 1.16-1.2;
     what is left is the JIT taking a block body (a `JitStub` over a `BlockDefinition`).
+    Round of 2026-11-26 (see Landed, perf/dmethjit, not gated): taken; `bm1` 51 -> 26.5 ns against
+    CRuby's 24. Left: bodies over captured locals, `block_given?`/`yield` or `super`, and calls with a
+    block or a splat, which still take the rule.
 24. **Struct with `keyword_init: true`: creating an object is 3.2 times CRuby** (1162
     against 369 ns; positional creation is level at 142 against 131). And
     `h.each_pair { |k, v| }` / `each_with_index` are 1.6 to 1.9 times CRuby (gap 13 with
@@ -1705,6 +1708,56 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   past the dispatchers' budget builds a `new` rule per class (about 250 classes into a loop);
   `Struct.new` itself is 5 times CRuby; `kwinit` (`def initialize(sku:, name:)`) 1.8x and
   `Hash#dup` are untouched.
+
+- **perf/dmethjit (2026-11-26) - the method JIT takes the body of a method made by `define_method`
+  (gap 23)** - not gated. `JitBlockMethod` (Runtime/Jit) takes a block as the `def` it would be
+  when nothing in it tells the two apart: BlockDefinition keeps its tree on the dispatcher
+  (`BlockDispatcher.JitAst`) when the block reads and writes none of the enclosing scope's locals,
+  has a def's parameters (plain mandatory, then optional; no rest, post, block or keyword one) and
+  was not compiled for eval or tracing; at the first call a rule is built for, its own screen refuses
+  what means the defining scope's thing in a block (yield, `block_given?`, `super`, class variables,
+  `__method__`, `binding`, `proc`/`lambda`, nested blocks and block-pass, regular expressions and
+  globals); then a synthetic `MethodDefinition` over the block's statements goes to `JitStub.Wrap` as a
+  def's would, with the Proc's `LocalScope` for its constants and the refinements active there. The
+  stub's generic body is the call the rule made (`Proc.BuildCall`) written in C#; the rule of
+  `RubyLambdaMethodInfo` calls the stub for plain arguments (no block, splat or assignment value),
+  passing omitted optionals as the default sentinel and unmarking a trailing keyword hash.
+  `JitStub.SelfCallResolvesHere` takes a self-call of the same define_method method (recursion).
+  Switch: `IR_JIT_DMETH=0`.
+  - The census counts only `def`s and moves by nothing (28,376 methods, 0 changed). Judged instead
+    by a traced run and a timed one. `Util/bench/dmeth-shapes.rb` under IR_JIT_VERBOSE=1: every
+    `bm*` shape specialized but `bmcapt` (a captured local: not taken). Traces of
+    `Util/bench/app-shapes.rb` and AWFY Richards, DeltaBlue, Json, CD: the same specialized (113, 78)
+    and declined-after-the-pre-screen (29, 19) counts as the baseline - none of their methods is an
+    eligible define_method body (delegate's and forwardable's take `*args, &block`).
+  - Timing (`ab.rb -r 6`, ns a call; CRuby / master / switch off / new, new over off): `bm0` 22.1 /
+    50.0 / 51.2 / 27.3 (0.53), `bm1` 24.2 / 51.4 / 51.3 / 26.5 (0.52), `bm2` 30.2 / 60.0 / 60.3 /
+    37.5 (0.62), `bmivar` 21.6 / 48.1 / 47.3 / 30.6 (0.65), `bmcall` 41.4 / 69.9 / 74.2 / 39.1
+    (0.53); the `def` controls and `bmcapt` level (0.90-1.01, overlap). An omitted optional argument
+    (`{ |x, y = 2| }` called with one) 93.9 -> 38.5. A body wrapped and then declined (a `return`, a
+    `nil.to_i`) costs what it did (0.99, 1.04 overlap).
+  - Slower: a body whose typed version keeps deopting (`{ |x| x + 1 }` called with an Integer and a
+    Float in turn) 98.2 -> 107.7 (1.10, alone, -r 8) - the stub's retire-and-retry cycle, which a
+    `def` of the same body pays as well (1.12 against -X:NoJIT).
+  - Matrices, CRuby against master against new: `Util/dmeth-jit-matrix.rb` (new: 31 rows - every
+    shape the JIT takes, captured locals read and written, the defining method's block, implicit and
+    explicit super, `__method__` under an alias, binding, instance_exec of the same Proc, define_method
+    with a Method/UnboundMethod/lambda, redefinition and remove_method while hot, a subclass override, a
+    module in two classes with different ivar types, refinements, Class.new constants, a kept keyword
+    hash), `Util/dmeth-matrix.rb`, `jit-matrix`, `jit-calls-matrix`, `block-given-matrix` with the JIT
+    on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` and the switch off: all identical to CRuby.
+    `Util/perf/inline-matrix.rb` (one case per process, the same modes): new identical to master;
+    both differ from CRuby in `tree_int_key` ("Object must be of type Int32." where CRuby says
+    "undefined method 'compare_to' for an instance of Integer"), as on master. IronRuby.Tests: the 69
+    registered tests that use define_method and the 20 named for the JIT pass.
+  - Found on master, not fixed: two define_method methods made from the same Proc are `==` as
+    UnboundMethods in CRuby and not in IronRuby (`W.instance_method(:n1) == W.instance_method(:n2)`).
+  - For the gate: the rule now calls a JIT stub for every eligible define_method method, so a
+    wrong typed body shows in any code that defines methods this way; the block's tree is kept on
+    its dispatcher for the life of the Proc when the JIT is on (one reference per eligible literal,
+    as `LoopInfo` already does); the generic body re-implements Proc.BuildCall's rule in C#
+    (`JitBlockMethod.Call0..CallN`): a difference in break/return/LambdaUnwinder handling would show
+    there first.
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R

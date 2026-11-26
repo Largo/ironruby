@@ -86,6 +86,35 @@ namespace IronRuby.Compiler.Ast {
             get { return PostParameterCount > 0; }
         }
 
+        /// <summary>
+        /// Parameters a method's typed body takes as a def's (JitStub.ParameterShape): plain mandatory locals, then
+        /// optional ones, no rest, post, block or keyword parameter.
+        /// </summary>
+        private bool IsJitMethodShape() {
+            if (HasFormalParametersInArray || ParameterCount > IronRuby.Runtime.Jit.JitStub.MaxArity) {
+                return false;
+            }
+            var signature = _parameters.Signature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                return false;
+            }
+            foreach (var parameter in _parameters.Mandatory) {
+                if (!(parameter is LocalVariable)) {
+                    return false;
+                }
+            }
+            foreach (var optional in _parameters.Optional) {
+                if (!(optional.Left is LocalVariable)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public LexicalScope/*!*/ DefinedScope {
+            get { return _definedScope; }
+        }
+
         private bool HasUnsplatParameter {
             get {
                 return _parameters.Unsplat != null;
@@ -384,6 +413,12 @@ namespace IronRuby.Compiler.Ast {
                 // can be is outlined into that loop once it is hot (BlockLoopSite)
                 blockDispatcher.LoopInfo = BlockLoopInfo.TryCreate(this, gen.Context, _definedScope.Depth,
                     gen.SourcePath + ":" + Location.Start.Line);
+            }
+            if (outerVariables == null && !hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval &&
+                IronRuby.Runtime.Jit.JitBlockMethod.Enabled && gen.Context.RubyOptions.Jit && IsJitMethodShape()) {
+                // -X:JIT: a block over none of the enclosing scope's locals may become the body of a method
+                // (define_method), which the method JIT can take as it takes a def's (JitBlockMethod)
+                blockDispatcher.JitAst = this;
             }
 
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
