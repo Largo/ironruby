@@ -6,9 +6,10 @@
 #
 # Each command runs with the library off (IR_STARTUP_DLL=none) and IR_STARTUP_DLL_TRACE=1, which names every Ruby file
 # the loader compiles from source; the list is the files of this tree's Src/StdLib that any command compiles, in the
-# order they were first loaded, minus EXCLUDED. A file is listed under the first command that loads it. The commands
-# run with this tree's ir.sh, or IR_TREE's (IR_CONFIG as set, else what ir.sh picks: the R2R host and the Release build
-# load the same files).
+# order they were first loaded, minus EXCLUDED and the files the compiler would leave out for what they use (refinements:
+# `IronRuby.Aot unsupported`, AotCompiler.UnsupportedFinder; it needs the compiler built, as build-startup.sh does). A file
+# is listed under the first command that loads it. The commands run with this tree's ir.sh, or IR_TREE's (IR_CONFIG as
+# set, else what ir.sh picks: the R2R host and the Release build load the same files).
 require "open3"
 
 ROOT = File.expand_path("../..", __dir__)
@@ -32,6 +33,17 @@ EXCLUDED = {
   "ruby/4.0/tmpdir.rb" => "an exception re-raised through a rescue clause (Dir::Tmpname.create) loses a frame in compiled code",
 }
 
+# {file => why} for the files the compiler leaves out of a library for what they use
+def unsupported(files)
+  aot = File.join(ROOT, "Util/aot/IronRuby.Aot/bin/Release/net10.0/IronRuby.Aot")
+  abort "startup-files.rb: no #{aot}; build it (Util/aot/build-startup.sh)" unless File.executable?(aot)
+  env = {}
+  env["DOTNET_ROOT"] = "/usr/local/dotnet" if !ENV["DOTNET_ROOT"] && File.executable?("/usr/local/dotnet/dotnet")
+  out, err, status = Open3.capture3(env, aot, "unsupported", *files.map { |f| File.join(STDLIB, f) })
+  abort "startup-files.rb: #{aot} unsupported failed:\n#{err}" unless status.success?
+  out.lines(chomp: true).to_h { |l| l.split(": ", 2) }.transform_keys { |f| f.delete_prefix(STDLIB) }
+end
+
 def loaded_files(args, stdin)
   env = { "IR_STARTUP_DLL" => "none", "IR_STARTUP_DLL_TRACE" => "1", "TERM" => "xterm" }
   cmd = [IR_SH, *args]
@@ -50,6 +62,9 @@ COMMANDS.each do |title, args, stdin|
   files.each { |f| seen[f] = true }
   sections << [title, files]
 end
+LEFT_OUT = unsupported(seen.keys)
+LEFT_OUT.each_key { |f| seen.delete(f) }
+sections.each { |_, files| files.reject! { |f| LEFT_OUT.key?(f) } }
 
 if ARGV.include?("--check")
   listed = File.readlines(LIST, chomp: true).reject { |l| l.strip.empty? || l.start_with?("#") }
@@ -70,7 +85,7 @@ File.open(LIST, "w") do |io|
   io.puts "# Written by startup-files.rb (ruby Util/aot/startup-files.rb rewrites it, --check checks it): the Ruby files these"
   io.puts "# commands load, in the order they first load them, compiled into IronRuby.Startup.dll by IronRuby.Aot startup."
   io.puts "# Paths are relative to this file. Left out:"
-  EXCLUDED.each { |f, why| io.puts "#   #{f}: #{why}" }
+  EXCLUDED.merge(LEFT_OUT).each { |f, why| io.puts "#   #{f}: #{why}" }
   sections.each do |title, files|
     io.puts "# #{title}"
     files.each { |f| io.puts "../../Src/StdLib/#{f}" }

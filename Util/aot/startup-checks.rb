@@ -50,6 +50,12 @@ class String
   alias_method :chomp, :__startup_checks_chomp
 end
 
+# irb's Tab completion: irb/completion.rb refines Binding (eval_methods), which compiled code does not run, so the
+# compiler leaves it out of the library; compiled, completion raised NoMethodError.
+require "irb"
+require "irb/completion"
+puts "irb completion: " + IRB::RegexpCompletor.new.completion_candidates("", "Strin", "", bind: binding).inspect
+
 # Interpolated strings with literal parts, which precompiled code makes from text.
 f = Fiber.new { 1 }
 puts "Fiber#inspect: " + f.inspect.sub(/0x\h+/, "0x").sub(/ \S+:\d+/, " file:line")

@@ -3,6 +3,7 @@
 # Paths are relative to this file. Left out:
 #   ruby/4.0/fileutils.rb: an exception re-raised through a rescue clause (FileUtils.mkdir_p) loses a frame in compiled code
 #   ruby/4.0/tmpdir.rb: an exception re-raised through a rescue clause (Dir::Tmpname.create) loses a frame in compiled code
+#   ruby/4.0/irb/completion.rb: refinements (`using' at line 164), which compiled code does not run
 # ir -e 1
 ../../Src/StdLib/ruby/4.0/gem_prelude.rb
 ../../Src/StdLib/ironruby/ruby4.rb
@@ -167,7 +168,6 @@
 ../../Src/StdLib/ruby/4.0/irb/helper_method/conf.rb
 ../../Src/StdLib/ruby/4.0/irb/inspector.rb
 ../../Src/StdLib/ruby/4.0/irb/input-method.rb
-../../Src/StdLib/ruby/4.0/irb/completion.rb
 ../../Src/StdLib/ruby/4.0/irb/ruby-lex.rb
 ../../Src/StdLib/ruby/4.0/irb/nesting_parser.rb
 ../../Src/StdLib/ruby/4.0/prism/visitor.rb

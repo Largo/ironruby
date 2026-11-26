@@ -436,12 +436,28 @@ namespace IronRuby.Runtime.Precompiled {
             get { return _runDepth > 0; }
         }
 
+        // the current interpreted frame when the innermost precompiled top level of this thread started (the require's)
+        [ThreadStatic]
+        private static Microsoft.Scripting.Interpreter.InterpretedFrame _runEnteredFrom;
+
+        /// <summary>
+        /// True while this thread runs the top level of a precompiled file and no interpreted frame has been entered since it
+        /// started: the current interpreted frame is then the one that required the file, below the compiled code, and not
+        /// the caller of whatever the compiled code calls now.
+        /// </summary>
+        internal static bool IsRunningAboveInterpretedFrames {
+            get { return _runDepth > 0 && ReferenceEquals(Microsoft.Scripting.Interpreter.InterpretedFrame.CurrentFrame.Value, _runEnteredFrom); }
+        }
+
         internal static object Run(Func<RubyScope, object, object>/*!*/ target, RubyScope/*!*/ scope) {
+            var enteredFrom = _runEnteredFrom;
+            _runEnteredFrom = Microsoft.Scripting.Interpreter.InterpretedFrame.CurrentFrame.Value;
             _runDepth++;
             try {
                 return target(scope, scope.SelfObject);
             } finally {
                 _runDepth--;
+                _runEnteredFrom = enteredFrom;
             }
         }
 
@@ -572,6 +588,11 @@ namespace IronRuby.Runtime.Precompiled {
                 var fileHashes = new System.Collections.Generic.Dictionary<string, string>();
                 for (int i = 0; i < info.Files.Length; i++) {
                     string file = Path.IsPathRooted(info.Files[i]) ? info.Files[i] : runtimeRoot + info.Files[i], hash = info.Hashes[i];
+                    // no hash: the compiler left the file out after it had compiled it (IronRuby.Aot's AotCompiler, too large
+                    // for arm64), and it is compiled from source
+                    if (hash == null) {
+                        continue;
+                    }
                     fileHashes[file] = hash;
                     // checked when the file is loaded, not now: most of a library's files may never be
                     Func<bool> isCurrent = () => {

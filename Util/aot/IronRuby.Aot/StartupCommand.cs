@@ -159,7 +159,11 @@ namespace IronRuby.Aot {
                     foreach (var cached in Directory.GetFiles(cache, "IronRuby.Startup*.dll")) {
                         File.Copy(cached, Path.Combine(outDir, Path.GetFileName(cached)), true);
                     }
-                    Console.Error.WriteLine($"cached {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count} files): nothing it is made from has changed");
+                    // the files it left out, as the build that made it said
+                    string leftOut = Path.Combine(cache, LeftOutFile);
+                    var leftOutLines = File.Exists(leftOut) ? File.ReadAllLines(leftOut) : new string[0];
+                    foreach (var line in leftOutLines) Console.Error.WriteLine(line);
+                    Console.Error.WriteLine($"cached {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count - leftOutLines.Length} files): nothing it is made from has changed");
                     return 0;
                 }
             }
@@ -169,11 +173,14 @@ namespace IronRuby.Aot {
                 OutputDirectory = Path.GetFullPath(outDir), DependencyIds = ids.ToArray(),
                 Root = root, RootFromLibrary = Path.GetRelativePath(host, root),
                 // arm64 ReadyToRun code of a method over 1 MB is wrong (AotCompiler.LargeMethodsJittedOver): a top level that
-                // large is split (below), and one of 128 KB of IL or more that remains (arm64 code is at most ~4.4x its IL)
-                // is left to the JIT
-                // (IR_AOT_LARGE_JIT=0 compiles them all, to see the check in Crossgen catch it)
-                LargeMethodsJittedOver = r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) &&
-                    Environment.GetEnvironmentVariable("IR_AOT_LARGE_JIT") != "0" ? LargeMethodILBytes : 0,
+                // large is split (below), and any method of 128 KB of IL or more that remains (arm64 code is at most ~4.4x its
+                // IL) is left to the JIT. Not on x64, whose code of such a method is right.
+                // (IR_AOT_LARGE_JIT=0 compiles them all, to see the check in Crossgen catch it; =1 does it on any target)
+                LargeMethodsJittedOver = Environment.GetEnvironmentVariable("IR_AOT_LARGE_JIT") switch {
+                    "0" => 0,
+                    "1" => LargeMethodILBytes,
+                    _ => r2r && rid.EndsWith("-arm64", StringComparison.Ordinal) ? LargeMethodILBytes : 0
+                },
                 // and before that, a top level that large is split into methods of their own, which leaves the JIT nothing
                 // to do (IR_AOT_SPLIT=1 splits on any target, to test it; =0 splits none)
                 SplitTopLevelOver = Environment.GetEnvironmentVariable("IR_AOT_SPLIT") switch {
@@ -183,7 +190,7 @@ namespace IronRuby.Aot {
                 }
             };
             compiler.Compile(null, files, dll);
-            Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count} files) in {sw.ElapsedMilliseconds} ms");
+            Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes, {files.Count - compiler.LeftOut.Count} files) in {sw.ElapsedMilliseconds} ms");
             foreach (var kv in compiler.Stats.OrderBy(kv => kv.Key)) {
                 Console.Error.WriteLine($"  {kv.Value,7}  {kv.Key}");
             }
@@ -218,6 +225,7 @@ namespace IronRuby.Aot {
                 foreach (var old in Directory.GetFiles(cache)) File.Delete(old);
                 foreach (var asm in outputs) File.Copy(asm, Path.Combine(cache, Path.GetFileName(asm)));
                 File.WriteAllText(Path.Combine(cache, "key"), key + "\n");
+                File.WriteAllLines(Path.Combine(cache, LeftOutFile), compiler.LeftOut.Select(f => $"left out {f.Path}: {f.Reason}"));
             }
             return 0;
         }
@@ -258,6 +266,8 @@ namespace IronRuby.Aot {
             Console.Error.WriteLine($"verified {count} methods in {sw.ElapsedMilliseconds} ms: {invalid.Count} rejected by the JIT");
             return invalid;
         }
+
+        private const string LeftOutFile = "left-out.txt";
 
         internal const int LargeMethodILBytes = 128 * 1024;
         // AotCompiler.SplitTopLevel splits a top level of more expression nodes than this: ruby4.rb's has ~8,900 (2.1 MB of

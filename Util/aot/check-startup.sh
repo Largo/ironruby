@@ -9,6 +9,8 @@
 #   0. Before both: the library matches its sources. A file edited since the library was built is compiled from
 #      source whenever it is loaded - correct, but as slow as without the library (an edited ruby4.rb: `ir -e 1' 486 ->
 #      564 ms) - and nothing else says so. The fix is a rebuild (a Release build, or Util/aot/build-startup.sh).
+#   3. A library compiled from Util/aot/startup-fixtures: what README part A lists as not run in compiled code prints the
+#      same compiled, and the compiler leaves out a file that uses refinements, which compiled code does not run.
 #   With --list, also whether startup-files.txt still lists every file the commands it was made from load
 #   (ruby Util/aot/startup-files.rb --check, about a minute; a warning, not a failure).
 #
@@ -77,6 +79,34 @@ elif [ "$out" != "true" ]; then
   status=1
 else
   echo "ok: in a copy of the tree the library is used, and load of an edited file runs the edit"
+fi
+# 3. a library of the fixtures (startup-fixtures/): what compiled code must run as the interpreter does (eval and
+#    binding, define_method, TracePoint, the location const_set and autoload record in a block) prints the same with it,
+#    and a file that uses refinements, which compiled code does not run, is left out, and the compiler says so
+FIX="$COPY/Src/Console/bin/fixtures/$TFM"
+mkdir -p "$FIX" "$COPY/Util/aot"
+cp -r "$IR_ROOT/Util/aot/startup-fixtures" "$COPY/Util/aot/"
+if [ -z "$DOTNET_ROOT" ] && [ -x /usr/local/dotnet/dotnet ]; then
+  DOTNET_ROOT=/usr/local/dotnet
+  export DOTNET_ROOT
+fi
+"$IR_ROOT/Util/aot/IronRuby.Aot/bin/Release/$TFM/IronRuby.Aot" startup -o "$FIX" --tfm "$TFM" --host "$COPY/$HOST" \
+  "$COPY/Util/aot/startup-fixtures/not-run.rb" "$COPY/Util/aot/startup-fixtures/refinements.rb" >"$TMP/fixtures.log" 2>&1
+IR_STARTUP_DLL="$FIX/IronRuby.Startup.dll" IR_STARTUP_DLL_TRACE=1 "$COPY/ir.sh" "$COPY/Util/aot/startup-fixtures/main.rb" >"$TMP/fix-on" 2>"$TMP/fix-trace"
+IR_STARTUP_DLL=none "$COPY/ir.sh" "$COPY/Util/aot/startup-fixtures/main.rb" >"$TMP/fix-off" 2>&1
+if ! grep -q "^left out .*/refinements.rb: refinements" "$TMP/fixtures.log" || ! grep -q "^wrote .*(.*, 1 files)" "$TMP/fixtures.log"; then
+  echo "FAIL: the compiler did not leave out a file that uses refinements (startup-fixtures/refinements.rb):"
+  cat "$TMP/fixtures.log"
+  status=1
+elif ! grep -q "IronRuby.Startup: 0 of 1 files stale" "$TMP/fix-trace"; then
+  echo "FAIL: the fixtures' library was not used"
+  status=1
+elif ! diff "$TMP/fix-off" "$TMP/fix-on" >"$TMP/diff"; then
+  echo "FAIL: startup-fixtures/main.rb differs with its library (< without, > with):"
+  cat "$TMP/diff"
+  status=1
+else
+  echo "ok: the fixtures print the same compiled ($(wc -l <"$TMP/fix-on") lines), and the file with refinements is left out"
 fi
 if [ "$1" = "--list" ]; then
   ruby "$IR_ROOT/Util/aot/startup-files.rb" --check || echo "WARNING: startup-files.txt is not what the commands load"
