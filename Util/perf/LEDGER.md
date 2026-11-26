@@ -981,11 +981,14 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     which costs about 150-200 instructions more than a scope made at entry. `inject` with a
     block, in the same method, lost its scope (658 -> 498 B, 3% fewer instructions). A
     C#-only shape the change cannot reach (`minmax`) read 4.6% more in that table, so 5% is
-    about the floor for one shape there. Untried: a site that has answered
-    `LightScopeRequired` remembers it, and the frame makes its scope before that call the
-    next time without asking; or the prelude gives such a method's rare path a method of its
-    own, so that the common path stays without a splat or a scope-reading callee
-    (`/perf-core`).
+    about the floor for one shape there. Tried and rejected (perf/lsite, see Rejected): a
+    site that has answered `LightScopeRequired` remembers it and skips the light site from
+    then on - the light site is +7 of the +232 instructions a light `gsub` pays; the rest is
+    the late scope's arm in the body and the light frame's exit. Untried: a light method
+    that has made its scope late once enters through its scoped body from then on (a
+    per-method memory, compiled twice); or the prelude gives such a method's rare path a
+    method of its own, so that the common path stays without a splat or a scope-reading
+    callee (`/perf-core`).
     The second: `w_splat` is 366 ns against 188 for the bare call (CRuby 194 and 71), and
     still about 185 B a call more than the block-passing wrapper: the rest Array the
     caller's rule builds and its unpacking into the callee. Untried: a rule for a splat
@@ -4334,6 +4337,56 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/lsite (/perf-step, 2026-11-26) - a light site that remembers it needed the scope**
+  (gap 16; switch `IR_LIGHT_REMEMBER`). In `LightFrameRewriter.MakeLightCall`, each site
+  got a box (`StrongBox<object>`, a constant of the body like a regex literal's cache, set
+  only to `RubyOps.LightScopeRequired`): `#r = memory ?? light(...)`, and the arm that makes
+  the scope stores the marker when the box is empty. A stale read costs an ask or a scope,
+  never a wrong answer, since the ordinary site with the scope is what the light one stands
+  in for. The AOT compiler had to learn to re-create a set box empty. First version
+  (`memory == null ? (r = light(), r == marker ? memory = r : r) : marker`) cost more.
+  - **How it was measured.** No `ab.rb -i` here: the container refuses
+    `perf_event_open`, and timing (`ab.rb -r 10`) spread 5-15% on 50-500 ns shapes. New:
+    `Util/perf/callgrind/count.sh`, callgrind instrumenting only the shape files' sections,
+    main thread only, tiered compilation off: steady to 0.01% section to section and process
+    to process (two processes of one arm: 8,996.6 / 8,993.3), but larger than the counter's
+    numbers and dependent on which shapes ran before in the process, so arms are compared
+    with the same shape list. N=20,000.
+  - **Regex shapes** (instructions a call; on = scope at entry, all = `IR_LIGHT_REGEX=all`;
+    remember off -> on): `gsub` on 12,719 -> 12,751, all 12,954 -> 12,971 (all/on 1.017);
+    `split` all 11,115 -> 11,240 (1.029 against on); `case when /z/` 8,908 -> 8,870 (1.029);
+    `=~ /d/` 6,014 -> 6,018 (1.028). Controls: `size` 1,538 -> 1,575, `tilde` (a scoped
+    method) 6,321 -> 6,357, `match?` 4,968 -> 5,038: +37 on every shape, the cost of the
+    one node in the shape file's own driver loop, a light block run by the DLR
+    interpreter (the first version: +118).
+  - **inject(:+) and zip** (core-small.rb; `IR_LIGHT_FRAMES=0` / remember off / on):
+    `inject_sym` 9,268 / 9,132 / 9,345, `zip` 13,168 / 13,133 / 13,256, `inject` with a block
+    10,418 / 10,276 / 10,643, `minmax` (control) 4,793 / 4,503 / 4,594. In this measure the
+    light frames already did not lose against scoped ones, and remembering made all four
+    worse (1.009-1.036): the prelude's light frames run interpreted at first and pay the
+    node on every light call.
+  - **Why it cannot work: the light site is not the cost.** callgrind with the CLR's perf
+    map, one `gsub` section, light (all) against scoped (on), +232 instructions a call: the
+    method's own compiled body +165 (the late scope's arm: `MaterializeLocals`,
+    `CreateMethodScopeLazy`'s arguments, the test), `CreateMethodScopeLazy` +35 against
+    `CreateMethodScope` 57 less, `LeaveLightMethodFrameSlow` +23, `LeaveLightMethodFrame`
+    +17, `TakePendingCallee(Slow)` +30, `EnterLightMethod` +12; the light site's rule (the
+    dynamic `CallSite.Target`) +7. Skipping the site saves those 7 and adds the node.
+  - Kept: `Util/light-remember-matrix.rb` (a site that needed the scope once and then gets a
+    receiver whose method does not, and the reverse, alternating; String#tr and String#sub
+    redefined at 1,000 calls and put back at 2,000; method_missing; a protected method of the
+    same class then a public one; a private method with an explicit receiver; super into
+    String#sub and String#gsub with a block; block_given? in a block of the method; binding
+    after a scope-needing call; two threads on one site with their own `$~`; a refinement
+    in force, and a method defined before `using`). It, regex-light, block-given and
+    light-rest print CRuby 4.0's output on the baseline and on the candidate, each as built,
+    with `IR_LIGHT_REMEMBER=0`, `IR_LIGHT_FRAMES=0`, `IR_LIGHT_REGEX=all`, `-X:NoJIT
+    -X:NoOSR` and `-X:NoJITCalls`; hot-shapes prints the baseline's in every mode (its
+    known `Encoding::CompatibilityError` for CRuby's FrozenError). Not run: `IR_CONFIG=R2R`.
+  - Learned: what a light frame that makes its scope late pays is the frame, not the
+    question - to stop losing, such a method has to enter scoped next time (gap 16's
+    "Untried"), not ask less.
 
 - **perf/evalc da03f675 and its second pass (round thirty-one, 2026-11-22) - a cache of the
   compiled code of eval'd strings** (gap 31). Merged, then taken out (f133bcfa) after an
