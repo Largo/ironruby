@@ -2032,7 +2032,7 @@ ArgumentError: invalid character
 GB18030 [1, 0, 0] true
 Emacs-Mule [16, 255] false
 ISO-8859-1 [255] true
-RangeError: 256 out of char range
+ArgumentError: invalid character
 ASCII-8BIT [128] true
 RangeError: 256 out of char range
 UTF-8 [227, 129, 130] true
