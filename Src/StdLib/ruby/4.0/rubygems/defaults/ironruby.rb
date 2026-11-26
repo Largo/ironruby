@@ -322,7 +322,7 @@ module Gem
   #
   # Set IRONRUBY_NO_GEM_CACHE=1 to fall back to upstream's eager scan.
 
-  IRONRUBY_DEFAULT_SPEC_INDEX_VERSION = 1 # :nodoc:
+  IRONRUBY_DEFAULT_SPEC_INDEX_VERSION = 2 # :nodoc:
   __hide_constant__ :IRONRUBY_DEFAULT_SPEC_INDEX_VERSION
 
   ##
@@ -347,13 +347,13 @@ module Gem
   ##
   # Cheap fingerprint of the default specifications directory: every gemspec's
   # name, size and mtime.  Installing, removing or updating a default gem
-  # changes it, which is exactly when the mapping has to be rebuilt.
+  # changes it, which is exactly when the mapping has to be rebuilt.  It is
+  # read in one pass over the directory (IronRuby.__gemspec_stamp__): a glob
+  # and a File::Stat per gemspec took ~13 ms of every boot, and a boot that
+  # finds the cache valid needs no list of the files.
 
-  def self.ironruby_default_spec_stamp(files) # :nodoc:
-    files.sort.map do |file|
-      stat = File.stat(file)
-      [File.basename(file), stat.size, stat.mtime.to_i]
-    end
+  def self.ironruby_default_spec_stamp(dir) # :nodoc:
+    IronRuby.__send__(:__gemspec_stamp__, dir)
   end
 
   ##
@@ -386,16 +386,20 @@ module Gem
   # while recording the mapping for next time.
 
   def self.ironruby_load_default_specs # :nodoc:
+    # Upstream's load_defaults globs with Gem::Util, which loads rubygems/util
+    # at boot; a boot that finds the cache valid needs no glob, and loads it
+    # here so that $LOADED_FEATURES is what upstream's boot leaves.
+    require_relative "../util"
     dir = Gem.default_specifications_dir
-    files = Gem::Util.glob_files_in_dir("*.gemspec", dir)
-    return if files.empty?
 
     stamp = nil
     cached = nil
     features = nil
     unless ENV["IRONRUBY_NO_GEM_CACHE"]
       begin
-        stamp = ironruby_default_spec_stamp(files)
+        stamp = ironruby_default_spec_stamp(dir)
+        # no gemspec: nothing to register (upstream's glob finds none either)
+        return if stamp.empty?
         data = File.open(ironruby_default_spec_index_file, "rb", &:read)
         data = Marshal.load(data)
         if data.is_a?(Hash) &&
@@ -419,6 +423,9 @@ module Gem
       ironruby_activate_already_loaded_defaults(cached)
       return
     end
+
+    files = Gem::Util.glob_files_in_dir("*.gemspec", dir)
+    return if files.empty?
 
     loaded_before = $LOADED_FEATURES.dup
 
