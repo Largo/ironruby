@@ -660,7 +660,14 @@ namespace IronRuby.Builtins {
                 // The buffer is a capacity, not a length: searching for the whole of it would look
                 // for the unused tail as well, and a needle built by growing one - String#pack, say -
                 // would never be found.
-                return str.IndexOf(ExactData(), start, count);
+                if (str is BinaryContent) {
+                    return str.IndexOf(ExactData(), start, count);
+                }
+                // A receiver held as characters is searched for the needle's characters. Its
+                // IndexOf(byte[]) means bytes: on a receiver whose characters are not its bytes (é)
+                // it switched the receiver to bytes and answered a byte offset where a CLR index was
+                // asked for - "é\"".index("\"".b) was 2.
+                return str.IndexOf(DataToString(), start, count);
             }
 
             /// <summary>
@@ -703,7 +710,11 @@ namespace IronRuby.Builtins {
             }
 
             public override int LastIndexIn(Content/*!*/ str, int start, int count) {
-                return str.LastIndexOf(ExactData(), start, count);
+                // as IndexIn
+                if (str is BinaryContent) {
+                    return str.LastIndexOf(ExactData(), start, count);
+                }
+                return str.LastIndexOf(DataToString(), start, count);
             }
 
             #endregion

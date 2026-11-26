@@ -545,7 +545,13 @@ namespace IronRuby.Builtins {
             if (!self.IsInitialized) {
                 throw RubyExceptions.CreateTypeError("uninitialized Regexp");
             }
-            return str != null && self.MatchFromCharacter(str, start, false) != null;
+            if (str == null) {
+                return false;
+            }
+            // IR_FAST_SEARCH=0: the MatchData is made and thrown away, as it used to be.
+            return MutableStringOps.FastSearchEnabled
+                ? self.IsMatchFromCharacter(str, start)
+                : self.MatchFromCharacter(str, start, false) != null;
         }
 
         [RubyMethod("match?")]

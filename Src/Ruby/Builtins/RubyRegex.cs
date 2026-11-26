@@ -1462,18 +1462,29 @@ namespace IronRuby.Builtins {
         /// Ruby's pos argument - Regexp#match(str, pos), String#index(re, pos), #match? - is a
         /// character index, negative from the end, while Match and LastMatch take the index
         /// space the regex runs in: the CLR chars of the string. Answers false when the
-        /// position is outside the string.
+        /// position is outside the string - before the regex is made for the input, which checks
+        /// its encoding: MRI answers nil (false) for /é/.match?(binary, 100) and does not raise.
         /// </summary>
         private bool ToSearchStart(MutableString/*!*/ input, ref int start, bool clamp) {
-            if (start == 0 || input.KnowsCharIndexIsClrIndex) {
+            if (start == 0) {
                 return true;
+            }
+            if (input.KnowsCharIndexIsClrIndex) {
+                return ToSearchStart(input.GetCharCount(), ref start, clamp);
             }
             input.PrepareForCharacterRead();
             if (!input.HasSurrogatePairs()) {
-                return true;
+                return ToSearchStart(input.GetCharCount(), ref start, clamp);
             }
 
-            int length = input.GetCharacterCount();
+            if (!ToSearchStart(input.GetCharacterCount(), ref start, clamp)) {
+                return false;
+            }
+            start = input.ToClrIndex(start);
+            return true;
+        }
+
+        private static bool ToSearchStart(int length, ref int start, bool clamp) {
             if (start < 0) {
                 start += length;
                 if (start < 0) {
@@ -1486,8 +1497,6 @@ namespace IronRuby.Builtins {
                 }
                 start = length;
             }
-
-            start = input.ToClrIndex(start);
             return true;
         }
 
@@ -1515,6 +1524,29 @@ namespace IronRuby.Builtins {
                 return null;
             }
             return Match(input, start, freezeInput);
+        }
+
+        /// <summary>
+        /// Whether <see cref="MatchFromCharacter(MutableString, int, bool)"/> would find a match, for
+        /// Regexp#match?: the same checks and the same search, but the engine is only asked whether
+        /// there is one (Regex.IsMatch), so neither a Match with its groups nor a MatchData nor a
+        /// frozen copy of the input is made. A subject with a surrogate pair needs the Match to tell
+        /// a match between the two halves of a pair from one Ruby has, and takes the long way.
+        /// </summary>
+        public bool IsMatchFromCharacter(MutableString/*!*/ input, int start) {
+            if (!ToSearchStart(input, ref start, false)) {
+                return false;
+            }
+            string str;
+            bool astral;
+            Regex regex = Transform(input, out str, out astral, true);
+            if (start < 0) {
+                start += str.Length;
+            }
+            if (start < 0 || start > str.Length) {
+                return false;
+            }
+            return astral ? MatchOutsidePairs(regex, str, start).Success : regex.IsMatch(str, start);
         }
 
         /// <summary>
