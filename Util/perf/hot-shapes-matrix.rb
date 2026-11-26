@@ -924,7 +924,7 @@ ldc = LDCall.new; ldh = {}; ldmods = [Integer, String, Comparable, Kernel, LDMod
 ldout = []
 20_000.times do |i|
   row = [ldc.band(i, 12), ldc.slice("hello#{i % 3}"), ldc.join("d#{i % 2}"), ldc.exist("/nonexistent#{i % 2}"),
-         ldc.hset(ldh, i % 4), ldc.fetch([1, 2], i % 3), (ldc.up(i.odd? ? LDStr.new("ab") : "cd") rescue :nomethod),
+         ldc.hset(ldh, i % 4), ldh[i % 4], ldc.fetch([1, 2], i % 3), (ldc.up(i.odd? ? LDStr.new("ab") : "cd") rescue :nomethod),
          (ldc.modf(i) rescue :nomethod), ldc.nm(ldmods[i % 7]), (ldc.miss(i.odd? ? LDMiss.new : "q") rescue :nomethod),
          ldc.bg, ldc.bg { 1 }, ldc.lv(i), ldc.bnd(i % 5), ldc.bxor(i, 1)]
   ldout << [i, row] if i % 1000 == 7 || (i > 9_995 && i < 10_010)
