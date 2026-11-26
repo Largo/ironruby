@@ -1329,6 +1329,11 @@ namespace IronRuby.Runtime {
         // later `load "ruby4.rb"` by a program is not.
         private Thread _corePreludeLoaderThread;
 
+        // The core prelude is loading, with background compilations held back (see LoadCorePrelude):
+        internal bool HoldsBackCompilation {
+            get { return _corePreludeLoaderThread != null; }
+        }
+
         // The directory of the core prelude's ruby4.rb, with a trailing separator, once it has started.
         private string _corePreludeDirectory;
 

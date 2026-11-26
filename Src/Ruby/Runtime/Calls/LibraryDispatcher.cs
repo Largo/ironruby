@@ -869,12 +869,150 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
-        // One call more made through the dispatcher, of the budget it may make (see _remaining)
+        // One call more made through the dispatcher, of the budget it may make (see _remaining). A spent dispatcher that bridges
+        // (see _bridge) makes its calls with the budget at 0 and leaves it there.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void Spend() {
-            if (--_remaining == 0) {
+            if (_remaining > 0 && --_remaining == 0) {
                 OnSpent();
             }
+        }
+
+        // Whether the dispatcher may make a call: it has budget left, or it bridges to a rule still being compiled.
+        private bool HasBudget {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get { return _remaining > 0 || _bridge != null && _bridge.IsPending; }
+        }
+
+        /// <summary>
+        /// IR_HOT_BRIDGE=0: the rule of a hot call (see <see cref="IsHot"/>) is light-compiled and run interpreted until its background
+        /// compilation lands, rather than the spent dispatcher making the calls (see <see cref="TryBridge"/>).
+        /// </summary>
+        internal static readonly bool HotBridgeEnabled = Environment.GetEnvironmentVariable("IR_HOT_BRIDGE") != "0";
+
+        /// <summary>
+        /// The rule of a hot call, compiled in the background while the spent dispatcher that made the call hot makes its calls again.
+        /// </summary>
+        /// <remarks>
+        /// A hot call's rule was light-compiled (the interpreter's instructions, a CallInstruction per new method signature, the
+        /// LightLambda's delegate) and then, two calls later, compiled in the background (see GetRuleCompilationThreshold): the light
+        /// compile served the few calls until the compiled rule landed - 40-55 of the ~250 rules `gem list' and irb build.
+        /// The spent dispatcher has made 200 such calls already: it makes them until the compiled rule lands. It then declines them, and
+        /// the bind that follows a decline - the call is hot, and the dispatcher would take it - hands out the compiled rule (as the
+        /// interpreter hands out a compiled rule, DynamicUtils.LightBind).
+        /// </remarks>
+        internal abstract class Bridge {
+            // 0 compiling, 1 compiled, 2 failed (the site binds a rule as it did before):
+            private int _state;
+
+            internal bool IsPending {
+                get { return Volatile.Read(ref _state) == 0; }
+            }
+
+            internal bool IsCompiled {
+                get { return Volatile.Read(ref _state) == 1; }
+            }
+
+            protected void Complete(bool compiled) {
+                Volatile.Write(ref _state, compiled ? 1 : 2);
+            }
+
+            internal abstract object CompiledTarget { get; }
+        }
+
+        internal sealed class Bridge<T> : Bridge where T : class {
+            private T _compiled;
+
+            internal void Start(Expression<T>/*!*/ rule) {
+                new System.Threading.Tasks.Task(() => {
+                    try {
+                        _compiled = rule.Compile();
+                        Complete(true);
+                    } catch (Exception) {
+                        Complete(false);
+                    }
+                }).Start();
+            }
+
+            internal override object CompiledTarget {
+                get { return _compiled; }
+            }
+        }
+
+        // set once, when the dispatcher bridges (see TryBridge):
+        private volatile Bridge _bridge;
+
+        /// <summary>
+        /// Has a spent dispatcher of the binder that would take a call on the target make the calls again until the rule of this call,
+        /// compiled in the background, lands: returns the dispatcher's delegate of the site's type - or the compiled rule, if the
+        /// dispatcher has bridged and the rule has landed - or null if there is no such dispatcher (or it bridges to a rule of another
+        /// type, or one not compiled yet: the site gets a rule of its own, as before).
+        /// </summary>
+        internal static T TryBridge<T>(RubyCallAction/*!*/ binder, object target, object[]/*!*/ args) where T : class {
+            var spent = Volatile.Read(ref binder.SpentDispatchers);
+            if (spent == null) {
+                return null;
+            }
+            LibraryDispatcher dispatcher = null;
+            for (int i = 0; i < spent.Length; i++) {
+                if (spent[i].IsCurrent(target)) {
+                    dispatcher = spent[i];
+                    break;
+                }
+            }
+            if (dispatcher == null) {
+                return null;
+            }
+            var current = dispatcher._bridge;
+            if (current != null) {
+                // the compiled rule, once for each decline: should its test fail for this call, the site's next bind builds a rule
+                // of its own, as an interpreted rule's site does when its compiled rule fails (DynamicUtils.LightBind)
+                if (LandedBridge != current) {
+                    return null;
+                }
+                LandedBridge = null;
+                var compiled = current.CompiledTarget as T;
+                if (compiled != null && compiled.GetType() == typeof(T)) {
+                    if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "bridge-landed";
+                    return compiled;
+                }
+                return null;
+            }
+            object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(typeof(T)));
+            if (result.GetType() != typeof(T)) {
+                return null;
+            }
+            var rule = binder.BuildRuleLambda<T>(args);
+            var bridge = new Bridge<T>();
+            #pragma warning disable 420 // a reference to a volatile field is not treated as volatile: Interlocked is
+            if (Interlocked.CompareExchange(ref dispatcher._bridge, bridge, null) != null) {
+            #pragma warning restore 420
+                return null;
+            }
+            bridge.Start(rule);
+            if (PhaseTimer.BindTrace) PhaseTimer.BindKind = "bridge";
+            return (T)result;
+        }
+
+        // The bridge whose dispatcher declined a call it would have made because the rule has landed, for the bind that follows on
+        // this thread (see TryBridge):
+        [ThreadStatic]
+        private static Bridge LandedBridge;
+
+        // A spent dispatcher declines the call, unless it bridges to a rule that has not landed yet:
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool CanCallSpent(object self) {
+            var bridge = _bridge;
+            if (bridge == null || !IsCurrent(self)) {
+                return false;
+            }
+            if (bridge.IsPending) {
+                return true;
+            }
+            if (bridge.IsCompiled) {
+                LandedBridge = bridge;
+            }
+            return false;
         }
 
         private void SetBudget(RubyCallAction/*!*/ binder, RubyContext/*!*/ context) {
@@ -965,7 +1103,7 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool CanCall(object self) {
-            return _remaining > 0 && IsCurrent(self);
+            return (_remaining > 0) ? IsCurrent(self) : CanCallSpent(self);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1044,7 +1182,7 @@ namespace IronRuby.Runtime.Calls {
             if (_rubyCall != null) {
                 // the rule passes the block and the arguments as they are (RubyMethodInfo.BuildCallNoFlow):
                 Proc rubyBlock = blockArg as Proc;
-                if (_remaining <= 0 || blockArg != null && rubyBlock == null || _splatCount >= 0 && (args = ExpandSplat(args)) == null) {
+                if (!HasBudget || blockArg != null && rubyBlock == null || _splatCount >= 0 && (args = ExpandSplat(args)) == null) {
                     result = null;
                     return false;
                 }
@@ -1059,7 +1197,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (_send != null) {
                 Proc sendBlock = blockArg as Proc;
-                if (_remaining <= 0 || blockArg != null && sendBlock == null || !_send.Matches(args)) {
+                if (!HasBudget || blockArg != null && sendBlock == null || !_send.Matches(args)) {
                     result = null;
                     return false;
                 }
@@ -1074,7 +1212,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (_construction != null) {
                 Proc initializerBlock = blockArg as Proc;
-                if (_remaining <= 0 || !_construction.IsCurrent(args.Length) || blockArg != null && initializerBlock == null) {
+                if (!HasBudget || !_construction.IsCurrent(args.Length) || blockArg != null && initializerBlock == null) {
                     result = null;
                     return false;
                 }
@@ -1088,7 +1226,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             Proc block = blockArg as Proc;
-            if (_remaining <= 0 || blockArg != null && block == null ||
+            if (!HasBudget || blockArg != null && block == null ||
                 _splatCount >= 0 && ((args = ExpandSplat(args)) == null || _splatCount > 0 && RubyOps.IsKeywordArgumentsHash(args[args.Length - 1])) ||
                 !Matches(block, args)) {
                 result = null;

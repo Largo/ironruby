@@ -115,6 +115,15 @@ namespace IronRuby.Runtime.Calls {
                 LibraryDispatcher.GetRuleCompilationThreshold(this, args[targetIndex], context) : context.CompilationThreshold;
         }
 
+        internal override T BindBridge<T>(object[]/*!*/ args, RubyContext/*!*/ context) {
+            int targetIndex = Signature.HasScope ? 1 : 0;
+            if (!LibraryDispatcher.HotBridgeEnabled || Context == null || targetIndex >= args.Length ||
+                context.Loader.HoldsBackCompilation) {
+                return null;
+            }
+            return LibraryDispatcher.TryBridge<T>(this, args[targetIndex], args);
+        }
+
         protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             // IsVariableCall only decides which error a call that finds no method raises; a dispatcher
             // is only made for a method that was found, and hands every other case back to the
