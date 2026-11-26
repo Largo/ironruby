@@ -12424,18 +12424,11 @@ class << Struct
     end
 
     klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
-    # klass is a new receiver: a call like klass.define_singleton_method would bind a rule
-    # of its own, every time (hundreds of microseconds). The methods called through
-    # bind_call share one rule - and are the built-ins, as in MRI's struct.c.
+    # klass is a new receiver: a call like klass.instance_variable_set would bind a rule of its
+    # own, every time (hundreds of microseconds). The methods called through bind_call share
+    # one rule. The class's keyword_init? and inspect (MRI's setup_struct) are RubyStruct's and
+    # read the option from here.
     ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :@__keyword_init__, keyword_init)
-    define_singleton = ::Kernel.instance_method(:define_singleton_method)
-    # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
-    # a subclass answers its superclass's (MRI's struct_ivar_get)
-    define_singleton.bind_call(klass, :keyword_init?) { __keyword_init__ }
-    if keyword_init
-      # MRI: #<Class:0x...>(keyword_init: true)
-      define_singleton.bind_call(klass, :inspect) { "#{super()}(keyword_init: true)" }
-    end
     ::Module.instance_method(:module_eval).bind_call(klass, &block) if block
     klass
   end
