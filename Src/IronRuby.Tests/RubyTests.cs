@@ -1394,6 +1394,7 @@ namespace IronRuby.Tests {
                 Hash_FetchErrorEllipsis1,
                 Hash_InitializeCopyIsReplace1,
                 Hash_UpdateStringKey1,
+                Hash_StringSubclassKey1,
                 Hash_EqlHashRehash1,
                 Enumerable_PatternUnusedBlockWarning1,
                 Enumerable_PredicatePattern1,
