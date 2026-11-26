@@ -234,11 +234,20 @@ if [ "${IR_COMPOSITE:-1}" != 0 ]; then
   jitlog=$(mktemp)
   jitpath=$jitlog
   case "$RID" in win-*) jitpath=$(cygpath -w "$jitlog") ;; esac
-  DOTNET_JitStdOutFile="$jitpath" DOTNET_JitDisasmSummary=1 with_timeout 120 stage_ir -e 1 > /dev/null || true
-  jitted=$(grep "JIT compiled" "$jitlog" | grep -v "dynamicClass" | grep -c "Tier0" || true)
+  status=0
+  DOTNET_JitStdOutFile="$jitpath" DOTNET_JitDisasmSummary=1 with_timeout 120 stage_ir -e 1 > /dev/null || status=$?
+  jitted=
+  # an empty log (a failed probe, or a runtime that ignores the knob) is no count, not a count of 0
+  if [ $status = 0 ] && grep -q "JIT compiled" "$jitlog"; then
+    jitted=$(grep "JIT compiled" "$jitlog" | grep -v "dynamicClass" | grep -c "Tier0" || true)
+  fi
   rm -f "$jitlog"
-  startup_note "\`ir -e 1\` JITs $jitted methods at Tier0 (startup profile Build/startup.mibc of $(git -C "$IR_ROOT" log -1 --format=%cs -- Build/startup.mibc 2>/dev/null))"
-  if [ "${jitted:-0}" -gt 60 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+  if [ -z "$jitted" ]; then
+    startup_note "no Tier0 count for \`ir -e 1\`: the probe failed (exit $status) or wrote no JIT log"
+  else
+    startup_note "\`ir -e 1\` JITs $jitted methods at Tier0 (startup profile Build/startup.mibc of $(git -C "$IR_ROOT" log -1 --format=%cs -- Build/startup.mibc 2>/dev/null))"
+  fi
+  if [ -n "$jitted" ] && [ "$jitted" -gt 60 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
     echo "::warning::$NAME: ir -e 1 JITs $jitted methods at Tier0; Build/startup.mibc looks stale (Util/make-startup-mibc.sh)"
   fi
 fi
