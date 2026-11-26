@@ -132,6 +132,16 @@ namespace IronRuby.Hosting {
             return null;
         }
 
+        // The main script's top level, or -e's, runs as a required file's does (RubyContext.CompilationThreshold).
+        protected override int RunFile(ScriptSource source) {
+            Loader.EnterFile();
+            try {
+                return base.RunFile(source);
+            } finally {
+                Loader.ExitFile();
+            }
+        }
+
         protected override int RunFile(string fileName) {
             // A script that cannot be read is a LoadError in MRI, reported without a backtrace:
             // "ruby: No such file or directory -- x (LoadError)".

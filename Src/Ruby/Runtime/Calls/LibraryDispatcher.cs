@@ -792,7 +792,7 @@ namespace IronRuby.Runtime.Calls {
 
         /// <summary>
         /// The calls the dispatcher can still make: as many as the interpreter runs a rule for before it compiles it
-        /// (RubyContext.CompilationThreshold when the dispatcher is made: 200 while the core prelude loads, 32 after it) - the calls the
+        /// (RubyContext.CompilationThreshold when the dispatcher is made: 200 inside a file's top level, 32 outside) - the calls the
         /// rule would have made interpreted, which is all a dispatcher stands in for. So a call made this often pays for a rule only
         /// where it also pays for compiling it, and none where the rule would have been compiled right away (-X:NoAdaptiveCompilation,
         /// a threshold of 0 or 1).

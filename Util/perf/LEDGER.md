@@ -1192,6 +1192,29 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     3,799 -> 3,765, 3,852 -> 3,830, 4,126 -> 4,122 M. Left, largest first: binding (gap 26's
     "cheaper first binds"); the class bodies' constants; the default-spec cache, whose map
     could be read on the first `find_default_spec` instead of at boot.
+    2026-11-26, perf/require-compile-threshold: the start-up compilation threshold (200, which
+    only the core prelude had) now covers every file's top level on the thread that runs it -
+    a require, load or autoload, and the main script's or `-e`'s own top level. Requires alone
+    took a third to a half of what `-X:CompilationThreshold 1000` saves (`gem list` 3,897 ->
+    3,482 M instructions, irb 4,121 -> 3,842); with the main script all of it (3,053; 3,173),
+    because `gem` and irb run their commands from the script's top level, not from a require.
+    The count is fixed when a lambda or rule is made and calls made while loading count towards
+    it, so code that turns hot is compiled 170 calls later and reaches the same steady state:
+    a loop started inside a require ran its rounds in 7.2-7.6 ms (master 7.2-7.6), its first
+    round 15-20 ms dearer; AWFY geomean 1.004 / 0.991 new/base in the two orders. The price is
+    warm-up of medium scripts: a small block-taking call run N times from a script, one process
+    each, medians of 6 - N=100 66.7 -> 55.6 ms, 300 86 -> 88, 600 101 -> 109, 2000 155 -> 186,
+    20000 223 -> 262. It grows with the value: at 2000 calls `-X:CompilationThreshold` 64
+    cost 20 ms, 200 40 ms and 500 75 ms, while 500 saved only 3% more instructions on `gem
+    list` and irb than 200; so 200. R2R host, instructions (perf stat, all threads, median of 3)
+    master -> this: `-e 1` 1,517 -> 1,516 M, `gem --version` 1,767 -> 1,740, `gem list` 3,897
+    -> 3,166, `echo exit | irb` 4,118 -> 3,283, `echo 1+1 | irb` 4,174 -> 3,319; CPU 1430 ->
+    1058, 1509 -> 1118, 1549 -> 1121 ms. Wall, best of 10 alternating, load 1.2-2.2 (500, same
+    shape): `gem list` 1039 -> 985, irb exit 1103 -> 1033, irb 1+1 1191 -> 1069 ms; at 200, load
+    7-28: 1113 -> 1040, 1171 -> 1096, 1206 -> 1117, `require "irb"` 1023 -> 957. Why a
+    crossing costs so much: past the threshold the shape still ran at ~50-150 us a call for
+    hundreds of calls before its compiled code took over (steady state is 1.7 us); that cold
+    stretch, not the IL compile, is the next thing to look at.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
