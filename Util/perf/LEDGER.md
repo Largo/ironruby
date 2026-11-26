@@ -795,9 +795,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    nor a multiple assignment (`a, b = b, a`; `IR_LIGHT_MASGN=0`, see Landed, perf/masgn);
    nor a regex literal whose method leaves `$~` alone (`s.match?(/x/)`, `/a#{x}/`; `IR_LIGHT_REGEX=0`,
    see Landed, perf/lightre: one passed to `gsub`, `=~`, `split`, `when` and the like stays out);
+   nor a class variable, a `defined?` of a constant or a constant qualified by an expression
+   (`@@x`, `defined?(A::B)`, `self.class::C`; `IR_LIGHT_LEXICAL=0`, see Landed, perf/lexical);
    Util/block-given-matrix.rb, Util/light-rest-matrix.rb, Util/block-pass-matrix.rb,
    Util/splat-pass-matrix.rb, Util/interpolation-matrix.rb, Util/hash-literal-matrix.rb,
-   Util/masgn-matrix.rb and Util/regex-light-matrix.rb are their matrices.
+   Util/masgn-matrix.rb, Util/regex-light-matrix.rb and Util/lexical-light-matrix.rb are their
+   matrices.
    What the census names next (2026-11-19 after perf/hashlit, 28,335 methods, 6,542 of
    them not light). By its first table: keyword parameters 1,257 (37 of them the
    prelude's, none AWFY's), `rescue`/`ensure` 478, 185 candidates that still need their
@@ -1383,6 +1386,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/lexical (2026-11-26) - class variables, `defined?` of a constant and `{expr}::C` in
+  light frames (`IR_LIGHT_LEXICAL`, gap 9).** The census of master f81fc19 had three lines of
+  "not a light frame: the construct" that are lexical lookups: ClassVariable 90 methods,
+  `IsDefinedExpression of ConstantVariable` 89, `ConstantVariable with an expression qualifier`
+  80. Their helpers (`RubyOps.GetClassVariable`, `TryGetClassVariable`, `IsDefinedClassVariable`,
+  `SetClassVariable`; `IsDefinedUnqualifiedConstant`, `IsDefinedQualifiedConstant`,
+  `IsDefinedGlobalConstant`, which `ScopeOperandIndex` already listed; `GetExpressionQualifiedConstant`,
+  `IsDefinedExpressionQualifiedConstant`) read the runtime, the global scope and the lexical chain
+  from the scope: `RubyScope.GetInnerMostModule` and `TryResolveConstantNoLock` walk `Module` up
+  the parents, and a method scope's `Module` is null and it is no instance_eval scope, so the walk
+  from it is the walk from its parent - the declaring scope the rewriter hands them (the scope
+  made on demand has the same parent). A block scope has no module either, so a light block's
+  `scope ?? parent` stands in the same way. `IsScopeFree` lets in, under the switch, `@@x`,
+  `defined?(@@x)`, `@@x = v` and its op-assigns (operator ones need `IR_LIGHT_CALLS` as for `@x`),
+  and `defined?`/a read of any constant whose innermost qualifier is a constant or a scope-free
+  expression; `ScopeOperandIndex` hands the five helpers not yet listed the declaring scope; with
+  the switch off `IR_LIGHT_FRAMES=why` names it. `x::A = v` stays out. Census (Src/StdLib + AWFY,
+  28,376 methods): light frames 26,019 -> 26,293 (91.7% -> 92.7%), 274 methods moved up, none
+  down; JIT compiles / maybe / never unchanged (3,296 / 2,921 / 22,159). The prelude's
+  `SystemCallError.__coerce_errno__` is among them, no AWFY method (AWFY has none of the three).
+  `ab.rb -r 4` on new shapes of `prelude-cost.rb` against the switch off (no perf counters in
+  the container, so time, not `-i`; the machine was shared by four other experiments): `x_cv`
+  (`@@cv`) 118.2 -> 80.9 ns (0.68), `x_defc` (`defined?(C) ? 1 : 0`) 80.4 -> 40.0 (0.50),
+  `x_qual` (`self.class::C`) 70.6 -> 41.8 (0.59); `x_const` (a plain constant, light before)
+  36.0 -> 35.7 (0.99 overlap). `Util/lexical-light-matrix.rb` (class bodies, `class << self`,
+  module_eval with a String and with a block, define_method, the top level, instance_eval, a
+  module function, bind_call, a nested class, an ancestor overtaking a class variable later,
+  constants and class variables defined and changed after the site is bound, private constants,
+  const_missing, a raising qualifier of `defined?`, binding, caller, TracePoint) prints CRuby
+  4.0's output on the unchanged build and on the change by default, with `IR_LIGHT_LEXICAL=0`,
+  `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` and R2R; jit-matrix,
+  jit-calls-matrix, block-given-matrix and light-rest-matrix agree with the baseline and CRuby;
+  census `-c` on a Richards trace 0 differ; IronRuby.Tests `Method_LightFrameLexical1` (new)
+  and 45 named class-variable, constant and light-frame tests pass. Found on the way, not
+  fixed (they differ on master too, so the matrix leaves them out): `defined?(@@x)` raises the
+  "overtaken" RuntimeError where CRuby answers "class variable"; `@@x` in a method of a `refine`
+  block resolves to the refinement, CRuby to the module around it. And CRuby 4.0.10 crashes
+  reading a class variable removed after its inline cache was warmed (a dangling cache), so the
+  matrix does not remove one. - census only, not gated
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R
