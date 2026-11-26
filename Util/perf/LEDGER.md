@@ -1497,14 +1497,61 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (`def v_unused(*a, k: 1) = 3` 4,798, `kr_rest` 5,325), so it is the call into the rest,
     not that method's prologue. Without a rest parameter the keyword call costs what the
     literal does (`def v_two(a, b)`, JIT off: positional 1,745, `{k: 2}` 2,404, `k: 2`
-    2,435). Suspects, not yet bisected: `RubyOps.NormalizeRestArgument` (a non-keyword rest
-    method keeps a copy of the hash) and what the rule for a site with a keyword hash does
-    for a rest callee (`ArgsBuilder` with a keyword signature takes no `GetRestTakesListFrom`
-    path, `RubyMethodInfo.GetDispatcher` none for a rest). Separately, the keyword prologue of
+    2,435). The first suspect owned it: `RubyOps.NormalizeRestArgument` copied the hash to
+    unmark it; perf/kwrest (Landed) unmarks the call's own, 4,814 -> 3,688, about 270 left over
+    the literal. A keyword method with a rest never normalized, so `v_unused` and `kr_rest`
+    did not move: theirs is the prologue's cost below. Separately, the keyword prologue of
     `def kw(a, k: 1) = a + k` costs about 1,300-1,500 with the JIT off (4,017 against
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
+  takes a call's keyword hash unmarks the call's own instead of storing a copy
+  (`IR_KWREST_IN_PLACE`, gap 38's first cost)** - instructions only, not gated. A keyword
+  call into a method whose rest takes the hash (`def r(*a)` called `r(i, k: 2)`; send,
+  method_missing, `define_method { |*a| }`, every delegator without `ruby2_keywords`) paid
+  about 1,400 instructions over passing the same Hash positionally. Bisected: the rule's
+  `RubyOps.NormalizeRestArgument` made `new Hash(hash)` - a table and every entry inserted
+  again through the comparer - only to have an unmarked hash in the array. Every hash marked as
+  keyword arguments is made for one call (`MakeKeywordArgumentsHash*`, `KeywordSplatArgument`'s
+  copy, the copies of `SplatRuby2Keywords` and `RestoreRuby2Keywords`, the C API's;
+  `PassOnKeywordRest` hands on one the method stops holding), which `ClearKeywordArguments`
+  already relies on to unmark the hash in place for any other parameter. So the mark (and
+  `IsOmittedKeywords`) comes off in place; the copy stays for a `ruby2_keywords` method, whose
+  copy carries the other mark, for the runtime's shared frozen empty hash, and for anything not
+  exactly a Hash. The keyword path went out of line (`NormalizeRestKeywords`, NoInlining) so
+  that the test a call without keywords runs stays as small as before. The rule's other
+  suspect - `ArgsBuilder` for a rest callee with a keyword signature - owns nothing here: a
+  keyword method with a rest never normalizes, and `v_unused` / `kr_rest` did not move; what
+  they pay over a plain rest is the keyword prologue, gap 38's second cost, a separate
+  experiment.
+  - Instructions a call (`Util/perf/callgrind/count.sh`, `ab.rb -i -r 1 -n 20000`, unchanged
+    build / switch off / on, shapes in `prelude-cost.rb`): `v_hash_into_rest` 4,814 / 4,838 /
+    3,688 (0.76); controls `x_const`, `v_two_pos`, `kr_plain_rest`, `v_prebuilt_hash` and the
+    keyword-rest methods `kr_rest`, `v_unused`, `kr_lines` 1.000. `v_hash_literal_arg` read
+    1.02 in that run, where the new code does not run; alone in a process it is 3,469 -> 3,400
+    (0.98): which shape's section a gen0 collection lands in moved with the allocations the
+    earlier shapes no longer make. (The first build had the keyword path inline and the same
+    1.02 there; the off arm of the split build equals the unchanged build on every shape.)
+  - `Util/kwrest-call-matrix.rb` (new: the hash in the rest passed on splatted, as an argument,
+    double-splatted, to `k:`; mutated; a fresh one each call; frozen; `**{}`, `**nil`, a
+    positional Hash, String keys; the caller's hash through `**h`, `**frozen` and positionally,
+    a kept hash passed again; `ruby2_keywords` - passing on, positional, the flag, mutated,
+    applied later, its hash into a plain rest; send, public_send, `__send__`, method_missing,
+    zsuper into a rest and with `**kw`, `super(*a)`, `define_method |*a|`, Method#call,
+    to_proc, Enumerator replay, a lambda's rest; `**nil`, `**kw` and `k:` given a Hash) prints
+    CRuby 4.0's output on the unchanged build, and on the change by default, with
+    `IR_KWREST_IN_PLACE=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`; so do
+    keyword-rest-light and keyword-light. splat-pass, light-rest and jit-calls print CRuby's
+    output in the default mode, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` and `IR_LIGHT_FRAMES=0`;
+    hot-shapes prints the unchanged build's in all five (it differs from CRuby already in one
+    String probe, FrozenError against Encoding::CompatibilityError). ruby/spec
+    `language/keyword_arguments_spec.rb` 23 examples 0 failures, `method_spec.rb` 168 / 0,
+    `send_spec.rb` 78 with 1 error - the known `into`/`to` conversion message - the same on
+    both builds. IronRuby.Tests `Method_KeywordHashIntoRest1` (new; passes with the switch
+    off too) and 50 named keyword, method, splat, send and super tests pass. Not timed; no
+    R2R run.
 
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
