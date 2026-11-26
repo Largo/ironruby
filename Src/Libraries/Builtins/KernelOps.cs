@@ -1211,18 +1211,35 @@ namespace IronRuby.Builtins {
         /// startup library alone makes some 50 such calls in `ir -e 1'.
         /// </summary>
         [RubyMethod("require_relative", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("require_relative", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object RequireRelative(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, object path) {
             var site = storage.GetCallSite("__require_relative__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
             return site.Target(site, self, path, NotedCallerPath(scope));
         }
 
+        // Kernel.require_relative and Kernel.__dir__: methods of their own, which a backtrace names "Kernel.require_relative"
+        // as MRI's does (see SingletonToInteger).
+        [RubyMethod("require_relative", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("RequireRelative")]
+        public static object SingletonRequireRelative(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, object path) {
+            return RequireRelative(storage, scope, self, path);
+        }
+
         [RubyMethod("__dir__", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("__dir__", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public static object GetDirectory(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self) {
             var site = storage.GetCallSite("__dir_of__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
             return site.Target(site, self, NotedCallerPath(scope));
+        }
+
+        [RubyMethod("__dir__", RubyMethodAttributes.PublicSingleton)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        [SameRubyMethod("GetDirectory")]
+        public static object SingletonGetDirectory(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self) {
+            return GetDirectory(storage, scope, self);
         }
 
         private static MutableString NotedCallerPath(RubyScope/*!*/ scope) {
