@@ -1056,10 +1056,22 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     String `match?` takes 0.47 us), although `match?` has less to do; a short anchored
     match is 1.3 to 1.5 times CRuby (`/\A[+-]?\d+/.match("12345 rest")` 663 against 452
     ns). One run beside two builds, so factors only; shapes and a reading of the three
-    entry points are in `Util/bench/daloze-lessons.md`, section 6. Reading the code did
-    not explain the first two; the experiment starts with finding out (a one-character
-    needle straight to a span search, `match?` without a Match object). Outside AWFY;
+    entry points are in `Util/bench/daloze-lessons.md`, section 6. Outside AWFY;
     it is what JSON escaping, `strscan` and log parsing spend.
+    Round of perf/strsearch (2026-11-26, see Landed): `Util/bench/strsearch-shapes.rb` (120
+    shapes) did not reproduce the regexp half - over 10 KB IronRuby is 25 to 160 times
+    *faster* than CRuby (`mp_u_n` 366 ns against 59 us, .NET's vectorized `IndexOfAny`),
+    and `match?` and `=~` cost the same there; what was slow was `match?` that finds
+    something (it built a MatchData), `#byteindex` (a Ruby helper; 1.1 ms on 10 KB of UTF-8)
+    and a BINARY needle (wrong answers); all three are dealt with. **Still open:** `s.index('"')` not
+    found in 10 KB is 198 ns against 109 (profile: 59% in `PackedSpanHelpers.IndexOf`,
+    the search over 20 KB of UTF-16; the rest is the call) - only a receiver held as bytes
+    would close it; `#start_with?` 134 / 212 ns against 55 / 90 (its caller makes a
+    `RubyMethodScope`, since the method takes the scope for a Regexp prefix's `$~`: gap 16
+    / a scope-free overload); `#byteindex` on UTF-8 found late is 1.3 us against 117 ns
+    (the UTF-8 length of the prefix, `Encoding.UTF8.GetByteCount`, 1.1 us over 10 KB of
+    mixed text), and from a positive offset other than 0 it walks the characters to it, so a
+    strscan-style loop of byte offsets over UTF-8 text is quadratic where CRuby's is not.
 22. **A `begin`/`rescue` or `ensure` in a method costs about 80 ns per call when nothing
     is raised**: `def r(x) begin; x + 1; rescue StandardError; 0; end end` 106 ns against
     CRuby's 24, the same with `ensure` 112 against 27 (`Util/bench/zjit-post-shapes.rb`,
@@ -1383,6 +1395,44 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/strsearch (2026-11-26) - `#byteindex`/`#byterindex` with a String needle in C#,
+  `Regexp#match?` without a MatchData, and two searches that answered wrong (gap 21)** - not
+  gated. Commits ba4a151, c9a4e7c, 95d5891 on `claude/perf-strsearch`; switch
+  `IR_FAST_SEARCH=0` (both speed-ups; the fixes are not switched). The census does not see a
+  library method's speed (0 methods moved, 28,376); judged by time, since this container has
+  no instruction counter: `Util/perf/ab.rb -r 4 Util/bench/strsearch-shapes.rb`, CRuby / master
+  f81fc19 / the candidate with the switch off / on, alternating rounds, ns:
+
+      bidx1_a_e   65.3 / 590.4 / 587.6 / 130.8   0.22     mp_a_e   98.2 / 166.0 / 157.5 / 104.0  0.66
+      bidx1_a_l  115.7 / 759.6 / 786.9 / 279.2   0.35     mp_u_e  127.6 / 156.0 / 162.2 / 107.9  0.67
+      bidx1_a_n  117.6 / 754.9 / 755.9 / 231.0   0.31     mp3_b_e  91.9 / 171.1 / 175.1 / 116.0  0.66
+      bidx1_b_n  119.3 / 663.4 / 638.1 / 199.2   0.31     int_mp  119.9 / 164.4 / 165.6 / 108.0  0.65
+      controls, all overlap: idx1_a_n 199.3 -> 198.2, idx1_u_l 196.5 -> 200.0, tilde_a_e 247.8 ->
+      248.0, int_tilde 248.0 -> 255.3, mp_u_l 396.7 -> 348.0, size 51.5 -> 47.4, eq 74.7 -> 67.6
+
+  On 10 KB of UTF-8 with non-ASCII characters `#byteindex` was 1,118,000 / 1,130,000 /
+  1,146,000 ns (found at byte 5 / 30 bytes from the end / not found; master, N=1000) and is
+  146 / 1,316 / 239 (CRuby 75 / 117 / 120). What it was: `#byteindex` and `#byterindex` sent
+  every call to ruby4.rb's `__ir_byte_search__`, which builds a table of every character's
+  byte offset with `each_char` on every call. Now a String needle with a Fixnum offset (or
+  none) is done in C#: a receiver whose characters are its bytes needs no conversion, a valid
+  UTF-8 one walks its UTF-16 characters to the offset and counts the UTF-8 length of the
+  prefix the answer ends; a Regexp, a `#to_str` needle, a Bignum offset, other multibyte
+  encodings and broken strings still go to the helper. `Regexp#match?` asks `Regex.IsMatch`
+  (but for a subject with a surrogate pair, which needs the Match to drop one that starts
+  between the halves). Fixed on the way, both in the new `Util/string-search-matrix.rb`
+  (56,234 rows, which now print CRuby 4.0's output, switch on and off; master differs in
+  1,098): a needle held as bytes (`'"'.b`) on a receiver held as characters that are not
+  its bytes switched the receiver to bytes and answered byte offsets (`"é\"".index('"'.b)`
+  was 2); and a Regexp search from an offset outside the string raised the encoding's
+  CompatibilityError (or, for `#index`, the broken receiver's ArgumentError) where CRuby
+  answers nil first. Checked: the matrix; `astral-string`, `string-methods`,
+  `regexp-binary-ctype`, `stdre`, `regex-light` and `regexp-escaped-byte` matrices print what
+  master prints; spec/core/string index, rindex, byteindex, byterindex, match, start_with,
+  include, partition, rpartition, slice, element_reference, element_set, split, sub, gsub,
+  scan, end_with, spec/core/regexp/match_spec.rb, spec/library/stringscanner and
+  stringio/gets_spec.rb: 0 failures; 62 named MutableString/Regex IronRuby.Tests pass.
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R
