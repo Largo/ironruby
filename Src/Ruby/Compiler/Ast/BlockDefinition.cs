@@ -410,7 +410,7 @@ namespace IronRuby.Compiler.Ast {
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
-                        new CompiledFrameExpression(body, encodedName, Location.Start.Line),
+                        new CompiledFrameExpression(body, encodedName, Location.Start.Line, isLambda && RubyContext.LazyLambdasEnabled),
                         encodedName,
                         parameters,
                         parameterCount,

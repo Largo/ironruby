@@ -1,0 +1,351 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightCompiler.cs
+@@ -177,6 +177,21 @@
+         // LightDelegateCreator.MaxCompiledTryDepth).
+         private int _tryDepth, _maxTryDepth;
+ 
++        // The lambdas nested in this one that are compiled when they first run (see CompileOnFirstCall).
++        private List<LightDelegateCreator> _lazyChildren;
++
++        /// <summary>
++        /// Which lambdas nested in the one being compiled are light-compiled only when a delegate made from one first
++        /// runs, rather than with the lambda they are nested in (null: none). A lambda that defines many nested ones and
++        /// runs few of them (a table of handlers, one per case) compiled them all before it could run at all. The
++        /// variables the nested lambda closes over are found by a walk of its tree (<see cref="ClosureFinder"/>), so that
++        /// the enclosing lambda boxes them and hands them over as it did; how deeply its try expressions nest, which a
++        /// compile of the enclosing lambda to IL has to know, is found when that compile asks for it. The walk costs a
++        /// fraction of the compile it may save, and nothing is saved on a lambda that runs: the language picks the
++        /// lambdas that are likely to be kept for later.
++        /// </summary>
++        public static Func<LambdaExpression, bool> CompileOnFirstCall { get; set; }
++
+         private static readonly LocalDefinition[] EmptyLocals = Array.Empty<LocalDefinition>();
+ 
+         internal LightCompiler(int compilationThreshold) {
+@@ -212,7 +227,20 @@
+ 
+             Debug.Assert(Instructions.CurrentStackDepth == (node.ReturnType != typeof(void) ? 1 : 0));
+ 
+-            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth, TryDepth = _maxTryDepth };
++            return new LightDelegateCreator(MakeInterpreter(node.Name), node) { TreeDepth = _maxDepth, TryDepth = _maxTryDepth, LazyChildren = _lazyChildren };
++        }
++
++        /// <summary>
++        /// Light-compiles a nested lambda whose compilation was put off (see CompileOnFirstCall): the variables it closes over
++        /// are those the enclosing lambda handed over, in that order.
++        /// </summary>
++        internal static void CompileLazy(LightDelegateCreator creator, LambdaExpression node, ParameterExpression[] closure, int compilationThreshold) {
++            var compiler = new LightCompiler(compilationThreshold);
++            foreach (var variable in closure) {
++                compiler._locals.AddClosureVariable(variable);
++            }
++            var compiled = compiler.CompileTop(node);
++            creator.SetCompiled(compiled.Interpreter, compiler._locals.ClosureVariables, compiled.TreeDepth, compiled.TryDepth, compiled.LazyChildren);
+         }
+ 
+         internal LightDelegateCreator CompileTop(LightLambdaExpression node) {
+@@ -286,6 +314,96 @@
+             throw new InvalidOperationException("unbound variable: " + expr);
+         }
+ 
++        // Whether a variable is one this lambda or a lambda it is nested in has in scope here.
++        private bool CanResolve(ParameterExpression variable) {
++            return _locals.TryGetLocalOrClosure(variable, out _) || _parent is not null && _parent.CanResolve(variable);
++        }
++
++        /// <summary>
++        /// The variables a nested lambda closes over, in the order it first uses them: those it uses, or a lambda nested in it
++        /// uses, outside the lambda, block or catch that declares them, and that the enclosing lambda has in scope. A variable
++        /// it cannot resolve is declared by the tree in a way the walk does not see (an instruction provider's own local),
++        /// and is left to the nested lambda; one too many is only boxed and handed over for nothing. The compile of the
++        /// nested lambda fails loudly ("unbound variable") on one the walk missed.
++        /// </summary>
++        private sealed class ClosureFinder : ExpressionVisitor {
++            private readonly LightCompiler _compiler;
++            private readonly Dictionary<ParameterExpression, int> _declared = new();
++            private readonly HashSet<ParameterExpression> _seen = new();
++            private readonly List<ParameterExpression> _closure = new();
++
++            private ClosureFinder(LightCompiler compiler) {
++                _compiler = compiler;
++            }
++
++            internal static ParameterExpression[] Find(LambdaExpression node, LightCompiler compiler) {
++                var finder = new ClosureFinder(compiler);
++                finder.Visit(node);
++                return finder._closure.ToArray();
++            }
++
++            public override Expression Visit(Expression node) {
++                if (!RuntimeHelpers.TryEnsureSufficientExecutionStack()) {
++                    StackGuard.RunOnFreshStack(() => base.Visit(node));
++                    return node;
++                }
++                return base.Visit(node);
++            }
++
++            private void Declare(IEnumerable<ParameterExpression> variables) {
++                foreach (var variable in variables) {
++                    _declared.TryGetValue(variable, out int count);
++                    _declared[variable] = count + 1;
++                }
++            }
++
++            private void Undeclare(IEnumerable<ParameterExpression> variables) {
++                foreach (var variable in variables) {
++                    int count = _declared[variable];
++                    if (count == 1) {
++                        _declared.Remove(variable);
++                    } else {
++                        _declared[variable] = count - 1;
++                    }
++                }
++            }
++
++            protected override Expression VisitParameter(ParameterExpression node) {
++                if (!_declared.ContainsKey(node) && _seen.Add(node) && _compiler.CanResolve(node)) {
++                    _closure.Add(node);
++                }
++                return node;
++            }
++
++            protected override Expression VisitLambda<T>(Expression<T> node) {
++                Declare(node.Parameters);
++                Visit(node.Body);
++                Undeclare(node.Parameters);
++                return node;
++            }
++
++            protected override Expression VisitBlock(BlockExpression node) {
++                Declare(node.Variables);
++                for (int i = 0; i < node.Expressions.Count; i++) {
++                    Visit(node.Expressions[i]);
++                }
++                Undeclare(node.Variables);
++                return node;
++            }
++
++            protected override CatchBlock VisitCatchBlock(CatchBlock node) {
++                if (node.Variable is not null) {
++                    Declare(new[] { node.Variable });
++                }
++                Visit(node.Filter);
++                Visit(node.Body);
++                if (node.Variable is not null) {
++                    Undeclare(new[] { node.Variable });
++                }
++                return node;
++            }
++        }
++
+         private void EnsureVariable(ParameterExpression variable) {
+             if (!_locals.ContainsVariable(variable)) {
+                 EnsureAvailableForClosure(variable);
+@@ -1466,6 +1584,20 @@
+ 
+         private void CompileLambdaExpression(Expression expr) {
+             var node = (LambdaExpression)expr;
++            var compileOnFirstCall = CompileOnFirstCall;
++            if (compileOnFirstCall is not null && compileOnFirstCall(node)) {
++                var closure = ClosureFinder.Find(node, this);
++                foreach (var variable in closure) {
++                    EnsureAvailableForClosure(variable);
++                }
++                var lazy = new LightDelegateCreator(node, closure, _compilationThreshold);
++                (_lazyChildren ??= new List<LightDelegateCreator>()).Add(lazy);
++                foreach (var variable in closure) {
++                    CompileGetBoxedVariable(variable);
++                }
++                Instructions.EmitCreateDelegate(lazy);
++                return;
++            }
+             var compiler = new LightCompiler(this);
+             var creator = compiler.CompileTop(node);
+             if (compiler._maxTryDepth > _maxTryDepth) {
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightDelegateCreator.cs
+@@ -3,6 +3,7 @@
+ // See the LICENSE file in the project root for more information.
+ 
+ using System;
++using System.Collections.Generic;
+ using System.Diagnostics;
+ using System.Linq.Expressions;
+ using System.Runtime.CompilerServices;
+@@ -38,7 +39,82 @@
+             _lambda = lambda;
+         }
+ 
+-        internal Interpreter Interpreter { get; }
++        /// <summary>
++        /// A nested lambda light-compiled only when a delegate made from it first runs (LightCompiler.CompileOnFirstCall),
++        /// which closes over <paramref name="closure"/>, in that order.
++        /// </summary>
++        internal LightDelegateCreator(LambdaExpression lambda, ParameterExpression[] closure, int compilationThreshold) {
++            Assert.NotNull(lambda, closure);
++            _lambda = lambda;
++            _lazyClosure = closure;
++            _closureSize = closure.Length;
++            _compilationThreshold = compilationThreshold;
++            _wasLazy = true;
++        }
++
++        // Of a lazy creator: the variables it closes over until it is light-compiled (null after), how many there are, and the
++        // threshold its interpreter is made with. A lazy creator whose lambda the light compiler cannot interpret has no
++        // interpreter once compiled, and is compiled to IL by its first run: the closure variables are then its own.
++        private volatile ParameterExpression[] _lazyClosure;
++        private readonly int _closureSize;
++        private readonly int _compilationThreshold;
++        private readonly bool _wasLazy;
++        private Dictionary<ParameterExpression, LocalVariable> _closureVariables;
++
++        internal Interpreter Interpreter { get; private set; }
++
++        /// <summary>
++        /// The nested lambdas whose light compilation was put off: compiling this lambda to IL compiles them too, and they
++        /// are light-compiled then for their TryDepth (see EffectiveTryDepth).
++        /// </summary>
++        internal List<LightDelegateCreator> LazyChildren { get; set; }
++
++        internal bool IsLightCompiled => _lazyClosure is null;
++
++        /// <summary>
++        /// How many closure variables a delegate of this lambda takes, which the instruction that makes one pops.
++        /// </summary>
++        internal int ClosureSize => _wasLazy ? _closureSize : Interpreter.ClosureSize;
++
++        /// <summary>
++        /// Light-compiles a lazy creator's lambda, if it has not been: its interpreter, or none if it cannot be interpreted.
++        /// </summary>
++        internal Interpreter EnsureLightCompiled() {
++            if (_lazyClosure is not null) {
++                lock (_compileLock) {
++                    var closure = _lazyClosure;
++                    if (closure is not null) {
++                        LightCompiler.CompileLazy(this, (LambdaExpression)_lambda, closure, _compilationThreshold);
++                        _lazyClosure = null;
++                    }
++                }
++            }
++            return Interpreter;
++        }
++
++        internal void SetCompiled(Interpreter interpreter, Dictionary<ParameterExpression, LocalVariable> closureVariables, int treeDepth, int tryDepth,
++            List<LightDelegateCreator> lazyChildren) {
++            Interpreter = interpreter;
++            _closureVariables = closureVariables;
++            TreeDepth = treeDepth;
++            TryDepth = tryDepth;
++            LazyChildren = lazyChildren;
++        }
++
++        // The deepest the try expressions of this lambda and every lambda nested in it nest, which a compile of it to IL
++        // compiles: the nested lambdas not light-compiled yet are, to find out.
++        private int EffectiveTryDepth() {
++            int depth = TryDepth;
++            if (LazyChildren is not null) {
++                foreach (var child in LazyChildren) {
++                    child.EnsureLightCompiled();
++                    depth = Math.Max(depth, child.EffectiveTryDepth());
++                }
++            }
++            return depth;
++        }
++
++        internal int CompilationThreshold => _wasLazy ? _compilationThreshold : Interpreter._compilationThreshold;
+ 
+         /// <summary>
+         /// How deeply the lambda's expression tree nests, as the light compiler found it.
+@@ -66,7 +142,7 @@
+         // which is linear in its size, as are the light compiler and the interpreter.
+         internal const int MaxCompiledTryDepth = 64;
+ 
+-        private bool HasClosure => Interpreter is not null && Interpreter.ClosureSize > 0;
++        private bool HasClosure => (Interpreter is not null) ? Interpreter.ClosureSize > 0 : _closureVariables is not null && _closureVariables.Count > 0;
+ 
+         internal bool HasCompiled => _compiled is not null;
+ 
+@@ -95,6 +171,11 @@
+                 }
+             }
+ 
++            if (_wasLazy) {
++                // light-compiled, or compiled if it cannot be interpreted, when the delegate first runs (LightLambda.TryGetCompiled)
++                return new LightLambda(this, closure, _compilationThreshold).MakeDelegate(DelegateType);
++            }
++
+             if (Interpreter is null) {
+                 // We can't interpret, so force a compile
+                 Compile(null);
+@@ -142,7 +223,8 @@
+             }
+ 
+             // See MaxCompiledTryDepth. A lambda the light compiler could not interpret has no interpreter, and is compiled.
+-            if (TryDepth > MaxCompiledTryDepth && Interpreter is not null) {
++            EnsureLightCompiled();
++            if (Interpreter is not null && EffectiveTryDepth() > MaxCompiledTryDepth) {
+                 return;
+             }
+ 
+@@ -168,13 +250,14 @@
+                 // Action<...> so it can be called from the LightLambda.Run
+                 // methods.
+                 LambdaExpression lambda = (_lambda as LambdaExpression) ?? (LambdaExpression)((LightLambdaExpression)_lambda).Reduce();
+-                if (Interpreter is not null) {
++                // (a lazy lambda's delegate is a LightLambda's even when it cannot be interpreted: its Run methods call a Func or an Action)
++                if (Interpreter is not null || _wasLazy) {
+                     _compiledDelegateType = GetFuncOrAction(lambda);
+                     lambda = Expression.Lambda(_compiledDelegateType, lambda.Body, lambda.Name, lambda.Parameters);
+                 }
+ 
+                 if (HasClosure) {
+-                    _compiled = LightLambdaClosureVisitor.BindLambda(lambda, Interpreter.ClosureVariables);
++                    _compiled = LightLambdaClosureVisitor.BindLambda(lambda, Interpreter?.ClosureVariables ?? _closureVariables);
+                 } else {
+                     _compiled = lambda.Compile();
+                 }
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+@@ -27,7 +27,8 @@
+ 
+     public partial class LightLambda {
+         private readonly StrongBox<object>[] _closure;
+-        private readonly Interpreter _interpreter;
++        // null until a lazy creator's lambda is light-compiled (see TryGetCompiled)
++        private Interpreter _interpreter;
+         private static readonly CacheDict<Type, Func<LightLambda, Delegate>> _runCache = new(100);
+ 
+         // Adaptive compilation support
+@@ -151,6 +152,17 @@
+         }
+ 
+         private bool TryGetCompiled() {
++            // A nested lambda light-compiled when it first runs (LightCompiler.CompileOnFirstCall); one the light compiler
++            // cannot interpret is compiled.
++            if (_interpreter is null) {
++                _interpreter = _delegateCreator.EnsureLightCompiled();
++                if (_interpreter is null) {
++                    _delegateCreator.Compile(null);
++                    _compiled = _delegateCreator.CreateCompiledDelegate(_closure);
++                    return true;
++                }
++            }
++
+             // Use the compiled delegate if available.
+             if (_delegateCreator.HasCompiled) {
+                 _compiled = _delegateCreator.CreateCompiledDelegate(_closure);
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/Instructions/TypeOperations.cs b/src/core/Microsoft.Dynamic/Interpreter/Instructions/TypeOperations.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/Instructions/TypeOperations.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/TypeOperations.cs
+@@ -16,7 +16,7 @@
+             _creator = delegateCreator;
+         }
+ 
+-        public override int ConsumedStack => _creator.Interpreter.ClosureSize;
++        public override int ConsumedStack => _creator.ClosureSize;
+         public override int ProducedStack => 1;
+ 
+         public override int Run(InterpretedFrame frame) {

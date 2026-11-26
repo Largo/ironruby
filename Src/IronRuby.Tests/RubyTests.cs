@@ -1015,6 +1015,7 @@ namespace IronRuby.Tests {
                 Array_FlattenNil1,
                 Hash_ValuesAtDefault1,
                 Lambda_ArityMessages1,
+                Lambda_CompiledOnFirstCall1,
                 ErrorMessages_Receivers1,
                 ErrorMessages_Wording1,
                 Time_StringParsing1,
