@@ -620,6 +620,37 @@ end
         }
 
         /// <summary>
+        /// The stub MethodInfo.Invoke emits for a method it calls often is no frame of Ruby code on Mono either, which reports
+        /// the frame of a DynamicMethod with System.Object as its declaring type (CoreCLR: none). On browser-wasm it stood
+        /// between Kernel#require_relative and __require_relative__ as ":0:in 'InvokeStub_Func`5.Invoke'", and
+        /// require_relative "parseexception" in rexml/element.rb looked for "/parseexception".
+        /// </summary>
+        public void Backtrace_MonoInvokeStubFrame1() {
+            Assert(!RubyStackTraceBuilder.IsVisibleClrFrame(new MonoDynamicMethodFrame("InvokeStub_Func`5.Invoke")));
+            Assert(!RubyStackTraceBuilder.IsVisibleClrFrame(new MonoDynamicMethodFrame("lambda_method12")));
+        }
+
+        // The method of a DynamicMethod's frame as Mono's StackFrame.GetMethod gives it.
+        private sealed class MonoDynamicMethodFrame : System.Reflection.MethodInfo {
+            private readonly string _name;
+            public MonoDynamicMethodFrame(string name) { _name = name; }
+            public override string Name => _name;
+            public override Type DeclaringType => typeof(object);
+            public override Type ReflectedType => typeof(object);
+            public override Type ReturnType => typeof(object);
+            public override System.Reflection.MethodAttributes Attributes => System.Reflection.MethodAttributes.Static | System.Reflection.MethodAttributes.Public;
+            public override RuntimeMethodHandle MethodHandle => throw new NotSupportedException();
+            public override System.Reflection.ICustomAttributeProvider ReturnTypeCustomAttributes => throw new NotSupportedException();
+            public override System.Reflection.MethodInfo GetBaseDefinition() => this;
+            public override System.Reflection.MethodImplAttributes GetMethodImplementationFlags() => System.Reflection.MethodImplAttributes.IL;
+            public override System.Reflection.ParameterInfo[] GetParameters() => new System.Reflection.ParameterInfo[0];
+            public override object Invoke(object obj, System.Reflection.BindingFlags invokeAttr, System.Reflection.Binder binder, object[] parameters, System.Globalization.CultureInfo culture) => throw new NotSupportedException();
+            public override object[] GetCustomAttributes(bool inherit) => new object[0];
+            public override object[] GetCustomAttributes(Type attributeType, bool inherit) => new object[0];
+            public override bool IsDefined(Type attributeType, bool inherit) => false;
+        }
+
+        /// <summary>
         /// Under the C locale (US-ASCII, Docker's default) a non-ASCII path is its UTF-8 bytes in a BINARY string. The
         /// frames of a file in such a directory were US-ASCII strings of characters it has none for, and require_relative,
         /// caller_locations(0)[0].path and the error report raised "invalid byte sequence in US-ASCII"; load of the

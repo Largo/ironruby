@@ -1136,18 +1136,24 @@ namespace IronRuby.Runtime {
             }
 
             Type type = method.DeclaringType;
+            // A frame of a DynamicMethod: CoreCLR reports it with no declaring type, Mono (browser-wasm) with System.Object.
+            // Mono's frame of the stub below was reported as ":0:in 'InvokeStub_Func`5.Invoke'", and require_relative,
+            // which takes its directory from its caller's frame, then looked for "/parseexception" - once the rule of the
+            // site Kernel#require_relative calls __require_relative__ through ran interpreted long enough to call the
+            // method's delegate through that stub (browser-wasm calls a virtual method by reflection, dlr-patches/wasm/0004).
+            bool dynamicMethod = type == null || type == typeof(object);
             // System.Linq.Expressions' object[] delegate thunks in a JIT process without dynamic code
-            if (type == null && !System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported &&
+            if (dynamicMethod && !System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported &&
                 method.Name.StartsWith("Thunk", StringComparison.Ordinal)) {
                 return false;
             }
             // the stub MethodInfo.Invoke makes for a method it calls often (see MethodBaseInvoker below)
-            if (type == null && method.Name.StartsWith("InvokeStub_", StringComparison.Ordinal)) {
+            if (dynamicMethod && method.Name.StartsWith("InvokeStub_", StringComparison.Ordinal)) {
                 return false;
             }
             // a lambda System.Linq.Expressions compiled without a name: a wrapper the runtime made (a fiber's body run
             // from compiled code put "0:in 'lambda_method66'" under the fiber's block), never a frame of Ruby code
-            if (type == null && method.Name.StartsWith("lambda_method", StringComparison.Ordinal)) {
+            if (dynamicMethod && method.Name.StartsWith("lambda_method", StringComparison.Ordinal)) {
                 return false;
             }
             if (type != null) {
