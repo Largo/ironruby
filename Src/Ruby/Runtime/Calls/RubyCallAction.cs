@@ -263,7 +263,8 @@ namespace IronRuby.Runtime.Calls {
                         null;
                 }
 
-                dispatcher = (!light || rubyMethod != null || method.Info is RubyAttributeAccessorInfo) ?
+                dispatcher = (!light || rubyMethod != null || method.Info is RubyAttributeAccessorInfo ||
+                    method.Info is RubyCustomMethodInfo customReader && customReader.IsStructReader) ?
                     method.Info.GetDispatcher(delegateType, Signature, target, version) : null;
 
                 // a Ruby method of a builtin class (much of the core library is written in Ruby), called on nil, true, false or a CLR object:

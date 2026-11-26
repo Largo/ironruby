@@ -2454,8 +2454,19 @@ namespace IronRuby.Builtins {
             SetMethodNoMutateNoEventNoLock(callerContext, name, method);
         }
 
+        /// <summary>
+        /// Adds a method, without its event, to a module no code can have seen yet - one just made, whose making ran no Ruby
+        /// code (RubyStruct.DefineStruct): no call site, rule or compiled body can depend on a resolution through it, so the
+        /// override and missing-method checks of PrepareMethodUpdate, which move the global method version that every typed
+        /// body and running loop guards on, have nothing to invalidate.
+        /// </summary>
+        internal void SetMethodOfUnseenModuleNoEventNoLock(string/*!*/ name, RubyMemberInfo/*!*/ method) {
+            Mutate();
+            SetMethodNoMutateNoEventNoLock(Context, name, method, true, false);
+        }
+
         internal void SetMethodNoMutateNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method,
-            bool newEntry = true) {
+            bool newEntry = true, bool prepareUpdate = true) {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(name, method);
 
@@ -2468,7 +2479,9 @@ namespace IronRuby.Builtins {
                 WarnIfRedefiningCoreMethodNoLock(name, method);
             }
 
-            PrepareMethodUpdate(name, method);
+            if (prepareUpdate) {
+                PrepareMethodUpdate(name, method);
+            }
 
             InitializeMethodsNoLock();
             _methods[name] = method;

@@ -1323,7 +1323,7 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            var construction = cls.TryGetObjectConstruction(count);
+            var construction = cls.TryGetObjectConstruction(count, true);
             if (construction == null) {
                 return null;
             }

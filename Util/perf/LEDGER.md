@@ -1050,6 +1050,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     method version (reading the code: `new` and `[]` added to the struct class's
     singleton class override `Class#new`, which invalidates sites on override), so it
     throws away every running loop's copy and every typed body's entry.
+    perf/struct (see Landed, not gated) measured it - 8 JIT invalidations for 30 `Struct.new`s
+    beside a hot loop - and fixed it for anonymous classes (0); a reader and the first `new` on a
+    new struct class take dispatchers instead of rules (4-9 and 10-25 us under IR_BIND_TRACE).
+    `Struct.new(:a, :b)` plus a first new and getter 79.5 -> 51 us (CRuby 5.7); `Struct.new` alone
+    26-27 -> 20-21 us a class (CRuby: 4.1-4.4). Left: the class itself (`Struct.new` in C# is about
+    three quarters of it, `Class.new(Struct)` 4 us), writers' rules, and a site past the
+    dispatchers' budget building a `new` rule per class.
 20. **Array and Hash are not safe under concurrent mutation** - a correctness gap, listed
     here because the fix has a speed price and the papers say how to keep it at zero for
     code that does not share. Eight threads appending to one Array raise "Source array
@@ -1111,6 +1118,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the invoice shapes are at CRuby's time. Left: initializers taking keywords (`Product.new(sku:
     ...)`) at about 2x CRuby, `Hash#dup`, and Struct `keyword_init` as above. And
     `Data.singleton_methods` lists `:allocate`, which CRuby's does not (as on the baseline).
+    perf/struct (see Landed, not gated): Struct keyword creation is stored in C#, `kw_new` 1017 ->
+    198 ns against CRuby's 299 (`kw_hash` 147 against 196, `sub_kw` 379 against 356). Left from this
+    gap: keyword initializers (`kwinit` 236 against 132) and `Hash#dup`.
 25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
     sixteen's breakdown; its author's numbers, taken beside two other experiments at load
     2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
@@ -1646,6 +1656,55 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   kernel/loop_spec (443 examples) and spec/core/exception + enumerable + language/rescue_spec
   (846) pass on both; 72 named IronRuby.Tests (Enumerator_*, Loop*, Backtrace*, Exception*,
   Raise*, Rescue*) pass.
+
+- **perf/struct (2026-11-26, 0cfab5c..37eae81, not gated) - Struct keyword arguments stored in
+  C#; a new struct class made without moving the global method version, its readers and its first
+  constructions without rules (gaps 24 and 19).** Four commits, one switch (`IR_FAST_STRUCT=0`).
+  (1) `Struct#initialize` (RubyStructOps.Initialize) stores keywords whose keys all name members
+  (Symbol or String, MRI's struct_hash_set_i) when keyword_init is true or nil, a single Hash for
+  keyword_init: true, and clears every member for no arguments; it sent all of them through a site
+  to `__struct_initialize_slow__` in ruby4.rb before (copy the Hash, `members`, `keyword_init?`,
+  `keys - names`, a splat). keyword_init is read as MRI's struct_ivar_get does, so a subclass of a
+  keyword_init: true struct is keyword_init too, and String keys name members: both were wrong on
+  master. (2) Measured first, as the gap asked: a loop calling a specialized method while it made a
+  Struct class every 10,000 iterations counted 8 JIT invalidations for 30 classes (Class.new none),
+  and eight settle the method on its generic body for good; `new` and `[]` on the singleton class
+  override Class#new, and the prelude's `inspect` overrides Module#inspect. An anonymous class whose
+  superclass has the default inherited hook has been seen by no code, so its methods go into the
+  tables without PrepareMethodUpdate (`RubyModule.SetMethodOfUnseenModuleNoEventNoLock`), events
+  after; `keyword_init?` and `inspect` are made in C# with the others, as MRI's setup_struct does
+  (so `singleton_methods` lists `:inspect`, as in CRuby). Now 0 invalidations. (3) A member reader
+  at a site with a scope (light ones too) gets a `RubyStructReaderDispatcher`: the rule generators
+  are closures per member per class, so no rule was ever shared (IR_BIND_TRACE: 32-577 us -> 4-9 us).
+  (4) `LibraryDispatcher.TryCreateConstruction` takes struct classes (`TryGetObjectConstruction(count,
+  structs: true)`; the method JIT's constructions still take plain classes only): allocate the
+  RubyStruct, call a Ruby initialize as for a plain class or Struct#initialize through a site of the
+  construction's own, as the rule does (IR_BIND_TRACE: the first `new` 80-160 us -> 10-25 us).
+  `Util/bench/struct-shapes.rb`, six alternating rounds, CRuby / master / new, ns: `kw_new` 299 /
+  1017 / 198, `kwnil_new` 305 / 1019 / 189, `kw_hash` 196 / 1051 / 147, `sub_kw` 356 / 1149 / 379,
+  `pos_new` 120 / 180 / 115, `new_class_use` (Struct.new plus a first new and getter) 5,678 / 79,510
+  / 50,976; `kwinit`, `getter`, `setter`, `obj_new`, `plain` and `hash_dup` overlap (the machine was
+  loaded: `getter` read 39 ns in one run and 79-93 in another; `hash_dup`, `setter` and `obj_new`
+  each looked slower once and overlapped run alone, 8-10 rounds). `new_class` is GC-bound and its
+  least-of-seven swings (spreads 44-143%); in one process, rounds of 1,000 `Struct.new(:a, :b)`,
+  three alternating runs: 26-27 us a class on master, 20-21 here, CRuby 4.1-4.4.
+  `Util/struct-matrix.rb` (new, 110 rows, each cold, again and warm) prints CRuby's output but for
+  `UsingRefine.make`, a refined `initialize` that Class#new sees on every IronRuby build (master
+  too); master differs in eight more rows. Matrices through gate-matrices.rb, as built, `-X:NoJIT
+  -X:NoOSR`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`, `IR_PARKED_SCOPES=0`, R2R and `IR_FAST_STRUCT=0`:
+  struct, hash-struct, hash-order, keyword-light, jit, jit-calls `same` or `baseline -16`,
+  hot-shapes `baseline`: PASS. spec/core/struct: 170 examples, 1 error (the known deconstruct_keys
+  one) on master, on this and with the switch off. IronRuby.Tests, the 37 named Struct, Keyword and
+  Construct tests and ClrRubyImpliedInterfaces3: PASSED. Recursion through a struct's initialize
+  and keyword initialize: SystemStackError with and without the JIT. Census: 0 methods changed (it
+  sees none of this). For the gate: the unseen-class path (a hook of `inherited` defined in another
+  thread between the two checks, ObjectSpace finding the class before its members exist), the
+  construction's initialize site made without the caller's scope (as the rule's library-initialize
+  call, which keeps the caller's flags, may not be), and that `keyword_init?` reads the hidden
+  variable through superclasses for any Struct subclass. Left: writers keep per-class rules; a site
+  past the dispatchers' budget builds a `new` rule per class (about 250 classes into a loop);
+  `Struct.new` itself is 5 times CRuby; `kwinit` (`def initialize(sku:, name:)`) 1.8x and
+  `Hash#dup` are untouched.
 
 - **perf/first-bind (2026-11-26) - what a first bind costs, split; light-scope sites call library
   methods through a dispatcher for their first calls (gap 26).** The split (master 4bae83f3, R2R

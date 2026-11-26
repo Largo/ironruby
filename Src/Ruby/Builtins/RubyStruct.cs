@@ -119,43 +119,90 @@ namespace IronRuby.Builtins {
             return new RubyStruct(rubyClass, true);
         }
 
+        /// <summary>
+        /// IR_FAST_STRUCT=0 sends every Struct#initialize but a positional one per member to the slow path in ruby4.rb, and
+        /// adds a new struct class's methods the way any method is added, moving the global method version.
+        /// </summary>
+        public static readonly bool FastStruct = Environment.GetEnvironmentVariable("IR_FAST_STRUCT") != "0";
+
         // triggers "inherited" event, adds constant to the owner
         public static RubyClass/*!*/ DefineStruct(RubyClass/*!*/ owner, string className, string/*!*/[]/*!*/ attributeNames) {
             Assert.NotNullItems(attributeNames);
-            
+
+            // An anonymous class whose superclass's inherited hook is the default has been seen by no code when its
+            // members are added: no Ruby code ran while it was made and no constant names it.
+            var context = owner.Context;
+            bool unseen = FastStruct && className == null && context.IsDefaultHook(owner, RubyClass.Hook.Inherited);
+
             // MRI: "inherited" event is triggered by DefineClass before the members are defined and the body is evaluated.
             // Any exception thrown by the event will cancel struct initialization.
-            RubyClass result = owner.Context.DefineClass(owner, className, owner, new Info(attributeNames));
-
-            AddClassMembers(result, attributeNames);
-
+            RubyClass result = context.DefineClass(owner, className, owner, new Info(attributeNames));
+            AddClassMembers(result, attributeNames, unseen && context.IsDefaultHook(owner, RubyClass.Hook.Inherited));
             return result;
         }
 
         // add methods to the generated class
-        private static void AddClassMembers(RubyClass/*!*/ cls, string[]/*!*/ structMembers) {
+        private static void AddClassMembers(RubyClass/*!*/ cls, string[]/*!*/ structMembers, bool unseen) {
             var newInstance = new RuleGenerator(RuleGenerators.InstanceConstructor);
             var context = cls.Context;
-
             var singletonClass = cls.GetOrCreateSingletonClass();
 
-            singletonClass.AddMethod(context, "[]", new RubyCustomMethodInfo(newInstance, RubyMemberFlags.Public, singletonClass));
-            singletonClass.AddMethod(context, "new", new RubyCustomMethodInfo(newInstance, RubyMemberFlags.Public, singletonClass));
+            // setup_struct's singleton methods: new, [], members, inspect, keyword_init?
+            var methods = new List<KeyValuePair<RubyClass, KeyValuePair<string, RubyMemberInfo>>>(5 + 2 * structMembers.Length);
+            Action<RubyClass, string, RubyMemberInfo> add = (module, name, method) =>
+                methods.Add(new KeyValuePair<RubyClass, KeyValuePair<string, RubyMemberInfo>>(module, new KeyValuePair<string, RubyMemberInfo>(name, method)));
 
-            singletonClass.AddMethod(context, "members", new RubyLibraryMethodInfo(
+            add(singletonClass, "new", new RubyCustomMethodInfo(newInstance, RubyMemberFlags.Public, singletonClass));
+            add(singletonClass, "[]", new RubyCustomMethodInfo(newInstance, RubyMemberFlags.Public, singletonClass));
+            add(singletonClass, "members", new RubyLibraryMethodInfo(
                 new[] { LibraryOverload.Create(new Func<RubyClass, RubyArray>(GetMembers), false, 0, 0) },
+                RubyMemberFlags.Public,
+                singletonClass
+            ));
+            add(singletonClass, "inspect", new RubyLibraryMethodInfo(
+                new[] { LibraryOverload.Create(new Func<RubyClass, MutableString>(Inspect), false, 0, 0) },
+                RubyMemberFlags.Public,
+                singletonClass
+            ));
+            add(singletonClass, "keyword_init?", new RubyLibraryMethodInfo(
+                new[] { LibraryOverload.Create(new Func<RubyClass, object>(GetKeywordInit), false, 0, 0) },
                 RubyMemberFlags.Public,
                 singletonClass
             ));
 
             for (int i = 0; i < structMembers.Length; i++) {
                 string getter = structMembers[i];
-
                 // any symbol is a legal member name; the accessors are defined for all of them,
                 // even when the resulting name is not writable as a literal method call
-                cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls, 0, i));
-                cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls, 1, i));
+                add(cls, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls, 0, i));
+                add(cls, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls, 1, i));
             }
+
+            if (unseen) {
+                // all of them first, then their events, which may run Ruby code (singleton_method_added, method_added)
+                using (context.ClassHierarchyLocker()) {
+                    foreach (var entry in methods) {
+                        entry.Key.SetMethodOfUnseenModuleNoEventNoLock(entry.Value.Key, entry.Value.Value);
+                    }
+                }
+                foreach (var entry in methods) {
+                    entry.Key.MethodAdded(entry.Value.Key);
+                }
+            } else {
+                foreach (var entry in methods) {
+                    entry.Key.AddMethod(context, entry.Value.Key, entry.Value.Value);
+                }
+            }
+        }
+
+        // The struct class's #inspect (MRI's rb_struct_s_inspect): its name, and "(keyword_init: true)" after it for a
+        // class made with that option.
+        public static MutableString/*!*/ Inspect(RubyClass/*!*/ self) {
+            var result = self.GetDisplayName(self.Context, false);
+            if (RubyOps.IsTrue(GetKeywordInit(self))) {
+                result = result.Append("(keyword_init: true)");
+            }
+            return result;
         }
 
         // Derived struct: [RubyMethod("members", RubyMethodAttributes.PublicSingleton)]
@@ -338,16 +385,26 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether the struct's class was built by Struct.new(..., keyword_init: true): ruby4.rb's
-        /// Struct.new keeps the option in the class's @__keyword_init__, which is what the class's
-        /// #keyword_init? answers. A subclass has none of its own.
+        /// The keyword_init: option of Struct.new, as MRI's struct_ivar_get finds it: ruby4.rb's Struct.new keeps it in the
+        /// class's @__keyword_init__ (true, false or nil), and a subclass has the one of the nearest class above it that
+        /// has one. Nil when none has.
         /// </summary>
-        public bool IsKeywordInit {
-            get {
-                var data = ImmediateClass.GetNonSingletonClass().TryGetInstanceData();
+        public object KeywordInit {
+            get { return GetKeywordInit(ImmediateClass.GetNonSingletonClass()); }
+        }
+
+        private static readonly string/*!*/ _KeywordInitVariable = IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__");
+
+        public static object GetKeywordInit(RubyClass/*!*/ cls) {
+            string name = _KeywordInitVariable;
+            for (RubyClass c = cls; c != null && c.StructInfo != null; c = c.SuperClass) {
+                var data = c.TryGetInstanceData();
                 object value;
-                return data != null && data.TryGetInstanceVariable(IronRuby.Runtime.RubyUtils.GetCoreStateInstanceVariableName("@__keyword_init__"), out value) && RubyOps.IsTrue(value);
+                if (data != null && data.TryGetInstanceVariable(name, out value)) {
+                    return value;
+                }
             }
+            return null;
         }
     }
 }

@@ -12426,33 +12426,26 @@ class << Struct
     end
 
     klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
-    # klass is a new receiver: a call like klass.define_singleton_method would bind a rule
-    # of its own, every time (hundreds of microseconds). The methods called through
-    # bind_call share one rule - and are the built-ins, as in MRI's struct.c.
+    # klass is a new receiver: a call like klass.instance_variable_set would bind a rule of its
+    # own, every time (hundreds of microseconds). The methods called through bind_call share
+    # one rule. The class's keyword_init? and inspect (MRI's setup_struct) are RubyStruct's and
+    # read the option from here.
     ::Kernel.instance_method(:__ir_set_hidden_ivar__).bind_call(klass, :@__keyword_init__, keyword_init)
-    define_singleton = ::Kernel.instance_method(:define_singleton_method)
-    # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
-    define_singleton.bind_call(klass, :keyword_init?) { @__keyword_init__ }
-    if keyword_init
-      # MRI: #<Class:0x...>(keyword_init: true)
-      define_singleton.bind_call(klass, :inspect) { "#{super()}(keyword_init: true)" }
-    end
     ::Module.instance_method(:module_eval).bind_call(klass, &block) if block
     klass
   end
 end
 
 class Struct
-  # Struct#initialize is RubyStructOps.Initialize: it stores one positional value per member
-  # itself and hands every other call here, the positional arguments in one array and the
-  # keywords, if any, in a Hash - as a `def initialize(*args, **kwargs)' would have received
-  # them. __struct_initialize__ is the plain store.
-  def __struct_initialize_slow__(args, kwargs)
+  # Struct#initialize is RubyStructOps.Initialize: it stores one positional value per member,
+  # and keywords that all name members, itself and hands every other call here, the positional
+  # arguments in one array and the keywords, if any, in a Hash - as a `def initialize(*args,
+  # **kwargs)' would have received them - with the class's keyword_init (true, false or nil, a
+  # subclass's that of the struct class above it). __struct_initialize__ is the plain store.
+  def __struct_initialize_slow__(args, kwargs, keyword_init = nil)
     kwargs ||= {}
     # self.class.members, not members: a struct may have a member called "members"
-    klass = self.class
-    names = klass.members
-    keyword_init = klass.respond_to?(:keyword_init?) ? klass.keyword_init? : nil
+    names = self.class.members
 
     # The overwhelmingly common call: one positional value per member.
     if kwargs.empty? && !keyword_init && args.size == names.size
@@ -12476,12 +12469,22 @@ class Struct
       unless args.empty?
         raise ArgumentError, "wrong number of arguments (given #{args.size + (kwargs.empty? ? 0 : 1)}, expected 0)"
       end
-      unknown = kwargs.keys - names
-      unless unknown.empty?
+      # struct_hash_set_i: a Symbol or a String names a member (rb_struct_pos)
+      values = ::Array.new(names.size)
+      unknown = nil
+      kwargs.each_pair do |key, value|
+        index = (key.is_a?(::Symbol) || key.is_a?(::String)) ? names.index(key.to_sym) : nil
+        if index
+          values[index] = value
+        else
+          (unknown ||= []) << key
+        end
+      end
+      if unknown
         # MRI's wording is plural whatever the count
         raise ArgumentError, "unknown keywords: #{unknown.join(', ')}"
       end
-      __struct_initialize__(*names.map { |name| kwargs[name] })
+      __struct_initialize__(*values)
     else
       # pad with nil so that a partial re-initialize clears the remaining members
       values = args.dup

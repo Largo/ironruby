@@ -1756,10 +1756,17 @@ namespace IronRuby.Builtins {
         /// no block, in the cases it is the allocation of a RubyObject and maybe a call of a Ruby initializer of that arity and
         /// nothing else; null otherwise.
         /// </summary>
-        internal ObjectConstruction TryGetObjectConstruction(int count) {
+        internal ObjectConstruction TryGetObjectConstruction(int count, bool structs = false) {
             Func<RubyClass, object> allocator;
+            bool isStruct = false;
             if (!TryGetPlainAllocation(out allocator)) {
-                return null;
+                // A class made by Struct.new, or a subclass of one (structs: for LibraryDispatcher.TryCreateConstruction): the rule
+                // allocates a RubyStruct (GetAllocatorNewExpression) and calls initialize, Struct's or a Ruby one, as for a plain class.
+                if (!structs || !IsPlainStruct()) {
+                    return null;
+                }
+                allocator = _structAllocator;
+                isStruct = true;
             }
 
             int version;
@@ -1771,6 +1778,15 @@ namespace IronRuby.Builtins {
 
             if (initializer == null) {
                 return null;
+            }
+
+            // Struct#initialize, a library method that takes the scope from no one: called as the rule calls it, through a site of
+            // its own (BuildOverriddenInitializerCall)
+            if (isStruct) {
+                if (initializer is RubyLibraryMethodInfo) {
+                    var structInitializer = (initializer.DeclaringModule == Context.GetClass(typeof(RubyStruct))) ? CreateInitializeCall(count) : null;
+                    return (structInitializer != null) ? new ObjectConstruction(this, allocator, version, structInitializer, count) : null;
+                }
             }
 
             // Object#initialize and BasicObject#initialize: no arguments - construct (a RubyObject constructor, the same allocation)
@@ -1803,6 +1819,50 @@ namespace IronRuby.Builtins {
 
             var body = method.GetDelegate();
             return (body.GetType() == MemberDispatcher.GetRubyMethodDelegateType(count)) ? new ObjectConstruction(this, allocator, version, body, count) : null;
+        }
+
+        private static readonly Func<RubyClass, object>/*!*/ _structAllocator = (cls) => RubyStruct.Create(cls);
+
+        // Class#new makes an instance of this class as a RubyStruct, and does nothing else before initialize (GetAllocatorNewExpression).
+        private bool IsPlainStruct() {
+            return RubyStruct.FastStruct && _structInfo != null && !IsSingletonClass && !_isUninitializedAllocation && _isRubyClass &&
+                CAllocator == null && !IsException() && GetUnderlyingSystemType() == typeof(RubyStruct);
+        }
+
+        // The rule's call of a library initialize (BuildOverriddenInitializerCall): a dynamic call of the instance's initialize,
+        // private methods included, with the arguments of new and no block, as a Ruby initializer's body is called (ObjectConstruction).
+        private Delegate CreateInitializeCall(int count) {
+            var action = RubyCallAction.Make(Context, Symbols.Initialize, new RubyCallSignature(count, RubyCallFlags.HasImplicitSelf));
+            switch (count) {
+                case 0: {
+                    var site = CallSite<Func<CallSite, object, object>>.Create(action);
+                    return new Func<object, Proc, object>((self, block) => site.Target(site, self));
+                }
+                case 1: {
+                    var site = CallSite<Func<CallSite, object, object, object>>.Create(action);
+                    return new Func<object, Proc, object, object>((self, block, a0) => site.Target(site, self, a0));
+                }
+                case 2: {
+                    var site = CallSite<Func<CallSite, object, object, object, object>>.Create(action);
+                    return new Func<object, Proc, object, object, object>((self, block, a0, a1) => site.Target(site, self, a0, a1));
+                }
+                case 3: {
+                    var site = CallSite<Func<CallSite, object, object, object, object, object>>.Create(action);
+                    return new Func<object, Proc, object, object, object, object>((self, block, a0, a1, a2) => site.Target(site, self, a0, a1, a2));
+                }
+                case 4: {
+                    var site = CallSite<Func<CallSite, object, object, object, object, object, object>>.Create(action);
+                    return new Func<object, Proc, object, object, object, object, object>((self, block, a0, a1, a2, a3) =>
+                        site.Target(site, self, a0, a1, a2, a3));
+                }
+                case 5: {
+                    var site = CallSite<Func<CallSite, object, object, object, object, object, object, object>>.Create(action);
+                    return new Func<object, Proc, object, object, object, object, object, object>((self, block, a0, a1, a2, a3, a4) =>
+                        site.Target(site, self, a0, a1, a2, a3, a4));
+                }
+                default:
+                    return null;
+            }
         }
 
         public void BuildObjectConstructionNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
