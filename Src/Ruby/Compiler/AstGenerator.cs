@@ -356,6 +356,12 @@ namespace IronRuby.Compiler.Ast {
             // A block literal (or lambda) is nested in this one: its Proc captures this block's scope.
             public bool HasNestedBlock;
 
+            // The hidden variables that hold the last Proc of each block literal written directly in this block's body, which
+            // the block keeps with its scope when it reuses that (BlockDefinition.ParkedBlockScopesEnabled); and whether a literal
+            // nested in it cannot be kept so: a lambda, a literal that does not reuse its Proc, one in a module body in the block.
+            internal List<MSA.Expression> ParkProcVariables;
+            internal bool HasUnparkableNestedBlock;
+
             // The lexical depth of the block's own scope (LexicalScope.Depth): a local defined at a
             // smaller depth belongs to an enclosing scope.
             internal int LexicalDepth;
