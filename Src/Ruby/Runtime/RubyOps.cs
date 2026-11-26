@@ -532,7 +532,6 @@ namespace IronRuby.Runtime {
         /// MethodYield of a light-frame method: the frame is the scope's if one was made, the call's otherwise.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static bool LightMethodYield(RuntimeFlowControl/*!*/ rfc, RubyScope scope, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
             if (yieldedBlockFlowControl.ReturnReason == BlockReturnReason.Undefined) {
                 return false;
@@ -624,7 +623,6 @@ namespace IronRuby.Runtime {
         /// TracePoint hook enabled later makes it then (<see cref="CreateBlockScopeLazy"/>).
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static RubyBlockScope CreateBlockScopeIfTraced(MutableTuple locals, string[] variableNames,
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
@@ -644,7 +642,6 @@ namespace IronRuby.Runtime {
         /// block makes its scope and reports it (<see cref="TraceBlockCall"/>).
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static bool EnterScopeFreeBlock() {
             RubyUtils.SafePoint();
             RequireSufficientStack();
@@ -933,12 +930,10 @@ namespace IronRuby.Runtime {
         #region Blocks
 
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static Proc InstantiateBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
             return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
         }
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static Proc InstantiateLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
             return dispatcher.HasMethod ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
         }
@@ -948,7 +943,6 @@ namespace IronRuby.Runtime {
         /// Proc this frame made for the literal last time, kept in a variable of the frame, made again if nothing kept it.
         /// </summary>
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static Proc InstantiateReusableBlock(Proc previous, RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
             if (previous != null && previous.TryReuse()) {
                 return previous;
@@ -989,14 +983,14 @@ namespace IronRuby.Runtime {
 
         #region Yield: TODO: generate
 
-        // AggressiveOptimization, here and on the other helpers a yield, a Proc#call or a light-frame method goes through
-        // (block dispatchers, BlockParam and RuntimeFlowControl factories): they are called from compiled Ruby code from
-        // the first iteration on, but tiered compilation leaves them Tier-0 for the first second or two of a process -
-        // its call counting waits until no method has been jitted for 100 ms, which a program that keeps compiling Ruby
-        // code does not give it - so a short script ran its yields through unoptimized getters and casts. Steady state
-        // is the same either way (Util/bench, best of 6 after a warm-up); a short run is 5-15% faster.
+        // Not AggressiveOptimization, here or on the other helpers a yield, a Proc#call or a light-frame method goes
+        // through (block dispatchers, BlockParam and RuntimeFlowControl factories), though compiled Ruby code calls them
+        // from its first iteration on. They were, so that the JIT-only build would not run them Tier-0 for the first
+        // second or two of a process (call counting waits until nothing has been jitted for 100 ms). But every host
+        // that ships is ReadyToRun, which precompiles them optimized and skips a method marked so: that one is jitted
+        // at its first call instead, 22 of them in every `ir -e 1` (2% of its instructions). Steady state is the same
+        // either way; a short yield-heavy run of the JIT-only build (IR_CONFIG=Release) is ~8% slower without it.
         [Emitted] 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield0(Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -1083,7 +1077,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -1101,7 +1094,6 @@ namespace IronRuby.Runtime {
         }
 
         // YieldNoAutoSplat1 uses InvokeNoAutoSplat instead of Invoke (used by Call1)
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         internal static object YieldNoAutoSplat1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -1115,7 +1107,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield2(object arg1, object arg2, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -1130,7 +1121,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield3(object arg1, object arg2, object arg3, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -1145,7 +1135,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object Yield4(object arg1, object arg2, object arg3, object arg4, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
@@ -1160,7 +1149,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         public static object YieldN(object[]/*!*/ args, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             Debug.Assert(args.Length > BlockDispatcher.MaxBlockArity);
 

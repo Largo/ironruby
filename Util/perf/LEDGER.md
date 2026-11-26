@@ -1220,6 +1220,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     449 -> 389 ms median, the tools -10% (Landed). JIT at `-e 1` 500 -> 133 methods; what is
     left is coreclr preparing first-run methods and types (~170 ms profiled), runtime init
     (~93) and binding (~117).
+    2026-11-26, perf/lazy-builtins: runtime init split on the composite host (Landed): what
+    is left of it is coreclr preparing code later start-up needs anyway, so deferring init
+    work moves its cost and saves nothing; the yield helpers lost AggressiveOptimization
+    (JIT at `-e 1` 133 -> 111 methods, -2% instructions on all four commands).
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
@@ -1388,6 +1392,63 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/lazy-builtins (2026-11-26) - runtime init of `ir -e 1`, split; the yield helpers are
+  no longer AggressiveOptimization, so ReadyToRun precompiles them (gap 26).** Master 5cbf9fda,
+  composite R2R host with the startup library on both trees. Asked: what runtime init does
+  (93 ms profiled, managed Main to the prelude's first parse), and whether registering the
+  built-ins lazily would shorten it. The split (perf with jitdump, 3 runs, main thread, ms):
+  by kind, coreclr runtime work 49, kernel 22, libc 10, JIT 8, managed code 4. By call:
+  `RubyContext..ctor` 45 (`Loader.LoadLibrary` 32, `BuiltinsLibraryInitializer.LoadModules`
+  26); the DLR loading the language by type name 6 (`TypeNameParser` cold) and creating it by
+  reflection 3.5; option parsing 9 (`RubyEncoding.LocaleCharmap` and its .cctor 6);
+  `Environment.OSVersion` 4; `RegisterSourceFileLocation`'s exception for `-e` 3; the console
+  3. Methods are already registered lazily (`RubyModule._methodsInitializer`, run at the first
+  lookup in a module or its descendants); of LoadModules' 26 ms, 21 was
+  `SetBuiltinConstant` of a nested class or alias forcing its owner's constant initializer:
+  Process's (12: `Process::Tms`, a Struct, defined and its `inherited` hook looked up) and
+  Encoding's (7: every encoding, .NET code pages loaded). Tried, not kept:
+  - **Deferring a library constant until its owner's constant table is first read**
+    (`SetLibraryConstantNoLock`, the set chained after the initializer, so `constants`
+    order and module copies are unchanged): LoadModules 26 -> 6 ms and init 93 -> 76 ms, but
+    `ir -e 1` executed the same instructions (1,103 M both, 5 runs each). The prelude reads
+    Process's constants (`const_defined?` in `module Process`, ruby4.rb) and Encoding's, so
+    both initializers run a little later; Tms then costs 0.5 ms instead of 12, because what
+    it paid for was the first run of code (Struct definition, method lookup, the class
+    hierarchy) that the prelude runs anyway.
+  - **`OperatingSystem.IsWindows()` for `OSVersion.Platform`, and `File.Exists` before
+    `ResolveLinkTarget` for `-e`**: both gone from the profile, `ir -e 1` the same (median
+    380 vs 381 ms over 30 alternating rounds, instructions equal).
+  So runtime init's 93 ms is first-run work coreclr does for code start-up needs anyway; it
+  goes only with the code it prepares (fewer distinct methods and types run), not by doing
+  the same work later.
+  Taken: the 65 helpers a yield, a Proc#call or a light-frame method goes through (RubyOps
+  Yield*, block and flow-control factories, BlockDispatcher*.Invoke, Proc.Call, BlockParam
+  factories) lose `AggressiveOptimization`. It was there so the JIT-only build would not run
+  them Tier-0 for its first second; crossgen2 skips a method marked so, and every shipped host
+  is ReadyToRun, so there it only made 22 of them FullOpts JIT compiles in every `ir -e 1`.
+  JIT at `-e 1` 133 -> 111 methods. Instructions (`icount.sh 3`, least of 3) base -> new:
+  `-e 1` 1,103 -> 1,080 M, `gem --version` 1,234 -> 1,206, `gem list` 2,206 -> 2,176, irb
+  2,504 -> 2,470. Wall, `bench.rb 10`, load 1.2-1.3, median (best; CPU best): `-e 1` 381 ->
+  381 (363 -> 362; 341 -> 333), `gem --version` 439 -> 434, `gem list` 799 -> 796, irb exit
+  898 -> 874, irb 1+1 894 -> 872; 30 rounds of `-e 1` alone: 386 -> 381 (363 -> 355; 340 ->
+  332). Cost: a 0.2 s yield-heavy script (times, each, map, Proc#call, a 3-argument yield)
+  takes the same on the R2R host (median 147 -> 145 ms, 6 runs) and ~8% longer on the
+  JIT-only Release build (210 -> 229), the case the attribute was added for. The other 30
+  uses (JitIntrinsics, Hash.Jit, Oj, MessagePack, BCrypt) run only from method-JIT code or
+  on-demand libraries, never at start-up, and stay. Gate: IronRuby.Tests PASSED on both
+  (1,345 tests, same failed and flaky lists); gate-matrices --all PASS (154 matrices, 6 modes
+  with r2r: 724 same, 200 baseline); ruby/spec sweep of the five suites: 6 examples not in the
+  list (Set compare_by_identity), failing alike on the baseline (local spec checkout 9444bc3c,
+  not the pin); built-in reflection (each named module's ancestors, instance, private,
+  protected and singleton methods, constants, `ObjectSpace` counts: 410 modules, 471 in
+  ObjectSpace) printed identically on both trees, Release and R2R; micro-table both orders, no
+  line slower than 5% in both; AWFY 12 on Release new/base 0.995 and 0.986, on R2R 0.995 and
+  0.998, none slower than 5% in both orders. What 350 still needs (-30 ms median): runtime
+  init only by running less code (the DLR's type-name lookup and reflection create, ~10 ms of
+  cold BCL; locale and the encodings' code pages, ~12), binding's first-run cost (gap 26's
+  117 ms), or the warm pool. `DOTNET_EnableWriteXorExecute=0` takes 0.5% of user and 7% of
+  kernel instructions (2,300 mprotects) and ~10 ms CPU, a hardening trade not taken here.
 
 - **perf/composite-r2r (2026-11-26) - the R2R host is built as the release is: self-contained,
   one composite ReadyToRun image of IronRuby and the framework, compiled with a startup profile

@@ -31,8 +31,6 @@ namespace IronRuby.Runtime {
         /// already, so nothing can target this call: it shares one frame that is never active and never a converter.
         /// </summary>
         [Emitted]
-        // AggressiveOptimization: see RubyOps.Yield0.
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static RuntimeFlowControl/*!*/ CreateRfcForMethod(Proc proc) {
             if (proc != null && proc.Kind == ProcKind.Block) {
                 proc.ConvertAsFrame();
@@ -338,7 +336,6 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static void LeaveProcCall(BlockParam/*!*/ call) {
             call.IsActiveLambdaCall = false;
         }
@@ -387,7 +384,6 @@ namespace IronRuby.Runtime {
         /// </summary>
         /// <returns>True if the block should terminate returning the result of yield.</returns>
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static bool BlockYield(RubyScope/*!*/ scope, BlockParam/*!*/ ownerBlockFlowControl, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
             Assert.NotNull(scope, ownerBlockFlowControl, yieldedBlockFlowControl);
 
@@ -414,7 +410,6 @@ namespace IronRuby.Runtime {
         /// </summary>
         /// <returns>True if the method should terminate returning the result of yield.</returns>
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static bool MethodYield(RubyScope/*!*/ scope, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
             if (yieldedBlockFlowControl.ReturnReason == BlockReturnReason.Undefined) {
                 return false;
@@ -518,7 +513,6 @@ namespace IronRuby.Runtime {
         /// Post-proc-call: Handles break and return from the called block.
         /// </summary>
         [Emitted]
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         public static object MethodProcCall(BlockParam/*!*/ blockFlowControl, object returnValue) {
             switch (blockFlowControl.ReturnReason) {
                 case BlockReturnReason.Break:
