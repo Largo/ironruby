@@ -848,6 +848,7 @@ namespace IronRuby.Tests {
 
                 ClassVariables1,
                 ClassVariables_DefinedOvertaken1,
+                ClassVariables_Refinement1,
                 UnqualifiedConstants2,
 
                 AliasMethodLookup1,

@@ -877,6 +877,36 @@ false
 ");
         }
 
+        /// <summary>
+        /// A method defined in a `refine' block reads and writes the class variables of the module around the `refine',
+        /// as MRI's vm_get_cvar_base, which passes over the refinement's cref, does.
+        /// </summary>
+        public void ClassVariables_Refinement1() {
+            TestOutput(@"
+module RM
+  @@r = :outer
+  refine String do
+    p @@r
+    def cv_r = @@r
+    def cv_d = defined?(@@r)
+    def cv_w(v) = (@@r = v)
+    def cv_missing = defined?(@@nowhere)
+  end
+end
+using RM
+p ""s"".cv_r, ""s"".cv_d, ""s"".cv_missing
+""s"".cv_w(:written)
+p RM.class_variable_get(:@@r), ""s"".cv_r
+", @"
+:outer
+:outer
+""class variable""
+nil
+:written
+:written
+");
+        }
+
         public void Scenario_RubyThreads1() { 
             AssertOutput(delegate() {
                 CompilerTest(@"
