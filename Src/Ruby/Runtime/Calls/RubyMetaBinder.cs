@@ -137,60 +137,9 @@ namespace IronRuby.Runtime.Calls {
                 return result;
             }
 
-            if (argArray != null || (result = BindBridge<T>(args, context)) == null) {
-                result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
-            }
+            result = this.LightBind<T>(args, (argArray == null) ? GetRuleCompilationThreshold(args, context) : context.CompilationThreshold);
             CacheTarget(result);
             return result;
-        }
-
-        /// <summary>
-        /// The delegate of a spent dispatcher that makes a hot call until its rule, compiled in the background, lands, or that rule
-        /// once it has - or null (see <see cref="LibraryDispatcher.TryBridge"/>).
-        /// </summary>
-        internal virtual T BindBridge<T>(object[]/*!*/ args, RubyContext/*!*/ context) where T : class {
-            return null;
-        }
-
-        /// <summary>
-        /// The rule a bind for the arguments builds, as a lambda of the site's type: the rule's test, its action, and the site's
-        /// update where the test fails - the lambda an interpreted rule compiles in the background (DynamicUtils.LightBind).
-        /// </summary>
-        internal Expression<T>/*!*/ BuildRuleLambda<T>(object[]/*!*/ args) where T : class {
-            var parameters = RuleParameters<T>.Parameters;
-            var targetMO = DynamicMetaObject.Create(args[0], parameters[1]);
-            var argsMO = new DynamicMetaObject[args.Length - 1];
-            for (int i = 0; i < argsMO.Length; i++) {
-                argsMO[i] = DynamicMetaObject.Create(args[i + 1], parameters[i + 2]);
-            }
-            var binding = Bind(targetMO, argsMO);
-            var body = Ast.Condition(
-                binding.Restrictions.ToExpression(),
-                AstUtils.Convert(binding.Expression, RuleParameters<T>.Update.Type),
-                RuleParameters<T>.Update
-            );
-            return Ast.Lambda<T>(body, "CallSite.Target", true, parameters);
-        }
-
-        // The parameters and the update of a rule lambda of the delegate type (see DynamicUtils.LightBind):
-        private static class RuleParameters<T> where T : class {
-            internal static readonly System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>/*!*/ Parameters;
-            internal static readonly Expression/*!*/ Update;
-
-            static RuleParameters() {
-                var methodParams = typeof(T).GetMethod("Invoke").GetParameters();
-                var prms = new ParameterExpression[methodParams.Length];
-                var invokeArgs = new Expression[methodParams.Length];
-                for (int i = 0; i < methodParams.Length; i++) {
-                    prms[i] = Ast.Parameter(methodParams[i].ParameterType);
-                    invokeArgs[i] = (i == 0) ? (Expression)Ast.Convert(prms[i], typeof(CallSite<T>)) : prms[i];
-                }
-                Parameters = new System.Collections.ObjectModel.ReadOnlyCollection<ParameterExpression>(prms);
-                Update = Ast.Block(
-                    Ast.Label(CallSiteBinder.UpdateLabel),
-                    Ast.Invoke(Ast.Property(invokeArgs[0], typeof(CallSite<T>).GetProperty("Update")), invokeArgs)
-                );
-            }
         }
 
         // Links a precompiled dispatcher to the one the site holds now, if that serves receivers this one does not (see MemberDispatcher.Next).
