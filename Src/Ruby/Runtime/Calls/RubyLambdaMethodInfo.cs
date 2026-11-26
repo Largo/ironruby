@@ -144,11 +144,22 @@ namespace IronRuby.Runtime.Calls {
                 return true;
             }
             var info = other as RubyLambdaMethodInfo;
-            return info != null && info._bodyId == _bodyId;
+            return info != null && (info._bodyId == _bodyId || SameProc(info._block, _block));
+        }
+
+        // Two methods made by define_method from the same Proc - or a copy of it, or its lambda - are the same method
+        // in MRI (rb_method_definition_eq compares the procs with Proc#==): the same block literal over the same scope
+        // (ProcOps.Equal). One literal run in two scopes (`[1, 2].each { |i| define_method(:"m#{i}") { } }') makes two.
+        private static bool SameProc(Proc/*!*/ a, Proc/*!*/ b) {
+            if (a.SymbolName != null || b.SymbolName != null) {
+                return a.SymbolName == b.SymbolName;
+            }
+            return a.Dispatcher == b.Dispatcher && a.LocalScope == b.LocalScope;
         }
 
         public override int GetEquivalenceHashCode() {
-            return _bodyId;
+            // as ProcOps.GetHash: what SameProc compares
+            return (_block.SymbolName != null) ? _block.SymbolName.GetHashCode() : _block.Dispatcher.GetHashCode() ^ _block.LocalScope.GetHashCode();
         }
 
         public string/*!*/ DefinitionName {
