@@ -173,6 +173,12 @@ namespace IronRuby.Runtime.Jit {
             _resolvedConstantOwner = owner;
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
             _usesConstants = true;
+            // a method body's loop runs on past the entry's revalidation (TryCompile); an outlined loop's copy hands
+            // itself back on any reassignment
+            if (_loop == null) {
+                if (_hasLoop) { _foldedInLoop = true; }
+                if (_calleeLoop) { _foldedAfterCalleeLoop = true; }
+            }
             return value;
         }
 

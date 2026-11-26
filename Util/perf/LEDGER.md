@@ -607,7 +607,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    out first what compiles once the screen lets it through. Done in perf/deadconst (see Landed): the
    screen lets `schedule` through and nothing compiles - it is called once per iteration, so it is the loop
    tier's, which still stops at `[osr] emitter: call: is_task_holding_or_waiting/0`; the next step for it
-   is calls on another receiver in an outlined loop. And two that the rounds
+   is calls on another receiver in an outlined loop. What that takes, found in perf/deadconst2 by taking
+   the obstacles off a copy of `schedule` one at a time (`IR_OSR_VERBOSE=1`): first the predicate
+   `is_task_holding_or_waiting` (`@task_holding || (!@packet_pending && @task_waiting)`, a pure method the
+   method JIT would inline, but the loop tier's inliner has no profile of the receiver's class); with
+   the loop's receiver in a local `t` it still says `call: is_task_holding_or_waiting/0`, and with the
+   predicate written out on attribute readers `call: th_p/0` - an attribute read on a local the `while`
+   writes is refused there on purpose (round eight: CD's `Node#successor` walks a few links per entry and
+   paid the copy's entry each time; only a core iterator's loop takes it). Behind those, `run_task`, which
+   no outlined loop can call: it needs a general call made with the loop's scope (visibility and
+   refinements as the source's, gap 1's round seven), and since an outlined loop deopts to the top of the
+   iteration from its snapshot, nothing after the call in the iteration may deopt - `@current_task = t`
+   is an instance variable write on self, which deopts for a frozen self. So three pieces: a class
+   profile for receivers in loops (the live value at entry is one, as `_peekLocal` uses), attribute reads
+   on a written local in a `while` that is entered once and runs long (the OSR counter knows it, the
+   entry does not), and a general call from a loop with a store after it that cannot deopt. The prize is
+   the loop's own dispatch (one predicate call, three attribute reads, two instance variable writes an
+   iteration), not `run_task`, which stays a call: at most `schedule`'s 7.5% self time, likely half.
+   Not attempted. And two that the rounds
    above keep running into: held-back writes that reach through a bound callee (a
    caller whose only effects are its callee's writes to the same self: `read_required_char`
    -> `read_char` -> `read`, `set_nesting_level` -> `set_is_root`), and attribute writes
@@ -1324,6 +1341,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     overflow check gives most loops one). perf/deadconst makes such a body deopt where it left an arm
     out; for a folded value in general the same (`_canDeopt` for a pure body with a loop that folded a
     constant) is untried, and an impure body would have to be declined for it.
+    Done in perf/deadconst2 (see Landed): such a body deopts at its loop's safe point when a constant
+    it folded was reassigned, and looks its constants up again there (going on) when it was another.
+    What is left of this gap's running-loop faults: a nearer constant appearing (rminor's case above),
+    and a method body with an effect that only a method redefinition makes stale, which goes on with
+    the old method until it returns (`MethodLoopSafePointSlow`'s impure branch).
 30. **`Binding#local_variable_get`, `_set`, `_defined?` and `local_variables` are an
     `eval` of source text each** (the prelude, `class Binding`): 436 us for a set against
     0.1 on CRuby. `ERB#result_with_hash` sets one per key (237 times CRuby), irb sets `_`
@@ -1583,6 +1605,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     passes over a refinement, as vm_get_cvar_base passes over a cref pushed by an eval). Tests
     `ClassVariables_DefinedOvertaken1` and `ClassVariables_Refinement1` have CRuby's output;
     `Util/lexical-light-matrix.rb` probes both again and prints CRuby's output in every mode.
+
+- **perf/deadconst2 (/perf-step, 2026-11-26, on claude/happy-gauss-95wm2j 2f8c31c) - a typed method body
+  whose loop folded a constant sees it reassigned at the loop's next safe point (gap 29)** - not gated.
+  The fault perf/deadconst found: a method body's `while` that folded a constant, with nothing else that
+  may deopt (a Float counter: an Int one's overflow check is a deopt), went on with the old value after
+  another thread reassigned the constant, until the call returned; CRuby's next read sees the new one.
+  The reassignment did move the code epoch (`RubyContext.ConstantReassigned`) and the safe point saw it,
+  but `MethodLoopSafePointSlow` deopts only a body that may (`JitLoopGuard.MayDeopt`). Now
+  `ResolveConstant` notes a constant folded in or after a loop of the method body's own, and `TryCompile`
+  makes such a body one that may deopt (the rule perf/deadconst had for a left-out arm, which this
+  replaces); one with an effect is declined, as a loop body that can deopt with an effect always is. One
+  that folds a constant after calling a bound callee with a loop is declined (the callee's safe point
+  looks at its own constants only). And the safe point, before deopting, looks the body's folded
+  constants up again (`JitLoopGuard.ConstantsStillHold`, the entry's `RevalidateConstants` for a running
+  loop: the method version unchanged, each constant the same object in the same module, the version read
+  before the lookups stored after): a reassignment of another constant lets the loop go on, where before
+  a body that could deopt deopted for any reassignment anywhere. rminor's trouble (a name cannot tell
+  which new constant concerns a fold) does not arise: a reassignment moves the epoch already, and what
+  is compared is the folded constants' own lookups.
+  Census (Src/StdLib + AWFY): 0 methods changed, as it must (it compiles no constant). All fourteen AWFY
+  benchmarks traced (3 x 1, `IR_JIT_VERBOSE` and `IR_OSR_VERBOSE`): the same methods specialized and
+  declined and the same loops specialized and refused on both builds. Richards `census -c` 0 differ.
+  Instructions a call (`Util/perf/callgrind/count.sh`, `ab.rb -i -n 20000`, base / new,
+  `Util/bench/deadconst-shapes.rb`): `mfloop_const` (a method's 8-iteration Float loop adding a constant,
+  the kind this makes deopt-capable) 1575.0 / 1650.8 = 1.048 - the entry's deopt handler and entry count,
+  once a call, not per iteration; its control `mfloop_plain` (the step a parameter) 1.002; `mloop_plain`
+  (an Int loop) 1.004, `mloop_dead` 1.000, `m_dead` 1.000, `m_plain` 1.000, `loop_dead` and `loop_plain`
+  (OSR) 1.001. Ordinary loops count the same.
+  Checked: `Util/deadconst-matrix.rb` gains rows 26-29 - a folded step and a folded bound of a method's
+  Float `while` reassigned by another thread (both `:limit` on the unchanged build, CRuby's `:seen` now;
+  the safe point deopts), the same with an instance variable written in the loop (declined on both
+  builds), and another constant reassigned 200 times while a folded loop runs (the right sum; no deopt in
+  the trace). The matrix prints CRuby's output on the new build with the JIT on, `-X:NoJIT -X:NoOSR`,
+  `-X:NoJITCalls` and `IR_JIT_DEADCONST=0`; jit, jit-calls, jit-const, block-loop, osr-array and dmeth-jit
+  matrices print CRuby's on both builds in all four modes, inline-matrix the baseline's (its documented
+  `tree_int_key`). IronRuby.Tests Jit* and Loop* (21) pass.
+  For the gate: a pure body with a loop that folds a constant now has a deopt-capable entry (+76
+  instructions a call on the Float shape); a caller that binds such a body treats it as one that can
+  deopt (`code.Deopts`), which could decline a caller with an effect before the call - none of the
+  fourteen benchmarks has one. Look at the order in `ConstantsStillHold` and at `Folded` being set
+  before `LoopGuard.Set` publishes the epoch.
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,

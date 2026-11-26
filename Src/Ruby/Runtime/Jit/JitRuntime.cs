@@ -353,6 +353,12 @@ namespace IronRuby.Runtime.Jit {
             // read before the versions: a change after this read moves the word past it again
             long epoch = RubyUtils.CodeEpoch;
             if (guard.Stale) {
+                // only constants moved, and each the body folded is what it was: the body is current (as at its entry,
+                // JitStub.RevalidateConstants), and the loop goes on
+                if (guard.ConstantsStillHold()) {
+                    guard.Epoch = epoch;
+                    return epoch;
+                }
                 if (guard.MayDeopt) {
                     if (Verbose) { Console.Error.WriteLine("[jit] safe point: a method or a constant the body was compiled under changed, deopt"); }
                     throw SafePointDeopt();
@@ -1281,6 +1287,9 @@ namespace IronRuby.Runtime.Jit {
         internal RubyContext ConstantsOf;
         // a typed method body may deopt at its loop's safe point (see MethodLoopSafePointSlow)
         internal bool MayDeopt;
+        // what the typed method body folded (JitCode.FoldedConstants), for its loops' safe points to look up again; null
+        // if it folded none, or is an outlined loop's copy (which hands itself back instead). Set before the code runs.
+        internal JitFoldedConstant[] Folded;
 
         internal static readonly System.Reflection.FieldInfo/*!*/ EpochField = typeof(JitLoopGuard).GetField("Epoch");
 
@@ -1293,6 +1302,25 @@ namespace IronRuby.Runtime.Jit {
             ConstantsOf = constantsOf;
             ConstantVersion = constantVersion;
             System.Threading.Volatile.Write(ref Epoch, epoch);
+        }
+
+        /// <summary>
+        /// The method version is the one the code was compiled under, and each constant it folded resolves as it did
+        /// (JitFoldedConstant.StillHolds): what moved the constant version was nothing the code folded, and the version
+        /// read before the lookups is recorded as current. As JitStub.RevalidateConstants: a change between the read
+        /// and the store has moved the version past the one stored, so the next safe point looks again.
+        /// </summary>
+        internal bool ConstantsStillHold() {
+            var context = ConstantsOf;
+            var folded = Folded;
+            if (context == null || folded == null || RubyModule.GlobalMethodVersion != Version) { return false; }
+            int version = System.Threading.Volatile.Read(ref context.ConstantAccessVersion);
+            foreach (var constant in folded) {
+                if (!constant.StillHolds(context)) { return false; }
+            }
+            if (context.IsAutoloadInProgress) { return false; }
+            System.Threading.Volatile.Write(ref ConstantVersion, version);
+            return true;
         }
 
         /// <summary>A method table or a constant the code was built on has changed since.</summary>
