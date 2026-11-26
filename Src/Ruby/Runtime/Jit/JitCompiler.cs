@@ -1185,6 +1185,13 @@ namespace IronRuby.Runtime.Jit {
             var hashLiteral = node as HashConstructor;
             if (hashLiteral != null) { return EmitHashLiteral(hashLiteral, out type); }
 
+            var parallel = node as ParallelAssignmentExpression;
+            if (parallel != null) { return EmitParallelAssignment(parallel, out type); }
+
+            // a value EmitParallelAssignment has already evaluated, standing for its right-hand side
+            var emitted = node as EmittedValue;
+            if (emitted != null) { type = emitted.Type; return emitted.Value; }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -1354,6 +1361,86 @@ namespace IronRuby.Runtime.Jit {
             }
             values.RemoveAt(0);
             return Ast.Call(JitRuntime.M("NewHash"), Ast.Constant(_context), Ast.NewArrayInit(typeof(object), values));
+        }
+
+        /// <summary>
+        /// `a, b = x, y', `@a, @b = b, a': the generic body's order (CompoundLeftValue.TransformWrite) - every right-hand
+        /// value first, left to right, into a temporary, then each target written left to right, a missing value nil and
+        /// a value with no target dropped. Each write is the one `target = value' makes (EmitAssignment), the value an
+        /// EmittedValue, so a local keeps its type and an instance variable write its effect and its deopt on a frozen
+        /// self, exactly as the same writes spelled as statements. Only locals of the method and instance variables as
+        /// targets, no `*rest' and no nested target, and two or more values, none splatted (IsListAssignment): a single
+        /// value is destructured by to_ary, which would be Ruby code run from the typed body, or a deopt after the effect
+        /// that computed it. The value of the expression, an Array of the right-hand values, is made only where it is used.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitParallelAssignment(ParallelAssignmentExpression/*!*/ node, out JT type) {
+            if (!IsListAssignment(node, _scopeDepth)) { throw Bail("parallel assignment"); }
+            var lefts = node.Left.LeftValues;
+            var rights = node.Right;
+            var parts = new List<MSA.Expression>();
+            var temps = new List<MSA.ParameterExpression>();
+            var values = new EmittedValue[rights.Length];
+            for (int i = 0; i < rights.Length; i++) {
+                JT t;
+                var v = Emit(rights[i], out t);
+                if (t == JT.None || t == JT.Never) { throw Bail("parallel assignment of a value that jumps away"); }
+                var temp = Ast.Variable(ClrType(t), "#masgn" + i);
+                temps.Add(temp);
+                parts.Add(Ast.Assign(temp, v));
+                values[i] = new EmittedValue(temp, t);
+            }
+            for (int i = 0; i < lefts.Length; i++) {
+                RExpr value = (i < values.Length) ? values[i] : new EmittedValue(Ast.Constant(null, typeof(object)), JT.Obj);
+                JT ignored;
+                parts.Add(Emit(new SimpleAssignmentExpression(lefts[i], value, null, node.Location), out ignored));
+            }
+            if (IsDiscardedStatement(node)) {
+                parts.Add(Ast.Constant(null, typeof(object)));
+            } else {
+                var boxed = new List<MSA.Expression>(values.Length);
+                foreach (var v in values) { boxed.Add(Coerce(v.Value, v.Type, JT.Obj)); }
+                parts.Add(IronRuby.Compiler.Methods.MakeArrayOpCall(boxed));
+            }
+            type = JT.Obj;
+            return Ast.Block(typeof(object), temps, parts);
+        }
+
+        /// <summary>The parallel assignments EmitParallelAssignment takes (JitScreen walks the same).</summary>
+        internal static bool IsListAssignment(ParallelAssignmentExpression/*!*/ node, int scopeDepth) {
+            var left = node.Left;
+            if (left.HasUnsplattedValue || node.Right.Length < 2) { return false; }
+            foreach (var target in left.LeftValues) {
+                if (target is InstanceVariable) { continue; }
+                var local = target as LocalVariable;
+                if (local == null || local.DefinitionLexicalDepth != scopeDepth) { return false; }
+            }
+            foreach (var value in node.Right) {
+                if (value is SplattedArgument) { return false; }
+            }
+            return true;
+        }
+
+        private HashSet<RExpr> _discardedStatements;
+
+        /// <summary>
+        /// A statement before the last of its list: EmitStatements drops its value. Anything else (a last statement, an
+        /// operand) may be used, which only costs the value being made.
+        /// </summary>
+        private bool IsDiscardedStatement(RExpr/*!*/ node) {
+            if (_discardedStatements == null) {
+                var finder = new DiscardedStatementFinder();
+                if (_ast != null && _ast.Body != null) { finder.Walk(_ast.Body); }
+                _discardedStatements = finder.Found;
+            }
+            return _discardedStatements.Contains(node);
+        }
+
+        private sealed class DiscardedStatementFinder : Walker {
+            internal readonly HashSet<RExpr>/*!*/ Found = new HashSet<RExpr>();
+
+            protected internal override void VisitStatements(Statements/*!*/ statements) {
+                foreach (var s in statements.AllButLast) { Found.Add(s); }
+            }
         }
 
         /// <summary>
@@ -3149,6 +3236,28 @@ namespace IronRuby.Runtime.Jit {
     ///     the "screen rejected" histogram printed on the way out, so a newly supported node kind
     ///     sitting at the top of that histogram is the drift, visible without reading any code.
     /// </summary>
+    /// <summary>
+    /// A value the typed body has already computed, as the right side of an assignment JitCompiler emits itself
+    /// (EmitParallelAssignment). Never in a parsed tree, never transformed by the generic compiler.
+    /// </summary>
+    internal sealed class EmittedValue : RExpr {
+        internal readonly MSA.Expression/*!*/ Value;
+        internal readonly JT Type;
+
+        internal EmittedValue(MSA.Expression/*!*/ value, JT type)
+            : base(Microsoft.Scripting.SourceSpan.None) {
+            Value = value;
+            Type = type;
+        }
+
+        internal override MSA.Expression/*!*/ TransformReadCore(AstGenerator/*!*/ gen) {
+            throw new InvalidOperationException("EmittedValue is the method JIT's own");
+        }
+
+        protected internal override void Walk(Walker/*!*/ walker) {
+        }
+    }
+
     internal sealed class JitScreen {
         private readonly int _scopeDepth;
         private readonly string/*!*/ _methodName;
@@ -3652,6 +3761,20 @@ namespace IronRuby.Runtime.Jit {
                 if (retArgs == null || retArgs.Expressions.Length == 0) { return true; }
                 if (retArgs.Expressions.Length != 1) { return No(node); }
                 return Walk(retArgs.Expressions[0]);
+            }
+
+            // `a, b = x, y' into locals and instance variables (JitCompiler.EmitParallelAssignment)
+            var parallel = node as ParallelAssignmentExpression;
+            if (parallel != null) {
+                if (!JitCompiler.IsListAssignment(parallel, _scopeDepth) || _inKeywordDefault) { return No(node); }
+                foreach (var value in parallel.Right) {
+                    if (!Walk(value)) { return false; }
+                }
+                foreach (var target in parallel.Left.LeftValues) {
+                    var targetLocal = target as LocalVariable;
+                    if (targetLocal != null) { _otherUses.Add(targetLocal.Name); }
+                }
+                return true;
             }
 
             // `{k => v}' with plain literal keys (JitCompiler.EmitHashLiteral): any other object, never an operand

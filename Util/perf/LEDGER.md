@@ -1450,6 +1450,56 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitscreen2 (2026-11-26) - a multiple assignment of a list in a body the method JIT
+  compiles** (`a, b = b, a`, `@a, @b = x, y`) - census only, not gated. With the census
+  counting honestly, the lines after the Hash literal were String literals (101) and multiple
+  assignment (75). The String literals left are arguments of calls on self (`add_tag :BOLD,
+  "\e[1m"`, Json's `read_char('-')`: taking them was perf/strlit's rejected first build, gap 1's
+  wall) and operands of String operators (`text << " @ "`, `@user + ':'`, `'%x' % n`: String
+  intrinsics, not a screen step). Multiple assignment had no JIT attempt (perf/masgn was light
+  frames). Of the 75: about 47 destructure one value (`a, b = f(x)`, `x, y = pair`), which needs
+  `to_ary` - Ruby code run from the typed body, or a deopt after the effect that made the value,
+  which the compiler declines (the trap) - and are left; the list form is taken.
+  `EmitParallelAssignment` follows the generic body (`CompoundLeftValue.TransformWrite`): every
+  right-hand value into a temporary, left to right, then each target written left to right,
+  nil for a missing value, an extra one evaluated and dropped. Each write is `EmitAssignment`
+  of `target = value` with the value an `EmittedValue` (a node the typed compiler alone makes),
+  so locals keep their types and an instance variable write its effect and frozen-self deopt
+  exactly as two statements would. Targets: locals of the method and instance variables; no
+  `*rest`, no nested target, two or more values, none splatted (`IsListAssignment`). The
+  expression's Array is made only where its value is used (not before the last statement of a
+  list).
+  JIT compiles 11.9% (3,370 -> 3,376), maybe 2,981 -> 2,989, never 22,025 -> 22,011, light
+  frames unchanged (Src/StdLib + AWFY, 28,376 methods; 14 methods moved up - 6 to `compiles`, 8
+  to `maybe`, all 8 at a call - none down). `ParallelAssignmentExpression` alone 75 -> 60 (the
+  destructuring forms). Moved: initializers (`Benchmark::Report`, `RDoc::Markup::Table`,
+  `Net::IMAP::ResponseReader`, `IRB::Vec`), `URI::Generic#set_authority` (three copies, at
+  `default_port`); none of AWFY or the prelude.
+  Traces: app-shapes specialized 116 -> 117 (`Shop::Line#initialize`), declined after the
+  pre-screen 30 -> 30; AWFY Json, Richards, DeltaBlue, CD and Havlak (3 x 10) the same on both
+  builds; `census.rb -c` 290 agree, 0 differ, and app-shapes' known 15.
+  Instructions a call (`Util/perf/callgrind/count.sh`, `Util/bench/jit-masgn-shapes.rb`, new):
+  `x, y = y, x` 2634 -> 1492 (0.57), `a, b, c = x, x + 1, x * 2` 3559 -> 1560 (0.44),
+  `@a, @b = x, y` 2483 -> 1948 (0.79), the expression's value used 2608 -> 1954 (0.75), the
+  control (`a = x; b = x + 1`) 1518 -> 1519. Timed (`ab.rb`, six rounds): 0.44 and 0.41 for
+  the first two, the rest overlapping.
+  Checked: `Util/jit-masgn-matrix.rb` (new, 22 rows: swap of Ints, Floats and Strings, three
+  values and a Bignum, rotation, instance variables and their swap, a local and an instance
+  variable together, a missing and an extra value, the value used and dropped, Float and object
+  values, overflow, an effect then a deopt, the order of calls on the right, a Fibonacci swap in
+  a `while` loop, a frozen self, redefinition; 17 of 19 `ma_*` methods specialized, the others at
+  a call of `note` and at an interpolation's deopts), and jit, jit-calls, jit-const, masgn,
+  jit-scan, ivar, jit-hash and jit-construct: CRuby's output and the unchanged build's with the
+  JIT on, `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`, and the unchanged build's with
+  `IR_LIGHT_FRAMES=0`; hot-shapes and inline-matrix (one case per process) the unchanged build's
+  in every mode, with their known one-row differences from CRuby.
+  Also: a per-count body (a method with optional parameters) that declined said "no reason
+  recorded" (`TrySpecializePerCount` never set the reason); it now records it as `TrySpecialize`
+  does. `CSV::FieldsConverter#initialize`'s line says "the compiler bailed out (see the
+  `rejected' line)".
+  For the gate: no IronRuby.Tests or spec run; `EmittedValue` is a new kind of node only the
+  typed compiler makes (its TransformReadCore throws).
+
 - **perf/jitscreen (2026-11-26) - a Hash literal in a body the method JIT compiles** (`{}`,
   `{a: x}`, `{"k" => v}`, `opts = {}`) - census only, not gated. The screen refused every Hash
   literal, the largest line of "JIT never, one thing only" that is not a call once the census
