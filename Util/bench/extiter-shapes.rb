@@ -60,9 +60,12 @@ t("map_next", n(20_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.ma
 t("range_map", n(20_000))    { |n| s = 0; (n / 1000).times { s += drain((1..1000).map) }; s }
 t("hash_find_all", n(20_000)) { |n| s = 0; (n / 100).times { s += drain(HSH.find_all) }; s }
 t("ewi_next", n(20_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.each.with_index) }; s }
+t("hash_ewi", n(20_000))     { |n| s = 0; (n / 100).times { e = HSH.each_with_index; 100.times { s += e.next[1] } }; s }
+t("map_wi", n(20_000))       { |n| s = 0; (n / 1000).times { s += drain(LARGE.map.with_index) }; s }
+t("wobj_next", n(20_000))    { |n| s = 0; (n / 1000).times { e = LARGE.each.with_object(1); 1000.times { s += e.next[0] } }; s }
 t("select_next", n(20_000))  { |n| s = 0; (n / 1000).times { s += drain(LARGE.select) }; s }
 t("lazy_next", n(5_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.lazy.map { |x| x + 1 }) }; s }
 t("produce", n(20_000))      { |n| s = 0; (n / 1000).times { e = Enumerator.produce(1) { |x| x + 1 }; 1000.times { s += e.next } }; s }
 t("zip_enum", n(20_000))     { |n| s = 0; (n / 1000).times { LARGE.zip(LARGE.each) { |a, b| s += a + b } }; s }
-# controls: these keep their fiber (a generator; with_index, lazy and produce above too)
+# controls: these keep their fiber (a generator; lazy and produce above too)
 t("generator", n(20_000))    { |n| s = 0; (n / 1000).times { s += drain(Enumerator.new { |y| LARGE.each { |x| y << x } }) }; s }

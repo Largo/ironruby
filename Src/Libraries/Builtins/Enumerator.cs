@@ -499,6 +499,71 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // Enumerator#with_index, #each_with_index and #with_object made without a block (the prelude's generators, marked by
+        // __iter_index_source__), and Enumerable#each_with_index over a receiver whose #each a cursor walks: the source's step
+        // with its index, or the memo, beside it - [value, index], the values of a step of several packed into an Array as the
+        // generator's `a.size <= 1 ? a.first : a` packs them. What the block answers goes on to the source's suspended yield
+        // (with_index_i and with_object_i answer it), so `map.with_index` collects it.
+        private sealed class IndexCursor : ExternalCursor {
+            private readonly ExternalCursor/*!*/ _inner;
+            private readonly bool _withObject;
+            private readonly object _memo;
+            // the generator answers what the source's #each answers; Enumerable#each_with_index answers its receiver
+            private readonly bool _answersReceiver;
+            private long _index;
+
+            internal IndexCursor(object receiver, ExternalCursor/*!*/ inner, long offset, bool answersReceiver) : base(receiver) {
+                _inner = inner;
+                _index = offset;
+                _answersReceiver = answersReceiver;
+            }
+
+            internal IndexCursor(object receiver, ExternalCursor/*!*/ inner, object memo) : base(receiver) {
+                _inner = inner;
+                _withObject = true;
+                _memo = memo;
+            }
+
+            internal override bool Multiple {
+                get { return true; }
+            }
+
+            internal override bool MoveNext(out object value) {
+                object step;
+                if (!_inner.MoveNext(out step)) {
+                    value = null;
+                    return false;
+                }
+                if (_inner.Multiple) {
+                    var stepValues = (RubyArray)step;
+                    step = (stepValues.Count == 0) ? null : (stepValues.Count == 1) ? stepValues[0] : new RubyArray(stepValues);
+                }
+                var values = new RubyArray(2);
+                values.Add(step);
+                if (_withObject) {
+                    values.Add(_memo);
+                } else {
+                    long index = _index++;
+                    values.Add((index >= Int32.MinValue && index <= Int32.MaxValue) ?
+                        ScriptingRuntimeHelpers.Int32ToObject((int)index) : (object)(BigInteger)index);
+                }
+                value = values;
+                return true;
+            }
+
+            internal override void Resume(object fed) {
+                _inner.Resume(fed);
+            }
+
+            internal override void Finish() {
+                _inner.Finish();
+            }
+
+            internal override object Result {
+                get { return _withObject ? _memo : _answersReceiver ? Receiver : _inner.Result; }
+            }
+        }
+
         // Array#reverse_each (rb_ary_reverse_each): from the length the iteration started with, down,
         // moving the position back when the Array has shrunk below it in the meantime.
         private sealed class ArrayReverseCursor : ExternalCursor {
@@ -736,7 +801,7 @@ namespace IronRuby.Builtins {
 
             object generator;
             if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
-                return null;
+                return TryCreateIndexCursor(context, self, generator);
             }
 
             if (!IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
@@ -807,10 +872,19 @@ namespace IronRuby.Builtins {
 
                 case "each_with_index":
                     // the prelude's #each_with_index, the built-in one it hands a block to, and the #each that one calls
-                    return (array = target as RubyArray) != null &&
-                        IsPreludeMethod(context, target, name, GetPreludeMethods(context).EachWithIndex) &&
-                        IsBuiltinMethod(context, target, "__each_with_index_without_args__", typeof(Enumerable), "GetEachWithIndexEnumerator", "EachWithIndex") &&
-                        IsBuiltinMethod(context, target, "each", typeof(IListOps), "Each") ? new ArrayWithIndexCursor(array) : null;
+                    if (!IsPreludeMethod(context, target, name, GetPreludeMethods(context).EachWithIndex) ||
+                        !IsBuiltinMethod(context, target, "__each_with_index_without_args__", typeof(Enumerable), "GetEachWithIndexEnumerator", "EachWithIndex")) {
+                        return null;
+                    }
+                    if ((array = target as RubyArray) != null) {
+                        return IsBuiltinMethod(context, target, "each", typeof(IListOps), "Each") ? new ArrayWithIndexCursor(array) : null;
+                    }
+                    // a Hash, a Range, a Struct: the steps of its #each with their index, and the receiver for the result
+                    if (!_fastNext) {
+                        return null;
+                    }
+                    ExternalCursor eachCursor = TryCreateEachCursor(context, target);
+                    return eachCursor != null ? new IndexCursor(target, eachCursor, 0, true) : null;
 
                 case "times":
                     if (target is int && IsBuiltinMethod(context, target, name, typeof(Integer), "Times")) {
@@ -850,6 +924,47 @@ namespace IronRuby.Builtins {
             }
             ExternalCursor inner = TryCreateEachCursor(context, target);
             return inner != null ? new EnumerableCollectCursor(target, inner, kind) : null;
+        }
+
+        // What the prelude's #with_index (#each_with_index) and #with_object made without a block are over, while their generator
+        // is the one they made (an #initialize again replaces it; a copy has no mark): see __iter_index_source__.
+        private Enumerator _indexSource;
+        private object _indexArgument;
+        private bool _indexWithObject;
+        private object _indexGenerator;
+
+        /// <summary>
+        /// Marks the generator enumerator the prelude's #with_index or #with_object has just made as one over <paramref name="source"/>,
+        /// so that #next walks it with a cursor over the source's when the source has one, rather than on a fiber.
+        /// </summary>
+        [RubyMethod("__iter_index_source__", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator/*!*/ MarkIndexSource(RubyContext/*!*/ context, Enumerator/*!*/ self, object source, object argument, bool withObject) {
+            var enumerator = source as Enumerator;
+            object generator;
+            if (enumerator != null && self._indexGenerator == null &&
+                context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
+                self._indexSource = enumerator;
+                self._indexArgument = argument;
+                self._indexWithObject = withObject;
+                self._indexGenerator = generator;
+            }
+            return self;
+        }
+
+        // A marked generator enumerator whose #each is the built-in one, over a source that has a cursor of its own; an index
+        // that is not a Fixnum leaves it to the fiber. IR_FAST_NEXT=0 leaves them all to it.
+        private static ExternalCursor TryCreateIndexCursor(RubyContext/*!*/ context, Enumerator/*!*/ self, object generator) {
+            if (!_fastNext || self._indexGenerator == null || !ReferenceEquals(generator, self._indexGenerator) ||
+                (!self._indexWithObject && !(self._indexArgument is int)) ||
+                !IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
+                return null;
+            }
+            ExternalCursor inner = TryCreateCursor(context, self._indexSource);
+            if (inner == null) {
+                return null;
+            }
+            return self._indexWithObject ? new IndexCursor(self, inner, self._indexArgument) :
+                new IndexCursor(self, inner, (int)self._indexArgument, false);
         }
 
         // The receiver's own #each, when it is a built-in one a cursor can do.
