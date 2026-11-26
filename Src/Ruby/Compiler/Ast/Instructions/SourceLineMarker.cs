@@ -110,11 +110,34 @@ namespace IronRuby.Compiler.Ast {
         private readonly MSA.Expression/*!*/ _body;
         private readonly string/*!*/ _encodedName;
         private readonly int _line;
+        private readonly bool _compileOnFirstCall;
 
-        internal CompiledFrameExpression(MSA.Expression/*!*/ body, string/*!*/ encodedName, int line) {
+        internal CompiledFrameExpression(MSA.Expression/*!*/ body, string/*!*/ encodedName, int line)
+            : this(body, encodedName, line, false) {
+        }
+
+        /// <param name="compileOnFirstCall">
+        /// The body of a lambda literal (`-> { }'): its lambda is light-compiled when the lambda is first called, not with
+        /// the code it is written in (see <see cref="IsCompiledOnFirstCall"/>).
+        /// </param>
+        internal CompiledFrameExpression(MSA.Expression/*!*/ body, string/*!*/ encodedName, int line, bool compileOnFirstCall) {
             _body = body;
             _encodedName = encodedName;
             _line = line;
+            _compileOnFirstCall = compileOnFirstCall;
+        }
+
+        /// <summary>
+        /// Whether the interpreter compiles a lambda nested in the code it is compiling when the lambda first runs
+        /// (LightCompiler.CompileOnFirstCall): a lambda literal's, which is a value made to be called later, if at all -
+        /// a table of handlers (prism's Serialize::Loader makes 152 at its first call and calls the few the source needs),
+        /// a callback, a default. Not a block's: the method it is passed to nearly always calls it at once (97% of the
+        /// blocks compiled while `require "irb"' runs are called), and a lambda compiled on its first call costs a walk
+        /// of its tree more (LightCompiler.ClosureFinder). Nor a module body's, which runs where it is.
+        /// </summary>
+        internal static bool IsCompiledOnFirstCall(MSA.LambdaExpression/*!*/ lambda) {
+            var frame = lambda.Body as CompiledFrameExpression;
+            return frame != null && frame._compileOnFirstCall;
         }
 
         internal MSA.Expression/*!*/ Body {
@@ -158,7 +181,7 @@ namespace IronRuby.Compiler.Ast {
 
         protected override MSA.Expression/*!*/ VisitChildren(MSA.ExpressionVisitor/*!*/ visitor) {
             var body = visitor.Visit(_body);
-            return (body == _body) ? this : new CompiledFrameExpression(body, _encodedName, _line);
+            return (body == _body) ? this : new CompiledFrameExpression(body, _encodedName, _line, _compileOnFirstCall);
         }
 
         // the frame's line set at each statement of its own code - not of the lambdas nested in it, which have frames of their own

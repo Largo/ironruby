@@ -2294,6 +2294,62 @@ p :to_s.to_proc.call(1)
 ");
         }
 
+        /// <summary>
+        /// A lambda literal is light-compiled at its first call, not with the code it is written in
+        /// (CompiledFrameExpression.IsCompiledOnFirstCall): the variables it closes over - the method's locals and parameters,
+        /// another lambda's, a block's - are handed to it as they were, nested lambdas, return, rescue/ensure, keywords and
+        /// binding work as before, and threads may make its first call at once.
+        /// </summary>
+        public void Lambda_CompiledOnFirstCall1() {
+            TestOutput(@"
+require 'ruby4'
+def table(k)
+  base = 10
+  t = [
+    -> (x) { base + x + k },
+    -> (x) { base += x; base },
+    -> (x) { -> (y) { x + y + base + k } },
+    -> { return :ret },
+    -> (x) { [1, 2].map { |e| e * x + base } },
+    -> (x) { begin; raise ""boom #{x}""; rescue => e; e.message; ensure; base += 100; end },
+    -> (x, *r, k: 1, &b) { [x, r, k, b && b.call(base)] },
+    -> { binding.local_variable_get(:base) },
+  ]
+  [t, -> { base }]
+end
+t, getbase = table(5)
+p t[0].(1)
+p t[1].(2), getbase.()
+p t[2].(3).(4)
+p t[3].()
+p t[4].(2)
+p t[5].(7), getbase.()
+p t[6].(1, 2, 3, k: 4) { |z| z * 2 }
+p t[7].()
+ls = []
+3.times { |i| j = i * 10; ls << -> { [i, j] } }
+p ls.map(&:call)
+x = 0
+m = Mutex.new
+lam = -> (n) { m.synchronize { x += n } }
+4.times.map { |n| Thread.new { 50.times { lam.(n) } } }.each(&:join)
+p x
+", @"
+16
+12
+12
+24
+:ret
+[14, 16]
+""boom 7""
+112
+[1, [2, 3], 4, 224]
+112
+[[0, 0], [1, 10], [2, 20]]
+300
+");
+        }
+
         public void ErrorMessages_Receivers1() {
             TestOutput(@"
 o = Object.new

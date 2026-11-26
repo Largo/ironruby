@@ -745,6 +745,15 @@ namespace IronRuby.Runtime {
 
         #region Initialization
 
+        /// <summary>
+        /// IR_LAZY_LAMBDAS=0 compiles a lambda literal with the code it is written in, as a block is, rather than at its first
+        /// call (see CompiledFrameExpression.IsCompiledOnFirstCall); IR_LAZY_LAMBDAS=all compiles every nested lambda - each
+        /// block and module body too - at its first call, which costs more than it saves but puts the light compiler's walk
+        /// for closed-over variables (LightCompiler.ClosureFinder) through all the code there is.
+        /// </summary>
+        internal static readonly bool LazyLambdasEnabled = Environment.GetEnvironmentVariable("IR_LAZY_LAMBDAS") != "0";
+        private static readonly bool LazyLambdasAll = Environment.GetEnvironmentVariable("IR_LAZY_LAMBDAS") == "all";
+
         public RubyContext(ScriptDomainManager/*!*/ manager, IDictionary<string, object> options)
             : base(manager) {
             ContractUtils.RequiresNotNull(manager, "manager");
@@ -755,6 +764,11 @@ namespace IronRuby.Runtime {
             }
 
             _runtimeId = Interlocked.Increment(ref _RuntimeIdGenerator);
+
+            // A lambda literal is light-compiled when it is first called, not with the method or file it is written in
+            // (CompiledFrameExpression.IsCompiledOnFirstCall).
+            Microsoft.Scripting.Interpreter.LightCompiler.CompileOnFirstCall = LazyLambdasAll ? (lambda => true) :
+                (Func<MSA.LambdaExpression, bool>)CompiledFrameExpression.IsCompiledOnFirstCall;
             _upTime = new Stopwatch();
             _upTime.Start();
             

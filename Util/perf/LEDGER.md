@@ -1361,6 +1361,37 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/big-method-first-call (2026-11-26) - a lambda literal is light-compiled at its first
+  call, not with the method it is written in.** irb's first syntax check cost ~300 ms, nearly
+  all the first `Prism.parse` (205 ms; the second 1 ms). Not `Serialize::Loader#load_nodes`'
+  1,800-line `case`: only CRuby runs that one. IronRuby (`RUBY_ENGINE != "ruby"`) runs
+  `define_load_node_lambdas`, an array of 152 lambda literals made by every Loader, and calls
+  the few the source needs. Its first call took 160 ms on the ReadyToRun host (`IR_PHASE_TIMES`:
+  53 ms transform, 114 ms LightCompile; the second call 0.03 ms), because the light compiler
+  compiles every lambda nested in what it compiles. Linear, not superlinear: a synthetic method
+  with N `when` branches costs ~70 us a branch to build at its first call (~140 with light frames,
+  whose rewrite doubles each call site: `IR_LIGHT_FRAMES=0` halves it), at N = 100 to 1600 alike.
+  DLR patch 0110 lets the language name the nested lambdas compiled at the first run of a
+  delegate made from one (`LightCompiler.CompileOnFirstCall`): a walk of the lambda's tree finds
+  the variables it closes over, which the enclosing lambda boxes and hands over as before, and an
+  IL compile of the enclosing lambda light-compiles the pending ones for their try depth (0109).
+  IronRuby names lambda literals only (`IR_LAZY_LAMBDAS=0` off, `=all` every nested lambda, for
+  testing the walk): 683 of the 700 nested lambdas `require "irb"` compiles are called, and
+  deferring them all cost the walk (36 ms) and made start-up ~4% slower. `define_load_node_lambdas`
+  160 -> 105 ms. Instructions (least of three, R2R host): `echo exit | iirb.sh` 6.48G -> 6.08G,
+  `require "prism"` and one parse 3.84G -> 3.56G, `-e 1` / `require "irb"` / `gem list` the same
+  to 0.1%. Wall, best of ten, R2R host, load ~2: `-e 1` 472 -> 467 ms, `gem --version` 632 -> 635,
+  `gem list` 1367 -> 1398, `require "irb"` 1193 -> 1212, `echo 1+1 | irb` 1707 -> 1668,
+  `echo exit | iirb.sh` 1585 -> 1521, require prism + parse 1014 -> 946. AWFY geomean 1.016 and
+  0.994 (new/base, both orders); Bounce looked 20% slower in both and is bimodal on both trees
+  (six alternating runs of each: base 62-143k, new 64-150k; 60 iterations in a process of their
+  own: 49.8G instructions on both). With the startup library of #291 the Loader is precompiled
+  (0.7 ms first call) and this changes nothing there; it is the Release build's, the library-less
+  host's and any program's that keeps a table of lambdas. Left (next start-up targets): the
+  block bodies' own transform (two rewrites over each body, LightFrameRewriter and
+  RegisterLocalsRewriter, are 57% of a block's transform), and an enclosing light frame's
+  rewriters walking every nested block body again.
+
 - **perf/compile-cold-stretch (2026-11-26) - the launchers give the youngest generation 128 MB, so
   start-up runs without collections (gap 26).** Asked: why a call costs 50-150 us for hundreds of
   calls after it crosses the compile threshold (PR #294's probe, steady state 1.7 us). Measured,
