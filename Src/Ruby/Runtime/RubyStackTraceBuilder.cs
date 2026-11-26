@@ -1078,6 +1078,9 @@ namespace IronRuby.Runtime {
             return name;
         }
 
+        // IR_COPIED_TABLE=0 reads the attributes of every type of the assembly, as before RubyCopiedModuleAttribute (for comparing).
+        private static readonly bool CopyingClassesTableEnabled = Environment.GetEnvironmentVariable("IR_COPIED_TABLE") != "0";
+
         // Per library assembly: copied-in module -> the class that copies it.
         private static readonly ConcurrentDictionary<Assembly, Dictionary<Type, Type>>/*!*/ _copyingClasses =
             new ConcurrentDictionary<Assembly, Dictionary<Type, Type>>();
@@ -1090,10 +1093,28 @@ namespace IronRuby.Runtime {
                 GetLibraryModuleName(copying) : null;
         }
 
-        // One pass over the assembly's attributes answers every later lookup: it reads the attributes
-        // of every type in IronRuby.Libraries, and doing that once per copied module made each of the
-        // first few backtraces of a process cost ~15 ms.
+        // A library assembly the initializer generator wrote says which classes copy which modules in
+        // (RubyCopiedModuleAttribute): reading the attributes of every type in IronRuby.Libraries instead
+        // took ~9 ms of the first backtrace that named a copied module's method (one `gem list', irb and
+        // `require "irb"' make), and loaded the assemblies its types refer to (AngleSharp,
+        // System.Net.Sockets). Another assembly has its types read, in one pass that answers every later
+        // lookup: once per copied module made each of the first few backtraces of a process cost ~15 ms.
         private static Dictionary<Type, Type>/*!*/ FindCopyingClasses(Assembly/*!*/ assembly) {
+            return (CopyingClassesTableEnabled && assembly.IsDefined(typeof(RubyLibraryAttribute), false)) ?
+                ReadCopyingClasses(assembly) : ScanCopyingClasses(assembly);
+        }
+
+        internal static Dictionary<Type, Type>/*!*/ ReadCopyingClasses(Assembly/*!*/ assembly) {
+            var result = new Dictionary<Type, Type>();
+            foreach (RubyCopiedModuleAttribute copied in assembly.GetCustomAttributes(typeof(RubyCopiedModuleAttribute), false)) {
+                if (!result.ContainsKey(copied.Module)) {
+                    result.Add(copied.Module, copied.CopyingClass);
+                }
+            }
+            return result;
+        }
+
+        internal static Dictionary<Type, Type>/*!*/ ScanCopyingClasses(Assembly/*!*/ assembly) {
             var result = new Dictionary<Type, Type>();
             Type[] types;
             try {
