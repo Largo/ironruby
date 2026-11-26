@@ -1669,6 +1669,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     both builds. IronRuby.Tests `Method_KeywordHashIntoRest1` (new; passes with the switch
     off too) and 50 named keyword, method, splat, send and super tests pass. Not timed; no
     R2R run.
+
 - **perf/havlak (/perf-step, 2026-11-26, on 819a368) - a call on a local the profile has no sample of
   is inlined for the classes that define the method, under checks of their class (gap 25)** - not
   gated. som.rb's `Dictionary#at` (Havlak's `IdentityDictionary`) declined at `call: match/2`: `e`
@@ -1713,6 +1714,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   deopts if that class's reader is another variable), and at "a fast path that decides from a resolved
   method": the candidate's method is resolved on the candidate class with the lookup's visibility
   (`InlinableCallee`), and a subclass never takes the inlined body (exact class check).
+
 - **perf/jitsettle (2026-11-26) - a retired entry's cool-down costs nothing per call** - not gated.
   A method whose typed body keeps failing (`x + 1` called with an Integer and a Float in turn) ran
   10-16% slower than with the JIT off, as a `def` and as a define_method method. What it does per call,
@@ -1834,6 +1836,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   twenty alternating runs each: best 865 -> 881, median 937 -> 942 (the 779 was one fast run).
   This container refuses perf_event_open, so there is no `ab.rb -i` here; perf/lsite's
   `Util/perf/callgrind/count.sh` counts instructions instead.
+
 - **perf/extiter3 (2026-11-26) - `with_index`, `each_with_index` and `with_object` enumerators
   take `next` on a cursor over their source's (gap 35)** - not gated. Base 1efd7e6 (the merged
   branch at 2f8c31c with perf/extiter2). The prelude's Enumerator#with_index (and so
@@ -1988,6 +1991,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   deopt (`code.Deopts`), which could decline a caller with an effect before the call - none of the
   fourteen benchmarks has one. Look at the order in `ConstantsStillHold` and at `Folded` being set
   before `LoopGuard.Set` publishes the epoch.
+
 - **perf/jitscreen2 (2026-11-26) - a multiple assignment of a list in a body the method JIT
   compiles** (`a, b = b, a`, `@a, @b = x, y`) - census only, not gated. With the census
   counting honestly, the lines after the Hash literal were String literals (101) and multiple
@@ -2092,6 +2096,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   trace says "stores not held back ... a call of JitRuntime.NewSymbolHash1"), as round
   strlit's literal makers were; not tried here.
   For the gate: no IronRuby.Tests or spec run; the decline above.
+
 - **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
   24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
   Object and Array dup and clone - content, encodings, broken bytes, frozen and chilled, ivars,
@@ -2110,6 +2115,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   in every mode and with the switch off: PASS (dup-matrix `same`, `baseline -2` switched off).
   spec/core/string and kernel dup/clone: 4,010 examples, the one known try_convert wording error
   on both builds.
+
 - **perf/strsearch2 (2026-11-26) - `#start_with?` with one String prefix takes no scope; an
   ASCII prefix is compared in place (gap 21, round two)** - not gated. Commit dc1d136 on
   `claude/perf-strsearch`, based on the merged branch 2f8c31c. `start_with?` had one overload,
@@ -2139,6 +2145,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   build in both modes; spec/core/string (3,963 examples) and spec/library/stringscanner (240):
   the same on both builds, 0 failures, one error on both (`String.try_convert ... raises
   TypeError if it's not a kind of String`, run as a directory).
+
 - **perf/lframe (/perf-frame, 2026-11-26) - a cheaper method entry: the alias name and the
   traced test** (switch `IR_LIGHT_ENTRY`, on unless `=0`) - instructions only, not gated.
   Built on 2f8c31c. What gap 16's profiles left on every light frame, looked at on its own
