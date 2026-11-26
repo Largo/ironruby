@@ -124,3 +124,27 @@ s = "abc\"def"
 try("index after <<") { "sentinel" =~ SENTINEL; b = $~; [(s << "\"x"; s.index('"', 4)), b, $~] }
 try("index after setbyte") { "sentinel" =~ SENTINEL; b = $~; [(t = +"abc"; t.setbyte(1, 0x22); t.index('"')), b, $~] }
 try("frozen literal index") { "sentinel" =~ SENTINEL; b = $~; [('x"y'.freeze.index('"')), b, $~] }
+
+puts "== start_with? (round two: a String prefix is answered without the caller's scope)"
+SW_RECEIVERS = {
+  sjis_trail: "\x83\x41bc".dup.force_encoding("Shift_JIS"), sjis_ascii: "Abc\x83\x41".dup.force_encoding("Shift_JIS"),
+  eucjp: "\xA4\xA2ab".dup.force_encoding("EUC-JP"), broken_cont: "a\x80bc".dup.force_encoding("UTF-8"),
+  broken_lead: "ab\xE3\x81".dup.force_encoding("UTF-8"), utf8: "aé日b", binary: "a\xE9b".b, ascii: "abc",
+  usascii: "abc".dup.force_encoding("US-ASCII"), utf16: "abc".encode("UTF-16LE"), empty: "",
+}
+SW_PREFIXES = {
+  a: "a", ab: "ab", A: "A", abc: "abc", abcd: "abcd", empty: "", e_acute: "aé", sjis_lead: "\x83".dup.force_encoding("Shift_JIS"),
+  bin_a: "a".b, bin_hi: "a\xE9".b, usascii: "a".dup.force_encoding("US-ASCII"), broken: "a\x80".dup.force_encoding("UTF-8"),
+  utf16: "a".encode("UTF-16LE"), tostr: ToStr.new("a"), sub: SubStr.new("ab"),
+}
+SW_RECEIVERS.each do |rname, base|
+  kinds(base).each do |kname, s|
+    SW_PREFIXES.each do |pname, pre|
+      try("#{rname}/#{kname}.start_with?(#{pname})") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?(pre)), b, $~] }
+    end
+    try("#{rname}/#{kname}.start_with?(x, a)") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?("x", "a")), b, $~] }
+    try("#{rname}/#{kname}.start_with?(/b/, a)") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?(/b/, "a")), b, $~] }
+    try("#{rname}/#{kname}.start_with?()") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?), b, $~] }
+    try("#{rname}/#{kname}.start_with?(nil)") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?(nil)), b, $~] }
+  end
+end

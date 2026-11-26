@@ -4674,7 +4674,25 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        // The usual call, one String prefix, without the scope: the overload above takes it for a Regexp
+        // prefix's $~, so a light frame calling it with a String made its scope on the call
+        // (RubyOps.LightScopeRequired) and called again - 70 ns of the 120 that "abc...".start_with?("a")
+        // took (Util/bench/strsearch-shapes.rb sw1_a; CRuby 55). The binder picks this one for a
+        // MutableString argument; a Regexp, a #to_str object or several prefixes still go above.
+        [RubyMethod("start_with?")]
+        public static bool StartsWithString(MutableString/*!*/ self, [NotNull]MutableString/*!*/ prefix) {
+            self.RequireCompatibleEncoding(prefix);
+            return StartsWith(self, prefix);
+        }
+
         private static bool StartsWith(MutableString/*!*/ self, MutableString/*!*/ subString) {
+            // An ASCII prefix is compared where both strings are, without switching either to bytes. It
+            // costs the same whatever the prefix's length, which the byte loop below beats only for one
+            // byte (2,645 instructions a call against 2,789; three bytes 3,863 against 2,828: sw1_a, sw3_a).
+            if (FastSearchEnabled && self.Encoding.IsAsciiIdentity && subString.IsAscii() && subString.GetCharCount() > 1) {
+                return self.StartsWithAscii(subString);
+            }
+
             int prefix = subString.GetByteCount();
             if (self.GetByteCount() < prefix) {
                 return false;
