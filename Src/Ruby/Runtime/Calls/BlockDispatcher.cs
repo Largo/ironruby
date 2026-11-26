@@ -166,6 +166,12 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         internal IronRuby.Runtime.Osr.BlockLoopInfo LoopInfo;
 
+        /// <summary>
+        /// -X:JIT: the block literal, when the method JIT may take it as the body of a method made by define_method
+        /// (JitBlockMethod); null otherwise.
+        /// </summary>
+        internal IronRuby.Compiler.Ast.BlockDefinition JitAst;
+
         public bool Ruby2Keywords {
             get { return _ruby2Keywords; }
             set { _ruby2Keywords = value; }

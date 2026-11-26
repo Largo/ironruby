@@ -110,6 +110,31 @@ namespace IronRuby.Runtime.Calls {
             get { return _lambda; }
         }
 
+        // -X:JIT: what the method JIT made of the block (JitBlockMethod), at the first call a rule was built for;
+        // NoJit when it took nothing. Each copy (alias, visibility) has its own, as each def copy shares its body's.
+        private sealed class JitHolder {
+            internal Delegate Trampoline;
+            internal IronRuby.Compiler.Ast.MethodDefinition Ast;
+        }
+        private static readonly JitHolder NoJit = new JitHolder();
+        private JitHolder _jit;
+
+        private JitHolder/*!*/ GetJit() {
+            var jit = Volatile.Read(ref _jit);
+            if (jit == null) {
+                IronRuby.Compiler.Ast.MethodDefinition ast = null;
+                var trampoline = IronRuby.Runtime.Jit.JitBlockMethod.Enabled ? IronRuby.Runtime.Jit.JitBlockMethod.TryWrap(this, out ast) : null;
+                jit = (trampoline != null) ? new JitHolder { Trampoline = trampoline, Ast = ast } : NoJit;
+                jit = Interlocked.CompareExchange(ref _jit, jit, null) ?? jit;
+            }
+            return jit;
+        }
+
+        /// <summary>The def the method JIT took the block as, once a call made it (JitStub.SelfCallResolvesHere).</summary>
+        internal IronRuby.Compiler.Ast.MethodDefinition JitAst {
+            get { var jit = Volatile.Read(ref _jit); return jit != null ? jit.Ast : null; }
+        }
+
         internal int Id {
             get { return _id; }
         }
@@ -179,6 +204,37 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
+            // -X:JIT: plain arguments, as many as the block takes, go to the stub of the method JIT, whose generic body is
+            // the call below (JitBlockMethod). An omitted optional argument is passed as the default sentinel, as to a def's.
+            if (!args.Signature.HasBlock && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument) {
+                var jit = GetJit();
+                if (jit.Trampoline != null) {
+                    var simple = args.GetSimpleArgumentExpressions();
+                    int jitArity = jit.Ast.Parameters.Mandatory.Length + jit.Ast.Parameters.Optional.Length;
+                    if (simple.Count <= jitArity) {
+                        var jitArgs = new Ast[2 + jitArity];
+                        jitArgs[0] = AstUtils.Box(args.TargetExpression);
+                        jitArgs[1] = IronRuby.Compiler.Ast.AstFactory.NullOfProc;
+                        int k = 0;
+                        foreach (var arg in simple) {
+                            jitArgs[2 + k] = AstUtils.Box(arg);
+                            k++;
+                        }
+                        // the block declares no keywords: a hash passed as keywords is a positional argument it may keep (as
+                        // BlockDispatcher.Positional unmarks it)
+                        if (k > 0) {
+                            jitArgs[1 + k] = Methods.ClearKeywordArguments.OpCall(jitArgs[1 + k]);
+                        }
+                        for (; k < jitArity; k++) {
+                            jitArgs[2 + k] = Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"));
+                        }
+                        metaBuilder.Result = IronRuby.Runtime.Jit.JitStub.CallCurrent(jit.Trampoline, jitArgs);
+                        AddRactorCheck(metaBuilder, args);
+                        return;
+                    }
+                }
+            }
+
             if (args.Signature.HasBlock) {
                 // The call is the flow-control frame of a literal block given to it, as a def method's is (its
                 // RubyMethodScope): a break from the block, wherever the body passes it on to, ends this call.
@@ -192,6 +248,10 @@ namespace IronRuby.Runtime.Calls {
                 args
             );
 
+            AddRactorCheck(metaBuilder, args);
+        }
+
+        private void AddRactorCheck(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             // once there are Ractors, a block that is not shareable runs only in the Ractor that defined the method
             metaBuilder.AddInitialization(Ast.IfThen(
                 Ast.Property(AstUtils.Constant(args.RubyContext), typeof(RubyContext).GetProperty("RactorsStarted")),

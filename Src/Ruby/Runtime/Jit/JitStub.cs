@@ -1182,7 +1182,12 @@ namespace IronRuby.Runtime.Jit {
             var resolved = cls.ResolveMethod(_ast.Name, VisibilityContext.AllVisible, refinements);
             if (!resolved.Found) { return false; }
             var info = resolved.Info as RubyMethodInfo;
-            return info != null && ReferenceEquals(info.GetSyntaxTree(), _ast);
+            if (info == null) {
+                // a method made by define_method calling itself: the def its block was taken as (JitBlockMethod)
+                var lambda = resolved.Info as RubyLambdaMethodInfo;
+                return lambda != null && ReferenceEquals(lambda.JitAst, _ast);
+            }
+            return ReferenceEquals(info.GetSyntaxTree(), _ast);
         }
 
         // ---- entry lambda ------------------------------------------------------------------
