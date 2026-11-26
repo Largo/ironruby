@@ -1197,6 +1197,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     475 ns a level at depth 10 and 552 at depth 1000. Narrow things to try: let
     `Dictionary#at` compile (type a call on a local assigned in the loop); the per-call
     cost of `(a..b).each { |i| yield ... }` (gap 14); `loop` through gap 22.
+    `Dictionary#at` compiles since perf/havlak (see Landed): Havlak's declines are
+    `Vector#remove_first` (a deopt after an effect) and `split_bucket` (an attribute write
+    on a receiver nothing samples - the same kind of local, `current` walking a chain; the
+    write would need what the read now has, a name from a class the call was inlined for or
+    from the classes that define the writer).
 26. **Start-up: `gem` and `irb` answer in 0.7 to 2.2 s, CRuby in 0.1 to 0.2** (the one
     thing that has to stay fast while the tiers stay on by default, and it is not fast).
     2026-11-18, a7060a27, the ReadyToRun host (`IR_CONFIG=R2R`, what `ir.sh` runs when
@@ -1503,6 +1508,51 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/havlak (/perf-step, 2026-11-26, on 819a368) - a call on a local the profile has no sample of
+  is inlined for the classes that define the method, under checks of their class (gap 25)** - not
+  gated. som.rb's `Dictionary#at` (Havlak's `IdentityDictionary`) declined at `call: match/2`: `e`
+  comes from `get_bucket(hash)`, a call, so `TrySample` has nothing for it, and the inliner, which
+  checks a class at a call on a parameter, had no class to check. Now `UnsampledCallees` takes the
+  classes, constants of Object, that define a method of the name themselves whose typed body is
+  inlinable now (`InlinableCallee`): one, or two with the same parameter and return types, each under
+  a check of its exact class (the inliner's two-class path, `IsOfClass`/`GuardClass`), and anything
+  else deopts - a subclass, a singleton class, a class whose method has no such body,
+  method_missing; the entry's method version check covers a redefinition, and a private or
+  protected method is not inlinable for an explicit receiver. A candidate still being profiled is
+  waited for only when no other is ready. An attribute read of the same local (`e.value`, `e.next`)
+  takes the variable's name from the class the call was inlined for and reads through
+  `ReadSelfAttr`, which binds to the class it meets and deopts where the name is not that variable's
+  reader; its value is an object. Switch: `IR_JIT_UNSAMPLED=0`.
+  Census (Src/StdLib + AWFY): 0 methods changed (it has no specialized callees to inline). Havlak
+  traced (`harness.rb Havlak 1 3`): `Dictionary/at` specialized (`hash`, `get_bucket` and
+  `IdEntry#match` inlined), declines after the pre-screen 3 -> 2, deopts 0, invalidations 0;
+  `census -c` 88 agree, 0 differ. The other thirteen benchmarks traced (3 x 1): the same JIT and OSR
+  decisions on both builds; all fourteen verify (CD at `3 100`: its inner count 1 is not a valid
+  one, on either build or CRuby). `Util/bench/havlak-shapes.rb` (new; som.rb's Dictionary with
+  `Entry#match`), instructions a call (`callgrind/count.sh`, new/base): `at_first` 0.611, `at_chain`
+  (behind one entry) 0.571, `at_miss` 0.538, the control `chain_len` (the same loop calling nothing on
+  the local) 1.000; time on a quiet machine, ns: 142 -> 88, 172 -> 104, 180 -> 100, control 147 ->
+  148. Havlak, `harness.rb Havlak 6 1`, three pairs in separate processes, the order turned in the
+  second: base 23.55, 22.37, 22.19 s, new 22.34, 21.62, 21.74 (0.965, new faster in each pair, inside
+  the benchmark's swing).
+  Checked: `Util/unsampled-matrix.rb` (new, 16 cases, one per process: entries of another class with
+  a match of its own half way, two classes both inlinable, `match` and `value` redefined, a singleton
+  `match` and `value`, method_missing, a subclass, a subclass with `private :value`, `value` and
+  `match` made private, `match` protected and removed, the entries frozen, the buckets emptied) prints
+  CRuby's output on the unchanged build and on the new one with the JIT on, `-X:NoJIT -X:NoOSR`,
+  `-X:NoJITCalls` and `IR_JIT_UNSAMPLED=0`; every case specializes `at` with `match` inlined. jit,
+  jit-calls, jit-const, ivar, deadconst matrices print CRuby's in all four modes; hot-shapes and
+  inline the baseline's (their known rows: a FrozenError where IronRuby raises
+  Encoding::CompatibilityError, and `tree_int_key`, on every build with the JIT on or off).
+  IronRuby.Tests Jit*, Loop*, Inline* (21) pass.
+  For the gate: the candidates are found by enumerating Object's constants under the hierarchy lock
+  at each compile of such a call (compile time only); a class not a constant of Object (nested in a
+  module) is not a candidate, so such a call stays uninlined. Look at the attribute read's name being
+  taken from the first candidate while the receiver may be of the second (ReadSelfAttr re-binds, and
+  deopts if that class's reader is another variable), and at "a fast path that decides from a resolved
+  method": the candidate's method is resolved on the candidate class with the lookup's visibility
+  (`InlinableCallee`), and a subclass never takes the inlined body (exact class check).
 
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and

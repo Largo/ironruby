@@ -40,6 +40,9 @@ namespace IronRuby.Runtime.Jit {
         private RubyClass _inlinedSelfClass;
         // A call was inlined on a parameter under a check of the one class the profile saw it hold (JitCode).
         private bool _inlinedOnArgumentClass;
+        // The locals nothing samples that a call was inlined on (UnsampledCallees), with the first class it was inlined
+        // for: what names the instance variable of an attribute read of the local (EmitMethodAttrRead).
+        private System.Collections.Generic.Dictionary<string, RubyClass> _unsampledClasses;
 
         /// <summary>
         /// The call inlined (see the file header), or null if it is not a call of an inlinable
@@ -56,23 +59,35 @@ namespace IronRuby.Runtime.Jit {
             if (node.Target == null && node.IsVariableCall) { return null; }
             if (selfReceiver && node.MethodName == _ast.Name) { return null; }
 
-            object sample;
-            if (!TrySample(node.Target, out sample) || sample == null) { return null; }
-            RubyClass cls = JitRuntime.ClassOf(_context, sample);
-            if (cls.Context != _context) { return null; }
-            if (selfReceiver && _inlinedSelfClass != null && _inlinedSelfClass != cls) { return null; }
-            // an explicit receiver is one the guard below checks the class of: an object of a Ruby class
-            if (!selfReceiver && !(sample is RubyObject)) { return null; }
-
-            var code = InlinableCallee(cls, node.MethodName, selfReceiver, args.Length);
-            if (code == null) { return null; }
-
-            // A parameter the profile saw hold objects of two classes (`key' in find_node, a CallSign or a Vector2D):
-            // both callees, each under a check of its own class, if their bodies take and give the same types.
+            RubyClass cls;
+            JitCode code;
             RubyClass otherCls = null;
             JitCode otherCode = null;
             var receiverLocal = node.Target as LocalVariable;
-            if (receiverLocal != null && _hints.ArgClasses != null && receiverLocal.DefinitionLexicalDepth == _scopeDepth) {
+            object sample;
+            if (!TrySample(node.Target, out sample) || sample == null) {
+                // A local of the method nothing samples (`e = get_bucket(hash)' before a `while e' that calls
+                // `e.match(hash, key)', Dictionary#at): the classes whose own method of the name has an inlinable
+                // typed body now, at most two, each under a check of its class; anything else deopts.
+                if (selfReceiver || receiverLocal == null || receiverLocal.DefinitionLexicalDepth != _scopeDepth ||
+                    !JitRuntime.InlineUnsampled || !UnsampledCallees(node.MethodName, args.Length, out cls, out code, out otherCls, out otherCode)) {
+                    return null;
+                }
+                (_unsampledClasses ?? (_unsampledClasses = new System.Collections.Generic.Dictionary<string, RubyClass>()))[receiverLocal.Name] = cls;
+            } else {
+                cls = JitRuntime.ClassOf(_context, sample);
+                if (cls.Context != _context) { return null; }
+                if (selfReceiver && _inlinedSelfClass != null && _inlinedSelfClass != cls) { return null; }
+                // an explicit receiver is one the guard below checks the class of: an object of a Ruby class
+                if (!selfReceiver && !(sample is RubyObject)) { return null; }
+
+                code = InlinableCallee(cls, node.MethodName, selfReceiver, args.Length);
+                if (code == null) { return null; }
+            }
+
+            // A parameter the profile saw hold objects of two classes (`key' in find_node, a CallSign or a Vector2D):
+            // both callees, each under a check of its own class, if their bodies take and give the same types.
+            if (otherCls == null && receiverLocal != null && _hints.ArgClasses != null && receiverLocal.DefinitionLexicalDepth == _scopeDepth) {
                 int p = Array.IndexOf(_paramNames, receiverLocal.Name);
                 var seen = (p >= 0 && p < _hints.ArgClasses.Length) ? _hints.ArgClasses[p] : null;
                 if (seen != null && seen.Length == 2 && (seen[0] == cls || seen[1] == cls)) {
@@ -169,6 +184,53 @@ namespace IronRuby.Runtime.Jit {
             if (code == null && stub.IsProfiling) { _hints.CalleeNotReady = true; }
             if (code == null || code.ParameterTypes.Length != argc) { return null; }
             return code;
+        }
+
+        /// <summary>
+        /// The callees of a call on a local the profile has no sample of (TryInlineCall): the classes, constants of
+        /// Object, that define a method of the name themselves whose typed body may be inlined now (InlinableCallee),
+        /// one or two of them, two only if their bodies take and give the same types. Each is called under a check of
+        /// its exact class, which deopts on any other (a subclass, a singleton class, a class whose method of the name
+        /// has no such body, one with method_missing), and the entry's method version check covers a redefinition.
+        /// A candidate still being profiled makes the caller wait for it only when no other is ready.
+        /// </summary>
+        private bool UnsampledCallees(string/*!*/ name, int argc, out RubyClass cls, out JitCode code, out RubyClass otherCls, out JitCode otherCode) {
+            cls = otherCls = null;
+            code = otherCode = null;
+            var classes = new System.Collections.Generic.List<RubyClass>();
+            using (_context.ClassHierarchyLocker()) {
+                _context.ObjectClass.EnumerateConstants((module, constantName, value) => {
+                    var c = value as RubyClass;
+                    RubyMemberInfo method;
+                    if (c != null && c.Context == _context && !c.IsSingletonClass && !classes.Contains(c) && c.TryGetDefinedMethod(name, out method) &&
+                        method is RubyMethodInfo) {
+                        classes.Add(c);
+                    }
+                    return false;
+                });
+            }
+            bool notReady = _hints.CalleeNotReady;
+            int ready = 0;
+            foreach (var c in classes) {
+                var body = InlinableCallee(c, name, false, argc);
+                if (body == null) { continue; }
+                if (++ready > 2) { break; }
+                if (cls == null) {
+                    cls = c;
+                    code = body;
+                } else {
+                    otherCls = c;
+                    otherCode = body;
+                }
+            }
+            if (ready == 0) { return false; }
+            // a candidate that is not specialized yet is waited for only when there is none to inline
+            _hints.CalleeNotReady = notReady;
+            if (ready > 2) { return false; }
+            if (otherCode != null && (otherCode.ReturnType != code.ReturnType || !SameTypes(otherCode.ParameterTypes, code.ParameterTypes))) {
+                return false;
+            }
+            return true;
         }
 
         private static bool SameTypes(JT[]/*!*/ a, JT[]/*!*/ b) {

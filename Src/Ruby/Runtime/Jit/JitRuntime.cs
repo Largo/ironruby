@@ -47,6 +47,13 @@ namespace IronRuby.Runtime.Jit {
         internal static readonly bool DeadConstants = Environment.GetEnvironmentVariable("IR_JIT_DEADCONST") != "0";
 
         /// <summary>
+        /// IR_JIT_UNSAMPLED (on unless =0): a call on a local of the method that the profile has no sample of is
+        /// inlined for the classes that define an inlinable method of the name, under checks of their classes
+        /// (JitCompiler.UnsampledCallees).
+        /// </summary>
+        internal static readonly bool InlineUnsampled = Environment.GetEnvironmentVariable("IR_JIT_UNSAMPLED") != "0";
+
+        /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
         internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
