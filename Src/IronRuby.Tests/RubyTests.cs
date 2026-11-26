@@ -1051,6 +1051,7 @@ namespace IronRuby.Tests {
                 Marshal_LoadChecks1,
                 Integer_SqrtPowDigits1,
                 Prelude_DataStructErrors1,
+                Prelude_DataUndefinedAllocator1,
                 Prelude_AliasNames1,
                 Visibility_DefaultScope1,
                 Main_PrivateAndInitializeCopy1,

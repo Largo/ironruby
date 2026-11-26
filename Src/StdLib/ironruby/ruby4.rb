@@ -7526,14 +7526,11 @@ class Enumerator
     end
 
     # Only Range#step, Range#% and Numeric#step make one: .new is undefined and .allocate refuses.
+    __ir_undef_alloc__
     class << self
       alias :__allocate__ :allocate
       private :__allocate__
       undef_method :new
-
-      def allocate
-        ::Kernel.raise(::TypeError, "allocator undefined for #{self}")
-      end
     end
 
     def self.__build__(from, to, by, exclude_end, source, inspect_str = nil)
@@ -7658,14 +7655,10 @@ end
 # user-written #initialize was never reached, so neither the `super` idiom nor
 # psych's Data.instance_method(:initialize).bind_call trick worked.
 class Data
-  class << self
-    # Only the classes Data.define makes have instances.
-    alias_method :__ir_allocate__, :allocate
-    def allocate
-      ::Kernel.raise(::TypeError, "allocator undefined for Data") if equal?(::Data)
-      __ir_allocate__
-    end
+  # Only the classes Data.define makes have instances (MRI: rb_undef_alloc_func(rb_cData)).
+  __ir_undef_alloc__
 
+  class << self
     def define(*names, &block)
       names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)

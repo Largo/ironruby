@@ -3756,6 +3756,36 @@ E = Data.define(:a, :b)
         }
 
         /// <summary>
+        /// Data and Enumerator::ArithmeticSequence have no allocator (MRI's rb_undef_alloc_func), which the prelude says with
+        /// Class#__ir_undef_alloc__ rather than a singleton method allocate that singleton_methods would list. A class
+        /// Data.define makes, and a subclass of one, still allocates, through Class#allocate.
+        /// </summary>
+        public void Prelude_DataUndefinedAllocator1() {
+            TestOutput(@"
+require 'ruby4'
+D = Data.define(:a)
+# (a test's require of ruby4 lists the prelude's __helpers__, which the prelude proper does not)
+p Data.singleton_methods.sort, D.singleton_methods.sort, Enumerator::ArithmeticSequence.singleton_methods.grep_v(/\A__/).sort
+p((Data.allocate rescue $!), D.allocate, (Enumerator::ArithmeticSequence.allocate rescue $!))
+p D.method(:allocate).owner, Data.respond_to?(:allocate), 1.step(10, 4).to_a, (1..2).step(1).class
+E = Class.new(D); p E.allocate, E.new(5)
+", @"
+[:define]
+[:[], :inspect, :members, :new]
+[:produce, :product]
+#<TypeError: allocator undefined for Data>
+#<data D a=nil>
+#<TypeError: allocator undefined for Enumerator::ArithmeticSequence>
+Class
+true
+[1, 5, 9]
+Enumerator::ArithmeticSequence
+#<data E a=nil>
+#<data E a=5>
+");
+        }
+
+        /// <summary>
         /// #yield_self is an alias of #then, as in MRI, so the Enumerator and Method#original_name say :then; the prelude's
         /// aliases (collect_concat, Lazy#filter/collect, select!/filter!, ENV#filter/each_pair) name the Enumerator after the
         /// name they were called by, Array#rfind shows its argument only when given one, and String#each_line and

@@ -3709,7 +3709,7 @@ namespace IronRuby.Builtins {
             return false;
         }
 
-        private static bool IsHelperName(string/*!*/ name) {
+        internal static bool IsHelperName(string/*!*/ name) {
             if (!name.StartsWith("__", StringComparison.Ordinal)) {
                 return false;
             }

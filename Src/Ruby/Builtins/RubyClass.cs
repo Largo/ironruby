@@ -85,6 +85,18 @@ namespace IronRuby.Builtins {
 
         public bool IsUninitializedAllocation { get { return _isUninitializedAllocation; } }
 
+        // MRI's rb_undef_alloc_func on a class written in Ruby (Data, Enumerator::ArithmeticSequence): Class#allocate of this
+        // class, not of its subclasses, raises "allocator undefined" (ClassOps.UndefineAllocator).
+        private bool _isAllocatorUndefined;
+
+        public void UndefineAllocator() {
+            using (Context.ClassHierarchyLocker()) {
+                _isAllocatorUndefined = true;
+                // rules of allocate built for this class allocate
+                MethodsUpdated("allocator");
+            }
+        }
+
         // immutable:
         private readonly Delegate/*!*/[]/*!*/ _factories;
 
@@ -1693,6 +1705,9 @@ namespace IronRuby.Builtins {
             if (!metaBuilder.Error) {
                 if (_isUninitializedAllocation) {
                     metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
+                } else if (_isAllocatorUndefined && !IsHelperName(methodName)) {
+                    // (a prelude helper's alias of allocate, such as ArithmeticSequence's __allocate__, still allocates)
+                    metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 } else if (HasSealedClrBase() || !BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
                     metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 }
@@ -2037,16 +2052,6 @@ namespace IronRuby.Builtins {
                 initializer.BuildCallNoFlow(metaBuilder, args, Symbols.Initialize);
             } else {
                 // TODO: we need more refactoring of RubyMethodGroupInfo.BuildCall to be able to inline this:
-                metaBuilder.Result = AstUtils.LightDynamic(
-                    RubyCallAction.Make(args.RubyContext, "initialize", new RubyCallSignature(args.Signature.ArgumentCount, flags)),
-                    siteArguments
-                );
-            }
-
-            if (!metaBuilder.Error) {
-                // PropagateRetrySingleton(instance = new <type>(), instance.initialize(<args>))
-                metaBuilder.Result = Methods.PropagateRetrySingleton.OpCall(
-                    Ast.Assign(instanceVariable, instanceExpr),
                 // The call is Class#new's, not the caller's: MRI's rb_obj_call_init calls initialize with no refinement active,
                 // so the site does not take the caller's scope, whose refinements would reach initialize (a refined
                 // Struct#initialize did, once the rule was compiled). No library initialize takes the scope, and the action is
@@ -2059,6 +2064,16 @@ namespace IronRuby.Builtins {
                 } else {
                     siteArguments = args.GetCallSiteArguments(instanceVariable);
                 }
+                metaBuilder.Result = AstUtils.LightDynamic(
+                    RubyCallAction.Make(args.RubyContext, "initialize", new RubyCallSignature(args.Signature.ArgumentCount, flags)),
+                    siteArguments
+                );
+            }
+
+            if (!metaBuilder.Error) {
+                // PropagateRetrySingleton(instance = new <type>(), instance.initialize(<args>))
+                metaBuilder.Result = Methods.PropagateRetrySingleton.OpCall(
+                    Ast.Assign(instanceVariable, instanceExpr),
                     metaBuilder.Result
                 );
 

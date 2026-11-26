@@ -53,6 +53,16 @@ namespace IronRuby.Builtins {
             return self;
         }
         
+        /// <summary>
+        /// MRI's rb_undef_alloc_func, for a core class the prelude writes in Ruby: allocate of this class (not of a subclass)
+        /// raises "allocator undefined", as Data.allocate does, without a singleton method allocate that Data.singleton_methods
+        /// would list.
+        /// </summary>
+        [RubyMethod("__ir_undef_alloc__", RubyMethodAttributes.PrivateInstance)]
+        public static void UndefineAllocator(RubyClass/*!*/ self) {
+            self.UndefineAllocator();
+        }
+
         [RubyMethod("allocate")]
         public static RuleGenerator/*!*/ Allocate() {
             return new RuleGenerator(RuleGenerators.InstanceAllocator);
