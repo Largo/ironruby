@@ -46,9 +46,17 @@ using MSA = System.Linq.Expressions;
             _rescueSpan = rescueSpan;
         }
 
+        /// <summary>
+        /// The guarded expression is not a line of its own to TracePoint :line: set on the expression of an endless def
+        /// (`def m = x rescue y'), which CRuby reports no line event for.
+        /// </summary>
+        public bool GuardedWithoutLine { get; set; }
+
         private Body/*!*/ ToBody(AstGenerator/*!*/ gen) {
+            var guarded = new Statements();
+            guarded.Add(_guardedExpression, GuardedWithoutLine ? Statements.NoLine : _guardedExpression.Location.Start.Line);
             return new Body(
-                new Statements(_guardedExpression),
+                guarded,
                 CollectionUtils.MakeList(new RescueClause(Array.Empty<Expression>(), null, new Statements(_rescueClauseStatement), _rescueSpan)),
             null, null, Location);
         }

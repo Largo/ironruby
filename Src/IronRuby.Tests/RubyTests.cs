@@ -1130,6 +1130,7 @@ namespace IronRuby.Tests {
                 Method_LightFrame2,
                 Block_RegisterLocals1,
                 Defined_ConditionNoFreeze1,
+                TracePoint_EndlessDefLine1,
                 Block_OptionalBeforeRest1,
                 LoweredRaise_IgnoresOwnRaise1,
                 Review212_1,

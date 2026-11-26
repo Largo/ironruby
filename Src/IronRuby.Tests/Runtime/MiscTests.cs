@@ -8503,5 +8503,32 @@ comparison of Integer with Labeled failed
 comparison of Integer with nil failed
 ");
         }
+
+        /// <summary>
+        /// The expression of an endless def is not a line to TracePoint :line (prism gives it no newline flag): CRuby reports
+        /// no event for it, with or without a rescue modifier, but does for statements in parentheses in it and in a block.
+        /// (The lines are one more than ruby's for the same text: the snippet starts on its second line.)
+        /// </summary>
+        public void TracePoint_EndlessDefLine1() {
+            TestOutput(@"
+def e1 = 42
+def e2(x) = x + 1
+def e3 = (y = 1; y + 1)
+def e4(x = 1) = x rescue 2
+def e5 = (42)
+def e6 = [1].map { _1 }
+def e7 = [1].map { |x|
+  x }
+def n1
+  42
+end
+lines = []
+tp = TracePoint.new(:line) { |t| lines << [t.lineno, t.method_id] if t.method_id }
+tp.enable { e1; e2(1); e3; e4; e5; e6; e7; n1 }
+p lines
+", @"
+[[4, :e3], [6, :e5], [7, :e6], [9, :e7], [11, :n1]]
+");
+        }
     }
 }

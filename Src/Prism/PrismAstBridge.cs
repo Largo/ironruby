@@ -714,6 +714,7 @@ namespace IronRuby.Prism {
                 case Pm.SelfNode _: return new SelfReference(span);
 
                 case Pm.ParenthesesNode parens: {
+                    if (parens.Body != null) _parenthesizedStatements++;
                     var inner = StatementsAsExpression(parens.Body, span);
                     // `(self).m` is not a call with self as the receiver: MRI only lets a private method
                     // be called on a bare `self`, so the parentheses have to survive the unwrapping.
@@ -2059,8 +2060,10 @@ namespace IronRuby.Prism {
 
         // ---- bodies ----
 
-        private Body/*!*/ BuildBeginBody(Pm.BeginNode/*!*/ node, SourceSpan span, Statements prologue) {
+        private Body/*!*/ BuildBeginBody(Pm.BeginNode/*!*/ node, SourceSpan span, Statements prologue, bool endless = false) {
+            int parenthesized = _parenthesizedStatements;
             var statements = BuildStatements(node.Statements);
+            if (endless && parenthesized == _parenthesizedStatements) statements = WithoutLines(statements);
             if (prologue != null) statements = Prepend(prologue, statements);
 
             List<RescueClause> rescues = null;
@@ -2077,6 +2080,20 @@ namespace IronRuby.Prism {
             if (node.EnsureClause is Pm.EnsureNode ensureNode) ensureStatements = BuildStatements(ensureNode.Statements);
 
             return new Body(statements, rescues, elseStatements, ensureStatements, span);
+        }
+
+        // Parenthesized statements mapped so far (an endless def's body with some keeps its line, see WithoutLines).
+        private int _parenthesizedStatements;
+
+        // The expression of an endless def (`def m = expr') is not a line of its own to TracePoint :line: prism does not
+        // mark it a new line, and CRuby reports no event for it (statements inside it, in parentheses, are reported).
+        private static Statements/*!*/ WithoutLines(Statements/*!*/ statements) {
+            var result = new Statements();
+            foreach (var statement in statements) {
+                if (statement is RescueExpression rescue) rescue.GuardedWithoutLine = true;
+                result.Add(statement, Statements.NoLine);
+            }
+            return result;
         }
 
         private static Statements/*!*/ Prepend(Statements/*!*/ prologue, Statements/*!*/ body) {
@@ -2100,11 +2117,15 @@ namespace IronRuby.Prism {
                 BuildStatements(node.Statements), Span(node));
         }
 
-        private Body/*!*/ DefinitionBody(Pm.PmNode body, SourceSpan span, Statements prologue) {
+        private Body/*!*/ DefinitionBody(Pm.PmNode body, SourceSpan span, Statements prologue, bool endless = false) {
             if (body is Pm.BeginNode begin) {
-                return BuildBeginBody(begin, span, prologue);
+                // (`def m = x rescue y')
+                return BuildBeginBody(begin, span, prologue, endless);
             }
+            int parenthesized = _parenthesizedStatements;
             var statements = BuildStatements(body);
+            // (statements in parentheses are lines to CRuby, `def m = (42)' too; unwrapped, they would lose their event)
+            if (endless && parenthesized == _parenthesizedStatements) statements = WithoutLines(statements);
             if (prologue != null) statements = Prepend(prologue, statements);
             return new Body(statements, null, null, null, span);
         }
@@ -2218,7 +2239,7 @@ namespace IronRuby.Prism {
                         node.Body = node.DeferredBodyLoader.LoadDeferredBody(node);
                         node.DeferredBodyLoader = null;
                     }
-                    var body = DefinitionBody(node.Body, span, prologue);
+                    var body = DefinitionBody(node.Body, span, prologue, node.EqualLoc != null);
                     return new MethodDefinition(scope, target, node.Name, parameters, body, span) { UsesBlock = _usesBlock };
                 } finally {
                     _zsuperArguments = enclosingZSuperArguments;
@@ -2273,7 +2294,7 @@ namespace IronRuby.Prism {
                 _usesBlock = false;
                 _zsuperArguments = zsuperArguments;
                 try {
-                    var body = DefinitionBody(bodyNode, span, prologue);
+                    var body = DefinitionBody(bodyNode, span, prologue, node.EqualLoc != null);
                     // the skim has to have seen what mapping the body sees
                     System.Diagnostics.Debug.Assert(_usesBlock == ((node.BodyContents & PrismLoader.ContentsUsesBlock) != 0));
                     return body;
