@@ -11,6 +11,9 @@
 # ids are taken out of inspect. Each expression runs twice and then in a loop of 200, so a
 # path that only a warm call site takes is probed too; a line says so when the warm answer
 # differs from the first.
+#
+# Known: `UsingRefine.make` prints [:refined, :init] on every IronRuby build (a refinement of
+# initialize is seen by Class#new); CRuby's new calls the unrefined initialize.
 
 KT = Struct.new(:a, :b, keyword_init: true)
 KF = Struct.new(:a, :b, keyword_init: false)
@@ -59,9 +62,16 @@ module RefineKT
     def a = :refined
   end
 end
+module RefineInit
+  refine KN do
+    def initialize(*) = super(:refined, :init)
+  end
+end
 module UsingRefine
   using RefineKT
+  using RefineInit
   def self.read = KT.new(a: 1).a
+  def self.make = KN.new(1, 2).to_a
 end
 KTH = Thread.new { Struct.new(:x, :y, keyword_init: true) }.value
 KNH = Thread.new { Struct.new(:x, :y) }.value
@@ -144,6 +154,13 @@ EXPRESSIONS = <<~'RUBY'.lines.map(&:strip).reject { |l| l.empty? || l.start_with
   FrozenKT.new(a: 1).frozen?
   FrozenKT.new(a: 1).to_a
   UsingRefine.read
+  UsingRefine.make
+  (c = Struct.new(:a); c.class_eval { private def initialize(*) = super(:priv) }; c.new(1).a)
+  (c = Struct.new(:a); c.class_eval { def method_missing(n, *a) = n }; c.new(1).a)
+  (c = Struct.new(:a, :b); c.class_eval { undef_method :initialize }; c.new(1, 2))
+  (c = Struct.new(:a); d = Class.new(c) { def initialize(x) = super(x * 3) }; d.new(2).a)
+  (c = Struct.new(:a, :b, :c, :d, :e, :f); c.new(1, 2, 3, 4, 5, 6).to_a)
+  (c = Struct.new(:a, :b); c.new(1) { :blk }.to_a)
   KT.new(a: 1).a
   KTH.new(x: 1, y: 2).to_a
   KTH.new(z: 1)
