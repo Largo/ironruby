@@ -1155,6 +1155,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (noisy). In the same loop `String#dup` is 2.4 times CRuby (137-142 ns against 56) and
     `Array#dup` 1.15 times (143-146 against 124): the generic Kernel#dup path, worth a gap of its
     own (`Util/bench/dup-shapes.rb`).
+    perf/strdup (see Landed): String#dup without the hooks, as CRuby's, is no faster on the clock
+    (100-113 against 104-109 ns, CRuby 55); the gap is elsewhere in the call or the copy.
 25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
     sixteen's breakdown; its author's numbers, taken beside two other experiments at load
     2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
@@ -1781,6 +1783,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   trace says "stores not held back ... a call of JitRuntime.NewSymbolHash1"), as round
   strlit's literal makers were; not tried here.
   For the gate: no IronRuby.Tests or spec run; the decline above.
+- **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
+  24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
+  Object and Array dup and clone - content, encodings, broken bytes, frozen and chilled, ivars,
+  singleton classes, subclasses, a refinement, TracePoint, and the hooks redefined in String, Object
+  and Kernel or by prepend and include, then restored) showed master differing from CRuby in six
+  rows. In CRuby `String#dup` belongs to String: a bare string (class String itself, no singleton
+  class, no instance variables) is copied without calling initialize_dup or initialize_copy, even
+  redefined; any other goes through rb_obj_dup. `MutableStringOps.Duplicate` does that now, so the
+  matrix prints CRuby's output (switch `IR_FAST_DUP=0`: every string through Kernel#dup, as before).
+  Instructions (`callgrind/count.sh`, `dup-shapes.rb`): `str_dup` 3,688 -> 3,291; `str_clone`,
+  `hash_dup`, `clone`, `obj_dup`, `oi_dup` (an object with ivars), `arr_dup` and `plain` level.
+  Time in a method's loop, three alternating runs: `S.dup` 104-109 ns on master, 100-113 here, CRuby
+  55 - no gain; controls within the noise. So the hooks were not what String#dup spends: the 50 ns
+  over CRuby lie in the call of the library method and the copy (CreateInstance, Replace's content
+  clone), still to be found. Checks: dup, hash-dup, struct, hash-struct, jit and hot-shapes matrices
+  in every mode and with the switch off: PASS (dup-matrix `same`, `baseline -2` switched off).
+  spec/core/string and kernel dup/clone: 4,010 examples, the one known try_convert wording error
+  on both builds.
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,

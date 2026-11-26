@@ -33,6 +33,8 @@ N = (ENV['N'] || 200_000).to_i
 H3 = { a: 1, b: 2, c: 3 }
 X = {}
 O = Object.new
+class OIc; def initialize = (@a = 1; @b = 2); def size = 2; end
+OI = OIc.new
 HI = { a: 1 }.tap { |h| h.instance_variable_set(:@x, 1) }
 A3 = [1, 2, 3]
 S3 = "abc"
@@ -49,3 +51,5 @@ t("plain", N) { |n| i = 0; c = 0; while i < n; c += plain(i); i += 1; end; c }
 t("size", N) { |n| i = 0; c = 0; while i < n; c += H3.size + i; i += 1; end; c }
 t("clone", N) { |n| i = 0; c = 0; while i < n; c += H3.clone.size + i; i += 1; end; c }
 t("dup_ivar", N) { |n| i = 0; c = 0; while i < n; c += HI.dup.size + i; i += 1; end; c }
+t("oi_dup", N) { |n| i = 0; c = 0; while i < n; c += OI.dup.size + i; i += 1; end; c }
+t("str_clone", N) { |n| i = 0; c = 0; while i < n; c += S3.clone.size + i; i += 1; end; c }
