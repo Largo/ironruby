@@ -233,7 +233,9 @@ namespace IronRuby.Compiler.Ast {
                 // the block's own scope answers - `Module.new { using R; o.respond_to?(:m) }', whose respond_to? reads only the
                 // runtime and the refinements from the scope it is given ([DeclaringScope]).
                 var callScope = Ast.Coalesce(AstUtils.Convert(scopeVariable, typeof(RubyScope)), parent);
-                var rewriter = new MethodDefinition.LightFrameRewriter(scopeVariable, lazy, null, callScope, inLoop, false);
+                var rewriter = new MethodDefinition.LightFrameRewriter(scopeVariable, lazy, null, callScope, inLoop, false) {
+                    Context = gen.Context
+                };
                 var lazyParamInit = rewriter.Visit(paramInit);
                 var lazyStatements = rewriter.Visit(statements);
                 if (!rewriter.NeedsScope) {
