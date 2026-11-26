@@ -712,7 +712,8 @@ namespace IronRuby.Builtins {
             MutableString/*!*/ self) {
 
             if (FastDup && self.GetType() == typeof(MutableString) && IsBare(allocateStorage.Context, self)) {
-                return self.CreateInstance().Replace(self);
+                // the copy constructor: what CreateInstance().Replace(self) leaves, without the empty content made for it
+                return self.Clone();
             }
             return KernelOps.Duplicate(initializeCopyStorage, allocateStorage, self);
         }
@@ -722,7 +723,7 @@ namespace IronRuby.Builtins {
         // BARE_STRING_P: no instance variables and the class String itself (the caller has seen the CLR type is MutableString,
         // so the class is String unless the string has a singleton class).
         private static bool IsBare(RubyContext/*!*/ context, MutableString/*!*/ self) {
-            return !context.HasInstanceVariables(self) && !context.GetImmediateClassOf(self).IsSingletonClass;
+            return context.HasNoInstanceVariablesOrSingleton(self);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]

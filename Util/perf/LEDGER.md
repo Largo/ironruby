@@ -1157,6 +1157,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     own (`Util/bench/dup-shapes.rb`).
     perf/strdup (see Landed): String#dup without the hooks, as CRuby's, is no faster on the clock
     (100-113 against 104-109 ns, CRuby 55); the gap is elsewhere in the call or the copy.
+    perf/dupcost (see Landed): it was the instance-data lookups and a wasted content; `S.dup`
+    77 ns against 114 (CRuby 56).
 25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
     sixteen's breakdown; its author's numbers, taken beside two other experiments at load
     2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
@@ -1489,6 +1491,33 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/dupcost (2026-11-26, not gated) - `String#dup` of a bare string: one look for instance
+  data, and the copy constructor** (gap 24's dup note). Where the time went, by callgrind with the
+  CLR's perf map over one `str_dup` section of `dup-shapes.rb` (instructions per call, the
+  shape's driver included; the scratch profiler kept the section's files and named JIT frames
+  from /tmp/perf-PID.map): the bare test 553 - `HasInstanceVariables` and `GetImmediateClassOf`
+  each looked the string up in the ConditionalWeakTable of instance data, through the general
+  `TryGetInstanceData` - and the copy 706: `CreateInstance` 375 (a new string with an empty
+  char-array content, zeroed) and `Replace` 331 (`SetEncoding` 120, the content's clone 106),
+  which threw that content away. Not the library call. Now `RubyContext.HasNoInstanceVariablesOrSingleton`
+  looks once, straight in the table for a String, and the copy is `MutableString.Clone()` (the
+  copy constructor: content clone, encoding, character flags - what CreateInstance().Replace left).
+  Tried first and dropped: a per-runtime flag "no String has instance data yet" - always set, since
+  the Loader puts `@gem_prelude_index` on the load path's strings at start-up.
+  Instructions (`callgrind/count.sh`, N=20000): `str_dup` 3,290 -> 2,418 (over `plain`'s 1,266:
+  2,024 -> 1,152); `str_clone`, `hash_dup`, `clone`, `obj_dup`, `oi_dup`, `arr_dup` level (one
+  `obj_dup` outlier on the base, 6,130, as seen before). Time in a method's loop, three alternating
+  runs: `S.dup` 97-113 -> 76-78 ns (CRuby 56); in reverse order 114-117 -> 77. `S.clone` read
+  139-192 -> 193-220 when run after `S.dup` in one process, but alone (129-132 on both, three runs
+  each) and in reverse order (207-208 against 198-209) it is level: an artefact of the order of
+  shapes in one process - which may also be what sank perf/struct2's Hash#dup (see Rejected).
+  Checks: dup, hash-dup, string-search, hot-shapes, jit and jit-calls matrices in every mode and
+  with `IR_FAST_DUP=0`: PASS. spec/core/string with the Kernel dup/clone specs: 4,010 examples,
+  the one known try_convert wording error on both builds. Not measured, since the call was not
+  the cost: other no-argument library calls (`s.size`, `a.first`, `h.empty?`). Left: the copy
+  allocates two objects (the string and its content) where CRuby shares the buffer; a
+  copy-on-write content would take the next ~350.
 
 - **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
   24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
