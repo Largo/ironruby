@@ -217,14 +217,8 @@ namespace IronRuby.Runtime {
                 interpretedFrame
             );
 
-            if (_aliasCallSeen) {
-                string callee = _pendingCallee;
-                if (callee != null) {
-                    _pendingCallee = null;
-                    if (_pendingCalleeDefinition == definitionName) {
-                        scope.CalleeName = callee;
-                    }
-                }
+            if (_pendingCallees != 0) {
+                scope.CalleeName = TakePendingCalleeSlow(definitionName);
             }
 
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
@@ -286,14 +280,8 @@ namespace IronRuby.Runtime {
 
             var scope = parked.Scope;
             scope.Reinitialize(locals, selfObject, blockParameter, interpretedFrame, null, null);
-            if (_aliasCallSeen) {
-                string callee = _pendingCallee;
-                if (callee != null) {
-                    _pendingCallee = null;
-                    if (_pendingCalleeDefinition == scope.DefinitionName) {
-                        scope.CalleeName = callee;
-                    }
-                }
+            if (_pendingCallees != 0) {
+                scope.CalleeName = TakePendingCalleeSlow(scope.DefinitionName);
             }
 
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
@@ -480,13 +468,16 @@ namespace IronRuby.Runtime {
         [Emitted]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static string TakePendingCallee(string/*!*/ definitionName) {
-            return _aliasCallSeen ? TakePendingCalleeSlow(definitionName) : null;
+            return (_pendingCallees != 0) ? TakePendingCalleeSlow(definitionName) : null;
         }
 
         private static string TakePendingCalleeSlow(string/*!*/ definitionName) {
             string callee = _pendingCallee;
             if (callee != null) {
                 _pendingCallee = null;
+                if (PendingCalleesCounted) {
+                    Interlocked.Decrement(ref _pendingCallees);
+                }
                 if (_pendingCalleeDefinition == definitionName) {
                     return callee;
                 }
@@ -570,7 +561,15 @@ namespace IronRuby.Runtime {
         private static string _pendingCallee;
         [ThreadStatic]
         private static string _pendingCalleeDefinition;
-        private static bool _aliasCallSeen;
+
+        // How many threads have a name pending (_pendingCallee): a frame's entry reads the thread-static only when some thread
+        // has. It used to be a flag that stayed set once any alias had been called - start-up calls some - and from then on
+        // every method's entry, light or not, read the thread-static, which in a DynamicMethod is a call into the runtime
+        // (~60 instructions with the test). A name is pending from the alias call's MarkAliasCall to the next entry of a
+        // method on that thread, which takes it whether or not it is that method's. A stale count only costs reads.
+        // IR_LIGHT_ENTRY=0: the flag as it was (counted up once, never down).
+        private static int _pendingCallees;
+        internal static readonly bool PendingCalleesCounted = Environment.GetEnvironmentVariable("IR_LIGHT_ENTRY") != "0";
 
         /// <summary>
         /// Wraps the last argument of a call to a method through an alias, so that the name is
@@ -578,7 +577,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static object MarkAliasCall(object lastArgument, string/*!*/ calleeName, string/*!*/ definitionName) {
-            _aliasCallSeen = true;
+            if (!PendingCalleesCounted) {
+                _pendingCallees = 1;
+            } else if (_pendingCallee == null) {
+                Interlocked.Increment(ref _pendingCallees);
+            }
             _pendingCallee = calleeName;
             _pendingCalleeDefinition = definitionName;
             return lastArgument;
