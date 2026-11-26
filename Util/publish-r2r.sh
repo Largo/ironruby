@@ -22,6 +22,13 @@
 #
 # The output lands in Src/Console/bin/R2R/$IR_TFM, which is exactly where
 # IR_CONFIG=R2R makes ir.sh look; no change to ir.sh is needed.
+#
+# It is built the way a Release build's own R2R host (Ruby.Console.csproj) and the
+# release archive (package-release.sh) are: self-contained, one composite image of
+# IronRuby and the framework, compiled with the startup profile Build/startup.mibc.
+# With the framework in the image, the generic instantiations startup makes over
+# framework types are precompiled too: `ir -e 1` ~450 -> ~385 ms, JIT'd methods
+# ~500 -> ~130. IR_COMPOSITE=0 publishes the framework-dependent per-assembly host.
 IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 export DOTNET_ROOT=/usr/local/dotnet
 export PATH=/usr/local/dotnet:$PATH
@@ -32,8 +39,14 @@ export PATH=/usr/local/dotnet:$PATH
 : "${IR_TFM:=net10.0}"
 
 cd "$IR_ROOT" || exit 1
+mode="--self-contained true -p:PublishReadyToRunComposite=true -p:IronRubyStartupProfile=true"
+if [ "${IR_COMPOSITE:-1}" = 0 ]; then
+  mode="--self-contained false"
+  # a composite publish leaves component stubs in obj/.../R2R that a per-assembly publish would ship (package-release.sh)
+  rm -rf "Src/Console/obj/Release/$IR_TFM/$RID/R2R"
+fi
 dotnet publish Src/Console/Ruby.Console.csproj \
-  -c Release -r "$RID" --self-contained false -f "$IR_TFM" \
+  -c Release -r "$RID" $mode -f "$IR_TFM" \
   -p:PublishReadyToRun=true \
   -p:DlrSourceDir="$DLR_SOURCE_DIR" \
   -o "$IR_ROOT/Src/Console/bin/R2R/$IR_TFM" "$@" || exit 1
