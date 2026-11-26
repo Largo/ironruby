@@ -37,6 +37,26 @@ module StartupFixture
     [o.instance_variable_get(:@q), class_eval("1 + 2")]
   end
 
+  # A noted call (const_set, autoload, require_relative, __dir__) evaluates its arguments in order: n is read before the
+  # argument after it assigns it, in a method and in a block.
+  def self.noted_argument_order(v)
+    n = :X
+    m = Module.new
+    m.const_set(n, (n = :Y; v))
+    [:P].each { |k| m.autoload(k, (k = :Q; "startup_fixture_nothing")) }
+    [m.constants.sort, n, m.autoload?(:P), m.autoload?(:Q)]
+  end
+
+  def self.tolerant = [1, 2].map { |i| (yield i rescue :raised) }
+
+  # A noted call that raises before it takes its note (an invalid constant name, an empty autoload path) leaves none
+  # behind for an eval in the same scope: __dir__ there is the eval's (nil), not this file's.
+  def self.failed_notes
+    pr = proc { |i| i == 1 ? const_set(:lowercase, 1) : eval("__dir__") }
+    (pr.(1) rescue nil)
+    [pr.(2), tolerant { |i| i == 1 ? autoload(:Empty, "") : eval("__dir__") }]
+  end
+
   # const_set and autoload record the location of the line that calls them, in a block as anywhere
   %i[A B].each_with_index { |name, i| const_set(name, i) }
   [:Later].each { |name| autoload(name, "startup_fixture_later") }

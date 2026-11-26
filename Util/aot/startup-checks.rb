@@ -82,3 +82,16 @@ threads.each do |name, t|
 end
 puts "Thread#backtrace_locations: " + threads["Set#each"].backtrace_locations.map(&:label).chunk_while { |a, b| a == b }.map(&:first).join(" | ")
 threads.each_value(&:kill)
+
+# Kernel#require_relative and #__dir__ called from precompiled code take the caller's file from what that code noted
+# for the call (PrecompiledCode.TakeNotedCallerPath), not from the stack: RubyGems' __dir__s at the top level and in a
+# method, and the require_relatives of RubyGems' list command, resolve to the same files either way.
+stdlib = ->(s) { s.to_s.sub(%r{.*/Src/StdLib/}, "") }
+puts "Gem::RUBYGEMS_DIR: " + stdlib.(Gem::RUBYGEMS_DIR)
+puts "Gem.autoload?(:Installer): " + stdlib.(Gem.autoload?(:Installer))
+# ... and an autoload whose path argument calls __dir__ still records where the autoload is (its own noted location).
+puts "Gem.const_source_location(:Installer): " + Gem.const_source_location(:Installer).map(&stdlib).join(":")
+puts "Gem.ironruby_stdlib_dirs: " + Gem.ironruby_stdlib_dirs.map(&stdlib).join(" ")
+before = $LOADED_FEATURES.size
+require "rubygems/commands/list_command"
+puts "list_command: #{$LOADED_FEATURES.size - before} files, " + $LOADED_FEATURES[before..].map(&stdlib).first(5).join(" ")

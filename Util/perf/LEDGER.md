@@ -1157,6 +1157,41 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     The library grows from 32.9 to 117.6 MB; a single line table for all files made `-e 1`
     11% dearer and is now one per file. Left: the 91 gemspecs (~245 ms of `gem list`), which
     `Gem::Specification.load` evals with its own binding, so the library cannot serve them.
+    2026-11-26, perf/rubygems-boot: what RubyGems costs `-e 1` (master 7bc00726, R2R host;
+    `-e 1` 478 ms best of 20, `--disable-gems` ~340). Perf with jitdump, 4 runs, main thread
+    inside gem_prelude's `require "rubygems"`: 146 ms CPU profiled (~122-139 unprofiled; the
+    file-open timeline puts rubygems.rb -> error_highlight.rb at 139 ms median of 7). By whose
+    code runs: rubygems.rb's own top level 72 (of which: the default-spec cache 21 -
+    `ironruby_load_default_specs` reading and `Marshal.load`ing 57 KB / 1,484 names 10, the
+    glob of 62 gemspecs 6, their stamp 2, the cache file name 2, activation 1; stack walks for
+    `require_relative` and `__dir__` 19; the require wrapper chain and loader for ~25 requires
+    10), specification.rb's class body 20 (Struct.new, the attribute table), requirement.rb 17
+    (Gem::Version constants: `compute_sort_key`), rbconfig.rb 11, specification_record.rb 9,
+    platform.rb 8 (Gem::Platform constants), the rest 10. By activity: binding call sites ~53
+    (545 outermost binds more than `--disable-gems`, phase timer +50 ms), running compiled Ruby
+    and the runtime under it (first calls of R2R methods, type loads) ~70, .NET JIT 20, GC 18,
+    kernel 18. Nothing is parsed but kernel_require.rb (eval'd, 4.5 KB, ~5 ms) and the defs
+    the method JIT re-parses at their first call (12 ms, `def body` phases). Lazy RubyGems
+    (TruffleRuby's lazy-rubygems: `autoload :Gem`, a `require` that loads RubyGems on a
+    LoadError) is out: `$LOADED_FEATURES`, `Kernel#require`'s owner and the default gems'
+    activation would differ from CRuby's, which loads the same 30 files at boot.
+    The fix taken: precompiled code notes where it calls `require_relative` and `__dir__` (as
+    it does for const_set and autoload), and those two, now library methods handed the
+    caller's scope, pass the file to their Ruby halves; others still walk the stack.
+    `caller(0, 1)` from compiled code was a CLR walk of the whole stack, 0.1 ms at the top and
+    0.6 ms eighty frames down, ~50 times in `-e 1` and 160 times in `require "irb"` (all now
+    noted). Stack-walk samples in `-e 1` 93-106 -> 2-6; allocation 27.6 -> 25.4 MB. R2R, best
+    of 10 alternating, every output checked, load 2.3: `-e 1` 488 / 488 (20 rounds: 478 ->
+    459, CPU 449 -> 438), `gem --version` 583 -> 550, `gem list` 1078 -> 1032, `require
+    "irb"` 1020 -> 1044, `echo 1+1 | irb` 1138 -> 1133 ms; instructions (all threads, best):
+    1,515 -> 1,486, 1,766 -> 1,735, 3,893 -> 3,783, 3,862 -> 3,899, 4,171 -> 4,185 M. The
+    irb ones are +1%: its walks are gone (-8 M), and one gen0 collection there became a gen1
+    (+37 M in `gc_heap`), with 3 MB less allocated. With the next commit (a noted call's
+    arguments evaluated before its note, so that `autoload :X, File.expand_path("x", __dir__)`
+    keeps its const_source_location), best of 10 at load 15: 1,516 -> 1,485, 1,763 -> 1,730,
+    3,799 -> 3,765, 3,852 -> 3,830, 4,126 -> 4,122 M. Left, largest first: binding (gap 26's
+    "cheaper first binds"); the class bodies' constants; the default-spec cache, whose map
+    could be read on the first `find_default_spec` instead of at boot.
 27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a

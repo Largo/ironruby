@@ -703,13 +703,15 @@ namespace IronRuby.Aot {
             }
         }
 
-        // the builtins that record where they were called from (RubyUtils.TryGetCallerSourceLocation)
-        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload" };
+        // the builtins that record or need where they were called from (RubyUtils.TryGetCallerSourceLocation,
+        // PrecompiledCode.TakeNotedCallerPath)
+        private static readonly HashSet<string> _locationRecordingMethods = new() { "const_set", "autoload", "require_relative", "__dir__" };
 
         /// <summary>
-        /// A call of Module#const_set or #autoload records its caller's location, which compiled code only has on the
-        /// CLR stack: the call says where it is first (PrecompiledCode.NoteCallLocation), with the scope the method is
-        /// then called from. Not in the Ruby half of the core library, whose frames report their caller's location.
+        /// A call of Module#const_set or #autoload records its caller's location, and Kernel#require_relative and #__dir__
+        /// work from their caller's file, which compiled code only has on the CLR stack: the call says where it is first
+        /// (PrecompiledCode.NoteCallLocation), with the scope the method is then called from. Not in the Ruby half of the
+        /// core library, whose frames report their caller's location.
         /// <paramref name="makeCall"/> makes the call from its arguments. The scope argument is evaluated once: a method's is
         /// a parameter, a block's an expression (the block's scope out of its closure), which is held in a temporary.
         /// </summary>
@@ -731,20 +733,39 @@ namespace IronRuby.Aot {
                 args = new List<Expression>(args) { [0] = held };
                 scope = held;
             }
+            // The arguments are evaluated before the note, in their order: a noted call among them
+            // (`autoload :X, File.expand_path("x", __dir__)`) would take or clear this call's note first. Once one is
+            // held, so is every one before it: an argument passed as a variable (a local, a temporary) would be read at
+            // the call, after a later argument assigned to it (`const_set(n, (n = :Y; v))`).
+            var heldArgs = new List<Expression>(args);
+            int last = heldArgs.Count - 1;
+            while (last > 0 && (heldArgs[last] is ParameterExpression || heldArgs[last] is ConstantExpression)) {
+                last--;
+            }
+            for (int i = 1; i <= last; i++) {
+                if (!(heldArgs[i] is ConstantExpression)) {
+                    var held = Expression.Variable(heldArgs[i].Type, "#arg" + i);
+                    variables.Add(held);
+                    setup.Add(Expression.Assign(held, heldArgs[i]));
+                    heldArgs[i] = held;
+                }
+            }
+            args = heldArgs;
             var call = makeCall(args);
-            Count("const_set/autoload calls noting their location");
+            Count("const_set/autoload/require_relative/__dir__ calls noting their location");
             var note = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.NoteCallLocation)),
                 Expression.Convert(scope, typeof(object)), IsRooted(file) ? RootedStringField(file) : Expression.Constant(file, typeof(string)),
                 Expression.Constant(line));
-            // a call that went elsewhere (a receiver's own const_set) leaves no note for a later one
+            // In a finally: a call that went elsewhere (a receiver's own const_set), or raised before it took the note (an
+            // invalid constant name), leaves no note for a later one - an eval in this scope - nor keeps the scope alive.
             var clear = Expression.Call(typeof(PrecompiledCode).GetMethod(nameof(PrecompiledCode.ClearCallLocation)));
-            setup.Add(note);
             if (call.Type == typeof(void)) {
-                return Expression.Block(variables, setup.Append(call).Append(clear));
+                return Expression.Block(variables, setup.Append(Expression.TryFinally(Expression.Block(note, call), clear)));
             }
             var result = Expression.Variable(call.Type, "#noted");
             variables.Add(result);
-            return Expression.Block(call.Type, variables, setup.Append(Expression.Assign(result, call)).Append(clear).Append(result));
+            return Expression.Block(call.Type, variables,
+                setup.Append(Expression.TryFinally(Expression.Block(typeof(void), note, Expression.Assign(result, call)), clear)).Append(result));
         }
 
         // DynamicInstructionN.CreateUntypedInstruction's limit
