@@ -597,6 +597,18 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightLexicalEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_LEXICAL") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_KEYWORD_REST=0 keeps every method with keyword parameters beside a rest or post parameter
+        /// (`def warn(*msgs, uplevel: nil)', `def m(a, *r, z, k: 1)') out of light frames (see KeywordsWithSplatLowering).
+        /// </summary>
+        internal static readonly bool LightKeywordRestEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORD_REST") != "0";
+
+        /// <summary>
+        /// IR_LIGHT_KEYWORD_SPLAT=0 makes a light-frame candidate that passes a hash on as keywords (`inner(*args, **opts)',
+        /// a parameterless `super' with a `**rest') make its scope, as before (see LightFrameRewriter.ScopeOperandIndex).
+        /// </summary>
+        internal static readonly bool LightKeywordSplatEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORD_SPLAT") != "0";
+
         // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
         // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
         // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
@@ -712,8 +724,10 @@ namespace IronRuby.Compiler.Ast {
         /// call's keyword hash, and a prologue at the head of the body that checks it and binds each keyword to its local, the
         /// defaults evaluated there in order (PrismAstBridge.LowerKeywords): locals, calls and runtime helpers that take no
         /// scope, so the body is scope-free if its statements are. The hash a call that passes no keywords gets is the
-        /// runtime's (LightFrameRewriter.ScopeOperandIndex). Not taken: keywords beside a rest or post parameter, which the
-        /// general lowering binds out of one splat by hand (KeywordsWithSplatLowering).
+        /// runtime's (LightFrameRewriter.ScopeOperandIndex). Keywords beside a rest or post parameter too (IR_LIGHT_KEYWORD_REST):
+        /// the general lowering binds them out of one splat by hand (KeywordsWithSplatLowering), with helpers that take no
+        /// scope but PopKeywordArguments, which reads the runtime's (ScopeOperandIndex). Not taken: such a signature whose
+        /// positionals a parameterless `super' cannot read back by name, which keeps a copy of the splat (SuperSplat).
         /// A body with rescue, else or ensure clauses, in the method's body or in a `begin', or with a rescue modifier or a
         /// `retry', is one if its statements and clauses are (AreClausesScopeFree): $! is the runtime's, so the path that raises
         /// nothing saves and restores it without a scope, and the path that catches an exception makes the scope on demand where
@@ -725,7 +739,7 @@ namespace IronRuby.Compiler.Ast {
                 _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length) {
                 return false;
             }
-            if (HasKeywordParameters && (!LightKeywordsEnabled || KeywordsWithSplatLowering)) {
+            if (HasKeywordParameters && (!LightKeywordsEnabled || KeywordsWithSplatLowering && !LightKeywordRestEnabled)) {
                 return false;
             }
             foreach (var parameter in _parameters.Mandatory) {
@@ -906,8 +920,8 @@ namespace IronRuby.Compiler.Ast {
             if (HasKeywordParameters && !LightKeywordsEnabled) {
                 return "keyword parameters (IR_LIGHT_KEYWORDS=0)";
             }
-            if (HasKeywordParameters && KeywordsWithSplatLowering) {
-                return "keyword parameters with a rest or post parameter";
+            if (HasKeywordParameters && KeywordsWithSplatLowering && !LightKeywordRestEnabled) {
+                return "keyword parameters with a rest or post parameter (IR_LIGHT_KEYWORD_REST=0)";
             }
             var body = Body;
             if (body == null || HasHandling(body) && !LightRescueEnabled) {
@@ -968,7 +982,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // Keywords beside a rest or post parameter: the general lowering takes every argument in one splat and binds the
-        // positionals out of it by hand (PrismAstBridge.LowerGeneralParameters), with helpers IsScopeFree does not take.
+        // positionals out of it by hand (PrismAstBridge.LowerGeneralParameters), with SplatParameterRead (see IsScopeFree).
         private bool KeywordsWithSplatLowering {
             get { return _parameters.Unsplat != null || _parameters.LeadingMandatoryCount != _parameters.Mandatory.Length; }
         }
@@ -1166,6 +1180,15 @@ namespace IronRuby.Compiler.Ast {
             if (keywordRead != null) {
                 return IsScopeFree(keywordRead.Keywords, blockLiterals, why) &&
                     (keywordRead.DefaultValue == null || IsScopeFree(keywordRead.DefaultValue, blockLiterals, why));
+            }
+            // the general lowering's reads of the one splat (PrismAstBridge.LowerGeneralParameters, IR_LIGHT_KEYWORD_REST): one
+            // runtime call each on the hidden local, which takes no scope but PopKeywordArguments, which reads the runtime's
+            // equality comparer for the empty hash of a call without keywords (LightFrameRewriter.ScopeOperandIndex); an optional
+            // parameter's default is evaluated in place when the splat has no argument left for it
+            var splatRead = node as SplatParameterRead;
+            if (splatRead != null && LightKeywordRestEnabled) {
+                return IsScopeFree(splatRead.Arguments, blockLiterals, why) &&
+                    (splatRead.DefaultValue == null || IsScopeFree(splatRead.DefaultValue, blockLiterals, why));
             }
             var keywordTest = node as KeywordArgumentsTest;
             if (keywordTest != null) {
@@ -1692,6 +1715,17 @@ namespace IronRuby.Compiler.Ast {
                 }
                 // the default of the hidden keyword parameter, the call passed no keywords: the runtime's shared empty hash, or a
                 // new one for a `**rest' to take over
+                // the keyword hash taken off the end of the general lowering's splat, or an empty one (IR_LIGHT_KEYWORD_REST)
+                if (LightKeywordRestEnabled && method == Methods.PopKeywordArguments) {
+                    return 0;
+                }
+                // `f(**h)' (KeywordArgumentSplat): the copy of h the call passes, made with the runtime's equality comparer, in a
+                // one-or-zero element array for a splatted call, or the call's own keyword hash passed on by a parameterless
+                // `super' (IR_LIGHT_KEYWORD_SPLAT)
+                if (LightKeywordSplatEnabled && (method == Methods.SplatKeywordHash || method == Methods.SplatKeywordHashIfHash ||
+                    method == Methods.KeywordSplatArgument || method == Methods.PassOnKeywordRest)) {
+                    return 0;
+                }
                 if (LightKeywordsEnabled && (method == Methods.GetOmittedKeywordArguments || method == Methods.MakeOmittedKeywordArguments)) {
                     return 0;
                 }

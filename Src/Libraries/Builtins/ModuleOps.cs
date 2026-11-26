@@ -1229,8 +1229,7 @@ namespace IronRuby.Builtins {
             if (self.Context.RactorsStarted) {
                 RactorIsolation.CheckClassVariable(self, variableName);
             }
-            object value;
-            if (self.TryResolveClassVariable(variableName, out value) == null) {
+            if (!self.IsClassVariableDefined(variableName)) {
                 RubyUtils.CheckClassVariableName(variableName);
                 return false;
             }

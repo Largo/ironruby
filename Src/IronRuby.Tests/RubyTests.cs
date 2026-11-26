@@ -847,6 +847,8 @@ namespace IronRuby.Tests {
                 Exception_RescueRefinedCaseEquality1,
 
                 ClassVariables1,
+                ClassVariables_DefinedOvertaken1,
+                ClassVariables_Refinement1,
                 UnqualifiedConstants2,
 
                 AliasMethodLookup1,
@@ -1137,6 +1139,7 @@ namespace IronRuby.Tests {
                 Method_LightFrameBlockGuard1,
                 Method_LightFrameBlockGiven1,
                 Method_LightFrameRest1,
+                Method_LightFrameKeywordRest1,
                 Method_LightFrameGlobal1,
                 Method_LightFrameLexical1,
                 Method_ParkedScope1,

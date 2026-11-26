@@ -3817,6 +3817,23 @@ namespace IronRuby.Builtins {
             return target;
         }
 
+        /// <summary>
+        /// Whether the module or an ancestor has the class variable: MRI's rb_cvar_defined, which `defined?(@@x)' and
+        /// Module#class_variable_defined? answer by, walks the ancestors without the "overtaken" check of a read
+        /// (TryResolveClassVariable).
+        /// </summary>
+        public bool IsClassVariableDefined(string/*!*/ name) {
+            Assert.NotNull(name);
+            bool found = false;
+            using (Context.ClassHierarchyLocker()) {
+                ForEachAncestor(delegate(RubyModule/*!*/ module) {
+                    object value;
+                    return found = module.TryGetClassVariable(name, out value);
+                });
+            }
+            return found;
+        }
+
         public bool EnumerateClassVariables(Func<RubyModule, string, object, bool>/*!*/ action) {
             var table = _classVariables;
             if (table != null) {

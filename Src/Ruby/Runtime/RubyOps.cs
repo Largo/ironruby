@@ -5978,8 +5978,7 @@ namespace IronRuby.Runtime {
             if (owner.Context.RactorsStarted) {
                 RactorIsolation.CheckClassVariable(owner, name);
             }
-            object value;
-            return owner.TryResolveClassVariable(name, out value) != null;
+            return owner.IsClassVariableDefined(name);
         }
 
         [Emitted]

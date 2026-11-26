@@ -902,7 +902,10 @@ namespace IronRuby.Runtime {
             RubyScope scope = this;
             do {
                 RubyModule result = scope.Module;
-                if (result != null && (!skipSingletons || !(result.IsSingletonClass || IsInstanceEval(scope)))) {
+                // MRI's vm_get_cvar_base passes over a singleton class's cref and one pushed by an eval - an instance_eval'd
+                // String, and the refinement a method defined in a `refine' block has as its cref (RubyOps.DefinitionScope),
+                // whose @@x is the module's around the `refine'
+                if (result != null && (!skipSingletons || !(result.IsSingletonClass || result.IsRefinement || IsInstanceEval(scope)))) {
                     return result;
                 }
                 scope = scope.Parent;
