@@ -1384,6 +1384,24 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     two ConditionalWeakTable entries onto the Proc measured nothing. Next idea: a lock-free
     test for a singleton class with no mixins that does not define the name itself (it
     resolves as its superclass), at most about 10%.
+    Round thirty-seven (see Landed, perf/singleton, not gated): that idea, taken further - a
+    singleton class with no modules of its own answers every name it has no entry for from its
+    superclass's lookup cache, lock-free, and the shared rule's test reads that cache. The
+    profile behind it (callgrind with the CLR's perf map, 300 steady-state `os_app` objects,
+    672K instructions each): `TryShareVersion` -> `ResolveShared` and `FillMethodLookup` about
+    90K and 65K an object - some thirty fills per object, each walking the ancestors and copying
+    the singleton class's whole cache table to file one name, because each definition empties
+    it. `os_new` 0.77 of its instructions, `os_app` 0.84.
+    Left, measured but not taken: (1) a shared rule is one per (method, receiver type, delegate
+    type), so two sites calling one method with arguments of different types share it, and the
+    second gets a rule of its own built for each object (~200 us, `IR_BIND_TRACE` "shared-new"):
+    OpenStruct's `define_singleton_method!(name, ...)` (a Symbol) and `("#{name}=", ...)` (a
+    String) do, 220-240 binds in a process's first ~250 OpenStructs, until the interpreted
+    `new_ostruct_member!` is recompiled (also with `-X:NoJIT`), about 45 ms of warm-up. Several
+    shared rules per key, the next built when every one holds the version and none matched,
+    would end it. (2) The four reader binds per object (a dispatcher per new singleton class,
+    gap 19's "first call"), about 5% of `os_app`'s instructions. (3) `Ractor.shareable_proc`
+    some 5%, `ModuleOps.DefineMethod` some 11%.
 33. **Three differences from CRuby in interpolation**, found by the probes of
     `Util/interpolation-matrix.rb` on the build before perf/interp and left as they were
     (the matrix avoids them); not speed gaps. When a part's `to_s` raises, the backtrace
@@ -1449,6 +1467,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `initialize_copy` before `super` sees the copy's constants there, the outer ones here).
 
 ## Landed
+
+- **perf/singleton (round thirty-seven, 2026-11-26) - lookups on a re-versioned singleton class
+  answered from its superclass's cache (gaps 32, 19)** - not gated. Each definition on an object
+  that gets methods of its own (OpenStruct's `define_singleton_method!` of every member)
+  re-versions its singleton class and so empties the class's method lookup cache; every name asked
+  again - the `singleton_method_added` hook check, `respond_to?`, the shared rules' version test -
+  then walked the ancestors under the class hierarchy lock and copied the cache's whole table to
+  file one entry, about thirty times per OpenStruct. Now a singleton class of a plain object with
+  no modules of its own and at most 16 methods keeps a snapshot of its own method names per
+  version (`RubyModule.InheritedLookups`) and answers every other name from its superclass's
+  cache, which stays warm across all such objects, without the lock and without filing. The
+  superclass's fill registered the answer for invalidation, so defining that name re-versions the
+  singleton class; defining a name nobody asked for does not, so every change of a module's
+  method table or modules drops the snapshot under the lock, and a reader checks after taking the
+  superclass's answer that the snapshot is still current (a superclass fill that registered the
+  name took the lock after any definition that had not seen the registration). And
+  `RubyCallAction.TryShareVersion` takes a new version from that cache when it finds the rule's
+  method there, at a visibility the call sees, before resolving under the lock
+  (`TryShareVersionFromLookup`; not for method_missing, a refined name, a protected method).
+  `IR_SINGLETON_LOOKUP=0` turns both off.
+  Instructions per call (`Util/perf/callgrind/count.sh`, N=200; base / off / new):
+  `ostr36-shapes.rb` `os_new` 232,692 / 233,695 / 180,601
+  (0.77), `os_write` 391,933 / 394,835 / 317,172 (0.80), `os_app` 565,493 / 576,944 / 482,054 (0.84),
+  `dsm_blk_call` 73,982 / 89,375 / 70,403 (0.95 of base), `dsm_tbl_call` 78,759 / 78,681 / 74,836 (0.95);
+  `app-shapes.rb` `ostruct` 5,808,127 / 5,829,182 / 4,932,345 (0.85); controls level: `delegate`
+  9,469,818 / 9,470,041 / 9,473,484, `forwardable` 4,204,623 / 4,163,226 / 4,204,592. Not timed
+  (timing on this machine spread more than the change); `sdef-shapes.rb` has no counter.
+  `Util/sdef-matrix.rb` section 12 (new: a name defined that nobody had asked for, `def o.x` after
+  lookups, undef/remove and `private` in the singleton class, a private forwarder in a subclass,
+  protected, `respond_to_missing?` and `method_missing` added to the class later, the
+  `singleton_method_added` hook, include and prepend into the singleton class, `extend` of a module
+  with `extended`, a refinement, two threads defining and removing while a third asks) prints CRuby
+  4.0's output on both builds; with the snapshot drop after a definition taken out, its first two
+  rows go wrong. `gate-matrices.rb` on hot-shapes, shared-rule-light, jit, jit-calls, sdef, extend,
+  respond-to, refinement, prepend (both), dmeth, struct, delegate and forwardable, in the seven
+  modes with `IR_SINGLETON_LOOKUP=0`: PASS (83 same, 15 baseline: struct-matrix and hot-shapes
+  differ from CRuby only as the baseline does). ruby/spec: library/openstruct, and
+  core/kernel define_singleton_method, extend, singleton_class, singleton_methods, respond_to,
+  public_send, method, core/basicobject/singleton_method_added, core/module method_defined,
+  prepend, include, refine, private, remove_method, undef_method, language/def, core/marshal/dump:
+  no failures on either build.
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only, not gated. `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
