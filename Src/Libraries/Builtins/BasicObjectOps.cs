@@ -57,6 +57,17 @@ namespace IronRuby.Builtins {
             // and the way the call was made (implicit receiver or not) is what #private_call? reports
             bool variableCall = RubyOps.MethodMissingVariableCall && args.Length == 0;
             RubyOps.MethodMissingVariableCall = false;
+            // a private or protected method the call found (MRI's raise_method_missing: MISSING_PRIVATE first)
+            var visibility = RubyOps.MethodMissingVisibility;
+            RubyOps.MethodMissingVisibility = RubyMethodVisibility.None;
+            if (visibility == RubyMethodVisibility.Private || visibility == RubyMethodVisibility.Protected) {
+                var visibilityError = NoMethodErrorOps.SetArguments((visibility == RubyMethodVisibility.Private) ?
+                    RubyExceptions.CreatePrivateMethodCalled(context, self, name.ToString()) :
+                    RubyExceptions.CreateProtectedMethodCalled(context, self, name.ToString()), args);
+                RubyExceptionData.GetInstance(visibilityError).PrivateCall = RubyOps.MethodMissingPrivateCall;
+                RubyOps.MethodMissingPrivateCall = false;
+                throw RubyExceptionData.MarkUnkept(visibilityError);
+            }
             if (variableCall) {
                 // a bare name: MRI's NameError, as the call would have raised without a method_missing
                 RubyOps.MethodMissingPrivateCall = false;

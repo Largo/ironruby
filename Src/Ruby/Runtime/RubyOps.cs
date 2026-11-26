@@ -4468,11 +4468,32 @@ namespace IronRuby.Runtime {
             set { _methodMissingVariableCall = value; }
         }
 
+        // And whether the method was there but private or protected (MISSING_PRIVATE, MISSING_PROTECTED), so that
+        // BasicObject#method_missing reached through super says "private method 'x' called", as the call would have.
+        [ThreadStatic]
+        private static RubyMethodVisibility _methodMissingVisibility;
+
+        public static RubyMethodVisibility MethodMissingVisibility {
+            get { return _methodMissingVisibility; }
+            set { _methodMissingVisibility = value; }
+        }
+
         [Emitted]
         public static void SetMethodMissingReason(bool privateCall, bool variableCall) {
             _methodMissingPrivateCall = privateCall;
             _methodMissingVariableCall = variableCall;
+            _methodMissingVisibility = RubyMethodVisibility.None;
         }
+
+        // SetMethodMissingReason for a call that found a method it may not call (RubyCallAction.BuildMethodMissingCall)
+        public static void SetMethodMissingReasonVisibility(bool privateCall, bool variableCall, RubyMethodVisibility visibility) {
+            _methodMissingPrivateCall = privateCall;
+            _methodMissingVariableCall = variableCall;
+            _methodMissingVisibility = visibility;
+        }
+
+        internal static readonly MethodInfo/*!*/ SetMethodMissingReasonVisibilityMethod =
+            typeof(RubyOps).GetMethod(nameof(SetMethodMissingReasonVisibility));
 
         [Emitted]
         public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs, bool privateCall) {

@@ -1074,10 +1074,18 @@ namespace IronRuby.Runtime.Calls {
             switch (BindToKernelMethodMissing(metaBuilder, args, methodName, methodMissing, incompatibleVisibility, isSuperCall)) {
                 case MethodMissingBinding.Custom:
                     Debug.Assert(!metaBuilder.Error);
-                    // a user-defined method_missing may call super: record how the call was made
-                    metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(
-                        AstUtils.Constant(args.Signature.HasImplicitSelf), AstUtils.Constant(defaultFallback && args.Signature.IsVariableCall)
-                    ));
+                    // a user-defined method_missing may call super: record how the call was made, and whether it found a
+                    // private or protected method
+                    if (incompatibleVisibility == RubyMethodVisibility.Private || incompatibleVisibility == RubyMethodVisibility.Protected) {
+                        metaBuilder.AddInitialization(Ast.Call(RubyOps.SetMethodMissingReasonVisibilityMethod,
+                            AstUtils.Constant(args.Signature.HasImplicitSelf), AstUtils.Constant(defaultFallback && args.Signature.IsVariableCall),
+                            AstUtils.Constant(incompatibleVisibility)
+                        ));
+                    } else {
+                        metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(
+                            AstUtils.Constant(args.Signature.HasImplicitSelf), AstUtils.Constant(defaultFallback && args.Signature.IsVariableCall)
+                        ));
+                    }
                     methodMissing.BuildMethodMissingCall(metaBuilder, args, methodName);
                     return true;
 

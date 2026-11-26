@@ -941,6 +941,7 @@ namespace IronRuby.Tests {
                 SuperToAttribute1,
                 SuperAndMethodMissing1,
                 SuperAndMethodMissing2,
+                SuperAndMethodMissing3,
                 SuperCaching1,
                 SuperInBlocks1,
                 SuperInDefineMethod1,
