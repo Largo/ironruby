@@ -592,6 +592,25 @@ namespace IronRuby.Runtime.Precompiled {
                     context.Loader.RegisterPrecompiledFile(file, new RubyScriptCode(lazyTarget, context.CreateFileUnit(file), TopScopeFactoryKind.File), isCurrent);
                 }
                 _fileHashes = fileHashes;
+                if (Trace) {
+                    // every file, not only the ones this run loads: a library that no longer matches its sources is slower
+                    // for each stale file (it is compiled from source) and otherwise says nothing (Util/aot/check-startup.sh)
+                    int stale = 0;
+                    foreach (var kv in fileHashes) {
+                        bool current;
+                        try {
+                            current = File.Exists(kv.Key) && HashFile(kv.Key) == kv.Value;
+                        } catch (Exception) {
+                            current = false;
+                        }
+                        if (!current) {
+                            Console.Error.WriteLine("IronRuby.Startup: stale: " + kv.Key);
+                            stale++;
+                        }
+                    }
+                    Console.Error.WriteLine("IronRuby.Startup: " + stale + " of " + fileHashes.Count + " files stale" +
+                        (stale > 0 ? " (compiled from source when loaded; rebuild the library: Util/aot/build-startup.sh)" : ""));
+                }
             } catch (Exception e) {
                 // a broken or mismatched library only costs the speedup
                 if (Trace) {

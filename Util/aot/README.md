@@ -330,11 +330,21 @@ builds are unaffected, because the check is behind `!IsDynamicCodeSupported`.
 ## D. The startup library (`IronRuby.Startup.dll`)
 
 Part A's compiler, aimed at `ir`'s own startup: `IronRuby.Aot startup` compiles the Ruby files
-every `ir` process loads (`startup-files.txt`: ruby4.rb, rbconfig, gem_prelude, rubygems and the
-rest of `ir -e 1`, plus `rubygems/path_support.rb` and a few commonly required libraries such as
-json, set, pp, optparse, fileutils, time) into a library that sits next to IronRuby.dll in the
-R2R host's directory. Requiring one of its files then runs the compiled top level instead of
-parsing, bridging, transforming and LightCompiling the source.
+`ir` loads at startup and the command-line tools load before they answer (`startup-files.txt`:
+ruby4.rb, rbconfig, gem_prelude, rubygems and the rest of `ir -e 1`; a few commonly required
+libraries such as json, set, pp, optparse, time; what `gem --version` and `gem list` load -
+RubyGems' command files, the vendored optparse, uri, net-http, resolv, timeout and securerandom,
+openssl.rb, socket.rb; and what irb loads - irb, reline, prism's Ruby side) into a library that
+sits next to IronRuby.dll in the R2R host's directory. Requiring one of its files then runs the
+compiled top level instead of parsing, bridging, transforming and LightCompiling the source.
+
+The list is measured, not picked: `ruby Util/aot/startup-files.rb` runs `ir -e 1`, a require of
+the common libraries, `gem --version`, `gem list` and `echo exit | irb` with the library off and
+`IR_STARTUP_DLL_TRACE=1`, and writes every file of `Src/StdLib` they compile from source, in the
+order they load them (215 files). `--check` says whether the list is still that (a new irb or
+RubyGems that loads other files); `check-startup.sh --list` runs it. Left out, and said so in the
+list: fileutils.rb and tmpdir.rb (below). Gemspecs are not files that are required but strings
+`Gem::Specification.load` evals with its own binding, so the library has nothing to offer them.
 
 ```sh
 dotnet build Src/Console/Ruby.Console.csproj -c Release -p:DlrSourceDir=...  # the R2R host, with its library
@@ -419,7 +429,8 @@ How it stays correct:
   are compiled from source too: a file required after `Coverage.start` is in `Coverage.result`
   (it was missing with the library before).
 - There is no PDB. The compiler records each sequence point's IL offset, and the library carries
-  the line table (`RubyStartupIndex.Lines()`), which the backtrace builder reads. Backtraces
+  the line table (each file's class has its own, `RubyStartup<i>.<lines>()`, read when a frame of that file
+  is first formatted), which the backtrace builder reads. Backtraces
   through rubygems code match the interpreted ones. That includes a `require` LoadError's: a
   compiled catch site is now skipped as a frame, not as the first frame reported, which had
   dropped the caller of gem_compat.rb's `Kernel#require` block. The same happened without the
@@ -468,7 +479,13 @@ How it stays correct:
   Its constants are static fields, each made the first time the code needs it (`k ?? (k =
   init)`, unsynchronized). Two threads that first run the same code together may each make one
   (a call site, a frozen literal); that is harmless, as each is equivalent.
-- `Util/aot/check-startup.sh` (about 5 s) checks what the library must not change. It runs
+- A file edited after the library was built is compiled from source, correctly but as slowly as
+  without the library (an edited ruby4.rb took `ir -e 1` from 486 to 564 ms), and nothing in a
+  normal run says so. `IR_STARTUP_DLL_TRACE=1 ir -e 1` checks every file of the library at start
+  and names the stale ones (`IronRuby.Startup: stale: ...`, then `N of M files stale`), and
+  `Util/aot/check-startup.sh` fails on any. A Release build or `Util/aot/build-startup.sh`
+  rebuilds it.
+- `Util/aot/check-startup.sh` (about 10 s) checks what the library must not change. It runs
   `startup-checks.rb` with and without the library and compares: coverage after a run-time
   `Coverage.start`, the frame labels above, frozen literals of a def compiled from source,
   interpolation, and other threads' backtraces through `loop`, `Set#each`, `Monitor#synchronize`,
@@ -522,7 +539,11 @@ Peak RSS grows by 6 MB, or by 14 MB once json is loaded. That is a transient pea
 `require "json"`, the process holds 100 MB RSS with the library and 105 MB without it (39 against
 43 MB anonymous).
 
-The library is 32.5 MB (ReadyToRun) for 46 files. spec/language passes with it (80 files, 2934
+The library was 32.5 MB (ReadyToRun) for 46 files; with the tools' files it is 117.6 MB for 215
+(prism/node.rb, ~1 MB of source, is the largest after ruby4.rb), and a build that changed one of
+them spends a minute or two more on it. The size costs a process nothing it does not run: the
+image is mapped, and `ir -e 1` runs no more instructions with it (1,513 M against 1,524 M with
+the 46-file library). Measured with the 46 files: spec/language passes with it (80 files, 2934
 examples, 5563 expectations, 0 failures, 0 errors). So do spec/core/thread, fiber, enumerator,
 exception, module, kernel, process, set and argf and spec/library/coverage, monitor, time,
 tmpdir, delegate, optionparser, stringio, date, tempfile, pp, rubygems and rbconfig, with the same
