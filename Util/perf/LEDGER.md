@@ -1124,6 +1124,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     perf/struct (see Landed, not gated): Struct keyword creation is stored in C#, `kw_new` 1017 ->
     198 ns against CRuby's 299 (`kw_hash` 147 against 196, `sub_kw` 379 against 356). Left from this
     gap: keyword initializers (`kwinit` 236 against 132) and `Hash#dup`.
+    perf/struct2 (see Rejected) measured both in a method's loop rather than the shape file's
+    block driver, which inflates them: `Hash#dup` of three keys is at CRuby's time (134-137 ns
+    against 144) and was dropped from this gap; `P.new(sku:, name:)` is 1.2-1.5 times CRuby there
+    (noisy). In the same loop `String#dup` is 2.4 times CRuby (137-142 ns against 56) and
+    `Array#dup` 1.15 times (143-146 against 124): the generic Kernel#dup path, worth a gap of its
+    own (`Util/bench/dup-shapes.rb`).
 25. **Havlak: 1.4 times CRuby, 25 times TruffleRuby, and no single place** (round
     sixteen's breakdown; its author's numbers, taken beside two other experiments at load
     2-14, so ratios). CRuby runs a copy with som.rb's `Set` renamed to `SomSet`: 2.85-3.3
@@ -4548,6 +4554,26 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/struct2 (/perf-step, 2026-11-26) - `Hash#dup` without its two hook calls** (gap 24;
+  switch `IR_FAST_DUP`). `RubyUtils.TryDuplicateObject` made the copy itself (a new Hash, the
+  instance variables, then what `Hash#initialize_copy` = `#replace` does) when the receiver's class
+  is Hash itself, no c_call is traced, and `initialize_dup` / `initialize_copy` resolve to the
+  library's KernelOps.InitializeDuplicate and HashOps.InitializeCopy - checked once per method
+  version of Hash, the resolutions marked InvalidateSitesOnOverride so that overriding either in
+  Hash, a prepended or included module, Object or Kernel moves the version. `Util/hash-dup-matrix.rb`
+  (new: copies' contents, defaults, compare_by_identity, ivars, frozenness, singleton methods, a
+  subclass, a refinement, TracePoint, and the hooks redefined and restored, once each with the dup
+  warm) printed CRuby's output on master, on the change and with the switch off. Instructions
+  (`Util/perf/callgrind/count.sh`, `dup-shapes.rb`, N=20000): `hash_dup` 4,180 -> 3,816, `plain`
+  1,266 both - the two dynamic calls were an eighth of the excess. Timed in a method's loop (four
+  rounds each, two alternating runs, steady rounds): `H.dup` 134-137 -> 127-129 ns, CRuby 144 -
+  already at CRuby's time - while `H.clone`, which the change does not enter, went 174-175 -> 198 in
+  both runs (the bigger TryDuplicateObject, presumably no longer inlined or laid out as before).
+  Rejected: 6% on a shape already level with CRuby against 13% on one it should not touch. What was
+  learned: the "Hash#dup 2x" of gap 24 was the shape file's block driver; in a method `String#dup`
+  (2.4x) and `Array#dup` (1.15x) are the dup gaps, and a fast path for them belongs in a method of
+  its own beside TryDuplicateObject (NoInlining), not inside it.
 
 - **perf/lsite (/perf-step, 2026-11-26) - a light site that remembers it needed the scope**
   (gap 16; switch `IR_LIGHT_REMEMBER`). In `LightFrameRewriter.MakeLightCall`, each site
