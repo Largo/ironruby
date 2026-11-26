@@ -658,7 +658,14 @@ namespace IronRuby.Compiler.Ast {
                     scope.MakeLocalsStorage(),
                     Ast.Assign(Rfc, EnterMethod),
                     Ast.Assign(Callee, Methods.TakePendingCallee.OpCall(Name)),
-                    MakeScopeIfTraced(scope.LocalsTupleVariable)
+                    // the test inline, as in EnterWithRegisterLocals: a call of CreateMethodScopeIfTraced, with its nine
+                    // arguments, on every entry to find out that nothing listens (IR_LIGHT_ENTRY=0 makes the call)
+                    RubyOps.PendingCalleesCounted
+                        ? (MSA.Expression)Ast.Condition(Methods.IsMethodCallTraced.OpCall(),
+                            MakeScopeIfTraced(scope.LocalsTupleVariable),
+                            AstUtils.Constant(null, typeof(RubyMethodScope))
+                        )
+                        : MakeScopeIfTraced(scope.LocalsTupleVariable)
                 );
             }
 
