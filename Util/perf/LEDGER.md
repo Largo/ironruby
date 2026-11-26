@@ -499,7 +499,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    Richards `device_in_add`, `work_in_add` and `add_input_and_check_priority` are now
    offered to the compiler and declined at `append` (no typed body: a deopt after an
    effect) or `NO_WORK` (gap 11); in Json `HashIndexTable#add` and `#get` at
-   `hash_slot_for`; in DeltaBlue `Dictionary#at` at `match`; in CD `RedBlackTree#get`
+   `hash_slot_for`; in DeltaBlue `Dictionary#at` at `match` (compiled since perf/havlak: see
+   Rejected, perf/jitbind, for what the calls on other receivers wait for now); in CD `RedBlackTree#get`
    at `node.value` and `Node#successor` at `x.right`, attribute reads on a local (the
    result of the bound `find_node` in `get`, which has no profile; a local that holds
    self in `successor`): `get` binds `find_node` and fails only there, a small thing to
@@ -5391,6 +5392,33 @@ after master (#228 to #233) had been merged into both trees.
   See "Caught by the review and by the measurement (round twenty-one)".
 
 ## Rejected
+
+- **perf/jitbind (2026-11-26) - binding a call on another receiver (a parameter, an ivar, a local
+  whose class the profile knows) to the callee's typed body, with a generic call as the fallback:
+  counted, not built - nothing it would take stops there.** The three methods gap 1 names: DeltaBlue's
+  and Havlak's `Dictionary#at` is specialized already on 9040b98 (`IdEntry#match`, the call on the
+  loop's `e`, `hash` and `get_bucket` are inlined into it: perf/havlak's inlining on an unsampled
+  local; the gap's "declines at `match`" was out of date). Richards' `queue_packet` is refused at
+  `t.add_input_and_check_priority`, but that callee has no typed body to bind to: it is declined
+  itself at `append` (the effect rule). CD's `RedBlackTree#get` waits for `find_node`, which is
+  declined at `current.key`, an attribute read on the local its `while` loop reassigns (the
+  `key.compare_to` on the parameter is inlined there already). Then every "call:" rejection in
+  app-shapes and the fourteen AWFY traces (3 x 10), with whether its callee had a typed body in the
+  same run: 24 in app-shapes and 23 in AWFY, of which the callee has none in all but a handful;
+  those are calls on self (`is_digit`, `is_white_space`, `set_is_root`, `is_shorter_than`,
+  `internal_init`: `-X:JITCalls`' already), the "no typed body yet" rejections of methods
+  specialized later in the run (`at`, `add`, `hash_slot_for`), and Towers' `pop_disk_from` at
+  `top.next`, an attribute reader on a local read from an Array (the callee "specialized" was
+  `Random#next`, a name match). One call on another receiver to a typed callee is left: Bounce's
+  `Ball#initialize`, `random.next` on a parameter, a constructor run once per ball, whose callee
+  writes `@seed` - so each bound call is an effect before the next one that could fail its class
+  check, and it needs the generic-call fallback after an effect this gap describes, for one cold
+  method. Not built.
+  What the walls are now, then: callees without typed bodies (the effect rule: `append`,
+  `read_string_internal`, `move_top_disk`/`push_disk`, `is_input`, `value` at `new`), and
+  attribute reads and writes on locals that hold an element or a loop's value (`current.key`,
+  `top.next`, `x.right` in `successor`). The latter is gap 3's, and the next step for CD and
+  Towers.
 
 - **perf/jitplain (2026-11-26) - the per-receiver test of perf/jitaref for the typed body's other
   core operations: nothing to take.** The other operations (`Array#[]=`, `fetch`, `size`, `first`,
