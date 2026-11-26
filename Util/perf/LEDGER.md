@@ -1492,6 +1492,40 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitprobe (2026-11-26) - the stub's generic cost is not the interpreter's** - not gated. A probe
+  (`JitStub.Probe`) times the generic body to decide whether an entry that deopts pays its way. It waited
+  for the generic body's compile for at most 8 deopt windows, which go by in microseconds when every
+  other call deopts, and then timed the interpreter: 4 us a call where the compiled body takes 0.16. Its
+  next probe is 100 ms on, and until then that figure kept the entry: `x + 1` with an Integer and a Float
+  in turn, in a method of its own, deopted on every other call for about 1,000 windows (some 15,000
+  deopts at 2 us). Right after the compile a probe still read 1.75 us (the CLR's first-tier code; 0.12 at
+  100 ms).
+  - The change: a cost timed before the compile is marked (`_genericCostInterpreted`) and forgotten when
+    `GenericCompiled` fires, which lets the next window probe again. And a probe taken while the generic
+    body is not compiled, or compiled 100 ms ago or less, takes none of the six probes and lets the next
+    come 10 ms on rather than 100 (at most 16 of them): the cost is the least any probe read, so it comes
+    down to the warm figure early. A stub with a warm generic body probes as before.
+  - Real runs (IR_JIT_VERBOSE=1: app-shapes, `gem list`, all 14 AWFY at `harness.rb B 5 10`): two methods
+    were first probed on an interpreted generic body. `Element#length` (AWFY List) deopts on every call
+    (16 in 16): the base keeps it for the whole run on a 62 us figure; the new probes twice more, reads
+    8.7 us and retires it - an entry that deopts on every call never pays. `Gem::Dependency#runtime?`
+    (`gem list`) is retired on both. Otherwise the traces specialize and decline the same (264, 64).
+    (Havlak, Mandelbrot and NBody report "incorrect result" at that inner size on both builds and on CRuby:
+    they verify only at their own.)
+  - Time (`Util/bench/jit-probe-shapes.rb`, a method of its own per section, 100,000 calls; `ab.rb -r 6`,
+    ns; base, new): `fresh_mixed` 875 -> 277 (0.32), `fresh_int` (never deopts) 87.0 / 96.7 (overlap);
+    `Util/bench/jit-settle-shapes.rb` all level (0.96-1.01, overlap). `warm_int`, a method defined once,
+    run after the fresh shapes in the same process, reads 42.7 -> 78.7: alone it is 82.4 / 83.9, and after
+    0.8 s of other work first 43-46 / 50-59 - the base spends half a second more in `fresh_mixed`, in
+    which the CLR tiers up the code `warm_int` runs too. Not a cost of the change.
+  - Matrices, CRuby against base (8fde498) against new, with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_JIT_REST=0`: jit, jit-calls, jit-const, dmeth-jit identical to CRuby;
+    hot-shapes, inline and int-matrix identical to base (the rows that differ from CRuby differ on base:
+    as in perf/jitsettle). IronRuby.Tests: the 20 named for the JIT pass.
+  - For the gate: a stub whose generic body is still interpreted now probes more (up to 16 short
+    probes of 32 timed calls each in its first 100 ms after the compile); `GenericCompiled` now takes
+    the stub's lock on the light compiler's thread.
+
 - **perf/jitsettle (2026-11-26) - a retired entry's cool-down costs nothing per call** - not gated.
   A method whose typed body keeps failing (`x + 1` called with an Integer and a Float in turn) ran
   10-16% slower than with the JIT off, as a `def` and as a define_method method. What it does per call,
