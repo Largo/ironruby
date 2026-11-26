@@ -3238,15 +3238,34 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>Mirrors JitCompiler.EmitBody.</summary>
         private bool WalkBody(Body/*!*/ body) {
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
-                return No(body);
+                return No(body) && WalkClausesForCensus(body, 0);
             }
             return WalkStatements(body.Statements);
+        }
+
+        /// <summary>
+        /// The census's screen (CollectAll) goes on into a body it has refused for its clauses: what the protected part, the
+        /// rescue clauses (their class lists too), else and ensure hold would be refused as well, and a refusal of the body
+        /// alone must mean that taking the clauses lets the method through. The real screen stops at No and never gets here.
+        /// </summary>
+        private bool WalkClausesForCensus(Body/*!*/ body, int prologueLength) {
+            if (_all == null) { return false; }
+            for (int i = prologueLength; i < body.Statements.Count; i++) { Walk(body.Statements[i]); }
+            if (body.RescueClauses != null) {
+                foreach (var clause in body.RescueClauses) {
+                    foreach (var type in clause.Types) { Walk(type); }
+                    WalkStatements(clause.Statements);
+                }
+            }
+            WalkStatements(body.ElseStatements);
+            WalkStatements(body.EnsureStatements);
+            return true;
         }
 
         /// <summary>Mirrors JitCompiler.EmitBody of a method with keywords: the prologue is not emitted.</summary>
         private bool WalkMethodBody(Body/*!*/ body, int prologueLength) {
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
-                return No(body);
+                return No(body) && WalkClausesForCensus(body, prologueLength);
             }
             for (int i = prologueLength; i < body.Statements.Count; i++) {
                 if (!Walk(body.Statements[i])) { return false; }

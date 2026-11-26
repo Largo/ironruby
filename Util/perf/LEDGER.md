@@ -1081,6 +1081,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     find what the method does around the handler (the scope, the saving of `$!`, the
     frame) and let a body whose handler is not entered run as light as one without.
     And **a raise that is rescued costs 6.3 us against 0.64**: a .NET exception per use.
+    The method JIT (round of 2026-11-26, see Rejected, perf/jitbody): `Body` alone refuses 30
+    methods, not the 461 the census used to say, all cold wrappers whose rescued part is a
+    call; a handler as a deopt can take only a call-free protected part (1 method). Left: a
+    handler emitted in the typed body, worth it only once a run shows hot methods needing it.
 23. **A method made by `define_method` is called at 2.3 times CRuby's time** (64 against
     28 ns; a `def` of the same body 31; YJIT 2-5 ns): the method JIT takes no block as a
     method body. Rails-style code defines most of its small methods this way.
@@ -4387,6 +4391,46 @@ after master (#228 to #233) had been merged into both trees.
   - Learned: what a light frame that makes its scope late pays is the frame, not the
     question - to stop losing, such a method has to enter scoped next time (gap 16's
     "Untried"), not ask less.
+
+- **perf/jitbody (2026-11-26) - a `begin`/`rescue`/`ensure` in the method JIT's typed body**
+  (gap 22; `JIT never, one thing only: Body 461`). Not attempted past the census, which
+  answered it: the 461 were an error of the census. In its collect-all mode the screen
+  (`JitScreen.WalkBody`) noted the refused `Body` and returned without walking what was in
+  it, so every call inside a `begin` went uncounted; walked (the change kept, census only,
+  every verdict the same: `-d` 0 methods changed, `-c` on Json 59/59 agree), `Body` is
+  refused in 736 methods and alone in **30**, not 461 (Src/StdLib + AWFY, 28,376 methods).
+  - The forms, over the 753 `never` methods with a `Body` among their refusals (a prism script
+    over the census's `-l -a` list, not kept): `rescue` 639
+    (with a class list 579, bare 71, `=> e` 186, several clauses 52), `ensure` 125, a
+    `begin` inside the method 381, at the method's level 377, `retry` 20, `else` 14, the
+    modifier 7. Of the 30 alone: `rescue` 21 (class list 20, bare 1, `=> e` 2), `ensure` 7;
+    no `retry`, `else` or modifier. A bare `begin ... end` is no refusal at all (the screen
+    and `JitCompiler.Emit` take a `Body` without clauses).
+  - Why not the cheapest sound form, the handler as a deopt to the generic body (as round
+    nineteen's `raise`): a deopt re-runs the method from the top, so it is sound only if
+    nothing observable happened before the exception, and an exception out of a call may
+    come after anything the callee did. So the protected part must have no call at all, and
+    the 30 are all I/O and protocol wrappers whose protected part is a call (`lstat`,
+    `getsockname`, `path`, `@http.finish`, `count || default`, `offsets.fetch`). One method
+    has a call-free protected part: `Net::IMAP::SASL::PlainAuthenticator#process`, an
+    `ensure` around a `return` of a string. Ceiling of that form: 1 method of 28,376.
+    And `Util/bench/rescue-shapes.rb` calls `is_a?` in every shape (refused by the screen on
+    purpose, to measure the frames), so no change here moves it; nothing was timed.
+  - What a next attempt needs: the handler in the typed body itself - a .NET try/catch whose
+    filter is the generic body's (`RescuePassMayTest`, `CanRescue*`, the class list
+    evaluated after inner ensures, `$!` set and restored, `retry` a jump), an `ensure` as a
+    finally that does not run for a deopt passing through, and a deopt inside the handler or
+    the ensure declined as after an effect. It wins at most the 30 (all `maybe` behind
+    calls), and they are cold. Not worth it until a run (`census.rb -u` on app-shapes)
+    shows hot methods that have nothing else refused.
+  - `Util/jit-rescue-matrix.rb` (new): 33 probes, hot past the thresholds and raising on
+    some calls - an effect before the raise, `retry`, a class list that is a method call,
+    inner ensure before the outer class list, `ensure` with `return` in the body and in the
+    clause, `$!` in the handler and restored, a callee's effect then raise, the modifier,
+    else+ensure, a deopting `raise` with ensure, `cause`, `throw` through an ensure, a
+    rescue that does not match, a frozen self written in ensure, Timeout through a rescue,
+    redefinition. It prints CRuby's output on master with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_LIGHT_FRAMES=0`.
 
 - **perf/evalc da03f675 and its second pass (round thirty-one, 2026-11-22) - a cache of the
   compiled code of eval'd strings** (gap 31). Merged, then taken out (f133bcfa) after an
