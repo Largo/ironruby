@@ -1495,6 +1495,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     either. interpolation-matrix: new row, baseline before. TracePoint_EndlessDefLine1.
   - `"#{sym}"` under a refinement of Symbol#to_s is the name while Symbol#to_s is the built-in
     (gap 33, vm_objtostring). interpolation-matrix: new row. Refinements17.
+  - `__callee__` in a define_method body called through an alias answered the definition's name
+    (found by perf/lframe): an alias call runs a copy of the method's lambda that carries the name
+    (Proc.CalleeName in its rare state; RubyLambdaMethodInfo.GetLambdaFor), in the rule and the
+    first-call dispatcher; such a call skips the method JIT's stub. light-entry-matrix (claude/perf-lsite)
+    "define_method body by alias": CRuby's output. DefineMethodCallee1.
   Not fixed: `42.compare_to(o)` in inline-matrix's `tree_int_key` answers Int32#CompareTo's
   "Object must be of type Int32." where CRuby has no such method. That is IronRuby's interop
   (RubyModule.IsUnmangledBuiltin: snake_case CLR names on Integer and Float, `5.to_string("X")`,
