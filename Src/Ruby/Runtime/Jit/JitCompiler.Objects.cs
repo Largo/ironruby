@@ -173,6 +173,12 @@ namespace IronRuby.Runtime.Jit {
             _resolvedConstantOwner = owner;
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
             _usesConstants = true;
+            // a method body's loop runs on past the entry's revalidation (TryCompile); an outlined loop's copy hands
+            // itself back on any reassignment
+            if (_loop == null) {
+                if (_hasLoop) { _foldedInLoop = true; }
+                if (_calleeLoop) { _foldedAfterCalleeLoop = true; }
+            }
             return value;
         }
 
@@ -1745,7 +1751,25 @@ namespace IronRuby.Runtime.Jit {
             if (node.Block != null || !_refinements.IsEmpty) { return null; }
             var target = node.Target;
             object sample;
-            if (!TrySample(target, out sample) || !(sample is RubyObject)) { return null; }
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) {
+                // A local nothing samples that a call was inlined on for a class (UnsampledCallees): the reader of that
+                // class names the variable; ReadSelfAttr binds to whatever class the object has and deopts unless the
+                // name is the same variable's reader there. Its value is an object.
+                var local = target as LocalVariable;
+                RubyClass inlinedFor;
+                if (local == null || local.DefinitionLexicalDepth != _scopeDepth || _unsampledClasses == null ||
+                    !_unsampledClasses.TryGetValue(local.Name, out inlinedFor)) {
+                    return null;
+                }
+                string name = JitRuntime.SelfAttrSite.ReaderVariable(inlinedFor, node.MethodName, true);
+                if (name == null || CanFallBack(target)) { return null; }
+                JT lt;
+                var localReceiver = Coerce(Emit(target, out lt), lt, JT.Obj);
+                _canDeopt = true;
+                type = JT.Obj;
+                return Ast.Call(JitRuntime.M("ReadSelfAttr"), Ast.Constant(_context), localReceiver,
+                    Ast.Constant(new JitRuntime.SelfAttrSite(node.MethodName, name, true)));
+            }
             bool explicitReceiver = target != null && !(target is SelfReference);
             string variableName = JitRuntime.SelfAttrSite.ReaderVariable(JitRuntime.ClassOf(_context, sample), node.MethodName, explicitReceiver);
             if (variableName == null) {

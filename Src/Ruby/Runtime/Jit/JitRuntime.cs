@@ -47,6 +47,13 @@ namespace IronRuby.Runtime.Jit {
         internal static readonly bool DeadConstants = Environment.GetEnvironmentVariable("IR_JIT_DEADCONST") != "0";
 
         /// <summary>
+        /// IR_JIT_UNSAMPLED (on unless =0): a call on a local of the method that the profile has no sample of is
+        /// inlined for the classes that define an inlinable method of the name, under checks of their classes
+        /// (JitCompiler.UnsampledCallees).
+        /// </summary>
+        internal static readonly bool InlineUnsampled = Environment.GetEnvironmentVariable("IR_JIT_UNSAMPLED") != "0";
+
+        /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
         internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
@@ -353,6 +360,12 @@ namespace IronRuby.Runtime.Jit {
             // read before the versions: a change after this read moves the word past it again
             long epoch = RubyUtils.CodeEpoch;
             if (guard.Stale) {
+                // only constants moved, and each the body folded is what it was: the body is current (as at its entry,
+                // JitStub.RevalidateConstants), and the loop goes on
+                if (guard.ConstantsStillHold()) {
+                    guard.Epoch = epoch;
+                    return epoch;
+                }
                 if (guard.MayDeopt) {
                     if (Verbose) { Console.Error.WriteLine("[jit] safe point: a method or a constant the body was compiled under changed, deopt"); }
                     throw SafePointDeopt();
@@ -1259,6 +1272,35 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- reflection handles the compiler emits ---------------------------------------
 
+        // `{k => v, ...}' in a typed body (JitCompiler.EmitHashLiteral): the Hash RubyOps.MakeHash and MakeSymbolHash1..3
+        // make, of the comparer of the runtime the body was compiled for. The keys are plain literals (a Symbol, String,
+        // Integer, nil, true or false), which the comparer hashes without calling #hash: no Ruby code runs.
+        public static object NewHash(RubyContext/*!*/ context, object[]/*!*/ items) {
+            return RubyUtils.SetHashElements(context, new Hash(context.EqualityComparer, items.Length / 2), items);
+        }
+
+        public static object NewSymbolHash1(RubyContext/*!*/ context, object key1, object value1) {
+            var result = Hash.CreateUnlinked(context.EqualityComparer, 1);
+            result.AppendUnlinked(key1, value1);
+            return result;
+        }
+
+        public static object NewSymbolHash2(RubyContext/*!*/ context, object key1, object value1, object key2, object value2) {
+            var result = Hash.CreateUnlinked(context.EqualityComparer, 2);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            return result;
+        }
+
+        public static object NewSymbolHash3(RubyContext/*!*/ context, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = Hash.CreateUnlinked(context.EqualityComparer, 3);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            result.AppendUnlinked(key3, value3);
+            return result;
+        }
+
         internal static MethodInfo/*!*/ M(string/*!*/ name) {
             return typeof(JitRuntime).GetMethod(name, BindingFlags.Public | BindingFlags.Static);
         }
@@ -1281,6 +1323,9 @@ namespace IronRuby.Runtime.Jit {
         internal RubyContext ConstantsOf;
         // a typed method body may deopt at its loop's safe point (see MethodLoopSafePointSlow)
         internal bool MayDeopt;
+        // what the typed method body folded (JitCode.FoldedConstants), for its loops' safe points to look up again; null
+        // if it folded none, or is an outlined loop's copy (which hands itself back instead). Set before the code runs.
+        internal JitFoldedConstant[] Folded;
 
         internal static readonly System.Reflection.FieldInfo/*!*/ EpochField = typeof(JitLoopGuard).GetField("Epoch");
 
@@ -1293,6 +1338,25 @@ namespace IronRuby.Runtime.Jit {
             ConstantsOf = constantsOf;
             ConstantVersion = constantVersion;
             System.Threading.Volatile.Write(ref Epoch, epoch);
+        }
+
+        /// <summary>
+        /// The method version is the one the code was compiled under, and each constant it folded resolves as it did
+        /// (JitFoldedConstant.StillHolds): what moved the constant version was nothing the code folded, and the version
+        /// read before the lookups is recorded as current. As JitStub.RevalidateConstants: a change between the read
+        /// and the store has moved the version past the one stored, so the next safe point looks again.
+        /// </summary>
+        internal bool ConstantsStillHold() {
+            var context = ConstantsOf;
+            var folded = Folded;
+            if (context == null || folded == null || RubyModule.GlobalMethodVersion != Version) { return false; }
+            int version = System.Threading.Volatile.Read(ref context.ConstantAccessVersion);
+            foreach (var constant in folded) {
+                if (!constant.StillHolds(context)) { return false; }
+            }
+            if (context.IsAutoloadInProgress) { return false; }
+            System.Threading.Volatile.Write(ref ConstantVersion, version);
+            return true;
         }
 
         /// <summary>A method table or a constant the code was built on has changed since.</summary>

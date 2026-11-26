@@ -292,6 +292,108 @@ namespace IronRuby.Builtins {
             /// <summary>The method has returned: what it does on its way out.</summary>
             internal virtual void Finish() {
             }
+
+            /// <summary>
+            /// The yield of the last step has returned, with the value fed to it (Enumerator#feed) or nil: what the method's
+            /// block would have answered.
+            /// </summary>
+            internal virtual void Resume(object fed) {
+            }
+
+            /// <summary>What the method answers (StopIteration#result), once it has returned.</summary>
+            internal virtual object Result {
+                get { return Receiver; }
+            }
+        }
+
+        // What a collecting method does with what its block answers, the block being the suspended yield of #next: #map
+        // keeps the answers, #select (#filter, #find_all) the elements it answered true for, #reject the others.
+        private const int CollectMap = 0, CollectSelect = 1, CollectReject = 2;
+
+        // Array#map, #collect, #select, #filter and #reject (IListOps): the length is read at each step, as Array#each's
+        // is; #select keeps the element as it is once the block has run (MRI's rb_ary_elt), #reject the one it yielded.
+        private sealed class ArrayCollectCursor : ExternalCursor {
+            private readonly RubyArray/*!*/ _array;
+            private readonly int _kind;
+            private readonly RubyArray/*!*/ _result = new RubyArray();
+            private int _index;
+            private object _current;
+
+            internal ArrayCollectCursor(RubyArray/*!*/ array, int kind) : base(array) {
+                _array = array;
+                _kind = kind;
+            }
+
+            internal override bool MoveNext(out object value) {
+                int index = _index;
+                if (index < _array.Count) {
+                    _index = index + 1;
+                    value = _current = _array[index];
+                    return true;
+                }
+                value = _current = null;
+                return false;
+            }
+
+            internal override void Resume(object fed) {
+                if (_kind == CollectMap) {
+                    _result.Add(fed);
+                } else if (_kind == CollectSelect) {
+                    if (Protocols.IsTrue(fed)) {
+                        int index = _index - 1;
+                        _result.Add(index < _array.Count ? _array[index] : null);
+                    }
+                } else if (!Protocols.IsTrue(fed)) {
+                    _result.Add(_current);
+                }
+            }
+
+            internal override object Result {
+                get { return _result; }
+            }
+        }
+
+        // Enumerable#map, #collect, #select, #filter, #find_all and #reject over a cursor of the receiver's #each (a Range,
+        // a Hash's #map and #find_all, a Struct): the element kept is the one yielded, packed before the block runs (FilterImpl).
+        private sealed class EnumerableCollectCursor : ExternalCursor {
+            private readonly ExternalCursor/*!*/ _inner;
+            private readonly int _kind;
+            private readonly RubyArray/*!*/ _result = new RubyArray();
+            private object _current;
+
+            internal EnumerableCollectCursor(object receiver, ExternalCursor/*!*/ inner, int kind) : base(receiver) {
+                _inner = inner;
+                _kind = kind;
+            }
+
+            internal override bool Multiple {
+                get { return _inner.Multiple; }
+            }
+
+            internal override bool MoveNext(out object value) {
+                if (_inner.MoveNext(out value)) {
+                    _current = value;
+                    return true;
+                }
+                _current = null;
+                return false;
+            }
+
+            internal override void Resume(object fed) {
+                if (_kind == CollectMap) {
+                    _result.Add(fed);
+                } else if (Protocols.IsTrue(fed) == (_kind == CollectSelect)) {
+                    _result.Add(_current);
+                }
+            }
+
+            internal override void Finish() {
+                _inner.Finish();
+            }
+
+            internal override object Result {
+                get { return _result; }
+            }
         }
 
         // Enumerable#each_slice and #each_cons (EachSlice) over a cursor of the receiver's #each: a new
@@ -394,6 +496,71 @@ namespace IronRuby.Builtins {
                 }
                 value = null;
                 return false;
+            }
+        }
+
+        // Enumerator#with_index, #each_with_index and #with_object made without a block (the prelude's generators, marked by
+        // __iter_index_source__), and Enumerable#each_with_index over a receiver whose #each a cursor walks: the source's step
+        // with its index, or the memo, beside it - [value, index], the values of a step of several packed into an Array as the
+        // generator's `a.size <= 1 ? a.first : a` packs them. What the block answers goes on to the source's suspended yield
+        // (with_index_i and with_object_i answer it), so `map.with_index` collects it.
+        private sealed class IndexCursor : ExternalCursor {
+            private readonly ExternalCursor/*!*/ _inner;
+            private readonly bool _withObject;
+            private readonly object _memo;
+            // the generator answers what the source's #each answers; Enumerable#each_with_index answers its receiver
+            private readonly bool _answersReceiver;
+            private long _index;
+
+            internal IndexCursor(object receiver, ExternalCursor/*!*/ inner, long offset, bool answersReceiver) : base(receiver) {
+                _inner = inner;
+                _index = offset;
+                _answersReceiver = answersReceiver;
+            }
+
+            internal IndexCursor(object receiver, ExternalCursor/*!*/ inner, object memo) : base(receiver) {
+                _inner = inner;
+                _withObject = true;
+                _memo = memo;
+            }
+
+            internal override bool Multiple {
+                get { return true; }
+            }
+
+            internal override bool MoveNext(out object value) {
+                object step;
+                if (!_inner.MoveNext(out step)) {
+                    value = null;
+                    return false;
+                }
+                if (_inner.Multiple) {
+                    var stepValues = (RubyArray)step;
+                    step = (stepValues.Count == 0) ? null : (stepValues.Count == 1) ? stepValues[0] : new RubyArray(stepValues);
+                }
+                var values = new RubyArray(2);
+                values.Add(step);
+                if (_withObject) {
+                    values.Add(_memo);
+                } else {
+                    long index = _index++;
+                    values.Add((index >= Int32.MinValue && index <= Int32.MaxValue) ?
+                        ScriptingRuntimeHelpers.Int32ToObject((int)index) : (object)(BigInteger)index);
+                }
+                value = values;
+                return true;
+            }
+
+            internal override void Resume(object fed) {
+                _inner.Resume(fed);
+            }
+
+            internal override void Finish() {
+                _inner.Finish();
+            }
+
+            internal override object Result {
+                get { return _withObject ? _memo : _answersReceiver ? Receiver : _inner.Result; }
             }
         }
 
@@ -634,7 +801,7 @@ namespace IronRuby.Builtins {
 
             object generator;
             if (context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
-                return null;
+                return TryCreateIndexCursor(context, self, generator);
             }
 
             if (!IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
@@ -671,6 +838,18 @@ namespace IronRuby.Builtins {
                 case "each":
                     return TryCreateEachCursor(context, target);
 
+                case "map":
+                case "collect":
+                    return TryCreateCollectCursor(context, target, name, CollectMap);
+
+                case "select":
+                case "filter":
+                case "find_all":
+                    return TryCreateCollectCursor(context, target, name, CollectSelect);
+
+                case "reject":
+                    return TryCreateCollectCursor(context, target, name, CollectReject);
+
                 case "each_pair":
                     return (hash = target as Hash) != null && IsBuiltinMethod(context, target, name, typeof(IDictionaryOps), "Each", "EachPair") ?
                         new HashCursor(hash, HashCursor.Pairs) : null;
@@ -693,10 +872,19 @@ namespace IronRuby.Builtins {
 
                 case "each_with_index":
                     // the prelude's #each_with_index, the built-in one it hands a block to, and the #each that one calls
-                    return (array = target as RubyArray) != null &&
-                        IsPreludeMethod(context, target, name, GetPreludeMethods(context).EachWithIndex) &&
-                        IsBuiltinMethod(context, target, "__each_with_index_without_args__", typeof(Enumerable), "GetEachWithIndexEnumerator", "EachWithIndex") &&
-                        IsBuiltinMethod(context, target, "each", typeof(IListOps), "Each") ? new ArrayWithIndexCursor(array) : null;
+                    if (!IsPreludeMethod(context, target, name, GetPreludeMethods(context).EachWithIndex) ||
+                        !IsBuiltinMethod(context, target, "__each_with_index_without_args__", typeof(Enumerable), "GetEachWithIndexEnumerator", "EachWithIndex")) {
+                        return null;
+                    }
+                    if ((array = target as RubyArray) != null) {
+                        return IsBuiltinMethod(context, target, "each", typeof(IListOps), "Each") ? new ArrayWithIndexCursor(array) : null;
+                    }
+                    // a Hash, a Range, a Struct: the steps of its #each with their index, and the receiver for the result
+                    if (!_fastNext) {
+                        return null;
+                    }
+                    ExternalCursor eachCursor = TryCreateEachCursor(context, target);
+                    return eachCursor != null ? new IndexCursor(target, eachCursor, 0, true) : null;
 
                 case "times":
                     if (target is int && IsBuiltinMethod(context, target, name, typeof(Integer), "Times")) {
@@ -714,6 +902,69 @@ namespace IronRuby.Builtins {
                         new CharCursor(str) : null;
             }
             return null;
+        }
+
+        // A collecting method (#map, #select...) that is Array's own over an Array, or Enumerable's over a receiver whose #each
+        // a cursor can do. IR_FAST_NEXT=0 leaves them to the fiber.
+        private static ExternalCursor TryCreateCollectCursor(RubyContext/*!*/ context, object target, string/*!*/ name, int kind) {
+            if (!_fastNext) {
+                return null;
+            }
+            // the C# methods of the name: the blockless one that made the enumerator, and the one with a block it stands for
+            string impl = (kind == CollectMap) ? (name == "collect" ? "Collect" : "Map") :
+                (kind == CollectReject) ? "Reject" : (name == "filter" ? "Filter" : name == "find_all" ? "FindAll" : "Select");
+            RubyArray array = target as RubyArray;
+            if (array != null && name != "find_all") {
+                return IsBuiltinMethod(context, target, name, typeof(IListOps),
+                    kind == CollectMap ? "GetMapEnumerator" : kind == CollectSelect ? "GetSelectEnumerator" : "Reject", impl) ?
+                    new ArrayCollectCursor(array, kind) : null;
+            }
+            if (!IsBuiltinMethod(context, target, name, typeof(Enumerable), kind == CollectMap ? "GetMapEnumerator" : impl, impl)) {
+                return null;
+            }
+            ExternalCursor inner = TryCreateEachCursor(context, target);
+            return inner != null ? new EnumerableCollectCursor(target, inner, kind) : null;
+        }
+
+        // What the prelude's #with_index (#each_with_index) and #with_object made without a block are over, while their generator
+        // is the one they made (an #initialize again replaces it; a copy has no mark): see __iter_index_source__.
+        private Enumerator _indexSource;
+        private object _indexArgument;
+        private bool _indexWithObject;
+        private object _indexGenerator;
+
+        /// <summary>
+        /// Marks the generator enumerator the prelude's #with_index or #with_object has just made as one over <paramref name="source"/>,
+        /// so that #next walks it with a cursor over the source's when the source has one, rather than on a fiber.
+        /// </summary>
+        [RubyMethod("__iter_index_source__", RubyMethodAttributes.PrivateInstance)]
+        public static Enumerator/*!*/ MarkIndexSource(RubyContext/*!*/ context, Enumerator/*!*/ self, object source, object argument, bool withObject) {
+            var enumerator = source as Enumerator;
+            object generator;
+            if (enumerator != null && self._indexGenerator == null &&
+                context.TryGetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__generator__"), out generator) && generator != null) {
+                self._indexSource = enumerator;
+                self._indexArgument = argument;
+                self._indexWithObject = withObject;
+                self._indexGenerator = generator;
+            }
+            return self;
+        }
+
+        // A marked generator enumerator whose #each is the built-in one, over a source that has a cursor of its own; an index
+        // that is not a Fixnum leaves it to the fiber. IR_FAST_NEXT=0 leaves them all to it.
+        private static ExternalCursor TryCreateIndexCursor(RubyContext/*!*/ context, Enumerator/*!*/ self, object generator) {
+            if (!_fastNext || self._indexGenerator == null || !ReferenceEquals(generator, self._indexGenerator) ||
+                (!self._indexWithObject && !(self._indexArgument is int)) ||
+                !IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller")) {
+                return null;
+            }
+            ExternalCursor inner = TryCreateCursor(context, self._indexSource);
+            if (inner == null) {
+                return null;
+            }
+            return self._indexWithObject ? new IndexCursor(self, inner, self._indexArgument) :
+                new IndexCursor(self, inner, (int)self._indexArgument, false);
         }
 
         // The receiver's own #each, when it is a built-in one a cursor can do.
@@ -872,6 +1123,7 @@ namespace IronRuby.Builtins {
                     } else {
                         // the suspended yield returns (next_ii), taking the fed value with it
                         if (cursor.Started) {
+                            cursor.Resume(self._hasFeed ? self._feedValue : null);
                             self._feedValue = null;
                             self._hasFeed = false;
                         }
@@ -884,7 +1136,7 @@ namespace IronRuby.Builtins {
                             cursor.Finish();
                             self._feedValue = null;
                             self._hasFeed = false;
-                            stop = cursor.StopException = CreateStopIteration(context, cursor.Receiver, null);
+                            stop = cursor.StopException = CreateStopIteration(context, cursor.Result, null);
                             first = true;
                         }
                     }
@@ -913,7 +1165,7 @@ namespace IronRuby.Builtins {
             // the first one is handed to Ruby code now (Exception#cause): if it was rescued and dropped, the walk for its
             // backtrace is still to be taken, and is taken here, as close to where it was rescued as there is
             RubyExceptionData.ExposeCatchSite(stop);
-            var again = CreateStopIteration(context, cursor.Receiver, stop);
+            var again = CreateStopIteration(context, cursor.Result, stop);
             throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(again) : again;
         }
 

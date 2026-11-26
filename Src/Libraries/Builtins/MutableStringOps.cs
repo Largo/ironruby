@@ -699,6 +699,32 @@ namespace IronRuby.Builtins {
             return self.Replace(other);
         }
 
+        /// <summary>
+        /// String#dup, MRI's rb_str_dup_m: a bare string - of class String itself, with no singleton class and no instance
+        /// variables - is copied as it is (str_duplicate: the content and the encoding, neither frozen nor chilled) without
+        /// calling initialize_dup or initialize_copy, whatever they are; any other goes through Kernel#dup (rb_obj_dup), which
+        /// calls them. IR_FAST_DUP=0 sends every string through Kernel#dup.
+        /// </summary>
+        [RubyMethod("dup")]
+        public static object/*!*/ Duplicate(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
+            CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
+            MutableString/*!*/ self) {
+
+            if (FastDup && self.GetType() == typeof(MutableString) && IsBare(allocateStorage.Context, self)) {
+                return self.CreateInstance().Replace(self);
+            }
+            return KernelOps.Duplicate(initializeCopyStorage, allocateStorage, self);
+        }
+
+        private static readonly bool FastDup = Environment.GetEnvironmentVariable("IR_FAST_DUP") != "0";
+
+        // BARE_STRING_P: no instance variables and the class String itself (the caller has seen the CLR type is MutableString,
+        // so the class is String unless the string has a singleton class).
+        private static bool IsBare(RubyContext/*!*/ context, MutableString/*!*/ self) {
+            return !context.HasInstanceVariables(self) && !context.GetImmediateClassOf(self).IsSingletonClass;
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ Reinitialize(MutableString/*!*/ self, [NotNull]byte[] other) {
             self.Clear();
@@ -4680,7 +4706,25 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        // The usual call, one String prefix, without the scope: the overload above takes it for a Regexp
+        // prefix's $~, so a light frame calling it with a String made its scope on the call
+        // (RubyOps.LightScopeRequired) and called again - 70 ns of the 120 that "abc...".start_with?("a")
+        // took (Util/bench/strsearch-shapes.rb sw1_a; CRuby 55). The binder picks this one for a
+        // MutableString argument; a Regexp, a #to_str object or several prefixes still go above.
+        [RubyMethod("start_with?")]
+        public static bool StartsWithString(MutableString/*!*/ self, [NotNull]MutableString/*!*/ prefix) {
+            self.RequireCompatibleEncoding(prefix);
+            return StartsWith(self, prefix);
+        }
+
         private static bool StartsWith(MutableString/*!*/ self, MutableString/*!*/ subString) {
+            // An ASCII prefix is compared where both strings are, without switching either to bytes. It
+            // costs the same whatever the prefix's length, which the byte loop below beats only for one
+            // byte (2,645 instructions a call against 2,789; three bytes 3,863 against 2,828: sw1_a, sw3_a).
+            if (FastSearchEnabled && self.Encoding.IsAsciiIdentity && subString.IsAscii() && subString.GetCharCount() > 1) {
+                return self.StartsWithAscii(subString);
+            }
+
             int prefix = subString.GetByteCount();
             if (self.GetByteCount() < prefix) {
                 return false;

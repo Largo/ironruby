@@ -846,6 +846,67 @@ y.foo
 ");
         }
 
+        /// <summary>
+        /// defined?(@@x) and Module#class_variable_defined? answer true for a class variable an ancestor has overtaken,
+        /// as MRI's rb_cvar_defined does; reading it still raises.
+        /// </summary>
+        public void ClassVariables_DefinedOvertaken1() {
+            TestOutput(@"
+class OB; end
+class OS < OB
+  @@ov = :sub
+  def d = defined?(@@ov)
+  def r = @@ov
+end
+p OS.new.d, OS.class_variable_defined?(:@@ov)
+OB.class_variable_set(:@@ov, :base)
+p OS.new.d, OS.class_variable_defined?(:@@ov), OB.class_variable_defined?(:@@ov)
+begin; OS.new.r; rescue RuntimeError => e; p e.message; end
+begin; OS.class_variable_get(:@@ov); rescue RuntimeError => e; p e.message; end
+p OS.class_variable_defined?(:@@none), defined?(OS)
+", @"
+""class variable""
+true
+""class variable""
+true
+true
+""class variable @@ov of OS is overtaken by OB""
+""class variable @@ov of OS is overtaken by OB""
+false
+""constant""
+");
+        }
+
+        /// <summary>
+        /// A method defined in a `refine' block reads and writes the class variables of the module around the `refine',
+        /// as MRI's vm_get_cvar_base, which passes over the refinement's cref, does.
+        /// </summary>
+        public void ClassVariables_Refinement1() {
+            TestOutput(@"
+module RM
+  @@r = :outer
+  refine String do
+    p @@r
+    def cv_r = @@r
+    def cv_d = defined?(@@r)
+    def cv_w(v) = (@@r = v)
+    def cv_missing = defined?(@@nowhere)
+  end
+end
+using RM
+p ""s"".cv_r, ""s"".cv_d, ""s"".cv_missing
+""s"".cv_w(:written)
+p RM.class_variable_get(:@@r), ""s"".cv_r
+", @"
+:outer
+:outer
+""class variable""
+nil
+:written
+:written
+");
+        }
+
         public void Scenario_RubyThreads1() { 
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -7736,6 +7797,94 @@ false
 ""wrong number of arguments (given 0, expected 1+)""
 ""boom 2""
 ""in 'Object#boom'""
+");
+        }
+
+        /// <summary>
+        /// IR_LIGHT_KEYWORD_REST and IR_LIGHT_KEYWORD_SPLAT: keywords beside a rest or post parameter, bound out of one splat
+        /// (PrismAstBridge.LowerGeneralParameters), and a hash passed on as keywords, in a light frame
+        /// (Util/keyword-rest-light-matrix.rb).
+        /// </summary>
+        public void Method_LightFrameKeywordRest1() {
+            TestOutput(@"
+def rk(*a, k: 1); [a, k]; end
+def post(x, *r, z, k: 0); [x, r, z, k]; end
+def opt(x, y = x + 1, *r, k: y); [x, y, r, k]; end
+def inner(*a, **o); o[:seen] = true unless o.empty?; [a, o]; end
+def pass(*a, **o); inner(*a, **o); end
+class B; def m(a, **o) = [:b, a, o]; end
+class S < B; def m(a, **o); [:s, super]; end; end
+arr = [1, 2, 3]
+h = {k: 5}
+p rk, rk(1, k: 2), rk({k: 3}), post(1, 2), post(*arr, k: 4), arr, opt(1), opt(1, 5, 6, k: 7)
+p pass(1, **h), h, pass(**nil), pass(1, **{}), S.new.m(1, j: 2), S.new.m(1)
+p 40.times.map { |i| rk(*[i] * (i % 3), k: i % 2).flatten.size }.uniq
+begin; post(1); rescue ArgumentError => e; p e.message; end
+begin; rk(j: 1); rescue ArgumentError => e; p e.message; end
+begin; pass(1, **1); rescue TypeError => e; p e.message; end
+", @"
+[[], 1]
+[[1], 2]
+[[{k: 3}], 1]
+[1, [], 2, 0]
+[1, [2], 3, 4]
+[1, 2, 3]
+[1, 2, [], 2]
+[1, 5, [6], 7]
+[[1], {k: 5, seen: true}]
+{k: 5}
+[[], {}]
+[[1], {}]
+[:s, [:b, 1, {j: 2}]]
+[:s, [:b, 1, {}]]
+[1, 2, 3]
+""wrong number of arguments (given 1, expected 2+)""
+""unknown keyword: :j""
+""no implicit conversion of Integer into Hash""
+");
+        }
+
+        /// <summary>
+        /// IR_KWREST_IN_PLACE: a rest parameter that takes a call's keyword hash unmarks the call's own hash instead of
+        /// storing a copy (RubyOps.NormalizeRestArgument); it stays positional when passed on or kept, the caller's hash
+        /// is never the one, and a ruby2_keywords method still gets a marked copy (Util/kwrest-call-matrix.rb).
+        /// </summary>
+        public void Method_KeywordHashIntoRest1() {
+            TestOutput(@"
+require 'ruby4'
+def takes_kw(*a, **kw) = [a, kw]
+def rest(*a) = a
+def pass_on(*a) = takes_kw(*a)
+def keep(*a) = a.last
+ruby2_keywords def r2k(*a) = takes_kw(*a)
+ruby2_keywords def r2k_last(*a) = a.last
+h = {k: 1}
+p rest(1, k: 2), pass_on(1, k: 2), takes_kw(*rest(k: 3))
+kept = keep(k: 4)
+p takes_kw(kept), takes_kw(*[kept]), kept.frozen?
+r = keep(**h)
+r[:x] = 1
+p r, h, keep(h).equal?(h), pass_on(h)
+p r2k(1, k: 2), r2k(1, {k: 2}), Hash.ruby2_keywords_hash?(r2k_last(k: 1)), Hash.ruby2_keywords_hash?(keep(k: 1))
+p 40.times.map { |i| pass_on(i % 2, k: i % 3) }.uniq.size, rest(1, **{}), rest(**nil)
+", @"
+[1, {k: 2}]
+[[1, {k: 2}], {}]
+[[{k: 3}], {}]
+[[{k: 4}], {}]
+[[{k: 4}], {}]
+false
+{k: 1, x: 1}
+{k: 1}
+true
+[[{k: 1}], {}]
+[[1], {k: 2}]
+[[1, {k: 2}], {}]
+true
+false
+6
+[1]
+[]
 ");
         }
 

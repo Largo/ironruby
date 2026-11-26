@@ -5564,10 +5564,14 @@ class Enumerator
       # yield [value, index] pairs, lazily, via the generator form above
       source = self
       n = source.size
+      # each step answers what the yield answered, which is what reaches a method enumerated
+      # through to_enum: `map.with_index` collects what was fed to it (MRI's with_index_i)
+      # Enumerator#next walks it with a cursor over the source's, when the source has one (Enumerator.cs).
+      # No local may hold the enumerator: the generator closes over this scope, and its fiber would keep it alive.
       return Enumerator.new(n) { |y|
         i = offset
-        source.each { |*a| y.yield(a.size <= 1 ? a.first : a, i); i += 1 }
-      }.__set_inspect__(self, :with_index, args)
+        source.each { |*a| answer = y.yield(a.size <= 1 ? a.first : a, i); i += 1; answer }
+      }.__set_inspect__(self, :with_index, args).__send__(:__iter_index_source__, source, offset, false)
     end
     i = offset
     each do |*args|
@@ -5594,8 +5598,10 @@ class Enumerator
     unless block_given?
       source = self
       n = source.size
-      return Enumerator.new(n) { |y| source.each { |*a| y.yield(a.size <= 1 ? a.first : a, memo) } }
-        .__set_inspect__(self, :with_object, [memo])
+      # it answers the memo, and so does StopIteration#result at the end of its #next (MRI's with_object)
+      # (no local holds the enumerator, as in #with_index)
+      return Enumerator.new(n) { |y| source.each { |*a| y.yield(a.size <= 1 ? a.first : a, memo) }; memo }
+        .__set_inspect__(self, :with_object, [memo]).__send__(:__iter_index_source__, source, memo, true)
     end
     each do |*args|
       yield(args.size <= 1 ? args.first : args, memo)

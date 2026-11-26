@@ -390,6 +390,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The slot of a local this scope declares - not `it' or _1.._9, nor one eval added - which the method JIT reads a
+        /// local captured by a define_method body from (JitBlockMethod.ReadCaptured), as the block's own closure does.
+        /// </summary>
+        internal bool TryGetLocalSlot(string/*!*/ name, out int index) {
+            EnsureBoxes();
+            index = -1;
+            return StaticLocalMapping != null && StaticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name);
+        }
+
+        /// <summary>The value of the local in a slot TryGetLocalSlot gave, as the locals hold it now.</summary>
+        internal object GetLocalSlotValue(int index) {
+            return GetLocalValue(index);
+        }
+
         private bool IsImplicitParameter(string/*!*/ name) {
             var names = OwnImplicitParameterNames;
             return names != null && Array.IndexOf(names, name) >= 0;
@@ -902,7 +917,10 @@ namespace IronRuby.Runtime {
             RubyScope scope = this;
             do {
                 RubyModule result = scope.Module;
-                if (result != null && (!skipSingletons || !(result.IsSingletonClass || IsInstanceEval(scope)))) {
+                // MRI's vm_get_cvar_base passes over a singleton class's cref and one pushed by an eval - an instance_eval'd
+                // String, and the refinement a method defined in a `refine' block has as its cref (RubyOps.DefinitionScope),
+                // whose @@x is the module's around the `refine'
+                if (result != null && (!skipSingletons || !(result.IsSingletonClass || result.IsRefinement || IsInstanceEval(scope)))) {
                     return result;
                 }
                 scope = scope.Parent;

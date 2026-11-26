@@ -602,3 +602,33 @@ t('fl: Integer set generically, then the loop') do
   bs = bl_fl_bodies; bl_fl_loop(bs, 0.01); bs[1].instance_variable_set(:@v, 1)
   [bl_fl_loop(bs, 0.01), bl_fl_state(bs), bl_fl_loop(bs, 0.01), bl_fl_state(bs)]
 end
+
+# ---------------------------------------------------------------- Permute's block: a call of a method on self
+# (gap 4) A hot downto whose block calls `swap' on self, a method the JIT compiles: the method redefined half way
+# through the loop, and a singleton `swap' on the receiver, must be the ones the following iterations call.
+class BlPerm
+  attr_reader :v, :log
+  def initialize; @v = (0...8).to_a; @log = []; end
+  def swap(i, j); t = @v[i]; @v[i] = @v[j]; @v[j] = t; end
+  def run(n, at, &event)
+    n.downto(0) do |i|
+      event.call(self) if i == at
+      swap(i % 8, (i + 3) % 8)
+    end
+    @v.dup
+  end
+end
+t('perm: swap redefined half way through a hot downto') do
+  o = BlPerm.new
+  200.times { o.run(40, -1) }
+  r = o.run(3000, 1500) { |_| BlPerm.class_eval { def swap(i, j); @log << [i, j] if @log.size < 3; end } }
+  BlPerm.class_eval { def swap(i, j); t = @v[i]; @v[i] = @v[j]; @v[j] = t; end }
+  [r, o.log]
+end
+t('perm: a singleton swap on the receiver half way through a hot downto') do
+  o = BlPerm.new
+  p2 = BlPerm.new
+  200.times { o.run(40, -1); p2.run(40, -1) }
+  r = o.run(3000, 1500) { |me| def me.swap(i, j); @log << :single if @log.size < 2; end }
+  [r, o.log, p2.run(3000, -1)]
+end

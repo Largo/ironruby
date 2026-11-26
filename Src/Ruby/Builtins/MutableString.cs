@@ -1653,6 +1653,52 @@ namespace IronRuby.Builtins {
             return _content.StartsWith(value);
         }
 
+        /// <summary>
+        /// Whether the string starts with <paramref name="prefix"/>, which is ASCII, read where both
+        /// contents are, as bytes or as characters: neither is switched to the other representation,
+        /// which GetByteCount and GetByte do to a string held as characters that are not its bytes.
+        /// The caller sees to it that this string's encoding is ASCII compatible: then an ASCII byte
+        /// is a character of its own, and an ASCII character stands for that byte, wherever they are,
+        /// so the first characters are the prefix's exactly when the first bytes are, and the prefix
+        /// ends on a character boundary.
+        /// </summary>
+        public bool StartsWithAscii(MutableString/*!*/ prefix) {
+            Debug.Assert(_encoding.IsAsciiIdentity);
+            ReadOnlySpan<char> chars, prefixChars;
+            ReadOnlySpan<byte> bytes, prefixBytes;
+            bool selfIsChars = GetRawData(_content, out chars, out bytes);
+            bool prefixIsChars = GetRawData(prefix._content, out prefixChars, out prefixBytes);
+            int count = prefixIsChars ? prefixChars.Length : prefixBytes.Length;
+            if ((selfIsChars ? chars.Length : bytes.Length) < count) {
+                return false;
+            }
+            if (selfIsChars && prefixIsChars) {
+                return chars.StartsWith(prefixChars);
+            }
+            if (!selfIsChars && !prefixIsChars) {
+                return bytes.StartsWith(prefixBytes);
+            }
+            for (int i = 0; i < count; i++) {
+                int a = selfIsChars ? chars[i] : bytes[i];
+                int b = prefixIsChars ? prefixChars[i] : prefixBytes[i];
+                if (a != b) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static bool GetRawData(Content/*!*/ content, out ReadOnlySpan<char> chars, out ReadOnlySpan<byte> bytes) {
+            if (content is BinaryContent binary) {
+                chars = default(ReadOnlySpan<char>);
+                bytes = binary.GetDataSpan();
+                return false;
+            }
+            bytes = default(ReadOnlySpan<byte>);
+            chars = (content is StringContent str) ? str.Data.AsSpan() : ((CharArrayContent)content).GetDataSpan();
+            return true;
+        }
+
         public bool EndsWith(char value) {
             try {
                 return GetLastChar() == value;

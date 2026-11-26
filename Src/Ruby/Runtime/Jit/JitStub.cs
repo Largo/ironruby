@@ -253,7 +253,8 @@ namespace IronRuby.Runtime.Jit {
             bool settled;
             lock (_sync) {
                 settled = _state == Settled;
-                if (settled) { Install(compiled); }
+                // a retired entry's rest holds the generic body too (StartResting)
+                if (settled || _state == Cooling && _resting) { Install(compiled); }
             }
             if (settled) { NotifyOwner(); }
         }
@@ -430,6 +431,9 @@ namespace IronRuby.Runtime.Jit {
 
         // Under _sync: the generic body, for good.
         private void Settle() {
+            _resting = false;
+            _restTimer?.Dispose();
+            _restTimer = null;
             _state = Settled;
             _current = null;
             _direct = null;
@@ -572,6 +576,12 @@ namespace IronRuby.Runtime.Jit {
         // CoolDownMs and doubles at each retirement. A retry that fails again costs one more window
         // of deopts, about 0.2 ms, against a cool-down of at least 8 ms; after MaxRetirements the
         // method keeps its generic body for good.
+        //
+        // The cool-down costs nothing per call (StartResting): the fast slot holds the generic body
+        // itself, as a settled method's does, and a timer ends it with a probe (ProbeCalls generic
+        // calls, each timed), whose CoolDownCheck puts the entry back. A stand-in that counted every
+        // call and timed one in 8 for the whole cool-down cost a method that keeps deopting 10-16%
+        // over the generic body for the two seconds before it settled (perf/jitsettle).
         internal const int MaxDeopts = 16;
         private const int DeoptWindow = MaxDeopts * 64;
         private const int MaxRetirements = 8;
@@ -680,8 +690,12 @@ namespace IronRuby.Runtime.Jit {
                         final ? ", for good" : String.Format(", retry in {0} ms", CoolDownMs << (_retirements - 1)));
                 }
                 if (!final) {
-                    StartCooling(Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
-                        CoolCheckCalls, CoolSampleMask);
+                    if (RestEnabled) {
+                        StartResting(CoolDownMs << (_retirements - 1));
+                    } else {
+                        StartCooling(Stopwatch.GetTimestamp() + (Stopwatch.Frequency * CoolDownMs / 1000) * (1L << (_retirements - 1)),
+                            CoolCheckCalls, CoolSampleMask);
+                    }
                     return;
                 }
                 Settle();
@@ -708,9 +722,41 @@ namespace IronRuby.Runtime.Jit {
             }
         }
 
+        // A retired entry's cool-down (OnDeopt): the generic body itself in the fast slot, nothing
+        // counted or timed, until a timer starts the probe that ends it (EndRest). _restGeneration
+        // names the rest a timer was set for, so that one left over from an earlier rest - the state
+        // moved on, and back to Cooling - does nothing.
+        // IR_JIT_REST=0: the counted, sampled cool-down of before (StartCooling for the whole of it).
+        internal static readonly bool RestEnabled = Environment.GetEnvironmentVariable("IR_JIT_REST") != "0";
+        private bool _resting;
+        private int _restGeneration;
+        private Timer _restTimer;
+
+        // Under _sync.
+        private void StartResting(int ms) {
+            _direct = null;
+            _state = Cooling;
+            _resting = true;
+            int generation = ++_restGeneration;
+            Install(BestGeneric);
+            _restTimer?.Dispose();
+            _restTimer = new Timer(state => ((JitStub)state).EndRest(generation), this, ms, Timeout.Infinite);
+        }
+
+        private void EndRest(int generation) {
+            lock (_sync) {
+                if (_state != Cooling || !_resting || generation != _restGeneration) { return; }
+                // time the generic body on the next calls, then put the entry back (CoolDownCheck)
+                StartCooling(0, ProbeCalls, 0);
+            }
+        }
+
         // Under _sync: the generic body until `until' and `calls' generic calls have passed, timing
         // the calls Cool picks with `mask'.
         private void StartCooling(long until, int calls, int mask) {
+            _resting = false;
+            _restTimer?.Dispose();
+            _restTimer = null;
             _direct = null;
             _coolUntil = until;
             _coolCalls = calls;
@@ -1101,9 +1147,17 @@ namespace IronRuby.Runtime.Jit {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
                 var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints(),
                     bind, epoch), epoch, version, constantVersion);
-                if (code == null) { continue; }
+                if (code == null) {
+                    // IR_JIT_VERBOSE=1: why, as TrySpecialize records it (the last count's, if none compiles)
+                    _declineReason = JitCompiler.LastDecline ?? "the compiler bailed out (see the `rejected' line)";
+                    continue;
+                }
                 if (code.EmittedSelfCall) {
-                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
+                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) {
+                        _declineReason = (_receiverClass == null || _polymorphicReceiver) ? "a class guard on a receiver of several classes"
+                            : "the self-call resolves elsewhere";
+                        continue;
+                    }
                     pinned = true;
                 }
                 if (code.DirectCalls) { pinned = true; }
@@ -1878,6 +1932,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private JitCode Named(JitCode code, long epoch, int version, int constantVersion) {
             if (code != null) {
+                code.LoopGuard.Folded = code.FoldedConstants;
                 code.LoopGuard.Set(epoch, version, code.UsesConstants ? _context : null, constantVersion);
             }
             if (code != null && _frameName != null) {

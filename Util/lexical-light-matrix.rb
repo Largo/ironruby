@@ -112,11 +112,8 @@ end
 co = CvOver.new
 t('overtaken by an ancestor later') do |i|
   CvOverBase.class_variable_set(:@@ov, :base) if i == 1500
-  err { co.ov }
+  [err { co.ov }, co.ov_defined, CvOver.class_variable_defined?(:@@ov)]
 end
-# Not probed, because the unchanged build differs from CRuby 4.0 there already: `defined?(@@ov)' once an
-# ancestor has overtaken @@ov (CRuby: "class variable"; IronRuby raises the RuntimeError), and `@@r' in a
-# method of a `refine' block (CRuby: the module around the refine; IronRuby: the refinement).
 
 # a module's class variable through an including class
 module CvMod
@@ -308,9 +305,13 @@ puts "traced #{calls.size} calls of #{calls.uniq.sort.inspect}"
 # `using' keeps its scope, so nothing above may follow it)
 
 module CvRefine
+  @@r = :refinement_module
   refine String do
     def cv_refined_defined; defined?(@@nowhere); end
+    def cv_refined; err { @@r }; end
+    def cv_refined_d; defined?(@@r); end
   end
 end
 using CvRefine
 t('refinement body, defined? of a missing one') { "s".cv_refined_defined }
+t('refinement body') { ["s".cv_refined, "s".cv_refined_d] }

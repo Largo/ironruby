@@ -316,6 +316,22 @@ class Lx
   def x_qual; self.class::C; end
 end
 
+# keywords beside a rest (IR_LIGHT_KEYWORD_REST) and a hash passed on as keywords (IR_LIGHT_KEYWORD_SPLAT): kr_kw, the
+# same keyword without the rest, was a light frame before; the others kept a scope
+class Kr
+  def kw(a, k: 1) = a + k
+  def rest(*a, k: 1) = a.size + k
+  def inner(*a, **o) = a.size + o.size
+  def pass(*a, **o) = inner(*a, **o)
+  def plain_rest(*a) = a.size + 2
+  def lead_rest(x, *a, k: 1) = x + a.size + k
+  # gap 38: where a keyword call to a rest method spends
+  def v_hash_into_rest(*a) = a.size + 1
+  def v_unused(*a, k: 1) = 3
+  def v_kwrest(*a, **o) = a.size + o.size
+  def v_two(a, b) = a
+end
+
 def cpu
   File.read("/proc/thread-self/schedstat").to_i / 1e9
 rescue SystemCallError
@@ -469,3 +485,26 @@ t("x_const", N) { |n| i = 0; s = 0; while i < n; s += lx.x_const; i += 1; end; s
 t("x_cv", N) { |n| i = 0; s = 0; while i < n; s += lx.x_cv; i += 1; end; s }
 t("x_defc", N) { |n| i = 0; s = 0; while i < n; s += lx.x_defc; i += 1; end; s }
 t("x_qual", N) { |n| i = 0; s = 0; while i < n; s += lx.x_qual; i += 1; end; s }
+
+# keywords beside a rest, and passed on
+kr = Kr.new
+kl = "ab"
+t("kr_kw", N) { |n| i = 0; s = 0; while i < n; s += kr.kw(i, k: 2); i += 1; end; s }
+t("kr_rest", N) { |n| i = 0; s = 0; while i < n; s += kr.rest(i, k: 2); i += 1; end; s }
+t("kr_pass", N) { |n| i = 0; s = 0; while i < n; s += kr.pass(i, k: 2); i += 1; end; s }
+t("kr_lines", N) { |n| i = 0; s = 0; while i < n; kl.each_line(chomp: true) { |l| s += l.size }; i += 1; end; s }
+# where a keyword call to a rest method spends (gap 38 of Util/perf/LEDGER.md): the same rest method with no keyword, a
+# positional Hash, a Hash literal and a keyword call; a keyword method that ignores its keyword; a method without a rest
+# given the same three, which are alike there
+t("kr_plain_rest", N) { |n| i = 0; s = 0; while i < n; s += kr.plain_rest(i); i += 1; end; s }
+t("kr_lead_rest", N) { |n| i = 0; s = 0; while i < n; s += kr.lead_rest(i, k: 2); i += 1; end; s }
+t("v_hash_into_rest", N) { |n| i = 0; s = 0; while i < n; s += kr.v_hash_into_rest(i, k: 2); i += 1; end; s }
+t("v_unused", N) { |n| i = 0; s = 0; while i < n; s += kr.v_unused(i, k: 2); i += 1; end; s }
+t("v_kwrest", N) { |n| i = 0; s = 0; while i < n; s += kr.v_kwrest(i, k: 2); i += 1; end; s }
+KH = {k: 2}
+t("v_prebuilt_hash", N) { |n| i = 0; s = 0; while i < n; s += kr.v_hash_into_rest(i, KH); i += 1; end; s }
+t("v_two_positionals", N) { |n| i = 0; s = 0; while i < n; s += kr.v_hash_into_rest(i, 2); i += 1; end; s }
+t("v_hash_literal_arg", N) { |n| i = 0; s = 0; while i < n; s += kr.v_hash_into_rest(i, {k: 2}); i += 1; end; s }
+t("v_two_kw", N) { |n| i = 0; s = 0; while i < n; s += kr.v_two(i, k: 2); i += 1; end; s }
+t("v_two_lit", N) { |n| i = 0; s = 0; while i < n; s += kr.v_two(i, {k: 2}); i += 1; end; s }
+t("v_two_pos", N) { |n| i = 0; s = 0; while i < n; s += kr.v_two(i, 2); i += 1; end; s }
