@@ -1488,6 +1488,58 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitstr (2026-11-26) - `s + "lit"` and `s << "lit"` in a body the method JIT compiles** -
+  census only, not gated. Behind the String literal line (101 alone) are call arguments (44, gap 1's
+  wall, perf/strlit's rejected first build) and operands of String operators: `+` 12 (about 15 with
+  mixed forms), `<<` 11 (16 with `*` or `%` beside it), `"fmt" % x` 8, `"-" * n` 5, comparisons
+  a few (`s == "lit"` is perf/t3's intrinsic already). Taken: `+` and `<<` with a String literal
+  argument. Not `%` (format runs `to_s`/`inspect`: Ruby code from the typed body) nor `*` (left for
+  a step of its own). Different from round fifteen's String `==` and `String#[]` (perf/core2,
+  0.92 and 0.91 on their shapes, nothing hot compiled): judged by the methods that then compile,
+  and the screen takes the operator only where it lets a method through; and from the rejected
+  "`x == "lit"` without allocating" (code outside the JIT, bytes only): this is the typed body.
+  `EmitStringLiteralConcat`: for a receiver whose CLR type is exactly `MutableString` (a subclass
+  instance is another type) and whose encoding the literal's can join, the library's own code -
+  `MutableString.Concat` for `+`, `Append` for `<<` (`JitRuntime.StringConcatLiteral`,
+  `StringAppendLiteral`), the literal one frozen copy that neither keeps nor changes. Compiled only
+  while `String#+`/`#<<` are the public library methods with no String carrying a singleton method
+  of the name (`IsPlainLibraryMethod`, as `s == "lit"`; a redefinition moves the method version the
+  entry checks) and no refinement active where the method was written. Anything else deopts before
+  anything is done: nil, an Integer, an Array, a subclass, incompatible encodings (UTF-16LE), and for
+  `<<` a frozen receiver (FrozenError from the generic body's frame) or a chilled one (the
+  deprecation warning, and the String unchilled, by the generic body). `<<` is an effect, after its
+  own deopt and not one on self only (`_effectNotOnSelf`), so a deopt after it declines as usual; not
+  in an outlined loop. The screen refuses either as an operand of a binary operator (a String, so
+  the operator could only deopt): the first build let `URI::Generic#userinfo` (`@user + ':' +
+  @password`) through, and app-shapes' trace declined it after the pre-screen (30 -> 31); with that
+  refused the trace is the baseline's.
+  JIT compiles 3,376 -> 3,384, maybe 2,989 -> 2,997, never 22,011 -> 21,995, light frames unchanged
+  (Src/StdLib + AWFY, 28,376 methods; 16 methods moved up - 8 to `compiles`, 8 to `maybe` - none
+  down). Moved: `Net::HTTP#debug` (two copies), RDoc's `accept_rule`, `accept_blank_line` and
+  `accept_list_end`, `REXML::Declaration#to_s`, `REXML::Text#xpath`, `IPAddr#reverse`,
+  `#ip6_arpa`, `#ip6_int`, Thor's `file_collision_help`, `Bundler::UI::RGProxy#say`; none of AWFY
+  (Json's are call arguments) or the prelude. Real code barely has it: of the methods app-shapes
+  calls, the String literal is the only refusal in none.
+  Traces: app-shapes 117 specialized and 30 declined after the pre-screen on both builds; AWFY
+  Json, Richards, DeltaBlue, CD and Havlak (3 x 10) the same on both; `census.rb -c` 290 agree, 0
+  differ, and app-shapes' known 15.
+  Instructions a call (`Util/perf/callgrind/count.sh`, `Util/bench/jit-strop-shapes.rb`, new):
+  `s + ":"` 3308 -> 3048 (0.92), `s + ":" + "x"` 4669 -> 3979 (0.85), `buf << "x"` 3910 -> 3116
+  (0.80), `@user + ":"` 3462 -> 3137 (0.91), the control `s == "lit"` 1244 -> 1244. The
+  concatenation itself is most of the cost; the typed body saves the literal's allocation and the
+  dispatch.
+  Checked: `Util/jit-strop-matrix.rb` (new, 31 rows: new and unfrozen results, a frozen receiver of
+  `+`, UTF-8, BINARY and US-ASCII receivers, UTF-16LE, nil, Integer and Array receivers, a subclass
+  with and without its own `+`, a singleton `+`, `<<` on frozen, chilled (with the deprecation
+  warning counted), UTF-16LE and BINARY receivers, an effect then a deopt, `<<` then an ivar write
+  on a frozen self, a refinement, `String#+` and `#<<` redefined and restored), and jit,
+  jit-calls, jit-strlit, jit-scan, jit-interp, jit-const: CRuby's output and the unchanged build's
+  with the JIT on, `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`, and the unchanged build's with
+  `IR_LIGHT_FRAMES=0`; hot-shapes and inline-matrix (one case per process) the unchanged build's in
+  every mode, with their known one-row differences from CRuby.
+  For the gate: no IronRuby.Tests or spec run. A String given a singleton `+` anywhere makes every
+  later compile of `+` bail for the life of the process (`HasPlainInstances`, as for `==`).
+
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
   perf/jitbody's census fix): the branch `claude/happy-gauss-95wm2j` at 2f8c31c against master

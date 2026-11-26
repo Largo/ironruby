@@ -444,6 +444,32 @@ namespace IronRuby.Runtime.Jit {
         /// the generic code would have made. Any other receiver deopts, and the generic code makes
         /// the call with a fresh literal.
         /// </summary>
+        /// <summary>
+        /// `s + "lit"' (JitCompiler.EmitStringLiteralConcat): String#+ of the library, MutableString.Concat, for an s that is a
+        /// String (not a subclass) whose encoding the literal's can join. Anything else deopts, before anything is done: the
+        /// generic body dispatches, converts or raises the Encoding::CompatibilityError from its own frame.
+        /// </summary>
+        public static object StringConcatLiteral(object value, MutableString/*!*/ literal) {
+            if (value != null && value.GetType() == typeof(MutableString)) {
+                var str = (MutableString)value;
+                if (str.GetCompatibleEncoding(literal) != null) { return str.Concat(literal); }
+            }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// `s << "lit"' (JitCompiler.EmitStringLiteralConcat): String#&lt;&lt; of the library, MutableString.Append, for an s
+        /// that is a String (not a subclass), neither frozen (FrozenError) nor chilled (the deprecation warning, and the
+        /// String no longer chilled), whose encoding the literal's can join. Anything else deopts before it changes s.
+        /// </summary>
+        public static object StringAppendLiteral(object value, MutableString/*!*/ literal) {
+            if (value != null && value.GetType() == typeof(MutableString)) {
+                var str = (MutableString)value;
+                if (!str.IsFrozen && !str.IsChilled && str.GetCompatibleEncoding(literal) != null) { return str.Append(literal); }
+            }
+            throw Deopt();
+        }
+
         public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal, string ascii) {
             if (value != null && value.GetType() == typeof(MutableString)) {
                 var str = (MutableString)value;
