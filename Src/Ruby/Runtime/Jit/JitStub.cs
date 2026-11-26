@@ -1101,9 +1101,17 @@ namespace IronRuby.Runtime.Jit {
                 if ((_countsSeen & (1 << k)) == 0) { continue; }
                 var code = Named(JitCompiler.TryCompile(_ast, _context, ProfiledTypes(_perCountMandatory + k), null, refinements, k, _declaringScope, Hints(),
                     bind, epoch), epoch, version, constantVersion);
-                if (code == null) { continue; }
+                if (code == null) {
+                    // IR_JIT_VERBOSE=1: why, as TrySpecialize records it (the last count's, if none compiles)
+                    _declineReason = JitCompiler.LastDecline ?? "the compiler bailed out (see the `rejected' line)";
+                    continue;
+                }
                 if (code.EmittedSelfCall) {
-                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) { continue; }
+                    if (_receiverClass == null || _polymorphicReceiver || !SelfCallResolvesHere(_receiverClass, refinements)) {
+                        _declineReason = (_receiverClass == null || _polymorphicReceiver) ? "a class guard on a receiver of several classes"
+                            : "the self-call resolves elsewhere";
+                        continue;
+                    }
                     pinned = true;
                 }
                 if (code.DirectCalls) { pinned = true; }
