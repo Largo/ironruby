@@ -8810,5 +8810,32 @@ NoMethodError
 [(2/1), (3/4)]
 ");
         }
+
+        /// <summary>
+        /// Kernel#Integer: a string of only whitespace and a sign is "invalid value" before the radix is looked at (rb_int_parse_cstr),
+        /// and the message quotes the string with rb_inspect, which escapes non-ASCII for a US-ASCII default external. Util/numeric-conversion-matrix.rb.
+        /// </summary>
+        public void Kernel_IntegerSignOnlyAndInspect1() {
+            TestOutput(@"
+require 'ruby4'
+v, $VERBOSE = $VERBOSE, nil; Encoding.default_external = Encoding::US_ASCII; $VERBOSE = v
+[-> { Integer(""-"", 1) }, -> { Integer(""+"", 37) }, -> { Integer("" - "", 2) }, -> { Integer(""1"", 1) }, -> { Integer("""", 1) },
+ -> { Integer("" "", 37) }, -> { Integer("" 1"") }, -> { Integer(""1 "", 16) }, -> { Integer(""é1"") }, -> { Integer(""1\xff"".b) },
+ -> { Integer(""-"", exception: false) }, -> { Integer(""+-1"") }].each { |l| p((l.call rescue $!)) }
+", @"
+#<ArgumentError: invalid value for Integer(): ""-"">
+#<ArgumentError: invalid value for Integer(): ""+"">
+#<ArgumentError: invalid value for Integer(): "" - "">
+#<ArgumentError: invalid radix 1>
+#<ArgumentError: invalid radix 1>
+#<ArgumentError: invalid value for Integer(): "" "">
+#<ArgumentError: invalid value for Integer(): ""\u00A01"">
+#<ArgumentError: invalid value for Integer(): ""1\u00A0"">
+#<ArgumentError: invalid value for Integer(): ""\u00E91"">
+#<ArgumentError: invalid value for Integer(): ""1\xFF"">
+nil
+#<ArgumentError: invalid value for Integer(): ""+-1"">
+");
+        }
     }
 }
