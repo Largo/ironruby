@@ -1500,6 +1500,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `module`) - the screen perf/evalc lacked. `erb_result` 0.31-0.33 of its time, `eval_small`
     0.40. Left: the binding's locals read by name (about 300 `GetLocalVariable` per render,
     each under a lock), and an eval of a text the screen refuses costs what it did.
+    perf/evallocals (Landed): a read or write of such a local remembers where the name resolved
+    (`LocalVariableSite`); a render 0.86-0.88 of its instructions, a loop of eval'd reads 0.37.
+    Left: the first access of each site per render (a fresh binding defines `_erbout`, which
+    invalidates every site), and the cost of the eval itself.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1640,6 +1644,53 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     frames (perf with jitdump, where perf_event_open is allowed) is the next tool.
 
 ## Landed
+
+- **perf/evallocals (/perf-step, 2026-11-27, on b887bc1 + perf/lexical a87b5dc) - a site of
+  eval'd code remembers where a local it knows by name resolved (`IR_EVAL_LOCAL_CACHE`, gap
+  31)** - instructions only, not gated. Eval'd code reads a local the text does not declare
+  (the binding's, or one an earlier eval defined - an eval's own top-level locals are such,
+  ERB's `_erbout` among them) through `RubyOps.GetLocalVariable(scope, name)`: a walk up the
+  scopes, at each a string lookup in its static mapping and, where an eval or Binding defined
+  locals, a lookup in that dictionary under a lock. Measured first: about 700 instructions a
+  read (`eval_reads_v`, an eval'd loop reading `v` from the binding, 1,646 a turn against 941
+  with only static locals), about 540 an access where every local is dynamic (`eval_reads`).
+  - The change: `DynamicLocals` holds a cell (`StrongBox<object>`) per local, kept for the
+    scope's life; `GetLocalVariableAtSite` / `SetLocalVariableAtSite` take a
+    `LocalVariableSite` (a constant of the compiled code, shared by every eval of the text and
+    so by every binding and thread) that remembers one immutable resolution - the slot of the
+    declaring scope's locals or the cell - and reuses it while (1) no scope of the runtime has
+    gained a dynamic local or dropped its dynamic locals since (`RubyContext.
+    LocalVariableSitesVersion`, bumped by `DefineDynamicVariable` for a new name and by
+    `ResetForReuse`), and (2) the scope is the same, or reaches the same holder through scopes
+    with the same locals table at each step (the next run of the same block; a scope's static
+    locals are its body's compiled table and its parent never changes). Otherwise it resolves
+    again; a name that does not resolve is looked up by name as before. A resolution keyed on
+    the scope alone made ERB 1.034-1.037 *slower*: `items.each` runs each iteration in a new
+    block scope, so every read missed and paid the lookup and an allocation; the chain check
+    fixed that.
+  - Instructions a unit (`Util/perf/callgrind/count.sh`, `ab.rb -i -r 1 -n 1000
+    Util/bench/erb-shapes.rb`; unchanged build / switch off / on): `erb_eval_top` 1,446,873 /
+    1,453,260 / 1,255,820 (0.864), `erb_full` (`result_with_hash`) 1,532,485 / 1,532,762 /
+    1,347,053 (0.879), `eval_reads_v` 1,636,785 / 1,652,003 / 1,025,414 (0.621),
+    `eval_reads` 4,145,087 / 3,839,458 / 1,406,918 (0.366); the controls `eval_small` 1.000 and
+    `eval_reads_static` 1.002. Timed (`ab.rb -r 3`): every row overlapped (spreads 39-95% on
+    the shared machine), so the clock said nothing either way.
+  - `Util/eval-locals-matrix.rb` (new: an eval defining a local the next eval reads, one that
+    does not assign, local_variable_set before and after reads, writes, a loop, a block in the
+    text, several evals on one binding, a new local between two reads, one text on alternating
+    and kept bindings, a name that is the method's in one binding and an eval's in another, a
+    block parameter shadowing the method's, a block's own local, a binding of a light frame,
+    Binding#dup, TOPLEVEL_BINDING.dup, instance_eval, a missing name, a local another thread
+    defined, four threads on one binding, ERB#result_with_hash and #result) prints CRuby 4.0's
+    output on the unchanged build, and on the change by default, with `IR_EVAL_LOCAL_CACHE=0`,
+    `IR_LIGHT_FRAMES=0`, `IR_LIGHT_ENTRY=0`, `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`.
+    erb-escape, lexical-light, global-light and block-scope-reuse print CRuby's output and
+    light-entry and hot-shapes the unchanged build's in all six modes. ruby/spec
+    `core/binding` 98 examples 0 failures, `core/kernel/eval_spec.rb` 57 / 0, `library/erb`
+    53 / 0, the same on both builds. IronRuby.Tests `Eval_LocalVariableSites1` (new; passes
+    with the switch off too) and 31 named eval, binding and block tests pass.
+    `ReflectionCache.Generated.cs` from ClassInitGenerator, identical to the entries written
+    by hand. Not run: R2R.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
