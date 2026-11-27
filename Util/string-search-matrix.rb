@@ -148,3 +148,58 @@ SW_RECEIVERS.each do |rname, base|
     try("#{rname}/#{kname}.start_with?(nil)") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?(nil)), b, $~] }
   end
 end
+
+puts "== StringScanner (round three: a UTF-8 subject is mapped between bytes and characters incrementally)"
+require 'strscan'
+def ss_state(ss)
+  [ss.pos, (ss.charpos rescue $!.class), ss.matched, ss.pre_match, ss.post_match, ss[0], (ss[1] rescue $!.class),
+   ss.matched_size, ss.eos?, ss.bol?, ss.rest_size, ss.rest, ss.peek(3)].inspect
+end
+SS_SUBJECTS = {
+  ascii: "hello world, 12 + 34\nnext line",
+  utf8: "héllo wörld, 日本 + 34\nnäxt line",
+  astral: "a😀b 𝒳c, 😀\n𠀀 end",
+  broken: "ab\xE9c d\xFFe, f".dup.force_encoding("UTF-8"),
+  binary: "ab\xE9c d\xFFe, f".b,
+  eucjp: "\xA4\xA2a b\xA4\xA4, c".dup.force_encoding("EUC-JP"),
+}
+SS_OPS = [
+  ["scan(/\\S+/)", ->(ss) { ss.scan(/\S+/) }], ["skip(/\\s+/)", ->(ss) { ss.skip(/\s+/) }],
+  ["scan(/(\\w)(\\w)/)", ->(ss) { ss.scan(/(\w)(\w)/) }], ["scan_until(/,/)", ->(ss) { ss.scan_until(/,/) }],
+  ["skip_until(/\\n/)", ->(ss) { ss.skip_until(/\n/) }], ["check(/./)", ->(ss) { ss.check(/./) }],
+  ["match?(/\\w+/)", ->(ss) { ss.match?(/\w+/) }], ["exist?(/ /)", ->(ss) { ss.exist?(/ /) }],
+  ["getch", ->(ss) { ss.getch }], ["get_byte", ->(ss) { ss.get_byte }], ["peek_byte", ->(ss) { ss.peek_byte }],
+  ["skip(' ')", ->(ss) { ss.skip(" ") }], ["scan('h')", ->(ss) { ss.scan("h") }], ["scan('é')", ->(ss) { ss.scan("é") }],
+  ["scan(/\\A./)", ->(ss) { ss.scan(/\A./) }], ["scan(/^n/)", ->(ss) { ss.scan(/^n/) }], ["unscan", ->(ss) { ss.unscan }],
+  ["search_full(/d/,1,1)", ->(ss) { ss.search_full(/d/, true, true) }], ["scan_full(/./,0,1)", ->(ss) { ss.scan_full(/./, false, true) }],
+]
+SS_SUBJECTS.each do |sname, subject|
+  SS_OPS.each do |oname, op|
+    # every op from every starting byte position, after a first op, then a second
+    (0..subject.bytesize).each do |start|
+      try("ss[#{sname}] pos=#{start} #{oname}") do
+        ss = StringScanner.new(subject.dup)
+        ss.pos = start
+        r = op.(ss)
+        [[r, ss_state(ss)].inspect, nil, nil]
+      end
+    end
+  end
+  try("ss[#{sname}] words") do
+    ss = StringScanner.new(subject.dup); out = []
+    until ss.eos?; ss.skip(/\s+/); out << [ss.scan(/\S+/), ss.pos, ss.charpos, ss.pre_match&.size]; break if out.size > 50; end
+    [out.inspect, nil, nil]
+  end
+  try("ss[#{sname}] concat midway") do
+    s = subject.dup; ss = StringScanner.new(s); a = ss.scan(/\S+/); s << " ñu"; ss << " 😀"; b = ss.scan_until(/ñ/)
+    c = ss.rest; ss.string = "nüevo"; d = ss.scan(/\S/)
+    [[a, b, c, d, ss_state(ss)].inspect, nil, nil]
+  end
+  try("ss[#{sname}] fixed_anchor") do
+    ss = StringScanner.new(subject.dup, fixed_anchor: true); r = [ss.scan(/\S+/), ss.skip(/\s/), ss.scan(/\A./), ss.scan(/./), ss_state(ss)]
+    [r.inspect, nil, nil]
+  end
+  try("ss[#{sname}] terminate/reset") do
+    ss = StringScanner.new(subject.dup); ss.scan(/\S+/); ss.terminate; t = ss_state(ss); ss.reset; [[t, ss_state(ss)].inspect, nil, nil]
+  end
+end

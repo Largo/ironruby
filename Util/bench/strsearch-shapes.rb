@@ -33,6 +33,9 @@ RE = /[<>"]/
 RE3 = /q"z/
 RE_INT = /\A[+-]?\d+/
 SHORT = "12345 rest"
+require 'strscan'
+SS_U = ("héllo wörld, " * 800)[0, 10000]
+SS_A = ("hello world, " * 800)[0, 10000]
 
 class H
   def initialize
@@ -168,6 +171,10 @@ class H
   def short_idx = (@short.index(" ") || -1)
   def size = @other.size
   def eq = (@other == @short ? 1 : 0)
+  # StringScanner over 10 KB, one call a whole pass (round three: the UTF-8 subject was quadratic)
+  def ss_words_u = (ss = StringScanner.new(SS_U); n = 0; until ss.eos?; ss.skip(/\s+/); n += 1 if ss.scan(/\S+/); end; n + ss.charpos)
+  def ss_until_u = (ss = StringScanner.new(SS_U); n = 0; while ss.scan_until(/,/); n += ss.matched_size; end; n)
+  def ss_words_a = (ss = StringScanner.new(SS_A); n = 0; until ss.eos?; ss.skip(/\s+/); n += 1 if ss.scan(/\S+/); end; n + ss.charpos)
 end
 
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
@@ -193,6 +200,8 @@ SHORTN = LONG * 10
 # CRuby takes 9 to 60 us for a character class over the whole of a 10 KB String, IronRuby under one:
 # the count is the long one so that IronRuby's sections are long enough to time.
 REGEX = LONG
+# a StringScanner pass over 10 KB takes 0.2 to 2 ms
+SCAN = [LONG / 2000, 1].max
 
 t("idx1_a_e", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.idx1_a_e; i += 1; end; s }
 t("idx3_a_e", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.idx3_a_e; i += 1; end; s }
@@ -314,3 +323,6 @@ t("int_tilde", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.int_tilde; i += 1
 t("short_idx", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.short_idx; i += 1; end; s }
 t("size", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.size; i += 1; end; s }
 t("eq", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.eq; i += 1; end; s }
+t("ss_words_u", SCAN) { |n| i = 0; s = 0; while i < n; s += h.ss_words_u; i += 1; end; s }
+t("ss_until_u", SCAN) { |n| i = 0; s = 0; while i < n; s += h.ss_until_u; i += 1; end; s }
+t("ss_words_a", SCAN) { |n| i = 0; s = 0; while i < n; s += h.ss_words_a; i += 1; end; s }
