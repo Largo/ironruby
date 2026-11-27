@@ -983,6 +983,34 @@ nil
         }
 
         /// <summary>
+        /// From a scan pointer inside a character, '.' (and \A., (?m:.)) matches a byte of the split character
+        /// as a character of its own, as Onigmo does: such a byte reaches .NET as a lone U+DC00-U+DCFF.
+        /// </summary>
+        public void StringScanner_DotOnSplitByte1() {
+            TestOutput(@"
+require 'ruby4'
+require 'strscan'
+def at(s, pos) = StringScanner.new(s).tap { |x| x.pos = pos }
+p at(""h\u00e9llo"", 2).check(/./), at(""h\u00e9llo"", 2).scan(/\A./), at(""h\u00e9llo"", 2).scan_full(/./, false, true)
+p at(""a\u{1F600}b"", 2).scan(/./), at(""a\u{1F600}b"", 3).scan(/(?m:.)/), at(""a\u{1F600}b"", 4).scan(/./)
+e = at(""\xA4\xA2a"".dup.force_encoding(""EUC-JP""), 1)
+p e.check(/./), e.scan(/\A.a/)
+p at(""h\u00e9llo"", 2).scan(/.l/), at(""h\u00e9llo"", 2).scan(/..+/)
+", @"
+""\xA9""
+""\xA9""
+""\xA9""
+""\x9F""
+""\x98""
+""\x80""
+""\xA2""
+""\xA2a""
+""\xA9l""
+""\xA9llo""
+");
+        }
+
+        /// <summary>
         /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
         /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
         /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET

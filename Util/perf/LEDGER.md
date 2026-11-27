@@ -3052,6 +3052,19 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   character, its answers over a shortened subject, and an error for an incompatible String pattern;
   Kernel#binding through Method#call/bind_call/to_proc raises; RubyRegex.MatchWindow has an
   allowBroken overload.
+  Fifth round (2026-11-27, on 374584c): string-search's last 63 lines. '.' (\A., (?m:.)) on a byte of a
+  split character: such a byte reaches .NET as a lone U+DC00-U+DCFF, which the astral-safe '.' excluded;
+  StringScanner's allowBroken path, the only one that matches a broken subject, now has a translation of its
+  own in which '.' takes it. string-search -> same. StringScanner_DotOnSplitByte1. Left: \S and [^x] on such
+  a byte (CRuby matches; not in the matrix). For the gate: only StringScanner matches from inside a
+  character change.
+  Not taken this round, the other candidate: a call on a later line of a multi-line statement reports the
+  statement's line. The line is a SourceLineMarker per statement (AstGenerator.AddDebugInfo): free in the
+  interpreter, which maps instructions to sequence points, but a store into the compiled frame's record
+  (PrecompiledFrames) in compiled code, and the method JIT and light frames keep lines their own way. Carrying
+  a call's own line means a marker before each call whose line differs from the last one emitted on that path
+  (and after it, for a later call back on the statement's line): free in the interpreter, a store per such
+  call in compiled code, and support in the JIT's and light frames' line records - multi-line statements only.
 - **perf/json (2026-11-27) - `case` over String literals looks its subject up once while String#===
   is the library's (gap 7)** - not gated. Commit 0a78877 on `claude/perf-strsearch`, based on
   claude/happy-gauss-95wm2j 15285eb with 0518f08 merged in. Measured first: a perf profile of AWFY
