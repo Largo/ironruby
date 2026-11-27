@@ -1771,6 +1771,18 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     perf/strswitch (see Landed) took cause 2: no write is lost to a reader's switch and no
     writer fails on one (21 and 25 rows of 252 on master, 0 and 0 now, 20 runs). Causes 1 and 3
     remain: 89 rows of readers that answer wrongly or raise.
+    What closing them takes (2026-11-27, analysis, not tried): holding the content inside each
+    content call stops a single call's torn read (the IndexOutOfRange and RangeError rows) for a
+    compare-exchange per call, about +1-2% instructions and +5-8% time on a short operation (the
+    cost perf/strcow measured for a held slice), but not the wrong answers: most String methods make
+    several content calls - end_with? reads the byte count, then compares the tail - and a writer
+    runs between them, so the answer mixes two states. Matching CRuby needs each whole String method
+    atomic: a lock per string (a Monitor on the MutableString, no new field) around every String
+    library method, in the call and dispatch layer and in the method JIT's inlined String
+    operations, with methods that take a block left out (CRuby lets other threads run between
+    yields too, and holding a lock across user code can deadlock). Estimated 10-20 ns a call,
+    +15-40% on a short String operation - not measured. Two-string operations take both locks in a
+    fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
 
@@ -1823,6 +1835,32 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   477 -> 467, `gem --version` 532 -> 547 and 552 -> 551, `gem list` 935 -> 921 and 950 -> 955,
   `require "irb"` 953 -> 958 and 974 -> 932, irb 1+1 1063 -> 1037 and 1091 -> 1047: round 4's `-e 1`
   loss is won back (perf/startup3 and 4).
+- **perf/sieve (2026-11-27, not gated) - a block-local first assigned inside an `if` branch or a
+  `while` body no longer keeps the block from being outlined** (switch `IR_BLOCK_LOOP_SCOPED`). AWFY
+  Sieve allocated 100.3 MB per iteration (alloc.rb). Bytes per `sieve` call, by variants: the
+  `while` loops alone 1 KB beyond the 40 KB flags Array; `(2..size).each` with the real block 296 KB,
+  with an empty block 98 KB (a boxed Integer per yield above the 1,023 cache), with only
+  `flags[i - 1]` in it 2.7 KB - that one is run in place (BlockLoopSite). Sieve's is not: the
+  block-loop screen admits a block-local only if a statement of the body itself first assigns it,
+  and `k = i + i` sits under `if flags[i - 1]`, so all 4,999 iterations were yields, each boxing `i`
+  and entering the OSR copy of the inner `while` with boxed locals. The screen now walks the
+  statement lists of `if`/`elsif`/`else` branches and `while` bodies as it walks the body
+  (`Screen.WalkScoped`): a local first mentioned by a statement of such a list that assigns it is
+  admitted for the rest of that list and refused anywhere after it, where the block would see nil
+  on an iteration that skipped the list while a loop slot would keep an earlier value. Sieve 100.3
+  -> 12.1 MB per iteration (the 300 flags Arrays are what is left); the other thirteen as before
+  (DeltaBlue, Richards and Towers moved by up to 7% between runs of the same build). AWFY, 10
+  alternating rounds of 8 s, medians: Sieve 136,442 -> 63,559 us (0.466), Permute 0.955, Bounce
+  1.009, Queens 1.029, all three within each other's ranges, and their OSR traces are the same on
+  both builds. `Util/block-loop-matrix.rb` gains a section (Sieve hot and with upto; a read after
+  the `if`; then and else; elsif; a do-while; a read after a `while`; a read before the assignment;
+  a Float deopt and an Integer leaving Int32 after it; binding; map, select, times; next; break; a
+  nested block): CRuby's output on both builds. Those the screen now admits but the loop compiler
+  cannot take (Float or overflowing arithmetic, binding, map's value) cost one attempt, 0.2-0.4 ms,
+  and are retired. Checks: block-loop, osr-array, array2, array-step, ivar, hot-shapes, jit,
+  jit-calls, strcow and dup matrices in every mode and switched off: PASS (array2 and block-loop's
+  R2R row as the base); spec/core/array 2,898 examples, the one known error on both. Base 9c4f953
+  (4320d4a with 8c31db5); the base needed DLR patches 0111 and 0112 applied by hand.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
