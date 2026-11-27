@@ -1193,6 +1193,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     callee that yields the conversion and the yield (`ny { 1 }` 164 against CRuby's 54). No step
     of the frame's bookkeeping is left to cut; what would take it is a block that is not a heap
     Proc over a heap scope until it escapes, a calling convention of its own.
+    perf/bcc (design only) wrote that convention down: `Docs/block-calling-convention.md`. The
+    cost model per call (`ny { 1 }` 160 ns against CRuby's 50, `a.each { |x| }` 142 against 73;
+    48 bytes with parking, 336 without, the time the same; a block passed on is never parked,
+    358 bytes; a conversion is already faster than CRuby's, 172 against 239), the nine steps
+    IronRuby takes against CRuby's captured block on the caller's frame, a block descriptor
+    (self, dispatcher, the frame's tuple and header, the Proc made only on escape) and every
+    way it escapes, and stages: 0, attribution of the ~100 ns among the nine steps on a host
+    with perf, which decides the rest; A, `[BlockNotKept]` library iterators with narrow
+    literals; B, Ruby methods that only yield; C, pass-on; D, literals that read the frame's
+    locals - each with its matrix and an upper bound.
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
