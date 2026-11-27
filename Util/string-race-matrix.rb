@@ -12,7 +12,8 @@
 #
 # A row is "<reader> / <writer>: ok", "wrong" (an answer of no state), "raises <Class>" or, when the
 # writer itself failed (a reader that changes how the string is held can do that to it), "writer
-# raises <Class>". A reader with a block (each_char, each_byte) lets the writer run between yields in
+# raises <Class>", or, when the string the writer leaves is not the state it began from (each flip
+# ends where it began), "lost write". A reader with a block (each_char, each_byte) lets the writer run between yields in
 # CRuby too, so only its exceptions count. Run it
 # many times (the races are rare): a single run proves little. READS sets the reads per row.
 # -*- frozen_string_literal: false -*-
@@ -112,7 +113,10 @@ READERS.each do |rname, reader|
     end
     stop = true
     failed = writer.value
+    # each flip ends where it began: a write that a reader undid leaves something else
+    lost = !failed && !(s.encoding == states[0].encoding && s.b == states[0].b)
     result = if failed then "writer raises #{failed}"
+             elsif lost then "lost write"
              elsif !raised.empty? then "raises #{raised.uniq.map(&:to_s).sort.join(', ')}"
              elsif wrong > 0 then "wrong"
              else "ok" end

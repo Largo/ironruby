@@ -167,6 +167,32 @@ namespace IronRuby.Builtins {
             _flags |= CharIndexChangedFlags;
         }
 
+        /// <summary>
+        /// Publishes <paramref name="to"/>, another representation of <paramref name="from"/> (Content.WrapContent), only if
+        /// <paramref name="from"/> is still this string's content. There is no GVL: a reader on another thread switches a
+        /// string between characters and bytes (getbyte, bytes, index...), and setting the converted content unconditionally
+        /// put back what the string held before a write that a writer made meanwhile - the write was lost, or its bytes were
+        /// decoded in an encoding the writer had already changed (Util/string-race-matrix.rb). The conversion is made holding
+        /// <paramref name="from"/> (a mutable content), and a writer that then holds it finds it is no longer current and
+        /// writes to the current content instead (IsCurrentContent). IR_SAFE_SWITCH=0: published unconditionally, as before.
+        /// </summary>
+        internal void PublishSwitch(Content/*!*/ from, Content/*!*/ to) {
+            if (!SafeSwitch) {
+                SetContent(to);
+                return;
+            }
+            if (ReferenceEquals(System.Threading.Interlocked.CompareExchange(ref _rawContent, to, from), from)) {
+                _flags |= CharIndexChangedFlags;
+            }
+        }
+
+        internal static readonly bool SafeSwitch = Environment.GetEnvironmentVariable("IR_SAFE_SWITCH") != "0";
+
+        /// <summary>Whether a content held for a write is still this string's (see PublishSwitch).</summary>
+        internal bool IsCurrentContent(Content/*!*/ content) {
+            return !SafeSwitch || ReferenceEquals(System.Threading.Volatile.Read(ref _rawContent), content);
+        }
+
         private void SetEncoding(RubyEncoding/*!*/ encoding) {
             uint flags = _flags;
 
@@ -944,28 +970,43 @@ namespace IronRuby.Builtins {
                 return;
             }
 
-            if (IsBinary) {
-                SetEncoding(newEncoding);
-                return;
+            // The bytes and the encoding change together: a reader on another thread that switches the string back to
+            // characters between the switch to bytes and the new encoding would decode them in the old one and leave
+            // characters under the new (MutableString.PublishSwitch). So the encoding is set holding the content, if it
+            // is still the string's and still the bytes, or the switch is made again.
+            while (true) {
+                if (IsBinary) {
+                    if (_content.TrySetOwnerEncoding(newEncoding, true)) {
+                        return;
+                    }
+                    continue;
+                }
+
+                // If the representation is character based and includes non-ascii chcaracters then we need 
+                // to switch to binary repr before we change the encoding so that the binary repr of the string is preserved.
+
+                // this caches hash-code, which we need to invalidate due to encoding change:
+                bool isAscii = IsAscii();
+                Mutate();
+
+                // An all-ASCII character representation only keeps its bytes if both the old and the
+                // new encoding encode ASCII as itself. "ab" in UTF-16LE is 4 bytes, so forcing a
+                // character-based "ab" to UTF-16LE without switching to bytes first would invent two
+                // NUL bytes (and forcing a UTF-16LE string to UTF-8 would drop them).
+                if (isAscii && _encoding.IsAsciiIdentity && newEncoding.IsAsciiIdentity) {
+                    // ASCII characters convert to the same bytes in both encodings
+                    SetEncoding(newEncoding);
+                    return;
+                }
+                if (SwitchToBytes()._content.TrySetOwnerEncoding(newEncoding, true)) {
+                    return;
+                }
             }
+        }
 
-            // If the representation is character based and includes non-ascii chcaracters then we need 
-            // to switch to binary repr before we change the encoding so that the binary repr of the string is preserved.
-
-            // this caches hash-code, which we need to invalidate due to encoding change:
-            bool isAscii = IsAscii();
-            Mutate();
-
-            // An all-ASCII character representation only keeps its bytes if both the old and the
-            // new encoding encode ASCII as itself. "ab" in UTF-16LE is 4 bytes, so forcing a
-            // character-based "ab" to UTF-16LE without switching to bytes first would invent two
-            // NUL bytes (and forcing a UTF-16LE string to UTF-8 would drop them).
-            if (isAscii && _encoding.IsAsciiIdentity && newEncoding.IsAsciiIdentity) {
-                SetEncoding(newEncoding);
-            } else {
-                SwitchToBytes();
-                SetEncoding(newEncoding);
-            }
+        // For Content.TrySetOwnerEncoding, which holds the content.
+        internal void SetEncodingHeld(RubyEncoding/*!*/ encoding) {
+            SetEncoding(encoding);
         }
 
         /// <summary>
@@ -987,7 +1028,7 @@ namespace IronRuby.Builtins {
                 // (a long ASCII sum, say) goes over to characters for UTF-16 and UTF-32, whose bytes
                 // are then made from them, as for a string held as characters.
                 if (IsBinary && !toEncoding.AsciiRoundTrips) {
-                    _content = _content.SwitchToStringContent();
+                    _content.SwitchToStringContent(); // published by the switch, if this string still holds what it switched from (PublishSwitch)
                 }
                 SetEncoding(toEncoding);
                 return;
@@ -1002,7 +1043,7 @@ namespace IronRuby.Builtins {
                 switchToChars = true;
             } else if (fromEncoding != _encoding) {
                 try {
-                    _content = _content.SwitchToBinaryContent();
+                    _content.SwitchToBinaryContent(); // published by the switch, if this string still holds what it switched from (PublishSwitch)
                 } catch (EncoderFallbackException e) {
                     throw RubyExceptions.CreateInvalidByteSequenceError(e, _encoding);
                 }
@@ -1014,7 +1055,7 @@ namespace IronRuby.Builtins {
 
             if (switchToChars) {
                 try {
-                    _content = _content.SwitchToStringContent();
+                    _content.SwitchToStringContent(); // published by the switch, if this string still holds what it switched from (PublishSwitch)
                 } catch (DecoderFallbackException e) {
                     throw RubyExceptions.CreateInvalidByteSequenceError(e, fromEncoding);
                 }
@@ -1345,7 +1386,7 @@ namespace IronRuby.Builtins {
         /// </exception>
         public MutableString/*!*/ SwitchToBytes() {
             try {
-                _content = _content.SwitchToBinaryContent();
+                _content.SwitchToBinaryContent(); // published by the switch, if this string still holds what it switched from (PublishSwitch)
             } catch (EncoderFallbackException e) {
                 throw RubyExceptions.CreateInvalidByteSequenceError(e, _encoding);
             }
@@ -1361,7 +1402,7 @@ namespace IronRuby.Builtins {
         /// </exception>
         public MutableString/*!*/ SwitchToCharacters() {
             try {
-                _content = _content.SwitchToStringContent();
+                _content.SwitchToStringContent(); // published by the switch, if this string still holds what it switched from (PublishSwitch)
             } catch (DecoderFallbackException e) {
                 throw RubyExceptions.CreateInvalidByteSequenceError(e, _encoding);
             }

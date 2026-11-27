@@ -1763,8 +1763,37 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `_rawContent`), every writer re-checking after it holds that its content is still current; and
     the encoding kept with the content (or read under the same hold). A decision about what
     IronRuby promises, as gap 20 is, before an experiment.
+    perf/strswitch (see Landed) took cause 2: no write is lost to a reader's switch and no
+    writer fails on one (21 and 25 rows of 252 on master, 0 and 0 now, 20 runs). Causes 1 and 3
+    remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/strswitch (2026-11-27, not gated) - a String's representation switch cannot lose a write**
+  (gap 39's cause 2; switch `IR_SAFE_SWITCH`). A switch between characters and bytes (a reader's
+  getbyte, bytes, index, unpack... or a writer's) now converts holding the content it switches
+  from and publishes the new one only by compare-exchange on `_rawContent` against it
+  (`MutableString.PublishSwitch`, from `Content.WrapContent`); the callers that stored the result
+  unconditionally (`SwitchToBytes`, `SwitchToCharacters`, `Transcode`) no longer do. Every write to
+  a char or byte content checks, once it holds it, that it is still the string's
+  (`EnterCurrentWrite`, `IsCurrent`) and otherwise makes the write on the current content.
+  `ForceEncoding` sets the encoding holding the byte content it switched to, if still current and
+  still bytes, or switches again (`Content.TrySetOwnerEncoding`). `Util/string-race-matrix.rb` now
+  also reports a lost write (the string a writer leaves is not the state its flips began from).
+  20 runs each: master 106 of 252 rows not always ok, 21 where the writer raised and 25 with a
+  lost write; this 89, 0 and 0. The 89 are cause 1 and 3 of gap 39 (readers reading unheld): under
+  encode! 29, slice! front 19, insert 17, replace 11, force_encoding 7, append 6; IndexOutOfRange
+  24, ArgumentError 18, RangeError 7, the rest wrong answers. Single-threaded instructions
+  (`callgrind/count.sh`, `Util/bench/strswitch-shapes.rb`): each write +41 (append 2,022 -> 2,063,
+  setbyte 1,697 -> 1,739, insert and slice! 3,695 -> 3,765), force_encoding there and back 4,139
+  -> 4,318, index after a switch 9,853 -> 10,092, getbyte and bytes that switch +41 and +46; size
+  and plain level. Checks: strcow, dup, string-search and hot-shapes matrices in every mode and with
+  the switch off: PASS; spec/core/string 3,963 examples, the one known try_convert wording error on
+  master, here and switched off; 60 MutableString, String and Encoding IronRuby.Tests: PASSED.
+  Left: writes into the array a caller got (`EnsureCapacity`, `GetWritableByteArray`, for buffers
+  and native code) are outside this; a writer's multi-step change that sets content and encoding
+  unheld (`Replace`, the end of `Transcode`) is safe against a reader's switch only because its
+  last store is unconditional.
 
 - **perf/strcow (2026-11-27, not gated) - a String slice copied while the content is held; a
   long tail slice shares the array, as MRI's** (gap 24's dup note). Asked for: copy-on-write content
