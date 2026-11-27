@@ -8855,5 +8855,35 @@ require 'ruby4'
 ""can't convert Object into Complex""
 ");
         }
+
+        /// <summary>
+        /// A directive the format string ends in after flags, or after a %1$ or %<name> whose argument MRI has fetched by then
+        /// (too few arguments, one hash required first), is "malformed format string"; so is one a newline or NUL ends. Util/format-matrix.rb.
+        /// </summary>
+        public void Sprintf_MalformedEnd1() {
+            TestOutput(@"
+require 'ruby4'
+[""%-"", ""%#"", ""% "", ""%+"", ""%0"", ""%5"", ""%."", ""%*"", ""%"", ""%1$"", ""%<a>"", ""%{"", ""%\n"", ""%\0"", ""% \n"", ""a%\nb""].each do |f|
+  p [f, (format(f) rescue $!.message), (format(f, 1) rescue $!.message), (format(f, a: 1) rescue $!.message)]
+end
+", @"
+[""%-"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%#"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""% "", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%+"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%0"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%5"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]""]
+[""%."", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]""]
+[""%*"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]"", ""malformed format string - %*[0-9]""]
+[""%"", ""incomplete format specifier; use %% (double %) instead"", ""incomplete format specifier; use %% (double %) instead"", ""incomplete format specifier; use %% (double %) instead""]
+[""%1$"", ""too few arguments"", ""malformed format string"", ""malformed format string""]
+[""%<a>"", ""one hash required"", ""one hash required"", ""malformed format string""]
+[""%{"", ""malformed name - unmatched parenthesis"", ""malformed name - unmatched parenthesis"", ""malformed name - unmatched parenthesis""]
+[""%\n"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""%\u0000"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""% \n"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+[""a%\nb"", ""malformed format string"", ""malformed format string"", ""malformed format string""]
+");
+        }
     }
 }

@@ -1018,6 +1018,7 @@ namespace IronRuby.Tests {
                 Rational_CoerceAndDivmod1,
                 Kernel_IntegerSignOnlyAndInspect1,
                 Kernel_RationalComplexSpecialMessage1,
+                Sprintf_MalformedEnd1,
                 Errno_MessageNotDoubled1,
                 Process_ClockGetTime1,
                 Process_ThreadCpuTime1,
