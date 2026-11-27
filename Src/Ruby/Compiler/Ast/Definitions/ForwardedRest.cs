@@ -24,8 +24,12 @@ namespace IronRuby.Compiler.Ast {
     /// is a new one, and here the only other reference is a variable no code reads again.
     /// </summary>
     internal sealed class ForwardedRest : Walker {
-        // IR_FORWARD_REST=0 turns it off
-        private static readonly bool _enabled = Environment.GetEnvironmentVariable("IR_FORWARD_REST") != "0";
+        // Off unless IR_FORWARD_REST=1. The gate of round 5 (2026-11-27) reached the rest Array after the call by names this
+        // walk cannot see: instance_eval and class_eval of a String, send(:eval, ...), an alias of eval - any call may ask
+        // for the frame's scope (RubyOps.LightScopeRequired) - and a TracePoint's binding at :return; each saw what the callee
+        // did to its rest parameter, where CRuby's caller keeps its own Array. Sound only where nothing runs in the frame after
+        // the call (the method's tail, no ensure) and no TracePoint is on, which this does not check yet.
+        private static readonly bool _enabled = Environment.GetEnvironmentVariable("IR_FORWARD_REST") == "1";
 
         private readonly string/*!*/ _name;
         private readonly int _depth;

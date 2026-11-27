@@ -1910,7 +1910,13 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   MRI's FL_EXIVAR may stay set after the removal, which would send it through rb_obj_dup.
 - **perf/forward (2026-11-27) - a rest parameter passed on where nothing can see it again is the callee's
   rest parameter; a block-passing call's hoisted splat is fresh** (gap 36 and gap 16's second part;
-  `IR_FORWARD_REST=0` turns the first off) - timed, not gated. Bytes a call
+  `IR_FORWARD_REST=0` turned the first off) - timed, not gated. **The first part is off by default since round 5's
+  gate (2026-11-27), behind `IR_FORWARD_REST=1`**: `Util/forward-rest-matrix.rb` (new, from the gate's probes) reads
+  the rest parameter again after the call by names ForwardedRest's walk cannot see - `instance_eval("args")`,
+  `send(:eval, "args")`, an alias of `eval` (any call may ask for the frame's scope), a TracePoint's binding at
+  `:return` - and each saw the callee's `a << :x` (`[1, 2, :x]`, CRuby `[1, 2]`). It is sound only where nothing
+  runs in the frame after the call (the method's tail, no ensure) and no TracePoint is on, which it does not check
+  yet; the hoisted splat of a block-passing call (the second part) is a copy and stays. Bytes a call
   (`Util/bench/forward-bytes.rb`, new), base -> new: `def w(...) = raw(...)` 212 -> 116,
   `w(...) = rest_t(...)` (a callee with a rest) 309 -> 116, `w(*args, &b) = raw(*args, &b)` 227 -> 132,
   with a rest callee 312 -> 120, `w(*args) = rest_t(*args)` 214 -> 120, `w_splat(1) { }` 420 -> 325;
@@ -7752,3 +7758,19 @@ What to take from it:
 - An upper bound measured by rewriting the benchmark says what the rewrite is worth, not
   what the mechanism is: before building for "the bytes", take the bytes away alone (a
   rewrite that keeps the block and drops the allocation) and time that.
+
+### Caught by the gate (round thirty-seven, round 5)
+
+- **A rest parameter handed to the callee as its own was read again through the frame's scope** -
+  perf/forward's ForwardedRest, before it merged into master. Its walk refused a block literal,
+  `binding`, `eval`, `local_variable_*` and a zsuper in the method, and took the splat as the only
+  reference to the rest parameter otherwise; the gate's probe read it after the call with
+  `instance_eval("args")`, `send(:eval, "args")`, an alias of `eval` and a TracePoint's binding at
+  `:return`, and each saw the callee's change. A light frame's scope is asked for at run time by
+  whatever the callee turns out to be (`RubyOps.LightScopeRequired`), so a list of names in the source
+  cannot say that nothing will read a local again; only "nothing runs in the frame after the call"
+  can, and a TracePoint can still look at :return. The experiment's matrix (splat-pass, kwrest-call)
+  had rows for what the callee does to the Array and none for a later reader of the caller's frame.
+  Off by default (`IR_FORWARD_REST=1` turns it on); `Util/forward-rest-matrix.rb` pins the readers.
+  A question for any change that lets two frames share what Ruby copies: list every way the frame can
+  be read after the call - eval by any name, binding by any route, TracePoint - before the walk.
