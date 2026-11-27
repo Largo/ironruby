@@ -2485,6 +2485,11 @@ namespace IronRuby.Runtime.Jit {
                 return EmitStringLiteralComparison(node, out type);
             }
 
+            // `s + "lit"', `s << "lit"' (JitCompiler.Objects.cs).
+            if (argc == 1 && IsStringLiteralConcat(node)) {
+                return EmitStringLiteralConcat(node, out type);
+            }
+
             // `v.nil?' on any object (JitRuntime.IsNil).
             if (node.Target != null && argc == 0 && node.MethodName == "nil?") {
                 JT tt;
@@ -3603,6 +3608,8 @@ namespace IronRuby.Runtime.Jit {
             // a Hash query is a Bool, never a number (an element read is speculated to be one)
             var call = node as MethodCall;
             if (call != null && call.Target != null && IsBoolQueryName(call.MethodName)) { return No(node); }
+            // nor is `s + "lit"' or `s << "lit"' (JitCompiler.EmitStringLiteralConcat): a String (`@user + ':' + @password')
+            if (call != null && JitCompiler.IsStringLiteralConcat(call)) { return No(node); }
             // nor is anything holding a String literal (`suffixes - [".rb"]'): such an operator only deopts
             _inOperand++;
             try {
@@ -4029,6 +4036,10 @@ namespace IronRuby.Runtime.Jit {
             } else if (argc == 1 && JitCompiler.IsStringLiteralComparison(node)) {
                 // `s == "lit"' or `"lit" == s' (JitCompiler.EmitStringLiteralComparison): s is any object
                 return Walk(JitCompiler.IsReversedStringLiteralComparison(node) ? args.Expressions[0] : node.Target);
+            } else if (argc == 1 && JitCompiler.IsStringLiteralConcat(node)) {
+                // `s + "lit"', `s << "lit"' (JitCompiler.EmitStringLiteralConcat): s is any object; a String, so never
+                // inside an operand of a binary operator, which only deopts on one (as a String literal there)
+                return (_inOperand == 0) ? Walk(node.Target) : No(node);
             } else if (argc != 1 || !IsBinaryOperator(node.MethodName)) {
                 // Emit only reaches EmitBinary for a one-argument call on a target, and only
                 // EmitBinary's own operators survive there whatever the operand types are.
