@@ -949,6 +949,35 @@ puts ArrayList
         }
 
         /// <summary>
+        /// Colons go only with z, and E and O only with the conversions they modify: otherwise MRI's
+        /// strftime makes the directive unknown at the colon (or the E or O), copies it through and
+        /// reads the rest afresh, so "%:%Y" is "%:2020" and "%:%" ends in a lone %. That error names
+        /// the whole format.
+        /// </summary>
+        public void Time_StrftimeColon1() {
+            TestOutput(@"
+t = Time.utc(2020, 1, 2, 3, 4, 5)
+%w[%:%Y %::y %:: %::::z %:::z %E%Y %O%d %E: %-:%m %10:%Y].each { |f| p t.strftime(f) }
+%w[%:% %::3% %E% x%].each { |f| begin; t.strftime(f); rescue ArgumentError => e; puts e.message; end }
+", @"
+""%:2020""
+""%::y""
+""%::""
+""%::::z""
+""+00""
+""%E2020""
+""%O02""
+""%E:""
+""%-:01""
+""%10:2020""
+invalid format: %:%
+invalid format: %::3%
+invalid format: %E%
+invalid format: x%
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's

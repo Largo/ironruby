@@ -71,8 +71,9 @@ namespace IronRuby.Builtins {
                 int start = i;
                 i++;
                 if (i >= format.Length) {
-                    // MRI: a lone % at the end, or one followed only by flags or a width, is an error
-                    throw RubyExceptions.CreateArgumentError("invalid format: " + format.Substring(start));
+                    // MRI: a lone % at the end, or one followed only by flags or a width, is an
+                    // error that names the whole format
+                    throw RubyExceptions.CreateArgumentError("invalid format: " + format);
                 }
 
                 Modifiers modifiers = new Modifiers();
@@ -107,17 +108,36 @@ namespace IronRuby.Builtins {
                 }
 
                 if (i >= format.Length) {
-                    throw RubyExceptions.CreateArgumentError("invalid format: " + format.Substring(start));
+                    throw RubyExceptions.CreateArgumentError("invalid format: " + format);
                 }
 
                 if (format[i] == 'E' || format[i] == 'O') {
                     modifiers.Alt = format[i];
                     i++;
+                    // MRI goes to "unknown" at the E or O itself when the next character is not
+                    // a conversion it modifies: "%E" is copied through and the rest is read
+                    // afresh, so "%E%Y" is "%E2020".
+                    if (i < format.Length && (modifiers.Alt == 'E' ? "cCxXyY" : "deHImMSuUVwWy").IndexOf(format[i]) < 0) {
+                        result.Append(format, start, i - start);
+                        continue;
+                    }
                 }
 
-                while (i < format.Length && format[i] == ':' && modifiers.Colons < 3) {
-                    modifiers.Colons++;
-                    i++;
+                if (i < format.Length && format[i] == ':') {
+                    int colons = 1;
+                    while (i + colons < format.Length && format[i + colons] == ':') {
+                        colons++;
+                    }
+                    if (colons > 3 || i + colons >= format.Length || format[i + colons] != 'z') {
+                        // MRI: colons go only with z; otherwise the directive is unknown at the
+                        // first colon, which is copied through, and the rest is read afresh, so
+                        // "%:%Y" is "%:2020" and "%:%" ends in a lone %.
+                        i++;
+                        result.Append(format, start, i - start);
+                        continue;
+                    }
+                    modifiers.Colons = colons;
+                    i += colons;
                 }
 
                 if (i >= format.Length) {

@@ -984,6 +984,7 @@ namespace IronRuby.Tests {
                 Time_LoadZone1,
                 Time_DumpLoadedZone1,
                 Time_MachineZone1,
+                Time_StrftimeColon1,
                 Time_OlsonZone1,
                 Zlib_Streams1,
                 Process_SpawnKill1,
