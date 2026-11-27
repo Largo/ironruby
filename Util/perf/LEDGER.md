@@ -1004,6 +1004,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     allocates), 0.51-0.70 of the time. Left: `any?`, `find` and `each_with_index` (Enumerable's
     C# goes through `each` and a SplattingBlock: the bytes are its own, not the parking's) and
     the literal given to a core iterator outside the parked list.
+    perf/iter2 (see Landed, not gated) took `find` and `any?`: Array's own, as in CRuby 4.0, and
+    parked - `find1` 298 ns / 885 B -> 113 / 69 (CRuby 66), `any1` 172 / 397 -> 107 / 69 (CRuby
+    55). `upto` and `downto` were tried the same way and left out: a parked slot around them
+    takes Permute from 124.5 to 53.9 MB per iteration and costs 3.8% more instructions, its time
+    level (1.00 over six rounds), as perf/deadconst found. Left: `each_with_index` (the prelude's,
+    `*args, &block`), `inject`, and `upto`/`downto`'s entry, which is not their bytes.
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
@@ -3189,6 +3195,55 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   build in both modes; spec/core/string (3,963 examples) and spec/library/stringscanner (240):
   the same on both builds, 0 failures, one error on both (`String.try_convert ... raises
   TypeError if it's not a kind of String`, run as a directory).
+
+- **perf/iter2 (round thirty-seven, 2026-11-27) - Array#find, #detect, #any?, #all? and #none? are
+  Array's own and, with #find_index and #index, let the method that gives them a literal park
+  (gap 13)** - instructions, bytes and time, not gated. An Array's `find` and `detect` were
+  Enumerable's: a call site to `each`, a C# SplattingBlock (a Proc, a closure) and an Array per
+  element - 885 bytes to find in `[1]` - and, being in `NeverParkedIterators`, no parked slot for
+  the method that called them. CRuby 4.0 has them as Array's own (`rb_ary_find`), with `any?`,
+  `all?` and `none?`: they walk the array, re-reading its length, yield each element with a plain
+  `rb_yield` (a lambda of two parameters raises), and never call `#each` - so a subclass's `each`
+  is not what they search, and a backtrace names `Array#find`, where IronRuby said `Array#each`
+  and `Enumerable#find`. Now they are IListOps methods (`Find`, `Detect`, `TrueForAll`/`None`/`Any`
+  with their pattern forms, over `Enumerable.TrueForList` and `PatternForList`, which Enumerable's
+  own use for an Array as before), `[BlockNotKept]` with `find_index` and `index`, and the seven
+  names are off `MethodDefinition.NeverParkedIterators`. `IR_PARKED_FIND=0` puts them back on it
+  (the methods stay Array's). Not inlined: ReadyToRun folded the `any?` forwarders into their caller
+  and a backtrace lost the `Array#any?` frame (caught by the R2R mode of the matrices).
+  Per call (`Util/bench/find-shapes.rb`; ns, bytes, CRuby): `find1` 298 / 885 -> 113 / 69 (66),
+  `any1` 172 / 397 -> 107 / 69 (55); with the switch off 163 / 357 and 138 / 357. Instructions
+  (callgrind, new over base / over off): `find1` 0.601 / 0.988, `find4` 0.586 / 1.009, `detect1`
+  0.608 / 0.988, `findidx4` 1.005 / 0.993, `any1` 1.015 / 1.014, `any4` 1.030 / 1.023, `all4` 0.996
+  / 0.992; controls `each1`, `times1`, `map1` 1.000. Time, four and eight alternating rounds, new
+  over off: `find1` 0.82 and 0.84, `detect1` 0.76, `findidx4` 0.73, `any1` 0.82 and 0.84, `any4`
+  0.75, `all4` 0.81; controls overlapping (spreads of 20-40% on a shared host). The parked slot is
+  bytes the counter does not see: each cell is the least of seven sections, and at N=20000 that one
+  runs no collection.
+  Tried and taken out: `[BlockNotKept]` on Integer#upto and #downto, off the list. `upto1` 389 ->
+  101 B and 0.85-0.86 of the time, Permute 124,533,643 -> 53,876,246 B per iteration (alloc.rb
+  geomean 0.937 with it); but `upto1` +3.0% instructions, `upto4` +1.8%, Permute +3.8% over off
+  (+4.4% over base), and Permute's time level (1.00 over six alternating rounds; the least of forty
+  iterations 104 against 107-112 ms). It is perf/deadconst's result again; without it Permute and
+  Queens allocate what the baseline does (alloc.rb: 124,548,094 / 124,525,657, 30,446,800 /
+  30,441,889).
+  Matrices (`Util/perf/gate-matrices.rb`, base b887bc1 with perf/iter): `Util/parked-iterator-matrix.rb`
+  (new: the nine methods called again and again, ifnone, empty, Bignum, no block, patterns with a
+  block, Symbol, lambda arity, stored Proc, break/next/return/raise, binding, proc, lambda, eval and
+  a method made in the block, the outer binding, a subclass's each, a subclass's find, Hash, Range,
+  Struct, an Enumerable whose each keeps the block, Array#each redefined, the array grown and
+  shrunk while searched, recursion, re-entrancy, a Fiber, four threads, a TracePoint, the frames,
+  the owners), enum, enumerable2, block-nest-reuse, block-scope-reuse, -blockpass, -race,
+  block-loop, block-given, light-rest, hot-shapes, jit, parked-scope and block-pass, in the seven
+  modes with IR_PARKED_FIND=0: PASS; the new matrix is CRuby's in every mode, the baseline differs
+  from it in three rows the change fixes (subclass each, frames, owners). ruby/spec core/array,
+  core/enumerable, integer/upto and downto: the baseline's one failure and three errors (Array#fill,
+  Array.new, Array.try_convert). WeakRef probe (find, any?, find_index, upto, downto in parked
+  methods, `IR_PARKED_SCOPES=verbose` confirming the slots): all freed. Census: 0 methods changed.
+  For the gate: Array now answers `find`, `detect`, `any?`, `all?`, `none?` itself (owners,
+  `instance_method`, `super` from a subclass, `Enumerable.instance_method(:find).bind_call(ary)`);
+  a method parked around `h.find { }` on a Hash, which is still Enumerable's and keeps no Proc,
+  until its slot gives up (`ParkedScopeSlot.MaxFailures`).
 
 - **perf/iter (round thirty-seven, 2026-11-26) - a block that holds a block literal reuses its scope
   and the literal's Proc (gaps 13 and 6)** - instructions and bytes, not gated. A block whose
