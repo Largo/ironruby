@@ -715,3 +715,14 @@ probe("fs_init_redefined") do
 end
 probe("fs_after_restore") { e = gen1; e.next; s1 = (e.next rescue $!); s2 = (e.next rescue $!); s2.cause.equal?(s1) }
 probe("cur_tracepoint")   { seen = []; tp = TracePoint.new(:raise) { |t| seen << [t.raised_exception.class, t.lineno == __LINE__] }; e = [].each; tp.enable { (e.next rescue nil); (e.next rescue nil) }; seen }
+probe("cur_init_redefined") do
+  calls = []
+  StopIteration.class_eval { alias_method :__ci_init__, :initialize; define_method(:initialize) { |*a| calls << a; __ci_init__(*a) } }
+  e = [1, 2].each; e.next; e.next
+  s1 = (e.next rescue $!); s2 = (e.next rescue $!)
+  m = [3].map; m.next; m.feed :f
+  s3 = (m.next rescue $!)
+  StopIteration.class_eval { remove_method :initialize; alias_method :initialize, :__ci_init__; remove_method :__ci_init__ }
+  [calls.size, s2.cause.equal?(s1), s1.result.equal?(e.size && s1.result), s3.result]
+end
+probe("cur_after_restore") { e = [1].each; e.next; s1 = (e.next rescue $!); s2 = (e.next rescue $!); s2.cause.equal?(s1) }

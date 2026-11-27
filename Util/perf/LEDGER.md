@@ -1579,7 +1579,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     reclaimed as an Enumerator's generator is, but a block that runs on the fiber and closes over
     a scope holding the enumerator (`e = xs.lazy.map { |x| ... }; e.next`, the same with
     `Enumerator.new { |y| ... }`) keeps it for the life of the process: 10,000 of them are 10,018
-    threads and 640 MB after GC (CRuby: 2 threads, 17 MB; `Util/bench/extiter-abandoned.rb`). Only
+    threads and 640 MB after GC (CRuby: 2 threads, 17 MB; `Util/bench/extiter-abandoned.rb`). The
+    reclaimable ones no longer wait for a collection to happen by: perf/fiberbound collects when
+    the fibers holding a thread have grown by 256 (peak 280 threads, about 170 MB). Only
     a fiber that is not a thread gets past that. Untried: switching fibers without a thread (a
     continuation of the method JIT's own); a smaller stack for fiber threads (the memory, not the
     thread).
@@ -1633,6 +1635,41 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/fiberbound (2026-11-27) - fibers abandoned while suspended are bounded: a collection when
+  the fibers holding a thread have grown by 256, the reclaimed threads parked for the next ones
+  (gap 35)** - not gated. Base 78bbfb1 (the round-38 branch at 15285eb with perf/fiberstart). A
+  suspended fiber holds a thread until a collection finds its handle, and the collector knows
+  nothing of the thread: 3,000 abandoned generators were three collections and 3,017 threads. Now
+  `ThreadOps.FiberCore.Run` counts the fibers that hold a thread, and a fiber about to start
+  (`__fiber_reuse__`) collects when the count has grown by 256 since the lowest it has been since
+  the last collection; the pool of parked fiber threads is as large as the bound (8 before), so
+  the threads the collection reclaims are the next fibers' instead of ending (a pool of 8 made the
+  bound cost 15-25% per abandoned enumerator: 862-927 against 748 us). A collection that reclaims
+  fewer than a quarter of the interval's fibers (counted as they unwind, an interval of starts
+  later) doubles the interval: a program whose fibers are alive, or held by a block on their own
+  thread that closes over them (`e = xs.lazy.map { |x| ... }; e.next`), which no collector sees
+  past, paid twice per enumerator when every 256 starts collected over 10,000 threads (1,073 ->
+  1,918 us); a first try that judged by the lowest count since the collection doubled the interval
+  while the reclaimed threads were still unwinding and let 2,787 pile up. GC.AddMemoryPressure for
+  each fiber's stack, tried instead: 18-21 collections in 3,000, 608-742 threads at the peak.
+  `IR_FIBER_BOUND=0` turns it off (and the pool back to 8); bounds of 64-1024 measured, 256 kept.
+  `extiter-abandoned.rb`, 10,000 each, base -> new: a lazy made in a method 1,229 us, peak 1,066
+  threads, 359 MB -> 689 us, 281, 174 MB; a generator 1,282 us, 513, 335 MB -> 700 us, 280, 165 MB;
+  the ones a block holds 1,073-1,126 us, 10,018 threads -> 1,119-1,145 us, 10,017 (unchanged: not
+  reachable while a fiber is a thread). `fiber-start.rb`: fibers that finish and threads level
+  (`fiber_complete` 13 / 18 us, `gen_drain` 136 / 142, `thread_join` 199 / 196), abandoned ones
+  281-294 threads after 3,000 against 2,823-3,017. Cursor shapes level (`ab.rb -r 6`, 0.96-1.07, all
+  overlapping). With it, the cursor path's StopIteration when StopIteration#new or #initialize is the
+  program's: made in C# it was another object than the one rescued, so a later end's cause was not
+  the first, and `map`'s result was lost; now the cursor hands the end to the prelude's
+  __iter_stop__ as the fiber path does (`__iter_slow__` op 4). `Util/extiter-matrix.rb` (332 probes)
+  prints CRuby's output with the bound and without; base differs in that probe only, off
+  (IR_FAST_NEXT=0) in `flm_to_ary_next` only. fiber-reclaim-matrix passes in every mode;
+  enum-next- and raise-matrix the same on base, new, off and without the bound. spec/core/fiber,
+  enumerator, thread and kernel/loop_spec: 1,026 examples, 0 failures on base, new and without
+  the bound; the Enumerator*, Lazy*, Loop*, Fiber*, Thread*, Exception* and Raise* IronRuby.Tests
+  (60) pass in five plain runs on base and five on new.
 
 - **perf/fiberstart (2026-11-27) - what a fiber's start costs, found; the end of an iteration on a
   fiber raised from C# and its stack walk deferred, as a cursor's is (gap 35)** - not gated. Base
