@@ -1572,8 +1572,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     same text (`eval("/a/").equal?(eval("/a/"))` is false; one eval's block gets the same one on
     every call), so sharing the code needs the literal's cache box per eval - and a block of the
     text reaches nothing per eval: it is compiled apart (BlockDispatcher) and sees only the
-    scope, which for `eval(s, binding)` is the binding's own. Untried: carrying an eval's literal
-    boxes on the Procs its code instantiates.
+    scope, which for `eval(s, binding)` is the binding's own.
+    perf/evalboxes (Landed) carries an eval's literal objects on the Procs its code
+    instantiates: regexp and Integer range literals are let in, and all 80 templates share
+    their code. Left: a text with `def`, `class`, `module`, `super`, `yield`, a flip-flop or END
+    (none of the 80 has one), and the eval's own cost when it is shared.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1787,6 +1790,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/evalboxes (/perf-step, 2026-11-27, on 4320d4a + perf/lexical 779d87c) - an eval'd
+  text with regexp or range literals shares its compiled code, the literals' objects kept per
+  eval (`IR_EVAL_LITERALS`, gap 31)** - instructions only, not gated. The commonest refusal left
+  by perf/evalscreen (6 of the 11 refused stdlib templates; 2.7 times a shared render).
+  - What CRuby does, checked first (CRuby 4.0): a regexp literal of the text's top level is a new
+    object per eval and the same one for every pass of one eval's `while`; one in a block, the
+    same on every call of the block within the eval, and a Proc that escapes keeps its eval's
+    after another eval of the text; two sites with the same text are two objects; `/#{x}/o` once
+    per eval; an interpolated one without `o` new every time; an Integer range literal frozen,
+    per eval, the same within one; regexps frozen; `$~` set in the binding's frame.
+  - Where the state lives: a plain string eval (`TopScopeFactoryKind.None`) whose tree has a
+    regexp or a range gets a hidden variable of its top level that its prologue sets to a new
+    `EvalLiterals` (one slot per literal site, filled once by whichever thread gets there
+    first). A literal of the top level reads its slot from it; every Proc the text instantiates
+    takes it along (`RubyOps.AttachEvalLiterals`, `Proc.EvalLiterals` in the Proc's rare state,
+    kept by its copies - `dup`, `curry`, a method made of it), and a literal in a block reads it
+    from the block's BlockParam's Proc (`GetBlockEvalLiterals`) - the binding's scope, shared by
+    every eval through it, is not used. A literal in a `def` or class body of the text keeps its
+    object in the code as before (the screen refuses those texts). Eval'd code replaces no loops
+    (`CanReplaceLoops` is false for eval), so a block body always runs with its BlockParam. The
+    screen lets in `RegularExpression`, `RegularExpressionCondition` and `RangeExpression`
+    (a flip-flop's `RangeCondition` stays refused). Five new emitted helpers;
+    `ReflectionCache.Generated.cs` is ClassInitGenerator's, identical to the entries written by
+    hand.
+  - Instructions a render (`Util/perf/callgrind/count.sh`, N=1000, one shape per process, switch
+    off -> on): `erb_eval_regexp` 3,399,928 -> 1,283,572 (0.378); `erb_eval_top` 1,272,648 ->
+    1,272,650, `erb_eval_defined` 1,271,525 -> 1,270,361, `eval_small` 55,159 -> 55,159. Timed:
+    `erb_eval_regexp` 613 -> 223 us, `erb_eval_top` 235 -> 239. Standard-library templates
+    shared: 72 -> 80 of 80.
+  - `Util/eval-literals-matrix.rb` (new: the cases above, nested blocks, a lambda and a proc of
+    one eval, frozen/source/options, an escaped Proc after another eval, two Procs of one eval,
+    a Proc made into a method, `dup` and `curry`, a Proc passed as a block, `/o` keeping its
+    first value, a range of variables, `$~` at the top level and in a block, a regexp as a
+    condition, four threads on one text, ERB) prints CRuby 4.0's output on the unchanged build,
+    and on the change by default, with `IR_EVAL_LITERALS=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT
+    -X:NoOSR`, `-X:NoJITCalls` and R2R. eval-defined, eval-locals, erb-escape, regex-light,
+    regexp-escaped-byte, regexp-inspect, regexp-property, lexical-light, block-scope-reuse and
+    hot-shapes print CRuby's output, eval-matrix, regex-property and regexp-binary-ctype the
+    unchanged build's, in those five modes; the three eval matrices CRuby's under R2R.
+    ruby/spec `core/kernel/eval_spec.rb` 57 / 0, `core/binding` 98 / 0, `language/regexp` 258 /
+    0, `core/regexp` 256 with 3 errors, `library/erb` 53 / 0 - the same on both builds.
+    IronRuby.Tests `Eval_SharedLiterals1` (new; passes with the switch off too) and 93 named
+    eval, binding, defined?, regexp, range, proc and block tests pass.
 
 - **perf/evalscreen (/perf-step, 2026-11-27, on 4320d4a + perf/lexical b45360c) - an eval'd
   text with `defined?` shares its compiled code (`IR_EVAL_SHARE_DEFINED`, gap 31)** -
