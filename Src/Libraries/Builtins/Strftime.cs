@@ -154,10 +154,12 @@ namespace IronRuby.Builtins {
                 }
 
                 if (modifiers.Width > 0 && PadsToWidth(directive, modifiers) &&
-                    result.Length + 2L * modifiers.Width > SizeLimit(format.Length)) {
+                    result.Length + 2L * modifiers.Width > SizeLimit(format.Length) &&
+                    !(directive == 'Z' && String.IsNullOrEmpty(RubyTimeOps.GetZoneAbbreviation(context, time)))) {
                     // MRI's strftime grows its buffer to at most strftime_size_limit and raises
                     // ERANGE, naming the format, rather than going on: "%2147483647d" would
-                    // otherwise ask for a 4 GB string.
+                    // otherwise ask for a 4 GB string. A %Z with no zone name writes nothing,
+                    // so it asks for no room.
                     throw RubyExceptions.CreateErrno(context, RubyErrno.GetNumber("ERANGE"), format);
                 }
 
@@ -253,7 +255,12 @@ namespace IronRuby.Builtins {
 
                 case 'Z': {
                         string name = RubyTimeOps.GetZoneAbbreviation(context, time);
-                        return Text(name ?? "", modifiers, width);
+                        if (String.IsNullOrEmpty(name)) {
+                            // MRI writes nothing for a time with no zone name (a fixed offset),
+                            // not even the padding of a width: "%10Z" is "".
+                            return "";
+                        }
+                        return Text(name, modifiers, width);
                     }
 
                 case 'c': return Compound(context, time, "%a %b %e %H:%M:%S %Y", modifiers, depth);

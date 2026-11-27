@@ -978,6 +978,28 @@ invalid format: x%
         }
 
         /// <summary>
+        /// A time with a fixed offset has no zone name, and MRI's %Z then writes nothing at all, not
+        /// even the padding of a width (nor does a huge width raise ERANGE).
+        /// </summary>
+        public void Time_StrftimeNoZone1() {
+            TestOutput(@"
+t = Time.new(2012, 1, 1, 0, 0, 0, 3660)
+%w[%10Z %-10Z %010Z %^5Z %Z| %2000000000Z].each { |f| p t.strftime(f) }
+u = Time.utc(2020)
+p u.strftime(""%6Z|""), u.localtime(""+01:00"").strftime(""%_5Z|"")
+", @"
+""""
+""""
+""""
+""""
+""|""
+""""
+""   UTC|""
+""|""
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's
