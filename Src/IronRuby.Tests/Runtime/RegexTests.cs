@@ -937,6 +937,25 @@ nil
         }
 
         /// <summary>
+        /// A subject replaced by a shorter one under the scan pointer: MRI's scans answer nil, #rest is
+        /// empty, #bol? is nil and #charpos counts the bytes beyond the end as characters.
+        /// </summary>
+        public void StringScanner_ShorterSubject1() {
+            TestOutput(@"
+require 'strscan'
+s = +""hello world""
+ss = StringScanner.new(s)
+ss.scan(/\S+/); ss.skip(/\s+/)
+s.replace(""a b"")
+p [ss.scan(/\S+/), ss[0], ss.pos, ss.matched, ss.pre_match, ss.rest, ss.charpos, ss.getch, ss.bol?, ss.eos?]
+p [ss.peek(2), ss.rest_size, ss.check(/x/), ss.skip(""a""), ss.exist?(/a/), ss.rest?, ss.inspect]
+", @"
+[nil, nil, 6, nil, nil, """", 6, nil, nil, true]
+["""", 0, nil, nil, nil, false, ""#<StringScanner fin>""]
+");
+        }
+
+        /// <summary>
         /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
         /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
         /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET

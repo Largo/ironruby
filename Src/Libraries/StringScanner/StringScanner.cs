@@ -391,6 +391,12 @@ namespace IronRuby.StandardLibrary.StringScanner {
         /// <param name="lazyGroups">The caller answers a length or a position, not text: the
         /// MatchData can wait until something asks for a group.</param>
         private bool Match(object/*!*/ pattern, bool anchored, bool advance, bool lazyGroups) {
+            if (_position > ByteLength) {
+                // The subject was replaced by a shorter one under the scan pointer: MRI's
+                // strscan_do_scan clears the match and answers nil (S_RESTLEN < 0).
+                ClearMatch();
+                return false;
+            }
             var regex = pattern as RubyRegex;
             return (regex != null)
                 ? MatchRegex(regex, anchored, advance, lazyGroups)
@@ -756,9 +762,13 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("beginning_of_line?")]
         [RubyMethod("bol?")]
-        public static bool BeginningOfLine(StringScanner/*!*/ self) {
+        public static bool? BeginningOfLine(StringScanner/*!*/ self) {
             if (self._position == 0) {
                 return true;
+            }
+            if (self._position > self.ByteLength) {
+                // MRI: nil once the subject got shorter than the scan pointer
+                return null;
             }
             Utf8OffsetMap map = self.Map;
             int clr = (map != null) ? map.ClrOf(self._position) : -1;
@@ -889,6 +899,12 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("charpos")]
         public static int GetCharPosition(StringScanner/*!*/ self) {
+            int length = self.ByteLength;
+            if (self._position > length) {
+                // MRI's rb_enc_strlen runs past the end of a subject that got shorter than the scan
+                // pointer, and counts each byte beyond it as a character
+                return self.CharacterCountOf(length) + (self._position - length);
+            }
             return self.CharacterCountOf(self._position);
         }
 
