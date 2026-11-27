@@ -146,6 +146,14 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal bool SafePointFirst { get; set; }
 
+        /// <summary>
+        /// IR_LAZY_ERRINFO=0 saves and restores $! around a begin/rescue/ensure on every run, as it used to. Otherwise a run in
+        /// which nothing is raised leaves $! alone: the rescue's finally restores it only if an exception was taken or the body
+        /// was left otherwise (a jump, an exception going through), and the ensure clause reads and restores it only for an
+        /// exception it runs for. Each access is a [ThreadStatic], a call into the runtime from compiled code (gap 22).
+        /// </summary>
+        internal static readonly bool LazyErrinfo = Environment.GetEnvironmentVariable("IR_LAZY_ERRINFO") != "0";
+
         private bool HasExceptionHandling {
             get {
                 return (_statements.Count > 0 && _rescueClauses != null) || _elseStatements != null || _ensureStatements != null;
@@ -217,8 +225,17 @@ namespace IronRuby.Compiler.Ast {
 
                 transformedEnsure = Ast.Block(
                     // ensure (an exception to be thrown on gets its backtrace completed first: a jump out of the clause ends it):
-                    Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
-                    AstUtils.IfThen(exceptionRethrowVariable, Ast.Call(_ExposeException, oldExceptionVariable)),
+                    // $! is read only for an exception the clause runs for (LazyErrinfo): with none, the clause leaves $! as it
+                    // found it when it completes, and restoring it would store what is there.
+                    LazyErrinfo
+                        ? AstUtils.IfThen(exceptionRethrowVariable,
+                            Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+                            Ast.Call(_ExposeException, oldExceptionVariable)
+                        )
+                        : Ast.Block(
+                            Ast.Assign(oldExceptionVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
+                            AstUtils.IfThen(exceptionRethrowVariable, Ast.Call(_ExposeException, oldExceptionVariable))
+                        ),
                     Ast.Assign(ensureDoneVariable, AstUtils.Constant(false)),
                     AstUtils.Try(
                         // An exception the clause raises has the exception the clause runs for as its cause, which the
@@ -240,7 +257,9 @@ namespace IronRuby.Compiler.Ast {
                             Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, entryExceptionVariable)
                         )
                     ),
-                    Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable),
+                    LazyErrinfo
+                        ? AstUtils.IfThen(exceptionRethrowVariable, Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable))
+                        : Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable),
 
                     // rethrow:
                     AstUtils.IfThen(
@@ -289,6 +308,22 @@ namespace IronRuby.Compiler.Ast {
             // had the exception (Exception_CauseRaisedInClause1).
             MSA.Expression handledVariable = (_rescueClauses != null) ?
                 gen.CurrentScope.DefineHiddenVariable("#handled-exception", typeof(Exception)) : null;
+
+            // Whether the statements ran to their end with nothing taken by the handler: $! is then what it was before, and the
+            // finally below has nothing to restore (LazyErrinfo). Left by a jump or an exception, they did not.
+            MSA.Expression completedVariable = (_rescueClauses != null && LazyErrinfo) ?
+                gen.CurrentScope.DefineHiddenVariable("#body-completed", typeof(bool)) : null;
+            Func<MSA.Expression> restoreHandled = () => (completedVariable != null)
+                ? AstUtils.IfThen(
+                    Ast.AndAlso(Ast.Not(exceptionRethrowVariable), Ast.OrElse(exceptionThrownVariable, Ast.Not(completedVariable))),
+                    Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
+                )
+                : AstUtils.Unless(exceptionRethrowVariable,
+                    Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
+                );
+            Func<MSA.Expression> markCompleted = () => (completedVariable != null)
+                ? (MSA.Expression)Ast.Assign(completedVariable, AstUtils.Constant(true))
+                : AstUtils.Empty();
 
             // make rescue clause:
             MSA.Expression transformedRescue;
@@ -376,6 +411,7 @@ namespace IronRuby.Compiler.Ast {
                         )
                     ),
                     Ast.Assign(passingVariable, AstUtils.Constant(null, typeof(Exception))),
+                    markCompleted(),
                     AstUtils.IfThen(exceptionThrownVariable, Ast.Block(
                         Ast.Assign(handledVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
                         transformedRescue,
@@ -384,9 +420,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Empty()
                 ).Finally(
                     // restore previous exception if the current one has been handled:
-                    AstUtils.Unless(exceptionRethrowVariable,
-                        Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
-                    ),
+                    restoreHandled(),
                     leaveRescue
                 );
             } else if (_rescueClauses != null) {
@@ -399,6 +433,7 @@ namespace IronRuby.Compiler.Ast {
                         Ast.Assign(exceptionThrownVariable, AstUtils.Constant(true)),
                         AstUtils.Empty()
                     ),
+                    markCompleted(),
                     AstUtils.IfThen(exceptionThrownVariable, Ast.Block(
                         Ast.Assign(handledVariable, Methods.GetCurrentException.OpCall(gen.CurrentScopeVariable)),
                         transformedRescue,
@@ -407,9 +442,7 @@ namespace IronRuby.Compiler.Ast {
                     AstUtils.Empty()
                 ).Finally(
                     // restore previous exception if the current one has been handled:
-                    AstUtils.Unless(exceptionRethrowVariable,
-                        Methods.SetCurrentException.OpCall(gen.CurrentScopeVariable, oldExceptionVariable)
-                    ),
+                    restoreHandled(),
                     leaveRescue
                 );
             } else if (_elseStatements == null) {
@@ -443,6 +476,8 @@ namespace IronRuby.Compiler.Ast {
                 // no rescue clause has run yet, also after a retry: the else clause's exceptions have $! as their cause
                 (_rescueClauses == null) ? (MSA.Expression)AstUtils.Empty() :
                     Ast.Assign(handledVariable, AstUtils.Constant(null, typeof(Exception))),
+                (completedVariable == null) ? (MSA.Expression)AstUtils.Empty() :
+                    Ast.Assign(completedVariable, AstUtils.Constant(false)),
 
                 guarded,
 
