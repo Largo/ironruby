@@ -1340,7 +1340,7 @@ US-ASCII 100: [RangeError, ""256 out of char range""]
 BINARY ff: ASCII-8BIT 3cff3e
 BINARY 100: [RangeError, ""256 out of char range""]
 ISO-8859-1 e9: ISO-8859-1 3ce93e
-ISO-8859-1 100: [RangeError, ""256 out of char range""]
+ISO-8859-1 100: [ArgumentError, ""invalid character""]
 Shift_JIS 80: Shift_JIS 3c803e
 Shift_JIS 81: [ArgumentError, ""invalid character""]
 Shift_JIS a1: Shift_JIS 3ca13e
