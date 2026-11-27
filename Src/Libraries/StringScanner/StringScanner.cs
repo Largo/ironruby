@@ -568,6 +568,11 @@ namespace IronRuby.StandardLibrary.StringScanner {
         private bool MatchLiteral(MutableString/*!*/ pattern, bool anchored, bool advance) {
             ClearMatch();
 
+            if (pattern.Encoding != _scanString.Encoding) {
+                // MRI's rb_enc_check(subject, pattern): an incompatible pattern is an error, not a miss
+                _scanString.RequireCompatibleEncoding(pattern);
+            }
+
             if (anchored && pattern.IsAscii()) {
                 // The usual #skip("{"): an ASCII pattern's characters are its bytes, so it can be
                 // compared where it stands instead of being copied out to a byte array first.

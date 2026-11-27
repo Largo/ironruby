@@ -956,6 +956,33 @@ p [ss.peek(2), ss.rest_size, ss.check(/x/), ss.skip(""a""), ss.exist?(/a/), ss.r
         }
 
         /// <summary>
+        /// A String pattern whose encoding is incompatible with the subject's is an error to MRI's strscan
+        /// (rb_enc_check), not a miss; an ASCII pattern, or an ASCII-only subject, is compatible.
+        /// </summary>
+        public void StringScanner_LiteralEncoding1() {
+            TestOutput(@"
+require 'strscan'
+b = StringScanner.new(""ab\xE9c"".b)
+p((b.scan(""\u00e9"") rescue $!), (b.scan(""a"") rescue $!), (b.skip_until(""\u00e9"") rescue $!))
+e = StringScanner.new(""\xA4\xA2a"".dup.force_encoding(""EUC-JP""))
+e.pos = 3
+p((e.scan(""\u00e9"") rescue $!), (e.check("""") rescue $!))
+a = StringScanner.new(""abc"")
+p((a.scan(""\u00e9"") rescue $!))
+u = StringScanner.new(""h\u00e9"")
+p((u.scan(""\xE9"".b) rescue $!))
+", @"
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+""a""
+#<Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8>
+#<Encoding::CompatibilityError: incompatible character encodings: EUC-JP and UTF-8>
+""""
+nil
+#<Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)>
+");
+        }
+
+        /// <summary>
         /// A BINARY subject is matched with Onigmo's ASCII-8BIT ctype table (MRI's
         /// rb_reg_prepare_enc compiles a regexp that is not fixed-encoding for the subject's
         /// encoding): no letters, punctuation, word characters or case pairs above 0x7F, where .NET
