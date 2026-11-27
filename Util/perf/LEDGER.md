@@ -1564,6 +1564,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (`LocalVariableSite`); a render 0.86-0.88 of its instructions, a loop of eval'd reads 0.37.
     Left: the first access of each site per render (a fresh binding defines `_erbout`, which
     invalidates every site), and the cost of the eval itself.
+    perf/evalscreen (Landed): of the 80 ERB templates of the standard library (rdoc's 40
+    `.rhtml`, bundler's 39 `.tt`) and erb-shapes' page, 69 were shared and 11 refused - a regexp
+    literal in 6, `defined?` in 5 (all of a local), a range in 2 (bundler's, run once); a refused
+    template costs 2.7 times a shared one (3.40M instructions a render against 1.27M). `defined?`
+    is let in now: 72 of 80. Left: the regexp literal. CRuby makes a new Regexp per eval of the
+    same text (`eval("/a/").equal?(eval("/a/"))` is false; one eval's block gets the same one on
+    every call), so sharing the code needs the literal's cache box per eval - and a block of the
+    text reaches nothing per eval: it is compiled apart (BlockDispatcher) and sees only the
+    scope, which for `eval(s, binding)` is the binding's own. Untried: carrying an eval's literal
+    boxes on the Procs its code instantiates.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1777,6 +1787,49 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/evalscreen (/perf-step, 2026-11-27, on 4320d4a + perf/lexical b45360c) - an eval'd
+  text with `defined?` shares its compiled code (`IR_EVAL_SHARE_DEFINED`, gap 31)** -
+  instructions only, not gated. Measured first, which refusals of perf/erb36's screen real
+  templates hit (ERB.new(...).src of every `.erb`, `.rhtml` and `.tt` of Src/StdLib and
+  erb-shapes' page, parsed with Prism under CRuby): 80 templates, 69 shared, 11 refused - a
+  regexp literal in 6 (4 alone: `/^\w+\./m`, `%r{\A[^/]+(?=/)}`), `defined?` in 5 (3 alone, all
+  of a local: `defined?(current)`, `defined?(klass)`), a range in 2 (bundler's `0..1`, run once
+  per `bundle gem`); no `yield`, `super` or definitions. A refused render costs 2.7 times a
+  shared one: `erb_eval_regexp` 3,399,071 and `erb_eval_defined` 3,399,985 instructions against
+  `erb_eval_top` 1,271,530 (the page with one regexp, or one `defined?(title)`).
+  - The regexp, the most common, was not taken: CRuby makes a new Regexp per eval of the same
+    text (three evals, three objects; one eval's block, the same object on every call), so a
+    shared Regexp is observable through `equal?` and `object_id`, and making the cache box per
+    eval needs state a block of the text can reach - it cannot: a block is compiled apart
+    (BlockDispatcher) and sees only its scope, the binding's own (see gap 31).
+  - `defined?` keeps only what its operand's code keeps: of a local, the answer the compile
+    found in the locals the cache key holds; of a call, a call site; of a constant, a constant's
+    cache (which an allowed constant read keeps too); of an instance, global or class variable,
+    a runtime call. The screen walks into the operand, so `defined?(yield)` and `defined?(super)`
+    stay refused by their YieldCall and SuperCall. One line in `EvalCodeCache.Screen`, under the
+    switch. Templates shared: 69 -> 72 of 80 (darkfish's and aliki's `_head` and darkfish's
+    `index`; `_sidebar_pages` also has a regexp).
+  - Instructions a render (`Util/perf/callgrind/count.sh`, N=1000, switch off -> on):
+    `erb_eval_defined` 3,399,985 -> 1,251,786 (0.368); `erb_eval_top` 1,271,530 -> 1,270,311,
+    `erb_eval_regexp` 3,399,071 -> 3,394,511, `eval_small` 55,414 -> 55,414. Timed alone,
+    `erb_eval_defined` 639 -> 235 us. (Several callgrind processes of the switch-off arm died
+    with exit 1 and no output after a few shapes - every eval of a refused text compiles new
+    code under valgrind; run shape by shape they finish.)
+  - `Util/eval-defined-matrix.rb` (new: `defined?` of a local with and without it in the
+    binding, a method defined and removed, `o.m` made private and public, a constant and
+    `A::B` defined and removed, `@iv` under another self, `$g`, `@@cv`, String and ::Kernel,
+    an assignment, an expression, nil, `puts`, self; `defined?(yield)` and `defined?(super)`,
+    `__FILE__`/`__LINE__` with the file and line given, a method's frame and the top level,
+    four threads on one cached text, ERB) prints CRuby 4.0's output on the unchanged build, and
+    on the change with the switch on and off, `IR_EVAL_LOCAL_CACHE=0`, `IR_LIGHT_FRAMES=0`,
+    `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`; so do eval-locals, erb-escape, lexical-light,
+    block-scope-reuse and hot-shapes, and eval-matrix prints the unchanged build's. ruby/spec
+    `core/kernel/eval_spec.rb` 57 / 0, `core/binding` 98 / 0, `library/erb` 53 / 0,
+    `core/basicobject/instance_eval_spec.rb` 41 with the 3 known into/to errors - the same on
+    both builds. IronRuby.Tests `Eval_SharedDefined1` (new; passes with the switch off too) and
+    29 named eval, binding and defined? tests pass. The round's base needed DLR patches 0111 and
+    0112 applied to the DLR checkouts.
 
 - **perf/evallocals (/perf-step, 2026-11-27, on b887bc1 + perf/lexical a87b5dc) - a site of
   eval'd code remembers where a local it knows by name resolved (`IR_EVAL_LOCAL_CACHE`, gap
