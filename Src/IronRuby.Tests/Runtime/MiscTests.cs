@@ -3275,6 +3275,32 @@ t { ""\xe0"".force_encoding(""macThai"").ord }
 ");
         }
 
+        /// <summary>
+        /// MRI builds the transcoders' error messages with rb_sprintf, so an UndefinedConversionError,
+        /// InvalidByteSequenceError or ConverterNotFoundError raised by a conversion has a binary message;
+        /// one made with a message of its own keeps that string.
+        /// </summary>
+        public void Encoding_ErrorMessageBinary1() {
+            TestOutput(@"
+ec = Encoding::Converter.new(""UTF-8"", ""US-ASCII"")
+ec.primitive_convert(""\xE6\x97\xA5"".dup.force_encoding(""UTF-8""), """".b)
+p ec.last_error.message.encoding
+[""\xE6\x97\xA5"", ""\xFF""].each { |s| begin; s.dup.force_encoding(""UTF-8"").encode(""US-ASCII""); rescue => x; p [x.class, x.message, x.message.encoding]; end }
+begin; ""\xFF"".b.encode(""UTF-8""); rescue => x; p [x.message, x.message.encoding]; end
+begin; Encoding::Converter.new(""x"", ""y""); rescue => x; p [x.message, x.message.encoding]; end
+p Encoding::UndefinedConversionError.new(""m"").message.encoding
+p Encoding::UndefinedConversionError.new.message
+", @"
+#<Encoding:BINARY (ASCII-8BIT)>
+[Encoding::UndefinedConversionError, ""U+65E5 from UTF-8 to US-ASCII"", #<Encoding:BINARY (ASCII-8BIT)>]
+[Encoding::InvalidByteSequenceError, ""\""\\xFF\"" on UTF-8"", #<Encoding:BINARY (ASCII-8BIT)>]
+[""\""\\xFF\"" from ASCII-8BIT to UTF-8"", #<Encoding:BINARY (ASCII-8BIT)>]
+[""code converter not found (x to y)"", #<Encoding:BINARY (ASCII-8BIT)>]
+#<Encoding:UTF-8>
+""Encoding::UndefinedConversionError""
+");
+        }
+
         public void Encoding_Converter1() {
             TestOutput(@"
 def t
