@@ -9344,6 +9344,29 @@ t(:rational) { Rational(3, 2).round(3e9) }
         }
 
         /// <summary>
+        /// sort_by and min_by(n) gather the keys without calling a program's own Array#<<, as MRI's do.
+        /// </summary>
+        public void Enumerable_SortByOwnPush1() {
+            TestOutput(@"
+require 'ruby4'
+H = { a: 3, b: 1, c: 2, d: 1 }
+class Array; alias __saved_push__ <<; remove_method :<<; def <<(x) = raise(""no""); end
+begin
+  p H.sort_by { |k, v| v }, [3, 1, 2].sort_by { -_1 }, H.min_by(2) { |k, v| v }, (1..4).sort_by { -_1 }
+ensure
+  class Array; remove_method :<<; alias << __saved_push__; end
+end
+p [1] << 2
+", @"
+[[:b, 1], [:d, 1], [:c, 2], [:a, 3]]
+[3, 2, 1]
+[[:b, 1], [:d, 1]]
+[4, 3, 2, 1]
+[1, 2]
+");
+        }
+
+        /// <summary>
         /// The expression of an endless def is not a line to TracePoint :line (prism gives it no newline flag): CRuby reports
         /// no event for it, with or without a rescue modifier, but does for statements in parentheses in it and in a block.
         /// (The lines are one more than ruby's for the same text: the snippet starts on its second line.)
