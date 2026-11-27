@@ -40,9 +40,9 @@ namespace IronRuby.Runtime.Jit {
         private RubyClass _inlinedSelfClass;
         // A call was inlined on a parameter under a check of the one class the profile saw it hold (JitCode).
         private bool _inlinedOnArgumentClass;
-        // The locals nothing samples that a call was inlined on (UnsampledCallees), with the first class it was inlined
-        // for: what names the instance variable of an attribute read of the local (EmitMethodAttrRead).
-        private System.Collections.Generic.Dictionary<string, RubyClass> _unsampledClasses;
+        // The locals nothing samples that a call was inlined on (UnsampledCallees), with the classes it was inlined for:
+        // what names the instance variable of an attribute read or write of the local (UnsampledAttrVariable).
+        private System.Collections.Generic.Dictionary<string, RubyClass[]> _unsampledClasses;
 
         /// <summary>
         /// The call inlined (see the file header), or null if it is not a call of an inlinable
@@ -73,7 +73,8 @@ namespace IronRuby.Runtime.Jit {
                     !JitRuntime.InlineUnsampled || !UnsampledCallees(node.MethodName, args.Length, out cls, out code, out otherCls, out otherCode)) {
                     return null;
                 }
-                (_unsampledClasses ?? (_unsampledClasses = new System.Collections.Generic.Dictionary<string, RubyClass>()))[receiverLocal.Name] = cls;
+                (_unsampledClasses ?? (_unsampledClasses = new System.Collections.Generic.Dictionary<string, RubyClass[]>()))[receiverLocal.Name] =
+                    (otherCls != null) ? new[] { cls, otherCls } : new[] { cls };
             } else {
                 cls = JitRuntime.ClassOf(_context, sample);
                 if (cls.Context != _context) { return null; }
@@ -187,8 +188,8 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
-        /// The callees of a call on a local the profile has no sample of (TryInlineCall): the classes, constants of
-        /// Object, that define a method of the name themselves whose typed body may be inlined now (InlinableCallee),
+        /// The callees of a call on a local the profile has no sample of (TryInlineCall): the classes that define a
+        /// method of the name themselves (JitStub.ClassesDefining: any subclass of Object, nested in a module or not) whose typed body may be inlined now (InlinableCallee),
         /// one or two of them, two only if their bodies take and give the same types. Each is called under a check of
         /// its exact class, which deopts on any other (a subclass, a singleton class, a class whose method of the name
         /// has no such body, one with method_missing), and the entry's method version check covers a redefinition.
@@ -197,18 +198,7 @@ namespace IronRuby.Runtime.Jit {
         private bool UnsampledCallees(string/*!*/ name, int argc, out RubyClass cls, out JitCode code, out RubyClass otherCls, out JitCode otherCode) {
             cls = otherCls = null;
             code = otherCode = null;
-            var classes = new System.Collections.Generic.List<RubyClass>();
-            using (_context.ClassHierarchyLocker()) {
-                _context.ObjectClass.EnumerateConstants((module, constantName, value) => {
-                    var c = value as RubyClass;
-                    RubyMemberInfo method;
-                    if (c != null && c.Context == _context && !c.IsSingletonClass && !classes.Contains(c) && c.TryGetDefinedMethod(name, out method) &&
-                        method is RubyMethodInfo) {
-                        classes.Add(c);
-                    }
-                    return false;
-                });
-            }
+            var classes = JitStub.ClassesDefining(_context, name);
             bool notReady = _hints.CalleeNotReady;
             int ready = 0;
             foreach (var c in classes) {

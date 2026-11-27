@@ -1822,16 +1822,9 @@ namespace IronRuby.Runtime.Jit {
             var target = node.Target;
             object sample;
             if (!TrySample(target, out sample) || !(sample is RubyObject)) {
-                // A local nothing samples that a call was inlined on for a class (UnsampledCallees): the reader of that
-                // class names the variable; ReadSelfAttr binds to whatever class the object has and deopts unless the
-                // name is the same variable's reader there. Its value is an object.
-                var local = target as LocalVariable;
-                RubyClass inlinedFor;
-                if (local == null || local.DefinitionLexicalDepth != _scopeDepth || _unsampledClasses == null ||
-                    !_unsampledClasses.TryGetValue(local.Name, out inlinedFor)) {
-                    return null;
-                }
-                string name = JitRuntime.SelfAttrSite.ReaderVariable(inlinedFor, node.MethodName, true);
+                // A local nothing samples (UnsampledAttrVariable): ReadSelfAttr binds to whatever class the object has
+                // and deopts unless the name is the same variable's reader there. Its value is an object.
+                string name = UnsampledAttrVariable(target as LocalVariable, node.MethodName, false);
                 if (name == null || CanFallBack(target)) { return null; }
                 JT lt;
                 var localReceiver = Coerce(Emit(target, out lt), lt, JT.Obj);
@@ -1872,6 +1865,44 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// The instance variable an attribute reader (<paramref name="writer"/>: writer) of the name reads (writes) on a
+        /// local of the method nothing samples: the one the class a call on the local was inlined for names
+        /// (UnsampledCallees), or else the one every class names whose own method of the name is written in Ruby - each must
+        /// be a public attr_reader/attr_writer or a method that is one (SelfAttrSite), all of the same variable, and there
+        /// must be one (AgreedAccessorVariable). Null otherwise. Only the name is decided here: the read or write checks the class of the object it
+        /// meets, and deopts where the accessor is not that variable's (a private one, method_missing, another class's).
+        /// </summary>
+        private string UnsampledAttrVariable(LocalVariable local, string/*!*/ name, bool writer) {
+            if (!JitRuntime.InlineUnsampled || local == null || local.DefinitionLexicalDepth != _scopeDepth || !_refinements.IsEmpty) { return null; }
+            RubyClass[] inlinedFor;
+            if (_unsampledClasses != null && _unsampledClasses.TryGetValue(local.Name, out inlinedFor)) {
+                string agreed = AgreedAccessorVariable(inlinedFor, name, writer, false);
+                if (agreed != null) { return agreed; }
+            }
+            return AgreedAccessorVariable(JitStub.ClassesDefining(_context, name, true, true), name, writer, true);
+        }
+
+        // The one variable the accessors of the name on these classes read (write); null if there is none or two differ.
+        // strict: every class whose own method of the name is written in Ruby (an accessor, a def) must be such an accessor -
+        // a name some class defines as a real method (`to_s', `name') is no evidence of what an object nothing samples
+        // holds; only methods of the core library (Integer#next) are left out, as their classes' objects deopt where met.
+        // Not strict: a class that is no such accessor is skipped (the classes a call on the local was inlined for).
+        private static string AgreedAccessorVariable(IEnumerable<RubyClass>/*!*/ classes, string/*!*/ name, bool writer, bool strict) {
+            string found = null;
+            foreach (var cls in classes) {
+                string v = writer ? JitRuntime.SelfAttrSite.WriterVariable(cls, name, true) : JitRuntime.SelfAttrSite.ReaderVariable(cls, name, true);
+                if (v == null) {
+                    RubyMemberInfo own;
+                    if (strict && cls.TryGetDefinedMethod(name, out own) && !(own is RubyLibraryMethodInfo)) { return null; }
+                    continue;
+                }
+                if (found != null && found != v) { return null; }
+                found = v;
+            }
+            return found;
+        }
+
+        /// <summary>
         /// `@o.x = v', `o.x = v', `self.x = v' in a method, where the profiled receiver's x= is an attr_writer
         /// (or a method that is one): the store (JitRuntime.WriteAttr), under ReadSelfAttr's checks, which
         /// deopt before anything is written; a frozen receiver deopts too, so that its FrozenError comes
@@ -1883,9 +1914,17 @@ namespace IronRuby.Runtime.Jit {
             if (op != null || node.IsSafeNavigation || !_refinements.IsEmpty) { throw Bail("attribute assignment " + node.Name); }
             var target = node.Qualifier;
             object sample;
-            if (!TrySample(target, out sample) || !(sample is RubyObject)) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
             bool explicitReceiver = !(target is SelfReference);
-            string variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            string variableName;
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) {
+                // A local nothing samples: the variable the writers of the name write (UnsampledAttrVariable). The store
+                // below is the sampled one's: WriteAttr checks the class it meets, and deopts before writing anything.
+                sample = null;
+                variableName = UnsampledAttrVariable(target as LocalVariable, node.Name, true);
+                if (variableName == null) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
+            } else {
+                variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            }
             if (variableName == null && sample is RubyStruct) {
                 int member = JitRuntime.StructMemberSite.Member(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver, true);
                 if (member >= 0) { return EmitStructMemberWrite(node, right, member, explicitReceiver, out type); }
