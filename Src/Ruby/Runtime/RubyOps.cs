@@ -432,15 +432,25 @@ namespace IronRuby.Runtime {
         /// held go with the call, as they would with a tuple that is dropped.
         /// </summary>
         private static MutableTuple ClearForPark(MutableTuple locals) {
-            if (locals == null) {
+            // A locals tuple is MutableTuple<object, ...> of 1, 2, 4, 8 or 16 slots (MakeObjectTupleType), each deriving from the
+            // one half its size: its slots are set directly, without SetValue's virtual call and switch per slot.
+            if (!(locals is MutableTuple<object> t1) || locals.Capacity > MaxParkedLocals) {
                 return null;
             }
-            int capacity = locals.Capacity;
-            if (capacity > MaxParkedLocals) {
-                return null;
-            }
-            for (int i = 0; i < capacity; i++) {
-                locals.SetValue(i, null);
+            t1.Item000 = null;
+            if (locals is MutableTuple<object, object> t2) {
+                t2.Item001 = null;
+                if (locals is MutableTuple<object, object, object, object> t4) {
+                    t4.Item002 = null; t4.Item003 = null;
+                    if (locals is MutableTuple<object, object, object, object, object, object, object, object> t8) {
+                        t8.Item004 = null; t8.Item005 = null; t8.Item006 = null; t8.Item007 = null;
+                        if (locals is MutableTuple<object, object, object, object, object, object, object, object,
+                            object, object, object, object, object, object, object, object> t16) {
+                            t16.Item008 = null; t16.Item009 = null; t16.Item010 = null; t16.Item011 = null;
+                            t16.Item012 = null; t16.Item013 = null; t16.Item014 = null; t16.Item015 = null;
+                        }
+                    }
+                }
             }
             return locals;
         }
