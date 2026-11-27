@@ -1776,6 +1776,38 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/lightmember (2026-11-27) - `recv.m op= v` in a light frame (gap 9)** - not gated. Chosen by the census of
+  4320d4a + perf/neqrule: what keeps methods out of light frames is now mostly a regular expression whose method sets the
+  caller's `$~` (gsub 273, `=~` 230, sub 104, `when` 86, scan 71, split 63, match 54 - about 880 methods, which
+  perf/regexlight found need a cheaper late scope or second call, not a filter change), a Range in a body with literal
+  blocks (158, kept out on purpose: measured slower), lambdas (73), and then `o.x op= v` (38) - which nothing in it
+  needs the scope for. Keyword parameters, which gap 9 named, are no longer on the list.
+  - Why the construct had the scope: no reason but the filter's - `IsScopeFree` had no case for a
+    MemberAssignmentExpression and refused it by default. What the frame must answer instead: nothing. The node is the
+    call of m on the receiver (kept in a hidden CLR variable of the lambda, not a scope local), the operator's call or
+    `||`/`&&`, and the call of m= with the right-hand side as its value (MemberAssignmentExpression.TransformReadCore),
+    sites like those of `o.x = o.x + 1`, which a light frame takes; `o&.x op= v` is a nil test around one
+    (PrismAstBridge.MemberOpAssign). What forces the scope at run time when something reaches for it: the same as for
+    any light call - a rule that needs the caller's scope answers LightScopeRequired, and binding, eval and
+    local_variables make it then (all in the matrix). Switch: `IR_LIGHT_MEMBER_OPASSIGN=0`.
+  - Census (Src/StdLib + AWFY, 28,377 methods): light frames 26,693 -> 26,732 (+39, 94.1% -> 94.2%), none down; the
+    JIT's counts unchanged. In app-shapes' run one method of the kind.
+  - Time (`Util/bench/prelude-cost.rb`, `ab.rb -r 6`, ns; CRuby / base / switch off / new): `m_opassign` (`o.x += 1`)
+    33.2 / 78.0 / 78.0 / 41.7 (0.53), `m_orassign` (`o.y ||= v`) 32.0 / 73.6 / 73.9 / 35.8 (0.48), `m_self_opassign`
+    31.6 / 75.8 / 73.5 / 42.0 (0.57); their written-out forms and the controls `d_one`, `kr_rest`, `p_plain_opt` level.
+  - Checks: the new `Util/light-member-opassign-matrix.rb` (`+=`, `-=`, `||=`, `&&=`, `<<` and `+=` on a list, `&.`;
+    the value is the right-hand side whatever m= returns; a private accessor on self and on another object; x=
+    redefined and removed after binding; a singleton x; method_missing; a BasicObject receiver; a refinement in
+    force and not; NoMethodError on nil and an Object, FrozenError; binding, local_variables, eval, a block that
+    op-assigns, raise and its label, recursion, `__method__`, block_given?; send, public_send, Method#call,
+    define_method; a TracePoint; threads), light-entry, hot-shapes, block-pass, jit, block-given, light-rest and
+    super-light: CRuby's output in all seven gate modes (as built, NoJIT, NoJITCalls, IR_LIGHT_FRAMES=0,
+    IR_PARKED_SCOPES=0, the ReadyToRun host, the switch off) on both trees, 56 of 56. ruby/spec language
+    optional_assignments, assignments and safe_navigator: no failures on either. IronRuby.Tests: the new
+    Method_LightFrameMemberOpAssign1 and the 42 other tests named for light frames and assignments pass.
+  - Found on the base, left: IronRuby's TracePoint does not report attr_accessor's reader and writer as `:c_call`
+    (CRuby does); the matrix traces only the method's own `:call`.
+
 - **perf/neqrule (2026-11-27) - `a != b` on plain objects is one rule for every class (gaps 10 and 12)** -
   not gated. `DispatchIntrinsics.TryBuildNotEquals` (#215) binds `a != b` as `!a.equal?(b)` when the
   receiver's `==` is BasicObject's, and `MaySpecialize` kept such rules out of IronRuby's shared rules, so a

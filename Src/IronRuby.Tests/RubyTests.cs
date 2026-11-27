@@ -1157,6 +1157,7 @@ namespace IronRuby.Tests {
                 Method_LightFrameBlockGuard1,
                 Method_LightFrameBlockGiven1,
                 Method_LightFrameRest1,
+                Method_LightFrameMemberOpAssign1,
                 Method_LightFrameKeywordRest1,
                 Method_KeywordHashIntoRest1,
                 Method_KeywordPrologue1,

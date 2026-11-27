@@ -7888,6 +7888,48 @@ false
         }
 
         /// <summary>
+        /// `recv.m op= v' in a light frame (IR_LIGHT_MEMBER_OPASSIGN): the read of m, the operator and the write of m= are calls of
+        /// the frame's light sites; the value is the right-hand side whatever m= returns; a private accessor on self; `&.'; binding.
+        /// </summary>
+        public void Method_LightFrameMemberOpAssign1() {
+            TestOutput(@"
+require 'ruby4'
+class Box; attr_accessor :x, :y; def initialize(x = 0) = (@x = x); end
+class Odd; def x = 5; def x=(v); @s = v; :ignored; end; attr_reader :s; end
+class Priv; def initialize = (@x = 1); def bump = (self.x += 1); private; attr_accessor :x; end
+def plus(o) = (o.x += 1)
+def ored(o, v) = (o.y ||= v)
+def anded(o, v) = (o.y &&= v)
+def safe(o) = (o&.x += 1)
+def seen(o) = (o.x += 1; _w = 3; binding.local_variable_get(:_w) + o.x)
+def boom(o)
+  o.x += 1
+  raise ""boom""
+end
+p plus(Box.new), ored(Box.new, 2), anded(Box.new, 2), safe(nil), safe(Box.new(4)), seen(Box.new)
+o = Odd.new
+p plus(o), o.s, Priv.new.bump
+p 40.times.map { |i| plus(Box.new(i % 3)) }.uniq, 40.times.map { |i| ored(Box.new, i) }.sum
+begin; plus(Object.new); rescue NoMethodError => e; p e.message; end
+begin; boom(Box.new); rescue => e; p e.backtrace[0][/in .*/]; end
+", @"
+1
+2
+nil
+nil
+5
+4
+6
+6
+2
+[1, 2, 3]
+780
+""undefined method 'x' for an instance of Object""
+""in 'Object#boom'""
+");
+        }
+
+        /// <summary>
         /// IR_LIGHT_KEYWORD_REST and IR_LIGHT_KEYWORD_SPLAT: keywords beside a rest or post parameter, bound out of one splat
         /// (PrismAstBridge.LowerGeneralParameters), and a hash passed on as keywords, in a light frame
         /// (Util/keyword-rest-light-matrix.rb).
