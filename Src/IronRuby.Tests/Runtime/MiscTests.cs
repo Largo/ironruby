@@ -8766,5 +8766,25 @@ p lines
 [[4, :e3], [6, :e5], [7, :e6], [9, :e7], [11, :n1]]
 ");
         }
+
+        /// <summary>
+        /// Float#divmod of an infinite dividend by a finite divisor: MRI's flodivmod takes the quotient as the dividend itself,
+        /// so Float::INFINITY.divmod(-2) is FloatDomainError "Infinity".
+        /// </summary>
+        public void Float_DivmodInfinite1() {
+            TestOutput(@"
+require 'ruby4'
+[-> { Float::INFINITY.divmod(-2) }, -> { (-Float::INFINITY).divmod(2) }, -> { Float::INFINITY.divmod(2.5) }, -> { Float::NAN.divmod(2) },
+ -> { Float::INFINITY.div(-2) }, -> { Float::INFINITY % -2 }, -> { 7.5.divmod(-2) }].each { |l| p((l.call rescue $!)) }
+", @"
+#<FloatDomainError: Infinity>
+#<FloatDomainError: -Infinity>
+#<FloatDomainError: Infinity>
+#<FloatDomainError: NaN>
+#<FloatDomainError: -Infinity>
+NaN
+[-4, -0.5]
+");
+        }
     }
 }
