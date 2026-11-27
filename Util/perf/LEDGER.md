@@ -1688,6 +1688,46 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   sets ScopeRead) and method_missing's reason - and Module#dup/#clone, which now copies before
   initialize_copy (anything that relied on Module#initialize_copy copying, e.g. a re-run
   initialize_copy, gets Kernel's).
+  Second round (2026-11-27, on b887bc1): the causes of the gate's "baseline" rows. All matrices,
+  as built, this branch against b887bc1: lines differing from CRuby 14,255 -> 414, baseline
+  matrices 28 -> 19 (chr, format-c, format-c-bytes, format, pack, unpack, ungetc, encode,
+  string-methods, value-object, hash-literal, interpolation, hot-shapes, light-entry, struct now
+  same). One commit per cause, each with CRuby 4.0's output as a registered IronRuby.Tests case:
+  - Integer#chr and String#<< of a code above 0xFF in a single byte encoding: "invalid codepoint
+    0x100 in US-ASCII" (CRuby 4.0's onigmo), and UTF-32 from 0x80000000 up invalid too; "out of
+    char range" stays for << onto BINARY/US-ASCII and argument-less chr. chr-matrix 9,011 lines.
+    Integer_ChrSingleByte1 (Integer_ChrMultibyte1's expectation regenerated from 4.0.10).
+  - %c of such a code: "invalid character" (BINARY and US-ASCII keep "out of char range").
+    format-c and format-c-bytes, 4,682 lines. Sprintf_CharacterSingleByte1.
+  - Math.log(x, base) as rb_math_log (pole first, log2 quotient plus the shifted bits, a size_t),
+    atan2/hypot converting the second argument first, Math.sqrt of a Complex. math-matrix 97 -> 37.
+    Math_LogBaseAndOrder1.
+  - A respond_to? that claims to_ary/to_str/to_hash without the method, default method_missing:
+    no conversion (rb_check_funcall), in the binder's rule and the prelude's try_convert.
+    array2 19 rows. Protocol_RespondToWithoutMethod1.
+  - Integer#fdiv of a coerced result as a Float; Integer#remainder (dividend for an infinite
+    divisor, Bignum coercing with remainder); Float::INFINITY.divmod's "Infinity"; Rational#coerce's
+    class name and Numeric#divmod's modulo first. coerce-matrix 22 -> 4. Four tests.
+  - Kernel#Integer: sign-only strings "invalid value" before the radix, message via rb_inspect;
+    Rational()/Complex() naming true/false. numeric-conversion 18 -> 2. Two tests.
+  - sprintf directives cut short: "malformed format string", after fetching %1$ / %<name>'s
+    argument. format-matrix 16 -> 0. Sprintf_MalformedEnd1.
+  - Array#pack floats take a Numeric only (rb_to_float); unpack's "@" at the end counts 1;
+    String#undump passes \s and \0 through; String#encode's options keywords only; String#tr!
+    checks encodings before frozenness (a leftover of the first round). Five tests.
+  Left, with the reason: the "from nil to integer" / "gives NilClass" wording ruby/spec pins the
+  other way (array2 63, math 37, numeric-conversion 2); `x << 2**64`, a NoMemoryError in CRuby
+  (coerce 4); 42.compare_to (deliberate interop); ffi-matrix (CRuby does not exit 0);
+  regexp-binary-ctype's ISO-8859-1 column (25 rows: the regexp translator would need Onigmo's
+  ISO-8859-1 ctype table beside its ASCII one); emacs-mule (CRuby's own oddities); strftime
+  (%:% and friends), strptime, caller and thread-backtrace frames, marshal, converter and
+  io-conversion messages, stdre's URI regexp, eval's regexp warning, Enumerator::Lazy's prepended
+  helper in its ancestors, int-matrix's (2**100).equal?, the heredoc part's frame line and
+  `frozen << Object.new` (the binder converts first) - each a cause of its own, one or a few rows.
+  For the gate: callable-parameters-matrix shows a DIFF only because ruby4.rb's lines moved
+  (method(:puts).to_proc.source_location; CRuby says nil on both); Kernel#Integer(String) now
+  takes the context (one more argument on that fast path); the binder's conversion rule for an
+  overridden respond_to? resolves to_xxx and method_missing at build time.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
