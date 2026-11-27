@@ -522,7 +522,7 @@ namespace IronRuby.Runtime.Calls {
             if (visibility == RubyMethodVisibility.Protected || !allVisible && visibility != RubyMethodVisibility.Public) {
                 return false;
             }
-            if (DispatchIntrinsics.MaySpecialize(lookup.Info, Signature, targetClass)) {
+            if (DispatchIntrinsics.MaySpecialize(lookup.Info, Signature, targetClass, target)) {
                 return false;
             }
 
