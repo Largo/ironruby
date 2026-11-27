@@ -471,11 +471,58 @@ namespace IronRuby.Runtime.Calls {
             }
             bool publicOnly = Signature.HasScope && !Signature.HasImplicitSelf && !Signature.HasLightScope && !Signature.IsInteropCall;
 
+            if (TryShareVersionFromLookup(context, target, publicOnly, versionSet)) {
+                return true;
+            }
+
             int version;
             RubyMemberInfo member;
             bool isMissing;
             if (!ResolveShared(context, context.EmptyScope, target, publicOnly, out version, out member, out isMissing) ||
                 member != versionSet.Member || isMissing != versionSet.IsMissing) {
+                return false;
+            }
+
+            versionSet.TryAdd(version);
+            return true;
+        }
+
+        // IR_SINGLETON_LOOKUP=0: the test resolves a new version under the class hierarchy lock only (see TryShareVersionFromLookup).
+        private static readonly bool _ShareFromLookup = Environment.GetEnvironmentVariable("IR_SINGLETON_LOOKUP") != "0";
+
+        /// <summary>
+        /// TryShareVersion's answer for a version whose class has the call's method in its lookup cache (RubyModule.GetMethodLookup):
+        /// true if the call resolves there to the rule's method, as ResolveShared would resolve it, and the version is then added.
+        /// The cache is read without the class hierarchy lock, and is kept per class version and registered for invalidation as a
+        /// call site's resolution is, so an answer filed for the version is the one ResolveShared would give for it. Only a call
+        /// that finds the method is answered: a method_missing call, one whose visibility or method does not match, a name some
+        /// refinement has (whose call may depend on the caller's refinements) and an answer the cache does not keep go to
+        /// ResolveShared. A singleton class re-versioned by each definition on its object (OpenStruct's) finds its lookups in its
+        /// superclass's cache (RubyModule.InheritsMethodLookupNoLock), so the version is taken in without a walk of the ancestors.
+        /// </summary>
+        private bool TryShareVersionFromLookup(RubyContext/*!*/ context, object/*!*/ target, bool publicOnly, RuleVersionSet/*!*/ versionSet) {
+            if (!_ShareFromLookup || versionSet.IsMissing || context.IsRefinedMethodName(_methodName)) {
+                return false;
+            }
+            RubyClass targetClass = context.GetImmediateClassOf(target);
+            if (targetClass.Context != context) {
+                return false;
+            }
+
+            int version;
+            var lookup = targetClass.GetMethodLookup(_methodName, out version);
+            if (version < 0 || !lookup.Found || lookup.Info != versionSet.Member ||
+                lookup.Info.GetType() != typeof(RubyLibraryMethodInfo) && lookup.Info.GetType() != typeof(RubyMethodInfo)) {
+                return false;
+            }
+
+            // ResolveShared's visibility (with the empty scope): public only, or all visible; a protected method is not shared.
+            var visibility = lookup.Visibility;
+            bool allVisible = !publicOnly && !(Signature.HasLightScope && !Signature.HasImplicitSelf) && !Signature.IsInteropCall;
+            if (visibility == RubyMethodVisibility.Protected || !allVisible && visibility != RubyMethodVisibility.Public) {
+                return false;
+            }
+            if (DispatchIntrinsics.MaySpecialize(lookup.Info, Signature, targetClass)) {
                 return false;
             }
 

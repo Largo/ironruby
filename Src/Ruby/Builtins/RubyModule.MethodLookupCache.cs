@@ -107,6 +107,20 @@ namespace IronRuby.Builtins {
                 version = table.Version;
                 return entry;
             }
+
+            // A singleton class that finds what its superclass finds for every name it has no entry for (see InheritedLookups):
+            var inherited = Volatile.Read(ref _inheritedLookups);
+            if (inherited != null && inherited.Version == Version.Method && !inherited.HasOwn(name)) {
+                int superVersion;
+                entry = ((RubyClass)this).SuperClass.GetMethodLookup(name, out superVersion);
+
+                // Nothing in this class changed meanwhile: a change of its own table or modules drops the snapshot under the
+                // class hierarchy lock, which a fill of the superclass's answer takes as well (see InheritedLookups).
+                if (superVersion >= 0 && Volatile.Read(ref _inheritedLookups) == inherited && inherited.Version == Version.Method) {
+                    version = inherited.Version;
+                    return entry;
+                }
+            }
             return FillMethodLookup(name, out version);
         }
 
@@ -114,6 +128,24 @@ namespace IronRuby.Builtins {
             publishedVersion = -1;
             using (Context.ClassHierarchyLocker()) {
                 int version = Version.Method;
+
+                // Not while a library method table is being populated: its methods go in without the
+                // version bump a later definition would make.
+                if (Context.MethodTableInitializationDepth == 0 && InheritsMethodLookupsNoLock()) {
+                    var inherited = _inheritedLookups;
+                    if (inherited == null || inherited.Version != version) {
+                        Volatile.Write(ref _inheritedLookups, inherited = new InheritedLookups(version, _methods));
+                    }
+                    if (!inherited.HasOwn(name)) {
+                        int superVersion;
+                        var inheritedEntry = ((RubyClass)this).SuperClass.GetMethodLookup(name, out superVersion);
+                        if (superVersion >= 0 && Version.Method == version) {
+                            publishedVersion = version;
+                        }
+                        return inheritedEntry;
+                    }
+                }
+
                 var entry = ResolveMethodLookupNoLock(name);
 
                 // Not while a library method table is being populated: its methods go in without the
@@ -147,6 +179,74 @@ namespace IronRuby.Builtins {
                 publishedVersion = version;
                 return entry;
             }
+        }
+
+        // IR_SINGLETON_LOOKUP=0: a singleton class's lookups are filed in its own cache as any class's (see InheritedLookups).
+        private static readonly bool _InheritLookups = Environment.GetEnvironmentVariable("IR_SINGLETON_LOOKUP") != "0";
+
+        /// <summary>
+        /// The names in the method table of a singleton class that answers every other lookup from its superclass's cache
+        /// (see <see cref="InheritsMethodLookupsNoLock"/>), as of a method version of the class.
+        ///
+        /// Each definition on an object that gets methods of its own (OpenStruct's define_singleton_method! of every member)
+        /// re-versions its singleton class and so empties the class's lookup cache, and each name asked again then walked the
+        /// ancestors and copied the cache's table to file one more entry - some thirty lookups (the hooks, respond_to?, the
+        /// shared rules' tests) per OpenStruct. The superclass's cache stays warm across all such objects, so a lookup of a name
+        /// the singleton class has no entry for is answered there, without the class hierarchy lock, and nothing is filed.
+        ///
+        /// The answer is kept by its callers under this class's version, as a filed one is, and is right for as long: the
+        /// superclass's fill registered it for invalidation (InvalidateSitesOnOverride, MissingMethodsCachedInSites), so a
+        /// definition of the name here re-versions this class, as anything that changes the superclass's answer does. A
+        /// definition of a name nobody has asked for does not re-version it, though, so the snapshot of the names is dropped
+        /// (under the class hierarchy lock) by every change of the method table or of the modules, and the reader checks it is
+        /// still the current one after taking the superclass's answer: a superclass fill that registered the name took the
+        /// lock after any definition that had not seen the registration.
+        /// </summary>
+        private sealed class InheritedLookups {
+            internal readonly int Version;
+            private readonly string/*!*/[]/*!*/ _ownNames;
+
+            internal InheritedLookups(int version, Dictionary<string, RubyMemberInfo> methods) {
+                Version = version;
+                if (methods == null || methods.Count == 0) {
+                    _ownNames = Array.Empty<string>();
+                } else {
+                    _ownNames = new string[methods.Count];
+                    methods.Keys.CopyTo(_ownNames, 0);
+                }
+            }
+
+            // any entry, a hidden or undefined one too
+            internal bool HasOwn(string/*!*/ name) {
+                foreach (string own in _ownNames) {
+                    if (String.Equals(own, name)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        // Dropped by every change of this module's method table or modules (under the class hierarchy lock):
+        private InheritedLookups _inheritedLookups;
+
+        // Past this many own methods a singleton class files its lookups (the names are searched one by one).
+        private const int MaxInheritedLookupOwnNames = 16;
+
+        /// <summary>
+        /// True if this is the singleton class of a plain Ruby object (not a module) that has no modules included in it or
+        /// prepended to it, nor many methods of its own: a walk from it for a name it has no entry for is its superclass's walk
+        /// (FindMethodInAncestorsNoLock), and finds the same method and owner. See <see cref="InheritedLookups"/>.
+        /// </summary>
+        private bool InheritsMethodLookupsNoLock() {
+            var cls = this as RubyClass;
+            if (!_InheritLookups || cls == null || !cls.IsSingletonClass || cls.SuperClass == null ||
+                !(cls.SingletonClassOf is IRubyObject) || cls.SingletonClassOf is RubyModule || TypeTracker != null ||
+                _prepends.Length != 0 || _mixins.Length != 0) {
+                return false;
+            }
+            InitializeMethodsNoLock();
+            return _methods == null || _methods.Count <= MaxInheritedLookupOwnNames;
         }
 
         /// <summary>
