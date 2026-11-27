@@ -8908,5 +8908,41 @@ class N < Numeric; def to_f = 2.5; end
 #<TypeError: can't convert Symbol into Float>
 ");
         }
+
+        /// <summary>
+        /// String#unpack's "@" with no count seeks to 0, but at the end of the format it counts 1, as every directive does there
+        /// (MRI's p >= pend: len = 1): "".unpack("@") is "@ outside of string", "".unpack("@C") [nil]. Util/unpack-matrix.rb.
+        /// </summary>
+        public void Unpack_AtEnd1() {
+            TestOutput(@"
+require 'ruby4'
+["""", ""a"", ""ab""].each { |s| [""@"", ""C@"", ""@C"", ""x@"", ""@0"", ""C@0"", ""@*"", ""C@*""].each { |f| puts ""#{s.inspect} #{f} #{(s.unpack(f) rescue $!.message).inspect}"" } }
+", @"
+"""" @ ""@ outside of string""
+"""" C@ ""@ outside of string""
+"""" @C [nil]
+"""" x@ ""x outside of string""
+"""" @0 []
+"""" C@0 [nil]
+"""" @* []
+"""" C@* [nil]
+""a"" @ []
+""a"" C@ [97]
+""a"" @C [97]
+""a"" x@ []
+""a"" @0 []
+""a"" C@0 [97]
+""a"" @* []
+""a"" C@* [97]
+""ab"" @ []
+""ab"" C@ [97]
+""ab"" @C [97]
+""ab"" x@ []
+""ab"" @0 []
+""ab"" C@0 [97]
+""ab"" @* []
+""ab"" C@* [97]
+");
+        }
     }
 }

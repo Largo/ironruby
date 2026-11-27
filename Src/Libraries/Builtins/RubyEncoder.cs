@@ -1227,11 +1227,14 @@ namespace IronRuby.Builtins {
                     } else if (c2 == '*') {
                         count = null;
                     } else {
+                        bool last = i >= format.Length;
                         i--;
-                        if (c == '@' && !packing) {
+                        if (c == '@' && !packing && !last) {
                             // "@" with no count is the one place the two directions part company:
                             // pack seeks to 1, like every other directive's default count, while
-                            // unpack seeks to the start.
+                            // unpack seeks to the start - unless the "@" ends the format, where MRI's
+                            // unpack takes the count as 1 too (p >= pend: len = 1), so "".unpack("@")
+                            // is "@ outside of string" while "".unpack("@C") is [nil].
                             count = 0;
                         }
                     }
