@@ -360,6 +360,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _InstantiateBlock;
         public static MethodInfo/*!*/ InstantiateLambda { get { return _InstantiateLambda ?? (_InstantiateLambda = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Builtins.Proc>(RubyOps.InstantiateLambda)); } }
         private static MethodInfo _InstantiateLambda;
+        public static MethodInfo/*!*/ InstantiateNestedParkedBlock { get { return _InstantiateNestedParkedBlock ?? (_InstantiateNestedParkedBlock = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.RubyBlockScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, System.Int32, IronRuby.Builtins.Proc>(RubyOps.InstantiateNestedParkedBlock)); } }
+        private static MethodInfo _InstantiateNestedParkedBlock;
         public static MethodInfo/*!*/ InstantiateParkedBlock { get { return _InstantiateParkedBlock ?? (_InstantiateParkedBlock = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Runtime.ParkedProcs, System.Int32, IronRuby.Builtins.Proc>(RubyOps.InstantiateParkedBlock)); } }
         private static MethodInfo _InstantiateParkedBlock;
         public static MethodInfo/*!*/ InstantiateReusableBlock { get { return _InstantiateReusableBlock ?? (_InstantiateReusableBlock = CallInstruction.CacheFunc<IronRuby.Builtins.Proc, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, IronRuby.Builtins.Proc>(RubyOps.InstantiateReusableBlock)); } }
@@ -570,6 +572,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ObjectToMutableString;
         public static MethodInfo/*!*/ ObjectToString { get { return _ObjectToString ?? (_ObjectToString = CallInstruction.CacheFunc<IronRuby.Runtime.IRubyObject, System.String>(RubyOps.ObjectToString)); } }
         private static MethodInfo _ObjectToString;
+        public static MethodInfo/*!*/ ParkNestedProc { get { return _ParkNestedProc ?? (_ParkNestedProc = CallInstruction.CacheFunc<IronRuby.Runtime.RubyBlockScope, System.Int32, System.Int32, IronRuby.Builtins.Proc, System.Boolean>(RubyOps.ParkNestedProc)); } }
+        private static MethodInfo _ParkNestedProc;
         public static MethodInfo/*!*/ PassOnKeywordRest { get { return _PassOnKeywordRest ?? (_PassOnKeywordRest = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, IronRuby.Builtins.Hash>(RubyOps.PassOnKeywordRest)); } }
         private static MethodInfo _PassOnKeywordRest;
         public static MethodInfo/*!*/ PopKeywordArguments { get { return _PopKeywordArguments ?? (_PopKeywordArguments = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Hash>(RubyOps.PopKeywordArguments)); } }
@@ -740,6 +744,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _TryToStringValidator;
         public static MethodInfo/*!*/ UndefineMethod { get { return _UndefineMethod ?? (_UndefineMethod = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.String>(RubyOps.UndefineMethod)); } }
         private static MethodInfo _UndefineMethod;
+        public static MethodInfo/*!*/ UnparkBlockScope { get { return _UnparkBlockScope ?? (_UnparkBlockScope = CallInstruction.CacheAction<IronRuby.Runtime.RubyBlockScope>(RubyOps.UnparkBlockScope)); } }
+        private static MethodInfo _UnparkBlockScope;
         public static MethodInfo/*!*/ Unsplat { get { return _Unsplat ?? (_Unsplat = CallInstruction.CacheFunc<System.Object, System.Collections.IList>(RubyOps.Unsplat)); } }
         private static MethodInfo _Unsplat;
         public static MethodInfo/*!*/ UpdateProfileTicks { get { return _UpdateProfileTicks ?? (_UpdateProfileTicks = CallInstruction.CacheAction<System.Int32, System.Int64>(RubyOps.UpdateProfileTicks)); } }

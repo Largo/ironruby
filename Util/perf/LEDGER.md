@@ -802,6 +802,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
    Closed in round ten: with `DATA_SIZE.times { }` rewritten as a `while` loop Richards
    allocates 3,204,249 bytes per iteration against 3,198,021 as written, so the inner
    block costs nothing measurable any more (round nine runs it in the compiled copy).
+   Round thirty-seven: it allocates 12.8 MB per iteration again (alloc.rb, 2f8c31c), and
+   perf/iter's reuse of a block holding a literal takes it to 2.4 MB (see Landed).
 7. **Json**: the 40 B String per character read is what is left of `@input[@index]`
    (its content is shared now); two Integer boxes per `read` (`@input.length`,
    `@index += 1` - see Rejected, perf/box, for what caching them buys and costs);
@@ -964,6 +966,16 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the walk about 12% faster and a megamorphic call without a block 2.2 times slower:
     reverted. A per-site table from class to dispatcher is worth at most about 10% of the
     walk. `Prism.parse` itself (not in the shape) is 8 times CRuby's.
+    Round thirty-seven (perf/iter, see Landed, not gated) measured the four parts on one
+    element against CRuby: a literal inside a block 111 ns and 302 B against 44 (`n.times {
+    o.e { |c| s += c } }`), `each1` 131/77 B against 72, a Ruby-level iterator 125/77 B
+    against 55, `upto1` 151/389 B against 70, `any1` 149/374 B against 52, `find1` 292/885 B
+    against 66, `each_with_index1` 415/1205 B against 134, `(1..k).each` 120/117 B against
+    141. It took the first: a block holding a literal now reuses its scope and the literal's
+    Proc as a block without one reuses its scope - 302 -> 46 B (what a call without a block
+    allocates), 0.51-0.70 of the time. Left: `any?`, `find` and `each_with_index` (Enumerable's
+    C# goes through `each` and a SplattingBlock: the bytes are its own, not the parking's) and
+    the literal given to a core iterator outside the parked list.
 14. **DeltaBlue: `Vector#each`** (`(@first_idx..(@last_idx - 1)).each { |i| yield
     @storage[i] }`) is about 20% of its samples by nearest Ruby frame (8.9% the method,
     11.3% its block), and no call site owns more than 1.2% of the 24% in
@@ -2713,6 +2725,66 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   sets ScopeRead) and method_missing's reason - and Module#dup/#clone, which now copies before
   initialize_copy (anything that relied on Module#initialize_copy copying, e.g. a re-run
   initialize_copy, gets Kernel's).
+
+- **perf/iter (round thirty-seven, 2026-11-26) - a block that holds a block literal reuses its scope
+  and the literal's Proc (gaps 13 and 6)** - instructions and bytes, not gated. A block whose
+  body has a block literal (`a.each { |x| o.e { |c| s += c } }`, Richards' worker block with
+  `DATA_SIZE.times { }`, prism's `each_child_node` walks) made a scope, a Proc and a BlockParam on
+  every call: the literal's Proc is over the block's scope, so `BlockDefinition` never let such a
+  block reuse its scope (`!HasNestedBlock`) nor the literal its Proc across calls (its `#proc`
+  variable is a CLR local of the block's frame). Now a literal written in a block's own body
+  registers with the block (`BlockScope.ParkProcVariables`) and is made by
+  `RubyOps.InstantiateNestedParkedBlock`; a block all of whose literals do so reuses its scope as a
+  block without one does. At the normal end of a call whose scope `LeaveReusableBlockScope` kept on
+  the BlockParam, `ParkNestedProc` keeps the last Proc of each literal on the scope
+  (`RubyBlockScope.ParkedNested`, a Proc or a Proc[], and the thread) if `IsReusableAndInactive`,
+  and otherwise `UnparkBlockScope` takes the scope back: a Proc given to anything but a light frame
+  or a [BlockNotKept] iterator, or a scope it ran in captured, keeps the scope from being reused. A
+  Proc of a literal the same call replaced may be held anywhere and reaches the scope: it marks the
+  scope captured (as `InstantiateParkedBlock` does for a method). The next call that takes the
+  scope makes the kept Procs again (`Proc.ReuseParked` with its self, dropping the BlockParam
+  another thread made). A lambda, a literal that does not reuse its Proc, or one in a module body
+  inside the block keeps the old path (`HasUnparkableNestedBlock`). The first call through a
+  BlockParam still keeps nothing (`ParkScope`), so a block run once per BlockParam pays only the
+  field. `IR_PARKED_BLOCK_SCOPES=0` (or `IR_PARKED_SCOPES=0`) is the old code.
+  Bytes per call (`Util/bench/nest-shapes.rb`, the thread's allocated bytes): the literal inside a
+  block 302 -> 46 B, the same as a call without a block. Instructions (callgrind, new over the
+  switch off): `light` 0.927, `each` 0.910, `two` 0.946, `kids` 0.953, `el3` 0.999, `el2` 1.026
+  (two elements: the second call keeps the scope and nothing reuses it), `once` 1.012 (a first run
+  of the whole file said 2.509 for it; counted again alone, twice, 1.012), controls `flat` 1.004,
+  `noblk` 1.001, `meth` 0.978. Time, four alternating rounds on a host at load 2-20: `light` 110 ->
+  66 ns (0.59; CRuby 48), `each` 114 -> 64 (0.51, overlapping; CRuby 64), `two` 168 -> 127 (0.70;
+  CRuby 104), `kids` 0.86, `el3` 0.94, `el2` 1.07 and `once` 1.00 overlapping. alloc.rb, all
+  fourteen: Richards 12,843,062 -> 2,444,179 B per iteration, Bounce 7,297,784 -> 5,471,207,
+  geomean 0.889; up: Sieve +1.3% (+1.6 MB, the same with the switch off: `ParkedNested` makes every
+  RubyBlockScope 8 B larger, and Sieve makes some 200,000 a iteration that are not reused),
+  DeltaBlue +0.4%, Permute +0.2%, Havlak +0.2%, CD +0.1%; Towers moves by a third between runs of
+  the same build (113 and 147 KB). AWFY under callgrind, instructions per benchmark call, new over
+  off: Richards 0.999, Bounce 0.998, DeltaBlue 1.000, Queens 0.998, Permute 1.000 - Richards' bytes
+  are not its time (its clock on the busy host: medians 4% either way between processes).
+  pwalk36: `walk` 0.995, `plain` 0.989, `each_child` 0.989 and `compact` 1.013 with 5-8% between
+  processes (prism's walk collects inside the sections). core-small under callgrind, new over
+  base: `each`, `inject`, `each_with_index`, `map_w_index`, `any`, `times`, `upto`, `range_each`,
+  `hash_each` 1.000, `find` 0.993, `group_by` 1.001.
+  Matrices (`Util/perf/gate-matrices.rb`, base 2f8c31c): `Util/block-nest-reuse-matrix.rb` (new:
+  &b kept by a method or in an ivar, the literal made three times in one call with the middle one
+  kept, proc, lambda, define_method, Binding of either scope, eval, a Hash default proc, an
+  Enumerator, lazy, a Thread, break/next/return/raise from the inner and the outer block,
+  recursion through the outer Proc and through the iterator, another self by define_method and
+  instance_exec, a Fiber suspended in the inner block, Enumerator#next, two literals one kept, a
+  literal in a `class << o` body, four threads calling one outer Proc and running one each,
+  TracePoint enabled between calls; CRuby's output on the unchanged build first), with
+  block-scope-reuse, -blockpass, -race, block-loop, block-given, light-rest, hot-shapes, jit,
+  parked-scope and block-pass, in the seven modes (as built, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
+  IR_LIGHT_FRAMES=0, IR_PARKED_SCOPES=0, R2R, IR_PARKED_BLOCK_SCOPES=0): PASS, 69 same, 8 as the
+  baseline. A WeakRef probe (receiver and argument of a define_method body with a nested literal,
+  arguments of Procs called five times whose scope is kept, a method's arguments, instance_exec's
+  self): all freed, on both builds and CRuby.
+  For the gate: the 8 B on every block scope (the alternative is the Procs in hidden slots of the
+  block's locals tuple, which `MakeClearLocals` would skip); the Proc#call path, where a kept scope
+  and its Procs move between threads through `CallBlockParam` (the thread check in
+  `InstantiateNestedParkedBlockSlow`, and the Proc[] cleared when another thread keeps); and any
+  way a literal's Proc reaches Ruby without clearing its reusable flag.
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,
@@ -5173,6 +5245,7 @@ in 2.2 s on both.
   one class and deopts too often profiles again, twice at most, instead of being
   retired. `treefind` 889-989 -> 529-548 ns (CRuby 1508); CD's time does not move
   measurably (gap 3).
+
 - **perf/iter, 9bbc9157 6b4e5960 - the pattern forms of `all?`, `any?`, `none?` and `one?`
   are C# overloads, not prelude wrappers** (gap 13). The C# `Array#any?` walked the
   Array directly all along; the prelude redefined the four methods as `(*args, &block)`

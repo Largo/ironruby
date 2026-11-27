@@ -172,6 +172,13 @@ namespace IronRuby.Compiler.Ast {
             return parameters;
         }
 
+        /// <summary>
+        /// IR_PARKED_BLOCK_SCOPES=0 (or IR_PARKED_SCOPES=0) makes a block that holds a block literal make a new scope and new
+        /// Procs on every call, as it did before round thirty-seven (see RubyOps.InstantiateNestedParkedBlock).
+        /// </summary>
+        internal static readonly bool ParkedBlockScopesEnabled = MethodDefinition.ParkedScopesEnabled &&
+            Environment.GetEnvironmentVariable("IR_PARKED_BLOCK_SCOPES") != "0";
+
         private ScopeBuilder/*!*/ DefineLocals(ScopeBuilder/*!*/ parentBuilder) {
             return new ScopeBuilder(_definedScope.AllocateClosureSlotsForLocals(0), parentBuilder, _definedScope);
         }
@@ -319,8 +326,11 @@ namespace IronRuby.Compiler.Ast {
 
             // A body that needs its scope but defines no closure over it can reuse the scope of the
             // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
-            // A nested block literal is a Proc over the scope on every call: nothing to reuse.
-            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+            // A nested block literal is a Proc over the scope on every call: the scope is reused only if each
+            // literal in the body reuses its Proc, and is kept with the last one (RubyOps.ParkNestedProc).
+            var nestedProcs = gen.CurrentBlock.ParkProcVariables;
+            bool parkNested = ParkedBlockScopesEnabled && nestedProcs != null && !gen.CurrentBlock.HasUnparkableNestedBlock;
+            bool reuseScope = lazyScope == null && !hasNestedReturn && (!gen.CurrentBlock.HasNestedBlock || parkNested) &&
                 !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
             // The same holds for the Proc of the literal (see BlockDispatcher.ReusesProc).
@@ -342,7 +352,20 @@ namespace IronRuby.Compiler.Ast {
                 var result = scope.DefineHiddenVariable("#result", typeof(object));
                 bool keepLocals = scope.HasReusableLocals;
                 MSA.Expression leave = Methods.LeaveReusableBlockScope.OpCall(scopeVariable, AstUtils.Constant(keepLocals));
-                if (keepLocals) {
+                if (gen.CurrentBlock.HasNestedBlock) {
+                    // the scope was kept on the BlockParam: with the last Proc of each literal if none may be held elsewhere,
+                    // or not at all
+                    MSA.Expression staged = null;
+                    for (int i = 0; i < nestedProcs.Count; i++) {
+                        var stage = Methods.ParkNestedProc.OpCall(scopeVariable, AstUtils.Constant(i), AstUtils.Constant(nestedProcs.Count),
+                            nestedProcs[i]);
+                        staged = (staged == null) ? stage : Ast.AndAlso(staged, stage);
+                    }
+                    var unpark = Methods.UnparkBlockScope.OpCall(scopeVariable);
+                    leave = Ast.IfThen(leave, keepLocals
+                        ? Ast.IfThenElse(staged, scope.MakeClearLocals(), unpark)
+                        : Ast.IfThen(Ast.Not(staged), unpark));
+                } else if (keepLocals) {
                     leave = Ast.IfThen(leave, scope.MakeClearLocals());
                 }
                 body = Ast.Block(
@@ -435,10 +458,24 @@ namespace IronRuby.Compiler.Ast {
             // either, but its hidden variable is the module body's, which the method's staging code cannot reach.
             var parkSlot = gen.CurrentMethod.ParkSlot;
             MSA.Expression instantiateReusable = null;
-            if (reusesProc && parkSlot != null && gen.CurrentBlock == null && gen.CurrentScope == gen.CurrentMethod.Builder) {
+            // A literal written in the body of a block is kept with the block's scope when the block reuses that
+            // (RubyOps.InstantiateNestedParkedBlock); any other literal nested in a block keeps the block from reusing its scope.
+            var outerBlock = gen.CurrentBlock;
+            if (reusesProc && parkSlot != null && outerBlock == null && gen.CurrentScope == gen.CurrentMethod.Builder) {
                 instantiateReusable = Methods.InstantiateParkedBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable,
                     dispatcher, gen.CurrentMethod.ParkedVariable, AstUtils.Constant(gen.CurrentMethod.ParkProcVariables.Count));
                 gen.CurrentMethod.ParkProcVariables.Add(previousProc);
+            } else if (outerBlock != null && !(reusesProc && gen.CurrentScope == outerBlock.Builder)) {
+                outerBlock.HasUnparkableNestedBlock = true;
+                if (reusesProc) {
+                    instantiateReusable = Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher);
+                }
+            } else if (outerBlock != null && ParkedBlockScopesEnabled) {
+                var nested = outerBlock.ParkProcVariables ?? (outerBlock.ParkProcVariables = new System.Collections.Generic.List<MSA.Expression>());
+                instantiateReusable = Methods.InstantiateNestedParkedBlock.OpCall(previousProc,
+                    AstUtils.Convert(gen.CurrentScopeVariable, typeof(RubyBlockScope)), gen.CurrentSelfVariable, dispatcher,
+                    AstUtils.Constant(nested.Count));
+                nested.Add(previousProc);
             } else if (reusesProc) {
                 instantiateReusable = Methods.InstantiateReusableBlock.OpCall(previousProc, gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher);
             }
