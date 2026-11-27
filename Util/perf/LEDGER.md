@@ -1186,7 +1186,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     (the UTF-8 length of the prefix, `Encoding.UTF8.GetByteCount`, 1.1 us over 10 KB of
     mixed text), and from a positive offset other than 0 it walks the characters to it, so a
     strscan-style loop of byte offsets over UTF-8 text is quadratic where CRuby's is not
-    (still so: `pos = s.byteindex(",", pos + 1)` over 100 KB of UTF-8, 93 ms against 0.36).
+    (fixed in round four, perf/strsearch4: 79-94 -> 2.4 ms over 100 KB, CRuby 0.35).
     Round three (perf/strsearch3, see Landed) found that StringScanner itself, which does not
     call `#byteindex`, was quadratic on UTF-8, and far worse; that is fixed.
 22. **A `begin`/`rescue` or `ensure` in a method costs about 80 ns per call when nothing
@@ -2228,6 +2228,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   takes the context (one more argument on that fast path); the binder's conversion rule for an
   overridden respond_to? resolves to_xxx and method_missing at build time.
 
+- **perf/strsearch4 (2026-11-27) - the ASCII scan's cost of round three found and mostly removed;
+  `#byteindex`/`#byterindex` from an offset other than 0 walk from the last search, through a map
+  shared with StringScanner (gap 21, round four)** - not gated. Commits 8d030d1, 103c741 on
+  `claude/perf-strsearch`, based on claude/happy-gauss-95wm2j b887bc1 with d3b8844 merged in.
+  1. Round three cost an ASCII scan word by word over 10 KB (`ss_words_a`) 2.6 to 3.4% more
+     instructions, most of it also with `IR_FAST_SEARCH=0`. Found with a per-function count:
+     callgrind with `DOTNET_ReadyToRun=0` (so that the library's code is JIT'd and named in the
+     runtime's perf map), the dumps of `count.sh`'s sections kept, their JIT addresses named from
+     `/tmp/perf-PID.map`, the least section of the tree before round three (b887bc1) against round
+     three's. Of the 6.7 M instructions a section had gained, 4.9 M were the check every scan makes
+     four times a token: the map getter (1.8 M), `StaticsHelpers.GetNonGCStaticBase` for the
+     switch's static (1.7 M; the switch-off arm paid it too, which is why turning the switch off
+     did not take the cost away), `MutableString.IsAscii()` (1.4 M), the encoding; the rest the
+     write barrier bucket (1.1 M), `MatchRegex`, `ByteLength`, `ClearMatch`. The getter now tests
+     `HasByteCharacters`, one flag that answers for a subject known to be ASCII, and leaves the
+     switch, the encoding and IsAscii to the slow path: `ss_words_a` 13.62-13.73 M (before round
+     three) / 13.97 M (round three) / 13.78-13.89 M now, +0.4 to 1.2% (the tree before round three
+     counts 0.8% apart from one process to the next). What is left is the getter's call (1.1 M a
+     section; the JIT does not inline it under `count.sh`'s settings, AggressiveInlining or not) and
+     `HasByteCharacters`' (0.37 M; AggressiveInlining on it changed nothing and was not kept).
+  2. `#byteindex`/`#byterindex` with a String needle on valid non-ASCII UTF-8 walked the characters
+     from the start to the offset on every call and counted the bytes of the answer's prefix: a
+     loop `pos = s.byteindex(",", pos + 1)` was quadratic. The scanner's map moves to
+     `Builtins/Utf8OffsetMap.cs`; for the searches it is shared by the readers of one snapshot of
+     the string's characters, in a ConditionalWeakTable keyed by the snapshot (as MutableString's
+     character index tables are); its UTF-8 length is counted only for an offset from the end; an
+     offset of 0 or none makes no map. Loop over 10 KB / 100 KB of UTF-8, base -> new (CRuby):
+     2.8 / 79-94 ms -> 0.23-0.29 / 2.4 ms (0.034 / 0.35); the ASCII loop 0.28 / 2.64 ms on both.
+     Callgrind, instructions a pass over 10 KB, ref (before round three) / base / new:
+     `bidx_loop_u` 63,835,104 / 63,835,196 / 3,279,668; `bridx_loop_u` 64,766,966 / 64,768,009 /
+     4,333,019; controls `bidx_loop_a` 2,325,945 / 2,308,458 (one other base run 17.0 M, not
+     repeated) / 2,310,130, `bidx1_a_n` 9,500 / 9,499 / 9,501, `bidx1_u_e` 4,629 / 4,628 / 4,635,
+     `ss_words_u` 2,943,413,146 / 15,023,760 / 15,217,309 (+1.3%: the scanner's map is the shared
+     class now, whose length and pair flag are computed lazily), `size` unchanged.
+  Checked: `Util/string-search-matrix.rb` (60,164 rows) gains the scanner's subject changed between
+  scans (setbyte, `[]=`, insert, replace, force_encoding, a stray byte appended) and
+  byteindex/byterindex loops and offset sweeps over long ASCII, UTF-8, astral, BINARY and US-ASCII
+  strings with a change midway; it prints exactly what the base prints, switch on and off; the base
+  differs from CRuby in 115 rows (the 110 of round three and 5 new ones: the scanner after its
+  subject was replaced by a shorter string or edited inside a character). `csv-matrix`,
+  `erb-escape-matrix`: CRuby's output on base, new and off. spec/core/string (3,963),
+  spec/library/stringscanner (240), spec/library/csv (33): the same on base, new and off, 0
+  failures (the one `String.try_convert` error on all three).
+
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
   (`IR_KWREST_IN_PLACE`, gap 38's first cost)** - instructions only, not gated. A keyword
@@ -2980,6 +3024,25 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   trace says "stores not held back ... a call of JitRuntime.NewSymbolHash1"), as round
   strlit's literal makers were; not tried here.
   For the gate: no IronRuby.Tests or spec run; the decline above.
+
+- **perf/strdup (2026-11-26, not gated) - `String#dup` is String's own, MRI's rb_str_dup_m** (gap
+  24's dup note). Kept as a CRuby-compatibility fix, not as a speed-up. `Util/dup-matrix.rb` (new: String,
+  Object and Array dup and clone - content, encodings, broken bytes, frozen and chilled, ivars,
+  singleton classes, subclasses, a refinement, TracePoint, and the hooks redefined in String, Object
+  and Kernel or by prepend and include, then restored) showed master differing from CRuby in six
+  rows. In CRuby `String#dup` belongs to String: a bare string (class String itself, no singleton
+  class, no instance variables) is copied without calling initialize_dup or initialize_copy, even
+  redefined; any other goes through rb_obj_dup. `MutableStringOps.Duplicate` does that now, so the
+  matrix prints CRuby's output (switch `IR_FAST_DUP=0`: every string through Kernel#dup, as before).
+  Instructions (`callgrind/count.sh`, `dup-shapes.rb`): `str_dup` 3,688 -> 3,291; `str_clone`,
+  `hash_dup`, `clone`, `obj_dup`, `oi_dup` (an object with ivars), `arr_dup` and `plain` level.
+  Time in a method's loop, three alternating runs: `S.dup` 104-109 ns on master, 100-113 here, CRuby
+  55 - no gain; controls within the noise. So the hooks were not what String#dup spends: the 50 ns
+  over CRuby lie in the call of the library method and the copy (CreateInstance, Replace's content
+  clone), still to be found. Checks: dup, hash-dup, struct, hash-struct, jit and hot-shapes matrices
+  in every mode and with the switch off: PASS (dup-matrix `same`, `baseline -2` switched off).
+  spec/core/string and kernel dup/clone: 4,010 examples, the one known try_convert wording error
+  on both builds.
 
 - **perf/strsearch2 (2026-11-26) - `#start_with?` with one String prefix takes no scope; an
   ASCII prefix is compared in place (gap 21, round two)** - not gated. Commit dc1d136 on
