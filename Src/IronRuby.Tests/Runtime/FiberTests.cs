@@ -122,6 +122,34 @@ p [$reclaim_continued, $reclaim_rescued, $reclaim_ensured, FiberReclaimInterop.c
         }
 
         /// <summary>
+        /// Thread#backtrace of a thread blocked in a core method shows that method on top, as MRI's does:
+        /// Mutex#lock, Queue#pop, SizedQueue#push, Thread#join and #value, ConditionVariable#wait,
+        /// Thread.stop.
+        /// </summary>
+        public void Thread_BlockedMethodFrame1() {
+            TestOutput(@"
+require 'ruby4'
+def lbl(t) = (sleep 0.1 until t.status == ""sleep""; t.backtrace.map { |l| l[/'.*'/] })
+m = Mutex.new; m.lock
+t = Thread.new { m.lock }; p lbl(t); m.unlock; t.join
+q = Queue.new; t = Thread.new { q.pop }; p lbl(t); q << 1; t.join
+sq = SizedQueue.new(1); sq << 1; t = Thread.new { sq.push(2) }; p lbl(t); sq.pop; t.join
+zq = Queue.new; z = Thread.new { zq.pop }; t = Thread.new { z.join }; p lbl(t); zq << 1; t.join
+zq = Queue.new; z = Thread.new { zq.pop }; t = Thread.new { z.value }; p lbl(t); zq << 1; t.join
+cv = ConditionVariable.new; m2 = Mutex.new; t = Thread.new { m2.lock; cv.wait(m2); m2.unlock }; p lbl(t); m2.synchronize { cv.signal }; t.join
+t = Thread.new { Thread.stop }; p lbl(t); t.wakeup; t.join
+", @"
+[""'Thread::Mutex#lock'"", ""'block in <main>'""]
+[""'Thread::Queue#pop'"", ""'block in <main>'""]
+[""'Thread::SizedQueue#push'"", ""'block in <main>'""]
+[""'Thread#join'"", ""'block in <main>'""]
+[""'Thread#value'"", ""'block in <main>'""]
+[""'Thread::ConditionVariable#wait'"", ""'block in <main>'""]
+[""'Thread.stop'"", ""'block in <main>'""]
+");
+        }
+
+        /// <summary>
         /// Thread.handle_interrupt holds a Thread#raise back in every runtime of the process. The
         /// exception's class used to be looked up in the first runtime created, whatever runtime the
         /// mask was for; in any other one no class matched, and every mask let everything through.
