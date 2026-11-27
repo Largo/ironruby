@@ -260,7 +260,7 @@ namespace IronRuby.Builtins {
         private bool _hasFeed;
 
         // __iter_slow__'s operations.
-        private const int SlowAdvance = 0, SlowPeek = 1, SlowAcrossThreads = 2, SlowResumeCurrent = 3;
+        private const int SlowAdvance = 0, SlowPeek = 1, SlowAcrossThreads = 2, SlowResumeCurrent = 3, SlowRaiseEnd = 4;
 
         /// <summary>
         /// Where the iteration of a built-in method has got to. A cursor belongs to the Ruby thread
@@ -1334,6 +1334,14 @@ namespace IronRuby.Builtins {
             if (acrossThreads) {
                 // raises FiberError
                 SlowStep(slowStorage, self, SlowAcrossThreads);
+            }
+
+            if (!RubyExceptionData.MakesUnkeptException(context.GetClass(typeof(StopIteration)))) {
+                // MRI makes it with rb_exc_new, which calls a #new or #initialize of the program's: the prelude's
+                // __iter_stop__ does (and keeps the first one as the cause of the next), as for an iteration on the fiber -
+                // made here, the object the program rescued was another than the one kept
+                context.SetInstanceVariable(self, RubyUtils.GetCoreStateInstanceVariableName("@__iter_result__"), cursor.Result);
+                SlowStep(slowStorage, self, SlowRaiseEnd);
             }
 
             // get_next_values: the end is raised once as such, and from then on as a new StopIteration
