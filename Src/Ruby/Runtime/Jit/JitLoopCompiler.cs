@@ -54,12 +54,29 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal MSA.ParameterExpression Assigned;
         internal MSA.ParameterExpression AssignedSnapshot;
+        /// <summary>The local the slot is.</summary>
+        internal LocalVariable Local;
     }
 
     internal static class JitLoopCompiler {
-        /// <summary>The boxed form a slot's value goes home as.</summary>
+        /// <summary>
+        /// IR_LOOP_EXITS=0: an Int32 goes home as a new box, and a block loop's copy stores its block's own locals at its exits
+        /// (see Box, TryCompile's deadAtExit), as they did.
+        /// </summary>
+        internal static readonly bool LeanExitsEnabled = Environment.GetEnvironmentVariable("IR_LOOP_EXITS") != "0";
+
+        /// <summary>
+        /// The boxed form a slot's value goes home as: an Int32 through the small-integer cache, as the generic code boxes
+        /// one (a loop's counter left at 5 cost a 24-byte box at every exit - three per NBody `advance').
+        /// </summary>
         private static MSA.Expression/*!*/ Box(MSA.Expression/*!*/ value, bool isLong) {
-            return isLong ? Ast.Call(JitRuntime.M("NarrowLong"), value) : (MSA.Expression)Ast.Convert(value, typeof(object));
+            if (isLong) {
+                return Ast.Call(JitRuntime.M("NarrowLong"), value);
+            }
+            if (value.Type == typeof(int) && LeanExitsEnabled) {
+                return Ast.Call(typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetMethod("Int32ToObject"), value);
+            }
+            return Ast.Convert(value, typeof(object));
         }
 
         /// <summary>
@@ -72,7 +89,7 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex, int scopeArgIndex,
-            out JitLoopGuard loopGuard, bool longRuns = false, bool lightFrame = false) {
+            out JitLoopGuard loopGuard, bool longRuns = false, bool lightFrame = false, ICollection<LocalVariable> deadAtExit = null) {
 
             loopGuard = null;
 
@@ -175,6 +192,7 @@ namespace IronRuby.Runtime.Jit {
                     Accessor = accessor,
                     Assigned = writeFirst ? Ast.Parameter(typeof(bool), local.Name + "#set") : null,
                     AssignedSnapshot = writeFirst ? Ast.Parameter(typeof(bool), local.Name + "#set-snap") : null,
+                    Local = local,
                 };
             };
 
@@ -339,6 +357,11 @@ namespace IronRuby.Runtime.Jit {
                     prologue.Add(Ast.Assign(slot.Variable, read));
                     prologue.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                 }
+                if (LeanExitsEnabled && (deadAtExit != null && deadAtExit.Contains(slot.Local) || !AssignsVariable.In(body, slot.Variable))) {
+                    // nothing reads it after the copy, however the copy ends, or the copy never changes it (`dt' of NBody's
+                    // `advance', read in every iteration): the tuple holds what it should, and no box is made for it
+                    continue;
+                }
                 storeCurrent.Add(store);
                 storeSnapshot.Add(storeSnap);
             }
@@ -380,6 +403,72 @@ namespace IronRuby.Runtime.Jit {
             facts.Guard.Set(epoch, version, facts.UsesConstants ? context : null, constantVersion);
             loopGuard = facts.Guard;
             return compiled;
+        }
+    }
+
+    /// <summary>
+    /// Whether an expression tree may change a given variable: an assignment to it (compound and increments included), or
+    /// a call that takes it by reference.
+    /// </summary>
+    internal sealed class AssignsVariable : MSA.ExpressionVisitor {
+        private readonly MSA.ParameterExpression/*!*/ _variable;
+        private bool _found;
+
+        private AssignsVariable(MSA.ParameterExpression/*!*/ variable) {
+            _variable = variable;
+        }
+
+        internal static bool In(MSA.Expression/*!*/ tree, MSA.ParameterExpression/*!*/ variable) {
+            var finder = new AssignsVariable(variable);
+            finder.Visit(tree);
+            return finder._found;
+        }
+
+        public override MSA.Expression Visit(MSA.Expression node) {
+            return _found ? node : base.Visit(node);
+        }
+
+        protected override MSA.Expression VisitBinary(MSA.BinaryExpression/*!*/ node) {
+            switch (node.NodeType) {
+                case MSA.ExpressionType.Assign:
+                case MSA.ExpressionType.AddAssign: case MSA.ExpressionType.AddAssignChecked:
+                case MSA.ExpressionType.SubtractAssign: case MSA.ExpressionType.SubtractAssignChecked:
+                case MSA.ExpressionType.MultiplyAssign: case MSA.ExpressionType.MultiplyAssignChecked:
+                case MSA.ExpressionType.DivideAssign: case MSA.ExpressionType.ModuloAssign: case MSA.ExpressionType.PowerAssign:
+                case MSA.ExpressionType.AndAssign: case MSA.ExpressionType.OrAssign: case MSA.ExpressionType.ExclusiveOrAssign:
+                case MSA.ExpressionType.LeftShiftAssign: case MSA.ExpressionType.RightShiftAssign:
+                    if (node.Left == _variable) { _found = true; return node; }
+                    break;
+            }
+            return base.VisitBinary(node);
+        }
+
+        protected override MSA.Expression VisitUnary(MSA.UnaryExpression/*!*/ node) {
+            switch (node.NodeType) {
+                case MSA.ExpressionType.PreIncrementAssign: case MSA.ExpressionType.PreDecrementAssign:
+                case MSA.ExpressionType.PostIncrementAssign: case MSA.ExpressionType.PostDecrementAssign:
+                    if (node.Operand == _variable) { _found = true; return node; }
+                    break;
+            }
+            return base.VisitUnary(node);
+        }
+
+        protected override MSA.Expression VisitMethodCall(MSA.MethodCallExpression/*!*/ node) {
+            var parameters = node.Method.GetParameters();
+            for (int i = 0; i < parameters.Length && i < node.Arguments.Count; i++) {
+                if (parameters[i].ParameterType.IsByRef && node.Arguments[i] == _variable) { _found = true; return node; }
+            }
+            return base.VisitMethodCall(node);
+        }
+
+        protected override MSA.Expression VisitExtension(MSA.Expression/*!*/ node) {
+            // an extension node (the DLR's) may write anything it holds: reduce it and look at what it is
+            return node.CanReduce ? Visit(node.Reduce()) : MarkFound(node);
+        }
+
+        private MSA.Expression MarkFound(MSA.Expression node) {
+            _found = true;
+            return node;
         }
     }
 
