@@ -5470,6 +5470,31 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/delegate (2026-11-27) - Ruby's delegation patterns against CRuby: measured, nothing built - a
+  delegation layer costs what its calls cost.** A call through each to a trivial method, ns, IronRuby
+  / CRuby (`Util/bench/delegate-shapes.rb`, new; CRuby by process CPU, since its thread clock here
+  reads in 40 ns steps): direct 37 / 25, 38 / 30, 79 / 42 (zero arguments, two, a block);
+  SimpleDelegator 411 / 379, 440 / 398, 477 / 396 (1.1-1.2); DelegateClass 120 / 73, 120 / 77,
+  190 / 84 (1.6, 1.6, 2.3); Forwardable 108 / 75, 150 / 78, 160 / 90 (1.4, 1.9, 1.8); a
+  method_missing with public_send 158 / 185, 240 / 203, 267 / 206 (0.9-1.3). By instructions a
+  DelegateClass or Forwardable layer adds about 2,900 to a direct call's 1,250-1,330: about 83 ns
+  against CRuby's 48, the 1.5-1.7 of IronRuby's calls in general, not something of delegation's.
+  What a forwarding layer pays over a call with fixed arguments (`Util/bench/forward-shapes.rb`,
+  new, instructions a call into `two(a, b)`): fixed 1,701; `&k` passed on with no block 2,304;
+  `*a` 2,870; `*a, &k` 3,207; `...` 3,078; `*, &` 3,205. Taken apart: the rest Array 1,170; an
+  unused `&k` parameter alone (light frame, no block given) 438; a block argument alone (`&nil`)
+  584 - the two together only 603, so mostly one cost; Forwardable's `defined?(_.m)` before each
+  forward about 30 ns (CRuby 12). A call passing a block to a Ruby method that uses none gets a rule
+  rather than a precompiled dispatcher (`BindPrecompiled` refuses it for `WarnUnusedBlock`, the
+  3.4 unused-block warning, which only the rule emits; `IR_BIND_TRACE=1` shows `two(L,2&)` as
+  `rule`): a probe that let the dispatcher through counted the same (within the counter's +-70),
+  so that is not where the block's cost is.
+  Left for a step: the ~440-600 instructions of a block parameter or argument that is nil (in the
+  light frame's entry or in `MethodCall`'s block-argument path - the hoisting, the retry frame,
+  the block's conversion), which every `...`, `&block` and DelegateClass forward pays; and the rest
+  Array of `...` (a calling convention that passes the caller's arguments on without one, as
+  CRuby's VM does - larger than a step).
+
 - **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
   above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
   The idea (perf/rescuefilter): a rescue above a passed ensure catches and throws again (~20 us for the
