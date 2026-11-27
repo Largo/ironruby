@@ -11377,6 +11377,10 @@ class IO
       end
       return ec.convert(text.encode(::Encoding::UTF_8, **options))
     end
+    # MRI's do_writeconv takes text bound for an encoding that is not ASCII-compatible
+    # (UTF-16BE) to that encoding's ASCII-compatible one first (UTF-8), so a byte that
+    # fails is reported on that leg: "\xFF" from ASCII-8BIT to UTF-8.
+    text = text.encode(::Encoding::UTF_8, **options) unless target.ascii_compatible? || text.encoding == ::Encoding::UTF_8
     text.encode(target, **options)
   end
   private :__encode_for_write__
