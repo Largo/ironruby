@@ -9226,6 +9226,50 @@ comparison of Integer with nil failed
         }
 
         /// <summary>
+        /// attr_reader and attr_writer methods are C methods to CRuby's TracePoint: :c_call and :c_return, through
+        /// every kind of call, in a method the JIT compiled before the TracePoint was enabled too, and nothing once it is off.
+        /// </summary>
+        public void TracePoint_AttrAccessorCCall1() {
+            TestOutput(@"
+require 'ruby4'
+class C; attr_accessor :x; attr_reader :r; attr_writer :w; def initialize; @r = 1; end; end
+c = C.new
+ev = []
+tp = TracePoint.new(:c_call, :c_return, :call, :return) { |t| ev << [t.event, t.method_id, t.defined_class, (t.return_value if t.event.to_s.end_with?(""return""))] if t.defined_class == C }
+tp.enable { c.x = 5; c.x; c.r; c.w = 2; c.send(:x); c.public_send(:x=, 3); c.method(:x).call }
+ev.each { |e| p e }
+class D; attr_accessor :x; def initialize; @x = 0; end; def bump; self.x = x + 1; end; def loop_read(n) = (s = 0; i = 0; while i < n; s += x; i += 1; end; s); end
+c = D.new
+5000.times { c.bump; c.loop_read(3) }
+ev2 = []
+tp2 = TracePoint.new(:c_call, :c_return) { |t| ev2 << [t.event, t.method_id] if t.defined_class == D }
+tp2.enable { c.bump; c.loop_read(2) }
+p ev2
+ev2.clear
+3000.times { c.bump; c.loop_read(3) }
+p ev2, c.x
+", @"
+[:c_call, :x=, C, nil]
+[:c_return, :x=, C, 5]
+[:c_call, :x, C, nil]
+[:c_return, :x, C, 5]
+[:c_call, :r, C, nil]
+[:c_return, :r, C, 1]
+[:c_call, :w=, C, nil]
+[:c_return, :w=, C, 2]
+[:c_call, :x, C, nil]
+[:c_return, :x, C, 5]
+[:c_call, :x=, C, nil]
+[:c_return, :x=, C, 3]
+[:c_call, :x, C, nil]
+[:c_return, :x, C, 3]
+[[:c_call, :x], [:c_return, :x], [:c_call, :x=], [:c_return, :x=], [:c_call, :x], [:c_return, :x], [:c_call, :x], [:c_return, :x]]
+[]
+8001
+");
+        }
+
+        /// <summary>
         /// The expression of an endless def is not a line to TracePoint :line (prism gives it no newline flag): CRuby reports
         /// no event for it, with or without a rescue modifier, but does for statements in parentheses in it and in a block.
         /// (The lines are one more than ruby's for the same text: the snippet starts on its second line.)
