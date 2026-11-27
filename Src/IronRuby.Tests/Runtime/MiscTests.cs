@@ -1049,6 +1049,23 @@ p((DateTime._strptime(u, ""%Y"") rescue $!))
         }
 
         /// <summary>
+        /// Date._strptime's leftover is a plain String even when the string passed in is a subclass's,
+        /// as MRI's is.
+        /// </summary>
+        public void Date_StrptimeSubclass1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+class S < String; end
+h = Date._strptime(S.new(""2026 x""), ""%Y""); p [h, h[:leftover].class]
+h = Date._strptime(S.new(""2026 \xC3\xA9""), ""%Y""); p [h[:leftover].bytes, h[:leftover].class]
+", @"
+[{year: 2026, leftover: "" x""}, String]
+[[32, 195, 169], String]
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's

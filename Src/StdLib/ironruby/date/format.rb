@@ -404,7 +404,8 @@ class Date
 	return h
       end
     end
-    str = str.dup
+    # A copy that is a plain String, as MRI's leftover is, whatever subclass came in
+    str = String.new(str)
     e = Format::Bag.new
     return unless _strptime_i(str, fmt, e)
 
