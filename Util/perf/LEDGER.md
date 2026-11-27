@@ -916,6 +916,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     objects, two Integers and two Strings (05a31f0a, merged into this branch after round
     nine): the cases this session's perf/neq1 found faster, without the Integer-against-
     Float one it found slower.
+    Round of 2026-11-27 (see Landed, perf/neqrule, not gated): the negated-builtin rule for plain objects is
+    shared by every class whose `==` is BasicObject's: a site over 2-60 classes no longer has a rule per class.
 11. **The method JIT refuses a constant whose value is nil** ("constant without a value":
     it cannot tell nil from an autoload that has not run). Richards' `NO_WORK = nil` and
     `NO_TASK = nil` keep three methods out. See Rejected for why fixing only that is not
@@ -2334,6 +2336,73 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
   differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
   base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
+- **perf/lightmember (2026-11-27) - `recv.m op= v` in a light frame (gap 9)** - not gated. Chosen by the census of
+  4320d4a + perf/neqrule: what keeps methods out of light frames is now mostly a regular expression whose method sets the
+  caller's `$~` (gsub 273, `=~` 230, sub 104, `when` 86, scan 71, split 63, match 54 - about 880 methods, which
+  perf/regexlight found need a cheaper late scope or second call, not a filter change), a Range in a body with literal
+  blocks (158, kept out on purpose: measured slower), lambdas (73), and then `o.x op= v` (38) - which nothing in it
+  needs the scope for. Keyword parameters, which gap 9 named, are no longer on the list.
+  - Why the construct had the scope: no reason but the filter's - `IsScopeFree` had no case for a
+    MemberAssignmentExpression and refused it by default. What the frame must answer instead: nothing. The node is the
+    call of m on the receiver (kept in a hidden CLR variable of the lambda, not a scope local), the operator's call or
+    `||`/`&&`, and the call of m= with the right-hand side as its value (MemberAssignmentExpression.TransformReadCore),
+    sites like those of `o.x = o.x + 1`, which a light frame takes; `o&.x op= v` is a nil test around one
+    (PrismAstBridge.MemberOpAssign). What forces the scope at run time when something reaches for it: the same as for
+    any light call - a rule that needs the caller's scope answers LightScopeRequired, and binding, eval and
+    local_variables make it then (all in the matrix). Switch: `IR_LIGHT_MEMBER_OPASSIGN=0`.
+  - Census (Src/StdLib + AWFY, 28,377 methods): light frames 26,693 -> 26,732 (+39, 94.1% -> 94.2%), none down; the
+    JIT's counts unchanged. In app-shapes' run one method of the kind.
+  - Time (`Util/bench/prelude-cost.rb`, `ab.rb -r 6`, ns; CRuby / base / switch off / new): `m_opassign` (`o.x += 1`)
+    33.2 / 78.0 / 78.0 / 41.7 (0.53), `m_orassign` (`o.y ||= v`) 32.0 / 73.6 / 73.9 / 35.8 (0.48), `m_self_opassign`
+    31.6 / 75.8 / 73.5 / 42.0 (0.57); their written-out forms and the controls `d_one`, `kr_rest`, `p_plain_opt` level.
+  - Checks: the new `Util/light-member-opassign-matrix.rb` (`+=`, `-=`, `||=`, `&&=`, `<<` and `+=` on a list, `&.`;
+    the value is the right-hand side whatever m= returns; a private accessor on self and on another object; x=
+    redefined and removed after binding; a singleton x; method_missing; a BasicObject receiver; a refinement in
+    force and not; NoMethodError on nil and an Object, FrozenError; binding, local_variables, eval, a block that
+    op-assigns, raise and its label, recursion, `__method__`, block_given?; send, public_send, Method#call,
+    define_method; a TracePoint; threads), light-entry, hot-shapes, block-pass, jit, block-given, light-rest and
+    super-light: CRuby's output in all seven gate modes (as built, NoJIT, NoJITCalls, IR_LIGHT_FRAMES=0,
+    IR_PARKED_SCOPES=0, the ReadyToRun host, the switch off) on both trees, 56 of 56. ruby/spec language
+    optional_assignments, assignments and safe_navigator: no failures on either. IronRuby.Tests: the new
+    Method_LightFrameMemberOpAssign1 and the 42 other tests named for light frames and assignments pass.
+  - Found on the base, left: IronRuby's TracePoint does not report attr_accessor's reader and writer as `:c_call`
+    (CRuby does); the matrix traces only the method's own `:call`.
+
+- **perf/neqrule (2026-11-27) - `a != b` on plain objects is one rule for every class (gaps 10 and 12)** -
+  not gated. `DispatchIntrinsics.TryBuildNotEquals` (#215) binds `a != b` as `!a.equal?(b)` when the
+  receiver's `==` is BasicObject's, and `MaySpecialize` kept such rules out of IronRuby's shared rules, so a
+  site saw a rule per receiver class: over two to eight classes it missed its target on every other call into
+  the DLR's `UpdateAndExecute`, whose speed the CLR's dynamic PGO decided (gap 12, perf/twospeed2), and over
+  60 it built a rule per class. Now `MaySpecialize` lets the rule be shared when the receiver is a plain
+  `RubyObject` (BasicObject subclasses included), the call has the intrinsic's shape, and the class resolves
+  `==` - public, without refinements, as BasicObject#!= calls it - to BasicObject#== (`IsSharableNotEquals`).
+  `ResolveShared` asks that both for the first bind and for every version `TryShareVersion` adds, so a class
+  whose `==` is another method (its own, a module's, a singleton's, Comparable's, a private or protected one,
+  one on Object) or whose `!=` is (defined, or undefined into method_missing) is never in the set, and
+  defining either re-versions the class. nil, booleans, Integers and Strings keep their rules per class.
+  `IR_SHARED_NEQ=0` turns it off.
+  - Ten processes each (`Util/bench/twospeed-shapes.rb`, ns, base / new): `neq2` 83-114 / 39-43, `neq3` 63-69
+    / 41-45, `neq4` 65-80 / 41-51, `neq8` 89-102 / 44-48, `neq60` 542-571 / 42-44; level: `neq1`, `==` at
+    every count, calls at every count (`call60` 561-605 / 562-608). Instructions (callgrind, N=20000):
+    `neq2` 0.924, `neq4` 0.856, `neq8` 0.770, `neq60` 0.230; `neq1`, `eq1`, `eq2`, `eq4`, `call1`, `call2`
+    1.000; `call60` 1.219 in one round after `neq60`, 1.138 alone, 1.005 (overlap) over two rounds -
+    a megamorphic site's binding, which the change does not reach (its method is a define_method one).
+  - AWFY, ten processes each, median of each process's last 8 of 15 iterations, ms, base / new: Richards
+    2363 / 2357, Json 488 / 494, Permute 1195 / 1196, DeltaBlue 542 / 545, Bounce 396 / 392 - inside their
+    spreads. None of them has such a site: Richards' `NO_TASK != @current_task` has a nil receiver, Json's
+    `!=` are on Strings, which keep their rules.
+  - Matrices (`Util/perf/gate-matrices.rb`, base 99c1d2f against new, as built, NoJIT, NoJITCalls,
+    IR_LIGHT_FRAMES=0, IR_PARKED_SCOPES=0, the ReadyToRun host and IR_SHARED_NEQ=0): `Util/neq-share-matrix.rb`
+    (new: 1-8 classes over two sites; `==` defined on a class after the site bound, from a module included
+    later, on a singleton class, on a BasicObject subclass, private, protected, on Object and removed again;
+    `!=` defined and from a module; undef `!=` into method_missing; refinements of `==` and `!=`; Comparable;
+    Struct; nil, true, String, Symbol; Integer against Float; threads), shared-rule-light, jit, jit-calls,
+    dmeth-jit, refinement: same as CRuby in all seven modes; hot-shapes: the base's one row. ruby/spec
+    core/basicobject, core/comparable and language/send_spec: as the base (the known `into`/`to` errors).
+    IronRuby.Tests: 338 named (equality, Comparable, refinements, rules, sites, dispatch, Method*, Super*,
+    Alias*, BasicObject, singleton, send, define_method, the JIT) pass.
+  - For the gate: the shared rule's set now decides `!=` for every plain-object class a program has; the
+    cases above are the ones that must leave a class out.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,

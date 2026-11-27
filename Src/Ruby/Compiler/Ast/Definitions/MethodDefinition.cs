@@ -618,6 +618,13 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal static readonly bool LightKeywordSplatEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_KEYWORD_SPLAT") != "0";
 
+        /// <summary>
+        /// IR_LIGHT_MEMBER_OPASSIGN=0 keeps a method with `recv.m op= v' (`o.x += 1', `o.x ||= v', `self.x &&= v'; a
+        /// MemberAssignmentExpression) out of light frames, as it was: it is a read of m, the operator and a write of m=, three
+        /// calls like those of `o.x = o.x + 1', which a light frame takes, and a hidden CLR variable for the receiver.
+        /// </summary>
+        internal static readonly bool LightMemberOpAssignEnabled = Environment.GetEnvironmentVariable("IR_LIGHT_MEMBER_OPASSIGN") != "0";
+
         // The built-in methods that store the caller's $~ when given a Regexp, and so take the caller's scope: a light frame
         // that calls one makes its scope on the call (RubyOps.LightScopeRequired) and calls again, which costs more than the
         // scope made at entry (gap 16 of Util/perf/LEDGER.md). A name only says which method is likely, not which is called,
@@ -1185,6 +1192,17 @@ namespace IronRuby.Compiler.Ast {
                     return why != null && Refuse(why, "RegularExpression passed to []= (it sets $~)");
                 }
                 return IsScopeFree(item.Array, blockLiterals, why) && AreScopeFree(item.Arguments, blockLiterals, why);
+            }
+            // `o.x op= v' (MemberAssignmentExpression.TransformReadCore): the call of x on the receiver, kept in a hidden variable
+            // of the lambda, the operator's call (or `||'/`&&') and the call of x= - sites like those of `o.x = o.x + 1', with
+            // nothing that takes the frame's scope. `o&.x op= v' is a nil test around one (PrismAstBridge.MemberOpAssign).
+            var memberAssignment = node as MemberAssignmentExpression;
+            if (memberAssignment != null) {
+                if (!LightCallsEnabled || !LightMemberOpAssignEnabled) {
+                    return Refuse(why, LightCallsEnabled ? "MemberAssignmentExpression (IR_LIGHT_MEMBER_OPASSIGN=0)" :
+                        "MemberAssignmentExpression (IR_LIGHT_CALLS=0)");
+                }
+                return IsScopeFree(memberAssignment.LeftTarget, blockLiterals, why) && IsScopeFree(memberAssignment.Right, blockLiterals, why);
             }
             // a String literal is a constant, or a copy of one; a Symbol literal is a constant
             if (node is StringLiteral) {
