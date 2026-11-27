@@ -173,4 +173,28 @@ row "superclass's and mixin's prepends win", [C13::X, C13.const_get(:X), D13::Y,
 loop13 = -> { run { i = 0; s = 0; while i < N; s += (F13::W == :own ? 1 : 0); i += 1; end; s } }
 row "a loop over it", entries(6, nil) { loop13.() }
 
+# ---------------------------------------------------------------- 6. a running loop beside reassignments of other constants
+# Each reassignment of any constant moves the code epoch, which every running compiled loop's safe point compares with; a loop
+# that folded none of them is kept (OsrLoopSite.Run), and must still see its own constant change after being kept many times.
+OTHER7 = 0
+R7 = 1
+module RL7
+  def self.outlined(n = LIMIT) = run { i = 0; while R7 == 1 && i < n; i += 1; end; i < n }
+  def self.body(n = LIMIT) = (i = 0; while R7 == 1 && i < n; i += 1; end; i < n)
+end
+200.times { RL7.body(20) }
+def others_then(name, mod)
+  # (no sleep or pass between them: CRuby's GVL would hand the loop a timeslice each time)
+  -> { 3000.times { |j| Object.const_set(:OTHER7, j) }; 500.times { Object.const_set(:R7, 1) }; mod.const_set(name, 2) }
+end
+row "running outlined, others reassigned, then its own", nearer(others_then(:R7, Object)) { RL7.outlined }
+Object.const_set(:R7, 1)
+row "running body, others reassigned, then its own", nearer(others_then(:R7, Object)) { RL7.body }
+K8 = 3
+stop8 = false
+reassigner = Thread.new { j = 0; until stop8; Object.const_set(:OTHER7, j += 1); Object.const_set(:K8, 3); Thread.pass; end }
+sums8 = 20.times.map { run { i = 0; s = 0; while i < N * 10; s += K8; i += 1; end; s } }
+stop8 = true; reassigner.join
+row "summing beside reassignments of it to the same value and of others", sums8.uniq
+
 puts "end"
