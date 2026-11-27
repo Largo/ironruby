@@ -88,6 +88,9 @@ namespace IronRuby.Compiler.Ast {
             // A call site splats one trailing array, so from the first splat on the arguments go into
             // one: foo(a,b,*c,*d,e,*f) is passed as foo(a,b,*[*c,*d,e,*f]).
             if (splattedCount == 1 && firstSplatted == _expressions.Length - 1) {
+                // the method's rest parameter, passed on where nothing can see it again (ForwardedRest)
+                var method = gen.CurrentMethod;
+                fresh = method != null && gen.CurrentBlock == null && ReferenceEquals(_expressions[firstSplatted], method.ForwardedRestSplat);
                 return _expressions[firstSplatted].TransformRead(gen);
             } else if (splattedCount >= 1) {
                 fresh = true;

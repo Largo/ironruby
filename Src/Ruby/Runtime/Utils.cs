@@ -379,6 +379,17 @@ namespace IronRuby.Runtime {
             return count >= SharedSliceMinLength && count >= arrayLength - (arrayLength >> 1);
         }
 
+        /// <summary>
+        /// IsSharedSlice, and also a long slice that runs to the end of the string, however much of the array it keeps:
+        /// MRI shares the buffer of a substring that ends where the string ends (rb_str_subseq, SHARABLE_SUBSTRING_P) and
+        /// copies any other, so a tail keeps the array alive there too. IR_SHARE_TAIL=0: IsSharedSlice only.
+        /// </summary>
+        internal static bool IsSharedSlice(int arrayLength, int count, bool toEnd) {
+            return count >= SharedSliceMinLength && (toEnd && ShareTailSlices || count >= arrayLength - (arrayLength >> 1));
+        }
+
+        private static readonly bool ShareTailSlices = Environment.GetEnvironmentVariable("IR_SHARE_TAIL") != "0";
+
         internal const int SharedSliceMinLength = 256;
 
         internal static int NormalizeCount(int arrayLength, int start, int count) {

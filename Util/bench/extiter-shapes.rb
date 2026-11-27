@@ -63,9 +63,19 @@ t("ewi_next", n(20_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.ea
 t("hash_ewi", n(20_000))     { |n| s = 0; (n / 100).times { e = HSH.each_with_index; 100.times { s += e.next[1] } }; s }
 t("map_wi", n(20_000))       { |n| s = 0; (n / 1000).times { s += drain(LARGE.map.with_index) }; s }
 t("wobj_next", n(20_000))    { |n| s = 0; (n / 1000).times { e = LARGE.each.with_object(1); 1000.times { s += e.next[0] } }; s }
+t("hash_select", n(20_000))  { |n| s = 0; (n / 100).times { e = HSH.select; 100.times { k, v = e.next; e.feed k.odd?; s += v } }; s }
+t("hash_reject", n(20_000))  { |n| s = 0; (n / 100).times { e = HSH.reject; 100.times { s += e.next[1] } }; s }
+t("filter_map", n(20_000))   { |n| s = 0; (n / 1000).times { s += drain(LARGE.filter_map) }; s }
+t("flat_map", n(20_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.flat_map) }; s }
+t("ewo_next", n(20_000))     { |n| s = 0; (n / 1000).times { e = LARGE.each_with_object([]); 1000.times { s += e.next[0] } }; s }
+t("hash_ewo", n(20_000))     { |n| s = 0; (n / 100).times { e = HSH.each_with_object(1); 100.times { s += e.next[1] } }; s }
 t("select_next", n(20_000))  { |n| s = 0; (n / 1000).times { s += drain(LARGE.select) }; s }
 t("lazy_next", n(5_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.lazy.map { |x| x + 1 }) }; s }
 t("produce", n(20_000))      { |n| s = 0; (n / 1000).times { e = Enumerator.produce(1) { |x| x + 1 }; 1000.times { s += e.next } }; s }
 t("zip_enum", n(20_000))     { |n| s = 0; (n / 1000).times { LARGE.zip(LARGE.each) { |a, b| s += a + b } }; s }
+# a fiber-backed enumerator of one element, drained: its start and its end are the cost (per enumerator)
+t("gen_one", n(2_000))       { |n| s = 0; n.times { s += drain(Enumerator.new { |y| y << 1 }) }; s }
+t("lazy_one", n(2_000))      { |n| s = 0; n.times { s += drain([1].lazy.map { |x| x }) }; s }
+t("gen_end", n(20_000))      { |n| s = 0; e = Enumerator.new { |y| }; n.times { begin; e.next; rescue StopIteration; s += 1; end }; s }
 # controls: these keep their fiber (a generator; lazy and produce above too)
 t("generator", n(20_000))    { |n| s = 0; (n / 1000).times { s += drain(Enumerator.new { |y| LARGE.each { |x| y << x } }) }; s }

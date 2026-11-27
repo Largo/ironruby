@@ -356,6 +356,17 @@ namespace IronRuby.Compiler.Ast {
             // A block literal (or lambda) is nested in this one: its Proc captures this block's scope.
             public bool HasNestedBlock;
 
+            // The hidden variables that hold the last Proc of each block literal written directly in this block's body, which
+            // the block keeps with its scope when it reuses that (BlockDefinition.ParkedBlockScopesEnabled); and whether a literal
+            // nested in it cannot be kept so: a lambda, a literal that does not reuse its Proc, one in a module body in the block.
+            internal List<MSA.Expression> ParkProcVariables;
+            internal bool HasUnparkableNestedBlock;
+
+            // This block may be outlined into an iterator's loop (BlockLoopInfo), which runs the nested iterators it holds in
+            // place and makes no Proc of their literals: its own Proc may be reused all the same (IR_NESTED_PROCS), and a literal
+            // nested in it keeps the enclosing Procs from being made again when it does make one (RubyOps.KeepEnclosingProcs).
+            public bool ReusesProcWithNested;
+
             // The lexical depth of the block's own scope (LexicalScope.Depth): a local defined at a
             // smaller depth belongs to an enclosing scope.
             internal int LexicalDepth;
@@ -431,6 +442,10 @@ namespace IronRuby.Compiler.Ast {
             // The method has a Hash literal (HashConstructor) with a key whose #hash or #eql? may be a Ruby method: the helper
             // that makes it calls them, so a light frame of the method keeps its stack check (MethodDefinition.LightFrame.MakesCalls).
             internal bool HasHashCallingKeys;
+
+            // The splat that passes the method's rest parameter on where nothing can see the Array again (ForwardedRest): its site
+            // says the splat is fresh, and a rest parameter of the callee takes the Array itself.
+            internal SplattedArgument ForwardedRestSplat;
 
             // The slot the method's literals take their parked Procs from (BlockDefinition), set by MethodDefinition before the
             // body is transformed if the method may have one at all; it is disabled afterwards if the body turns out not to qualify.

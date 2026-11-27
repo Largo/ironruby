@@ -904,6 +904,15 @@ namespace IronRuby.Builtins {
             if (value is MutableString) {
                 throw RubyExceptions.CreateTypeError("can't convert String into Float");
             }
+            // MRI's rb_to_float: only a Numeric is asked for to_f; anything else is "can't convert ToF into Float" (nil, true
+            // and false by value)
+            if (!(value is int || value is long || value is double || value is BigInteger)) {
+                var context = floatConversion.Context;
+                if (!context.GetClassOf(value).IsSubclassOf(context.GetClass(typeof(Numeric)))) {
+                    string name = (value == null || value is bool) ? context.Inspect(value).ToString() : context.GetClassOf(value).GetNonSingletonClass().Name;
+                    throw RubyExceptions.CreateTypeError("can't convert {0} into Float", name);
+                }
+            }
             double result = Protocols.CastToFloat(floatConversion, value);
             // the CLR's NaN has its sign bit set; MRI packs the positive quiet NaN
             return Double.IsNaN(result) ? BitConverter.Int64BitsToDouble(0x7FF8000000000000L) : result;
@@ -1218,11 +1227,14 @@ namespace IronRuby.Builtins {
                     } else if (c2 == '*') {
                         count = null;
                     } else {
+                        bool last = i >= format.Length;
                         i--;
-                        if (c == '@' && !packing) {
+                        if (c == '@' && !packing && !last) {
                             // "@" with no count is the one place the two directions part company:
                             // pack seeks to 1, like every other directive's default count, while
-                            // unpack seeks to the start.
+                            // unpack seeks to the start - unless the "@" ends the format, where MRI's
+                            // unpack takes the count as 1 too (p >= pend: len = 1), so "".unpack("@")
+                            // is "@ outside of string" while "".unpack("@C") is [nil].
                             count = 0;
                         }
                     }

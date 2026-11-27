@@ -937,6 +937,7 @@ namespace IronRuby.Builtins {
             }
             _mixins = ArrayUtils.Copy(module._mixins);
             _prepends = ArrayUtils.Copy(module._prepends);
+            _inheritedLookups = null;
 
             // dependentModules - skip
             // tracker - skip, .NET members not copied
@@ -978,22 +979,14 @@ namespace IronRuby.Builtins {
             
             // copy instance variables:
             _context.CopyInstanceData(this, result, false);
-            result._isUninitializedModuleCopy = true;
-            return result;
-        }
 
-        // Set on the module #dup and #clone make, until initialize_copy has filled it in: MRI's
-        // Module#initialize_copy copies only into a module allocated for the copy, and is a no-op on
-        // any module that already exists (#138).
-        private bool _isUninitializedModuleCopy;
-
-        /// <summary>
-        /// Whether this module is a copy #dup or #clone made and initialize_copy has yet to fill in;
-        /// answering true once, as the copying then happens.
-        /// </summary>
-        public bool TakeUninitializedModuleCopy() {
-            bool result = _isUninitializedModuleCopy;
-            _isUninitializedModuleCopy = false;
+            // Constants, methods, class variables and mixins too, before #dup or #clone calls initialize_copy, as MRI 4.0's
+            // init_copy does (rb_mod_init_copy): an initialize_copy that does not call super has them, and one that reads a
+            // constant before super reads the copy's. Module has no initialize_copy of its own; Kernel's copies nothing, so
+            // initialize_copy on a module that already exists leaves it as it is (#138).
+            using (Context.ClassHierarchyLocker()) {
+                result.InitializeMembersFrom(this);
+            }
             return result;
         }
 
@@ -2485,6 +2478,7 @@ namespace IronRuby.Builtins {
 
             InitializeMethodsNoLock();
             _methods[name] = method;
+            _inheritedLookups = null;
 
             if (IsHelperName(name)) {
                 if (_context.Loader.IsLoadingCorePrelude) {
@@ -2590,6 +2584,7 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
             Debug.Assert(_methods != null);
             _methods.Add(name, method);
+            _inheritedLookups = null;
         }
 
         /// <summary>
@@ -2598,6 +2593,7 @@ namespace IronRuby.Builtins {
         internal bool RemoveMethodNoCacheInvalidation(string/*!*/ name) {
             Context.RequiresClassHierarchyLock();
             Debug.Assert(_methods != null);
+            _inheritedLookups = null;
             return _methods.Remove(name);
         }
 
@@ -2635,6 +2631,7 @@ namespace IronRuby.Builtins {
                         }
 
                         _methods.Remove(name);
+                        _inheritedLookups = null;
 
                         if (_refinedModule != null) {
                             _context.RefinedMethodChanged(_refinedModule, name);
@@ -3378,6 +3375,7 @@ namespace IronRuby.Builtins {
                     TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
                     TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
                     _methods.Add(name, method);
+                    _inheritedLookups = null;
                     return true;
                 }
             }
@@ -3709,7 +3707,7 @@ namespace IronRuby.Builtins {
             return false;
         }
 
-        private static bool IsHelperName(string/*!*/ name) {
+        internal static bool IsHelperName(string/*!*/ name) {
             if (!name.StartsWith("__", StringComparison.Ordinal)) {
                 return false;
             }
@@ -3956,6 +3954,7 @@ namespace IronRuby.Builtins {
             }
 
             PrependsUpdated(oldPrepends, _prepends = expanded);
+            _inheritedLookups = null;
             _context.ConstantsChanged();
         }
 
@@ -4041,6 +4040,7 @@ namespace IronRuby.Builtins {
                 var expanded = SpliceBefore(oldMixins, mixinIndex, added);
                 if (expanded.Length != oldMixins.Length) {
                     MixinsUpdated(oldMixins, _mixins = expanded);
+                    _inheritedLookups = null;
                 }
             }
 
@@ -4050,6 +4050,7 @@ namespace IronRuby.Builtins {
                 var expanded = SpliceBefore(old, prependIndex, added);
                 if (expanded.Length != old.Length) {
                     PrependsUpdated(old, _prepends = expanded);
+                    _inheritedLookups = null;
                 }
             }
 
@@ -4103,6 +4104,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
+            _inheritedLookups = null;
             _context.ConstantsChanged();
 
             if (!IsClass) {
@@ -4149,6 +4151,7 @@ namespace IronRuby.Builtins {
             }
 
             MixinsUpdated(_mixins, _mixins = expanded);
+            _inheritedLookups = null;
             _context.ConstantsChanged();
 
             if (!IsClass) {

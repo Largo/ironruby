@@ -16,9 +16,11 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Text;
+using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
@@ -155,15 +157,86 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         #region byte / character bookkeeping
 
+        // The scan pointer is a byte offset and the regex engine matches CLR characters. For a subject that is
+        // valid UTF-8 and not all ASCII, converting between the two used to copy out and count everything
+        // before the offset, in both directions, and to read the subject as bytes (GetByteCount,
+        // GetBinarySlice, GetByte), which switched it from characters to bytes - and the next match switched
+        // it back, decoding the whole of it: a scan of 100 KB of UTF-8 text word by word took 8.4 s (CRuby:
+        // 2 ms). The scanner keeps a Utf8OffsetMap (Builtins) for the subject's current snapshot of
+        // characters instead, and drops it when the subject changes (ConvertToString answers a new string).
+
+        private Utf8OffsetMap _map;
+        private string _unmappedText;
+
+        // IR_FAST_SEARCH, read here so that the check every scan makes needs no other class
+        private static readonly bool MapEnabled = MutableStringOps.FastSearchEnabled;
+
+        // the map _match's CLR offsets are offsets into; null when the match was not made through one
+        private Utf8OffsetMap _matchMap;
+
+        /// <summary>
+        /// The map for the subject as it is now, or null when the subject is not one it is for:
+        /// not UTF-8, all ASCII (bytes and CLR characters are one for one, which the paths below
+        /// already know), or not valid. IR_FAST_SEARCH=0 makes none.
+        /// </summary>
+        private Utf8OffsetMap Map {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get {
+                // What every scan asks, four times a token: one flag test, which answers for a subject
+                // already known to be ASCII (or BINARY). A per-function count of an ASCII scan
+                // (callgrind, JIT'd code named from the perf map) put the earlier check - the switch's
+                // static, the encoding, an IsAscii call - at 4.9 of the 6.7 M instructions the map
+                // had added to a pass over 10 KB.
+                MutableString subject = _scanString;
+                return subject.HasByteCharacters ? null : MapFor(subject);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private Utf8OffsetMap MapFor(MutableString/*!*/ subject) {
+            if (!MapEnabled || subject.Encoding != RubyEncoding.UTF8 || subject.IsAscii()) {
+                return null;
+            }
+            // a string held as bytes is decoded once, as a match would
+            subject.PrepareForCharacterRead();
+            string text = subject.ConvertToString();
+            Utf8OffsetMap map = _map;
+            if (map != null && ReferenceEquals(map.Text, text)) {
+                return map;
+            }
+            if (ReferenceEquals(text, _unmappedText) || subject.ContainsInvalidCharacters()) {
+                _unmappedText = text;
+                return null;
+            }
+            return _map = new Utf8OffsetMap(text);
+        }
+
         private int ByteLength {
-            get { return _scanString.GetByteCount(); }
+            get {
+                Utf8OffsetMap map = Map;
+                return (map != null) ? map.ByteLength : _scanString.GetByteCount();
+            }
         }
 
         private MutableString/*!*/ ByteSlice(int start, int count) {
             if (count <= 0) {
                 return MutableString.CreateEmpty(_scanString.Encoding);
             }
+            Utf8OffsetMap map = Map;
+            if (map != null) {
+                MutableString mapped = ByteSliceMapped(map, start, count);
+                if (mapped != null) {
+                    return mapped;
+                }
+            }
             return MutableString.CreateBinary(_scanString.GetBinarySlice(start, count), _scanString.Encoding);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private MutableString ByteSliceMapped(Utf8OffsetMap/*!*/ map, int start, int count) {
+            int clrStart = map.ClrOf(start);
+            int clrEnd = (clrStart >= 0) ? map.ClrOf(start + count) : -1;
+            return (clrEnd >= 0) ? MutableString.Create(map.Text.Substring(clrStart, clrEnd - clrStart), _scanString.Encoding) : null;
         }
 
         private MutableString/*!*/ RestString() {
@@ -184,6 +257,14 @@ namespace IronRuby.StandardLibrary.StringScanner {
             int available = ByteLength - _position;
             if (available <= 0) {
                 return 0;
+            }
+            Utf8OffsetMap map = Map;
+            if (map != null) {
+                int clr = map.ClrOf(_position);
+                if (clr >= 0) {
+                    char ch = map.Text[clr];
+                    return (ch < 0x80) ? 1 : (ch < 0x800) ? 2 : Char.IsHighSurrogate(ch) ? 4 : 3;
+                }
             }
 
             // No encoding Ruby knows needs more than this for one character.
@@ -218,6 +299,22 @@ namespace IronRuby.StandardLibrary.StringScanner {
             if (_scanString.DetectSingleByteCharacters()) {
                 return byteIndex;
             }
+            Utf8OffsetMap map = Map;
+            if (map != null) {
+                int clr = map.ClrOf(byteIndex);
+                if (clr >= 0) {
+                    if (!map.HasPairs) {
+                        return clr;
+                    }
+                    int count = 0;
+                    for (int i = 0; i < clr; i++) {
+                        if (!Char.IsLowSurrogate(map.Text[i])) {
+                            count++;
+                        }
+                    }
+                    return count;
+                }
+            }
             return MutableString.CreateBinary(_scanString.GetBinarySlice(0, byteIndex), _scanString.Encoding).GetCharacterCount();
         }
 
@@ -235,6 +332,13 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 // every scan cost a pass over everything already scanned.
                 return byteIndex;
             }
+            Utf8OffsetMap map = Map;
+            if (map != null) {
+                int clr = map.ClrOf(byteIndex);
+                if (clr >= 0) {
+                    return clr;
+                }
+            }
             return MutableString.CreateBinary(_scanString.GetBinarySlice(0, byteIndex), _scanString.Encoding).GetCharCount();
         }
 
@@ -251,6 +355,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
             _matchBase = 0;
             _matchStart = 0;
             _matchEnd = 0;
+            _matchMap = null;
         }
 
         #endregion
@@ -306,8 +411,54 @@ namespace IronRuby.StandardLibrary.StringScanner {
             }
         }
 
+        /// <summary>
+        /// MatchRegex on a subject with a map: 1 matched, 0 did not, -1 the scan pointer is inside a
+        /// character and the old path is to decide.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private int MatchRegexMapped(Utf8OffsetMap/*!*/ map, RubyRegex/*!*/ pattern, bool anchored, bool advance) {
+            int clrPosition = map.ClrOf(_position);
+            if (clrPosition < 0) {
+                return -1;
+            }
+            // The MatchData is made here rather than left pending: the window match makes it anyway
+            // for a subject that is not one byte per character (see MatchWindowBounds).
+            MatchData data = _fixedAnchor
+                ? pattern.Match(_scanString, clrPosition, false)
+                : pattern.MatchWindow(_scanString, clrPosition, anchored, false);
+            int clrStart, clrEnd;
+            if (data == null || !data.TryGetGroupClrOffsets(0, out clrStart, out clrEnd)) {
+                return 0;
+            }
+            int byteStart = map.ByteOf(clrStart);
+            int byteEnd = (byteStart >= 0) ? map.ByteOf(clrEnd) : -1;
+            if (byteEnd >= 0) {
+                if (anchored && byteStart != _position) {
+                    return 0;
+                }
+                _match = data;
+                _matchMap = map;
+                _matchBase = 0;
+                return Matched(byteStart, byteEnd, advance) ? 1 : 0;
+            }
+            if (!data.TryGetGroupByteOffsets(0, out byteStart, out byteEnd) || (anchored && byteStart != _position)) {
+                return 0;
+            }
+            _match = data;
+            _matchBase = 0;
+            return Matched(byteStart, byteEnd, advance) ? 1 : 0;
+        }
+
         private bool MatchRegex(RubyRegex/*!*/ pattern, bool anchored, bool advance, bool lazyGroups) {
             ClearMatch();
+
+            Utf8OffsetMap map = Map;
+            if (map != null) {
+                int mapped = MatchRegexMapped(map, pattern, anchored, advance);
+                if (mapped >= 0) {
+                    return mapped != 0;
+                }
+            }
 
             if (lazyGroups && !_fixedAnchor) {
                 int boundsStart, boundsEnd;
@@ -362,6 +513,15 @@ namespace IronRuby.StandardLibrary.StringScanner {
             if (anchored && pattern.IsAscii()) {
                 // The usual #skip("{"): an ASCII pattern's characters are its bytes, so it can be
                 // compared where it stands instead of being copied out to a byte array first.
+                Utf8OffsetMap map = Map;
+                int clr = (map != null) ? map.ClrOf(_position) : -1;
+                if (clr >= 0) {
+                    string literal = pattern.ToString();
+                    if (!map.Text.AsSpan(clr).StartsWith(literal.AsSpan())) {
+                        return false;
+                    }
+                    return Matched(_position, _position + literal.Length, advance);
+                }
                 int length = pattern.GetByteCount();
                 if (_position + length > ByteLength) {
                     return false;
@@ -463,6 +623,16 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 return null;
             }
             int start, end;
+            Utf8OffsetMap map = self.Map;
+            if (map != null && map == self._matchMap) {
+                if (!self.CurrentMatch.TryGetGroupClrOffsets(subgroup, out start, out end)) {
+                    return null;
+                }
+                int byteStart = map.ByteOf(start), byteEnd = map.ByteOf(end);
+                if (byteStart >= 0 && byteEnd >= 0) {
+                    return self.ByteSlice(byteStart, byteEnd - byteStart);
+                }
+            }
             return self.CurrentMatch.TryGetGroupByteOffsets(subgroup, out start, out end)
                 ? self.ByteSlice(self._matchBase + start, end - start)
                 : null;
@@ -535,7 +705,15 @@ namespace IronRuby.StandardLibrary.StringScanner {
         [RubyMethod("beginning_of_line?")]
         [RubyMethod("bol?")]
         public static bool BeginningOfLine(StringScanner/*!*/ self) {
-            return (self._position == 0) || (self._scanString.GetByte(self._position - 1) == (byte)'\n');
+            if (self._position == 0) {
+                return true;
+            }
+            Utf8OffsetMap map = self.Map;
+            int clr = (map != null) ? map.ClrOf(self._position) : -1;
+            if (clr > 0) {
+                return map.Text[clr - 1] == '\n';
+            }
+            return self._scanString.GetByte(self._position - 1) == (byte)'\n';
         }
 
         [RubyMethod("check")]

@@ -62,8 +62,11 @@ module RbConfig
   CONFIG["LIBRUBY"] = "IronRuby.dll"
 
   # Set up paths
-  # bindir is where the running ir executable lives, so RbConfig.ruby names it.
-  bindir = File.expand_path(System::IO::Path.get_directory_name(System::Reflection::Assembly.get_entry_assembly.location).to_s) rescue nil
+  # bindir is where the running ir executable lives, so RbConfig.ruby names it: the entry
+  # assembly's directory, which the host answers along with the runtime's version - without
+  # CLR interop, whose call sites cost every boot a rule and a reflection lookup each.
+  host_dir, clr_version = IronRuby.__send__(:__host_config__)
+  bindir = (File.expand_path(host_dir) if host_dir) rescue nil
   prefix = TOPDIR || File.dirname(libdir)
 
   CONFIG["bindir"] = bindir || "#{prefix}/bin"
@@ -80,7 +83,6 @@ module RbConfig
   CONFIG["host_os"] = CONFIG["target_os"] =  cpu_and_os[1]
 
   # architecture
-  clr_version = "#{System::Environment.Version.Major}.#{System::Environment.Version.Minor}"
   # The .NET runtime IronRuby is running on, not the framework it was compiled for: the
   # net10.0 build answers "universal-dotnet11.0" under the .NET 11 runtime.
   CONFIG["arch"] = arch = "universal-dotnet#{clr_version}"

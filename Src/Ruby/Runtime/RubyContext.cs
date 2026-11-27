@@ -770,6 +770,9 @@ namespace IronRuby.Runtime {
 
             _runtimeId = Interlocked.Increment(ref _RuntimeIdGenerator);
 
+            // Compiled bodies load their call sites and sealed constants without a cast helper (CompiledConstantsRewriter).
+            CompiledConstantsRewriter.Install();
+
             // A lambda literal is light-compiled when it is first called, not with the method or file it is written in
             // (CompiledFrameExpression.IsCompiledOnFirstCall).
             Microsoft.Scripting.Interpreter.LightCompiler.CompileOnFirstCall = LazyLambdasAll ? (lambda => true) :
@@ -3010,6 +3013,26 @@ namespace IronRuby.Runtime {
         public bool HasInstanceVariables(object obj) {
             RubyInstanceData data = TryGetInstanceData(obj);
             return data != null && data.HasInstanceVariables;
+        }
+
+        /// <summary>
+        /// Neither instance variables nor a singleton class, with one look in the table of instance data (each of
+        /// HasInstanceVariables and GetImmediateClassOf takes one, some 200 instructions for an object of a CLR type):
+        /// MRI's BARE_STRING_P for String#dup (MutableStringOps.Duplicate), less the class, which the caller tests.
+        /// </summary>
+        public bool HasNoInstanceVariablesOrSingleton(object obj) {
+            RubyInstanceData data;
+            if (obj != null && obj.GetType() == typeof(MutableString)) {
+                // a String (not a Ruby subclass, which is an IRubyObject) keeps its data in the table (TryGetClrTypeInstanceData)
+                _referenceTypeInstanceData.TryGetValue(obj, out data);
+            } else {
+                data = TryGetInstanceData(obj);
+            }
+            if (data == null) {
+                return true;
+            }
+            var immediate = data.ImmediateClass;
+            return !data.HasInstanceVariables && (immediate == null || !immediate.IsSingletonClass);
         }
 
         /// <summary>

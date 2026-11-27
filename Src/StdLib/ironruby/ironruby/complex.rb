@@ -810,7 +810,9 @@ class Complex < Numeric
   # to_complex: rb_convert_type(val, T_COMPLEX, "Complex", "to_c")
   def self.__to_complex__(value)
     unless __ir_responds_to__(value, :to_c)
-      ::Kernel.raise(::TypeError, "can't convert #{nil.equal?(value) ? 'nil' : __ir_class_of__(value)} into Complex")
+      # (convert_type_err names nil, true and false by value)
+      special = nil.equal?(value) || true.equal?(value) || false.equal?(value)
+      ::Kernel.raise(::TypeError, "can't convert #{special ? value.inspect : __ir_class_of__(value)} into Complex")
     end
     result = value.to_c
     unless ::Complex === result

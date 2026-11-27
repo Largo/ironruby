@@ -622,6 +622,38 @@ D.new.bar rescue p $!
 ");
         }
 
+        /// <summary>
+        /// A call of a private or protected method from outside that goes to a method_missing calling super ends in MRI's
+        /// "private method 'x' called" (MISSING_PRIVATE, MISSING_PROTECTED): the reason reaches BasicObject#method_missing.
+        /// </summary>
+        public void SuperAndMethodMissing3() {
+            TestOutput(@"
+require 'ruby4'
+class C
+  def method_missing(n, *a) = super
+  def respond_to_missing?(*) = super
+  private def x(*) = 1
+  protected def y = 2
+  def z = x
+end
+def err = yield.then { :none } rescue [$!.class, $!.message, $!.name, ($!.args rescue :na), ($!.private_call? rescue :na)]
+c = C.new
+p err { c.x }, err { c.x(1, 2) }, err { c.y }, err { c.nope }, err { c.z }
+p err { c.instance_eval { nope2 } }, err { c.instance_eval { nope3() } }, err { c.x }
+p Thread.new { err { c.y } }.value
+", @"
+[NoMethodError, ""private method 'x' called for an instance of C"", :x, [], false]
+[NoMethodError, ""private method 'x' called for an instance of C"", :x, [1, 2], false]
+[NoMethodError, ""protected method 'y' called for an instance of C"", :y, [], false]
+[NoMethodError, ""undefined method 'nope' for an instance of C"", :nope, [], false]
+:none
+[NameError, ""undefined local variable or method 'nope2' for an instance of C"", :nope2, :na, :na]
+[NoMethodError, ""undefined method 'nope3' for an instance of C"", :nope3, [], true]
+[NoMethodError, ""private method 'x' called for an instance of C"", :x, [], false]
+[NoMethodError, ""protected method 'y' called for an instance of C"", :y, [], false]
+");
+        }
+
         public void SuperCaching1() {
             AssertOutput(() => CompilerTest(@"
 module M

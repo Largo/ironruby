@@ -19,6 +19,8 @@ using Microsoft.Scripting.Runtime;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System;
+using System.IO;
 
 namespace IronRuby.Builtins {
     [RubyModule("IronRuby", Extends = typeof(Ruby), Restrictions = ModuleRestrictions.NotPublished)]
@@ -32,6 +34,56 @@ namespace IronRuby.Builtins {
         [RubyMethod("globals", RubyMethodAttributes.PublicSingleton)]
         public static Scope/*!*/ GetGlobalScope(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             return context.DomainManager.Globals;
+        }
+
+        /// <summary>
+        /// What the default-spec cache of rubygems/defaults/ironruby.rb is valid for: [name, size, mtime] of each entry of the
+        /// directory that `Dir.glob("*.gemspec")` would match (not a dot file), in ordinal order of the names; mtime in 100 ns
+        /// ticks. Empty if the directory does not exist. A boot that finds the cache valid then needs neither the glob nor a
+        /// File::Stat per gemspec, which took ~13 ms of `ir -e 1'.
+        /// </summary>
+        [RubyMethod("__gemspec_stamp__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray/*!*/ GetGemspecStamp(RubyContext/*!*/ context, RubyModule/*!*/ self, [NotNull]MutableString/*!*/ dir) {
+            // (collections of reference types only: their shared code is precompiled, where a List of KeyValuePairs was
+            // JIT-compiled at the first call - 26 methods, ~2 ms)
+            var entries = new List<FileSystemInfo>();
+            var directory = new DirectoryInfo(context.DecodePath(dir));
+            if (directory.Exists) {
+                foreach (FileSystemInfo entry in directory.GetFileSystemInfos()) {
+                    string name = entry.Name;
+                    if (name.EndsWith(".gemspec", StringComparison.Ordinal) && !name.StartsWith(".", StringComparison.Ordinal)) {
+                        entries.Add(entry);
+                    }
+                }
+            }
+            entries.Sort((x, y) => String.CompareOrdinal(x.Name, y.Name));
+
+            var result = new RubyArray(entries.Count);
+            foreach (FileSystemInfo entry in entries) {
+                var file = entry as FileInfo;
+                long size = (file != null && file.Exists) ? file.Length : 0;
+                long mtime = entry.Exists ? entry.LastWriteTimeUtc.Ticks : 0;
+                result.Add(new RubyArray(new object[] { context.EncodePath(entry.Name), Protocols.Normalize(size), Protocols.Normalize(mtime) }));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// What rbconfig.rb asks the host: [the directory of the entry assembly (nil without one, as in a host that embeds IronRuby;
+        /// "" if it has no location), the .NET runtime's "major.minor"]. It asked through CLR interop
+        /// (System::Reflection::Assembly.get_entry_assembly.location and friends), whose six call sites bound rules of their own
+        /// and looked their members up by reflection: ~4 ms of every `ir -e 1'.
+        /// </summary>
+        [RubyMethod("__host_config__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray/*!*/ GetHostConfig(RubyContext/*!*/ context, RubyModule/*!*/ self) {
+            var entry = System.Reflection.Assembly.GetEntryAssembly();
+            object bindir = null;
+            if (entry != null) {
+                // UTF-8, as System::String#to_s made it
+                bindir = MutableString.Create(Path.GetDirectoryName(entry.Location) ?? "", RubyEncoding.UTF8);
+            }
+            Version clr = Environment.Version;
+            return new RubyArray(new object[] { bindir, MutableString.CreateAscii(clr.Major + "." + clr.Minor) });
         }
 
         [RubyMethod("loaded_assemblies", RubyMethodAttributes.PublicSingleton)]

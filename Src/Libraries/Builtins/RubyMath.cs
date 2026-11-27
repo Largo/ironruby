@@ -386,6 +386,22 @@ namespace IronRuby.Builtins {
         // or an Int64 is far below the 2**1024 from which those split the exponent off first.
         // Everything else - a negative number (DomainError), a Bignum, a Rational, nil, a base of
         // nil - goes to the Ruby definitions.
+        /// <summary>
+        /// MRI's rb_math_log of two numbers that are not negative (and fit a double): the pole first - a zero x is -Infinity,
+        /// or NaN for a zero base, and a zero base -0.0 - then log2(x) / log2(base) plus the bits shifted out of a big one
+        /// (none here) over log2(base), which makes a base of 1 NaN and turns a -0.0 quotient into 0.0.
+        /// </summary>
+        internal static double LogBase(double d, double b) {
+            if (d == 0.0) {
+                return (b != 0.0) ? Double.NegativeInfinity : Double.NaN;
+            }
+            if (b == 0.0) {
+                return -0.0;
+            }
+            double lb = SM.Log2(b);
+            return SM.Log2(d) / lb + 0.0 / lb;
+        }
+
         private static bool TryGetLogArgument(RubyContext/*!*/ context, object x, out double d) {
             return TryGetDouble(context, x, out d) && (d >= 0.0 || double.IsNaN(d));
         }
@@ -405,9 +421,7 @@ namespace IronRuby.Builtins {
         public static object Log(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object x, object newBase) {
             double d, b;
             if (TryGetLogArgument(general.Context, x, out d) && TryGetLogArgument(general.Context, newBase, out b)) {
-                if (double.IsNaN(d)) return d;
-                if (double.IsNaN(b)) return b;
-                return SM.Log(d) / SM.Log(b);
+                return LogBase(d, b);
             }
             return General(general, "__ir_log__", self, x, newBase);
         }

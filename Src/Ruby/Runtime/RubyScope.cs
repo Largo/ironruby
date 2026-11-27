@@ -956,7 +956,8 @@ namespace IronRuby.Runtime {
                         return callee ? methodScope.CalleeName : methodScope.DefinitionName;
 
                     case ScopeKind.BlockMethod:
-                        return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DefinitionName;
+                        var proc = ((RubyBlockScope)scope).BlockFlowControl.Proc;
+                        return (callee ? proc.CalleeName : null) ?? proc.Method.DefinitionName;
 
                     case ScopeKind.TopLevel:
                         return null;
@@ -1800,6 +1801,11 @@ namespace IronRuby.Runtime {
         // Set only for a block whose body has a return in a nested block: 1 while the body runs
         // (and catches a LambdaUnwinder aimed at this scope), 2 once it has finished.
         internal byte LambdaReturnState;
+
+        // The last Procs of the block literals in the body, kept with the scope for the call that reuses it (a Proc for one
+        // literal, a Proc[] for more; see RubyOps.ParkNestedProc), and the thread that kept them. Not cleared by Reinitialize.
+        internal object ParkedNested;
+        internal int ParkedNestedThreadId;
 
         public override string[] OwnImplicitParameterNames {
             get {

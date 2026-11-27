@@ -1381,14 +1381,15 @@ namespace IronRuby.Runtime {
             MutableString str = key as MutableString;
             Hash hash = obj as Hash;
             // an identity hash stores the string object it was given, it must not copy it;
-            // neither is there a reason to copy an already frozen string
-            if (str != null && !str.IsFrozen && (hash == null || !hash.ComparesByIdentity)) {
+            // neither is there a reason to copy an already frozen string. Nor an instance of a
+            // subclass of String: MRI copies only a key whose class is String (RHASH_STRING_KEY_P),
+            // and stores any other as it is, unfrozen.
+            if (str != null && !str.IsFrozen && str.GetType() == typeof(MutableString) && (hash == null || !hash.ComparesByIdentity)) {
                 // MRI's rb_hash_key_str gives a bare String key's copy from the fstring table,
                 // and so refuses it a singleton class; the copy of any other is merely frozen.
                 // It is not put in the table here (which is never swept, MRI's is), only marked.
                 var copy = str.Duplicate(context, false, str.Clone());
-                key = (str.GetType() == typeof(MutableString) && !context.HasInstanceVariables(str))
-                    ? copy.FreezeInterned() : copy.Freeze();
+                key = !context.HasInstanceVariables(str) ? copy.FreezeInterned() : copy.Freeze();
             } else {
                 key = CustomStringDictionary.NullToObj(key);
             }

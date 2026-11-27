@@ -19,14 +19,12 @@ class Continuation
   # out of #instance_variables. Not an ObjectSpace::WeakMap entry: that holds its values
   # weakly too, and the array had no other reference to keep it.
 
+  __ir_undef_alloc__
+
   class << self
     alias_method :__ir_allocate__, :allocate
     private :__ir_allocate__
     undef_method :new
-
-    def allocate
-      raise TypeError, "allocator undefined for #{self}"
-    end
 
     # Kernel#callcc: runs the block with a new continuation, which is live until
     # the block finishes.

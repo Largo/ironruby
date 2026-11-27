@@ -712,7 +712,8 @@ namespace IronRuby.Builtins {
             MutableString/*!*/ self) {
 
             if (FastDup && self.GetType() == typeof(MutableString) && IsBare(allocateStorage.Context, self)) {
-                return self.CreateInstance().Replace(self);
+                // the copy constructor: what CreateInstance().Replace(self) leaves, without the empty content made for it
+                return self.Clone();
             }
             return KernelOps.Duplicate(initializeCopyStorage, allocateStorage, self);
         }
@@ -722,7 +723,7 @@ namespace IronRuby.Builtins {
         // BARE_STRING_P: no instance variables and the class String itself (the caller has seen the CLR type is MutableString,
         // so the class is String unless the string has a singleton class).
         private static bool IsBare(RubyContext/*!*/ context, MutableString/*!*/ self) {
-            return !context.HasInstanceVariables(self) && !context.GetImmediateClassOf(self).IsSingletonClass;
+            return context.HasNoInstanceVariablesOrSingleton(self);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
@@ -814,6 +815,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, int c) {
             if (c < 0) {
+                // MRI's rb_str_concat checks the receiver first: a frozen string raises FrozenError whatever it is given
+                self.RequireNotFrozen();
                 throw RubyExceptions.CreateRangeError("{0} out of char range", c);
             }
 
@@ -833,16 +836,30 @@ namespace IronRuby.Builtins {
                 self.ForceEncoding(RubyEncoding.Binary);
                 return self.Append((byte)c);
             }
+            // (ToChr may refuse the code: the frozen check comes first, as above)
+            self.RequireNotFrozen();
+            RequireByteCode(self, (uint)c);
             return self.Append(Integer.ToChr(self.Encoding, self.Encoding, c));
+        }
+
+        // MRI's rb_str_concat takes a code onto a BINARY or US-ASCII string as a byte, and one above 0xFF is "256 out of char
+        // range" there, where Integer#chr in those encodings says "invalid codepoint 0x100 in ASCII-8BIT".
+        private static void RequireByteCode(MutableString/*!*/ self, uint c) {
+            if (c > 0xff && (self.Encoding == RubyEncoding.Binary || self.Encoding == RubyEncoding.Ascii)) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
         }
 
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
+            self.RequireNotFrozen();
+
             // A code above the int range is still a number of 32 bits to MRI's rb_str_concat, and
             // a character where the encoding has one that wide: 0x8431A430 in GB18030. A wider
             // one that is still a Fixnum in MRI is named in the message.
             if (c.Sign > 0 && c <= UInt32.MaxValue) {
+                RequireByteCode(self, (uint)c);
                 return self.Append(Integer.ToChr(self.Encoding, self.Encoding, (uint)c));
             }
             if (c >= -((BigInteger)1 << 62) && c < ((BigInteger)1 << 62)) {
@@ -1157,8 +1174,9 @@ namespace IronRuby.Builtins {
                 return (start == charCount && count >= 0) ? self.CreateDerived() : null;
             }
 
-            // a long substring shares the receiver's array (MutableString.GetSlice)
-            return GetCharacterSlice(self, start, count);
+            // a long substring shares the receiver's array (MutableString.GetSlice), and so does a long tail
+            self.ToClrRange(ref start, ref count);
+            return self.GetSlice(start, count, true);
         }
 
         #region byteslice
@@ -3031,7 +3049,18 @@ namespace IronRuby.Builtins {
             [Optional]object fromEncoding,
             [Keywords, DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            Protocols.TryConvertToOptions(toHash, ref options, ref toEncoding, ref fromEncoding);
+            // The options are keywords only (Ruby 3.0's separation): a trailing positional Hash, or an object with
+            // #to_hash, is an encoding to CRuby 4.0 and so "no implicit conversion of Hash into String". A keyword hash
+            // that arrived as the last positional argument (**obj) is still the options.
+            if (options == null) {
+                if (fromEncoding is Hash lastHash && lastHash.IsKeywordArguments) {
+                    options = lastHash;
+                    fromEncoding = Missing.Value;
+                } else if (fromEncoding == Missing.Value && toEncoding is Hash onlyHash && onlyHash.IsKeywordArguments) {
+                    options = onlyHash;
+                    toEncoding = Missing.Value;
+                }
+            }
 
             // encodings:
             RubyEncoding to, from;
@@ -4523,6 +4552,7 @@ namespace IronRuby.Builtins {
             }
 
             ReadOnlySpan<char> chars = default(ReadOnlySpan<char>);
+            Utf8OffsetMap map = null;
             bool singleByte = self.DetectSingleByteCharacters();
             if (!singleByte) {
                 if (self.Encoding != RubyEncoding.UTF8 || self.ContainsInvalidCharacters()) {
@@ -4556,18 +4586,30 @@ namespace IronRuby.Builtins {
             } else {
                 // The UTF-8 size of the whole string is counted only for an offset from the end:
                 // the walk to a positive offset finds out by itself whether it is past the end.
+                // An offset other than 0 is usually the last answer plus one, in a loop over the
+                // string: the walk then goes from where the last one stopped, through the map shared
+                // by every search of this snapshot of the characters, instead of from the start (93 ms
+                // for such a loop over 100 KB of UTF-8, CRuby 0.36). The first call, or one from 0,
+                // makes no map.
                 int clrOffset;
                 if (args.Length < 2) {
                     clrOffset = reverse ? chars.Length : 0;
                 } else {
                     int offset = (int)args[1];
+                    if (offset != 0) {
+                        map = Utf8OffsetMap.For(self.ConvertToString());
+                        if (map.Text.Length != chars.Length) {
+                            // the string changed under the search (another thread)
+                            return false;
+                        }
+                    }
                     if (offset < 0) {
-                        offset += Encoding.UTF8.GetByteCount(chars);
+                        offset += map.ByteLength;
                         if (offset < 0) {
                             return true;
                         }
                     }
-                    clrOffset = Utf8OffsetToClrIndex(chars, offset);
+                    clrOffset = (map != null) ? map.ClrOf(offset) : Utf8OffsetToClrIndex(chars, offset);
                     if (clrOffset == -2) {
                         if (!reverse) {
                             return true;
@@ -4590,7 +4632,8 @@ namespace IronRuby.Builtins {
                 // the string changed under the search (another thread): the helper is the one to ask
                 return false;
             }
-            result = ScriptingRuntimeHelpers.Int32ToObject(Encoding.UTF8.GetByteCount(chars.Slice(0, foundClr)));
+            int foundByte = (map != null) ? map.ByteOf(foundClr) : -1;
+            result = ScriptingRuntimeHelpers.Int32ToObject(foundByte >= 0 ? foundByte : Encoding.UTF8.GetByteCount(chars.Slice(0, foundClr)));
             return true;
         }
 
@@ -6688,12 +6731,26 @@ namespace IronRuby.Builtins {
         }
 
         // encoding aware, TODO: KCODE
+        // MRI's tr_trans: an empty string is nil, frozen or not; then the encodings of the two sets are checked against the
+        // string's, and only then is the string required to be modifiable. True for the empty string.
+        private static bool RequireTranslatable(MutableString/*!*/ self, MutableString/*!*/ from, MutableString/*!*/ to) {
+            if (self.IsEmpty) {
+                return true;
+            }
+            self.RequireCompatibleEncoding(from);
+            self.RequireCompatibleEncoding(to);
+            self.RequireNotFrozen();
+            return false;
+        }
+
         [RubyMethod("tr!")]
         public static MutableString Translate(MutableString/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ from, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
 
             bool anyCharacterMaps;
-            self.RequireNotFrozen();
+            if (RequireTranslatable(self, from, to)) {
+                return null;
+            }
             Translate(self, from, to, true, false, out anyCharacterMaps);
             return anyCharacterMaps ? self : null;
         }
@@ -6712,7 +6769,9 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ from, [DefaultProtocol, NotNull]MutableString/*!*/ to) {
 
             bool anyCharacterMaps;
-            self.RequireNotFrozen();
+            if (RequireTranslatable(self, from, to)) {
+                return null;
+            }
             Translate(self, from, to, true, true, out anyCharacterMaps);
             return anyCharacterMaps ? self : null;
         }

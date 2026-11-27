@@ -229,7 +229,7 @@ namespace IronRuby.Runtime {
 
         #region Parked method scopes
 
-        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda or nested block in them)
+        // A method whose block literals all reuse their Procs (BlockDispatcher.ReusesProc: no lambda, no nested block that does not keep them: KeepEnclosingProcs)
         // and which calls no super makes a scope and a Proc per literal on every call, the Proc's parent (`def each; (a..b).each
         // { |i| yield @s[i] }; end'). Once such a call has returned normally, if nothing captured the scope (RubyScope.IsCaptured:
         // binding, eval, a method or Symbol proc made in it, a TracePoint, a Proc of a literal replaced) and the last Proc of
@@ -749,6 +749,96 @@ namespace IronRuby.Runtime {
             return scope.BlockFlowControl.ParkScope(scope);
         }
 
+        // A block that holds block literals - `a.each { |x| x.each_child { |c| s += c } }' - made a scope, and a Proc and a
+        // BlockParam per literal, on every call: the literals' Procs are over the block's scope, so it could not be reused. It
+        // is now, when each literal is written in the block's own body and reuses its Proc (BlockDispatcher.ReusesProc): at
+        // the normal end of a call that kept the scope on its BlockParam (LeaveReusableBlockScope), the last Proc of each
+        // literal is kept with the scope if nothing but the block's frame holds it (Proc.IsReusableAndInactive: given to light
+        // frames and [BlockNotKept] iterators only, and no scope it ran in captured); otherwise the scope is not kept either. The
+        // next call that takes the scope makes those Procs again for the literals. A Proc of a literal that the same call
+        // replaced may be held anywhere and reaches the scope: it marks the scope captured. IR_PARKED_BLOCK_SCOPES=0 turns it off.
+
+        /// <summary>
+        /// InstantiateReusableBlock of a literal (the index-th) written in the body of a block: the Proc kept with the block's
+        /// scope by the call that last used the scope, if there is one.
+        /// </summary>
+        [Emitted]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Proc InstantiateNestedParkedBlock(Proc previous, RubyBlockScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher,
+            int index) {
+            if (previous == null && scope.ParkedNested == null) {
+                return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            }
+            return InstantiateNestedParkedBlockSlow(previous, scope, self, dispatcher, index);
+        }
+
+        private static Proc InstantiateNestedParkedBlockSlow(Proc previous, RubyBlockScope/*!*/ scope, object self,
+            BlockDispatcher/*!*/ dispatcher, int index) {
+            if (previous != null) {
+                if (previous.TryReuse()) {
+                    return previous;
+                }
+                scope.IsCaptured = true;
+            } else {
+                Proc proc;
+                var parked = scope.ParkedNested;
+                var procs = parked as Proc[];
+                if (procs != null) {
+                    proc = procs[index];
+                    procs[index] = null;
+                } else {
+                    proc = (Proc)parked;
+                    scope.ParkedNested = null;
+                }
+                if (proc != null) {
+                    proc.ReuseParked(self, scope.ParkedNestedThreadId != Environment.CurrentManagedThreadId);
+                    if (proc.TryReuse()) {
+                        return proc;
+                    }
+                }
+            }
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        /// <summary>
+        /// Keeps the last Proc of the index-th of <paramref name="count"/> literals of a block with the block's scope, which
+        /// LeaveReusableBlockScope has kept on the BlockParam; false if something else may hold the Proc (UnparkBlockScope then
+        /// takes the scope back). A literal the call did not reach keeps what was kept.
+        /// </summary>
+        [Emitted]
+        public static bool ParkNestedProc(RubyBlockScope/*!*/ scope, int index, int count, Proc proc) {
+            if (proc == null) {
+                return true;
+            }
+            if (!proc.IsReusableAndInactive) {
+                return false;
+            }
+            int threadId = Environment.CurrentManagedThreadId;
+            if (count == 1) {
+                scope.ParkedNested = proc;
+            } else {
+                var procs = scope.ParkedNested as Proc[];
+                if (procs == null) {
+                    scope.ParkedNested = procs = new Proc[count];
+                } else if (scope.ParkedNestedThreadId != threadId) {
+                    // the Procs another thread kept carry its BlockParams: one ParkedNestedThreadId is for all of them
+                    Array.Clear(procs, 0, procs.Length);
+                }
+                procs[index] = proc;
+            }
+            scope.ParkedNestedThreadId = threadId;
+            return true;
+        }
+
+        /// <summary>
+        /// A block scope LeaveReusableBlockScope kept on its BlockParam that cannot be reused after all: a Proc of a literal
+        /// in the block may be held elsewhere (ParkNestedProc).
+        /// </summary>
+        [Emitted]
+        public static void UnparkBlockScope(RubyBlockScope/*!*/ scope) {
+            scope.BlockFlowControl.TakeReusableScope();
+        }
+
         [Emitted]
         public static RubyBlockScope/*!*/ CreateBlockScopeLazy(MutableTuple locals, string[] variableNames,
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
@@ -845,10 +935,34 @@ namespace IronRuby.Runtime {
             if (!IsRefinedHere(scope, value, "to_s")) {
                 return null;
             }
+            // MRI's objtostring takes a Symbol's name while Symbol#to_s is the built-in one, refined or not (vm_objtostring:
+            // check_method_basic_definition); a redefined Symbol#to_s is called as any other, under the refinements.
+            if (value is RubySymbol && IsBuiltinSymbolToS(context)) {
+                return null;
+            }
             var site = context.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object>>(
                 "to_s", new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
             return ToSDefaultConversion(context, value, site.Target(site, scope, value));
+        }
+
+        private static bool IsBuiltinSymbolToS(RubyContext/*!*/ context) {
+            var symbolClass = context.GetClass(typeof(RubySymbol));
+            RubyMemberInfo method;
+            using (context.ClassHierarchyLocker()) {
+                method = symbolClass.ResolveMethodNoLock("to_s", VisibilityContext.AllVisible).Info;
+            }
+            // the library's Symbol#to_s (SymbolOps.ToString), not another library method aliased as to_s
+            if (!(method is RubyLibraryMethodInfo) || method.DeclaringModule != symbolClass) {
+                return false;
+            }
+            var members = method.GetMembers();
+            var clrMethod = (members.Length == 1) ? members[0] as MethodInfo : null;
+            if (clrMethod == null || clrMethod.Name != "ToString") {
+                return false;
+            }
+            var parameters = clrMethod.GetParameters();
+            return parameters.Length == 1 && parameters[0].ParameterType == typeof(RubySymbol);
         }
 
         /// <summary>
@@ -957,6 +1071,24 @@ namespace IronRuby.Runtime {
                 return previous;
             }
             return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+        }
+
+        /// <summary>
+        /// The Proc of a literal nested in a block, made in <paramref name="scope"/> (the enclosing block's, or a scope inside
+        /// it): it reaches the Procs of the blocks that scope runs in, which are therefore not made again (Proc.ClearReusable) -
+        /// and so not parked with their method's scope either (RubyOps.StageParkedProc). The enclosing literal reuses its Proc
+        /// only on calls that make no nested Proc (BlockDefinition, IR_NESTED_PROCS). Nothing else changes for a block that
+        /// makes one: its scope is not reused (BlockDefinition, reuseScope) and its BlockParams are handed on as they were.
+        /// </summary>
+        [Emitted]
+        public static Proc/*!*/ KeepEnclosingProcs(Proc/*!*/ proc, RubyScope/*!*/ scope) {
+            for (RubyScope s = scope; s is RubyBlockScope blockScope; s = s._parent) {
+                var bfc = blockScope.BlockFlowControl;
+                if (bfc != null) {
+                    bfc.Proc.ClearReusable();
+                }
+            }
+            return proc;
         }
 
         [Emitted]
@@ -4493,11 +4625,32 @@ namespace IronRuby.Runtime {
             set { _methodMissingVariableCall = value; }
         }
 
+        // And whether the method was there but private or protected (MISSING_PRIVATE, MISSING_PROTECTED), so that
+        // BasicObject#method_missing reached through super says "private method 'x' called", as the call would have.
+        [ThreadStatic]
+        private static RubyMethodVisibility _methodMissingVisibility;
+
+        public static RubyMethodVisibility MethodMissingVisibility {
+            get { return _methodMissingVisibility; }
+            set { _methodMissingVisibility = value; }
+        }
+
         [Emitted]
         public static void SetMethodMissingReason(bool privateCall, bool variableCall) {
             _methodMissingPrivateCall = privateCall;
             _methodMissingVariableCall = variableCall;
+            _methodMissingVisibility = RubyMethodVisibility.None;
         }
+
+        // SetMethodMissingReason for a call that found a method it may not call (RubyCallAction.BuildMethodMissingCall)
+        public static void SetMethodMissingReasonVisibility(bool privateCall, bool variableCall, RubyMethodVisibility visibility) {
+            _methodMissingPrivateCall = privateCall;
+            _methodMissingVariableCall = variableCall;
+            _methodMissingVisibility = visibility;
+        }
+
+        internal static readonly MethodInfo/*!*/ SetMethodMissingReasonVisibilityMethod =
+            typeof(RubyOps).GetMethod(nameof(SetMethodMissingReasonVisibility));
 
         [Emitted]
         public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs, bool privateCall) {

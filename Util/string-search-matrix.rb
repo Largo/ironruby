@@ -148,3 +148,105 @@ SW_RECEIVERS.each do |rname, base|
     try("#{rname}/#{kname}.start_with?(nil)") { "sentinel" =~ SENTINEL; b = $~; [(s.start_with?(nil)), b, $~] }
   end
 end
+
+puts "== StringScanner (round three: a UTF-8 subject is mapped between bytes and characters incrementally)"
+require 'strscan'
+def ss_state(ss)
+  [ss.pos, (ss.charpos rescue $!.class), ss.matched, ss.pre_match, ss.post_match, ss[0], (ss[1] rescue $!.class),
+   ss.matched_size, ss.eos?, ss.bol?, ss.rest_size, ss.rest, ss.peek(3)].inspect
+end
+SS_SUBJECTS = {
+  ascii: "hello world, 12 + 34\nnext line",
+  utf8: "héllo wörld, 日本 + 34\nnäxt line",
+  astral: "a😀b 𝒳c, 😀\n𠀀 end",
+  broken: "ab\xE9c d\xFFe, f".dup.force_encoding("UTF-8"),
+  binary: "ab\xE9c d\xFFe, f".b,
+  eucjp: "\xA4\xA2a b\xA4\xA4, c".dup.force_encoding("EUC-JP"),
+}
+SS_OPS = [
+  ["scan(/\\S+/)", ->(ss) { ss.scan(/\S+/) }], ["skip(/\\s+/)", ->(ss) { ss.skip(/\s+/) }],
+  ["scan(/(\\w)(\\w)/)", ->(ss) { ss.scan(/(\w)(\w)/) }], ["scan_until(/,/)", ->(ss) { ss.scan_until(/,/) }],
+  ["skip_until(/\\n/)", ->(ss) { ss.skip_until(/\n/) }], ["check(/./)", ->(ss) { ss.check(/./) }],
+  ["match?(/\\w+/)", ->(ss) { ss.match?(/\w+/) }], ["exist?(/ /)", ->(ss) { ss.exist?(/ /) }],
+  ["getch", ->(ss) { ss.getch }], ["get_byte", ->(ss) { ss.get_byte }], ["peek_byte", ->(ss) { ss.peek_byte }],
+  ["skip(' ')", ->(ss) { ss.skip(" ") }], ["scan('h')", ->(ss) { ss.scan("h") }], ["scan('é')", ->(ss) { ss.scan("é") }],
+  ["scan(/\\A./)", ->(ss) { ss.scan(/\A./) }], ["scan(/^n/)", ->(ss) { ss.scan(/^n/) }], ["unscan", ->(ss) { ss.unscan }],
+  ["search_full(/d/,1,1)", ->(ss) { ss.search_full(/d/, true, true) }], ["scan_full(/./,0,1)", ->(ss) { ss.scan_full(/./, false, true) }],
+]
+SS_SUBJECTS.each do |sname, subject|
+  SS_OPS.each do |oname, op|
+    # every op from every starting byte position, after a first op, then a second
+    (0..subject.bytesize).each do |start|
+      try("ss[#{sname}] pos=#{start} #{oname}") do
+        ss = StringScanner.new(subject.dup)
+        ss.pos = start
+        r = op.(ss)
+        [[r, ss_state(ss)].inspect, nil, nil]
+      end
+    end
+  end
+  try("ss[#{sname}] words") do
+    ss = StringScanner.new(subject.dup); out = []
+    until ss.eos?; ss.skip(/\s+/); out << [ss.scan(/\S+/), ss.pos, ss.charpos, ss.pre_match&.size]; break if out.size > 50; end
+    [out.inspect, nil, nil]
+  end
+  try("ss[#{sname}] concat midway") do
+    s = subject.dup; ss = StringScanner.new(s); a = ss.scan(/\S+/); s << " ñu"; ss << " 😀"; b = ss.scan_until(/ñ/)
+    c = ss.rest; ss.string = "nüevo"; d = ss.scan(/\S/)
+    [[a, b, c, d, ss_state(ss)].inspect, nil, nil]
+  end
+  try("ss[#{sname}] fixed_anchor") do
+    ss = StringScanner.new(subject.dup, fixed_anchor: true); r = [ss.scan(/\S+/), ss.skip(/\s/), ss.scan(/\A./), ss.scan(/./), ss_state(ss)]
+    [r.inspect, nil, nil]
+  end
+  try("ss[#{sname}] terminate/reset") do
+    ss = StringScanner.new(subject.dup); ss.scan(/\S+/); ss.terminate; t = ss_state(ss); ss.reset; [[t, ss_state(ss)].inspect, nil, nil]
+  end
+end
+
+puts "== StringScanner with the subject changed between scans (round four)"
+SS_SUBJECTS.each do |sname, subject|
+  [["setbyte(0, 0x41)", ->(s) { s.setbyte(0, 0x41) }], ["setbyte(-1, 0x7A)", ->(s) { s.setbyte(-1, 0x7A) }],
+   ["setbyte(3, 0xC3)", ->(s) { s.setbyte(3, 0xC3) }], ["[0] = 'ü'", ->(s) { s[0] = "ü" }], ["[2, 3] = 'X'", ->(s) { s[2, 3] = "X" }],
+   ["[-1] = '😀'", ->(s) { s[-1] = "😀" }], ["insert(1, 'ñ')", ->(s) { s.insert(1, "ñ") }], ["replace('ö o')", ->(s) { s.replace("ö o") }],
+   ["force_encoding(BINARY)", ->(s) { s.force_encoding("BINARY") }], ["<< 0xFF byte", ->(s) { s << "\xFF".b.force_encoding(s.encoding) }],
+  ].each do |cname, change|
+    try("ss[#{sname}] #{cname} between scans") do
+      s = subject.dup; ss = StringScanner.new(s)
+      a = ss.scan(/\S+/); b = ss.skip(/\s+/)
+      r = begin; change.(s); [ss.scan(/\S+/), ss[0], ss.pos, ss.matched, ss.pre_match, ss.rest, (ss.charpos rescue $!.class), ss.getch, ss.bol?, ss.eos?]
+          rescue => e; [e.class, e.message]; end
+      [[a, b, r].inspect, nil, nil]
+    end
+  end
+end
+
+puts "== byteindex/byterindex loops over long strings (round four: a map shared by the searches of one snapshot)"
+LONG_SUBJECTS = {
+  ascii: "hello, world; " * 200, utf8: "héllo, wörld; 日本, " * 150, astral: "a😀, 𝒳b; " * 200,
+  binary: ("ab\xE9, c; " * 200).b, usascii: ("ab, c; " * 200).force_encoding("US-ASCII"),
+}
+LONG_SUBJECTS.each do |sname, subject|
+  [",", "; ", "日", "😀", "é"].each do |needle|
+    try("#{sname} byteindex loop #{needle.inspect}") do
+      out = []; pos = 0
+      while (pos = (subject.byteindex(needle, pos) rescue (out << $!.class; nil))); out << pos; pos += 1; break if out.size > 2000; end
+      [out.inspect.sum(32), out.size, out.last(3)].then { |x| [x.inspect, nil, nil] }
+    end
+    try("#{sname} byterindex loop #{needle.inspect}") do
+      out = []; pos = subject.bytesize
+      while pos >= 0 && (pos = (subject.byterindex(needle, pos) rescue (out << $!.class; nil))); out << pos; pos -= 1; break if out.size > 2000; end
+      [out.inspect.sum(32), out.size, out.last(3)].then { |x| [x.inspect, nil, nil] }
+    end
+    try("#{sname} byteindex every offset #{needle.inspect}") do
+      out = (0..subject.bytesize + 1).step(7).map { |i| subject.byteindex(needle, i) rescue $!.class }
+      out += (1..40).map { |i| subject.byteindex(needle, -i) rescue $!.class }
+      out += (0..subject.bytesize + 1).step(11).map { |i| subject.byterindex(needle, i) rescue $!.class }
+      [[out.inspect.sum(32), out.size, out.first(5), out.last(5)].inspect, nil, nil]
+    end
+  end
+  try("#{sname} byteindex after a change") do
+    s = subject.dup; a = s.byteindex(",", 3); s[0, 1] = "ü"; b = s.byteindex(",", 3); s << "ñ,"; c = s.byterindex(",", -1); d = s.byteindex(",", 5)
+    [[a, b, c, d].inspect, nil, nil]
+  end
+end

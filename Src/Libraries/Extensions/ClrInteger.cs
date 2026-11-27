@@ -869,8 +869,11 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("fdiv")]
         public static object FDiv(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
-            object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "fdiv", self, other);
+            ConversionStorage<double>/*!*/ floatConversion, object/*!*/ self, object other) {
+            // MRI's rb_int_fdiv_double takes what the coerced fdiv answers as a Float (NUM2DBL): 1.fdiv(Complex(1, 1)) is
+            // the RangeError "can't convert 0.5-0.5i into Float", not the Complex.
+            object result = Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "fdiv", self, other);
+            return (result is double) ? result : Protocols.CastToFloat(floatConversion, result);
         }
         /// <summary>
         /// Returns self modulo other, where other is Fixnum.  See <see cref="FloatOps.Divmod"/> for more information.

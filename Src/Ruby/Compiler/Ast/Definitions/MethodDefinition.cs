@@ -237,6 +237,7 @@ namespace IronRuby.Compiler.Ast {
             // so they need the qualified form rather than the bare method name.
             gen.CurrentMethod.FrameLabel = frameLabel;
             gen.CurrentMethod.HasOwnCompiledFrame = true;
+            gen.CurrentMethod.ForwardedRestSplat = ForwardedRest.Find(_parameters, Body);
 
             // The literals of the body take their Procs from this slot if the body turns out to park its scope (below).
             if (ParkedScopesEnabled && allowLightFrame && _parameters.Block == null && definitionRefinements == null && gen.Profiler == null &&

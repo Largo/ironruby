@@ -83,6 +83,7 @@ namespace IronRuby.Builtins {
             public RefinementActivation RefinementOverride;
             public string SymbolName;
             public bool IsIsolated;
+            public string CalleeName;
         }
 
         private RareState _rare;
@@ -251,6 +252,16 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// The name a method define_method made is called by when it is not the method's own (an alias), for
+        /// __callee__; null otherwise. Only on the copy of the method's lambda that such a call runs
+        /// (RubyLambdaMethodInfo.GetLambdaFor).
+        /// </summary>
+        internal string CalleeName {
+            get { var r = _rare; return (r != null) ? r.CalleeName : null; }
+            set { if (value != null || _rare != null) { Rare.CalleeName = value; } }
+        }
+
+        /// <summary>
         /// The proc is isolated from the scopes around it, as CRuby isolates the block of Ractor.new
         /// and a shareable proc: code it evals cannot reach their locals, and it has no binding.
         /// </summary>
@@ -277,7 +288,8 @@ namespace IronRuby.Builtins {
             _scope = scope;
             _dispatcher = dispatcher;
             // (no RubyScope.MarkCaptured here: a literal block makes a Proc over its enclosing scope on every
-            // call, and a block with a nested block literal never reuses its scope - see BlockDefinition)
+            // call, and a block with a nested block literal never reuses its scope - see BlockDefinition; the
+            // nested literal's Proc keeps the enclosing Procs from being made again: RubyOps.KeepEnclosingProcs)
         }
 
         protected Proc(Proc/*!*/ proc)

@@ -209,8 +209,8 @@ namespace IronRuby.Builtins {
         // Integer(string), Integer(fixnum) and Integer(float), the common calls, without the storages and the keyword parameter of the
         // general overload below: the binder's dispatch to that one cost more than the conversion (~100 ns for a Fixnum).
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
-        public static object ToInteger(object self, [NotNull]MutableString/*!*/ value) {
-            return ParseInteger(value, 0, true);
+        public static object ToInteger(RubyContext/*!*/ context, object self, [NotNull]MutableString/*!*/ value) {
+            return ParseInteger(value, 0, true, context);
         }
 
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
@@ -240,7 +240,7 @@ namespace IronRuby.Builtins {
             // the common cases, without the keyword and protocol machinery
             if (radixOrOptions == Missing.Value) {
                 if (value is MutableString str) {
-                    return ParseInteger(str, 0, true);
+                    return ParseInteger(str, 0, true, fixnumCast.Context);
                 }
                 if (value is int || value is long || value is BigInteger) {
                     return value;
@@ -277,7 +277,7 @@ namespace IronRuby.Builtins {
                 return clrInteger;
             }
             if (value is MutableString s) {
-                return ParseInteger(s, radix, raise);
+                return ParseInteger(s, radix, raise, fixnumCast.Context);
             }
             if (value == null) {
                 if (!raise) {
@@ -300,7 +300,7 @@ namespace IronRuby.Builtins {
 
             MutableString text = TryConvertToStr(toStr, value);
             if (text != null) {
-                return ParseInteger(text, radix, raise);
+                return ParseInteger(text, radix, raise, fixnumCast.Context);
             }
 
             if (!raise) {
@@ -604,7 +604,7 @@ namespace IronRuby.Builtins {
         /// A string that does not read as an Integer is an ArgumentError, or null when
         /// <paramref name="raise"/> is false.
         /// </summary>
-        public static object ParseInteger(MutableString/*!*/ value, int radix, bool raise = true) {
+        public static object ParseInteger(MutableString/*!*/ value, int radix, bool raise = true, RubyContext context = null) {
             RequireAsciiCompatible(value);
             var str = value.ConvertToString();
 
@@ -612,7 +612,7 @@ namespace IronRuby.Builtins {
             // Integer("\n", 1) is "invalid value", not "invalid radix" - but not about an empty one,
             // whose radix is checked first: Integer("", 1) is "invalid radix", with exception: false too.
             if (str.Length > 0 && !HasIntegerDigits(str)) {
-                return raise ? throw InvalidIntegerValue(value) : null;
+                return raise ? throw InvalidIntegerValue(value, context) : null;
             }
 
             // Only a positive radix is range-checked; a negative one is a hint, and an
@@ -625,7 +625,7 @@ namespace IronRuby.Builtins {
             if (TryParseRubyInteger(str, radix, out result)) {
                 return result;
             }
-            return raise ? throw InvalidIntegerValue(value) : null;
+            return raise ? throw InvalidIntegerValue(value, context) : null;
         }
 
         #endregion
@@ -636,24 +636,34 @@ namespace IronRuby.Builtins {
         // prefix of 0x, 0b, 0o or 0d may appear, and a bare leading zero means octal; single
         // underscores may separate digits. Derived by differential testing against CRuby 3.3.8.
 
-        /// <summary>True when the string holds anything but surrounding whitespace.</summary>
+        /// <summary>
+        /// True when the string holds anything but surrounding whitespace and a sign: MRI's rb_int_parse_cstr finds a string of
+        /// only those empty before it looks at the radix, so Integer("-", 1) is "invalid value", not "invalid radix".
+        /// </summary>
         private static bool HasIntegerDigits(string/*!*/ str) {
+            bool sign = false;
             foreach (char c in str) {
-                if (!IsIntegerWhitespace(c)) {
-                    return true;
+                if (IsIntegerWhitespace(c)) {
+                    continue;
                 }
+                if ((c == '+' || c == '-') && !sign) {
+                    sign = true;
+                    continue;
+                }
+                return true;
             }
             return false;
         }
 
         /// <summary>
-        /// MRI quotes the offending string as #inspect does: control characters and bytes that
-        /// are not valid in its encoding escaped ("1\xFF"), everything else passed through.
+        /// MRI quotes the offending string with rb_inspect: control characters and bytes that are not valid in its
+        /// encoding escaped ("1\xFF"), and non-ASCII escaped too ("\u00A01") unless output reads the string's encoding
+        /// (RubyContext.Inspect). Without a context (a caller other than Kernel#Integer), #inspect's quoting alone.
         /// </summary>
-        private static Exception/*!*/ InvalidIntegerValue(MutableString/*!*/ value) {
+        private static Exception/*!*/ InvalidIntegerValue(MutableString/*!*/ value, RubyContext context) {
             // thrown at once by its callers, kept by nothing
             return RubyExceptionData.MarkUnkept(RubyExceptions.CreateArgumentError("invalid value for Integer(): {0}",
-                MutableStringOps.GetQuotedStringRepresentation(value, false, '"')));
+                (context != null) ? context.Inspect(value) : MutableStringOps.GetQuotedStringRepresentation(value, false, '"')));
         }
 
         private static bool IsIntegerWhitespace(char c) {
@@ -1752,6 +1762,23 @@ namespace IronRuby.Builtins {
                 return RubyMethodVisibility.None;
             }
             return method.Info.IsNotImplemented ? RubyMethodVisibility.None : method.Visibility;
+        }
+
+        /// <summary>
+        /// After respond_to? said yes to a conversion: whether calling the method could answer - the object's class has it, or a
+        /// method_missing other than BasicObject's. MRI's rb_check_funcall (check_funcall_missing) takes "no" for no conversion
+        /// rather than raising NoMethodError, as the conversions of the binder do (ProtocolConversionAction).
+        /// </summary>
+        [RubyMethod("__ir_conversion_callable__", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsConversionCallable(ConversionStorage<string>/*!*/ stringCast, object self, object obj, object methodName) {
+            var context = stringCast.Context;
+            string name = Protocols.CastToSymbol(stringCast, methodName);
+            RubyClass cls = context.GetImmediateClassOf(obj);
+            if (GetDefinedVisibility(cls, name) != RubyMethodVisibility.None) {
+                return true;
+            }
+            var methodMissing = cls.GetMethodLookup(Symbols.MethodMissing);
+            return methodMissing.Found && !(methodMissing.Info.DeclaringModule == context.BasicObjectClass && methodMissing.Info is RubyLibraryMethodInfo);
         }
 
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]

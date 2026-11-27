@@ -203,6 +203,16 @@ namespace IronRuby.Runtime.Calls {
             return result.ToReadOnlyCollection();
         }
 
+        // target, arguments: for a site bound to the context that takes no scope
+        internal ReadOnlyCollection<Expression>/*!*/ GetBoundCallSiteArguments(Expression/*!*/ targetExpression) {
+            var result = new AstExpressions(ExplicitArgumentCount);
+            result.Add(targetExpression);
+            for (int j = FirstArgumentIndex; j < _args.Length; j++) {
+                result.Add(_args[j].Expression);
+            }
+            return result.ToReadOnlyCollection();
+        }
+
         private int GetSimpleArgumentIndex(int i) {
             return FirstArgumentIndex + (_signature.HasBlock ? 1 : 0) + i;
         }

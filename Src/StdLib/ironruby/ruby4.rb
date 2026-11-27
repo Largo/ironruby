@@ -9,7 +9,7 @@ module Kernel
   # asks of an implementation other than CRuby's - "into", where CRuby still says "to".
   private def __ir_try_convert__(obj, method, klass, name)
     return obj if klass === obj
-    return nil unless __ir_responds_to__(obj, method)
+    return nil unless __ir_responds_to__(obj, method) && __ir_conversion_callable__(obj, method)
     converted = obj.__send__(method)
     return nil if converted.nil?
     return converted if klass === converted
@@ -246,6 +246,8 @@ module Enumerable
     end
     result
   end unless method_defined?(:filter_map)
+  # Enumerator#next walks a #filter_map with a cursor while this is the method (Enumerator.cs).
+  ::Enumerator.__iter_cursor_method__(self, :filter_map)
 
   # The optional Hash counts into it instead of into a fresh one, which also
   # means the frozen check happens before the first element is looked at.
@@ -487,6 +489,7 @@ module Enumerable
     each { |*values| yield(__enum_item__(values), memo) }
     memo
   end unless method_defined?(:each_with_object)
+  ::Enumerator.__iter_cursor_method__(self, :each_with_object)
 
   # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
   #
@@ -698,6 +701,8 @@ module Enumerable
     end
     __ir_same_method__(:collect_concat, :flat_map)
   end
+  ::Enumerator.__iter_cursor_method__(self, :flat_map)
+  ::Enumerator.__iter_cursor_method__(self, :collect_concat)
 
   def uniq(&block)
     seen = {}
@@ -3454,8 +3459,11 @@ class Numeric
   end
   alias :% :modulo
 
+  # MRI's num_divmod is rb_assoc_new(num_div(x, y), num_modulo(x, y)), whose arguments gcc evaluates right
+  # to left: the modulo first, which is what a coerce or an error in between shows.
   def divmod(other)
-    [div(other), modulo(other)]
+    m = modulo(other)
+    [div(other), m]
   end
 
   # The modulo moved back across zero when the two point in opposite
@@ -3899,6 +3907,8 @@ class String
   private :__ir_rpartition__
 
   def prepend(*others)
+    # MRI's rb_str_update checks the receiver before it converts or looks at what is prepended
+    __ir_require_unfrozen__
     others = others.map do |o|
       # #to_str only: MRI will not call #to_s to find something to prepend.
       converted = o.is_a?(::String) ? o : ::String.try_convert(o)
@@ -3992,11 +4002,10 @@ class String
         when "b" then out << "\b"
         when "a" then out << "\a"
         when "e" then out << "\e"
-        when "s" then out << " "
         when "\\" then out << "\\"
         when '"' then out << '"'
         when "#" then out << "#"
-        when "0" then out << "\0"
+        # (not \s nor \0: #dump writes neither, and MRI's undump passes them through as they are)
         when "x"
           hex = body[(i + 1), 2]
           ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
@@ -5852,7 +5861,12 @@ class Enumerator
 
   # get_next_values: the end is raised once as such, and from then on as a new
   # StopIteration whose cause is that first one.
+  # get_next_values: the end is raised once as such, and from then on as a new StopIteration
+  # whose cause is that first one. Made and raised in C#, as a cursor's is
+  # (Enumerator#__iter_raise_stop__), so that a rescue that drops it skips the stack walk -
+  # unless StopIteration's #new or #initialize is not IronRuby's own, which it then calls here.
   def __iter_stop__
+    __iter_raise_stop__(@__iter_result__)
     error = ::StopIteration.new("iteration reached an end")
     error.__set_result__(@__iter_result__)
     first = @__iter_stop_exc__
@@ -5897,9 +5911,11 @@ class Enumerator
 
   # The fiber's half of #next (op 0: the values of the next step, taken), #peek
   # (op 1: the same values, left for the next #next; the caller copies them) - and
-  # the FiberError of a cursor another thread started (op 2).
+  # the FiberErrors of a cursor another thread started (op 2) and of one in use (op 3).
   def __iter_slow__(op)
     ::Kernel.raise(::FiberError, "fiber called across threads") if op == 2
+    # a cursor's #flat_map converting the block's answer, which calls back into this enumerator (op 3)
+    ::Kernel.raise(::FiberError, "attempt to resume the current fiber") if op == 3
     __iter_advance__
     values = @__peek__
     if op == 0
@@ -6011,6 +6027,31 @@ class Enumerator
       lazy = Lazy.__raw__(@__size__) { |y| generator.call(y, *args) }
       block ? lazy.each(&block) : lazy
     end
+
+    # Enumerator#next walks the lazy on a fiber, a thread here, that runs #each: given this lazy, the
+    # thread kept it alive and with it the fiber's handle, so an abandoned lazy's fiber was never
+    # reclaimed. A plain Lazy's #each reads nothing but these, so the fiber gets a copy, as an
+    # Enumerator's gets one (Enumerator#__enum_iteration_source__, Enumerator.cs).
+    ::Enumerator.__iter_cursor_method__(self, :each)
+
+    def __enum_iteration_source__
+      return self unless ::Enumerator.__iter_detachable_lazy__(self)
+      Lazy.allocate.__send__(:__lazy_detach__, @__generator__, @__size__, @__lazy_source__, @__lazy_generator__,
+                             @__deferred__, @__packed_pairs__, @__inspect__)
+    end
+    private :__enum_iteration_source__
+
+    def __lazy_detach__(generator, size, source, source_generator, deferred, packed_pairs, inspect)
+      @__generator__ = generator
+      @__size__ = size
+      @__lazy_source__ = source
+      @__lazy_generator__ = source_generator
+      @__deferred__ = deferred
+      @__packed_pairs__ = packed_pairs
+      @__inspect__ = inspect
+      self
+    end
+    private :__lazy_detach__
 
     # Enumerator#+ chains eagerly; a lazy receiver stays lazy, as in MRI:
     # (1..).lazy + [1] is an Enumerator::Lazy over an Enumerator::Chain.
@@ -7532,14 +7573,11 @@ class Enumerator
     end
 
     # Only Range#step, Range#% and Numeric#step make one: .new is undefined and .allocate refuses.
+    __ir_undef_alloc__
     class << self
       alias :__allocate__ :allocate
       private :__allocate__
       undef_method :new
-
-      def allocate
-        ::Kernel.raise(::TypeError, "allocator undefined for #{self}")
-      end
     end
 
     def self.__build__(from, to, by, exclude_end, source, inspect_str = nil)
@@ -7664,14 +7702,10 @@ end
 # user-written #initialize was never reached, so neither the `super` idiom nor
 # psych's Data.instance_method(:initialize).bind_call trick worked.
 class Data
-  class << self
-    # Only the classes Data.define makes have instances.
-    alias_method :__ir_allocate__, :allocate
-    def allocate
-      ::Kernel.raise(::TypeError, "allocator undefined for Data") if equal?(::Data)
-      __ir_allocate__
-    end
+  # Only the classes Data.define makes have instances (MRI: rb_undef_alloc_func(rb_cData)).
+  __ir_undef_alloc__
 
+  class << self
     def define(*names, &block)
       names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)
@@ -8380,8 +8414,9 @@ module Math
   end
 
   def __ir_atan2__(y, x)
-    y = __flt__(y)
+    # x first, as MRI's math_atan2 converts them
     x = __flt__(x)
+    y = __flt__(y)
     return y if y.nan?
     return x if x.nan?
     ::System::Math.Atan2(y, x)
@@ -8442,6 +8477,17 @@ module Math
   end
 
   def __ir_sqrt__(x)
+    # MRI's rb_math_sqrt takes a Complex as one: sqrt((|x| + re) / 2), sqrt((|x| - re) / 2) with the sign of
+    # the imaginary part (its sign bit: -0.0 counts)
+    if x.is_a?(::Complex)
+      i = x.imaginary
+      neg = i.is_a?(::Float) ? (i < 0.0 || (i == 0.0 && 1.0 / i < 0.0)) : i < 0
+      re = __flt__(x.real)
+      d = __flt__(x.abs)
+      im = ::System::Math.Sqrt((d - re) / 2.0)
+      re = ::System::Math.Sqrt((d + re) / 2.0)
+      return ::Complex.rect(re, neg ? -im : im)
+    end
     x = __flt__(x)
     return x if x.nan?
     __dom__("sqrt") if x < 0.0
@@ -8483,14 +8529,20 @@ module Math
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
     end
     x, bits = __log_split__(x)
-    r = __log__(x, "log")
-    return r if r
-    v = ::System::Math.Log(x) + bits * ::System::Math.Log(2.0)
-    return v if rest.empty?
+    if rest.empty?
+      r = __log__(x, "log")
+      return r if r
+      return ::System::Math.Log(x) + bits * ::System::Math.Log(2.0)
+    end
+    # MRI's rb_math_log of two: both converted and checked (a NaN is not negative), the pole, then
+    # log2(x) / log2(base) + (bits - base's bits, a size_t) / log2(base) - see RubyMath.LogBase
+    __dom__("log") if x < 0.0
     b, bbits = __log_split__(rest[0])
-    r = __log__(b, "log")
-    return r if r
-    v / (::System::Math.Log(b) + bbits * ::System::Math.Log(2.0))
+    __dom__("log") if b < 0.0
+    return (b != 0.0 ? -::Float::INFINITY : ::Float::NAN) if x == 0.0
+    return -0.0 if b == 0.0
+    lb = ::System::Math.Log2(b)
+    ::System::Math.Log2(x) / lb + ((bits - bbits) & 0xFFFF_FFFF_FFFF_FFFF).to_f / lb
   end
 
   def __ir_log2__(x)
@@ -8541,8 +8593,9 @@ module Math
   end
 
   def __ir_hypot__(x, y)
-    x = __flt__(x).abs
+    # y first: MRI's hypot(Get_Double(x), Get_Double(y)) converts its arguments right to left (gcc's order)
     y = __flt__(y).abs
+    x = __flt__(x).abs
     # An infinity wins over a NaN, which is what C's hypot() promises.
     return ::Float::INFINITY if x.infinite? || y.infinite?
     return ::Float::NAN if x.nan? || y.nan?

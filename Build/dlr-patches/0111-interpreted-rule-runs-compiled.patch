@@ -1,0 +1,80 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+@@ -151,6 +151,16 @@
+             return CreateCustomDelegate(delegateType);
+         }
+ 
++        /// <summary>
++        /// Runs <paramref name="compiled"/>, a compilation of the same lambda with the delegate type this LightLambda was made
++        /// for, from the next call on (DynamicUtils: an interpreted rule whose compiled rule the site never picked up).
++        /// </summary>
++        internal void UseCompiled(Delegate compiled) {
++            if (compiled is not null && _compiled is null) {
++                _compiled = compiled;
++            }
++        }
++
+         private bool TryGetCompiled() {
+             // A nested lambda light-compiled when it first runs (LightCompiler.CompileOnFirstCall); one the light compiler
+             // cannot interpret is compiled.
+diff --git a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
+--- a/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
++++ b/src/core/Microsoft.Dynamic/Utils/DynamicUtils.cs
+@@ -113,6 +113,7 @@
+                     // we failed the rule because we have a compiled target available, return the compiled target
+                     Debug.Assert(CachedBindingInfo<T>.LastInterpretedFailure.CompiledTarget is not null);
+                     var res = CachedBindingInfo<T>.LastInterpretedFailure.CompiledTarget;
++                    CachedBindingInfo<T>.LastInterpretedFailure.Rebound++;
+                     CachedBindingInfo<T>.LastInterpretedFailure = null;
+                     return res;
+                 }
+@@ -133,7 +134,10 @@
+             private T/*!*/ CreateDelegate(DynamicMetaObjectBinder/*!*/ binder, DynamicMetaObject/*!*/ binding, CachedBindingInfo<T>/*!*/ bindingInfo) {
+                 var lambda = Compile(binding, bindingInfo);
+                 try {
+-                    return lambda.LightCompile(Int32.MaxValue);
++                    T result = lambda.LightCompile(Int32.MaxValue);
++                    // the interpreted rule, which can run its compiled body itself (CachedBindingInfo<T>.CheckCompiled)
++                    bindingInfo.Light = (result as Delegate)?.Target as Microsoft.Scripting.Interpreter.LightLambda;
++                    return result;
+                 } catch (NotImplementedException ex) {
+                     // the interpreter doesn't support every expression, fall back to compiling the lambda
+                     PerfTrack.NoteEvent(PerfTrack.Categories.BindingSlow, $"LightBind fallback {binder.GetType().Name}: {ex.Message}");
+@@ -249,6 +253,23 @@
+         [ThreadStatic]
+         public static CachedBindingInfo<T> LastInterpretedFailure;
+ 
++        // The LightLambda of the interpreted rule; null if it is not one.
++        public Microsoft.Scripting.Interpreter.LightLambda Light;
++
++        // How often the rule has failed because its compiled target was ready, how often that failure had the site bind
++        // again and pick up the compiled rule (Bind, from LastInterpretedFailure), and how many failures that did not the
++        // rule may have before it runs its compiled target itself. A binder that binds the site some other way never picks
++        // it up, and a site whose rules come in a different order can hold both the interpreted rule and the compiled one:
++        // the interpreted one, never matching, stays before the other in the site's rules and runs in the interpreter, to
++        // fail, on every call (a `!=` site over four or eight classes, 2.2-3 times as slow), millions of times. A failure
++        // that rebinds is the scheme working and is not counted; nor is it there to count every time: a site with more classes
++        // than it keeps rules for finds the interpreted rule in the binder's cache again and again, and switching such a rule
++        // to its compiled target in place (32 failures) left the binder's cache with rules behind a LightLambda's Run: 60
++        // classes 18% slower. Hence a count that only a rule stuck before its compiled one reaches.
++        private int _failuresForCompiled;
++        public int Rebound;
++        private const int MaxFailuresForCompiled = 4096;
++
+         public CachedBindingInfo(DynamicMetaObjectBinder binder, int compilationThreshold)
+             : base(binder, compilationThreshold) {
+         }
+@@ -269,6 +290,12 @@
+             }
+ 
+             if (CompiledTarget is not null) {
++                var light = Light;
++                if (light is not null && ++_failuresForCompiled - Rebound > MaxFailuresForCompiled) {
++                    // run the compiled rule in place from the next call on, and match this one
++                    light.UseCompiled(CompiledTarget as Delegate);
++                    return true;
++                }
+                 LastInterpretedFailure = this;
+                 return false;
+             }

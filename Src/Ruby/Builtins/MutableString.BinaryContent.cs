@@ -113,6 +113,30 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            internal override bool TrySetOwnerEncoding(RubyEncoding/*!*/ encoding, bool bytesOnly) {
+                bool shared = ContentState.Enter(ref _state);
+                try {
+                    if (!IsCurrent) {
+                        return false;
+                    }
+                    _owner.SetEncodingHeld(encoding);
+                    return true;
+                } finally {
+                    ContentState.Exit(ref _state, shared);
+                }
+            }
+
+            // EnterWrite, and true if this content is still its string's; otherwise released again and false, and the
+            // write goes to the string's content (MutableString.PublishSwitch).
+            private bool EnterCurrentWrite(int minCapacity) {
+                EnterWrite(minCapacity);
+                if (IsCurrent) {
+                    return true;
+                }
+                ExitWrite();
+                return false;
+            }
+
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void ExitWrite() {
                 ContentState.Exit(ref _state, false);
@@ -143,9 +167,15 @@ namespace IronRuby.Builtins {
             }
 
             /// <exception cref="DecoderFallbackException">Invalid character.</exception>
+            // Converted holding this content, so that no write to it is lost (see WrapContent).
             private CharArrayContent/*!*/ SwitchToChars(int additionalCapacity) {
-                char[] chars = DataToChars(additionalCapacity, _owner._encoding.EscapingEncoding);
-                return WrapContent(chars, chars.Length - additionalCapacity);
+                bool shared = ContentState.Enter(ref _state);
+                try {
+                    char[] chars = DataToChars(additionalCapacity, _owner._encoding.EscapingEncoding);
+                    return WrapContent(chars, chars.Length - additionalCapacity);
+                } finally {
+                    ContentState.Exit(ref _state, shared);
+                }
             }
 
             /// <exception cref="DecoderFallbackException">Invalid character.</exception>
@@ -176,7 +206,11 @@ namespace IronRuby.Builtins {
             }
 
             internal void AppendBytes(string/*!*/ str, int start, int count) {
-                EnterWrite(_count + count);
+                if (!EnterCurrentWrite(_count + count)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Append(str, start, count);
+                    return;
+                }
                 try {
                     _count = Utils.Append(ref _data, _count, str, start, count, _owner._encoding.EscapingEncoding);
                 } finally {
@@ -185,7 +219,11 @@ namespace IronRuby.Builtins {
             }
 
             internal void AppendBytes(char[]/*!*/ chars, int start, int count) {
-                EnterWrite(_count + count);
+                if (!EnterCurrentWrite(_count + count)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Append(chars, start, count);
+                    return;
+                }
                 try {
                     _count = Utils.Append(ref _data, _count, chars, start, count, _owner._encoding.EscapingEncoding);
                 } finally {
@@ -279,7 +317,11 @@ namespace IronRuby.Builtins {
             public override int Count {
                 get { return _count; }
                 set {
-                    EnterWrite(value);
+                    if (!EnterCurrentWrite(value)) {
+                        // see MutableString.PublishSwitch
+                        _owner._content.Count = value;
+                        return;
+                    }
                     try {
                         if (_data.Length < value) {
                             Array.Resize(ref _data, Utils.GetExpandedSize(_data, value));
@@ -425,7 +467,13 @@ namespace IronRuby.Builtins {
             // characters and then taking a snapshot of them made two copies of a long string, and a
             // long ASCII sum held as bytes cost more to match than one held as characters.
             public override string/*!*/ ConvertToString() {
-                return WrapContent(DataToString()).Data;
+                // converted holding this content, as SwitchToChars is
+                bool shared = ContentState.Enter(ref _state);
+                try {
+                    return WrapContent(DataToString()).Data;
+                } finally {
+                    ContentState.Exit(ref _state, shared);
+                }
             }
 
             public override byte[]/*!*/ ConvertToBytes() {
@@ -555,12 +603,31 @@ namespace IronRuby.Builtins {
             }
 
             public override Content/*!*/ GetSlice(int start, int count) {
-                if (Utils.IsSharedSlice(_data.Length, Utils.NormalizeCount(_count, start, count))) {
-                    // see Utils.IsSharedSlice; checked again while holding the content
+                // Held for the copy too: unheld, a copy read the array, its start and its count while a writer on another thread
+                // moved them (a slice racing #slice! came out with characters of the string twice).
+                bool shared = ContentState.Enter(ref _state);
+                try {
+                    int sliceCount = Utils.NormalizeCount(_count, start, count);
+                    if (Utils.IsSharedSlice(_data.Length, sliceCount)) {
+                        // see Utils.IsSharedSlice
+                        shared = true;
+                        return new BinaryContent(_data, _start + start, sliceCount, _owner);
+                    }
+                    return Create(Utils.GetSlice(GetDataSpan(), start, count), _owner);
+                } finally {
+                    ContentState.Exit(ref _state, shared);
+                }
+            }
+
+            // A long slice that runs to the end shares the array as well (Content.GetSlice(int, int, bool)); any other is GetSlice's.
+            public override Content/*!*/ GetSlice(int start, int count, bool shareTail) {
+                int n = Utils.NormalizeCount(_count, start, count);
+                if (shareTail && start + n == _count && Utils.IsSharedSlice(_data.Length, n, true)) {
                     bool shared = ContentState.Enter(ref _state);
                     try {
+                        // checked again while holding the content
                         int sliceCount = Utils.NormalizeCount(_count, start, count);
-                        if (Utils.IsSharedSlice(_data.Length, sliceCount)) {
+                        if (start + sliceCount == _count && Utils.IsSharedSlice(_data.Length, sliceCount, true)) {
                             shared = true;
                             return new BinaryContent(_data, _start + start, sliceCount, _owner);
                         }
@@ -568,7 +635,7 @@ namespace IronRuby.Builtins {
                         ContentState.Exit(ref _state, shared);
                     }
                 }
-                return Create(Utils.GetSlice(GetDataSpan(), start, count), _owner);
+                return GetSlice(start, count);
             }
 
             public override CharacterEnumerator/*!*/ GetCharacters() {
@@ -776,7 +843,11 @@ namespace IronRuby.Builtins {
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
                     Append((byte)c, repeatCount);
                 } else {
-                    EnterWrite(_count + repeatCount);
+                    if (!EnterCurrentWrite(_count + repeatCount)) {
+                        // see MutableString.PublishSwitch
+                        _owner._content.Append(c, repeatCount);
+                        return;
+                    }
                     try {
                         _count = Utils.Append(ref _data, _count, c, repeatCount, _owner._encoding.EscapingEncoding);
                     } finally {
@@ -786,7 +857,11 @@ namespace IronRuby.Builtins {
             }
 
             public override void Append(byte b, int repeatCount) {
-                EnterWrite(_count + repeatCount);
+                if (!EnterCurrentWrite(_count + repeatCount)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Append(b, repeatCount);
+                    return;
+                }
                 try {
                     _count = Utils.Append(ref _data, _count, b, repeatCount);
                 } finally {
@@ -803,7 +878,11 @@ namespace IronRuby.Builtins {
             }
 
             public override void Append(byte[]/*!*/ bytes, int start, int count) {
-                EnterWrite(_count + count);
+                if (!EnterCurrentWrite(_count + count)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Append(bytes, start, count);
+                    return;
+                }
                 try {
                     _count = Utils.Append(ref _data, _count, bytes, start, count);
                 } finally {
@@ -874,7 +953,11 @@ namespace IronRuby.Builtins {
             }
 
             public override void Insert(int index, byte b) {
-                EnterWrite(_count + 1);
+                if (!EnterCurrentWrite(_count + 1)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Insert(index, b);
+                    return;
+                }
                 try {
                     _count = Utils.InsertAt(ref _data, _count, index, b, 1);
                 } finally {
@@ -891,7 +974,11 @@ namespace IronRuby.Builtins {
             }
 
             public override void Insert(int index, byte[]/*!*/ bytes, int start, int count) {
-                EnterWrite(_count + count);
+                if (!EnterCurrentWrite(_count + count)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Insert(index, bytes, start, count);
+                    return;
+                }
                 try {
                     _count = Utils.InsertAt(ref _data, _count, index, bytes, start, count);
                 } finally {
@@ -910,7 +997,11 @@ namespace IronRuby.Builtins {
                 if (index >= _count) {
                     throw new IndexOutOfRangeException();
                 }
-                EnterWrite(0);
+                if (!EnterCurrentWrite(0)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.SetByte(index, b);
+                    return;
+                }
                 try {
                     _data[index] = b;
                 } finally {
@@ -932,6 +1023,12 @@ namespace IronRuby.Builtins {
 
             public override void Remove(int start, int count) {
                 bool shared = ContentState.Enter(ref _state);
+                if (!IsCurrent) {
+                    // see MutableString.PublishSwitch
+                    ContentState.Exit(ref _state, shared);
+                    _owner._content.Remove(start, count);
+                    return;
+                }
                 try {
                     if (shared) {
                         // Cutting off the end leaves the shared bytes as they are; anything else copies
@@ -946,7 +1043,11 @@ namespace IronRuby.Builtins {
             }
 
             public override void Write(int offset, byte[]/*!*/ value, int start, int count) {
-                EnterWrite(offset + count);
+                if (!EnterCurrentWrite(offset + count)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Write(offset, value, start, count);
+                    return;
+                }
                 try {
                     Utils.Resize(ref _data, offset + count);
                     _count = Math.Max(_count, offset + count);
@@ -958,7 +1059,11 @@ namespace IronRuby.Builtins {
 
             public override void Write(int offset, byte value, int repeatCount) {
                 int end = offset + repeatCount;
-                EnterWrite(end);
+                if (!EnterCurrentWrite(end)) {
+                    // see MutableString.PublishSwitch
+                    _owner._content.Write(offset, value, repeatCount);
+                    return;
+                }
                 try {
                     Utils.Resize(ref _data, end);
                     if (end > _count) {

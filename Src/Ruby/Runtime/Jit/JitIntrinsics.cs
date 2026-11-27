@@ -444,6 +444,32 @@ namespace IronRuby.Runtime.Jit {
         /// the generic code would have made. Any other receiver deopts, and the generic code makes
         /// the call with a fresh literal.
         /// </summary>
+        /// <summary>
+        /// `s + "lit"' (JitCompiler.EmitStringLiteralConcat): String#+ of the library, MutableString.Concat, for an s that is a
+        /// String (not a subclass) whose encoding the literal's can join. Anything else deopts, before anything is done: the
+        /// generic body dispatches, converts or raises the Encoding::CompatibilityError from its own frame.
+        /// </summary>
+        public static object StringConcatLiteral(object value, MutableString/*!*/ literal) {
+            if (value != null && value.GetType() == typeof(MutableString)) {
+                var str = (MutableString)value;
+                if (str.GetCompatibleEncoding(literal) != null) { return str.Concat(literal); }
+            }
+            throw Deopt();
+        }
+
+        /// <summary>
+        /// `s << "lit"' (JitCompiler.EmitStringLiteralConcat): String#&lt;&lt; of the library, MutableString.Append, for an s
+        /// that is a String (not a subclass), neither frozen (FrozenError) nor chilled (the deprecation warning, and the
+        /// String no longer chilled), whose encoding the literal's can join. Anything else deopts before it changes s.
+        /// </summary>
+        public static object StringAppendLiteral(object value, MutableString/*!*/ literal) {
+            if (value != null && value.GetType() == typeof(MutableString)) {
+                var str = (MutableString)value;
+                if (!str.IsFrozen && !str.IsChilled && str.GetCompatibleEncoding(literal) != null) { return str.Append(literal); }
+            }
+            throw Deopt();
+        }
+
         public static bool StringEqualsLiteral(object value, MutableString/*!*/ literal, string ascii) {
             if (value != null && value.GetType() == typeof(MutableString)) {
                 var str = (MutableString)value;
@@ -503,6 +529,31 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
             throw Deopt();
+        }
+
+        // `a[i]' once some Array has had a singleton `[]' or `method_missing' (JitCompiler.EmitIndexRead): Array#[] for an
+        // Array without a singleton class, the test the generic site makes (RubyOps.IsClrNonSingletonRuleValid); an Array
+        // with one deopts, and the generic body dispatches to its method.
+        private static bool HasSingletonClass(RubyContext/*!*/ context, object/*!*/ recv) {
+            RubyInstanceData data;
+            RubyClass immediate;
+            return context.TryGetClrTypeInstanceData(recv, out data) && (immediate = data.ImmediateClass) != null &&
+                (immediate.IsSingletonClass || immediate.IsRubyClass);
+        }
+
+        public static object IndexIntChecked(RubyContext/*!*/ context, object recv, int index, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(RubyArray) && HasSingletonClass(context, recv)) { throw Deopt(); }
+            return IndexInt(recv, index, true, hashes);
+        }
+
+        public static object IndexLongChecked(RubyContext/*!*/ context, object recv, long index, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(RubyArray) && HasSingletonClass(context, recv)) { throw Deopt(); }
+            return IndexLong(recv, index, true, hashes);
+        }
+
+        public static object IndexObjChecked(RubyContext/*!*/ context, object recv, object index, bool hashes) {
+            if (recv != null && recv.GetType() == typeof(RubyArray) && HasSingletonClass(context, recv)) { throw Deopt(); }
+            return IndexObj(recv, index, true, hashes);
         }
 
         public static object IndexLong(object recv, long index, bool arrays, bool hashes) {
@@ -845,7 +896,7 @@ namespace IronRuby.Runtime.Jit {
             // a new key while the hash is iterated is the generic code's RuntimeError
             if (hash.IsIterating) { throw Deopt(); }
             var str = key as MutableString;
-            if (str != null && !str.IsFrozen && !hash.ComparesByIdentity) {
+            if (str != null && !str.IsFrozen && str.GetType() == typeof(MutableString) && !hash.ComparesByIdentity) {
                 key = str.Duplicate(context, false, str.Clone()).Freeze();
                 hashCode = key.GetHashCode();
             }

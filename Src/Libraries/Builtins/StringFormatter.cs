@@ -236,6 +236,10 @@ namespace IronRuby.Builtins {
         }
 
         private Exception/*!*/ MalformedFormat(char c) {
+            // a newline or NUL ends the directive in MRI's sprintf (case '\n', case '\0'): no character to name
+            if (c == '\n' || c == '\0') {
+                return RubyExceptions.CreateArgumentError("malformed format string");
+            }
             return RubyExceptions.CreateArgumentError("malformed format string - %" + c);
         }
 
@@ -265,7 +269,12 @@ namespace IronRuby.Builtins {
                         throw RubyExceptions.CreateArgumentError("malformed format string - %*[0-9]");
                     }
                     if (flagSeen || argumentSeen) {
-                        throw RubyExceptions.CreateArgumentError("malformed format string - %");
+                        // MRI's sprintf has fetched the argument of a "%1$" or "%<name>" already (GETPOSARG, GETNAMEARG), so
+                        // too few arguments or no hash is that error; then it is a plain "malformed format string".
+                        if (argumentSeen) {
+                            GetData(_opts.ArgIndex, _opts.Name);
+                        }
+                        throw RubyExceptions.CreateArgumentError("malformed format string");
                     }
                     throw RubyExceptions.CreateArgumentError("incomplete format specifier; use %% (double %) instead");
                 }
