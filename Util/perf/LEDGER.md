@@ -5434,6 +5434,33 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/rescuefilter (2026-11-27) - deciding a constant rescue class list in the first-pass filter:
+  measured, not built - it is decided there already, except above a passed ensure, where it cannot
+  soundly be.** perf/timeout named "`rescue ExitException => e`: 29 us per frame against 8.6 for a core
+  class". Wrong attribution: alone, a rescue of a user class named by a constant - top-level,
+  qualified, lexical in a module, with or without `=> e`, of an Exception subclass followed by `raise`
+  - costs what a core class does (8-16 us per raise against a bare 8,
+  `Util/bench/rescue-above-ensure-shapes.rb`, new), because `RubyOps.RescueSiteCannotMatch` reads the
+  clause's constant site cache in the filter, for any constant. What turns the filter off is not the
+  class but an ensure the exception has already gone through: `RescuePassMayTest` refuses while
+  `PendingPassedEnsures` is not zero, for every class list, core classes included - Ruby evaluates the
+  class list after those ensures have run, and the CLR's first pass runs before them. Then the frame
+  catches, completes the backtrace the ensure began (`TakePassedEnsureCapture`,
+  `CaptureExceptionTrace`), finds no match and throws again: the first such frame above an ensure
+  costs about 20 us (33 against 14 without the ensure), each further one about 3 (three: 43);
+  CRuby 0.8 and 1.2. Timeout's raise has exactly this shape (`handle_timeout`'s rescue above the
+  Proc's `ensure request.finished`): with perf/timeout's override, leaving out any one of the
+  rescue, the ensure or the Proc takes it from 63-76 us to 25-31.
+  Not sound to decide in the filter: the pending ensure runs arbitrary code first (`request.finished`
+  calls a method), which can reassign the constant (the site's version would move, but only after
+  the filter answered), define `===` on the class, or `extend` the exception with a module of the
+  class list. What would take it: run the pending ensure clauses from the filter itself, on top of
+  the raise, before the class list is looked at (the order Ruby wants), and have the second pass skip
+  them - the pieces are there for ensure-only bodies (`PassEnsure`, `EnterPassedEnsure`, the stack
+  room `PassEnsureStackRoom` keeps for a clause run on top of the raise), not for a clause that a
+  rescue frame above has to wait for. A larger change than a step; its matrix would need every row of
+  raise-matrix about ensure order, `$!`, cause, retry and jumps out of an ensure.
+
 - **perf/ensure (2026-11-26) - the catch-and-rethrow of an `ensure` clause that jumps (#213 item 3):
   measured, not built - real code almost never has such a frame on a raise's path.** Compiled, an
   `ensure` already lets an exception go through a CLR filter (`EnsureGuardExpression`,
