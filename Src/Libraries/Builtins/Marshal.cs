@@ -730,8 +730,23 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                // MRI keeps the backtrace of the raise in "bt_locations" as well and writes it out:
+                // the very array of "bt" (a link) while the exception still has the backtrace it
+                // was raised with, the raise's strings once #set_backtrace replaced it, and nothing
+                // for an exception that was never raised (or got its backtrace from #raise's
+                // argument, or from Marshal).
+                object locations = null;
+                if (data.HasBacktrace) {
+                    object value;
+                    if (!_context.TryGetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__backtrace_from_strings__"), out value)) {
+                        locations = data.Backtrace;
+                    } else if (_context.TryGetInstanceVariable(exception, RubyUtils.GetCoreStateInstanceVariableName("@__raise_backtrace_strings__"), out value)) {
+                        locations = value;
+                    }
+                }
+
                 WriteObject(exception);
-                WriteInt32(2 + (isNameError ? 1 : 0) + (isNoMethodError ? 2 : 0) + (cause != null ? 1 : 0) + internalNames.Count + instanceNames.Length);
+                WriteInt32(2 + (locations != null ? 1 : 0) + (isNameError ? 1 : 0) + (isNoMethodError ? 2 : 0) + (cause != null ? 1 : 0) + internalNames.Count + instanceNames.Length);
                 WriteSymbol("mesg", RubyEncoding.Binary);
                 object message = data.Message;
                 var messageString = message as MutableString;
@@ -757,13 +772,6 @@ namespace IronRuby.Builtins {
                     WriteAnObject(data.PrivateCall);
                 }
 
-                // MRI writes the cause as another pseudo instance variable, and only when the
-                // exception has one - an exception that was never raised inside a rescue has not.
-                if (cause != null) {
-                    WriteSymbol("cause", RubyEncoding.Binary);
-                    WriteAnObject(cause);
-                }
-
                 foreach (string name in internalNames) {
                     object value;
                     _context.TryGetInstanceVariable(exception, HiddenIVarName(name), out value);
@@ -772,6 +780,19 @@ namespace IronRuby.Builtins {
                 }
 
                 WriteIVarPairs(exception, instanceNames);
+
+                // MRI writes the cause as another pseudo instance variable, and only when the
+                // exception has one - an exception that was never raised inside a rescue has not.
+                // It and "bt_locations" are set when the exception is raised, so they come after
+                // the instance variables #initialize set.
+                if (cause != null) {
+                    WriteSymbol("cause", RubyEncoding.Binary);
+                    WriteAnObject(cause);
+                }
+                if (locations != null) {
+                    WriteSymbol("bt_locations", RubyEncoding.Binary);
+                    WriteAnObject(locations);
+                }
             }
 
             private void WriteUsingDump(object/*!*/ obj) {

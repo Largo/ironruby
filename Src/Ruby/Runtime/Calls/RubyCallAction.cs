@@ -448,7 +448,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // respond_to?(:sym) and send(:sym) rules are specialized on the receiver's class (DispatchIntrinsics):
-            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass)) {
+            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass, target)) {
                 return false;
             }
 
@@ -522,7 +522,7 @@ namespace IronRuby.Runtime.Calls {
             if (visibility == RubyMethodVisibility.Protected || !allVisible && visibility != RubyMethodVisibility.Public) {
                 return false;
             }
-            if (DispatchIntrinsics.MaySpecialize(lookup.Info, Signature, targetClass)) {
+            if (DispatchIntrinsics.MaySpecialize(lookup.Info, Signature, targetClass, target)) {
                 return false;
             }
 

@@ -54,6 +54,56 @@ class HsDict
   end
 end
 
+# The same in a module, beside the top-level HsEntry, which defines a `match' too: a candidate search that sees only
+# Object's constants finds HsEntry alone, inlines for it, and deopts on every HsNs::Entry (JitStub.ClassesDefining).
+module HsNs
+  class Entry
+    attr_reader :hash, :key, :value
+    attr_accessor :next
+    def initialize(hash, key, value, nxt); @hash = hash; @key = key; @value = value; @next = nxt; end
+    def match(hash, key); @hash == hash && @key == key; end
+  end
+  class Dict
+    def initialize(size = 16); @buckets = Array.new(size); end
+    def get_bucket(hash); @buckets[(@buckets.size - 1) & hash]; end
+    def at(key)
+      hash = key.custom_hash
+      e = get_bucket(hash)
+      while e
+        return e.value if e.match(hash, key)
+        e = e.next
+      end
+      nil
+    end
+    def at_put(key, value)
+      hash = key.custom_hash
+      i = (@buckets.size - 1) & hash
+      @buckets[i] = Entry.new(hash, key, value, @buckets[i])
+    end
+  end
+end
+
+# AWFY Towers' pop_disk_from and push_disk: a disk read from an Array, then an attribute read and write on it
+class HsDisk
+  attr_accessor :next
+  attr_reader :size
+  def initialize(size); @size = size; @next = nil; end
+end
+class HsPiles
+  def initialize; @piles = Array.new(3); end
+  def pop_disk_from(pile)
+    top = @piles[pile]
+    raise 'Attempting to remove a disk from an empty pile' unless top
+    @piles[pile] = top.next
+    top.next = nil
+    top
+  end
+  def push_disk(disk, pile)
+    disk.next = @piles[pile]
+    @piles[pile] = disk
+  end
+end
+
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
 INSTR = ENV["INSTR"] && (require_relative "../perf/instructions"; Instructions.open || warn("no instruction counter (perf_event_open)"))
 def t(name, n)
@@ -78,4 +128,10 @@ N = (ENV["N"] || 1_000_000).to_i
 t("at_first", N) { |n| i = 0; s = 0; while i < n; s += d.at(first); i += 1; end; s }
 t("at_chain", N) { |n| i = 0; s = 0; while i < n; s += d.at(deep); i += 1; end; s }
 t("at_miss", N) { |n| i = 0; s = 0; while i < n; s += 1 if d.at(missing).nil?; i += 1; end; s }
+nd = HsNs::Dict.new
+keys.each_with_index { |k, i| nd.at_put(k, i) }
+t("ns_at_chain", N) { |n| i = 0; s = 0; while i < n; s += nd.at(deep); i += 1; end; s }
+hp = HsPiles.new
+3.times { |p| [3, 2, 1].each { |sz| hp.push_disk(HsDisk.new(sz + p * 10), p) } }
+t("towers_pop", N / 3 * 3) { |n| i = 0; s = 0; while i < n; dk = hp.pop_disk_from(i % 3); hp.push_disk(dk, (i + 2) % 3); s += dk.size; i += 1; end; s }
 t("chain_len", N) { |n| i = 0; s = 0; while i < n; s += d.chain_length(deep); i += 1; end; s }

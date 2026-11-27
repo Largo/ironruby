@@ -5910,11 +5910,14 @@ class Enumerator
 
   # The fiber's half of #next (op 0: the values of the next step, taken), #peek
   # (op 1: the same values, left for the next #next; the caller copies them) - and
-  # the FiberErrors of a cursor another thread started (op 2) and of one in use (op 3).
+  # the FiberErrors of a cursor another thread started (op 2) and of one in use (op 3), and the
+  # end of a cursor's iteration raised as the fiber's is (op 4).
   def __iter_slow__(op)
     ::Kernel.raise(::FiberError, "fiber called across threads") if op == 2
     # a cursor's #flat_map converting the block's answer, which calls back into this enumerator (op 3)
     ::Kernel.raise(::FiberError, "attempt to resume the current fiber") if op == 3
+    # the end of a cursor's iteration, when StopIteration is made with the program's #new or #initialize (op 4)
+    __iter_stop__ if op == 4
     __iter_advance__
     values = @__peek__
     if op == 0
@@ -6606,23 +6609,22 @@ class Enumerator
   # Each lazy chain method records itself for #inspect:
   # #<Enumerator::Lazy: #<Enumerator::Lazy: 1..3>:map>.  grep and grep_v, which
   # need the caller's frame, record themselves in __ir_lazy_grep_impl__.
-  module LazyInspect
-    # map, flat_map and select record themselves: their aliases (collect, filter, ...)
-    # have to stay the very same method.
-    [:reject, :filter_map, :compact, :uniq, :take, :take_while, :drop, :drop_while, :with_index,
-     :each_with_index, :with_object, :zip, :chunk, :chunk_while,
-     :slice_when, :slice_before, :slice_after, :each_slice, :each_cons, :cycle].each do |name|
-      define_method(name) do |*args, &block|
-        result = super(*args, &block)
-        if result.is_a?(::Enumerator::Lazy) && !result.equal?(self)
-          result.__set_inspect__(self, name, name == :with_index && args.empty? ? [0] : args)
-        end
-        result
+  # map, flat_map and select record themselves: their aliases (collect, filter, ...)
+  # have to stay the very same method. The others are wrapped here, in Lazy itself
+  # around the method each replaces, not in a prepended module: MRI's Lazy has nothing
+  # prepended, and Lazy.ancestors would show it.
+  [:reject, :filter_map, :compact, :uniq, :take, :take_while, :drop, :drop_while, :with_index,
+   :each_with_index, :with_object, :zip, :chunk, :chunk_while,
+   :slice_when, :slice_before, :slice_after, :each_slice, :each_cons, :cycle].each do |name|
+    original = Lazy.instance_method(name)
+    Lazy.send(:define_method, name) do |*args, &block|
+      result = original.bind_call(self, *args, &block)
+      if result.is_a?(::Enumerator::Lazy) && !result.equal?(self)
+        result.__set_inspect__(self, name, name == :with_index && args.empty? ? [0] : args)
       end
+      result
     end
   end
-  __hide_constant__ :LazyInspect
-  Lazy.prepend(LazyInspect)
 
   # --- Enumerator::Chain -------------------------------------------------
   class Chain < Enumerator
@@ -11413,6 +11415,10 @@ class IO
       end
       return ec.convert(text.encode(::Encoding::UTF_8, **options))
     end
+    # MRI's do_writeconv takes text bound for an encoding that is not ASCII-compatible
+    # (UTF-16BE) to that encoding's ASCII-compatible one first (UTF-8), so a byte that
+    # fails is reported on that leg: "\xFF" from ASCII-8BIT to UTF-8.
+    text = text.encode(::Encoding::UTF_8, **options) unless target.ascii_compatible? || text.encoding == ::Encoding::UTF_8
     text.encode(target, **options)
   end
   private :__encode_for_write__
@@ -12586,6 +12592,9 @@ class Exception
       # was raised keeps the ones it was raised with, and one that never was gets none,
       # however many strings it is given.
       @__backtrace_locations__ = backtrace_locations
+      # Marshal writes the raise's backtrace as "bt_locations" beside the new "bt", as MRI
+      # does, so the strings it was raised with are kept for it
+      @__raise_backtrace_strings__ ||= backtrace if @__backtrace_locations__
       @__backtrace_from_strings__ = true
       __core_set_backtrace__(value)
     end

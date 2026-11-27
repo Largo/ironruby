@@ -100,12 +100,14 @@ namespace IronRuby.Builtins {
         #region __send__
 
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         public static object SendMessage(RubyScope/*!*/ scope, object self) {
             return KernelOps.SendMessage(scope, self);
         }
 
         // ARGS: 0
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
@@ -114,6 +116,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 0&
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
@@ -122,6 +125,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -131,6 +135,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -140,6 +145,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -149,6 +155,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -158,6 +165,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -167,6 +175,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -176,6 +185,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
@@ -185,6 +195,7 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("__send__")]
+        [RubyStackTraceHidden]
         [ReceivesKeywords]
         public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
             RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,

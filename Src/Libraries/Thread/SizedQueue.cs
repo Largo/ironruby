@@ -55,6 +55,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 try {
                     while (_queue.Count >= _limit) {
                         bool signalled;
+                        string previous = IronRuby.Builtins.ThreadOps.EnterBlockingMethod("Thread::SizedQueue#push");
                         try {
                             using (RubyUtils.BlockingWait.Enter()) {
                                 if (timeoutMilliseconds < 0) {
@@ -67,6 +68,8 @@ namespace IronRuby.StandardLibrary.Threading {
                         } catch (ThreadInterruptedException) {
                             RubyUtils.TranslateThreadInterrupt();
                             continue;
+                        } finally {
+                            IronRuby.Builtins.ThreadOps.ExitBlockingMethod(previous);
                         }
                         CheckOpen();
                         if (!signalled) {

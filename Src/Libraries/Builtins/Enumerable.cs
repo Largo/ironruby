@@ -273,12 +273,7 @@ namespace IronRuby.Builtins {
             // An Array walks itself, as rb_ary_any_p and friends do, and does not call #each.
             var array = self as RubyArray;
             if (array != null) {
-                for (int i = 0; i < array.Count; i++) {
-                    if (Protocols.IsTrue(site.Target(site, pattern, array[i])) == stop) {
-                        return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
-                    }
-                }
-                return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+                return PatternForList(site, array, pattern, stop, positiveResult);
             }
 
             object result = ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
@@ -292,40 +287,63 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// The pattern form of Array#all?, #any? and #none? (rb_ary_all_p etc. with an argument): pattern === element for each
+        /// element, the list's length read again each time.
+        /// </summary>
+        internal static object PatternForList(CallSite<Func<CallSite, object, object, object>>/*!*/ site, IList/*!*/ list, object pattern,
+            bool stop, bool positiveResult) {
+            for (int i = 0; i < list.Count; i++) {
+                if (Protocols.IsTrue(site.Target(site, pattern, list[i])) == stop) {
+                    return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
+                }
+            }
+            return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+        }
+
+        /// <summary>
+        /// Array#all?, #any? and #none? (rb_ary_all_p etc.), with a block or without: they walk the list and yield each element
+        /// once, rather than going through #each and a block of ours.
+        /// </summary>
+        internal static object TrueForList(BlockParam predicate, IList/*!*/ list, bool stop, bool positiveResult) {
+            var array = list as RubyArray;
+            // -X:OSR: once the block is hot, the rest of a plain Array's search runs in a typed copy of
+            // the loop this and the block make together (BlockLoopSite)
+            var loop = (predicate != null && array != null && array.Count >= BlockLoopSite.MinCollectRun && array.GetType() == typeof(RubyArray))
+                ? BlockLoopSite.For(predicate, stop ? BlockLoopKind.FindTruthy : BlockLoopKind.FindFalsy) : null;
+            long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
+            for (int i = 0; i < list.Count; i++) {
+                if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinCollectRun) {
+                    bool found;
+                    i = loop.Run(predicate, array, i, ref countdown, out found);
+                    if (found) { return ScriptingRuntimeHelpers.BooleanToObject(positiveResult); }
+                    if (i >= array.Count) { break; }
+                }
+                object item = list[i];
+                if (predicate != null) {
+                    // rb_ary_all_p and friends yield the element with a plain
+                    // rb_yield: a lambda takes an Array element whole
+                    object blockResult;
+                    if (predicate.Yield(item, out blockResult)) {
+                        return blockResult;
+                    }
+                    item = blockResult;
+                }
+                if (Protocols.IsTrue(item) == stop) {
+                    if (loop != null) { loop.Leave(countdown); }
+                    return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
+                }
+            }
+            if (loop != null) { loop.Leave(countdown); }
+            return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+        }
+
         private static object TrueForItems(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool stop, bool positiveResult) {
-            // An Array's #all?, #any? and #none? are its own in MRI (rb_ary_all_p etc.): they walk the
-            // array and yield each element once rather than going through #each and a block of ours.
+            // An Array's #all?, #any? and #none? are its own (IListOps.TrueForAll etc.); Enumerable's, reached on an Array
+            // all the same (bind_call), walks it as they do, as it did when they were these.
             var array = self as RubyArray;
             if (array != null) {
-                // -X:OSR: once the block is hot, the rest of a plain Array's search runs in a typed copy of
-                // the loop this and the block make together (BlockLoopSite)
-                var loop = (predicate != null && array.Count >= BlockLoopSite.MinCollectRun && array.GetType() == typeof(RubyArray))
-                    ? BlockLoopSite.For(predicate, stop ? BlockLoopKind.FindTruthy : BlockLoopKind.FindFalsy) : null;
-                long countdown = (loop != null) ? loop.Countdown : Int64.MaxValue;
-                for (int i = 0; i < array.Count; i++) {
-                    if (--countdown <= 0 && array.Count - i >= BlockLoopSite.MinCollectRun) {
-                        bool found;
-                        i = loop.Run(predicate, array, i, ref countdown, out found);
-                        if (found) { return ScriptingRuntimeHelpers.BooleanToObject(positiveResult); }
-                        if (i >= array.Count) { break; }
-                    }
-                    object item = array[i];
-                    if (predicate != null) {
-                        // rb_ary_all_p and friends yield the element with a plain rb_yield: a
-                        // lambda takes an Array element whole
-                        object blockResult;
-                        if (predicate.Yield(item, out blockResult)) {
-                            return blockResult;
-                        }
-                        item = blockResult;
-                    }
-                    if (Protocols.IsTrue(item) == stop) {
-                        if (loop != null) { loop.Leave(countdown); }
-                        return ScriptingRuntimeHelpers.BooleanToObject(positiveResult);
-                    }
-                }
-                if (loop != null) { loop.Leave(countdown); }
-                return ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
+                return TrueForList(predicate, array, stop, positiveResult);
             }
 
             object result = ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
