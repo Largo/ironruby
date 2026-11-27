@@ -894,6 +894,28 @@ namespace IronRuby.Runtime {
             return scope.ResolveAndSetLocalVariable(name, value);
         }
 
+        /// <summary>
+        /// <see cref="GetLocalVariable"/> from a site that remembers where the name resolved (IR_EVAL_LOCAL_CACHE): a
+        /// read of the slot or cell, without the lookup by name and its lock, while the scope and the runtime's
+        /// dynamic locals are what they were.
+        /// </summary>
+        [Emitted]
+        public static object GetLocalVariableAtSite(RubyScope/*!*/ scope, LocalVariableSite/*!*/ site) {
+            var resolution = site.Resolve(scope);
+            return (resolution != null) ? resolution.Read() : scope.ResolveLocalVariable(site.Name);
+        }
+
+        [Emitted]
+        public static object SetLocalVariableAtSite(object value, RubyScope/*!*/ scope, LocalVariableSite/*!*/ site) {
+            var resolution = site.Resolve(scope);
+            if (resolution != null) {
+                resolution.Write(value);
+                return value;
+            }
+            // a name not visible from here: defined in the scope that takes it, as before
+            return scope.ResolveAndSetLocalVariable(site.Name, value);
+        }
+
         [Emitted]
         public static VersionHandle/*!*/ GetSelfClassVersionHandle(RubyScope/*!*/ scope) {
             return scope.SelfImmediateClass.Version;
