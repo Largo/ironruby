@@ -1427,7 +1427,7 @@ namespace IronRuby.Runtime.Jit {
 
         private bool IsEarlyTopStatement(RExpr/*!*/ node) {
             if (_loop != null || _ast == null || _noUnloggedWrites || _noUnloggedEarlyWrites || !_refinements.IsEmpty) { return false; }
-            var statements = _ast.Body.Statements;
+            var statements = MethodStatements;
             if (statements == null || statements.Count == 0 || statements.Last == node) { return false; }
             var receiver = LastStoreReceiver();
             if (receiver == null) { return false; }
@@ -1443,7 +1443,8 @@ namespace IronRuby.Runtime.Jit {
 
         // The receiver of the store the body ends with - `@v[j] = x' or `a[j] = x', a an untyped local - or null.
         private RExpr LastStoreReceiver() {
-            var assign = _ast.Body.Statements.Last as SimpleAssignmentExpression;
+            var statements = MethodStatements;
+            var assign = (statements != null && statements.Count > 0) ? statements.Last as SimpleAssignmentExpression : null;
             var element = (assign != null && assign.Operation == null) ? assign.Left as ArrayItemAccess : null;
             if (element == null || element.Block != null || element.Arguments.Expressions.Length != 1 ||
                 element.Arguments.Expressions[0] is SplattedArgument) {
@@ -1486,7 +1487,7 @@ namespace IronRuby.Runtime.Jit {
 
         private bool IsLastStatement(RExpr/*!*/ node) {
             if (_loop != null || _ast == null || _noUnloggedWrites) { return false; }
-            var statements = _ast.Body.Statements;
+            var statements = MethodStatements;
             return statements != null && statements.Count > 0 && statements.Last == node;
         }
 

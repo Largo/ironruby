@@ -1779,6 +1779,50 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitrescue (2026-11-28, census and timed, not gated) - `begin`/`rescue`/`else`/`ensure` in the method JIT's
+  typed body** (gap 22's remainder; switch `IR_JIT_RESCUE`). Built on happy-gauss 4320d4a, perf/jitbody 238d994 and
+  perf/lsite f7ae738 (lazy `$!`, IR_LAZY_ERRINFO).
+  - **Approach.** The handler is not emitted in the typed body. The typed body takes a begin, or a method-level
+    rescue, only where its protected part cannot raise: no call it does not inline, no loop, safe point, fallback,
+    construction or try. `JitCompiler.RaiseFreeChecker` checks this on the emitted tree, allowing only the helpers that
+    throw nothing but a deopt (the sinking allow-list plus the deopting reads and identity tests) and inlined lambdas.
+    An exception the generic body would raise there (an overflow, `raise`, a nil receiver) is a deopt here: the
+    generic body runs the call again from the top, rescue clauses and all. That is allowed only before an effect, as
+    for any deopt. So the typed body emits the statements, then else, then ensure: the order of a run that raises
+    nothing. Such a run leaves `$!` alone (with IR_LAZY_ERRINFO=0 the generic body stores back what it read) and
+    never sets InRescue. With an ensure, the else clause must be raise-free too, and no return, break, next, redo or
+    retry may leave the begin (`JumpsThroughEnsure`, refused by the screen as well). A deopt passes the ensure without
+    running it; the generic body runs it, once.
+  - **Why not a handler in the typed body.** The protected part may make calls only if each call is inlined, i.e.
+    raise-free as well. An exception from Ruby code needs the generic body's frame (backtrace, `$!`, TracePoint
+    `:rescue`, `retry`). Typed bodies already avoid raising from a frame they don't have (`InterpolatedPart`'s
+    comment), and this keeps to that.
+  - **Fixed on the way.** The analyses of "the body's last statement" (held-back writes, the last store, the resume
+    path) read `_ast.Body.Statements`. With method-level clauses that list is followed by else and ensure. A method
+    `def m(x) @n += x rescue .. else @n += 1; @n * 2 end` returned `@n`. They now read `MethodStatements`, which is
+    null for such a body.
+  - **Census** (Src/StdLib, Util/bench, AWFY, against the merged base): 61 methods up, none down. Compiles 3,583 ->
+    3,585, maybe 3,238 -> 3,297, never 22,570 -> 22,509. `Body` as the first refusal: 555 -> 39 methods. Most of the
+    57 that left "never (Body)" are maybe behind a call (I/O and protocol wrappers): they compile only where the call
+    inlines.
+  - **Hot methods.** app-shapes calls no method that `Body` alone refused (9 have it among others), and AWFY has no
+    rescue in a benchmark. Traced runs: app-shapes 118 specialized and 29 declined on both builds;
+    zjit-post-shapes 6 -> 8 specialized (`B#resc`, `B#ens`), declines 0 -> 0.
+  - **Clock** (ab.rb -r 5, zjit-post-shapes): rescue 53.9 -> 36.7 ns against the switch off (base 58.3, CRuby 27.9),
+    ensure 65.6 -> 50.1 (base 65.4, CRuby 32.3), no overlap. zjit-post-shapes prints no instruction counts.
+  - **Checks.** `Util/jit-rescue-matrix.rb` has a new section 23 (Q): method-level rescue/else/ensure order and value,
+    the value of a begin with else and ensure, nested begins, an effect then a deopt in the protected part or in the
+    ensure, a raise in the ensure, `$!` read in the ensure under an outer rescue, backtraces from the handler and
+    through the begin, TracePoint `:raise`/`:rescue`, Thread#raise of an Exception and of a StandardError into a hot
+    method, Timeout, and a default argument (evaluated outside the method's rescue). It prints CRuby's output with
+    the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls, IR_LIGHT_FRAMES=0, the switch off, and IR_LAZY_ERRINFO=0.
+    errinfo, rescue-light, jit-raise, raise, jit, jit-calls, hot-shapes and light-entry in the same five modes: the
+    same as the base (raise's anonymous-class row prints an address). ruby/spec language rescue, ensure and retry,
+    core/exception and library/timeout: the same as the base, no failures. IronRuby.Tests, all 1,377: one failure,
+    JitCensus1, which pins census verdicts. Its `Point#safe` (a method-level rescue around `@x.fetch`) is now maybe
+    (call: fetch/0). The test now expects that, plus a new `Point#jump` (a return through an ensure) that is still
+    never (Body); it passes.
+
 - **perf/jitblockparam (2026-11-27, census and timed, not gated) - a typed body for a call without a block**
   (switch `IR_JIT_BLOCK_PARAM`). A method whose block parameter is only passed on, `def w(a, b, &k) =
   @t.two(a, b, &k)`, was never wrapped (`JitStub.ParameterShape`: "block parameter"), and one passing `&nil`
