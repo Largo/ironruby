@@ -1624,6 +1624,47 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/timeout (2026-11-27) - `Timeout.timeout` wakes its watcher thread only when it has to**
+  (`Src/StdLib/ironruby/timeout.rb`, an override that loads CRuby's file as it is and redefines two
+  methods of `Timeout::State`) - timed, not gated. A raise rescued through `Timeout.timeout` cost
+  152-164 us against CRuby's 3.1 (perf/ensure's finding). Taken apart with copies of timeout.rb
+  (each with one thing left out; no profiler: this container refuses perf_event_open and the
+  sampler could not be installed): without the `ensure request.finished` 21 us, without the
+  watcher's signal 57-60, without the handler's `rescue ExitException` 66, without the Proc's
+  `return` 62; and by thread (`Util/bench/timeout-shapes.rb`'s measure): with the signal 145 us of
+  process CPU of which 100 on the calling thread, without it 57 and 57. So each call's
+  `@condvar.signal` wakes the watcher, whose iteration (drain the queue, `min_by`, `reject!`, wait
+  again) then runs beside the raise: ~45 us of its own CPU and ~43 more on the caller. Pinned to one
+  CPU the difference shrinks (72 against 54): interference between the two threads, not the
+  watcher's work alone - not found further without a sampler (no contended Monitor entries:
+  `Monitor.LockContentionCount` 0 per call; no gen-0 collections).
+  The watcher needs a signal only when it would otherwise sleep past the new request's deadline. It
+  now publishes the deadline it waits for (`@watcher_deadline`, under `@queue_mutex`, while in the
+  condition variable's wait), and `add_request` signals when the new deadline is earlier, when the
+  watcher is not in that wait (in `@queue.pop`, which the push wakes, or between waits, where it
+  checks the queue under the mutex), or when the queue has 64 requests. A request not signalled for
+  is due no earlier than what the watcher wakes for, and it drains the queue then: every timeout
+  fires when CRuby's would. Without a raise the watcher usually finds the request finished, drops it
+  and blocks in `@queue.pop`, which every push wakes as before, so that path is unchanged.
+  Timing (`ab.rb`, six rounds, the calling thread's CPU, ns): raise 53,328 -> 32,954 (0.62); no raise
+  2,765 -> 3,146 and the bare raise control 4,753 -> 4,750, both overlapping. Process CPU of a raise,
+  two runs (`Util/bench/timeout-shapes.rb`'s measure, us): 164 and 135 -> 76 and 69. Callgrind gives
+  nothing here: valgrind runs one thread at a time, so the interference cannot appear, and the
+  baseline's arm failed under it.
+  What is left of the raise (57 against a bare 8): `Error.handle_timeout`'s `rescue ExitException =>
+  e` (a class list by constant: a catch, a backtrace, then `raise` again; a frame like it alone 29 us
+  against 8.6 for a core class) and the Proc's `return yield` inside begin/ensure.
+  Checked: `Util/timeout-matrix.rb` (new, 28 rows: firing in sleep, a busy loop, IO and Queue#pop,
+  nil/zero/negative, a custom class and message, the backtrace, ExitException not taken by a bare
+  rescue, a raise in the block with its cause and `$!`, nested both ways, a short timeout after 2,000
+  long ones and inside a long one with 200 queued, two threads, one watcher thread after 10,000
+  calls) prints CRuby's output on the unchanged build and on this one (with the JIT on, `-X:NoJIT
+  -X:NoOSR`, `-X:NoJITCalls`, `IR_LIGHT_FRAMES=0`); ruby/spec library/timeout (7), core/thread/raise
+  (77) and core/kernel/sleep (15) pass on both.
+  For the gate: Timeout's own code is CRuby's and is loaded as it is; a timeout gem installed over it
+  is not overridden (the override is found first on the load path only for `require "timeout"` of
+  the stdlib copy).
+
 - **perf/jitaref (2026-11-26) - `a[i]` in a typed body after some Array has a singleton `[]`**
   - trace only, not gated (the census cannot see it: it loads no library). The side finding of
   perf/jitconst: app-shapes declined `OptionParser.top` (`@stack[-1]`) and `.base`, and rejected
