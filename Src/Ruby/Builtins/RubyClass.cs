@@ -958,7 +958,36 @@ namespace IronRuby.Builtins {
         /// The cache is shared by all runtimes in the process, and a member that is missing without PrivateBinding
         /// (a private field, say) exists with it, so the key includes that setting.
         /// </summary>
-        private static Dictionary<(Type, string, bool, bool), int> _clrFailedMemberLookupCache = new Dictionary<(Type, string, bool, bool), int>();
+        private static Dictionary<FailedLookup, int> _clrFailedMemberLookupCache = new Dictionary<FailedLookup, int>();
+
+        // The key of a failed lookup. A class, not a ValueTuple: a CoreLib collection over a struct of IronRuby's has its code
+        // JIT-compiled at its first use (~0.8 ms of every start on the ReadyToRun host, at the first CLR member lookup),
+        // where one over a class shares the precompiled code of every reference type.
+        private sealed class FailedLookup : IEquatable<FailedLookup> {
+            private readonly Type/*!*/ _type;
+            private readonly string/*!*/ _name;
+            private readonly bool _isStatic, _privateBinding;
+
+            internal FailedLookup(Type/*!*/ type, string/*!*/ name, bool isStatic, bool privateBinding) {
+                _type = type;
+                _name = name;
+                _isStatic = isStatic;
+                _privateBinding = privateBinding;
+            }
+
+            public bool Equals(FailedLookup other) {
+                return other != null && _type == other._type && _name == other._name && _isStatic == other._isStatic &&
+                    _privateBinding == other._privateBinding;
+            }
+
+            public override bool Equals(object obj) {
+                return Equals(obj as FailedLookup);
+            }
+
+            public override int GetHashCode() {
+                return _type.GetHashCode() ^ _name.GetHashCode() ^ (_isStatic ? 1 : 0) ^ (_privateBinding ? 2 : 0);
+            }
+        }
 
         /// <summary>
         /// GetRuntimeMethods includes
@@ -976,7 +1005,7 @@ namespace IronRuby.Builtins {
         private static bool IsFailureCached(Type/*!*/ type, string/*!*/ methodName, bool isStatic, bool privateBinding, int extensionVersion) {
             // check for cached lookup failure (if the cache is available):
             bool result = false;
-            var key = (type, methodName, isStatic, privateBinding);
+            var key = new FailedLookup(type, methodName, isStatic, privateBinding);
 
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
@@ -1006,7 +1035,7 @@ namespace IronRuby.Builtins {
             // store failure to the cache if the cache is not owned by another thread:
             var cache = Interlocked.Exchange(ref _clrFailedMemberLookupCache, null);
             if (cache != null) {
-                cache[(type, methodName, isStatic, privateBinding)] = extensionVersion;
+                cache[new FailedLookup(type, methodName, isStatic, privateBinding)] = extensionVersion;
                 Interlocked.Exchange(ref _clrFailedMemberLookupCache, cache);
             }
         }
@@ -1602,16 +1631,63 @@ namespace IronRuby.Builtins {
         /// asked for at all.
         /// </summary>
         private static bool MayDeclareFieldOrEvent(Type/*!*/ type, string/*!*/ name) {
-            return _declaredFieldAndEventNames.GetValue(type, static t => {
-                var names = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var field in t.GetFields(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
-                    names.Add(field.Name);
+            return _declaredFieldAndEventNames.GetValue(type, static t => ReadFieldAndEventNames(t) ?? ReflectFieldAndEventNames(t)).Contains(name);
+        }
+
+        // The names from the assembly's metadata tables, as DeclaredMemberNames.MayDeclareMethod reads a type's method names:
+        // GetFields and GetEvents populate the type's reflection cache with an object per member (Int32 and Double: 0.2-0.3 ms
+        // each, ~2 ms over the 42 types `ir -e 1' asks about). Null where there is no TypeDef to read (an array, a generic
+        // parameter, a type of a dynamic assembly such as a generated Ruby class): reflection answers those.
+        internal static HashSet<string> ReadFieldAndEventNames(Type/*!*/ type) {
+            try {
+                if (type.HasElementType || type.IsGenericParameter || type.Module != type.Assembly.ManifestModule) {
+                    return null;
                 }
-                foreach (var e in t.GetEvents(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
-                    names.Add(e.Name);
+                int token = type.MetadataToken;
+                if ((token >> 24) != 0x02) { // not a TypeDef
+                    return null;
+                }
+                var reader = _metadataReaders.GetValue(type.Assembly, static a => new MetadataReaderBox(CreateMetadataReader(a))).Reader;
+                if (reader == null) {
+                    return null;
+                }
+                var definition = reader.GetTypeDefinition(System.Reflection.Metadata.Ecma335.MetadataTokens.TypeDefinitionHandle(token & 0xFFFFFF));
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var handle in definition.GetFields()) {
+                    names.Add(reader.GetString(reader.GetFieldDefinition(handle).Name));
+                }
+                foreach (var handle in definition.GetEvents()) {
+                    names.Add(reader.GetString(reader.GetEventDefinition(handle).Name));
                 }
                 return names;
-            }).Contains(name);
+            } catch (Exception) {
+                return null;
+            }
+        }
+
+        private sealed class MetadataReaderBox {
+            internal readonly System.Reflection.Metadata.MetadataReader Reader; // null: no metadata to read
+            internal MetadataReaderBox(System.Reflection.Metadata.MetadataReader reader) { Reader = reader; }
+        }
+
+        private static readonly ConditionalWeakTable<Assembly, MetadataReaderBox> _metadataReaders = new ConditionalWeakTable<Assembly, MetadataReaderBox>();
+
+        private static unsafe System.Reflection.Metadata.MetadataReader CreateMetadataReader(Assembly/*!*/ assembly) {
+            if (assembly.IsDynamic || !System.Reflection.Metadata.AssemblyExtensions.TryGetRawMetadata(assembly, out byte* blob, out int length)) {
+                return null;
+            }
+            return new System.Reflection.Metadata.MetadataReader(blob, length);
+        }
+
+        internal static HashSet<string>/*!*/ ReflectFieldAndEventNames(Type/*!*/ t) {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var field in t.GetFields(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
+                names.Add(field.Name);
+            }
+            foreach (var e in t.GetEvents(BindingFlags.DeclaredOnly | ReflectionUtils.AllMembers)) {
+                names.Add(e.Name);
+            }
+            return names;
         }
 
         private static readonly ConditionalWeakTable<Type, HashSet<string>> _declaredFieldAndEventNames = new ConditionalWeakTable<Type, HashSet<string>>();
