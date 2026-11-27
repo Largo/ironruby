@@ -8786,5 +8786,29 @@ NaN
 [-4, -0.5]
 ");
         }
+
+        /// <summary>
+        /// Rational#coerce of what it cannot take names the class (nurat_coerce: "NilClass can't be coerced into Rational"); and
+        /// Numeric#divmod computes the modulo first (gcc's order of num_divmod's arguments), so a coerce is asked once before the error.
+        /// </summary>
+        public void Rational_CoerceAndDivmod1() {
+            TestOutput(@"
+require 'ruby4'
+class C1
+  @@log = []
+  def self.log = @@log
+  def coerce(o) = (@@log << :coerce; [o, 2])
+end
+p((Rational(3, 4).divmod(C1.new) rescue $!.class), C1.log)
+p((Rational(3, 4).coerce(nil) rescue $!), (Rational(3, 4).coerce(""x"") rescue $!), (Rational(3, 4).coerce(:s) rescue $!), Rational(3, 4).coerce(2))
+", @"
+NoMethodError
+[:coerce]
+#<TypeError: NilClass can't be coerced into Rational>
+#<TypeError: String can't be coerced into Rational>
+#<TypeError: Symbol can't be coerced into Rational>
+[(2/1), (3/4)]
+");
+        }
     }
 }

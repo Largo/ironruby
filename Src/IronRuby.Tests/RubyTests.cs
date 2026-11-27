@@ -1015,6 +1015,7 @@ namespace IronRuby.Tests {
                 Math_CLibrary1,
                 Math_LogBaseAndOrder1,
                 Float_DivmodInfinite1,
+                Rational_CoerceAndDivmod1,
                 Errno_MessageNotDoubled1,
                 Process_ClockGetTime1,
                 Process_ThreadCpuTime1,

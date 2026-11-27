@@ -282,7 +282,8 @@ class Rational < Numeric
       real = other.real
       [::Float === real ? real.to_r : ::Rational.__new_internal__(real, 1), self]
     else
-      ::Kernel.raise(::TypeError, "#{__ir_coerce_name__(other)} can't be coerced into #{self.class}")
+      # (nurat_coerce names the class, rb_obj_classname: "NilClass can't be coerced into Rational")
+      ::Kernel.raise(::TypeError, "#{other.class} can't be coerced into #{self.class}")
     end
   end
 

@@ -3454,8 +3454,11 @@ class Numeric
   end
   alias :% :modulo
 
+  # MRI's num_divmod is rb_assoc_new(num_div(x, y), num_modulo(x, y)), whose arguments gcc evaluates right
+  # to left: the modulo first, which is what a coerce or an error in between shows.
   def divmod(other)
-    [div(other), modulo(other)]
+    m = modulo(other)
+    [div(other), m]
   end
 
   # The modulo moved back across zero when the two point in opposite
