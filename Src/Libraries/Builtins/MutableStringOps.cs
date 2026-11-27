@@ -868,6 +868,17 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateRangeError("bignum out of char range");
         }
 
+        /// <summary>
+        /// Anything else: MRI's rb_str_concat checks the receiver before it converts the argument,
+        /// so a frozen string raises FrozenError whatever it is given ("a".freeze << Object.new),
+        /// where the binder's conversion of a [DefaultProtocol] parameter would raise the TypeError first.
+        /// </summary>
+        [RubyMethod("<<")]
+        public static MutableString/*!*/ Append(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, object other) {
+            self.RequireNotFrozen();
+            return self.Append(Protocols.CastToString(stringCast, other));
+        }
+
         // Ruby 1.9 gave #concat - but not #<< - any number of arguments. Each one is an
         // Integer codepoint or something String-convertible, and they are appended in order,
         // so "s.concat(s, s)" triples s rather than looping.

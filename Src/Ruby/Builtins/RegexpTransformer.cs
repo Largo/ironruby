@@ -115,6 +115,8 @@ namespace IronRuby.Builtins {
             public bool AstralSafe;
             // see Transform(..., asciiCtype)
             public bool AsciiCtype;
+            // see Transform(..., latin1Ctype)
+            public bool Latin1Ctype;
             // Whether /i or an inline (?i) may be in effect anywhere in the pattern (AsciiCtype only).
             public bool MayIgnoreCase;
             // Whether AsciiCtype made the translation differ from the plain one.
@@ -246,6 +248,19 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor, bool astralSafe,
             bool asciiCtype, out bool asciiCtypeApplied) {
+            return Transform(rubyPattern, options, out hasGAnchor, astralSafe, asciiCtype, false, out asciiCtypeApplied);
+        }
+
+        /// <summary>
+        /// With <paramref name="latin1Ctype"/> the translation is for an ISO-8859-1 subject with bytes above 0x7F, which MRI
+        /// matches with Onigmo's ISO-8859-1 ctype table (enc/iso_8859_1.c) rather than Unicode's: [[:punct:]] is
+        /// U+00A1 U+00AB U+00AD U+00B7 U+00BB U+00BF there (not U+00A7 U+00B6), space is U+00A0 but not U+0085 (\s and
+        /// [[:space:]] alike, \R neither), word characters include the superscripts and vulgar fractions (\w, [[:word:]],
+        /// \b, \B), (?a) does not narrow a POSIX bracket, and case folds only within the Latin-1 letters.
+        /// <paramref name="asciiCtypeApplied"/> then says whether any of that changed the translation.
+        /// </summary>
+        internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor, bool astralSafe,
+            bool asciiCtype, bool latin1Ctype, out bool asciiCtypeApplied) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
                 hasGAnchor = false;
@@ -257,6 +272,7 @@ namespace IronRuby.Builtins {
             transformer._clrOptions = RubyRegex.ToClrOptions(options);
             transformer._state.AstralSafe = astralSafe;
             transformer._state.AsciiCtype = asciiCtype;
+            transformer._state.Latin1Ctype = latin1Ctype;
             var result = transformer.Transform();
             hasGAnchor = transformer._hasGAnchor;
             asciiCtypeApplied = transformer._state.AsciiCtypeApplied;
@@ -694,9 +710,11 @@ namespace IronRuby.Builtins {
             for (int depth = DefaultMaxCallDepth; ; depth /= 2) {
                 bool astralSafe = _state.AstralSafe;
                 bool asciiCtype = _state.AsciiCtype;
+                bool latin1Ctype = _state.Latin1Ctype;
                 _state = new SharedState();
                 _state.AstralSafe = astralSafe;
                 _state.AsciiCtype = asciiCtype;
+                _state.Latin1Ctype = latin1Ctype;
                 _state.MayIgnoreCase = asciiCtype &&
                     ((_clrOptions & RegexOptions.IgnoreCase) != 0 || HasInlineIgnoreCase(_rubyPattern));
                 _state.MaxCallDepth = depth;
@@ -1627,12 +1645,14 @@ namespace IronRuby.Builtins {
             switch (escape) {
                 case 'b':   // word boundary
                 case 'B':   // not a word boundary
-                    if (_state.AsciiCtype) {
-                        // a BINARY subject's word characters are ASCII ones
+                    if (_state.AsciiCtype || _state.Latin1Ctype) {
+                        // a BINARY subject's word characters are ASCII ones; an ISO-8859-1 subject's are its letters, the
+                        // superscripts and the vulgar fractions too
                         _state.AsciiCtypeApplied = true;
+                        string w = _state.AsciiCtype ? "[0-9A-Za-z_]" : Latin1WordClass;
                         _sb.Append(escape == 'b'
-                            ? "(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_]))"
-                            : "(?:(?<=[0-9A-Za-z_])(?=[0-9A-Za-z_])|(?<![0-9A-Za-z_])(?![0-9A-Za-z_]))");
+                            ? "(?:(?<=" + w + ")(?!" + w + ")|(?<!" + w + ")(?=" + w + "))"
+                            : "(?:(?<=" + w + ")(?=" + w + ")|(?<!" + w + ")(?!" + w + "))");
                     } else if (_state.AstralSafe) {
                         AppendAstralWordBoundary(escape == 'b');
                     } else {
@@ -1680,8 +1700,9 @@ namespace IronRuby.Builtins {
                     // A generic line break: CRLF as a unit, or any single line terminator.
                     // Atomic so that CRLF never backtracks into matching just the CR.
                     // In a BINARY subject (SharedState.AsciiCtype) 0x85 is no line terminator.
-                    _state.AsciiCtypeApplied |= _state.AsciiCtype;
-                    _sb.Append(_state.AsciiCtype ? "(?>\\r\\n|[\\n\\v\\f\\r])" : "(?>\\r\\n|[\\n\\v\\f\\r\\u0085\\u2028\\u2029])");
+                    // Nor in an ISO-8859-1 one.
+                    _state.AsciiCtypeApplied |= _state.AsciiCtype || _state.Latin1Ctype;
+                    _sb.Append(_state.AsciiCtype || _state.Latin1Ctype ? "(?>\\r\\n|[\\n\\v\\f\\r])" : "(?>\\r\\n|[\\n\\v\\f\\r\\u0085\\u2028\\u2029])");
                     break;
 
                 case 'K':
@@ -2311,6 +2332,9 @@ namespace IronRuby.Builtins {
         private static readonly int[] _latin1WordQuirk = new int[] { 0xb2, 0xb3, 0xb9, 0xb9, 0xbc, 0xbe };
         private static readonly int[] _asciiHexDigit = new int[] { '0', '9', 'A', 'F', 'a', 'f' };
         private static readonly int[] _asciiSpace = new int[] { 0x09, 0x0d, 0x20, 0x20 };
+        private static readonly int[] _latin1Space = new int[] { 0x09, 0x0d, 0x20, 0x20, 0xa0, 0xa0 };
+        // Onigmo's ISO-8859-1 word characters (Transform(..., latin1Ctype))
+        private const string Latin1WordClass = @"[0-9A-Za-z_\xaa\xb2\xb3\xb5\xb9\xba\xbc-\xbe\xc0-\xd6\xd8-\xf6\xf8-\xff]";
         private static readonly int[] _asciiDigit = new int[] { '0', '9' };
         private static readonly int[] _asciiWord = new int[] { '0', '9', 'A', 'Z', '_', '_', 'a', 'z' };
 
@@ -2319,6 +2343,19 @@ namespace IronRuby.Builtins {
         /// Space, Digit and Word properties.
         /// </summary>
         private CharacterSet/*!*/ MakeAsciiAware(string/*!*/ property, int[]/*!*/ ascii, string/*!*/ asciiText, bool positive) {
+            if (_state.Latin1Ctype) {
+                // ISO-8859-1's table: \s and (?u)\s take in U+00A0 (not U+0085), and (?u)\w the superscripts and fractions
+                if (property == "space") {
+                    _state.AsciiCtypeApplied = true;
+                    var space = CharacterSet.MakeSet(_latin1Space, null);
+                    return positive ? space : space.Complement();
+                }
+                if (property == "word" && _characterClassMode == CharacterClassMode.Unicode) {
+                    _state.AsciiCtypeApplied = true;
+                    var word = CharacterSet.MakeProperty(UnicodeProperties.Find(property), true).Union(CharacterSet.MakeSet(_latin1WordQuirk, null));
+                    return positive ? word : word.Complement();
+                }
+            }
             if (_characterClassMode == CharacterClassMode.Unicode) {
                 if (!_state.AsciiCtype) {
                     return CharacterSet.MakeProperty(UnicodeProperties.Find(property), positive);
@@ -3162,6 +3199,9 @@ namespace IronRuby.Builtins {
             if (table < 0) {
                 throw MakeError("invalid POSIX bracket type");
             }
+            if (_state.Latin1Ctype) {
+                return MakeLatin1PosixCharacterClass(table, name, positive);
+            }
             return MakePosixCharacterClass(table, positive);
         }
 
@@ -3181,6 +3221,31 @@ namespace IronRuby.Builtins {
             }
             return positive ? result : result.Complement();
         }
+
+        /// <summary>
+        /// [[:name:]] for an ISO-8859-1 subject (Transform(..., latin1Ctype)): Onigmo's ISO-8859-1 class, whatever (?a) says -
+        /// Unicode's below U+0100 (nothing above: the subject has nothing there, and a member above, as U+0178 or U+1E9E, would
+        /// fold a Latin-1 letter under /i that Onigmo's table does not fold), but for the punctuation, the space and the word
+        /// characters, which differ.
+        /// </summary>
+        private CharacterSet/*!*/ MakeLatin1PosixCharacterClass(int table, string/*!*/ name, bool positive) {
+            _state.AsciiCtypeApplied = true;
+            var result = CharacterSet.MakeProperty(table, true).Intersect(CharacterSet.MakeSet(_latin1Range, null));
+            switch (name) {
+                case "punct":
+                    result = result.Subtract(CharacterSet.MakeSet(new[] { 0xa7, 0xa7, 0xb6, 0xb6 }, null)).Union(CharacterSet.MakeSet(new[] { 0xad, 0xad }, null));
+                    break;
+                case "space":
+                    result = result.Subtract(CharacterSet.MakeSet(new[] { 0x85, 0x85 }, null));
+                    break;
+                case "word":
+                    result = result.Union(CharacterSet.MakeSet(_latin1WordQuirk, null));
+                    break;
+            }
+            return positive ? result : result.Complement();
+        }
+
+        private static readonly int[] _latin1Range = new int[] { 0, 0xff };
 
         /// <summary>The ASCII members of <paramref name="set"/>, or every character but those.</summary>
         private static CharacterSet/*!*/ RestrictToAscii(CharacterSet/*!*/ set, bool positive) {

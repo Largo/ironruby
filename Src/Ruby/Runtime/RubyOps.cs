@@ -894,6 +894,62 @@ namespace IronRuby.Runtime {
             return scope.ResolveAndSetLocalVariable(name, value);
         }
 
+        /// <summary>
+        /// <see cref="GetLocalVariable"/> from a site that remembers where the name resolved (IR_EVAL_LOCAL_CACHE): a
+        /// read of the slot or cell, without the lookup by name and its lock, while the scope and the runtime's
+        /// dynamic locals are what they were.
+        /// </summary>
+        /// <summary>The literals of one eval of a text whose code may be shared (see <see cref="EvalLiterals"/>).</summary>
+        [Emitted]
+        public static EvalLiterals/*!*/ CreateEvalLiterals(int count) {
+            return new EvalLiterals(count);
+        }
+
+        /// <summary>The eval's literals a block of its text reads, from the Proc the text instantiated it as.</summary>
+        [Emitted]
+        public static EvalLiterals GetBlockEvalLiterals(BlockParam/*!*/ bfc) {
+            return bfc.Proc.EvalLiterals;
+        }
+
+        /// <summary>A Proc the eval'd text instantiated takes the eval's literals with it.</summary>
+        [Emitted]
+        public static Proc/*!*/ AttachEvalLiterals(Proc/*!*/ proc, EvalLiterals literals) {
+            proc.EvalLiterals = literals;
+            return proc;
+        }
+
+        /// <summary>
+        /// The cache of a regexp literal of an eval'd text, one per eval. Without the eval's literals - a Proc that lost them,
+        /// which no path is known to - a fresh one: the regexp is right, only made again.
+        /// </summary>
+        [Emitted]
+        public static StrongBox<RubyRegex>/*!*/ GetEvalRegexBox(EvalLiterals literals, int index) {
+            return (literals != null) ? literals.GetRegexBox(index) : new StrongBox<RubyRegex>(null);
+        }
+
+        /// <summary>An Integer range literal of an eval'd text: frozen, one object per eval (see <see cref="EvalLiterals"/>).</summary>
+        [Emitted]
+        public static Range/*!*/ GetEvalIntegerRange(EvalLiterals literals, int index, int begin, int end, bool exclusive) {
+            return (literals != null) ? literals.GetIntegerRange(index, begin, end, exclusive) : new Range(begin, end, exclusive);
+        }
+
+        [Emitted]
+        public static object GetLocalVariableAtSite(RubyScope/*!*/ scope, LocalVariableSite/*!*/ site) {
+            var resolution = site.Resolve(scope);
+            return (resolution != null) ? resolution.Read() : scope.ResolveLocalVariable(site.Name);
+        }
+
+        [Emitted]
+        public static object SetLocalVariableAtSite(object value, RubyScope/*!*/ scope, LocalVariableSite/*!*/ site) {
+            var resolution = site.Resolve(scope);
+            if (resolution != null) {
+                resolution.Write(value);
+                return value;
+            }
+            // a name not visible from here: defined in the scope that takes it, as before
+            return scope.ResolveAndSetLocalVariable(site.Name, value);
+        }
+
         [Emitted]
         public static VersionHandle/*!*/ GetSelfClassVersionHandle(RubyScope/*!*/ scope) {
             return scope.SelfImmediateClass.Version;
@@ -2540,6 +2596,16 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object ArrayLiteralExtreme(RubyScope/*!*/ scope, object item1, object item2, ArrayExtremeSite/*!*/ site) {
             return site.Invoke(scope, item1, item2);
+        }
+
+        /// <summary>
+        /// The clause of a `case' over String literals the subject is to take (CaseStringSite): its index,
+        /// CaseStringSite.NoClause, or CaseStringSite.NotHandled when the `===' calls are to be made as
+        /// written. The scope is only asked for its runtime.
+        /// </summary>
+        [Emitted]
+        public static int CaseStringDispatch(RubyScope/*!*/ scope, object value, CaseStringSite/*!*/ site) {
+            return site.Dispatch(scope.RubyContext, value);
         }
 
         [Emitted]

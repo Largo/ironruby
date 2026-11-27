@@ -324,12 +324,40 @@ namespace IronRuby.Runtime.Calls {
         /// class has one instance, so its folded rule would serve one object - OpenStruct's `respond_to?(:total)' met a new one with
         /// every OpenStruct, and built and compiled a rule for each. The ordinary call is shared between such classes instead.
         /// </summary>
-        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method, RubyCallSignature signature, RubyClass/*!*/ targetClass) {
+        ///
+        /// A `!=' rule for a plain Ruby object (IsSharableNotEquals) is the exception: its answer, `a.equal?(b)' negated, is the same
+        /// for every class that resolves `==' to BasicObject#==, so it is shared like an ordinary call (gap 10).
+        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method, RubyCallSignature signature, RubyClass/*!*/ targetClass, object target) {
             if (IsKernelMethod(method, ref _respondTo, "RespondTo")) {
                 return signature.ArgumentCount == 1 && !signature.HasBlock && !signature.HasSplattedArgument && !signature.HasRhsArgument &&
                     !IsObjectSingleton(targetClass);
             }
-            return IsSendMethod(method) || IsNotEqualsMethod(method);
+            return IsSendMethod(method) || IsNotEqualsMethod(method) && !IsSharableNotEquals(targetClass, target, signature);
+        }
+
+        internal static readonly bool ShareNotEqualsEnabled = System.Environment.GetEnvironmentVariable("IR_SHARED_NEQ") != "0";
+
+        /// <summary>
+        /// `a != b' on a plain Ruby object - a RubyObject, BasicObject subclasses included - whose class resolves `==' (public,
+        /// without refinements, as BasicObject#!= calls it) to BasicObject#==: TryBuildNotEquals binds it as `!a.equal?(b)',
+        /// which depends on nothing else about the class. One rule then serves every such class, its receiver test the set of
+        /// class versions found to resolve both names so (RubyCallAction.BindShared, TryShareVersion - each of which comes
+        /// here for the class it is about to add): a site over two to eight classes no longer misses its target on every
+        /// other call into the DLR's update, whose speed was the CLR's dynamic PGO's to decide (gap 12, perf/twospeed2).
+        /// Defining `==' or `!=' anywhere in the class's ancestry re-versions it, and the new version is checked again here;
+        /// a class whose `==' is another method (Comparable's, a Struct's, a user's, a refinement-free override) is not taken
+        /// and gets the rule of its own it got before. IR_SHARED_NEQ=0 turns this off.
+        /// </summary>
+        internal static bool IsSharableNotEquals(RubyClass/*!*/ targetClass, object target, RubyCallSignature signature) {
+            if (!ShareNotEqualsEnabled || target == null || target.GetType() != typeof(RubyObject) ||
+                signature.HasBlock || signature.HasSplattedArgument || signature.HasRhsArgument || signature.ResolveOnly ||
+                signature.IsVirtualCall || signature.IsSuperCall || signature.IsInteropCall || signature.ArgumentCount != 1) {
+                return false;
+            }
+            int version;
+            var lookup = targetClass.GetMethodLookup("==", out version);
+            return version >= 0 && lookup.Found && lookup.Visibility == RubyMethodVisibility.Public &&
+                IsLibraryMethod(lookup.Info, "IronRuby.Builtins.BasicObjectOps", "ValueEquals");
         }
 
         // the singleton class of an object that is not a module: its only instance is that object

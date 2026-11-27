@@ -141,6 +141,10 @@ namespace IronRuby.Runtime.Osr {
         // scope, which its constants resolve in as the method scope's would, and its refinements are none, which a light
         // frame's always are (it is never compiled where one is active, and `using' is not allowed in a method).
         internal bool InLightFrame;
+        // Locals no one reads once the copy has returned, however it returned: a block loop's block parameter and block
+        // locals (BlockLoopSite), which live in a tuple of the site's own that is cleared after the run - a generic
+        // iteration after a hand-back yields to the block, whose call has a scope of its own. The exits store none of them.
+        internal ICollection<LocalVariable> DeadAtExit;
 
         private readonly object/*!*/ _lock = new object();
         private readonly string/*!*/ _name;
@@ -281,7 +285,7 @@ namespace IronRuby.Runtime.Osr {
                 long start = Stopwatch.GetTimestamp();
                 try {
                     JitLoopGuard guard;
-                    var typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, out guard, LongRuns, InLightFrame);
+                    var typed = JitLoopCompiler.TryCompile(LoopAst, Context, ScopeDepth, TupleArgIndex, tuples, SelfArgIndex, ScopeArgIndex, out guard, LongRuns, InLightFrame, DeadAtExit);
                     _guard = guard;
                     _typed = typed;
                 } catch (Exception e) {

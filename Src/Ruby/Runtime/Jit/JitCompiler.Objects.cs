@@ -158,6 +158,9 @@ namespace IronRuby.Runtime.Jit {
         // moved (JitFoldedConstant.StillHolds).
         private List<JitFoldedConstant> _foldedConstants;
 
+        // A body this one calls folded constants it did not record: what this one folded cannot all be looked up again.
+        private bool _foldedIncomplete;
+
         /// <summary>
         /// What the constant resolves to right now (JitFoldedConstant.Resolve), or a bailout wherever that would
         /// not be a value the constant version alone keeps valid. Every constant it answers is recorded, for
@@ -168,13 +171,13 @@ namespace IronRuby.Runtime.Jit {
             if (scope == null) { throw Bail("constant without a scope: " + node.Name); }
             object value;
             RubyModule owner;
-            string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner);
+            string failure = JitFoldedConstant.Resolve(_context, scope, node, out value, out owner, true);
             if (failure != null) { throw Bail(failure); }
             _resolvedConstantOwner = owner;
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
             _usesConstants = true;
-            // a method body's loop runs on past the entry's revalidation (TryCompile); an outlined loop's copy hands
-            // itself back on any reassignment
+            // a method body's loop runs on past the entry's revalidation (TryCompile); an outlined loop's copy looks its
+            // constants up again at its entry (JitRuntime.LoopConstantsCurrent) and hands itself back on any reassignment
             if (_loop == null) {
                 if (_hasLoop) { _foldedInLoop = true; }
                 if (_calleeLoop) { _foldedAfterCalleeLoop = true; }
@@ -184,7 +187,7 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>Takes over what a body this one calls directly folded (EmitDirectCall).</summary>
         private void TakeFoldedConstants(JitCode/*!*/ code) {
-            if (code.FoldedConstants == null) { return; }
+            if (code.FoldedConstants == null) { _foldedIncomplete = true; return; }
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).AddRange(code.FoldedConstants);
         }
 
@@ -1819,16 +1822,9 @@ namespace IronRuby.Runtime.Jit {
             var target = node.Target;
             object sample;
             if (!TrySample(target, out sample) || !(sample is RubyObject)) {
-                // A local nothing samples that a call was inlined on for a class (UnsampledCallees): the reader of that
-                // class names the variable; ReadSelfAttr binds to whatever class the object has and deopts unless the
-                // name is the same variable's reader there. Its value is an object.
-                var local = target as LocalVariable;
-                RubyClass inlinedFor;
-                if (local == null || local.DefinitionLexicalDepth != _scopeDepth || _unsampledClasses == null ||
-                    !_unsampledClasses.TryGetValue(local.Name, out inlinedFor)) {
-                    return null;
-                }
-                string name = JitRuntime.SelfAttrSite.ReaderVariable(inlinedFor, node.MethodName, true);
+                // A local nothing samples (UnsampledAttrVariable): ReadSelfAttr binds to whatever class the object has
+                // and deopts unless the name is the same variable's reader there. Its value is an object.
+                string name = UnsampledAttrVariable(target as LocalVariable, node.MethodName, false);
                 if (name == null || CanFallBack(target)) { return null; }
                 JT lt;
                 var localReceiver = Coerce(Emit(target, out lt), lt, JT.Obj);
@@ -1869,6 +1865,51 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// The instance variable an attribute reader (<paramref name="writer"/>: writer) of the name reads (writes) on a
+        /// local of the method nothing samples: the one the class a call on the local was inlined for names
+        /// (UnsampledCallees), or else the one every class names whose own method of the name is written in Ruby - each must
+        /// be a public attr_reader/attr_writer or a method that is one (SelfAttrSite), all of the same variable, and there
+        /// must be one (AgreedAccessorVariable). Null otherwise. Only the name is decided here: the read or write checks the class of the object it
+        /// meets, and deopts where the accessor is not that variable's (a private one, method_missing, another class's).
+        /// </summary>
+        private string UnsampledAttrVariable(LocalVariable local, string/*!*/ name, bool writer) {
+            if (!JitRuntime.InlineUnsampled || local == null || local.DefinitionLexicalDepth != _scopeDepth || !_refinements.IsEmpty) { return null; }
+            RubyClass[] inlinedFor;
+            if (_unsampledClasses != null && _unsampledClasses.TryGetValue(local.Name, out inlinedFor)) {
+                string agreed = AgreedAccessorVariable(inlinedFor, name, writer, false);
+                if (agreed != null) { return agreed; }
+            }
+            return AgreedAccessorVariable(JitStub.ClassesDefining(_context, name, true, true), name, writer, true);
+        }
+
+        // The one variable the accessors of the name on these classes read (write); null if there is none or two differ.
+        // strict: every class whose own method of the name is written in Ruby (an accessor, a def) must be such an accessor -
+        // a name some class defines as a real method (`to_s', `name') is no evidence of what an object nothing samples
+        // holds; only methods of the core library (Integer#next) are left out, as their classes' objects deopt where met.
+        // Not strict: a class that is no such accessor is skipped (the classes a call on the local was inlined for).
+        private static string AgreedAccessorVariable(IEnumerable<RubyClass>/*!*/ classes, string/*!*/ name, bool writer, bool strict) {
+            string found = null;
+            foreach (var cls in classes) {
+                string v = writer ? JitRuntime.SelfAttrSite.WriterVariable(cls, name, true) : JitRuntime.SelfAttrSite.ReaderVariable(cls, name, true);
+                if (v == null) {
+                    if (strict) {
+                        RubyMemberInfo own;
+                        bool defined;
+                        // the method table under the class hierarchy lock, as everywhere else it is read
+                        using (cls.Context.ClassHierarchyLocker()) {
+                            defined = cls.TryGetDefinedMethod(name, out own);
+                        }
+                        if (defined && !(own is RubyLibraryMethodInfo)) { return null; }
+                    }
+                    continue;
+                }
+                if (found != null && found != v) { return null; }
+                found = v;
+            }
+            return found;
+        }
+
+        /// <summary>
         /// `@o.x = v', `o.x = v', `self.x = v' in a method, where the profiled receiver's x= is an attr_writer
         /// (or a method that is one): the store (JitRuntime.WriteAttr), under ReadSelfAttr's checks, which
         /// deopt before anything is written; a frozen receiver deopts too, so that its FrozenError comes
@@ -1880,9 +1921,17 @@ namespace IronRuby.Runtime.Jit {
             if (op != null || node.IsSafeNavigation || !_refinements.IsEmpty) { throw Bail("attribute assignment " + node.Name); }
             var target = node.Qualifier;
             object sample;
-            if (!TrySample(target, out sample) || !(sample is RubyObject)) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
             bool explicitReceiver = !(target is SelfReference);
-            string variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            string variableName;
+            if (!TrySample(target, out sample) || !(sample is RubyObject)) {
+                // A local nothing samples: the variable the writers of the name write (UnsampledAttrVariable). The store
+                // below is the sampled one's: WriteAttr checks the class it meets, and deopts before writing anything.
+                sample = null;
+                variableName = UnsampledAttrVariable(target as LocalVariable, node.Name, true);
+                if (variableName == null) { throw Bail("attribute assignment " + node.Name + " on an unprofiled receiver"); }
+            } else {
+                variableName = JitRuntime.SelfAttrSite.WriterVariable(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver);
+            }
             if (variableName == null && sample is RubyStruct) {
                 int member = JitRuntime.StructMemberSite.Member(JitRuntime.ClassOf(_context, sample), node.Name, explicitReceiver, true);
                 if (member >= 0) { return EmitStructMemberWrite(node, right, member, explicitReceiver, out type); }
@@ -2270,8 +2319,13 @@ namespace IronRuby.Runtime.Jit {
         /// an autoload pending or running, a deprecated or private constant, a missing one, or a scope lexically
         /// inside an object's singleton class (whose generic sites do not cache either). Null when it is one.
         /// </summary>
+        ///
+        /// <paramref name="notePath"/>: the lookup is being folded - every module it searched, or would search ahead of where it
+        /// found the constant, notes the name (RubyModule.NoteFoldedConstantNoLock), in the same hold of the class hierarchy
+        /// lock as the lookup: a constant of that name made in one of them later, or brought into one by a mixin, is then a
+        /// change a running loop that folded this must see (RubyModule.ConstantAddedNoLock).
         internal static string Resolve(RubyContext/*!*/ context, RubyScope/*!*/ scope, ConstantVariable/*!*/ node,
-            out object value, out RubyModule resolvedOwner) {
+            out object value, out RubyModule resolvedOwner, bool notePath = false) {
             string name = node.Name;
             value = null;
             resolvedOwner = null;
@@ -2282,7 +2336,7 @@ namespace IronRuby.Runtime.Jit {
                 if (qualifier == null) { return "constant qualified by an expression: " + name; }
                 object qualifierValue;
                 RubyModule qualifierOwner;
-                failure = Resolve(context, scope, qualifier, out qualifierValue, out qualifierOwner);
+                failure = Resolve(context, scope, qualifier, out qualifierValue, out qualifierOwner, notePath);
                 if (failure != null) { return failure; }
                 var module = qualifierValue as RubyModule;
                 if (module == null) { return "constant qualified by a non-module: " + name; }
@@ -2294,6 +2348,7 @@ namespace IronRuby.Runtime.Jit {
                     if (!module.TryResolveConstantNoLock(null, name, out storage) || module.IsPrivateConstantInAncestors(name)) {
                         return "qualified constant not found: " + name;
                     }
+                    if (notePath) { NoteAncestors(module, name); }
                     if ((failure = NotDeprecated(context, module.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
                     resolvedOwner = module.GetConstantOwnerNoLock(name) ?? module;
                     value = storage.Value;
@@ -2308,6 +2363,7 @@ namespace IronRuby.Runtime.Jit {
                         if (!obj.TryResolveConstantNoLock(null, name, out storage) || obj.IsPrivateConstant(name)) {
                             return "constant not found: ::" + name;
                         }
+                        if (notePath) { NoteAncestors(obj, name); }
                         if ((failure = NotDeprecated(context, obj.GetConstantOwnerNoLock(name), name)) != null) { return failure; }
                         resolvedOwner = obj.GetConstantOwnerNoLock(name) ?? obj;
                     } else {
@@ -2315,6 +2371,7 @@ namespace IronRuby.Runtime.Jit {
                         if (scope.TryResolveConstantNoLock(null, name, out storage, out owner) != null) {
                             return "constant not found: " + name;
                         }
+                        if (notePath) { NoteLexicalPath(context, scope, name); }
                         // the owner is only reported once some constant has been deprecated
                         if ((failure = NotDeprecated(context, owner, name)) != null) { return failure; }
                         resolvedOwner = owner;
@@ -2330,6 +2387,30 @@ namespace IronRuby.Runtime.Jit {
                 return "constant without a value: " + name;
             }
             return null;
+        }
+
+        // The modules a lookup of `name' from the module searches (its ancestors), each noting the name.
+        private static void NoteAncestors(RubyModule/*!*/ module, string/*!*/ name) {
+            module.ForEachAncestor(true, (m) => { m.NoteFoldedConstantNoLock(name); return false; });
+        }
+
+        // The modules an unqualified lookup from the scope searches (RubyScope.TryResolveConstantNoLock): the lexical
+        // scopes' modules, the innermost one's ancestors, and Object's when that is a module or there is none. All of
+        // them, not only those ahead of where the constant was found: one after it costs a needless hand-back at most.
+        private static void NoteLexicalPath(RubyContext/*!*/ context, RubyScope/*!*/ scope, string/*!*/ name) {
+            RubyModule innerMost = null;
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                if (s.Module != null) {
+                    s.LexicalConstantModule.NoteFoldedConstantNoLock(name);
+                    innerMost ??= s.Module;
+                }
+            }
+            if (innerMost != null) {
+                NoteAncestors(innerMost, name);
+            }
+            if (innerMost == null || !innerMost.IsClass) {
+                NoteAncestors(context.ObjectClass, name);
+            }
         }
 
         /// <summary>A deprecated constant warns on every read, which the generic code does.</summary>

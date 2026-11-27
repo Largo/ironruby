@@ -248,6 +248,65 @@ namespace IronRuby.Runtime.Osr {
                 return true;
             }
 
+            // Locals first assigned by a statement of a nested list - an `if' branch, a `while' body - whose scope, that list,
+            // has ended (WalkScoped): any later mention is outside it.
+            private HashSet<string> _outOfScope;
+
+            /// <summary>
+            /// IR_BLOCK_LOOP_SCOPED=0: a block-local must be first assigned by a statement of the body itself, as before.
+            /// </summary>
+            internal static readonly bool ScopedLocals = Environment.GetEnvironmentVariable("IR_BLOCK_LOOP_SCOPED") != "0";
+
+            // A list of statements of an `if' branch or a `while' body: a local of the block's own first mentioned by a statement
+            // of the list that assigns it (`k = i + i' in Sieve's `if flags[i - 1]') is admitted for the rest of the list - every
+            // mention of it is then after that assignment in the same iteration, so the slot it keeps across iterations of the
+            // copy is never read before it is written, as a fresh block-local is not - and refused anywhere after the list, where
+            // the block would see nil on an iteration that did not run the list.
+            private void WalkScoped(Statements list) {
+                if (list == null) { return; }
+                List<string> scoped = null;
+                foreach (var statement in list) {
+                    var assignment = statement as SimpleAssignmentExpression;
+                    var target = (ScopedLocals && assignment != null && assignment.Operation == null) ? assignment.Left as LocalVariable : null;
+                    if (target != null && target.DefinitionLexicalDepth == _depth && !IsKnown(target) &&
+                        (_outOfScope == null || !_outOfScope.Contains(target.Name))) {
+                        assignment.Right.Walk(this);
+                        _locals.Add(target);
+                        (scoped ?? (scoped = new List<string>())).Add(target.Name);
+                    } else {
+                        statement.Walk(this);
+                    }
+                    if (_rejected) { return; }
+                }
+                if (scoped != null) {
+                    var outOfScope = _outOfScope ?? (_outOfScope = new HashSet<string>());
+                    foreach (var name in scoped) { outOfScope.Add(name); }
+                }
+            }
+
+            internal protected override void Walk(IfExpression/*!*/ node) {
+                if (Enter(node)) {
+                    node.Condition.Walk(this);
+                    WalkScoped(node.Body);
+                    if (node.ElseIfClauses != null) {
+                        foreach (var clause in node.ElseIfClauses) {
+                            if (_rejected) { break; }
+                            if (clause.Condition != null) { clause.Condition.Walk(this); }
+                            WalkScoped(clause.Statements);
+                        }
+                    }
+                }
+                Exit(node);
+            }
+
+            internal protected override void Walk(WhileLoopExpression/*!*/ node) {
+                if (Enter(node)) {
+                    if (node.Condition != null) { node.Condition.Walk(this); }
+                    WalkScoped(node.Statements);
+                }
+                Exit(node);
+            }
+
             private bool IsKnown(LocalVariable/*!*/ local) {
                 if (_parameter != null && local.Name == _parameter.Name) { return true; }
                 foreach (var known in _locals) {
@@ -294,7 +353,7 @@ namespace IronRuby.Runtime.Osr {
             private bool Admits(LocalVariable/*!*/ node) {
                 int d = node.DefinitionLexicalDepth;
                 if (d < 0 || d > _depth) { return false; }
-                if (d == _depth) { return IsKnown(node); }
+                if (d == _depth) { return IsKnown(node) && (_outOfScope == null || !_outOfScope.Contains(node.Name)); }
                 return _parent == null || _parent.Admits(node);
             }
         }
@@ -453,6 +512,12 @@ namespace IronRuby.Runtime.Osr {
             _osr.TupleArgIndex = tupleArgIndex;
             _osr.SelfArgIndex = depth + 1;
             _osr.ScopeArgIndex = depth + 2;
+            // Run reads back only the counter and what a select kept (the hidden locals), and clears the tuple
+            var dead = new List<LocalVariable>(info.Locals);
+            if (info.Parameter != null) {
+                dead.Add(info.Parameter);
+            }
+            _osr.DeadAtExit = dead;
         }
 
         private void Retire() {

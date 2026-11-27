@@ -1036,6 +1036,12 @@ namespace IronRuby.Aot {
                     hint = "extreme";
                     return Expression.New(typeof(ArrayExtremeSite).GetConstructor(new[] { typeof(bool) }), Expression.Constant(extreme.IsMax));
 
+                case CaseStringSite caseSite:
+                    hint = "casestr";
+                    return Expression.New(typeof(CaseStringSite).GetConstructor(new[] { typeof(string[]), typeof(int[]) }),
+                        Expression.NewArrayInit(typeof(string), caseSite.Literals.Select(l => (Expression)Expression.Constant(l))),
+                        Expression.NewArrayInit(typeof(int), caseSite.Clauses.Select(c => (Expression)Expression.Constant(c))));
+
                 case BinaryOpStorage:
                     hint = "opstorage";
                     return Expression.New(typeof(BinaryOpStorage).GetConstructor(new[] { typeof(RubyContext) }), ContextExpression);

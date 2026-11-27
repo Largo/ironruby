@@ -123,6 +123,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 RubyMutex.Unlock(mutex);
                 node = self._waiters.AddLast(info);
             }
+            string previousLabel = IronRuby.Builtins.ThreadOps.EnterBlockingMethod("Thread::ConditionVariable#wait");
             try {
                 if (ms < 0) {
                     info.Sleep();
@@ -149,7 +150,11 @@ namespace IronRuby.StandardLibrary.Threading {
                 }
                 // Uninterruptibly: MRI promises the mutex is held again when #wait returns, even
                 // if the thread was killed while it was waiting to get it back.
-                RubyMutex.DoLock(mutex, false);
+                try {
+                    RubyMutex.DoLock(mutex, false);
+                } finally {
+                    IronRuby.Builtins.ThreadOps.ExitBlockingMethod(previousLabel);
+                }
             }
             return result;
         }

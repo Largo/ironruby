@@ -54,6 +54,14 @@ namespace IronRuby.Runtime.Jit {
         internal static readonly bool InlineUnsampled = Environment.GetEnvironmentVariable("IR_JIT_UNSAMPLED") != "0";
 
         /// <summary>
+        /// IR_JIT_NESTED (on unless =0): the candidates of an unsampled call (JitStub.ClassesDefining, JitCompiler.UnsampledCallees)
+        /// are every subclass of Object that defines the method, not only those that are constants of Object: most classes of
+        /// real code are nested in a module, and a nested receiver whose method's name a top-level class also defines was
+        /// inlined for the top-level class alone and deopted on every call.
+        /// </summary>
+        internal static readonly bool NestedClasses = Environment.GetEnvironmentVariable("IR_JIT_NESTED") != "0";
+
+        /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
         internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected, DeoptRetired, DeoptRetried;
@@ -1323,8 +1331,9 @@ namespace IronRuby.Runtime.Jit {
         internal RubyContext ConstantsOf;
         // a typed method body may deopt at its loop's safe point (see MethodLoopSafePointSlow)
         internal bool MayDeopt;
-        // what the typed method body folded (JitCode.FoldedConstants), for its loops' safe points to look up again; null
-        // if it folded none, or is an outlined loop's copy (which hands itself back instead). Set before the code runs.
+        // what the typed method body folded (JitCode.FoldedConstants), for its loops' safe points to look up again, or what
+        // an outlined loop's copy folded, for its entry to (JitRuntime.LoopConstantsCurrent); null if it folded none or
+        // some it did not record. Set before the code runs.
         internal JitFoldedConstant[] Folded;
 
         internal static readonly System.Reflection.FieldInfo/*!*/ EpochField = typeof(JitLoopGuard).GetField("Epoch");

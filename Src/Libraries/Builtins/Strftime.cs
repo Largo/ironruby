@@ -71,8 +71,9 @@ namespace IronRuby.Builtins {
                 int start = i;
                 i++;
                 if (i >= format.Length) {
-                    // MRI: a lone % at the end, or one followed only by flags or a width, is an error
-                    throw RubyExceptions.CreateArgumentError("invalid format: " + format.Substring(start));
+                    // MRI: a lone % at the end, or one followed only by flags or a width, is an
+                    // error that names the whole format
+                    throw RubyExceptions.CreateArgumentError("invalid format: " + format);
                 }
 
                 Modifiers modifiers = new Modifiers();
@@ -107,17 +108,36 @@ namespace IronRuby.Builtins {
                 }
 
                 if (i >= format.Length) {
-                    throw RubyExceptions.CreateArgumentError("invalid format: " + format.Substring(start));
+                    throw RubyExceptions.CreateArgumentError("invalid format: " + format);
                 }
 
                 if (format[i] == 'E' || format[i] == 'O') {
                     modifiers.Alt = format[i];
                     i++;
+                    // MRI goes to "unknown" at the E or O itself when the next character is not
+                    // a conversion it modifies: "%E" is copied through and the rest is read
+                    // afresh, so "%E%Y" is "%E2020".
+                    if (i < format.Length && (modifiers.Alt == 'E' ? "cCxXyY" : "deHImMSuUVwWy").IndexOf(format[i]) < 0) {
+                        result.Append(format, start, i - start);
+                        continue;
+                    }
                 }
 
-                while (i < format.Length && format[i] == ':' && modifiers.Colons < 3) {
-                    modifiers.Colons++;
-                    i++;
+                if (i < format.Length && format[i] == ':') {
+                    int colons = 1;
+                    while (i + colons < format.Length && format[i + colons] == ':') {
+                        colons++;
+                    }
+                    if (colons > 3 || i + colons >= format.Length || format[i + colons] != 'z') {
+                        // MRI: colons go only with z; otherwise the directive is unknown at the
+                        // first colon, which is copied through, and the rest is read afresh, so
+                        // "%:%Y" is "%:2020" and "%:%" ends in a lone %.
+                        i++;
+                        result.Append(format, start, i - start);
+                        continue;
+                    }
+                    modifiers.Colons = colons;
+                    i += colons;
                 }
 
                 if (i >= format.Length) {
@@ -134,10 +154,12 @@ namespace IronRuby.Builtins {
                 }
 
                 if (modifiers.Width > 0 && PadsToWidth(directive, modifiers) &&
-                    result.Length + 2L * modifiers.Width > SizeLimit(format.Length)) {
+                    result.Length + 2L * modifiers.Width > SizeLimit(format.Length) &&
+                    !(directive == 'Z' && String.IsNullOrEmpty(RubyTimeOps.GetZoneAbbreviation(context, time)))) {
                     // MRI's strftime grows its buffer to at most strftime_size_limit and raises
                     // ERANGE, naming the format, rather than going on: "%2147483647d" would
-                    // otherwise ask for a 4 GB string.
+                    // otherwise ask for a 4 GB string. A %Z with no zone name writes nothing,
+                    // so it asks for no room.
                     throw RubyExceptions.CreateErrno(context, RubyErrno.GetNumber("ERANGE"), format);
                 }
 
@@ -233,7 +255,12 @@ namespace IronRuby.Builtins {
 
                 case 'Z': {
                         string name = RubyTimeOps.GetZoneAbbreviation(context, time);
-                        return Text(name ?? "", modifiers, width);
+                        if (String.IsNullOrEmpty(name)) {
+                            // MRI writes nothing for a time with no zone name (a fixed offset),
+                            // not even the padding of a width: "%10Z" is "".
+                            return "";
+                        }
+                        return Text(name, modifiers, width);
                     }
 
                 case 'c': return Compound(context, time, "%a %b %e %H:%M:%S %Y", modifiers, depth);

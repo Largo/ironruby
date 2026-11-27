@@ -1026,6 +1026,17 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// The entry guard of an outlined loop that folded constants and recorded them all: nothing has changed any constant
+        /// since the guard's snapshot, or the constants it folded are still what they were (JitLoopGuard.ConstantsStillHold,
+        /// which then moves the snapshot up - as JitStub.RevalidateConstants does for a method entry).
+        /// </summary>
+        public static bool LoopConstantsCurrent(object/*!*/ guard) {
+            var loopGuard = (JitLoopGuard)guard;
+            return System.Threading.Volatile.Read(ref loopGuard.ConstantsOf.ConstantAccessVersion) ==
+                System.Threading.Volatile.Read(ref loopGuard.ConstantVersion) || loopGuard.ConstantsStillHold();
+        }
+
+        /// <summary>
         /// The guard of a method entry whose typed bodies folded constants: nothing has changed any constant
         /// since the specialization's snapshot, or the constants they folded are still what they were
         /// (JitStub.RevalidateConstants, which then moves the snapshot up).

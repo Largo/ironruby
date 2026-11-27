@@ -531,3 +531,21 @@ t("d_none", N) { |n| i = 0; s = 0; while i < n; s += kr.d_none(i); i += 1; end; 
 t("d_one", N) { |n| i = 0; s = 0; while i < n; s += kr.d_one(i); i += 1; end; s }
 t("d_two", N) { |n| i = 0; s = 0; while i < n; s += kr.d_two(i); i += 1; end; s }
 t("d_cond", N) { |n| i = 0; s = 0; while i < n; s += kr.d_cond(i); i += 1; end; s }
+# `o.x += 1' (a MemberAssignmentExpression, IR_LIGHT_MEMBER_OPASSIGN) against the same written out as `o.x = o.x + 1',
+# which a light frame already takes; `||=' on an attribute against its written-out form; and a method that does only that
+class MOp
+  attr_accessor :x, :y
+  def initialize = (@x = 0; @y = nil)
+  def opa(o) = (o.x += 1)
+  def opa_out(o) = (o.x = o.x + 1)
+  def ora(o, v) = (o.y ||= v)
+  def ora_out(o, v) = (o.y || (o.y = v))
+  def self_opa = (self.x += 1)
+end
+mo = MOp.new
+mt = MOp.new
+t("m_opassign", N) { |n| i = 0; while i < n; mo.opa(mt); i += 1; end; mt.x }
+t("m_opassign_out", N) { |n| i = 0; while i < n; mo.opa_out(mt); i += 1; end; mt.x }
+t("m_orassign", N) { |n| i = 0; s = 0; while i < n; s += mo.ora(mt, i); i += 1; end; s }
+t("m_orassign_out", N) { |n| i = 0; s = 0; while i < n; s += mo.ora_out(mt, i); i += 1; end; s }
+t("m_self_opassign", N) { |n| i = 0; while i < n; mo.self_opa; i += 1; end; mo.x }

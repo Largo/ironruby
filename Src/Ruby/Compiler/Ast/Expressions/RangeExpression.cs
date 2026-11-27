@@ -68,6 +68,12 @@ namespace IronRuby.Compiler.Ast {
                 // a Range is frozen, and MRI makes a literal one of integers a single object, which
                 // the expression evaluates to every time
                 gen.HasLiteralState = true;
+                // one per eval of a text whose code is shared (AstGenerator.GetEvalLiterals)
+                var literals = gen.GetEvalLiterals();
+                if (literals != null) {
+                    return Methods.GetEvalIntegerRange.OpCall(literals, AstUtils.Constant(gen.EvalLiteralCount++),
+                        AstUtils.Constant(intBegin), AstUtils.Constant(intEnd), AstUtils.Constant(_isExclusive));
+                }
                 return AstUtils.Constant(new IronRuby.Builtins.Range(intBegin, intEnd, _isExclusive));
             } else {
                 return (_isExclusive ? Methods.CreateExclusiveRange : Methods.CreateInclusiveRange).OpCall(

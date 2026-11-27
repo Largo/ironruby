@@ -60,6 +60,9 @@ namespace IronRuby.Compiler.Ast {
                 return gen.CurrentScope.GetVariableAccessor(_definitionLexicalDepth, _closureIndex);
             } else {
                 // dynamic lookup:
+                if (LocalVariableSitesEnabled) {
+                    return Methods.GetLocalVariableAtSite.OpCall(gen.CurrentScopeVariable, AstUtils.Constant(new IronRuby.Runtime.LocalVariableSite(Name)));
+                }
                 return Methods.GetLocalVariable.OpCall(gen.CurrentScopeVariable, AstUtils.Constant(Name));
             }
         }
@@ -73,6 +76,10 @@ namespace IronRuby.Compiler.Ast {
                 return Ast.Assign(gen.CurrentScope.GetVariableAccessor(_definitionLexicalDepth, _closureIndex), AstUtils.Box(rightValue));
             } else {
                 // dynamic lookup:
+                if (LocalVariableSitesEnabled) {
+                    return Methods.SetLocalVariableAtSite.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable,
+                        AstUtils.Constant(new IronRuby.Runtime.LocalVariableSite(Name)));
+                }
                 return Methods.SetLocalVariable.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(Name));
             }
         }
@@ -80,5 +87,11 @@ namespace IronRuby.Compiler.Ast {
         internal override string/*!*/ GetNodeName(AstGenerator/*!*/ gen) {
             return "local-variable";
         }
+
+        /// <summary>
+        /// IR_EVAL_LOCAL_CACHE=0 makes eval'd code read and write the locals it knows by name only through the lookup by
+        /// name on every access again, instead of a site that remembers where the name resolved (LocalVariableSite).
+        /// </summary>
+        private static readonly bool LocalVariableSitesEnabled = System.Environment.GetEnvironmentVariable("IR_EVAL_LOCAL_CACHE") != "0";
     }
 }

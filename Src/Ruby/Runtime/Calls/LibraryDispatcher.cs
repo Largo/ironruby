@@ -1154,7 +1154,8 @@ namespace IronRuby.Runtime.Calls {
 
             if (infoType == typeof(RubyLibraryMethodInfo)) {
                 var libraryMethod = (RubyLibraryMethodInfo)info;
-                if (TracePoint.CCallTracing || DispatchIntrinsics.IsSend(libraryMethod)) {
+                if (TracePoint.CCallTracing || DispatchIntrinsics.IsSend(libraryMethod) || RubyMethod.RequiresRubyCaller(libraryMethod)) {
+                    // (Kernel#binding through a Method object is an error the rule raises: RubyMethod.BuildInvoke)
                     return null;
                 }
                 return TryCreate(binder, delegateType, signature, libraryMethod, receiverClass, receiver, RubyCallAction.ClrReceiverTest.Plain,
