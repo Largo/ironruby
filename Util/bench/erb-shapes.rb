@@ -31,12 +31,25 @@ def fresh_top(title) = (b = TOPLEVEL_BINDING.dup; b.local_variable_set(:title, t
 def fresh(title) = (b = binding; b.local_variable_set(:title, title); b.local_variable_set(:items, ITEMS); b)
 
 def cpu; File.read("/proc/thread-self/schedstat").to_i / 1e9; end
+# INSTR=1 (Util/perf/ab.rb -i) adds a column: the instructions of a unit, from the least of the seven sections.
+INSTR = ENV['INSTR'] && (require_relative '../perf/instructions'; Instructions.open || warn('no instruction counter (perf_event_open)'))
 def t(name, n)
   return puts(name) if ARGV == ['--list']
   return unless ARGV.empty? || ARGV.include?(name)
-  best = 1e9; sum = nil
-  7.times { t0 = cpu; sum = yield n; d = cpu - t0; best = d if d < best }
-  printf "%-16s %9.1f ns  %d\n", name, best * 1e9 / n, sum
+  best = 1e9; sum = nil; fewest = nil; counted = !!INSTR
+  7.times do
+    c0 = INSTR && INSTR.read
+    t0 = cpu; sum = yield n; d = cpu - t0
+    c1 = INSTR && INSTR.read
+    best = d if d < best
+    if c0 && c1
+      c = c1 - c0
+      fewest = c if fewest.nil? || c < fewest
+    else
+      counted = false
+    end
+  end
+  printf "%-16s %9.1f ns  %d%s\n", name, best * 1e9 / n, sum, counted ? format('  %.1f instr', fewest.to_f / n) : ''
 end
 N = (ENV["N"] || 1000).to_i
 def n(count) = [count * N / 1000, 1].max
@@ -48,3 +61,13 @@ t("erb_def", n(3000))     { |n| s = 0; n.times { |i| s += crc(Body.run("T#{i & 3
 t("erb_toplevel", n(3000)) { |n| s = 0; n.times { |i| b = ERBT.send(:new_toplevel, [:title, :items]); b.local_variable_set(:title, i); s += b.local_variable_get(:title) }; s }
 t("erb_new", n(1000))     { |n| s = 0; n.times { s += crc(ERB.new(PAGE, trim_mode: '-').src) }; s }
 t("eval_small", n(10000)) { |n| s = 0; n.times { s += eval('1 + 1', binding) }; s }
+# a read of a local the binding holds, not the text (RubyOps.GetLocalVariable): 1000 reads of v a unit, and the loop's
+# own locals, which the eval defines on the binding too
+LOOP = "i = 0; s = 0; while i < 1000; s += v; i += 1; end; s"
+def fresh_v = (b = binding; b.local_variable_set(:v, 1); b)
+t("eval_reads", n(30)) { |n| s = 0; n.times { s += eval(LOOP, fresh_v, '(reads)', 0) }; s }
+# the same loop with its own locals static (a lambda's), reading v from the binding, and reading only its own
+LOOP_V = "-> { i = 0; s = 0; while i < 1000; s += v; i += 1; end; s }.()"
+LOOP_S = "-> { i = 0; s = 0; w = v; while i < 1000; s += w; i += 1; end; s }.()"
+t("eval_reads_v", n(30)) { |n| s = 0; n.times { s += eval(LOOP_V, fresh_v, '(reads)', 0) }; s }
+t("eval_reads_static", n(30)) { |n| s = 0; n.times { s += eval(LOOP_S, fresh_v, '(reads)', 0) }; s }

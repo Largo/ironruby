@@ -1278,6 +1278,7 @@ namespace IronRuby.Tests {
                 Binding1,
                 TopLevelBinding_RubyProgram,
                 EvalWithProcBinding1,
+                Eval_LocalVariableSites1,
                 ModuleEvalProc1,
                 ModuleEvalProc2,
                 ModuleEvalProc3,

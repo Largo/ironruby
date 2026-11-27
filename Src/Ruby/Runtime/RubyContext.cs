@@ -353,6 +353,18 @@ namespace IronRuby.Runtime {
         // a table it actually changed.
         internal int RefinementVersion = 1;
 
+        // Bumped whenever a scope of this runtime gains a dynamic local (an eval's or Binding's), or drops its dynamic
+        // locals: what a LocalVariableSite remembered may no longer be where its name resolves.
+        private int _localVariableSitesVersion;
+
+        internal int LocalVariableSitesVersion {
+            get { return Volatile.Read(ref _localVariableSitesVersion); }
+        }
+
+        internal void InvalidateLocalVariableSites() {
+            Interlocked.Increment(ref _localVariableSitesVersion);
+        }
+
         // Every module that Module#refine has ever been called on.  Empty in a program that never calls
         // refine, which is what keeps the whole feature off the fast path.
         private readonly Dictionary<RubyModule, bool> _refinedModules = new Dictionary<RubyModule, bool>();

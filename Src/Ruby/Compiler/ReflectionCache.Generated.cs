@@ -312,6 +312,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _GetLocals;
         public static MethodInfo/*!*/ GetLocalVariable { get { return _GetLocalVariable ?? (_GetLocalVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.GetLocalVariable)); } }
         private static MethodInfo _GetLocalVariable;
+        public static MethodInfo/*!*/ GetLocalVariableAtSite { get { return _GetLocalVariableAtSite ?? (_GetLocalVariableAtSite = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Runtime.LocalVariableSite, System.Object>(RubyOps.GetLocalVariableAtSite)); } }
+        private static MethodInfo _GetLocalVariableAtSite;
         public static MethodInfo/*!*/ GetMetaObject { get { return _GetMetaObject ?? (_GetMetaObject = CallInstruction.CacheFunc<IronRuby.Runtime.IRubyObject, Expression, System.Dynamic.DynamicMetaObject>(RubyOps.GetMetaObject)); } }
         private static MethodInfo _GetMetaObject;
         public static MethodInfo/*!*/ GetMethodBlockParameter { get { return _GetMethodBlockParameter ?? (_GetMethodBlockParameter = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Builtins.Proc>(RubyOps.GetMethodBlockParameter)); } }
@@ -622,6 +624,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetInstanceVariable;
         public static MethodInfo/*!*/ SetLocalVariable { get { return _SetLocalVariable ?? (_SetLocalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetLocalVariable)); } }
         private static MethodInfo _SetLocalVariable;
+        public static MethodInfo/*!*/ SetLocalVariableAtSite { get { return _SetLocalVariableAtSite ?? (_SetLocalVariableAtSite = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.LocalVariableSite, System.Object>(RubyOps.SetLocalVariableAtSite)); } }
+        private static MethodInfo _SetLocalVariableAtSite;
         public static MethodInfo/*!*/ SetMethodMissingReason { get { return _SetMethodMissingReason ?? (_SetMethodMissingReason = CallInstruction.CacheAction<System.Boolean, System.Boolean>(RubyOps.SetMethodMissingReason)); } }
         private static MethodInfo _SetMethodMissingReason;
         public static MethodInfo/*!*/ SetMissingMethodArguments { get { return _SetMissingMethodArguments ?? (_SetMissingMethodArguments = CallInstruction.CacheFunc<System.Exception, System.Object[], System.Collections.IList, System.Object, System.Boolean, System.Boolean, System.Exception>(RubyOps.SetMissingMethodArguments)); } }

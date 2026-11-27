@@ -133,8 +133,9 @@ namespace IronRuby.Runtime {
         internal sealed class RareState {
             // closure: name -> slot of the compiled locals, built for eval and Binding on demand
             public Dictionary<string, int> StaticLocalMapping;
-            // closure: locals an eval or Binding#local_variable_set introduced
-            public Dictionary<string, object> DynamicLocals;
+            // closure: locals an eval or Binding#local_variable_set introduced, each in a cell of its own that it keeps for
+            // the scope's life, so that a site of eval'd code can hold on to it (RubyOps.GetLocalVariable, LocalVariableSite)
+            public Dictionary<string, StrongBox<object>> DynamicLocals;
 
             // Refinements activated by `using' in this scope, in activation order; null until `using' runs here.
             public List<RubyModule> UsedModules;
@@ -166,7 +167,7 @@ namespace IronRuby.Runtime {
             set { Rare.StaticLocalMapping = value; }
         }
 
-        private Dictionary<string, object> DynamicLocals {
+        private Dictionary<string, StrongBox<object>> DynamicLocals {
             get { var r = _rare; return (r != null) ? r.DynamicLocals : null; }
         }
 
@@ -265,6 +266,10 @@ namespace IronRuby.Runtime {
             _selfObject = selfObject;
             _selfImmediateClass = null;
             _methodAttributes = RubyMethodAttributes.PublicInstance;
+            if (_rare != null && _rare.DynamicLocals != null) {
+                // the cells a site may hold go with them (LocalVariableSite)
+                RubyContext.InvalidateLocalVariableSites();
+            }
             _rare = null;
             InterpretedFrame = interpretedFrame;
         }
@@ -437,7 +442,13 @@ namespace IronRuby.Runtime {
             }
 
             lock (DynamicLocals) {
-                return DynamicLocals.TryGetValue(name, out value);
+                StrongBox<object> cell;
+                if (DynamicLocals.TryGetValue(name, out cell)) {
+                    value = cell.Value;
+                    return true;
+                }
+                value = null;
+                return false;
             }
         }
 
@@ -456,11 +467,12 @@ namespace IronRuby.Runtime {
             }
 
             lock (DynamicLocals) {
-                if (!DynamicLocals.ContainsKey(name)) {
+                StrongBox<object> cell;
+                if (!DynamicLocals.TryGetValue(name, out cell)) {
                     return false;
                 }
 
-                DynamicLocals[name] = value;
+                cell.Value = value;
             }
             return true;
         }
@@ -478,7 +490,7 @@ namespace IronRuby.Runtime {
             if (DynamicLocals != null) {
                 lock (DynamicLocals) {
                     foreach (var entry in DynamicLocals) {
-                        yield return entry;
+                        yield return new KeyValuePair<string, object>(entry.Key, entry.Value.Value);
                     }
                 }
             }
@@ -708,12 +720,85 @@ namespace IronRuby.Runtime {
         /// </summary>
         internal virtual void DefineDynamicVariable(string/*!*/ name, object value) {
             if (DynamicLocals == null) {
-                Interlocked.CompareExchange(ref Rare.DynamicLocals, new Dictionary<string, object>(), null);
+                Interlocked.CompareExchange(ref Rare.DynamicLocals, new Dictionary<string, StrongBox<object>>(), null);
             }
 
             lock (DynamicLocals) {
-                DynamicLocals[name] = value;
+                StrongBox<object> cell;
+                if (DynamicLocals.TryGetValue(name, out cell)) {
+                    cell.Value = value;
+                    return;
+                }
+                DynamicLocals[name] = new StrongBox<object>(value);
             }
+            // a name new to this scope can shadow what a site resolved it to further out (LocalVariableSite)
+            RubyContext.InvalidateLocalVariableSites();
+        }
+
+        /// <summary>
+        /// Where <paramref name="name"/> resolves from this scope, as <see cref="ResolveLocalVariable"/> looks it up: a slot
+        /// of the locals of the scope that declares it, or the cell of one an eval or Binding defined. Null if it does not
+        /// resolve. For a site of eval'd code to read and write it again without the lookup (LocalVariableSite).
+        /// </summary>
+        internal LocalVariableSite.Resolution TryResolveLocal(string/*!*/ name, int version) {
+            RubyScope scope = this;
+            var passed = new List<string[]>();
+            while (true) {
+                scope.EnsureBoxes();
+                int index;
+                var mapping = scope.StaticLocalMapping;
+                if (mapping != null && mapping.TryGetValue(name, out index) && !scope.IsImplicitParameter(name)) {
+                    return new LocalVariableSite.Resolution(this, version, scope, index, null, passed.ToArray());
+                }
+
+                var dynamicLocals = scope.DynamicLocals;
+                if (dynamicLocals != null) {
+                    StrongBox<object> cell;
+                    lock (dynamicLocals) {
+                        dynamicLocals.TryGetValue(name, out cell);
+                    }
+                    if (cell != null) {
+                        return new LocalVariableSite.Resolution(this, version, scope, -1, cell, passed.ToArray());
+                    }
+                }
+
+                // a scope without its locals installed yet cannot be told from another by them
+                if (!scope.InheritsLocalVariables || scope._variableNames == null) {
+                    return null;
+                }
+
+                passed.Add(scope._variableNames);
+                scope = scope.Parent;
+            }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="holder"/> is where a name resolves from this scope as it did from another scope whose
+        /// chain up to it passed scopes with these locals (<paramref name="passed"/>, nearest first) - the same block run
+        /// again in a new scope: a scope's own locals are its compiled table, shared by every scope of the same body, so
+        /// the same table cannot hold the name now if it did not then; a dynamic local that could is covered by the
+        /// version of the site's resolution (LocalVariableSite).
+        /// </summary>
+        internal bool ResolvesThroughSameChain(string[]/*!*/[]/*!*/ passed, RubyScope/*!*/ holder) {
+            RubyScope scope = this;
+            for (int i = 0; i < passed.Length; i++) {
+                if (!ReferenceEquals(scope._variableNames, passed[i]) || !scope.InheritsLocalVariables) {
+                    return false;
+                }
+                scope = scope.Parent;
+                if (scope == null) {
+                    return false;
+                }
+            }
+            return ReferenceEquals(scope, holder);
+        }
+
+        internal object GetLocalSlotValueForSite(int index) {
+            return GetLocalValue(index);
+        }
+
+        internal void SetLocalSlotValueForSite(int index, object value) {
+            SetLocalValue(index, value);
         }
 
         #endregion

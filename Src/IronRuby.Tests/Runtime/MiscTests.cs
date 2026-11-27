@@ -7901,6 +7901,43 @@ p 40.times.map { |i| [opt(i % 2, k: i % 3), req(1, k: i % 2)] }.uniq.size
         }
 
         /// <summary>
+        /// IR_EVAL_LOCAL_CACHE: eval'd code reads and writes the locals it knows by name through a site that remembers
+        /// where the name resolved (LocalVariableSite) - one text on two bindings, locals an eval defined, local_variable_set
+        /// after a read, a block of the text, a binding of a light frame, Binding#dup, a local another thread defined
+        /// (Util/eval-locals-matrix.rb).
+        /// </summary>
+        public void Eval_LocalVariableSites1() {
+            TestOutput(@"
+require 'ruby4'
+def b_with(**h) = binding.tap { |b| h.each { |k, v| b.local_variable_set(k, v) } }
+TEXT = ""v * 2""
+r = [b_with(v: 1), b_with(v: 2)].map { |b| eval(TEXT, b) }
+b = binding
+eval(""x = 1"", b); eval(""x += 1"", b)
+c = b_with(v: 3)
+r1 = eval(""v"", c); c.local_variable_set(:v, 4)
+s = b_with(v: 1)
+eval(""[1, 2].each { |e| v += e }"", s)
+def light(a) = (eval(""a = a + 10"", binding); a)
+d = b_with(v: 1).dup; eval(""v = 9; n = 1"", d)
+t = binding
+Thread.new { eval(""tt = 7"", t) }.join
+p r, eval(""x"", b), b.local_variable_get(:x), [r1, eval(""v"", c)], s.local_variable_get(:v), light(1), eval(""n"", d), eval(""tt"", t)
+p 30.times.map { |i| eval(""v + 1"", b_with(v: i % 3)) }.uniq
+", @"
+[2, 4]
+2
+2
+[3, 4]
+4
+11
+1
+7
+[1, 2, 3]
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any
