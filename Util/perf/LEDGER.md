@@ -6434,6 +6434,56 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/castcheck (/perf-frame, 2026-11-27) - why the JIT expands no cast in Ruby's compiled
+  bodies, and a fix that was not worth keeping** (switch `IR_UNWIND_RETURN`, reverted; built on
+  15285eb with claude/perf-lsite merged, 054d132). perf/lconst found every `castclass` in a Ruby
+  body to be a call of `CORINFO_HELP_CHKCASTCLASS`, even to a sealed class, while a probe lambda
+  of the same runtime got the one-compare inline check.
+  - **What decides it.** Not the tier (`DOTNET_JitDisasmSummary`: `F#f0` and `F#fc3` FullOpts,
+    IL 460 and 1,106 bytes), the class's assembly (IronRuby.dll's sealed `ConstantSiteCache` is
+    checked inline from a probe, in its own process and inside `ir`), skip-visibility, a
+    try/finally, a fault, a catch, a catch with rethrow, a try-catch-finally, nested tries, 32
+    casts, a constant cached in a local (three or more uses), or `PrecompiledFrames.Current`.
+    Found by bisecting Ruby's own trees in the compile hook (a temporary switch that dropped or
+    emptied parts of each TryExpression, then a dump of the reduced tree): a **jump out of a
+    catch handler through an enclosing finally**. Every method frame has one: the handler of
+    a `return` from a block (`MethodUnwinder`) did `return GetMethodUnwinderReturnValue(u)`
+    through the frame's finally (`LeaveMethodFrame`/`LeaveLightMethodFrame`). Reproduced in a
+    lambda of its own: `TryFault(Block(casts, Label(TryCatchFinally(Return(label), catch:
+    Return(label), finally: call))))` - 0 inline checks, every cast a helper call; take away
+    the catch's `Return` or the finally and all of them are inline again. A second, unrelated
+    cliff on the way: a lambda with 664 or more variables (663: inline) loses every inline cast
+    too, which looks like the JIT's "too many locals" bail-out (1,024 locals with its own
+    temporaries); `DOTNET_JitMaxLocalsToTrack` does not move it in this release runtime. No
+    Ruby body seen comes near it.
+  - **Who else.** The rule bodies (`CallSite.Target`) and the method JIT's typed bodies have no
+    such jump and already check inline: in a regex-shapes run, 32 rules had 100-120 inline checks
+    (the helper calls beside them are the expansions' slow paths), the typed body 4. Only the
+    generic bodies of methods suffer.
+  - **The fix tried.** The handler keeps the value and a flag in two locals and the method
+    returns after the try, once the finally has run - the same order. A block's `return` (in an
+    `each`, from inside `ensure`, a `map`) still answers right. The six Ruby bodies of a
+    regex-shapes run: 23 -> 102 inline checks; `F#fc3` with `IR_SEALED_CONSTANTS=0`: 0 -> 9.
+  - **Why rejected.** The casts it frees are mostly the closure constants perf/lconst already
+    loads without a cast (`Unsafe.As`), and nothing showed a gain: `ab.rb -r 10` of frame-cost,
+    `-X:NoJIT`, both switches off / this one on / both on - `f0` 39.9 / 35.9 / 36.0 ns, `fc3`
+    72.0 / 71.9 / 71.6, `bytesplice` 912 / 898 / 826, every small shape within its 10-70% spread.
+    It costs a store and a test a call, and two locals live into the handler.
+  - **And the callgrind counter cannot judge such a change.** Under valgrind the runtime compiles
+    many methods MinOpts that it compiles FullOpts natively, `DOTNET_TieredCompilation=0`
+    notwithstanding: 4,588 of 8,011 compilations of an `ir` run of frame-cost (natively 0 of
+    5,445), among them `Host:Main`, `RubyContext..cctor` and the Ruby body `F#fc3` (4,485
+    bytes of code against 2,721) - MinOpts expands no cast, so the counter measured the helper
+    calls whichever way this switch was. A probe program shows the same (60 of 89 MinOpts, its
+    expression-tree lambda FullOpts); `DOTNET_JITMinOpts=0`, `DOTNET_JitMinOpts=0` and
+    `DOTNET_ZapDisable=1` change nothing. So `Util/perf/callgrind/count.sh` counts are a fair
+    measure of work a change removes (calls, allocations, helper calls) but not of what the JIT
+    does with optimized code: perf/lframe's and perf/lconst's numbers are of the first kind,
+    but what they are worth natively is owed to a clock or a machine with a counter.
+  - Left: the jump is easy to remove if a later change (another helper expansion, a cheaper
+    `isinst`) can show a gain from it; the commits are d7398a6 (the change) and 2ad002b.
+
+
 - **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
   above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
   The idea (perf/rescuefilter): a rescue above a passed ensure catches and throws again (~20 us for the
