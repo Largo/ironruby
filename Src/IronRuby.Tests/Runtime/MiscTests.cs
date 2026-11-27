@@ -9270,6 +9270,46 @@ p ev2, c.x
         }
 
         /// <summary>
+        /// A Float that does not fit an integer is named as C's "%-.10g" prints it, as MRI's rb_out_of_long does:
+        /// "float Inf out of range of integer", "1e+30", "NaN".
+        /// </summary>
+        public void Float_OutOfRangeMessage1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  p [l, yield]
+rescue => e
+  p [l, e.class, e.message]
+end
+t(:take_inf) { [1].take(Float::INFINITY) }
+t(:take_ninf) { [1].take(-Float::INFINITY) }
+t(:first_nan) { [1].first(Float::NAN) }
+t(:big) { [1].take(1e30) }
+t(:ary_new) { Array.new(Float::INFINITY) }
+t(:str_mul) { ""a"" * Float::INFINITY }
+t(:at) { [1][1e19] }
+t(:idx) { [1][Float::NAN] }
+t(:mul) { [1] * 1e20 }
+t(:fmt) { ""%c"" % 1e30 }
+t(:fmt2) { ""%*d"" % [1e20, 1] }
+t(:small) { [1].take(-9.5e18) }
+", @"
+[:take_inf, RangeError, ""float Inf out of range of integer""]
+[:take_ninf, RangeError, ""float -Inf out of range of integer""]
+[:first_nan, RangeError, ""float NaN out of range of integer""]
+[:big, RangeError, ""float 1e+30 out of range of integer""]
+[:ary_new, RangeError, ""float Inf out of range of integer""]
+[:str_mul, RangeError, ""float Inf out of range of integer""]
+[:at, RangeError, ""float 1e+19 out of range of integer""]
+[:idx, RangeError, ""float NaN out of range of integer""]
+[:mul, RangeError, ""float 1e+20 out of range of integer""]
+[:fmt, RangeError, ""float 1e+30 out of range of integer""]
+[:fmt2, RangeError, ""float 1e+20 out of range of integer""]
+[:small, RangeError, ""float -9.5e+18 out of range of integer""]
+");
+        }
+
+        /// <summary>
         /// The expression of an endless def is not a line to TracePoint :line (prism gives it no newline flag): CRuby reports
         /// no event for it, with or without a rescue modifier, but does for statements in parentheses in it and in a block.
         /// (The lines are one more than ruby's for the same text: the snippet starts on its second line.)

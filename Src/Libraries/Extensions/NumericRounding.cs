@@ -99,7 +99,7 @@ namespace IronRuby.Builtins {
                     throw new FloatDomainError("NaN");
                 }
                 if (d >= 2147483648.0 || d <= -2147483649.0) {
-                    throw RubyExceptions.CreateRangeError("float {0} out of range of integer", d);
+                    throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", RubyUtils.FormatFloatG10(d)));
                 }
                 return (int)d;
             }
