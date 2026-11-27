@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using IronRuby.Builtins;
+using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 
 namespace IronRuby.Tests {
@@ -85,6 +86,25 @@ require 'digest'
             Assert(builtins > 2000, "only " + builtins + " overloads of the builtins were checked");
             // the second walk sees the builtins again, and the libraries
             Assert(count - builtins > builtins, "no overload of a library loaded by require was checked");
+        }
+    
+        /// <summary>
+        /// A backtrace names a copied module's method (IList#fetch, ClrInteger#+) by the class that copies it in, which
+        /// RubyStackTraceBuilder reads from the RubyCopiedModuleAttributes the initializer generator writes. They must say
+        /// what reading the Includes(Copy = true) attributes of every type of the assembly says.
+        /// </summary>
+        public void LibraryCopiedModuleAttributes1() {
+            foreach (var assembly in new[] { typeof(IronRuby.Builtins.ArrayOps).Assembly, typeof(IronRuby.StandardLibrary.Yaml.RubyYaml).Assembly }) {
+                var read = RubyStackTraceBuilder.ReadCopyingClasses(assembly);
+                var scanned = RubyStackTraceBuilder.ScanCopyingClasses(assembly);
+                Assert(read.Count == scanned.Count, assembly.GetName().Name + ": " + read.Count + " pairs written, " + scanned.Count + " found");
+                foreach (var pair in scanned) {
+                    Type copying;
+                    Assert(read.TryGetValue(pair.Key, out copying) && copying == pair.Value,
+                        assembly.GetName().Name + ": " + pair.Key + " is copied into " + pair.Value + ", written " + copying);
+                }
+            }
+            Assert(RubyStackTraceBuilder.ReadCopyingClasses(typeof(IronRuby.Builtins.ArrayOps).Assembly).Count >= 6);
         }
     }
 }

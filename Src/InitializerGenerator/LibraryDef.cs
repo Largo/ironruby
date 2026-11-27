@@ -142,6 +142,9 @@ namespace IronRuby.InitializerGenerator {
             public ModuleKind Kind;
             public bool HasCopyInclusions;
 
+            // RubyModuleAttribute.Name was given (not only Extends):
+            public bool HasExplicitName;
+
             public TypeRef Super;              // non-null for all classes except for object
 
             // Non-null for modules nested in other Ruby modules.
@@ -415,6 +418,7 @@ namespace IronRuby.InitializerGenerator {
                     }
 
                     def.Trait = trait;
+                    def.HasExplicitName = module.Name != null;
                     def.Extends = module.Extends ?? trait;
                     def.DefineIn = module.DefineIn;
 
@@ -996,6 +1000,26 @@ namespace IronRuby.InitializerGenerator {
         #endregion
 
         #region Code Generation
+
+        /// <summary>
+        /// An assembly attribute for each module a class with a Ruby name of its own copies in: what
+        /// RubyStackTraceBuilder.GetCopyingClassName read from the attributes of every type of the assembly before.
+        /// </summary>
+        public void GenerateCopiedModuleAttributes(IndentedWriter output) {
+            var worklist = new List<ModuleDef>(_moduleDefs.Values);
+            worklist.Sort(CompareNames);
+            foreach (ModuleDef def in worklist) {
+                if (!def.HasExplicitName) {
+                    continue;
+                }
+                foreach (MixinRef mixin in def.Mixins) {
+                    if (mixin.Copy) {
+                        output.WriteLine("[assembly: {0}(typeof({1}), typeof({2}))]", "IronRuby.Runtime.RubyCopiedModuleAttribute",
+                            _known.TypeName(mixin.Module.Type), _known.TypeName(def.Trait));
+                    }
+                }
+            }
+        }
 
         public void GenerateCode(IndentedWriter output) {
             _output = output;

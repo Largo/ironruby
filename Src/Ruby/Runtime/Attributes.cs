@@ -42,6 +42,33 @@ namespace IronRuby.Runtime {
         }
     }
 
+    /// <summary>
+    /// Applied to a library assembly, by the initializer generator, for each module a class of it copies in
+    /// (<see cref="IncludesAttribute.Copy"/>) whose <see cref="RubyModuleAttribute"/> gives it a Ruby name of its own:
+    /// IListOps into Array, ClrInteger into Integer. A backtrace names a copied module's method by the class
+    /// (RubyStackTraceBuilder.GetCopyingClassName), and these say which without reading every type's attributes.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
+    public sealed class RubyCopiedModuleAttribute : Attribute {
+        private readonly Type/*!*/ _module;
+        private readonly Type/*!*/ _copyingClass;
+
+        public Type/*!*/ Module {
+            get { return _module; }
+        }
+
+        public Type/*!*/ CopyingClass {
+            get { return _copyingClass; }
+        }
+
+        public RubyCopiedModuleAttribute(Type/*!*/ module, Type/*!*/ copyingClass) {
+            ContractUtils.RequiresNotNull(module, "module");
+            ContractUtils.RequiresNotNull(copyingClass, "copyingClass");
+            _module = module;
+            _copyingClass = copyingClass;
+        }
+    }
+
     [AttributeUsage(AttributeTargets.Field | AttributeTargets.Class | AttributeTargets.Interface | AttributeTargets.Method, AllowMultiple = true)]
     public sealed class RubyConstantAttribute : RubyAttribute {
         private readonly string _name;
