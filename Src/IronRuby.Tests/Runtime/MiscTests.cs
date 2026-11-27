@@ -1026,6 +1026,29 @@ p DateTime.strptime(""2026 UTC-3"", ""%Y %Z"").offset
         }
 
         /// <summary>
+        /// Date._strptime and Date._parse refuse a string (or format) whose encoding is not ASCII-compatible
+        /// with MRI's ArgumentError, before any regexp sees it.
+        /// </summary>
+        public void Date_StrptimeEncoding1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+u = ""2026"".encode(""UTF-16LE"")
+p((Date._strptime(u, ""%Y"") rescue $!))
+p((Date._strptime(""2026"", ""%Y"".encode(""UTF-16LE"")) rescue $!))
+p((Date._parse(u) rescue $!))
+p((Date.strptime(u, ""%Y"") rescue $!))
+p((DateTime._strptime(u, ""%Y"") rescue $!))
+", @"
+#<ArgumentError: string should have ASCII compatible encoding>
+#<ArgumentError: format should have ASCII compatible encoding>
+#<ArgumentError: string should have ASCII compatible encoding>
+#<ArgumentError: string should have ASCII compatible encoding>
+#<ArgumentError: string should have ASCII compatible encoding>
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's

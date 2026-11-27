@@ -386,7 +386,11 @@ class Date
     # StringValue, as date_s__strptime takes both (String#+ converts with #to_str, or raises
     # MRI's TypeError: "no implicit conversion of nil into String")
     str = '' + str unless String === str
+    # date_s__strptime_internal: each argument must have an ASCII-compatible encoding, the
+    # string's checked before the format is converted
+    raise ArgumentError, 'string should have ASCII compatible encoding' unless str.encoding.ascii_compatible?
     fmt = '' + fmt unless String === fmt
+    raise ArgumentError, 'format should have ASCII compatible encoding' unless fmt.encoding.ascii_compatible?
     # ASCII-only Strings go to the C# walk (Src/Libraries/Date/DateStrptime.cs), which answers
     # false for what it leaves to the Ruby below. It hands back the Rationals as [n, d] and the
     # offset as a place after the zone, so that the Hash keeps the Bag's order.
@@ -856,6 +860,7 @@ class Date
 	:_parse_year, :_parse_mon, :_parse_mday, :_parse_ddd
 
   def self._parse(str, comp=true)
+    raise ArgumentError, 'string should have ASCII compatible encoding' unless str.encoding.ascii_compatible?
     str = str.dup
 
     e = Format::Bag.new
