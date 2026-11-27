@@ -232,3 +232,104 @@ t('nested Procs are distinct objects') {
   N.times { |n| o.m(n, out) }
   [out.size, out.map(&:object_id).uniq.size, out.map(&:call)]
 }
+
+# ---------------------------------------------------------------- 8. an outlined block whose nested iterator keeps its block
+#
+# The blocks above are not outlined (their nested literals are given to methods that are not core iterators), so their
+# Procs are never reused. These are: the nested `Range#each' and `times' run in place in the copy of the `each_index'
+# block, and the method's scope is parked. Then the iterator is redefined to keep the block it is given, the copy goes
+# stale, and the generic body makes the nested Proc - which must see the locals and self of its own call.
+
+$kept = []
+$keep = false
+
+class Outlined
+  def initialize; @a = [1.5, 2.5, 3.5, 4.5, 5.5]; @s = 0.0; end
+  attr_reader :s
+  def range(dt)
+    @a.each_index do |i|
+      x = @a[i]
+      ((i + 1)...@a.size).each do |j|
+        @s += (x - @a[j]) * dt + j
+      end
+    end
+    dt
+  end
+  def times(dt)
+    @a.each_index do |i|
+      x = @a[i]
+      (@a.size - i).times do |j|
+        @s += x * dt - j
+      end
+    end
+    dt
+  end
+end
+
+def kept_values(dt_name)
+  r = $kept.map { |b| b.binding.local_variable_get(dt_name) rescue b.class }
+  $kept.clear
+  r
+end
+
+t('outlined: Range#each redefined to keep its block') {
+  o = Outlined.new
+  N.times { |n| o.range(n * 0.25) }
+  Range.class_eval do
+    alias_method :__np_each, :each
+    def each(&b)
+      $kept << b if $keep
+      __np_each(&b)
+    end
+  end
+  begin
+    out = []
+    300.times do |n|
+      $keep = (n % 100 == 50)
+      o.range(n + 0.5)
+    end
+    $keep = false
+    out << kept_values(:dt) << kept_values(:dt)
+    out << o.s
+  ensure
+    Range.class_eval do
+      alias_method :each, :__np_each
+      remove_method :__np_each
+    end
+  end
+  N.times { |n| o.range(n * 0.5) }
+  out << o.s
+}
+t('outlined: kept nested blocks called later') {
+  o = Outlined.new
+  N.times { |n| o.times(n * 0.125) }
+  Integer.class_eval do
+    alias_method :__np_times, :times
+    def times(&b)
+      $kept << b if $keep
+      __np_times(&b)
+    end
+  end
+  begin
+    calls = []
+    200.times do |n|
+      $keep = (n == 10 || n == 150)
+      o.times(n * 2.0)
+    end
+    $keep = false
+    calls = $kept.map { |b| [b.call(7), b.binding.local_variable_get(:i), b.binding.local_variable_get(:x), b.binding.local_variable_get(:dt)] }
+    $kept.clear
+    [calls, o.s]
+  ensure
+    Integer.class_eval do
+      alias_method :times, :__np_times
+      remove_method :__np_times
+    end
+  end
+}
+t('outlined: kept again after the iterator is restored') {
+  o = Outlined.new
+  r = []
+  4.times { N.times { |n| o.range(n * 0.5) }; r << o.s }
+  r
+}
