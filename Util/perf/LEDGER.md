@@ -912,6 +912,22 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     the next idea. A light caller's call of a JIT-typed method with a Float argument (`selfcall`
     of micro-table) is 3% slower by median through the dispatcher than through the rule, with
     the same bytes.
+    Round of 2026-11-27 (see Landed, perf/twospeed, not gated): found and fixed - an interpreted shared rule
+    left ahead of its compiled one in a site's rules, run on every call to fail (DLR patch 0111). `neq2`
+    still varies 59-102 ns on both builds, which is something else.
+    Round of 2026-11-27, second (perf/twospeed2, a finding, no code): `neq2`'s spread is the CLR's dynamic PGO,
+    not IronRuby's or the DLR's. Alone `neq2` is 60-64 ns in 12 of 12 processes; after `eq1` and `call1` (either
+    alone does not do it) 61-104. With `DOTNET_TieredPGO=0` it is 67-75 in 8 of 8, with
+    `DOTNET_TieredCompilation=0` 66-71: no slow process and no fast one. The site holds two rules, one a class
+    (the negated-builtin `!=` rule is per class, not shared), so every other call misses its target and runs
+    `System.Dynamic.UpdateDelegates.UpdateAndExecute3` (dotnet-trace: 20-25% of the loop, the rules 13-19%) -
+    .NET's own code, tiered and instrumented, which the calls before it trained: guarded devirtualization of the
+    rule delegates it invokes then guesses well (62 ns) or badly (100 ns) depending on what it saw. The rules and
+    the loop are dynamic methods, not tiered. Left: the lever is IronRuby's - one rule for both classes (a
+    version set, as a shared rule has), so that the site never misses; that is a change to how `!=`/`==` on
+    plain objects is bound (#215), for its own step. Bounce, 10 processes each (`harness.rb Bounce 20 1500`,
+    median of the last 10 iterations, ms): with DLR patch 0111 473-511 (median 495), without 477-507 (498): not
+    bimodal on either, and level.
 13. **Calling an iterator at all costs twice what it does in CRuby**: `a.each { |x| s +=
     x }` over one element from a method is 166 ns against 79, `n.times` 182 against 88,
     `a.map` 194 against 101, and `a.any? { |x| x > 1000 }` 414 against 67, 438 against
@@ -1622,6 +1638,76 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/twospeed (2026-11-27) - an interpreted rule stuck before its compiled one runs compiled
+  (gap 12, DLR patch 0111)** - not gated. What decides the speed: `recv != other` over four or eight plain
+  classes is served by IronRuby's shared rule (one rule whose test is a set of class versions, handed to
+  every site that calls the method on another class, RubyCallAction). `DynamicUtils.LightBind` makes it
+  interpreted; past its count it compiles in the background and then fails its test once compiled, so that
+  the site binds again and the binder hands out the compiled one (`LastInterpretedFailure`). The site got
+  the compiled rule another way (the shared rule replaced under it), and in some processes the interpreted
+  one stayed ahead of it in the site's rules: on every call of three of the four classes it ran in the
+  interpreter to fail, and the compiled rule behind it matched. Which order a process lands in depends on
+  when the background compile comes back, so on timing: `IR_BIND_TRACE=1` and `IR_PHASE_TIMES=1` made
+  every run fast (0 of 32 slow). Found with `dotnet-trace` (sampled, `--show-child-io`): the slow
+  process spent 53% of the loop in `UpdateAndExecute3 -> LightLambda.Run4 -> Interpreter.Run`, the fast one
+  0.3%; and with counters in a copy of the DLR: 5.25 million failures of a compiled-ready rule in the slow
+  processes, 50-800 in the fast ones, the same number of rebinds in both.
+  - The change (Build/dlr-patches/0111-interpreted-rule-runs-compiled.patch): the interpreted rule keeps
+    its `LightLambda`, and once it has failed for its compiled target 4,096 times more than the site has
+    bound again and picked that up, it runs the compiled target itself (`LightLambda.UseCompiled`) and
+    matches. 32 was tried first and made a 60-class site 18% slower: its rules, found in the binder's cache
+    again and again, switched too, and the cache then held rules behind a `LightLambda` Run; at 4,096 only a
+    stuck rule switches.
+  - Ten processes each (`Util/bench/twospeed-shapes.rb`, ns, base / new): `neq4` slow
+    (221-237) in 5 of 10 on base, 0 of 10 new (78-85); `call4` 3 of 10 / 0 (85-100); `neq8` 7 of 10
+    (187-403) / 0 (102-122); `call8` 7 of 10 (178-264) / 0 (109-124). Level: 1, 2 and 3 classes, `==` at
+    every count, `neq60` (median 668 / 661) and `call60` (704 / 704). `neq2` varies 59-102 on both builds:
+    another effect, left.
+  - Instructions (`Util/perf/callgrind/count.sh`, N=20000): `neq1`, `call1`, `neq2`, `neq4` 1.000; `call4`
+    1.019 (+53); `neq8` 0.725, `call8` 0.856, `neq60` 0.666, `call60` 0.328 (in so few calls the rules a
+    megamorphic site keeps meeting are still the interpreted ones).
+  - Matrices, CRuby against base against new, with the JIT on, `-X:NoJIT -X:NoOSR`, `-X:NoJITCalls` and
+    `IR_LIGHT_FRAMES=0`: shared-rule-light, jit, jit-calls and dmeth-jit identical to CRuby; hot-shapes
+    identical to base (its one row that differs from CRuby differs on base). IronRuby.Tests: 240 named
+    (rules and sites, Method*, Super*, Alias*, Proc*, Block*, define_method, instance_method, the JIT) pass.
+  - For the gate: the patch is the DLR's, so a checkout of `../dlr` needs it applied by hand (`git -C
+    ../dlr apply Build/dlr-patches/0111-interpreted-rule-runs-compiled.patch`); every interpreted rule in
+    every program is affected. AWFY was not timed; Bounce was once seen bimodal (gap 12's note).
+
+- **perf/jitprobe (2026-11-26) - the stub's generic cost is not the interpreter's** - not gated. A probe
+  (`JitStub.Probe`) times the generic body to decide whether an entry that deopts pays its way. It waited
+  for the generic body's compile for at most 8 deopt windows, which go by in microseconds when every
+  other call deopts, and then timed the interpreter: 4 us a call where the compiled body takes 0.16. Its
+  next probe is 100 ms on, and until then that figure kept the entry: `x + 1` with an Integer and a Float
+  in turn, in a method of its own, deopted on every other call for about 1,000 windows (some 15,000
+  deopts at 2 us). Right after the compile a probe still read 1.75 us (the CLR's first-tier code; 0.12 at
+  100 ms).
+  - The change: a cost timed before the compile is marked (`_genericCostInterpreted`) and forgotten when
+    `GenericCompiled` fires, which lets the next window probe again. And a probe taken while the generic
+    body is not compiled, or compiled 100 ms ago or less, takes none of the six probes and lets the next
+    come 10 ms on rather than 100 (at most 16 of them): the cost is the least any probe read, so it comes
+    down to the warm figure early. A stub with a warm generic body probes as before.
+  - Real runs (IR_JIT_VERBOSE=1: app-shapes, `gem list`, all 14 AWFY at `harness.rb B 5 10`): two methods
+    were first probed on an interpreted generic body. `Element#length` (AWFY List) deopts on every call
+    (16 in 16): the base keeps it for the whole run on a 62 us figure; the new probes twice more, reads
+    8.7 us and retires it - an entry that deopts on every call never pays. `Gem::Dependency#runtime?`
+    (`gem list`) is retired on both. Otherwise the traces specialize and decline the same (264, 64).
+    (Havlak, Mandelbrot and NBody report "incorrect result" at that inner size on both builds and on CRuby:
+    they verify only at their own.)
+  - Time (`Util/bench/jit-probe-shapes.rb`, a method of its own per section, 100,000 calls; `ab.rb -r 6`,
+    ns; base, new): `fresh_mixed` 875 -> 277 (0.32), `fresh_int` (never deopts) 87.0 / 96.7 (overlap);
+    `Util/bench/jit-settle-shapes.rb` all level (0.96-1.01, overlap). `warm_int`, a method defined once,
+    run after the fresh shapes in the same process, reads 42.7 -> 78.7: alone it is 82.4 / 83.9, and after
+    0.8 s of other work first 43-46 / 50-59 - the base spends half a second more in `fresh_mixed`, in
+    which the CLR tiers up the code `warm_int` runs too. Not a cost of the change.
+  - Matrices, CRuby against base (8fde498) against new, with the JIT on, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls` and `IR_JIT_REST=0`: jit, jit-calls, jit-const, dmeth-jit identical to CRuby;
+    hot-shapes, inline and int-matrix identical to base (the rows that differ from CRuby differ on base:
+    as in perf/jitsettle). IronRuby.Tests: the 20 named for the JIT pass.
+  - For the gate: a stub whose generic body is still interpreted now probes more (up to 16 short
+    probes of 32 timed calls each in its first 100 ms after the compile); `GenericCompiled` now takes
+    the stub's lock on the light compiler's thread.
 
 - **perf/kwrest (/perf-step, 2026-11-26, on 79a2c30 + perf/lexical3) - a rest parameter that
   takes a call's keyword hash unmarks the call's own instead of storing a copy
