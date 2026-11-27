@@ -1323,8 +1323,9 @@ namespace IronRuby.Runtime.Jit {
         internal RubyContext ConstantsOf;
         // a typed method body may deopt at its loop's safe point (see MethodLoopSafePointSlow)
         internal bool MayDeopt;
-        // what the typed method body folded (JitCode.FoldedConstants), for its loops' safe points to look up again; null
-        // if it folded none, or is an outlined loop's copy (which hands itself back instead). Set before the code runs.
+        // what the typed method body folded (JitCode.FoldedConstants), for its loops' safe points to look up again, or what
+        // an outlined loop's copy folded, for its entry to (JitRuntime.LoopConstantsCurrent); null if it folded none or
+        // some it did not record. Set before the code runs.
         internal JitFoldedConstant[] Folded;
 
         internal static readonly System.Reflection.FieldInfo/*!*/ EpochField = typeof(JitLoopGuard).GetField("Epoch");

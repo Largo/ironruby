@@ -158,6 +158,9 @@ namespace IronRuby.Runtime.Jit {
         // moved (JitFoldedConstant.StillHolds).
         private List<JitFoldedConstant> _foldedConstants;
 
+        // A body this one calls folded constants it did not record: what this one folded cannot all be looked up again.
+        private bool _foldedIncomplete;
+
         /// <summary>
         /// What the constant resolves to right now (JitFoldedConstant.Resolve), or a bailout wherever that would
         /// not be a value the constant version alone keeps valid. Every constant it answers is recorded, for
@@ -173,8 +176,8 @@ namespace IronRuby.Runtime.Jit {
             _resolvedConstantOwner = owner;
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).Add(new JitFoldedConstant(scope, node, value, owner));
             _usesConstants = true;
-            // a method body's loop runs on past the entry's revalidation (TryCompile); an outlined loop's copy hands
-            // itself back on any reassignment
+            // a method body's loop runs on past the entry's revalidation (TryCompile); an outlined loop's copy looks its
+            // constants up again at its entry (JitRuntime.LoopConstantsCurrent) and hands itself back on any reassignment
             if (_loop == null) {
                 if (_hasLoop) { _foldedInLoop = true; }
                 if (_calleeLoop) { _foldedAfterCalleeLoop = true; }
@@ -184,7 +187,7 @@ namespace IronRuby.Runtime.Jit {
 
         /// <summary>Takes over what a body this one calls directly folded (EmitDirectCall).</summary>
         private void TakeFoldedConstants(JitCode/*!*/ code) {
-            if (code.FoldedConstants == null) { return; }
+            if (code.FoldedConstants == null) { _foldedIncomplete = true; return; }
             (_foldedConstants ?? (_foldedConstants = new List<JitFoldedConstant>())).AddRange(code.FoldedConstants);
         }
 
