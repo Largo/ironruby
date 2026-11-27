@@ -4001,6 +4001,38 @@ true
         }
 
         /// <summary>
+        /// MRI keeps the backtrace of a raise in "bt_locations" and Marshal writes it: as a link to "bt"
+        /// while that is still the raise's, as the raise's strings once #set_backtrace replaced it, and not
+        /// at all for an exception never raised or raised with a backtrace of #raise's argument. It and the
+        /// cause come after the instance variables set before the raise.
+        /// </summary>
+        public void Marshal_ExceptionBtLocations1() {
+            TestOutput(@"
+require 'ruby4'
+def ivars(e) = Marshal.dump(e).scan(/:[\x06-\x16]([a-z_@?]+)(.)/).map(&:join)
+e = RuntimeError.new(""x""); p ivars(e)
+e.set_backtrace([""a""]); p ivars(e)
+begin; raise ""y""; rescue => f; end
+p ivars(f)
+f.set_backtrace([""b""]); p ivars(f)
+p Marshal.load(Marshal.dump(f)).backtrace == [""b""]
+begin; raise RuntimeError, ""z"", [""s1""]; rescue => g; end
+p ivars(g), ivars(Marshal.load(Marshal.dump(g)))
+begin; begin; raise ""in""; rescue; e2 = KeyError.new(""o"", receiver: 1, key: 2); e2.instance_variable_set(:@u, 1); raise e2; end; rescue => c; end
+p ivars(c)
+", @"
+[""mesgI"", ""bt0""]
+[""mesgI"", ""bt[""]
+[""mesgI"", ""bt["", ""bt_locations@\a""]
+[""mesgI"", ""bt["", ""bt_locations[""]
+true
+[""mesgI"", ""bt[""]
+[""mesgI"", ""bt[""]
+[""mesgI"", ""bt["", ""receiveri\x06"", ""keyi\a"", ""@ui\x06"", ""causeo:"", ""bt_locations@\v""]
+");
+        }
+
+        /// <summary>
         /// An exception MRI dumped loads as MRI loads it: "bt_locations" is not an instance variable of the result, which
         /// has no Locations; a NoMethodError's message dumped as a NameError::message is its string, and NameError's name,
         /// NoMethodError's args and private_call? are the error's own again - and IronRuby writes them as MRI does. The

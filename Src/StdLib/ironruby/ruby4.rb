@@ -12550,6 +12550,9 @@ class Exception
       # was raised keeps the ones it was raised with, and one that never was gets none,
       # however many strings it is given.
       @__backtrace_locations__ = backtrace_locations
+      # Marshal writes the raise's backtrace as "bt_locations" beside the new "bt", as MRI
+      # does, so the strings it was raised with are kept for it
+      @__raise_backtrace_strings__ ||= backtrace if @__backtrace_locations__
       @__backtrace_from_strings__ = true
       __core_set_backtrace__(value)
     end
