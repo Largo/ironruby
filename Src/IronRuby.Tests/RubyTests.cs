@@ -320,6 +320,7 @@ namespace IronRuby.Tests {
                 RubyBlocks14A,
                 RubyBlocks14B,
                 RubyBlocks14C,
+                UnusedBlock_LaterDefinition1,
                 RubyBlocks16,
                 RubyBlocks18,
 
