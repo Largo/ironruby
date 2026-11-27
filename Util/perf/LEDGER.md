@@ -879,6 +879,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     objects, two Integers and two Strings (05a31f0a, merged into this branch after round
     nine): the cases this session's perf/neq1 found faster, without the Integer-against-
     Float one it found slower.
+    Round of 2026-11-27 (see Landed, perf/neqrule, not gated): the negated-builtin rule for plain objects is
+    shared by every class whose `==` is BasicObject's: a site over 2-60 classes no longer has a rule per class.
 11. **The method JIT refuses a constant whose value is nil** ("constant without a value":
     it cannot tell nil from an autoload that has not run). Richards' `NO_WORK = nil` and
     `NO_TASK = nil` keep three methods out. See Rejected for why fixing only that is not
@@ -1638,6 +1640,42 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/neqrule (2026-11-27) - `a != b` on plain objects is one rule for every class (gaps 10 and 12)** -
+  not gated. `DispatchIntrinsics.TryBuildNotEquals` (#215) binds `a != b` as `!a.equal?(b)` when the
+  receiver's `==` is BasicObject's, and `MaySpecialize` kept such rules out of IronRuby's shared rules, so a
+  site saw a rule per receiver class: over two to eight classes it missed its target on every other call into
+  the DLR's `UpdateAndExecute`, whose speed the CLR's dynamic PGO decided (gap 12, perf/twospeed2), and over
+  60 it built a rule per class. Now `MaySpecialize` lets the rule be shared when the receiver is a plain
+  `RubyObject` (BasicObject subclasses included), the call has the intrinsic's shape, and the class resolves
+  `==` - public, without refinements, as BasicObject#!= calls it - to BasicObject#== (`IsSharableNotEquals`).
+  `ResolveShared` asks that both for the first bind and for every version `TryShareVersion` adds, so a class
+  whose `==` is another method (its own, a module's, a singleton's, Comparable's, a private or protected one,
+  one on Object) or whose `!=` is (defined, or undefined into method_missing) is never in the set, and
+  defining either re-versions the class. nil, booleans, Integers and Strings keep their rules per class.
+  `IR_SHARED_NEQ=0` turns it off.
+  - Ten processes each (`Util/bench/twospeed-shapes.rb`, ns, base / new): `neq2` 83-114 / 39-43, `neq3` 63-69
+    / 41-45, `neq4` 65-80 / 41-51, `neq8` 89-102 / 44-48, `neq60` 542-571 / 42-44; level: `neq1`, `==` at
+    every count, calls at every count (`call60` 561-605 / 562-608). Instructions (callgrind, N=20000):
+    `neq2` 0.924, `neq4` 0.856, `neq8` 0.770, `neq60` 0.230; `neq1`, `eq1`, `eq2`, `eq4`, `call1`, `call2`
+    1.000; `call60` 1.219 in one round after `neq60`, 1.138 alone, 1.005 (overlap) over two rounds -
+    a megamorphic site's binding, which the change does not reach (its method is a define_method one).
+  - AWFY, ten processes each, median of each process's last 8 of 15 iterations, ms, base / new: Richards
+    2363 / 2357, Json 488 / 494, Permute 1195 / 1196, DeltaBlue 542 / 545, Bounce 396 / 392 - inside their
+    spreads. None of them has such a site: Richards' `NO_TASK != @current_task` has a nil receiver, Json's
+    `!=` are on Strings, which keep their rules.
+  - Matrices (`Util/perf/gate-matrices.rb`, base 99c1d2f against new, as built, NoJIT, NoJITCalls,
+    IR_LIGHT_FRAMES=0, IR_PARKED_SCOPES=0, the ReadyToRun host and IR_SHARED_NEQ=0): `Util/neq-share-matrix.rb`
+    (new: 1-8 classes over two sites; `==` defined on a class after the site bound, from a module included
+    later, on a singleton class, on a BasicObject subclass, private, protected, on Object and removed again;
+    `!=` defined and from a module; undef `!=` into method_missing; refinements of `==` and `!=`; Comparable;
+    Struct; nil, true, String, Symbol; Integer against Float; threads), shared-rule-light, jit, jit-calls,
+    dmeth-jit, refinement: same as CRuby in all seven modes; hot-shapes: the base's one row. ruby/spec
+    core/basicobject, core/comparable and language/send_spec: as the base (the known `into`/`to` errors).
+    IronRuby.Tests: 338 named (equality, Comparable, refinements, rules, sites, dispatch, Method*, Super*,
+    Alias*, BasicObject, singleton, send, define_method, the JIT) pass.
+  - For the gate: the shared rule's set now decides `!=` for every plain-object class a program has; the
+    cases above are the ones that must leave a class out.
 
 - **perf/twospeed (2026-11-27) - an interpreted rule stuck before its compiled one runs compiled
   (gap 12, DLR patch 0111)** - not gated. What decides the speed: `recv != other` over four or eight plain
