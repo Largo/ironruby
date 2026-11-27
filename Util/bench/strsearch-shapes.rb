@@ -174,6 +174,11 @@ class H
   # StringScanner over 10 KB, one call a whole pass (round three: the UTF-8 subject was quadratic)
   def ss_words_u = (ss = StringScanner.new(SS_U); n = 0; until ss.eos?; ss.skip(/\s+/); n += 1 if ss.scan(/\S+/); end; n + ss.charpos)
   def ss_until_u = (ss = StringScanner.new(SS_U); n = 0; while ss.scan_until(/,/); n += ss.matched_size; end; n)
+  # String#byteindex from the last answer, over 10 KB (round four: from an offset other than 0 it walked
+  # the characters from the start on every call)
+  def bidx_loop_u = (pos = 0; n = 0; while (pos = SS_U.byteindex(",", pos)); n += pos; pos += 1; end; n)
+  def bidx_loop_a = (pos = 0; n = 0; while (pos = SS_A.byteindex(",", pos)); n += pos; pos += 1; end; n)
+  def bridx_loop_u = (pos = SS_U.bytesize; n = 0; while pos >= 0 && (pos = SS_U.byterindex(",", pos)); n += pos; pos -= 1; end; n)
   def ss_words_a = (ss = StringScanner.new(SS_A); n = 0; until ss.eos?; ss.skip(/\s+/); n += 1 if ss.scan(/\S+/); end; n + ss.charpos)
 end
 
@@ -326,3 +331,6 @@ t("eq", SHORTN) { |n| i = 0; s = 0; while i < n; s += h.eq; i += 1; end; s }
 t("ss_words_u", SCAN) { |n| i = 0; s = 0; while i < n; s += h.ss_words_u; i += 1; end; s }
 t("ss_until_u", SCAN) { |n| i = 0; s = 0; while i < n; s += h.ss_until_u; i += 1; end; s }
 t("ss_words_a", SCAN) { |n| i = 0; s = 0; while i < n; s += h.ss_words_a; i += 1; end; s }
+t("bidx_loop_u", SCAN) { |n| i = 0; s = 0; while i < n; s += h.bidx_loop_u; i += 1; end; s }
+t("bidx_loop_a", SCAN) { |n| i = 0; s = 0; while i < n; s += h.bidx_loop_a; i += 1; end; s }
+t("bridx_loop_u", SCAN) { |n| i = 0; s = 0; while i < n; s += h.bridx_loop_u; i += 1; end; s }

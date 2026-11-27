@@ -203,3 +203,50 @@ SS_SUBJECTS.each do |sname, subject|
     ss = StringScanner.new(subject.dup); ss.scan(/\S+/); ss.terminate; t = ss_state(ss); ss.reset; [[t, ss_state(ss)].inspect, nil, nil]
   end
 end
+
+puts "== StringScanner with the subject changed between scans (round four)"
+SS_SUBJECTS.each do |sname, subject|
+  [["setbyte(0, 0x41)", ->(s) { s.setbyte(0, 0x41) }], ["setbyte(-1, 0x7A)", ->(s) { s.setbyte(-1, 0x7A) }],
+   ["setbyte(3, 0xC3)", ->(s) { s.setbyte(3, 0xC3) }], ["[0] = 'ü'", ->(s) { s[0] = "ü" }], ["[2, 3] = 'X'", ->(s) { s[2, 3] = "X" }],
+   ["[-1] = '😀'", ->(s) { s[-1] = "😀" }], ["insert(1, 'ñ')", ->(s) { s.insert(1, "ñ") }], ["replace('ö o')", ->(s) { s.replace("ö o") }],
+   ["force_encoding(BINARY)", ->(s) { s.force_encoding("BINARY") }], ["<< 0xFF byte", ->(s) { s << "\xFF".b.force_encoding(s.encoding) }],
+  ].each do |cname, change|
+    try("ss[#{sname}] #{cname} between scans") do
+      s = subject.dup; ss = StringScanner.new(s)
+      a = ss.scan(/\S+/); b = ss.skip(/\s+/)
+      r = begin; change.(s); [ss.scan(/\S+/), ss[0], ss.pos, ss.matched, ss.pre_match, ss.rest, (ss.charpos rescue $!.class), ss.getch, ss.bol?, ss.eos?]
+          rescue => e; [e.class, e.message]; end
+      [[a, b, r].inspect, nil, nil]
+    end
+  end
+end
+
+puts "== byteindex/byterindex loops over long strings (round four: a map shared by the searches of one snapshot)"
+LONG_SUBJECTS = {
+  ascii: "hello, world; " * 200, utf8: "héllo, wörld; 日本, " * 150, astral: "a😀, 𝒳b; " * 200,
+  binary: ("ab\xE9, c; " * 200).b, usascii: ("ab, c; " * 200).force_encoding("US-ASCII"),
+}
+LONG_SUBJECTS.each do |sname, subject|
+  [",", "; ", "日", "😀", "é"].each do |needle|
+    try("#{sname} byteindex loop #{needle.inspect}") do
+      out = []; pos = 0
+      while (pos = (subject.byteindex(needle, pos) rescue (out << $!.class; nil))); out << pos; pos += 1; break if out.size > 2000; end
+      [out.inspect.sum(32), out.size, out.last(3)].then { |x| [x.inspect, nil, nil] }
+    end
+    try("#{sname} byterindex loop #{needle.inspect}") do
+      out = []; pos = subject.bytesize
+      while pos >= 0 && (pos = (subject.byterindex(needle, pos) rescue (out << $!.class; nil))); out << pos; pos -= 1; break if out.size > 2000; end
+      [out.inspect.sum(32), out.size, out.last(3)].then { |x| [x.inspect, nil, nil] }
+    end
+    try("#{sname} byteindex every offset #{needle.inspect}") do
+      out = (0..subject.bytesize + 1).step(7).map { |i| subject.byteindex(needle, i) rescue $!.class }
+      out += (1..40).map { |i| subject.byteindex(needle, -i) rescue $!.class }
+      out += (0..subject.bytesize + 1).step(11).map { |i| subject.byterindex(needle, i) rescue $!.class }
+      [[out.inspect.sum(32), out.size, out.first(5), out.last(5)].inspect, nil, nil]
+    end
+  end
+  try("#{sname} byteindex after a change") do
+    s = subject.dup; a = s.byteindex(",", 3); s[0, 1] = "ü"; b = s.byteindex(",", 3); s << "ñ,"; c = s.byterindex(",", -1); d = s.byteindex(",", 5)
+    [[a, b, c, d].inspect, nil, nil]
+  end
+end
