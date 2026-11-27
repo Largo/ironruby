@@ -75,15 +75,16 @@ module FiberReclaimChecks
     [WeakRef.new(enum), WeakRef.new(fiber), fiber.__state__.__core__]
   end
 
-  # Not Hash#each: Enumerator#next walks that one with a cursor and no fiber (Enumerator.cs);
-  # Enumerable#each_with_index over a Hash still suspends a built-in method on a fiber.
+  # A built-in method suspended on a fiber. Not Hash#each, nor Enumerable#each_with_index over a Hash
+  # (perf/extiter3), nor the other kinds Enumerator#next now walks with a cursor and no fiber
+  # (Enumerator.cs, TryCreateCursor): Array#combination is C# and has no cursor.
   def self.build_native_enumerator
-    { :a => 1, :b => 2 }.each_with_index
+    [1, 2, 3].combination(2)
   end
 
   def self.discard_native_enumerator
     enum = build_native_enumerator
-    assert(enum.next == [[:a, 1], 0], 'native enumerator did not park')
+    assert(enum.next == [1, 2], 'native enumerator did not park')
     fiber = enum.__send__(:__ir_hidden_ivar__, :@__fiber__)
     [WeakRef.new(enum), WeakRef.new(fiber), fiber.__state__.__core__]
   end
