@@ -1131,7 +1131,10 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     Landed: perf/strsearch2); `#byteindex` on UTF-8 found late is 1.3 us against 117 ns
     (the UTF-8 length of the prefix, `Encoding.UTF8.GetByteCount`, 1.1 us over 10 KB of
     mixed text), and from a positive offset other than 0 it walks the characters to it, so a
-    strscan-style loop of byte offsets over UTF-8 text is quadratic where CRuby's is not.
+    strscan-style loop of byte offsets over UTF-8 text is quadratic where CRuby's is not
+    (still so: `pos = s.byteindex(",", pos + 1)` over 100 KB of UTF-8, 93 ms against 0.36).
+    Round three (perf/strsearch3, see Landed) found that StringScanner itself, which does not
+    call `#byteindex`, was quadratic on UTF-8, and far worse; that is fixed.
 22. **A `begin`/`rescue` or `ensure` in a method costs about 80 ns per call when nothing
     is raised**: `def r(x) begin; x + 1; rescue StandardError; 0; end end` 106 ns against
     CRuby's 24, the same with `ensure` 112 against 27 (`Util/bench/zjit-post-shapes.rb`,
@@ -1801,6 +1804,52 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     code. More block literals keep their tree on the dispatcher with the JIT on (any that assigns no
     enclosing local).
 
+- **perf/strsearch3 (2026-11-27) - StringScanner on a UTF-8 subject maps bytes to characters
+  incrementally, without switching the subject to bytes (gap 21, round three)** - not gated.
+  Commits 0c41d0f, 8822aad on `claude/perf-strsearch`, based on claude/happy-gauss-95wm2j
+  79a2c30 with a7b9a12 merged in. Chosen by measured size among the three items left under gap
+  21: a loop over 10 KB and 100 KB of UTF-8 text (CRuby / base, ms) - StringScanner word by word
+  (`skip(/\s+/); scan(/\S+/)`) 0.20 / 55 and 2.1 / 8,400; `scan_until(/,/)` 0.072 / 13.8 and
+  0.71 / 2,047; `byteindex(",", pos)` in a loop 0.039 / 2.7 and 0.36 / 93; `index(",", pos)` (a
+  character offset) 2.4 / 0.058 and 233 / 0.24 (CRuby's is the quadratic one). The scanner does not
+  use `#byteindex`, so its loop was its own: the scan pointer is a byte offset and the regex
+  matches CLR characters, and every conversion copied out and counted the whole prefix
+  (`CharIndexOf` before the match, `MatchData.ToByteIndex` after), while `eos?`, `matched`,
+  `getch`... read the subject as bytes, which switched it from characters to bytes, and the next
+  match decoded all of it again (profile: `SwitchToCharacters` 35%, UTF-8 transcoding 80% self).
+  Now a scanner keeps a map for a subject that is valid UTF-8 and not all ASCII, made for one
+  snapshot of its characters (ConvertToString's string; a changed subject has a new one) with its
+  UTF-8 length counted once; offsets are converted by walking the characters from a cursor (the
+  last offset converted), so a step costs about a token's length. Match offsets are taken as CLR
+  offsets (`MatchData.TryGetGroupClrOffsets`, new) and mapped; ByteLength, ByteSlice, getch's
+  width, charpos, bol?, an ASCII literal and Integer groups read the characters. An offset inside a
+  character, an ASCII, non-UTF-8 or broken subject, a group read after the subject changed, and
+  `IR_FAST_SEARCH=0` take the old paths.
+  Callgrind (`count.sh`, N=20000), instructions a pass over 10 KB, base / new: `ss_until_u`
+  736,035,168 / 4,818,316 (0.0065); `ss_words_u` (not counted on the base: some 2.9e9) / 15,030,852;
+  `ss_words_a` (ASCII, a control) 13,620,867-13,727,541 / 14,080,576 (**+2.6 to +3.4%**; with
+  `IR_FAST_SEARCH=0` 13,969,285, so most of it is not the map's check: moving the mapped paths out
+  of `MatchRegex` and `ByteSlice` and inlining the early exit did not change it); `sw3_a`, `size`
+  unchanged. Time, `ab.rb -r 4`, ns a pass, CRuby / base / off / new: `ss_words_u` 414,855 /
+  211,024,746 / 213,010,273 / 1,756,873; `ss_until_u` 150,450 / 52,087,624 / 52,459,357 / 635,316;
+  `ss_words_a` 364,739 / 633,832 / 635,709 / 1,439,309 - but that shape is bimodal from process to
+  process (0.7 to 2.1 ms on either build, five runs each), and base and off had spent minutes in the
+  slow shapes before it in the same process; the count is the number to go by. CSV.parse of
+  UTF-8 rows (`Zürich,"Müller, Jörg",42,ñandú`), CRuby / base / new: 10 KB 1.2 / 218 / 79 ms, 100 KB
+  11 / 27,651 / 168 ms (the ASCII rows' times swing 17-95 ms from run to run on all three arms).
+  Still 4 to 8 times CRuby on UTF-8 scans (the regex call, a MatchData per match, a String per
+  token), about where ASCII scans already were.
+  Checked: `Util/string-search-matrix.rb` gained a StringScanner section (2,532 rows: 19 operations
+  from every byte offset of ASCII, UTF-8, astral, broken UTF-8, BINARY and EUC-JP subjects, word
+  loops, concat midway, `string=`, fixed_anchor, terminate/reset; 60,022 rows in all): this build
+  prints exactly what the base prints, switch on and off. The base differs from CRuby in 110 of the
+  new rows, all pre-existing and untouched: a scan started from a byte offset inside a character
+  (UTF-8, astral, EUC-JP: CRuby matches from the stray bytes, IronRuby finds nothing), a non-ASCII
+  literal on a BINARY subject (CRuby raises Encoding::CompatibilityError), EUC-JP. `csv-matrix`
+  and `erb-escape-matrix`: same as the base and CRuby. spec/core/string (3,963 examples),
+  spec/library/stringscanner (240), spec/library/csv, spec/library/erb: the same on base, new and
+  off, 0 failures (one error in all three, `String.try_convert`, run as a directory).
+
 - **Gate of 2026-11-26 for round thirty-seven** (perf/lglobal, perf/lexical, perf/deadconst,
   perf/strsearch, perf/extiter, perf/struct, perf/dmethjit; the rejected perf/lsite's tools and
   perf/jitbody's census fix): the branch `claude/happy-gauss-95wm2j` at 2f8c31c against master
@@ -2200,6 +2249,7 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     IronRuby.Tests: the 11 of AliasTests, `Backtrace_ArityCalleeFrame1` and the ten
     `Method_LightFrame*`: PASSED. The census cannot see this (no method changes verdict).
     Not run: `IR_CONFIG=R2R` start-up, the suite, a sweep, AWFY (owed to the gate).
+
 
 - **perf/lglobal (round thirty-seven, 2026-11-26) - a global variable in a light frame (gap 9)** -
   census only when merged, gated 2026-11-26 (round thirty-seven's gate entry). `IsScopeFree` had no case for a GlobalVariable, so `$stdout`, `$VERBOSE`,

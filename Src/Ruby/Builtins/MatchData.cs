@@ -259,6 +259,25 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        /// <summary>
+        /// The offsets of a group in the CLR characters the regex matched (the subject's
+        /// ConvertToString), untranslated: for a caller that keeps its own map from those to bytes
+        /// (StringScanner), where ToByteIndex copies and counts the whole prefix on every call.
+        /// </summary>
+        public bool TryGetGroupClrOffsets(int groupIndex, out int start, out int end) {
+            if (groupIndex != 0) {
+                RequireExistingGroup(groupIndex);
+            }
+            Group group = (groupIndex == 0) ? _match : _match.Groups[groupIndex];
+            if (!group.Success) {
+                start = end = 0;
+                return false;
+            }
+            start = group.Index;
+            end = group.Index + group.Length;
+            return true;
+        }
+
         public int[] GetGroupOffsets(string/*!*/ name, bool inBytes) {
             if (!HasNamedGroup(name)) {
                 throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
