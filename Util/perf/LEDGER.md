@@ -1039,8 +1039,9 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `Hash#sort_by` (2.4 -> 1.9), `Range#sort_by` (2.9 -> 2.3) and `Hash#max_by(2)` (3.1 -> 2.6)
     are done too (perf/hsortby, see Landed). Survey of 2026-11-27 (one round): the Ruby rows
     above 4x CRuby are `Array#dig` into a Hash (9.2), `String(nil)`/`String(5)` (8.8, 6.7),
-    `Array#sum` (8.0) and with a block over Floats (7.1) or Integers (4.4); `Array#min` (6.0)
-    and `Array#take` (4.1, Enumerable's C# take: CRuby's is Array's own) are C#, /perf-step's.
+    `Array#sum` (8.0) and with a block over Floats (7.1) or Integers (4.4). Of the C# rows,
+    `Array#min` (6.0 in that one round) is 2.0x measured (72 ns against 36, as `max`): the
+    survey's noise, not a slow path; `Array#take` (4.1) is done (perf/arymin, see Landed).
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
     (`min_by(2)` 3.8 -> 2.9 after the review fix below). Open beside speed: `min_by(n)`'s tie order is input order,
     MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
@@ -1795,6 +1796,18 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/arymin (/perf-step, 2026-11-27, on ed49c52) - `Array#take` is Array's own, as MRI's
+  `rb_ary_take`** - clock only, not gated. Array inherited Enumerable's C# take, a walk of
+  #each through a Proc: `[1, 2, 3, 4].take(2)` 248.0 -> 83.1 ns (CRuby 71.5), `first_n`, `min`,
+  `max`, `minmax` within the noise. Six cases of `Util/array-take-matrix.rb` (new) now print
+  CRuby's output: the owner, the backtrace label, a subclass's own #each and a redefined
+  Array#each not called, a redefined Enumerable#take not reaching Arrays, `take(2**40)`. Left:
+  nil's and Infinity's conversion messages (the protocol's, as for `first`). The same in four
+  modes and R2R; array-step, array2, enum, enum-next, enumerable2, osr-array and hot-shapes
+  unchanged; ruby/spec core/array and core/enumerable the same examples on both builds.
+  `Array#min`, the other row the survey put far from CRuby, measured 2.0x CRuby, not 6.0x, and
+  was left: its Fixnum path is there, what remains is the call.
 
 - **perf/hsortby (/perf-core, 2026-11-27, on 5472a50) - `sort_by`, `min_by(n)` and
   `max_by(n)` of a Hash, a Range or an Enumerator through the C# merge sort** (the gap 15 survey's
