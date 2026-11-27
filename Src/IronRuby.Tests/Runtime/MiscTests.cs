@@ -3301,6 +3301,26 @@ p Encoding::UndefinedConversionError.new.message
 ");
         }
 
+        /// <summary>
+        /// A decorator's name in Encoding::Converter#convpath (and search_convpath) is a binary string,
+        /// as MRI's transcoder table holds it.
+        /// </summary>
+        public void Encoding_ConvPathDecoratorBinary1() {
+            TestOutput(@"
+p Encoding::Converter.new("""", """", universal_newline: true).convpath.map(&:encoding)
+p Encoding::Converter.new("""", ""universal_newline"").convpath.map(&:encoding)
+p Encoding::Converter.new([[""UTF-8"", ""EUC-JP""], ""crlf_newline""]).convpath.last.encoding
+p Encoding::Converter.search_convpath(""UTF-8"", ""EUC-JP"", crlf_newline: true).last.encoding
+p Encoding::Converter.new(""UTF-8"", ""UTF-16BE"", xml: :text).convpath[0].encoding
+", @"
+[#<Encoding:BINARY (ASCII-8BIT)>]
+[#<Encoding:BINARY (ASCII-8BIT)>]
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+");
+        }
+
         public void Encoding_Converter1() {
             TestOutput(@"
 def t
