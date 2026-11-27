@@ -1376,6 +1376,18 @@ namespace IronRuby.Runtime {
         internal ParkedProcs Parked;
         internal ParkedProcs Spare;
 
+        // The scopes of recursive calls: Parked serves one call at a time, so a method that calls itself (Permute's `permute',
+        // six deep) made a scope and Procs for every call below the first. A call that finds Parked taken takes one of these,
+        // and one that ends while Parked is full parks here; each entry is taken and filled with a compare-exchange, as Parked
+        // is. Made on the first such park; Deeper.Length + 1 calls deep are served. IR_PARKED_DEPTH (default 8, 1: Parked only).
+        internal ParkedProcs[] Deeper;
+        internal static readonly int Depth = GetDepth();
+
+        private static int GetDepth() {
+            int depth;
+            return Int32.TryParse(Environment.GetEnvironmentVariable("IR_PARKED_DEPTH"), out depth) && depth >= 1 ? Math.Min(depth, 64) : 8;
+        }
+
         // The number of block literals of the body, the name it is defined under.
         internal int ProcCount;
         internal readonly string/*!*/ DefinitionName;

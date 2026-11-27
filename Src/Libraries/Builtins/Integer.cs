@@ -1149,7 +1149,10 @@ namespace IronRuby.Builtins {
         /// <remarks>
         /// Since both self and other are Fixnum then this algorithm doesn't need to worry about overflowing into Bignum.
         /// </remarks>
+        // Only yields to its block: a literal block's Proc, and the method's scope with it, can be made again for the next
+        // call ([BlockNotKept], as Integer#times; MethodDefinition.NeverParkedIterators).
         [RubyMethod("downto")]
+        [BlockNotKept]
         public static object DownTo(BlockParam block, int self, int other) {
             return (block != null) ? DownToImpl(block, self, other) : new Enumerator(self, "downto", other);
         }
@@ -1185,6 +1188,7 @@ namespace IronRuby.Builtins {
         /// This approach automatically deals with Floats and overflow/underflow between Fixnum and Bignum.
         /// </remarks>
         [RubyMethod("downto")]
+        [BlockNotKept]
         public static object DownTo(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ subtractStorage,
             BlockParam block, object/*!*/ self, object other) {
 

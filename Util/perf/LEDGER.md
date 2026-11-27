@@ -1786,6 +1786,32 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/permute (2026-11-27, not gated) - Integer#downto parks its caller's scope, and a recursive
+  method parks one scope per level** (switches `IR_PARK_DOWNTO`, `IR_PARKED_DEPTH`). alloc.rb on 9b588fc:
+  Permute 124.5 MB per iteration, 1.45 MB per `permute(6)` (8,660 calls), for an algorithm that needs
+  a 6-element Array. Variants: with `while` in place of `downto` 208 KB (`@count += 1` boxes an Integer
+  on every call, the cached ones below 1,024 included); so about 144 bytes per call came from the block.
+  `permute` is a light frame whose literal block reuses its Proc, but `downto` was in
+  `MethodDefinition.NeverParkedIterators` (it lacked `[BlockNotKept]`, which `times` has), so the
+  method had no parking slot and made a scope, a Proc and a BlockParam on every call; and a slot parks
+  one scope, which a recursion six deep could use on one level only. Now both Integer#downto overloads
+  are `[BlockNotKept]` (they only yield; the generic one's `<` and `-` never see the block) and
+  `downto` leaves the list; and `ParkedScopeSlot.Deeper` (up to 7 more, made on the first overflow,
+  each taken and filled by compare-exchange as `Parked` is) holds the scopes of recursive calls.
+  `permute(6)` 1,453 -> 746 KB (downto) -> 411 KB (depth). An in-process GC allocation-tick listener
+  (an IronRuby subclass of EventListener) sampled what is left: boxed Int32 5,470, the scoped calls'
+  `MutableTuple<object, object>` locals 2,234, the rest small. alloc.rb: Permute 124.5 -> 20.3 MB,
+  Queens 30.5 -> 8.7 MB, Havlak 1,774 -> 1,674 MB, the others as before. AWFY, 10 alternating rounds,
+  medians: Permute 112,970 -> 105,378 us (0.933, no overlap), Queens 0.969, Towers 1.000.
+  `Util/parked-scope-matrix.rb` gains section 7 (Permute; each level's locals, 4 and 12 deep; an
+  exception three levels down; a binding and a Proc kept from a downto block; break, next, a Float
+  and Bignum bounds, no block; two threads in the same recursive method): CRuby's output on both builds.
+  Checks: parked-scope, block-scope-reuse, block-scope-reuse-blockpass, block-nest-reuse, block-loop,
+  osr-array, hot-shapes, jit, jit-calls and ivar matrices in every mode and with each switch off:
+  PASS; block-scope-reuse-race 10 of 10 as CRuby; spec/core/integer, core/proc and language
+  block/yield/break as on the base. Left: the `@count` boxes (an Integer instance variable is held
+  boxed, raw only for Floats) and the locals tuple per scoped call.
+
 - **perf/sieve (2026-11-27, not gated) - a block-local first assigned inside an `if` branch or a
   `while` body no longer keeps the block from being outlined** (switch `IR_BLOCK_LOOP_SCOPED`). AWFY
   Sieve allocated 100.3 MB per iteration (alloc.rb). Bytes per `sieve` call, by variants: the

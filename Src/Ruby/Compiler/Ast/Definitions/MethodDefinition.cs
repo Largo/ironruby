@@ -491,8 +491,15 @@ namespace IronRuby.Compiler.Ast {
         };
 
         internal static bool IsNeverParkedIterator(string/*!*/ name) {
+            // Integer#downto only yields ([BlockNotKept], as #times): a method that calls it with a literal (Permute's recursive
+            // `permute') may park its scope. IR_PARK_DOWNTO=0 counts it among the iterators above, as before.
+            if (name == "downto" && ParkDownTo) {
+                return false;
+            }
             return NeverParkedIterators.Contains(name);
         }
+
+        private static readonly bool ParkDownTo = Environment.GetEnvironmentVariable("IR_PARK_DOWNTO") != "0";
 
         /// <summary>
         /// IR_LIGHT_BLOCK_GIVEN=0 makes `block_given?' in a light-frame method the call it was before: the frame makes its
