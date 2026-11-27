@@ -1180,6 +1180,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     site; B, its Proc's scope made but not published as the frame's (no slow exit, no parking,
     the frame's calls still light), with one scope per invocation and the frame's exit marking it
     left when the Proc escaped.
+    perf/literalsite (see Landed, not gated) built A and with it the attribution: where the
+    literal runs, its Proc makes the scope anyway and A changes nothing (`nbl` 118 -> 114,
+    overlapping); where it does not, A takes the whole 45 ns (`nbx` 100 -> 56, `nbp`'s 56). So
+    the full site costs about nothing, and the literal's own ~60 ns is the scope made and
+    published (the object, `LeaveLightMethodFrameSlow`, the parking around it) plus the Proc:
+    change B is what is left for `nb { }` and `a.each { }`.
 
 17. **The prelude calls its C# helpers as methods**: about 230 private `__x__` methods,
     called 1,928 times in `ruby4.rb` through call sites (8-12 ns each, a rule to bind per
@@ -1915,6 +1921,34 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     fixed order. Undecided: a matter of what IronRuby promises under threads, as gap 20 is.
 
 ## Landed
+
+- **perf/literalsite (round thirty-seven, 2026-11-27) - a call with a block in a light frame whose
+  literals are all narrow takes the light site (gaps 16 and 13)** - instructions not counted, time and
+  bytes, not gated. Change A of `Docs/light-frame-literal-blocks.md`. In a light body with literal blocks
+  every call with a block took the full site with the scope made on demand (`blockPass = ... &&
+  !BlockLiterals`), so `return nb(&P) if a; nb { }` made a scope on the hot path, which never reaches the
+  literal. Now, when every literal of the body is of the narrow shape (`HasOnlyNarrowLiterals`: no
+  enclosing local read or written, no return, yield, super, nested literal, lambda, def or class body,
+  no call of binding, eval, local_variables, __method__, __callee__, block_given?, iterator? - the AST
+  walker does not visit a call's block, so the checker walks it), such a call takes the `HasLightScope`
+  site as in a body without literals, with LightScopeRequired sending it to the full site with the scope
+  as before; a literal's Proc is still made over the scope made on demand. `IR_LIGHT_LITERAL_CALLS=0` is
+  the old code. Six alternating rounds against the switch off, ns per call: `nbx` 100 -> 56 (CRuby 44),
+  `nbp` 56 -> 56, `nby` 52 -> 48, `nbl` 118 -> 114, `eachl` 138 -> 140, `each1` 159 -> 162, `times1` 164 ->
+  157, `map1` 167 -> 172, `call` 59 -> 60 (all but `nbx` overlapping); bytes a call with parking off, `nbx`
+  208 -> 24. What it measured is the point (see gap 16): the full site is not where a literal's cost is.
+  Checked: `Util/literal-block-light-matrix.rb` (new: the narrow shape to a light method, each, times,
+  map; escape through `&b` kept and called after the method returned, `define_method`, `Kernel.proc`,
+  `lambda`, the kept Proc's `binding.local_variables`; break with an ensure, next, raise, throw; the
+  callee taking `binding`, `send(:binding)` in the literal, `local_variables`, `__method__`, `$~` set
+  through `send`, `eval` in the method, a private callee, `block_given?`; recursion, re-entrancy, four
+  threads; six bodies that are not of the shape; TracePoint `:call`/`:b_call`/`:c_call` and a `:b_call`
+  binding) with CRuby's output on both builds and with the switch off; with it block-pass, block-given,
+  parked-scope, block-scope-reuse (three), block-nest-reuse, light-entry, light-rest, parked-iterator,
+  hot-shapes and jit in the seven modes and the switch off: PASS, 91 same. ruby/spec language/block,
+  proc, return and core/proc: 496 examples, no failure on either build. IronRuby.Tests in full on a
+  Debug build: one failure, `Fiber_ThreadRaiseInSwitchBookkeeping1`, run while the specs loaded the
+  host; alone it passed five times of five (three of three on the baseline).
 
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,

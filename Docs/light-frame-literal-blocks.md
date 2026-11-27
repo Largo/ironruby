@@ -1,6 +1,7 @@
 # A literal block in a light frame: what it costs, and a Proc without a method scope
 
-Status: measured and designed in round thirty-seven (perf/lazyproc), not built. It is the remainder of
+Status: measured and designed in round thirty-seven (perf/lazyproc); change A built in perf/literalsite
+(`IR_LIGHT_LITERAL_CALLS`, on), which also attributed the cost - see "What A measured" below. B is not built. It is the remainder of
 gap 13 of `Util/perf/LEDGER.md` (the fixed cost of calling an iterator) and a case of gap 16 (a light
 frame that ends up making its scope).
 
@@ -37,6 +38,24 @@ scope with a release write instead of a compare-exchange moved nothing, perf/ite
 parking, `IR_PARKED_SCOPES=0`, costs the same). The first job of an attempt is that attribution - a
 profile on a host with perf, or the sequence the body emits timed piece by piece in C# - because it
 decides which of the two steps below is worth building.
+
+## What A measured (perf/literalsite)
+
+Built as designed below, for bodies whose literals are all of the narrow shape
+(`MethodDefinition.HasOnlyNarrowLiterals`), alternating rounds against the switch off and CRuby:
+
+| shape | switch off | A | CRuby |
+|---|---|---|---|
+| `nbx`: `return nb(&P) if a; nb { }` | 100 | 56 | 44 |
+| `nbp`: `nb(&P)` (no literal) | 56 | 56 | 40 |
+| `nbl`: `nb { }` | 118 | 114 (overlapping) | 36 |
+| `eachl`, `each1`, `times1`, `map1` | 138, 159, 164, 167 | 140, 162, 157, 172 (overlapping) | 68, 79, 93, 111 |
+
+So **the full site costs about nothing**: where the literal runs, its Proc makes the scope anyway and A
+changes nothing (`nbl`); where it does not, A takes the whole 45 ns (`nbx` falls to `nbp`), because the call
+no longer makes the scope (208 -> 24 bytes a call with parking off). The 45 ns is the scope being made and
+published: the object, `LeaveLightMethodFrameSlow`, the parking around it. That is B's ground, and B is
+what the literal's own cost (`nbl`, `each1`) needs.
 
 ## How a literal reaches its method today
 
