@@ -678,3 +678,40 @@ probe("ewo_singleton")    { a = [1]; def a.each_with_object(m); yield :own, m; :
 probe("ewo_size")         { [[1, 2].each_with_object(0).size, { a: 1 }.each_with_object(0).size, (1..3).each_with_object(0).size] }
 probe("ewo_thread")       { e = [1, 2].each_with_object(0); e.next; Thread.new { begin; e.next; rescue => x; "#{x.class}: #{x.message}"; end }.value }
 probe("ewo_inspect")      { e = [1].each_with_object(:m); e.next; e.inspect }
+
+# --- the StopIteration of an iteration on the fiber (a generator, a lazy): raised from C# now ----------
+def gen1 = Enumerator.new { |y| y << 1; :gen_r }
+probe("fs_result")        { e = gen1; e.next; s = (e.next rescue $!); [s.class, s.message, s.result] }
+probe("fs_again")         { e = gen1; e.next; s1 = (e.next rescue $!); s2 = (e.next rescue $!); s3 = (e.next rescue $!); [s1.equal?(s2), s2.cause.equal?(s1), s3.cause.equal?(s1), s1.cause, s3.result] }
+probe("fs_dropped_cause") { e = gen1; e.next; begin; e.next; rescue StopIteration; end; s = (e.next rescue $!); [s.cause.class, s.cause.result, bt(s.cause).size > 0] }
+def fs_drop(e) = (begin; e.next; rescue StopIteration; end; nil)
+def fs_later(e) = [1].each { s = (e.next rescue $!); return [bt(s.cause), bt(s)] }
+probe("fs_bt_cause_later") { e = gen1; e.next; fs_drop(e); fs_later(e) }
+def fs_bt_direct
+  e = gen1
+  e.next
+  begin
+    e.next
+  rescue StopIteration => s
+    bt(s)
+  end
+end
+probe("fs_bt_direct")     { fs_bt_direct }
+probe("fs_loop")          { e = gen1; [loop { e.next }, loop { e.next }] }
+probe("fs_lazy_loop")     { e = [1, 2].lazy.map { |x| x * 2 }; r = []; [loop { r << e.next }, r] }
+probe("fs_rewind_fresh")  { e = gen1; e.next; s1 = (e.next rescue $!); e.rewind; e.next; s2 = (e.next rescue $!); [s2.equal?(s1), s2.cause.nil?] }
+probe("fs_dup_after_end") { e = gen1; e.next; s1 = (e.next rescue $!); d = e.dup; d.next; s2 = (d.next rescue $!); [s2.equal?(s1), s2.cause.nil?] }
+probe("fs_raise_inside")  { e = Enumerator.new { |y| y << 1; raise ArgumentError, "in" }; e.next; [(e.next rescue "#{$!.class}: #{$!.message}"), e.next] }
+probe("fs_cause_in_rescue") { e = gen1; e.next; begin; raise "outer"; rescue; s = (e.next rescue $!); end; [s.class, s.cause&.message] }
+probe("fs_tracepoint")    { seen = []; tp = TracePoint.new(:raise) { |t| seen << t.raised_exception.class }; e = gen1; e.next; tp.enable { e.next rescue nil }; [seen.uniq, seen.size <= 1] }
+probe("fs_thread_after_end") { e = gen1; e.next; (e.next rescue nil); Thread.new { begin; e.next; rescue => x; [x.class, x.cause.class]; end }.value }
+probe("fs_init_redefined") do
+  calls = []
+  StopIteration.class_eval { alias_method :__fs_init__, :initialize; define_method(:initialize) { |*a| calls << a; __fs_init__(*a) } }
+  e = gen1; e.next
+  s1 = (e.next rescue $!); s2 = (e.next rescue $!)
+  StopIteration.class_eval { remove_method :initialize; alias_method :initialize, :__fs_init__; remove_method :__fs_init__ }
+  [calls.size, s2.cause.equal?(s1), s1.result]
+end
+probe("fs_after_restore") { e = gen1; e.next; s1 = (e.next rescue $!); s2 = (e.next rescue $!); s2.cause.equal?(s1) }
+probe("cur_tracepoint")   { seen = []; tp = TracePoint.new(:raise) { |t| seen << [t.raised_exception.class, t.lineno == __LINE__] }; e = [].each; tp.enable { (e.next rescue nil); (e.next rescue nil) }; seen }

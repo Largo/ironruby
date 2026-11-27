@@ -1339,13 +1339,13 @@ namespace IronRuby.Builtins {
             // get_next_values: the end is raised once as such, and from then on as a new StopIteration
             // whose cause is the first one
             if (first) {
-                throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(stop) : stop;
+                throw Raising(context, stop);
             }
             // the first one is handed to Ruby code now (Exception#cause): if it was rescued and dropped, the walk for its
             // backtrace is still to be taken, and is taken here, as close to where it was rescued as there is
             RubyExceptionData.ExposeCatchSite(stop);
             var again = CreateStopIteration(context, cursor.Result, stop);
-            throw ThrowsUnkept() ? RubyExceptionData.MarkUnkept(again) : again;
+            throw Raising(context, again);
         }
 
         // IR_FAST_NEXT=0 throws the StopIteration of a cursor as before, the stack walked as soon as a frame rescues it.
@@ -1361,6 +1361,20 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static bool ThrowsUnkept() {
             return _fastNext && TracePoint.ActiveEvents == 0;
+        }
+
+        /// <summary>
+        /// The StopIteration about to be thrown, marked unkept (<see cref="ThrowsUnkept"/>), after a TracePoint on :raise has seen
+        /// it go by, as MRI's rb_exc_raise shows it (and as Hash#fetch's KeyError is shown, IDictionaryOps).
+        /// </summary>
+        private static StopIteration/*!*/ Raising(RubyContext/*!*/ context, StopIteration/*!*/ stop) {
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
+                TracePoint.OnException(TraceEvents.Raise, null, context, stop);
+            }
+            if (ThrowsUnkept()) {
+                RubyExceptionData.MarkUnkept(stop);
+            }
+            return stop;
         }
 
         // CursorStep's part for a cursor whose Resume runs Ruby code, in a method of its own: the handler here would otherwise be
@@ -1397,6 +1411,33 @@ namespace IronRuby.Builtins {
             }
             cursor.Resuming = false;
             cursor.ResumedEarly = true;
+        }
+
+        // The StopIteration that ended the fiber's iteration (__iter_raise_stop__), the cause of the ones raised after it.
+        private StopIteration _fiberStop;
+
+        /// <summary>
+        /// The end of an iteration that runs on the prelude's fiber (Enumerator#__iter_stop__), raised as a cursor's is
+        /// (CursorStep): once as such, and from then on as a new StopIteration whose cause is the first, each one unkept, so that
+        /// the frame that rescues it may leave the walk of the stack below it (perf/extiter). Raised by the prelude it was an
+        /// exception Ruby code had made - Kernel#raise of an instance - and every end of such an iteration took the walk.
+        /// </summary>
+        [RubyMethod("__iter_raise_stop__", RubyMethodAttributes.PrivateInstance)]
+        public static object RaiseFiberStop(RubyContext/*!*/ context, Enumerator/*!*/ self, object result) {
+            // MRI makes it with rb_exc_new, which calls a #new or #initialize of the program's: the prelude does then
+            // (and keeps the first one itself)
+            if (!RubyExceptionData.MakesUnkeptException(context.GetClass(typeof(StopIteration)))) {
+                return null;
+            }
+            StopIteration first = self._fiberStop;
+            if (first == null) {
+                var stop = self._fiberStop = CreateStopIteration(context, result, null);
+                throw Raising(context, stop);
+            }
+            // handed to Ruby code now (Exception#cause): the walk left for it is taken here
+            RubyExceptionData.ExposeCatchSite(first);
+            var again = CreateStopIteration(context, result, first);
+            throw Raising(context, again);
         }
 
         private static StopIteration/*!*/ CreateStopIteration(RubyContext/*!*/ context, object result, StopIteration cause) {
@@ -1527,6 +1568,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("__iter_reset__", RubyMethodAttributes.PrivateInstance)]
         public static object ResetExternalIteration(Enumerator/*!*/ self) {
             self._cursor = null;
+            self._fiberStop = null;
             self._onFiber = false;
             self._feedValue = null;
             self._hasFeed = false;

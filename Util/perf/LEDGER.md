@@ -1571,7 +1571,8 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     cursor would call blocks under its lock) and `Enumerator.new`. A raw fiber round trip is 2.3 us of wall clock and 4.7-6 us of CPU (two
     threads spinning), so the prelude's machinery around it is not where the time is.
     **An abandoned fiber-backed enumerator** costs 1.1-1.6 ms of process CPU to make and take one
-    value from (starting its thread), and its thread and about 60 KB stay until the handle's
+    value from (starting its thread: 316-482 us of wall clock warm, a new OS thread each, as
+    perf/fiberstart found; one that finishes reuses a pooled thread, 13-25 us), and its thread and about 60 KB stay until the handle's
     finalizer unwinds it (FiberRegistration, ThreadOps.Fiber.cs). That needs nothing on the
     fiber's side to reach the handle, and a blocked thread's stack is a GC root: since
     perf/extiter4 (Landed) a lazy made elsewhere, or whose blocks are Symbol#to_procs, is
@@ -1632,6 +1633,45 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `v_two_kw` 2,435) in either lowering. Not the splat lowering: see Rejected, perf/lexical3.
 
 ## Landed
+
+- **perf/fiberstart (2026-11-27) - what a fiber's start costs, found; the end of an iteration on a
+  fiber raised from C# and its stack walk deferred, as a cursor's is (gap 35)** - not gated. Base
+  8d7efda (the round-38 branch with perf/extiter5). Measured first (`Util/bench/fiber-start.rb`,
+  new: one kind per process, blocks of 500, wall and process CPU, threads), on this four-core
+  container: a raw CLR thread started and joined is 120-150 us whatever its stack (0, 256 KB, 1 MB,
+  8 MB; a C# probe), 150-220 us with 0-3,000 threads alive; Ruby's `Thread.new { }.join` 130-260
+  us, one left waiting (`thread_park`) 285-412 us - so the 41-58 us of #213 was another machine. A
+  Fiber made is 2.3 us; one that finishes runs on a pooled thread (`fiber_complete` 13-25 us,
+  2,000 pool hits of 2,000); one left suspended takes a new thread, 316-482 us after warm-up,
+  1.2-1.5 times a waiting Ruby thread's, and keeps it: without a GC.start 3,000 of them were three
+  GCs and 3,017 threads, and reclaiming them (GC.start every 100 or 250) bounded the threads at
+  117-267 but cost more per enumerator (802-838 us against 578: the unwinding), since a reclaimed
+  thread beyond the pool's 8 ends. No change there: a thread for a suspended fiber is the price
+  while a fiber is a thread. What a drained fiber-backed enumerator cost beyond its fiber
+  (`gen_drain` 206 us against a fiber's 24) was mostly its end: __iter_stop__ raised a
+  StopIteration Ruby code had made and kept (the cause of later ones) with Kernel#raise, which
+  takes the catch-site walk (73 us of it). Now __iter_stop__ calls `Enumerator#__iter_raise_stop__`
+  (C#), which makes and throws it as CursorStep does - unkept, the first kept in the enumerator and
+  exposed (ExposeCatchSite) when handed out as a cause, forgotten by #rewind - unless
+  StopIteration's #new or #initialize is the program's (MakesUnkeptException), when the prelude
+  makes it as before, since MRI's rb_exc_new calls them. Both paths now show the StopIteration to
+  a TracePoint on :raise (`TracePoint.OnException`, as Hash#fetch's KeyError): the cursor's was
+  never shown (base: none of CRuby's three events), the fiber's was by Kernel#raise. Medians of
+  4,000, base -> new: a generator's ending `next` 57 -> 28-33 us, a lazy's `loop { e.next }` end
+  53-57 -> 25-27 us, the first `next` unchanged (65-75). `ab.rb -r 6`, ns, base / off / new:
+  `gen_end` (`next` again after a generator's end) 32803 / 29684 / 7929 (0.27 of off), `lazy_one`
+  (a one-element lazy drained) 119422 / 114263 / 70466 (0.62), `gen_one` 1.04 overlapping (its
+  start dominates), the cursor shapes level with base. Still open, the cursor path's own
+  difference from CRuby: with StopIteration#initialize redefined its cause is another object
+  (base too; the fiber path takes the prelude's way then and matches CRuby). `Util/extiter-matrix
+  .rb` (329 probes, 17 new: result, causes and their backtraces with the first end dropped in a
+  frame that has returned, loop, rewind, dup, an error in the generator, the cause inside a rescue,
+  TracePoint on both paths, threads, a redefined #initialize) prints CRuby's output on new; base
+  differs in the cursor TracePoint probe (fixed here), off in `flm_to_ary_next` only (perf/extiter5).
+  enum-next-, block-loop-, raise-, full-message- and enum-matrix the same on base, new and off.
+  spec/core/fiber, enumerator, thread and kernel/loop_spec: 1,026 examples, 0 failures in all
+  three; the Enumerator*, Lazy*, Loop*, Fiber*, Thread*, Exception* and Raise* IronRuby.Tests pass
+  in five plain runs on base and five on new (no abort, no failure).
 
 - **perf/extiter5 (2026-11-27) - Hash#select / #filter / #reject, `filter_map`, `flat_map` and
   `each_with_object` take `next` on a cursor (gap 35)** - not gated. Base 1fca3c7 (the round-38

@@ -73,5 +73,9 @@ t("select_next", n(20_000))  { |n| s = 0; (n / 1000).times { s += drain(LARGE.se
 t("lazy_next", n(5_000))     { |n| s = 0; (n / 1000).times { s += drain(LARGE.lazy.map { |x| x + 1 }) }; s }
 t("produce", n(20_000))      { |n| s = 0; (n / 1000).times { e = Enumerator.produce(1) { |x| x + 1 }; 1000.times { s += e.next } }; s }
 t("zip_enum", n(20_000))     { |n| s = 0; (n / 1000).times { LARGE.zip(LARGE.each) { |a, b| s += a + b } }; s }
+# a fiber-backed enumerator of one element, drained: its start and its end are the cost (per enumerator)
+t("gen_one", n(2_000))       { |n| s = 0; n.times { s += drain(Enumerator.new { |y| y << 1 }) }; s }
+t("lazy_one", n(2_000))      { |n| s = 0; n.times { s += drain([1].lazy.map { |x| x }) }; s }
+t("gen_end", n(20_000))      { |n| s = 0; e = Enumerator.new { |y| }; n.times { begin; e.next; rescue StopIteration; s += 1; end }; s }
 # controls: these keep their fiber (a generator; lazy and produce above too)
 t("generator", n(20_000))    { |n| s = 0; (n / 1000).times { s += drain(Enumerator.new { |y| LARGE.each { |x| y << x } }) }; s }

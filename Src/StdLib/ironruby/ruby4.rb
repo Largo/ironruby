@@ -5857,7 +5857,12 @@ class Enumerator
 
   # get_next_values: the end is raised once as such, and from then on as a new
   # StopIteration whose cause is that first one.
+  # get_next_values: the end is raised once as such, and from then on as a new StopIteration
+  # whose cause is that first one. Made and raised in C#, as a cursor's is
+  # (Enumerator#__iter_raise_stop__), so that a rescue that drops it skips the stack walk -
+  # unless StopIteration's #new or #initialize is not IronRuby's own, which it then calls here.
   def __iter_stop__
+    __iter_raise_stop__(@__iter_result__)
     error = ::StopIteration.new("iteration reached an end")
     error.__set_result__(@__iter_result__)
     first = @__iter_stop_exc__
