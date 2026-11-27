@@ -8055,6 +8055,42 @@ p 30.times.map { |i| eval(""v + 1"", b_with(v: i % 3)) }.uniq
         }
 
         /// <summary>
+        /// IR_EVAL_SHARE_DEFINED: a text with `defined?' shares its compiled code between evals (EvalCodeCache), and the
+        /// answers follow what changed in between - the binding's locals, a method and a constant defined and removed,
+        /// self's instance variables; `defined?(yield)' stays refused (Util/eval-defined-matrix.rb).
+        /// </summary>
+        public void Eval_SharedDefined1() {
+            TestOutput(@"
+require 'ruby4'
+def b_with(**h) = binding.tap { |b| h.each { |k, v| b.local_variable_set(k, v) } }
+T = ""[defined?(cur) ? cur : :none, defined?(dm_t), defined?(DC_T), defined?(@iv)]""
+class P; def initialize(n) = (@iv = n if n); def b = binding; end
+r = []
+r << eval(T, b_with(cur: 1))
+r << eval(T, b_with)
+Object.send(:define_method, :dm_t) { 1 }
+Object.const_set(:DC_T, 1)
+r << eval(T, b_with(cur: 2))
+Object.send(:remove_method, :dm_t)
+Object.send(:remove_const, :DC_T)
+r << eval(T, b_with)
+r << eval(T, P.new(5).b) << eval(T, P.new(nil).b)
+def blk(&b) = eval(""defined?(yield) ? yield : :noblock"", binding)
+r << blk << blk { 1 }
+r.each { |x| p x }
+", @"
+[1, nil, nil, nil]
+[:none, nil, nil, nil]
+[2, ""method"", ""constant"", nil]
+[:none, nil, nil, nil]
+[:none, nil, nil, ""instance-variable""]
+[:none, nil, nil, nil]
+:noblock
+1
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any

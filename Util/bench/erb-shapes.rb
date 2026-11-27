@@ -71,3 +71,8 @@ LOOP_V = "-> { i = 0; s = 0; while i < 1000; s += v; i += 1; end; s }.()"
 LOOP_S = "-> { i = 0; s = 0; w = v; while i < 1000; s += w; i += 1; end; s }.()"
 t("eval_reads_v", n(30)) { |n| s = 0; n.times { s += eval(LOOP_V, fresh_v, '(reads)', 0) }; s }
 t("eval_reads_static", n(30)) { |n| s = 0; n.times { s += eval(LOOP_S, fresh_v, '(reads)', 0) }; s }
+# the template with what perf/erb36's screen refuses (EvalCodeCache.IsShareable): a regexp literal, a defined? of a local
+SRC_RE = ERB.new(PAGE.sub("<%= title %>", "<%= title.sub(/T/, 't') %>"), trim_mode: '-').src
+SRC_DEF = ERB.new(PAGE.sub("<%= title %>", "<%= defined?(title) ? title : '' %>"), trim_mode: '-').src
+t("erb_eval_regexp", n(300)) { |n| s = 0; n.times { |i| s += crc(eval(SRC_RE, fresh_top("T#{i & 3}"), '(erb)', 0)) }; s }
+t("erb_eval_defined", n(300)) { |n| s = 0; n.times { |i| s += crc(eval(SRC_DEF, fresh_top("T#{i & 3}"), '(erb)', 0)) }; s }

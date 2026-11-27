@@ -22,8 +22,9 @@ namespace IronRuby.Runtime {
     /// ones - a /o regexp, a regexp or range literal (one object per eval), END {}, and the same one
     /// level down in a `def' or a block compiled at its first call. So a text is kept only when its
     /// whole tree, blocks included, holds none of the nodes whose code keeps such a value
-    /// (<see cref="IsShareable"/>): no regexp, range, flip-flop, END, defined?, super, yield, and no
-    /// def, class or module body (whose code would also be one for two evals). What is left - calls,
+    /// (<see cref="IsShareable"/>): no regexp, range, flip-flop, END, super, yield, and no
+    /// def, class or module body (whose code would also be one for two evals). A `defined?' is let in
+    /// (perf/evalscreen): it keeps what its operand's code keeps. What is left - calls,
     /// locals, string, symbol and number literals, blocks, constants, conditionals, loops - keeps
     /// only call-site caches, which a method body run again shares too; a frozen string literal is
     /// interned, the same object for every eval, as MRI's is.
@@ -82,6 +83,11 @@ namespace IronRuby.Runtime {
             return screen.Shareable;
         }
 
+        /// <summary>
+        /// IR_EVAL_SHARE_DEFINED=0 refuses a text with a `defined?' again, as perf/erb36's screen did (see Screen).
+        /// </summary>
+        private static readonly bool ShareDefinedEnabled = Environment.GetEnvironmentVariable("IR_EVAL_SHARE_DEFINED") != "0";
+
         private sealed class Screen : Walker {
             internal bool Shareable = true;
 
@@ -99,7 +105,11 @@ namespace IronRuby.Runtime {
             public override bool Enter(RegularExpression/*!*/ node) => Refuse();
             public override bool Enter(RegularExpressionCondition/*!*/ node) => Refuse();
             public override bool Enter(ShutdownHandlerStatement/*!*/ node) => Refuse();
-            public override bool Enter(IsDefinedExpression/*!*/ node) => Refuse();
+            // `defined?' keeps what the code of its operand keeps and nothing more (IR_EVAL_SHARE_DEFINED): of a local, the
+            // answer the compile found in the locals the key holds; of a call, a call site; of a constant, a constant's cache,
+            // which a constant read keeps too; of an instance, global or class variable, a runtime call. The walk goes on into
+            // the operand, so `defined?(yield)' and `defined?(super)' are refused as their YieldCall and SuperCall are.
+            public override bool Enter(IsDefinedExpression/*!*/ node) => ShareDefinedEnabled || Refuse();
             public override bool Enter(SuperCall/*!*/ node) => Refuse();
             public override bool Enter(YieldCall/*!*/ node) => Refuse();
 
