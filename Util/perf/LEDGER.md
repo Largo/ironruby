@@ -1036,6 +1036,12 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     in `Kernel#__ir_string__`, which asks whether #respond_to? is Kernel's
     (`method(:respond_to?).owner`) and calls #to_s through `bind_call`; CRuby decides that in
     C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
+    `Hash#sort_by` (2.4 -> 1.9), `Range#sort_by` (2.9 -> 2.3) and `Hash#max_by(2)` (3.1 -> 2.6)
+    are done too (perf/hsortby, see Landed). Survey of 2026-11-27 (one round): the Ruby rows
+    above 4x CRuby are `Array#dig` into a Hash (9.2), `String(nil)`/`String(5)` (8.8, 6.7),
+    `Array#sum` (8.0) and with a block over Floats (7.1) or Integers (4.4). Of the C# rows,
+    `Array#min` (6.0 in that one round) is 2.0x measured (72 ns against 36, as `max`): the
+    survey's noise, not a slow path; `Array#take` (4.1) is done (perf/arymin, see Landed).
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
     (`min_by(2)` 3.8 -> 2.9 after the review fix below). Open beside speed: `min_by(n)`'s tie order is input order,
     MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
@@ -1560,6 +1566,23 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     `module`) - the screen perf/evalc lacked. `erb_result` 0.31-0.33 of its time, `eval_small`
     0.40. Left: the binding's locals read by name (about 300 `GetLocalVariable` per render,
     each under a lock), and an eval of a text the screen refuses costs what it did.
+    perf/evallocals (Landed): a read or write of such a local remembers where the name resolved
+    (`LocalVariableSite`); a render 0.86-0.88 of its instructions, a loop of eval'd reads 0.37.
+    Left: the first access of each site per render (a fresh binding defines `_erbout`, which
+    invalidates every site), and the cost of the eval itself.
+    perf/evalscreen (Landed): of the 80 ERB templates of the standard library (rdoc's 40
+    `.rhtml`, bundler's 39 `.tt`) and erb-shapes' page, 69 were shared and 11 refused - a regexp
+    literal in 6, `defined?` in 5 (all of a local), a range in 2 (bundler's, run once); a refused
+    template costs 2.7 times a shared one (3.40M instructions a render against 1.27M). `defined?`
+    is let in now: 72 of 80. Left: the regexp literal. CRuby makes a new Regexp per eval of the
+    same text (`eval("/a/").equal?(eval("/a/"))` is false; one eval's block gets the same one on
+    every call), so sharing the code needs the literal's cache box per eval - and a block of the
+    text reaches nothing per eval: it is compiled apart (BlockDispatcher) and sees only the
+    scope, which for `eval(s, binding)` is the binding's own.
+    perf/evalboxes (Landed) carries an eval's literal objects on the Procs its code
+    instantiates: regexp and Integer range literals are let in, and all 80 templates share
+    their code. Left: a text with `def`, `class`, `module`, `super`, `yield`, a flip-flop or END
+    (none of the 80 has one), and the eval's own cost when it is shared.
 32. **A singleton class, and a method defined at run time, cost 25 to 60 times CRuby's**
     (`Object.new.singleton_class` 17 us, `def o.x` 18, `define_singleton_method` 46,
     `Class.new` 12, with a `def` 37), and `OpenStruct.new(h)` of three keys, which
@@ -1861,6 +1884,174 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   jit-calls, strcow and dup matrices in every mode and switched off: PASS (array2 and block-loop's
   R2R row as the base); spec/core/array 2,898 examples, the one known error on both. Base 9c4f953
   (4320d4a with 8c31db5); the base needed DLR patches 0111 and 0112 applied by hand.
+- **perf/arymin (/perf-step, 2026-11-27, on ed49c52) - `Array#take` is Array's own, as MRI's
+  `rb_ary_take`** - clock only, not gated. Array inherited Enumerable's C# take, a walk of
+  #each through a Proc: `[1, 2, 3, 4].take(2)` 248.0 -> 83.1 ns (CRuby 71.5), `first_n`, `min`,
+  `max`, `minmax` within the noise. Six cases of `Util/array-take-matrix.rb` (new) now print
+  CRuby's output: the owner, the backtrace label, a subclass's own #each and a redefined
+  Array#each not called, a redefined Enumerable#take not reaching Arrays, `take(2**40)`. Left:
+  nil's and Infinity's conversion messages (the protocol's, as for `first`). The same in four
+  modes and R2R; array-step, array2, enum, enum-next, enumerable2, osr-array and hot-shapes
+  unchanged; ruby/spec core/array and core/enumerable the same examples on both builds.
+  `Array#min`, the other row the survey put far from CRuby, measured 2.0x CRuby, not 6.0x, and
+  was left: its Fixnum path is there, what remains is the call.
+
+- **perf/hsortby (/perf-core, 2026-11-27, on 5472a50) - `sort_by`, `min_by(n)` and
+  `max_by(n)` of a Hash, a Range or an Enumerator through the C# merge sort** (the gap 15 survey's
+  largest Ruby row in nanoseconds over CRuby: `Hash#sort_by` +1250 ns). The generic walk made
+  [key, index, element] triples and sorted them with a Ruby comparison block; now the elements it
+  gathers go to `__list_sort_by__` (the C# stable merge sort, as an Array's already did) with
+  their keys by position. The walk itself is unchanged, so are block calls and the `Hash#each`
+  frame. The merge now sends #<=> to the earlier key, as MRI's sort_by_cmp: keys that do not
+  compare are named in CRuby's order, for Arrays too ("comparison of Integer with String
+  failed"; it said "String with 1").
+  - Clock (`ab.rb`, four rounds, ns, CRuby / unchanged / this): `hash_sort_by` 905 / 2158 /
+    1753 (0.81), `hash_sort_by_pair` 852 / 2166 / 1757 (0.81), `range_sort_by` 681 / 1953 /
+    1547 (0.79), `hash_max_by_n` 776 / 2415 / 2024 (0.84); `sort_by`, `min_by_n`, `max_by_n`
+    of an Array 1.00, 1.01, 0.99 (noise).
+  - `Util/sort-by-matrix.rb` (new) prints the unchanged build's output but for one line now
+    CRuby's (ties under a redefined Integer#<=>), in five modes and R2R; callable-parameters,
+    caller, light-entry, hot-shapes unchanged in four modes; ruby/spec core/enumerable, hash,
+    array, range, struct, enumerator the same examples on both builds; IronRuby.Tests
+    `Backtrace_LibraryFrames1` and six more pass. Not gated.
+  - Left from CRuby (as before): tie order (CRuby's sort_by is not stable; this is), the NaN
+    key's message, and a redefined `Array#<<` reaching the walk. Next lever: the walk - a
+    `|*values|` block and `__enum_item__` per element; a Hash whose #each is the built-in one
+    could be walked with a one-value block, as `__plain_list__?` does for an Array.
+
+- **perf/evalboxes (/perf-step, 2026-11-27, on 4320d4a + perf/lexical 779d87c) - an eval'd
+  text with regexp or range literals shares its compiled code, the literals' objects kept per
+  eval (`IR_EVAL_LITERALS`, gap 31)** - instructions only, not gated. The commonest refusal left
+  by perf/evalscreen (6 of the 11 refused stdlib templates; 2.7 times a shared render).
+  - What CRuby does, checked first (CRuby 4.0): a regexp literal of the text's top level is a new
+    object per eval and the same one for every pass of one eval's `while`; one in a block, the
+    same on every call of the block within the eval, and a Proc that escapes keeps its eval's
+    after another eval of the text; two sites with the same text are two objects; `/#{x}/o` once
+    per eval; an interpolated one without `o` new every time; an Integer range literal frozen,
+    per eval, the same within one; regexps frozen; `$~` set in the binding's frame.
+  - Where the state lives: a plain string eval (`TopScopeFactoryKind.None`) whose tree has a
+    regexp or a range gets a hidden variable of its top level that its prologue sets to a new
+    `EvalLiterals` (one slot per literal site, filled once by whichever thread gets there
+    first). A literal of the top level reads its slot from it; every Proc the text instantiates
+    takes it along (`RubyOps.AttachEvalLiterals`, `Proc.EvalLiterals` in the Proc's rare state,
+    kept by its copies - `dup`, `curry`, a method made of it), and a literal in a block reads it
+    from the block's BlockParam's Proc (`GetBlockEvalLiterals`) - the binding's scope, shared by
+    every eval through it, is not used. A literal in a `def` or class body of the text keeps its
+    object in the code as before (the screen refuses those texts). Eval'd code replaces no loops
+    (`CanReplaceLoops` is false for eval), so a block body always runs with its BlockParam. The
+    screen lets in `RegularExpression`, `RegularExpressionCondition` and `RangeExpression`
+    (a flip-flop's `RangeCondition` stays refused). Five new emitted helpers;
+    `ReflectionCache.Generated.cs` is ClassInitGenerator's, identical to the entries written by
+    hand.
+  - Instructions a render (`Util/perf/callgrind/count.sh`, N=1000, one shape per process, switch
+    off -> on): `erb_eval_regexp` 3,399,928 -> 1,283,572 (0.378); `erb_eval_top` 1,272,648 ->
+    1,272,650, `erb_eval_defined` 1,271,525 -> 1,270,361, `eval_small` 55,159 -> 55,159. Timed:
+    `erb_eval_regexp` 613 -> 223 us, `erb_eval_top` 235 -> 239. Standard-library templates
+    shared: 72 -> 80 of 80.
+  - `Util/eval-literals-matrix.rb` (new: the cases above, nested blocks, a lambda and a proc of
+    one eval, frozen/source/options, an escaped Proc after another eval, two Procs of one eval,
+    a Proc made into a method, `dup` and `curry`, a Proc passed as a block, `/o` keeping its
+    first value, a range of variables, `$~` at the top level and in a block, a regexp as a
+    condition, four threads on one text, ERB) prints CRuby 4.0's output on the unchanged build,
+    and on the change by default, with `IR_EVAL_LITERALS=0`, `IR_LIGHT_FRAMES=0`, `-X:NoJIT
+    -X:NoOSR`, `-X:NoJITCalls` and R2R. eval-defined, eval-locals, erb-escape, regex-light,
+    regexp-escaped-byte, regexp-inspect, regexp-property, lexical-light, block-scope-reuse and
+    hot-shapes print CRuby's output, eval-matrix, regex-property and regexp-binary-ctype the
+    unchanged build's, in those five modes; the three eval matrices CRuby's under R2R.
+    ruby/spec `core/kernel/eval_spec.rb` 57 / 0, `core/binding` 98 / 0, `language/regexp` 258 /
+    0, `core/regexp` 256 with 3 errors, `library/erb` 53 / 0 - the same on both builds.
+    IronRuby.Tests `Eval_SharedLiterals1` (new; passes with the switch off too) and 93 named
+    eval, binding, defined?, regexp, range, proc and block tests pass.
+
+- **perf/evalscreen (/perf-step, 2026-11-27, on 4320d4a + perf/lexical b45360c) - an eval'd
+  text with `defined?` shares its compiled code (`IR_EVAL_SHARE_DEFINED`, gap 31)** -
+  instructions only, not gated. Measured first, which refusals of perf/erb36's screen real
+  templates hit (ERB.new(...).src of every `.erb`, `.rhtml` and `.tt` of Src/StdLib and
+  erb-shapes' page, parsed with Prism under CRuby): 80 templates, 69 shared, 11 refused - a
+  regexp literal in 6 (4 alone: `/^\w+\./m`, `%r{\A[^/]+(?=/)}`), `defined?` in 5 (3 alone, all
+  of a local: `defined?(current)`, `defined?(klass)`), a range in 2 (bundler's `0..1`, run once
+  per `bundle gem`); no `yield`, `super` or definitions. A refused render costs 2.7 times a
+  shared one: `erb_eval_regexp` 3,399,071 and `erb_eval_defined` 3,399,985 instructions against
+  `erb_eval_top` 1,271,530 (the page with one regexp, or one `defined?(title)`).
+  - The regexp, the most common, was not taken: CRuby makes a new Regexp per eval of the same
+    text (three evals, three objects; one eval's block, the same object on every call), so a
+    shared Regexp is observable through `equal?` and `object_id`, and making the cache box per
+    eval needs state a block of the text can reach - it cannot: a block is compiled apart
+    (BlockDispatcher) and sees only its scope, the binding's own (see gap 31).
+  - `defined?` keeps only what its operand's code keeps: of a local, the answer the compile
+    found in the locals the cache key holds; of a call, a call site; of a constant, a constant's
+    cache (which an allowed constant read keeps too); of an instance, global or class variable,
+    a runtime call. The screen walks into the operand, so `defined?(yield)` and `defined?(super)`
+    stay refused by their YieldCall and SuperCall. One line in `EvalCodeCache.Screen`, under the
+    switch. Templates shared: 69 -> 72 of 80 (darkfish's and aliki's `_head` and darkfish's
+    `index`; `_sidebar_pages` also has a regexp).
+  - Instructions a render (`Util/perf/callgrind/count.sh`, N=1000, switch off -> on):
+    `erb_eval_defined` 3,399,985 -> 1,251,786 (0.368); `erb_eval_top` 1,271,530 -> 1,270,311,
+    `erb_eval_regexp` 3,399,071 -> 3,394,511, `eval_small` 55,414 -> 55,414. Timed alone,
+    `erb_eval_defined` 639 -> 235 us. (Several callgrind processes of the switch-off arm died
+    with exit 1 and no output after a few shapes - every eval of a refused text compiles new
+    code under valgrind; run shape by shape they finish.)
+  - `Util/eval-defined-matrix.rb` (new: `defined?` of a local with and without it in the
+    binding, a method defined and removed, `o.m` made private and public, a constant and
+    `A::B` defined and removed, `@iv` under another self, `$g`, `@@cv`, String and ::Kernel,
+    an assignment, an expression, nil, `puts`, self; `defined?(yield)` and `defined?(super)`,
+    `__FILE__`/`__LINE__` with the file and line given, a method's frame and the top level,
+    four threads on one cached text, ERB) prints CRuby 4.0's output on the unchanged build, and
+    on the change with the switch on and off, `IR_EVAL_LOCAL_CACHE=0`, `IR_LIGHT_FRAMES=0`,
+    `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`; so do eval-locals, erb-escape, lexical-light,
+    block-scope-reuse and hot-shapes, and eval-matrix prints the unchanged build's. ruby/spec
+    `core/kernel/eval_spec.rb` 57 / 0, `core/binding` 98 / 0, `library/erb` 53 / 0,
+    `core/basicobject/instance_eval_spec.rb` 41 with the 3 known into/to errors - the same on
+    both builds. IronRuby.Tests `Eval_SharedDefined1` (new; passes with the switch off too) and
+    29 named eval, binding and defined? tests pass. The round's base needed DLR patches 0111 and
+    0112 applied to the DLR checkouts.
+
+- **perf/evallocals (/perf-step, 2026-11-27, on b887bc1 + perf/lexical a87b5dc) - a site of
+  eval'd code remembers where a local it knows by name resolved (`IR_EVAL_LOCAL_CACHE`, gap
+  31)** - instructions only, not gated. Eval'd code reads a local the text does not declare
+  (the binding's, or one an earlier eval defined - an eval's own top-level locals are such,
+  ERB's `_erbout` among them) through `RubyOps.GetLocalVariable(scope, name)`: a walk up the
+  scopes, at each a string lookup in its static mapping and, where an eval or Binding defined
+  locals, a lookup in that dictionary under a lock. Measured first: about 700 instructions a
+  read (`eval_reads_v`, an eval'd loop reading `v` from the binding, 1,646 a turn against 941
+  with only static locals), about 540 an access where every local is dynamic (`eval_reads`).
+  - The change: `DynamicLocals` holds a cell (`StrongBox<object>`) per local, kept for the
+    scope's life; `GetLocalVariableAtSite` / `SetLocalVariableAtSite` take a
+    `LocalVariableSite` (a constant of the compiled code, shared by every eval of the text and
+    so by every binding and thread) that remembers one immutable resolution - the slot of the
+    declaring scope's locals or the cell - and reuses it while (1) no scope of the runtime has
+    gained a dynamic local or dropped its dynamic locals since (`RubyContext.
+    LocalVariableSitesVersion`, bumped by `DefineDynamicVariable` for a new name and by
+    `ResetForReuse`), and (2) the scope is the same, or reaches the same holder through scopes
+    with the same locals table at each step (the next run of the same block; a scope's static
+    locals are its body's compiled table and its parent never changes). Otherwise it resolves
+    again; a name that does not resolve is looked up by name as before. A resolution keyed on
+    the scope alone made ERB 1.034-1.037 *slower*: `items.each` runs each iteration in a new
+    block scope, so every read missed and paid the lookup and an allocation; the chain check
+    fixed that.
+  - Instructions a unit (`Util/perf/callgrind/count.sh`, `ab.rb -i -r 1 -n 1000
+    Util/bench/erb-shapes.rb`; unchanged build / switch off / on): `erb_eval_top` 1,446,873 /
+    1,453,260 / 1,255,820 (0.864), `erb_full` (`result_with_hash`) 1,532,485 / 1,532,762 /
+    1,347,053 (0.879), `eval_reads_v` 1,636,785 / 1,652,003 / 1,025,414 (0.621),
+    `eval_reads` 4,145,087 / 3,839,458 / 1,406,918 (0.366); the controls `eval_small` 1.000 and
+    `eval_reads_static` 1.002. Timed (`ab.rb -r 3`): every row overlapped (spreads 39-95% on
+    the shared machine), so the clock said nothing either way.
+  - `Util/eval-locals-matrix.rb` (new: an eval defining a local the next eval reads, one that
+    does not assign, local_variable_set before and after reads, writes, a loop, a block in the
+    text, several evals on one binding, a new local between two reads, one text on alternating
+    and kept bindings, a name that is the method's in one binding and an eval's in another, a
+    block parameter shadowing the method's, a block's own local, a binding of a light frame,
+    Binding#dup, TOPLEVEL_BINDING.dup, instance_eval, a missing name, a local another thread
+    defined, four threads on one binding, ERB#result_with_hash and #result) prints CRuby 4.0's
+    output on the unchanged build, and on the change by default, with `IR_EVAL_LOCAL_CACHE=0`,
+    `IR_LIGHT_FRAMES=0`, `IR_LIGHT_ENTRY=0`, `-X:NoJIT -X:NoOSR` and `-X:NoJITCalls`.
+    erb-escape, lexical-light, global-light and block-scope-reuse print CRuby's output and
+    light-entry and hot-shapes the unchanged build's in all six modes. ruby/spec
+    `core/binding` 98 examples 0 failures, `core/kernel/eval_spec.rb` 57 / 0, `library/erb`
+    53 / 0, the same on both builds. IronRuby.Tests `Eval_LocalVariableSites1` (new; passes
+    with the switch off too) and 31 named eval, binding and block tests pass.
+    `ReflectionCache.Generated.cs` from ClassInitGenerator, identical to the entries written
+    by hand. Not run: R2R.
 
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,

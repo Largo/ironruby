@@ -1712,6 +1712,30 @@ namespace IronRuby.Builtins {
             return new RubyArray(self, 0, count);
         }
 
+        // Array's own #take, as MRI's rb_ary_take: a new plain Array of the first count elements, read
+        // from the storage. Enumerable's walked #each through a Proc, three times as long, and so
+        // called a subclass's own #each, which MRI's does not.
+        [RubyMethod("take")]
+        public static RubyArray/*!*/ Take(IList/*!*/ self, [DefaultProtocol]int count) {
+            if (count < 0) {
+                throw RubyExceptions.CreateArgumentError("attempt to take negative size");
+            }
+            return new RubyArray(self, 0, Math.Min(count, self.Count));
+        }
+
+        // The count is a long in MRI (NUM2LONG): past an int it takes the whole Array, past a long it
+        // is a RangeError.
+        [RubyMethod("take")]
+        public static RubyArray/*!*/ Take(IList/*!*/ self, [NotNull]System.Numerics.BigInteger count) {
+            if (count < Int64.MinValue || count > Int64.MaxValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+            }
+            if (count.Sign < 0) {
+                throw RubyExceptions.CreateArgumentError("attempt to take negative size");
+            }
+            return new RubyArray(self, 0, self.Count);
+        }
+
         [RubyMethod("last")]
         public static object Last(IList/*!*/ self) {
             return self.Count == 0 ? null : self[self.Count - 1];
@@ -3210,7 +3234,9 @@ namespace IronRuby.Builtins {
             int left = start, right = start + half, target = start;
             int leftEnd = start + half, rightEnd = start + length;
             while (left < leftEnd && right < rightEnd) {
-                if (fixnumKeys ? (int)keys[right] < (int)keys[left] : Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
+                // the earlier key is the receiver of #<=>, as in MRI's sort_by_cmp: keys that do not
+                // compare are named in that order ("comparison of Integer with String failed")
+                if (fixnumKeys ? (int)keys[left] > (int)keys[right] : Protocols.Compare(comparisonStorage, keys[left], keys[right]) > 0) {
                     keyBuffer[target] = keys[right];
                     itemBuffer[target++] = items[right++];
                 } else {

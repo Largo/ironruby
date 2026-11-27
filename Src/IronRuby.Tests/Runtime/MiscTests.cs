@@ -8308,6 +8308,117 @@ p 40.times.map { |i| [opt(i % 2, k: i % 3), req(1, k: i % 2)] }.uniq.size
         }
 
         /// <summary>
+        /// IR_EVAL_LOCAL_CACHE: eval'd code reads and writes the locals it knows by name through a site that remembers
+        /// where the name resolved (LocalVariableSite) - one text on two bindings, locals an eval defined, local_variable_set
+        /// after a read, a block of the text, a binding of a light frame, Binding#dup, a local another thread defined
+        /// (Util/eval-locals-matrix.rb).
+        /// </summary>
+        public void Eval_LocalVariableSites1() {
+            TestOutput(@"
+require 'ruby4'
+def b_with(**h) = binding.tap { |b| h.each { |k, v| b.local_variable_set(k, v) } }
+TEXT = ""v * 2""
+r = [b_with(v: 1), b_with(v: 2)].map { |b| eval(TEXT, b) }
+b = binding
+eval(""x = 1"", b); eval(""x += 1"", b)
+c = b_with(v: 3)
+r1 = eval(""v"", c); c.local_variable_set(:v, 4)
+s = b_with(v: 1)
+eval(""[1, 2].each { |e| v += e }"", s)
+def light(a) = (eval(""a = a + 10"", binding); a)
+d = b_with(v: 1).dup; eval(""v = 9; n = 1"", d)
+t = binding
+Thread.new { eval(""tt = 7"", t) }.join
+p r, eval(""x"", b), b.local_variable_get(:x), [r1, eval(""v"", c)], s.local_variable_get(:v), light(1), eval(""n"", d), eval(""tt"", t)
+p 30.times.map { |i| eval(""v + 1"", b_with(v: i % 3)) }.uniq
+", @"
+[2, 4]
+2
+2
+[3, 4]
+4
+11
+1
+7
+[1, 2, 3]
+");
+        }
+
+        /// <summary>
+        /// IR_EVAL_SHARE_DEFINED: a text with `defined?' shares its compiled code between evals (EvalCodeCache), and the
+        /// answers follow what changed in between - the binding's locals, a method and a constant defined and removed,
+        /// self's instance variables; `defined?(yield)' stays refused (Util/eval-defined-matrix.rb).
+        /// </summary>
+        public void Eval_SharedDefined1() {
+            TestOutput(@"
+require 'ruby4'
+def b_with(**h) = binding.tap { |b| h.each { |k, v| b.local_variable_set(k, v) } }
+T = ""[defined?(cur) ? cur : :none, defined?(dm_t), defined?(DC_T), defined?(@iv)]""
+class P; def initialize(n) = (@iv = n if n); def b = binding; end
+r = []
+r << eval(T, b_with(cur: 1))
+r << eval(T, b_with)
+Object.send(:define_method, :dm_t) { 1 }
+Object.const_set(:DC_T, 1)
+r << eval(T, b_with(cur: 2))
+Object.send(:remove_method, :dm_t)
+Object.send(:remove_const, :DC_T)
+r << eval(T, b_with)
+r << eval(T, P.new(5).b) << eval(T, P.new(nil).b)
+def blk(&b) = eval(""defined?(yield) ? yield : :noblock"", binding)
+r << blk << blk { 1 }
+r.each { |x| p x }
+", @"
+[1, nil, nil, nil]
+[:none, nil, nil, nil]
+[2, ""method"", ""constant"", nil]
+[:none, nil, nil, nil]
+[:none, nil, nil, ""instance-variable""]
+[:none, nil, nil, nil]
+:noblock
+1
+");
+        }
+
+        /// <summary>
+        /// IR_EVAL_LITERALS: a text with regexp and range literals shares its compiled code between evals, its literals' objects
+        /// kept per eval (EvalLiterals): a new one per eval, the same one for every pass and block call of one eval and for a
+        /// Proc that escaped it, /o once per eval, threads each with their own (Util/eval-literals-matrix.rb).
+        /// </summary>
+        public void Eval_SharedLiterals1() {
+            TestOutput(@"
+require 'ruby4'
+B = binding
+def distinct(a) = a.map(&:object_id).uniq.size
+p distinct(3.times.map { eval(""/a\\w/"", B) }), distinct(eval(""4.times.map { /a\\w/ }"", B)), eval(""[/s/, /s/]"", B).then { |r| r[0].equal?(r[1]) }
+pr = eval(""proc { /esc/ }"", B); first = pr.call; other = eval(""proc { /esc/ }"", B).call
+p pr.call.equal?(first), first.equal?(other), pr.dup.call.equal?(first)
+V = binding.tap { |b| b.local_variable_set(:v, ""z"") }
+p distinct(3.times.map { eval('/#{v}/o', V) }), distinct(eval('3.times.map { /#{v}/o }', V)), distinct(eval('3.times.map { /#{v}/ }', V))
+p eval(""(1..2)"", B).frozen?, distinct(3.times.map { eval(""(1..2)"", B) }), distinct(eval(""3.times.map { (1...4) }"", B))
+eval('""xab"" =~ /a(b)/', binding); p $~[1]
+rs = 4.times.map { Thread.new { 20.times.map { eval(""2.times.map { /th/ }"", B) } } }.map(&:value).flatten(1)
+p rs.all? { |pair| pair[0].equal?(pair[1]) }, distinct(rs.map(&:first)) == rs.size
+", @"
+3
+1
+false
+true
+false
+true
+3
+1
+3
+true
+3
+1
+""b""
+true
+true
+");
+        }
+
+        /// <summary>
         /// A method that reads or writes a global is a light frame too (MethodDefinition.IsLightGlobal): every global but $~ and
         /// $_ is the runtime's, and the frame reads and writes it through the declaring scope. A name that comes to denote $~ or $_
         /// after the method was compiled (an alias) makes the scope on demand at the read or the write, and so does any
