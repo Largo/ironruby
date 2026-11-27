@@ -5434,6 +5434,27 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/passensure (2026-11-27) - running a pending ensure clause from the filter of a rescue frame
+  above it: designed, found unsound, not built** (stage 1 of the brief; `Docs/rescue-above-ensure.md`).
+  The idea (perf/rescuefilter): a rescue above a passed ensure catches and throws again (~20 us for the
+  first such frame) only because Ruby evaluates its class list after the ensure runs; run the ensure
+  from the rescue's first-pass filter, then decide there, and have the second pass skip the clause.
+  Not sound, for the CLR's model rather than the work: (1) the CLR finally blocks between the raise and
+  the ensure - a Mutex's unlock and File.open's close in C# library methods, the DLR's `$!` restores,
+  every Ruby frame's bookkeeping - run in the second pass, and Ruby wants them before an outer ensure:
+  `Util/raise-matrix.rb` "pe: a Mutex unlocked before the outer ensure" prints `[[:locked, false]]` on
+  CRuby and today, the early clause would see `true`; (2) a compiled or light frame's clause reads its
+  frame's CLR locals and cannot be called from an outer filter without compiling every ensure clause
+  as a closure (a cost on the path that does not raise); (3) a clause that raises, jumps (`return`,
+  `break`, `next`, `throw`, `retry` above) or is interrupted (Thread#raise, Thread#kill) cannot do so
+  from inside a filter, which can only return, and whose exceptions the CLR swallows.
+  `Util/raise-matrix.rb` has seventeen new rows, "a rescue above a passed ensure" (the ensure before a
+  class list that is a method call, a constant reassigned / `===` defined / the exception extended in
+  the ensure, `$!`, cause, each jump, retry, Mutex and File order, the backtrace, Thread#raise and
+  Thread#kill during the ensure): CRuby's output on the unchanged build in every mode. What is left
+  for the cost: a cheaper catch (a lazier capture, `ExceptionDispatchInfo` for the throw again),
+  which needs a sampler.
+
 - **perf/rescuefilter (2026-11-27) - deciding a constant rescue class list in the first-pass filter:
   measured, not built - it is decided there already, except above a passed ensure, where it cannot
   soundly be.** perf/timeout named "`rescue ExitException => e`: 29 us per frame against 8.6 for a core
