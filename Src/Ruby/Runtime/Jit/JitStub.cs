@@ -153,6 +153,8 @@ namespace IronRuby.Runtime.Jit {
         // body (it is profiling or cooling down, or its entry is stale). The method then goes on
         // profiling, as for a callee it would inline (ReceiverHints.CalleeNotReady, MaxInlineWaits).
         private bool _calleeNotReady;
+        // A call the stub profiled had a block: a body compiled for calls without one is declined (JitCode.AssumesNoBlock).
+        protected bool _calledWithBlock;
 
         protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity,
             JitKeywords keywords) {
@@ -363,7 +365,8 @@ namespace IronRuby.Runtime.Jit {
             if (_receiverClass == null) { _receiverClass = cls; } else if (_receiverClass != cls) { _polymorphicReceiver = true; }
             ObserveType(ref _selfClrType, self);
 
-            if (++_calls < Threshold) { return; }
+            // a method that passes its block parameter on and was called with a block declines now (TrySpecialize)
+            if (++_calls < Threshold && !(_calledWithBlock && _ast.Parameters.Block != null)) { return; }
             _calls = 0;
 
             if (Interlocked.CompareExchange(ref _compiling, 1, 0) != 0) { return; }
@@ -886,6 +889,12 @@ namespace IronRuby.Runtime.Jit {
             }
             if (_perCountMandatory >= 0) { return TrySpecializePerCount(refinements); }
 
+            // a body for calls without a block (BlockParameterOnlyPassed) is not compiled for a method called with one
+            if (_calledWithBlock && _ast.Parameters.Block != null) {
+                _declineReason = "called with a block";
+                return false;
+            }
+
             var types = ProfiledTypes(_typedCount);
 
             // The method version the entry guards on is read before compiling, so that it is never
@@ -902,6 +911,11 @@ namespace IronRuby.Runtime.Jit {
             var hints = Hints();
             var code = Named(JitCompiler.TryCompile(_ast, _context, types, _keywords, refinements, -1, _declaringScope, hints,
                 Callees(refinements, version, constantVersion), epoch), epoch, version, constantVersion);
+            if (code != null && code.AssumesNoBlock && _calledWithBlock) {
+                // the entry would send each call that has a block to the generic body, past its guards
+                _declineReason = "called with a block";
+                return false;
+            }
             if (code == null) {
                 // A call the body could inline - or, with -X:JITCalls, bind - is of a method that has not been
                 // specialized yet: a caller called once per call of its callee turns hot first. Profile on, a
@@ -1332,6 +1346,10 @@ namespace IronRuby.Runtime.Jit {
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
                     Ast.Constant(pinnedClass, typeof(RubyClass))));
             }
+            // a body compiled for a call without a block (BlockParameterOnlyPassed, JitCompiler.EmitBlockGiven)
+            if (code.AssumesNoBlock) {
+                test = And(test, Ast.ReferenceEqual(blk, Ast.Constant(null, typeof(Proc))));
+            }
 
             MSA.ParameterExpression[] keywordValues = null;
             if (_keywords != null) {
@@ -1741,13 +1759,63 @@ namespace IronRuby.Runtime.Jit {
         internal static string ParameterShape(MethodDeclaration/*!*/ ast) {
             var ps = ast.Parameters;
             if (ps.Unsplat != null) { return "rest parameter"; }
-            if (ps.Block != null) { return "block parameter"; }
-            if (ast.UsesBlock) { return "uses its block"; }
+            if (ps.Block != null) {
+                if (!BlockParameterOnlyPassed(ast)) { return "block parameter"; }
+            } else if (ast.UsesBlock) {
+                return "uses its block";
+            }
             if (ps.Mandatory.Length + ps.Optional.Length > MaxArity) { return "more than " + MaxArity + " parameters"; }
             for (int i = 0; i < ps.Mandatory.Length; i++) {
                 if (!(ps.Mandatory[i] is LocalVariable)) { return "destructuring parameter"; }
             }
             return null;
+        }
+
+        // IR_JIT_BLOCK_PARAM=0 turns it off
+        private static readonly bool _blockParameters = Environment.GetEnvironmentVariable("IR_JIT_BLOCK_PARAM") != "0";
+
+        /// <summary>
+        /// A method with a block parameter that does nothing with it but pass it on, `def w(a, b, &amp;k) = @t.m(a, b, &amp;k)': the
+        /// parameter is never read otherwise nor assigned, the method does not yield or call super (which passes it on too), and
+        /// it has only mandatory parameters. Called without a block, k is nil and `&amp;k' passes no block, as `&amp;nil' does; the
+        /// typed body is made for that call (JitCode.AssumesNoBlock: the entry takes it only when the block is null, and a method
+        /// the profile saw called with one is declined), and compiles `&amp;k' as no block at all (JitScreen.PassesNoBlock).
+        /// A call with a block runs the generic body, which passes it on.
+        /// </summary>
+        internal static bool BlockParameterOnlyPassed(MethodDeclaration/*!*/ ast) {
+            var ps = ast.Parameters;
+            if (!_blockParameters || ps.Block == null || ps.Optional.Length > 0 || ps.Unsplat != null || ast.Body == null) { return false; }
+            var finder = new BlockPassFinder(ps.Block);
+            ast.Body.Walk(finder);
+            return !finder.Refused;
+        }
+
+        private sealed class BlockPassFinder : Walker {
+            private readonly string/*!*/ _name;
+            private readonly int _depth;
+            internal bool Refused;
+
+            internal BlockPassFinder(LocalVariable/*!*/ parameter) {
+                _name = parameter.Name;
+                _depth = parameter.DefinitionLexicalDepth;
+            }
+
+            private bool IsParameter(Expression node) {
+                var local = node as LocalVariable;
+                return local != null && local.Name == _name && local.DefinitionLexicalDepth == _depth;
+            }
+
+            public override bool Enter(BlockReference/*!*/ node) {
+                // `&k': the parameter passed on, and not otherwise read
+                return !IsParameter(node.Expression);
+            }
+
+            // any other read, or an assignment
+            public override bool Enter(LocalVariable/*!*/ node) { if (IsParameter(node)) { Refused = true; } return true; }
+            public override bool Enter(YieldCall/*!*/ node) { Refused = true; return true; }
+            public override bool Enter(SuperCall/*!*/ node) { Refused = true; return true; }
+            // a method defined inside has variables of its own
+            public override bool Enter(MethodDefinition/*!*/ node) { return false; }
         }
 
         // The static part of Wrap's decision; rejectedBy is set when the screen (not the parameter list) refused the body.
@@ -2081,6 +2149,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block) {
             var f = _fast;
             if (f != null) { return f(self, block); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, Args0);
             f = _fast;
             return (f != null) ? f(self, block) : _gen(self, block);
@@ -2121,6 +2190,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block, object a0) {
             var f = _fast;
             if (f != null) { return f(self, block, a0); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, new[] { a0 });
             f = _fast;
             return (f != null) ? f(self, block, a0) : _gen(self, block, a0);
@@ -2161,6 +2231,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block, object a0, object a1) {
             var f = _fast;
             if (f != null) { return f(self, block, a0, a1); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, new[] { a0, a1 });
             f = _fast;
             return (f != null) ? f(self, block, a0, a1) : _gen(self, block, a0, a1);
@@ -2201,6 +2272,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block, object a0, object a1, object a2) {
             var f = _fast;
             if (f != null) { return f(self, block, a0, a1, a2); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, new[] { a0, a1, a2 });
             f = _fast;
             return (f != null) ? f(self, block, a0, a1, a2) : _gen(self, block, a0, a1, a2);
@@ -2241,6 +2313,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3) {
             var f = _fast;
             if (f != null) { return f(self, block, a0, a1, a2, a3); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, new[] { a0, a1, a2, a3 });
             f = _fast;
             return (f != null) ? f(self, block, a0, a1, a2, a3) : _gen(self, block, a0, a1, a2, a3);
@@ -2281,6 +2354,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
             var f = _fast;
             if (f != null) { return f(self, block, a0, a1, a2, a3, a4); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, new[] { a0, a1, a2, a3, a4 });
             f = _fast;
             return (f != null) ? f(self, block, a0, a1, a2, a3, a4) : _gen(self, block, a0, a1, a2, a3, a4);
@@ -2321,6 +2395,7 @@ namespace IronRuby.Runtime.Jit {
         private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {
             var f = _fast;
             if (f != null) { return f(self, block, a0, a1, a2, a3, a4, a5); }
+            if (block != null) { _calledWithBlock = true; }
             Profile(self, new[] { a0, a1, a2, a3, a4, a5 });
             f = _fast;
             return (f != null) ? f(self, block, a0, a1, a2, a3, a4, a5) : _gen(self, block, a0, a1, a2, a3, a4, a5);

@@ -1774,6 +1774,41 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/jitblockparam (2026-11-27, census and timed, not gated) - a typed body for a call without a block**
+  (switch `IR_JIT_BLOCK_PARAM`). A method whose block parameter is only passed on, `def w(a, b, &k) =
+  @t.two(a, b, &k)`, was never wrapped (`JitStub.ParameterShape`: "block parameter"), and one passing `&nil`
+  was refused at the screen (a call with a block). Now `JitStub.BlockParameterOnlyPassed` takes a method whose
+  block parameter is never read except as `&k`, never assigned, with no yield and no super, and only
+  mandatory parameters. Its typed body is compiled for a call without a block: there k is nil and `&k`
+  passes none, as `&nil` always does (`JitScreen.PassesNoBlock`; the screen, `EmitCall` and `TryInlineCall`
+  take such a call as one without a block). `block_given?` in a method body (not in an outlined loop, not
+  with optional or keyword parameters, Kernel's and unrefined) compiles to false on the same terms
+  (`EmitBlockGiven`). Such a body sets `JitCode.AssumesNoBlock`, and the entry adds `block == null` to its
+  test, so a call with a block runs the generic body, which passes it on. A method the profile saw called
+  with a block is declined ("called with a block"), at that call if it has a block parameter, before
+  anything is compiled. Inlined and directly called bodies are only ever called without a block.
+  Census (Src/StdLib, Util/bench, AWFY): 62 methods up, none down. 61 left "never (block parameter)"
+  (2 now compile, the rest are maybe), and `FW#pass_nil` left "never (MethodCall two)". Compiles 3,579 ->
+  3,583, maybe 3,180 -> 3,238. Traced runs: forward-shapes specialized 4 -> 7, declines 1 -> 1;
+  delegate-shapes 3 -> 3, 1 -> 1; app-shapes 120 -> 120 specialized, declines 28 -> 29. The new decline,
+  `CSV::FieldsConverter#each` (`@converters.each(&block)`), is always called with a block; it declines at
+  its first call. Most of the methods let through pass `&k` to an iterator, so they win nothing: the gain
+  is a forwarder to a leaf called without a block. Instructions per call (`callgrind/count.sh`,
+  `Util/bench/forward-shapes.rb`): fixed_blk 2,254 -> 1,703, param_only 2,094 -> 1,699, pass_nil
+  2,232 -> 1,697, the same as fixed (1,701). rest, rest_blk, dots and anon are unchanged (rest and dots
+  read +69 once and 0 on a rerun). Delegate-shapes is unchanged, row for row (its forwarders take a rest
+  or a block). Clock (ab.rb -r 3, noisy): param_only 54 -> 38 ns against the switch off; the other rows
+  overlap. `Util/jit-blockparam-matrix.rb` (new: `&k`, `&nil`, block_given? in the caller and callee,
+  break and next through the passed block, a lambda's return, `&obj` with to_proc once, `&:sym`, send and
+  Method#call with a block, two layers, anonymous `&`, an inlined callee's block_given?, k read, assigned,
+  through a binding, super with the implicit block, a deopt with a block in flight, a method always
+  called with a block, a block every third call, block_given? redefined, refined and in a loop, a
+  singleton, the callee redefined): CRuby's output with the JIT on, -X:NoJIT -X:NoOSR, -X:NoJITCalls,
+  IR_LIGHT_FRAMES=0 and the switch off. jit, jit-calls, dmeth-jit, block-pass, block-given, forward-rest
+  and hot-shapes in the same five modes: the same as the base (forward-rest's six bind_call-of-binding rows
+  differ from CRuby on both). ruby/spec language block, send, yield, super, def and proc: the same as the
+  base (send's one error is the known `into`). IronRuby.Tests, all 1,377: PASSED.
+
 - **Gate of 2026-11-27 for round 4 of round thirty-seven** (perf/strdup, perf/strsearch2,
   perf/extiter2 and 3, perf/lframe, perf/lexical2 and 3, perf/kwrest, perf/jitscreen and 2,
   perf/deadconst2, perf/permute, perf/havlak, perf/dmethjit2, perf/jitsettle; the rejected
