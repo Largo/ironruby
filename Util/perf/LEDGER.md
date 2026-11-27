@@ -6485,6 +6485,27 @@ after master (#228 to #233) had been merged into both trees.
 
 ## Rejected
 
+- **perf/nilblock (/perf-frame, 2026-11-27) - a nil block parameter or argument: measured by
+  clock, no cost to remove** (no code; built on d206f90, which is 4320d4a with claude/perf-lsite).
+  perf/delegate (3ea2ea5) counted a nil `&k` parameter or `&nil` argument at 440-600 instructions
+  a call into `two(a, b)` with the callgrind counter (`Util/bench/forward-shapes.rb`).
+  - **By clock it is not there.** `ab.rb -r 12 -n 2000000`, `-X:NoJIT` so that every wrapper is
+    the same kind of frame (ns; CRuby / IronRuby): fixed 37.3 / 51.9, an unused `&k` 46.0 / 50.0,
+    `&nil` 37.9 / 52.0, `&k` passed on (nil) 47.9 / 53.3 - the four within IronRuby's spread
+    (7-20%) of each other, where CRuby pays 9-10 ns for a block parameter. With the method JIT
+    (`ab.rb -r 8`): fixed 40.0, `&k` unused 44.0, `&nil` 46.3, `&k` passed 51.7 (CRuby 35.7,
+    44.0, 35.9, 46.3).
+  - **What the counter saw.** Its code is MinOpts (perf/castcheck), and the wrappers differ in
+    the typed body: `fixed` is specialized (`FW/fixed arity 2 -> Int`), a method with a block
+    parameter is never wrapped (`JitStub.ParameterShape`: "block parameter"), and one that
+    passes `&nil` is refused by the screen (`MethodCall two`). That refusal is the 4-6 ns left
+    with the JIT on; it is the method JIT's to take, a typed body that takes a block and hands
+    it on (gap 9), not a frame's.
+  - **What the clock does show:** `...` 111.7 ns against fixed 51.9 (CRuby 45.7: 2.44), and
+    `(*, &)` 117.9 (CRuby 83.6) - the rest Array a forwarding layer builds and splats (gap 16's
+    second part; perf/delegate's 1,170 instructions). That is the forwarding cost worth a
+    step, not the block.
+
 - **perf/castcheck (/perf-frame, 2026-11-27) - why the JIT expands no cast in Ruby's compiled
   bodies, and a fix that was not worth keeping** (switch `IR_UNWIND_RETURN`, reverted; built on
   15285eb with claude/perf-lsite merged, 054d132). perf/lconst found every `castclass` in a Ruby
