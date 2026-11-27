@@ -1901,6 +1901,32 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/permute (2026-11-27, not gated) - Integer#downto parks its caller's scope, and a recursive
+  method parks one scope per level** (switches `IR_PARK_DOWNTO`, `IR_PARKED_DEPTH`). alloc.rb on 9b588fc:
+  Permute 124.5 MB per iteration, 1.45 MB per `permute(6)` (8,660 calls), for an algorithm that needs
+  a 6-element Array. Variants: with `while` in place of `downto` 208 KB (`@count += 1` boxes an Integer
+  on every call, the cached ones below 1,024 included); so about 144 bytes per call came from the block.
+  `permute` is a light frame whose literal block reuses its Proc, but `downto` was in
+  `MethodDefinition.NeverParkedIterators` (it lacked `[BlockNotKept]`, which `times` has), so the
+  method had no parking slot and made a scope, a Proc and a BlockParam on every call; and a slot parks
+  one scope, which a recursion six deep could use on one level only. Now both Integer#downto overloads
+  are `[BlockNotKept]` (they only yield; the generic one's `<` and `-` never see the block) and
+  `downto` leaves the list; and `ParkedScopeSlot.Deeper` (up to 7 more, made on the first overflow,
+  each taken and filled by compare-exchange as `Parked` is) holds the scopes of recursive calls.
+  `permute(6)` 1,453 -> 746 KB (downto) -> 411 KB (depth). An in-process GC allocation-tick listener
+  (an IronRuby subclass of EventListener) sampled what is left: boxed Int32 5,470, the scoped calls'
+  `MutableTuple<object, object>` locals 2,234, the rest small. alloc.rb: Permute 124.5 -> 20.3 MB,
+  Queens 30.5 -> 8.7 MB, Havlak 1,774 -> 1,674 MB, the others as before. AWFY, 10 alternating rounds,
+  medians: Permute 112,970 -> 105,378 us (0.933, no overlap), Queens 0.969, Towers 1.000.
+  `Util/parked-scope-matrix.rb` gains section 7 (Permute; each level's locals, 4 and 12 deep; an
+  exception three levels down; a binding and a Proc kept from a downto block; break, next, a Float
+  and Bignum bounds, no block; two threads in the same recursive method): CRuby's output on both builds.
+  Checks: parked-scope, block-scope-reuse, block-scope-reuse-blockpass, block-nest-reuse, block-loop,
+  osr-array, hot-shapes, jit, jit-calls and ivar matrices in every mode and with each switch off:
+  PASS; block-scope-reuse-race 10 of 10 as CRuby; spec/core/integer, core/proc and language
+  block/yield/break as on the base. Left: the `@count` boxes (an Integer instance variable is held
+  boxed, raw only for Floats) and the locals tuple per scoped call.
+
 - **Gate of 2026-11-27 for round 5 of round thirty-seven** (perf/crubydiff's first two rounds, perf/dupcost,
   perf/strcow, perf/strswitch, perf/jitstr, perf/jitaref, perf/timeout, perf/forward, perf/jitprobe,
   perf/twospeed and its note, perf/extiter4 and 5, perf/fiberstart, perf/iter, perf/strsearch3 and 4,
@@ -4074,6 +4100,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   `instance_method`, `super` from a subclass, `Enumerable.instance_method(:find).bind_call(ary)`);
   a method parked around `h.find { }` on a Hash, which is still Enumerable's and keeps no Proc,
   until its slot gives up (`ParkedScopeSlot.MaxFailures`).
+  Later (perf/permute of 2026-11-27, see Landed): `downto` is taken after all, together with a parked
+  scope per level of recursion (`ParkedScopeSlot.Deeper`, IR_PARKED_DEPTH). With the one slot of this
+  round a recursion six deep parked on one level only, so the cost of parking was paid on every call
+  and the bytes saved on few (Permute 124.5 -> 53.9 MB); with a slot per level Permute allocates 20.3 MB
+  and its time is 0.933 of the base's (10 alternating rounds). `upto` stays out.
 
 - **perf/iter (round thirty-seven, 2026-11-26) - a block that holds a block literal reuses its scope
   and the literal's Proc (gaps 13 and 6)** - instructions and bytes, gated 2026-11-27 (round 5's gate entry). A block whose
@@ -7720,6 +7751,8 @@ after master (#228 to #233) had been merged into both trees.
   cases (a `swap` on self redefined half way through a hot `downto`, a singleton `swap` on the
   receiver; CRuby's output on the unchanged build with the JIT on, off and without JIT calls) kept.
   What was learned is under gap 4.
+  Taken later for `downto` (perf/permute of 2026-11-27, Landed): with a parked scope per level of
+  recursion the saving covers the whole recursion, not one level, and Permute's time is 0.933.
 
 - **perf/lsite2 (/perf-step, 2026-11-26) - a light method that has made its scope late
   enters through a scoped twin from then on** (gap 16; switch `IR_LIGHT_TWIN`, `=verbose`
