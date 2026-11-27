@@ -184,12 +184,19 @@ namespace IronRuby.Compiler.Ast {
                     ordered.Add(temp);
                 }
                 if (scratch.SplattedArgument != null) {
+                    // The splat is expanded into an array here, before the block argument is evaluated: a copy, which nothing else
+                    // refers to, and so fresh for the call (RubyCallFlags.HasFreshSplat): a rest parameter of the callee takes it
+                    // rather than copying it again. A splat that is fresh already - an array the arguments made, or a rest parameter
+                    // passed on where nothing can see it again (ForwardedRest) - is that array, not copied: the block argument cannot
+                    // name it either.
                     var temp = gen.CurrentScope.DefineHiddenVariable("#splat", typeof(RubyArray));
-                    assignments.Add(Ast.Assign(temp,
-                        Ast.New(typeof(RubyArray).GetConstructor(new[] { typeof(System.Collections.IList) }),
-                            AstUtils.Convert(scratch.SplattedArgument, typeof(System.Collections.IList)))
+                    var list = AstUtils.Convert(scratch.SplattedArgument, typeof(System.Collections.IList));
+                    assignments.Add(Ast.Assign(temp, scratch.SplattedArgumentIsFresh ?
+                        (MSA.Expression)Methods.TakeFreshSplat.OpCall(list) :
+                        Ast.New(typeof(RubyArray).GetConstructor(new[] { typeof(System.Collections.IList) }), list)
                     ));
                     ordered.SplattedArgument = temp;
+                    ordered.SplattedArgumentIsFresh = true;
                 }
                 hoisted = assignments;
                 arguments = null;
