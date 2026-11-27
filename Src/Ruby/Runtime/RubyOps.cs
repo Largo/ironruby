@@ -402,7 +402,6 @@ namespace IronRuby.Runtime {
                     proc?.ClearForPark();
                 }
                 var methodScope = (RubyMethodScope)scope;
-                parked.Locals = ParkedLocalsEnabled ? ClearForPark(methodScope._locals) : null;
                 methodScope.ClearCallState();
                 parked.Scope = methodScope;
                 parked.ThreadId = Environment.CurrentManagedThreadId;
@@ -414,63 +413,6 @@ namespace IronRuby.Runtime {
             }
             parked.Clear();
             Volatile.Write(ref slot.Spare, parked);
-        }
-
-        /// <summary>
-        /// IR_PARKED_LOCALS=0: a call of a method that parks its scope makes a new locals tuple, as it did, rather than take the
-        /// tuple of the parked scope's last call (TakeParkedLocals).
-        /// </summary>
-        internal static readonly bool ParkedLocalsEnabled = Environment.GetEnvironmentVariable("IR_PARKED_LOCALS") != "0";
-
-        // The most slots of a locals tuple that is cleared and parked: a flat tuple (up to 128 slots is one) and a short clear.
-        private const int MaxParkedLocals = 16;
-
-        /// <summary>
-        /// The locals tuple of a call whose scope is being parked, every slot cleared to nil, for the next call to take; null if it
-        /// is not one to keep. Nothing else holds it: the scope is not captured (BeginPark), and every Proc of the call that could
-        /// reach it is reusable and inactive (StageParkedProc), so nothing outlives the call that could read it - and the values it
-        /// held go with the call, as they would with a tuple that is dropped.
-        /// </summary>
-        private static MutableTuple ClearForPark(MutableTuple locals) {
-            // A locals tuple is MutableTuple<object, ...> of 1, 2, 4, 8 or 16 slots (MakeObjectTupleType), each deriving from the
-            // one half its size: its slots are set directly, without SetValue's virtual call and switch per slot.
-            if (!(locals is MutableTuple<object> t1) || locals.Capacity > MaxParkedLocals) {
-                return null;
-            }
-            t1.Item000 = null;
-            if (locals is MutableTuple<object, object> t2) {
-                t2.Item001 = null;
-                if (locals is MutableTuple<object, object, object, object> t4) {
-                    t4.Item002 = null; t4.Item003 = null;
-                    if (locals is MutableTuple<object, object, object, object, object, object, object, object> t8) {
-                        t8.Item004 = null; t8.Item005 = null; t8.Item006 = null; t8.Item007 = null;
-                        if (locals is MutableTuple<object, object, object, object, object, object, object, object,
-                            object, object, object, object, object, object, object, object> t16) {
-                            t16.Item008 = null; t16.Item009 = null; t16.Item010 = null; t16.Item011 = null;
-                            t16.Item012 = null; t16.Item013 = null; t16.Item014 = null; t16.Item015 = null;
-                        }
-                    }
-                }
-            }
-            return locals;
-        }
-
-        /// <summary>
-        /// The locals tuple a method with a parking slot makes, if it can be the one parked with the scope, cleared (the caller
-        /// checks its type, and makes a new one otherwise): of <paramref name="taken"/>, the parked scope this call took, when the
-        /// tuple is made with the scope (ScopeBuilder.MaterializeLocals); of the one parked in the slot, when it is made at the
-        /// entry, before the call knows whether it will take the scope. Taken with an atomic exchange, apart from the scope, so
-        /// that each tuple belongs to one call: a call that takes the parked scope gives it this call's tuple (Reinitialize), and
-        /// one that does not leaves the scope parked without one.
-        /// </summary>
-        [Emitted]
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static MutableTuple TakeParkedLocals(ParkedScopeSlot/*!*/ slot, ParkedProcs taken) {
-            var parked = taken ?? Volatile.Read(ref slot.Parked);
-            if (parked == null || parked.Locals == null) {
-                return null;
-            }
-            return Interlocked.Exchange(ref parked.Locals, null);
         }
 
         #endregion

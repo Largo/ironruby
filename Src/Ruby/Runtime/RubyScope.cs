@@ -1408,18 +1408,12 @@ namespace IronRuby.Runtime {
         internal readonly Proc[]/*!*/ Procs;
         internal int ThreadId;
 
-        // The locals tuple of the parked scope's last call, cleared, for the next call's entry to take (RubyOps.TakeParkedLocals):
-        // the entry makes the tuple before it knows whether it will take the scope, so the two are taken apart, each by one
-        // call. Null when there is none to take.
-        internal MutableTuple Locals;
-
         internal ParkedProcs(int count) {
             Procs = new Proc[count];
         }
 
         internal void Clear() {
             Scope = null;
-            Locals = null;
             Array.Clear(Procs, 0, Procs.Length);
         }
     }

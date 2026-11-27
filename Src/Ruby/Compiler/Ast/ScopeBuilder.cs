@@ -255,26 +255,11 @@ namespace IronRuby.Compiler.Ast {
         }
 
         public MSA.Expression/*!*/ MakeLocalsStorage() {
-            return MakeLocalsStorage(null);
-        }
-
-        /// <summary>
-        /// Where a method body with a parking slot takes a tuple of nils before it makes one (RubyOps.TakeParkedLocals): at its
-        /// entry (MakeLocalsStorage), and when it makes its scope from register locals (MaterializeLocals, after the parked
-        /// scope is taken). Null for any other body.
-        /// </summary>
-        internal MSA.Expression ReusedLocals, ReusedLocalsWithScope;
-
-        /// <summary>
-        /// MakeLocalsStorage that takes the tuple <paramref name="reused"/> gives, if it is one of this scope's type, before it
-        /// makes one: a tuple whose every slot is nil (RubyOps.TakeParkedLocals).
-        /// </summary>
-        public MSA.Expression/*!*/ MakeLocalsStorage(MSA.Expression reused) {
             // TODO: use a factory instead of Ast.New to improve interpreter perf:
-            MSA.Expression tuple = (LiftedVisibleVariableCount == 0) ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) :
-                (reused != null) ? Ast.Coalesce(Ast.TypeAs(reused, _localsTuple.Type), NewTuple(_localsTuple.Type)) :
-                NewTuple(_localsTuple.Type);
-            MSA.Expression result = Ast.Assign(_localsTuple, tuple);
+            MSA.Expression result = Ast.Assign(
+                _localsTuple, 
+                LiftedVisibleVariableCount == 0 ? (MSA.Expression)Ast.Constant(null, _localsTuple.Type) : NewTuple(_localsTuple.Type)
+            );
             
             if (_parameters != null) {
                 var initializers = new AstExpressions();
@@ -410,9 +395,7 @@ namespace IronRuby.Compiler.Ast {
         internal MSA.Expression/*!*/ MaterializeLocals() {
             Debug.Assert(_registers != null);
             var result = new AstExpressions();
-            result.Add(Ast.Assign(_localsTuple, (ReusedLocalsWithScope != null)
-                ? Ast.Coalesce(Ast.TypeAs(ReusedLocalsWithScope, _localsTuple.Type), NewTuple(_localsTuple.Type))
-                : NewTuple(_localsTuple.Type)));
+            result.Add(Ast.Assign(_localsTuple, NewTuple(_localsTuple.Type)));
             for (int i = 0; i < _registers.Length; i++) {
                 result.Add(Ast.Assign(GetVariableAccessor(_localsTuple, i), _registers[i]));
             }
