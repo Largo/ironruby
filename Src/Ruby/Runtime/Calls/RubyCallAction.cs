@@ -448,7 +448,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // respond_to?(:sym) and send(:sym) rules are specialized on the receiver's class (DispatchIntrinsics):
-            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass)) {
+            if (!isMissing && DispatchIntrinsics.MaySpecialize(member, Signature, targetClass, target)) {
                 return false;
             }
 
