@@ -183,6 +183,19 @@ namespace IronRuby.Builtins {
             Assert.NotNull(metaBuilder, args);
             Debug.Assert(args.Target == this);
 
+            if (_methodMissingName == null && RequiresRubyCaller(_info)) {
+                // MRI: a method object's call is not a Ruby caller, and Kernel#binding has nothing to bind
+                metaBuilder.AddRestriction(Ast.AndAlso(
+                    Ast.TypeIs(args.TargetExpression, typeof(RubyMethod)),
+                    Ast.Equal(Ast.Property(Ast.Convert(args.TargetExpression, typeof(RubyMethod)), InfoProperty), AstUtils.Constant(_info, typeof(RubyMemberInfo)))
+                ));
+                metaBuilder.SetError(Ast.New(
+                    typeof(RuntimeError).GetConstructor(new[] { typeof(string) }),
+                    AstUtils.Constant("Cannot create Binding object for non-Ruby caller")
+                ));
+                return;
+            }
+
             // A call to these methods depends on the method, the name it is called by and the arguments (self included), not on
             // which Method object holds them. Each `instance_method(:m).bind(obj).call` makes a new Method, so a rule that took 
             // the Method and its receiver as constants was bound and compiled anew for every call of such a site.
@@ -233,6 +246,20 @@ namespace IronRuby.Builtins {
             } else {
                 _info.BuildCall(metaBuilder, args, _name);
             }
+        }
+
+        internal static bool RequiresRubyCaller(RubyMemberInfo/*!*/ info) {
+            var library = info as RubyLibraryMethodInfo;
+            if (library == null) {
+                return false;
+            }
+            foreach (var overload in library.MethodBases) {
+                var method = overload.ReflectionInfo;
+                if (method != null && method.IsDefined(typeof(RequiresRubyCallerAttribute), false)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static bool IsReceiverIndependent(RubyMemberInfo/*!*/ info) {

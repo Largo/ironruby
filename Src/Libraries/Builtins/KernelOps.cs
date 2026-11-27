@@ -935,6 +935,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binding", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("binding", RubyMethodAttributes.PublicSingleton)]
+        [RequiresRubyCaller]
         public static Binding/*!*/ GetLocalScope(RubyScope/*!*/ scope, object self) {
             var result = Binding.Create(scope, scope.SelfObject);
 

@@ -6430,6 +6430,53 @@ respond: [false, true, -1, 1]
         }
 
         /// <summary>
+        /// Kernel#binding called through a Method object (Method#call, bind, bind_call, to_proc) has no
+        /// Ruby caller to bind, and MRI raises RuntimeError; send and an alias still bind the caller.
+        /// </summary>
+        public void Method_BindingNonRubyCaller1() {
+            TestOutput(@"
+require 'ruby4'
+def t(l)
+  r = yield
+  p [l, r.class, (r.local_variable_get(:x) rescue $!.class)]
+rescue => e
+  p [l, e.class, e.message]
+end
+x = 1
+p x
+t(:send) { send(:binding) }
+t(:__send__) { __send__(:binding) }
+t(:public_send) { public_send(:binding) }
+t(:method_call) { method(:binding).call }
+t(:bind_call) { Kernel.instance_method(:binding).bind_call(self) }
+t(:to_proc) { method(:binding).to_proc.call }
+t(:unbound_bind) { Kernel.instance_method(:binding).bind(self).call }
+t(:instance_eval) { instance_eval { binding } }
+t(:tap) { [1].map(&method(:binding)) rescue $! }
+class Object; alias bnd binding; end
+t(:alias) { bnd }
+t(:alias_method) { method(:bnd).call }
+t(:singleton) { Kernel.method(:binding).call }
+t(:caught) { begin; method(:binding).call; rescue RuntimeError => e; e.class.ancestors.include?(StandardError); end }
+", @"
+1
+[:send, Binding, 1]
+[:__send__, Binding, 1]
+[:public_send, NoMethodError, ""private method 'binding' called for main""]
+[:method_call, RuntimeError, ""Cannot create Binding object for non-Ruby caller""]
+[:bind_call, RuntimeError, ""Cannot create Binding object for non-Ruby caller""]
+[:to_proc, RuntimeError, ""Cannot create Binding object for non-Ruby caller""]
+[:unbound_bind, RuntimeError, ""Cannot create Binding object for non-Ruby caller""]
+[:instance_eval, Binding, 1]
+[:tap, ArgumentError, NoMethodError]
+[:alias, Binding, 1]
+[:alias_method, RuntimeError, ""Cannot create Binding object for non-Ruby caller""]
+[:singleton, RuntimeError, ""Cannot create Binding object for non-Ruby caller""]
+[:caught, TrueClass, NoMethodError]
+");
+        }
+
+        /// <summary>
         /// A method with optional positional parameters and keywords (`def m(a, b = 2, k: 3)') keeps its
         /// optionals as optional parameters; a keyword call that leaves one out has its keyword hash moved
         /// into place before the defaults run, in the generic body and in the JIT's entry (the loop at the
