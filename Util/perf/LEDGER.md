@@ -1036,6 +1036,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     in `Kernel#__ir_string__`, which asks whether #respond_to? is Kernel's
     (`method(:respond_to?).owner`) and calls #to_s through `bind_call`; CRuby decides that in
     C (rb_check_funcall). Probably needs a C# helper, which is /perf-step's, not /perf-core's.
+    `Hash#sort_by` (2.4 -> 1.9), `Range#sort_by` (2.9 -> 2.3) and `Hash#max_by(2)` (3.1 -> 2.6)
+    are done too (perf/hsortby, see Landed). Survey of 2026-11-27 (one round): the Ruby rows
+    above 4x CRuby are `Array#dig` into a Hash (9.2), `String(nil)`/`String(5)` (8.8, 6.7),
+    `Array#sum` (8.0) and with a block over Floats (7.1) or Integers (4.4); `Array#min` (6.0)
+    and `Array#take` (4.1, Enumerable's C# take: CRuby's is Array's own) are C#, /perf-step's.
     `Array#to_h { }` is done too (4.7 -> 2.3), and `min_by`/`max_by` (3.1 -> 2.2), and their count form
     (`min_by(2)` 3.8 -> 2.9 after the review fix below). Open beside speed: `min_by(n)`'s tie order is input order,
     MRI's nmin selection orders ties its own way. `take_while`/`drop_while` done (2.6 -> 2.2,
@@ -1790,6 +1795,29 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     remain: 89 rows of readers that answer wrongly or raise.
 
 ## Landed
+
+- **perf/hsortby (/perf-core, 2026-11-27, on 5472a50) - `sort_by`, `min_by(n)` and
+  `max_by(n)` of a Hash, a Range or an Enumerator through the C# merge sort** (the gap 15 survey's
+  largest Ruby row in nanoseconds over CRuby: `Hash#sort_by` +1250 ns). The generic walk made
+  [key, index, element] triples and sorted them with a Ruby comparison block; now the elements it
+  gathers go to `__list_sort_by__` (the C# stable merge sort, as an Array's already did) with
+  their keys by position. The walk itself is unchanged, so are block calls and the `Hash#each`
+  frame. The merge now sends #<=> to the earlier key, as MRI's sort_by_cmp: keys that do not
+  compare are named in CRuby's order, for Arrays too ("comparison of Integer with String
+  failed"; it said "String with 1").
+  - Clock (`ab.rb`, four rounds, ns, CRuby / unchanged / this): `hash_sort_by` 905 / 2158 /
+    1753 (0.81), `hash_sort_by_pair` 852 / 2166 / 1757 (0.81), `range_sort_by` 681 / 1953 /
+    1547 (0.79), `hash_max_by_n` 776 / 2415 / 2024 (0.84); `sort_by`, `min_by_n`, `max_by_n`
+    of an Array 1.00, 1.01, 0.99 (noise).
+  - `Util/sort-by-matrix.rb` (new) prints the unchanged build's output but for one line now
+    CRuby's (ties under a redefined Integer#<=>), in five modes and R2R; callable-parameters,
+    caller, light-entry, hot-shapes unchanged in four modes; ruby/spec core/enumerable, hash,
+    array, range, struct, enumerator the same examples on both builds; IronRuby.Tests
+    `Backtrace_LibraryFrames1` and six more pass. Not gated.
+  - Left from CRuby (as before): tie order (CRuby's sort_by is not stable; this is), the NaN
+    key's message, and a redefined `Array#<<` reaching the walk. Next lever: the walk - a
+    `|*values|` block and `__enum_item__` per element; a Hash whose #each is the built-in one
+    could be walked with a one-value block, as `__plain_list__?` does for an Array.
 
 - **perf/evalboxes (/perf-step, 2026-11-27, on 4320d4a + perf/lexical 779d87c) - an eval'd
   text with regexp or range literals shares its compiled code, the literals' objects kept per
