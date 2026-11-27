@@ -9,7 +9,7 @@ module Kernel
   # asks of an implementation other than CRuby's - "into", where CRuby still says "to".
   private def __ir_try_convert__(obj, method, klass, name)
     return obj if klass === obj
-    return nil unless __ir_responds_to__(obj, method)
+    return nil unless __ir_responds_to__(obj, method) && __ir_conversion_callable__(obj, method)
     converted = obj.__send__(method)
     return nil if converted.nil?
     return converted if klass === converted

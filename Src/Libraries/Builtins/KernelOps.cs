@@ -1754,6 +1754,23 @@ namespace IronRuby.Builtins {
             return method.Info.IsNotImplemented ? RubyMethodVisibility.None : method.Visibility;
         }
 
+        /// <summary>
+        /// After respond_to? said yes to a conversion: whether calling the method could answer - the object's class has it, or a
+        /// method_missing other than BasicObject's. MRI's rb_check_funcall (check_funcall_missing) takes "no" for no conversion
+        /// rather than raising NoMethodError, as the conversions of the binder do (ProtocolConversionAction).
+        /// </summary>
+        [RubyMethod("__ir_conversion_callable__", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsConversionCallable(ConversionStorage<string>/*!*/ stringCast, object self, object obj, object methodName) {
+            var context = stringCast.Context;
+            string name = Protocols.CastToSymbol(stringCast, methodName);
+            RubyClass cls = context.GetImmediateClassOf(obj);
+            if (GetDefinedVisibility(cls, name) != RubyMethodVisibility.None) {
+                return true;
+            }
+            var methodMissing = cls.GetMethodLookup(Symbols.MethodMissing);
+            return methodMissing.Found && !(methodMissing.Info.DeclaringModule == context.BasicObjectClass && methodMissing.Info is RubyLibraryMethodInfo);
+        }
+
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
         public static object/*!*/ CloneWithFreeze(
             CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCopyStorage,
