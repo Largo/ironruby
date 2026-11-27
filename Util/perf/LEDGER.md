@@ -1779,6 +1779,49 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
 
 ## Landed
 
+- **perf/splatpos (/perf-step, 2026-11-27) - `f(*a, &b)' passes `a' itself, not a copy, when
+  `b' is a variable, a constant or a literal** (switch `IR_SPLAT_BY_REFERENCE`, on unless `=0`).
+  Built on 288cc13 (claude/perf-lsite, which has 4320d4a).
+  - **What the round asked, and where the cost was.** A splat into a fixed-arity Ruby callee
+    already costs what the call written out does (`two(*a)` 46 ns, `two(a[0], a[1])` 51,
+    CRuby 40 and 40). The slow ones were the splats that also pass a block: `rest_blk` (`(*a,
+    &b) = two(*a, &b)`) 103, `dots` 104, `lead_dots` 104 (CRuby 82, 44, 90). A call with a
+    block argument evaluates its receiver and arguments into temporaries first (the block is
+    computed first for a literal block's retry), and a trailing splat was copied there into a
+    fresh RubyArray: an allocation and a copy per call, for every forwarder.
+  - **What CRuby 4.0 does.** `splatarray false` - the list itself, expanded by the call after
+    the block argument's #to_proc - when the block argument is a variable, a constant or a
+    literal (prism_compile.c, pm_setup_args_dup_rest_p; `--dump=insns`); `splatarray true`, a
+    copy made before the block argument, for anything else (`&G.new(a)`, `&method(:m)`,
+    `&(g.x)`). So it is observable: with `g = o` whose #to_proc appends to `a`, `f(*a, &g)`
+    gets the new item and `two(*a, &g)` raises `given 3, expected 2`; `f(*a, &Grow.new(a))`
+    does not. IronRuby copied always, which was wrong for the first kind.
+  - **What changed.** MethodCall.TransformRead keeps the list (after #to_a) in the temporary,
+    not fresh, when the block argument is a local, instance, global or class variable, self,
+    a literal, a symbol or an unqualified (or constant-qualified) constant
+    (MethodCall.IsSideEffectFree; a subset of CRuby's set - the shapes it leaves out, `[]`,
+    `{}`, `1..2`, have no #to_proc that could change a list). A rest parameter of the callee
+    copies it as for any splat. `...` and `(*, &)` forward a local, so they take it.
+  - **Checks.** New `Util/splat-blockarg-matrix.rb` (order of receiver/args/to_a/to_proc, the
+    list growing and shrinking under to_proc with `&local`, `&@ivar`, `&$gvar`, `&CONST` and
+    with a call, length mismatches, to_a and nil splats, optional/keyword/block callees,
+    ruby2_keywords, frozen list, forwarders, callee redefined after bind, method_missing,
+    break, super): same as CRuby in default, `IR_LIGHT_FRAMES=0`, `-X:NoJIT -X:NoOSR`,
+    `-X:NoJITCalls`; `=0` shows the old difference. splat-pass, kwrest-call, block-pass,
+    anon-forward, light-entry, hot-shapes, jit, jit-calls matrices same as CRuby in every mode
+    and with the switch off; forward-rest's two `binding` lines differ from CRuby the same way
+    on the unchanged build. language/send and def specs as before (send's one error is the
+    known `into`/`to` wording). IronRuby.Tests in full: PASSED.
+  - **Clock** (`ab.rb -r 6`, Release net10.0, ns; CRuby / off / on): splat-shapes `dots` 44.0 /
+    103.8 / 75.6, `rest_blk` 82.4 / 103.3 / 74.9, `lead_dots` 90.0 / 103.7 / 71.7, the rest
+    unchanged (`splat` 39.9 / 47.9 / 46.0, `rest_kw_blk` 117.7 / 187.8 / 182.9, `anon` 89.7 /
+    259.1 / 259.5). forward-shapes `rest` 116 / 78, `rest_blk` 102 / 68, `dots` 99 / 76, `anon`
+    98 / 60 (off / on; wide spreads). delegate-shapes `dc_two` 137 / 100, `fw_two` 120 / 80,
+    `fw_blk` 156 / 120, `mm_two` 238 / 198, `sd_two` 375 / 334; `direct_*` unchanged.
+  - **Left.** `anon` of splat-shapes (`(*, **, &)`, 259 against CRuby's 90) and `rest_kw_blk`
+    pass a keyword splat too and go another way (KeywordSplatMerge); `f(*a, k: g, &g)` still
+    copies where CRuby does not (the splat is not trailing there; pre-existing).
+
 - **perf/rescuelight (/perf-frame, 2026-11-27) - `$!` left alone in a begin/rescue/ensure that
   raises nothing** (switch `IR_LAZY_ERRINFO`, on unless `=0`) - timed, not gated. Built on
   4320d4a with claude/perf-lsite merged (d83116b).
