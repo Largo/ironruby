@@ -2003,9 +2003,18 @@ namespace IronRuby.Runtime.Jit {
             // Only the classes that are constants of Object: with every class (ClassesDefining's walk) the hint is more often
             // yes for a receiver that is an Array or a Hash (some nested class has a leaf `push'), and such a caller is
             // wrapped to be declined (app-shapes: CSV::Parser::Scanner#keep_start), with nothing more specialized.
-            foreach (var cls in ClassesDefining(context, name, false)) {
-                RubyMemberInfo method;
-                if (cls.TryGetDefinedMethod(name, out method) && IsLeafMethod(method as RubyMethodInfo, true)) { return true; }
+            // The method tables are read under the class hierarchy lock (another thread may be defining a method), the
+            // leaf test of what they hold outside it, as before ClassesDefining (round 6's gate: the Debug build's
+            // RequiresClassHierarchyLock aborted the TLS tests here).
+            var candidates = new List<RubyMethodInfo>();
+            using (context.ClassHierarchyLocker()) {
+                foreach (var cls in ClassesDefining(context, name, false)) {
+                    RubyMemberInfo method;
+                    if (cls.TryGetDefinedMethod(name, out method) && method is RubyMethodInfo info) { candidates.Add(info); }
+                }
+            }
+            foreach (var info in candidates) {
+                if (IsLeafMethod(info, true)) { return true; }
             }
             return false;
         }

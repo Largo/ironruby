@@ -1892,8 +1892,15 @@ namespace IronRuby.Runtime.Jit {
             foreach (var cls in classes) {
                 string v = writer ? JitRuntime.SelfAttrSite.WriterVariable(cls, name, true) : JitRuntime.SelfAttrSite.ReaderVariable(cls, name, true);
                 if (v == null) {
-                    RubyMemberInfo own;
-                    if (strict && cls.TryGetDefinedMethod(name, out own) && !(own is RubyLibraryMethodInfo)) { return null; }
+                    if (strict) {
+                        RubyMemberInfo own;
+                        bool defined;
+                        // the method table under the class hierarchy lock, as everywhere else it is read
+                        using (cls.Context.ClassHierarchyLocker()) {
+                            defined = cls.TryGetDefinedMethod(name, out own);
+                        }
+                        if (defined && !(own is RubyLibraryMethodInfo)) { return null; }
+                    }
                     continue;
                 }
                 if (found != null && found != v) { return null; }
