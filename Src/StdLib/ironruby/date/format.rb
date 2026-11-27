@@ -1073,7 +1073,9 @@ class Date
       if Format::ZONES.include?(zone)
 	offset = Format::ZONES[zone]
 	offset += 3600 if dst
-      elsif zone.sub!(/\A(?:gmt|utc?)?([-+])/, '')
+      # MRI's date_zone_to_diff strips only a "gmt" or "utc" before the sign: "ut-3" is no
+      # offset, though "ut" alone is a zone.
+      elsif zone.sub!(/\A(?:gmt|utc)?([-+])/, '')
 	sign = $1
 	if zone.include?(':')
 	  hour, min, sec, = zone.split(':')

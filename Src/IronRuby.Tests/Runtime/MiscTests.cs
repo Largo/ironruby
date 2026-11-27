@@ -1000,6 +1000,32 @@ p u.strftime(""%6Z|""), u.localtime(""+01:00"").strftime(""%_5Z|"")
         }
 
         /// <summary>
+        /// MRI's date_zone_to_diff strips only "gmt" or "utc" before a zone's sign, so "UT-3" has no
+        /// offset, though "ut" on its own is UTC.
+        /// </summary>
+        public void Date_ZoneToDiffUt1() {
+            TestOutput(@"
+require 'ruby4'
+require 'date'
+[""UT-3"", ""UT+0930"", ""UTC-3"", ""GMT+3"", ""+3"", ""ut"", ""Ut-03:00"", ""utc+9"", ""gmt-3.5""].each { |z| p [z, Date._strptime(z, ""%Z"")] }
+p Date._parse(""2026-01-02 10:00 UT-3"")
+p DateTime.strptime(""2026 UTC-3"", ""%Y %Z"").offset
+", @"
+[""UT-3"", {zone: ""UT-3"", offset: nil}]
+[""UT+0930"", {zone: ""UT+0930"", offset: nil}]
+[""UTC-3"", {zone: ""UTC-3"", offset: -10800}]
+[""GMT+3"", {zone: ""GMT+3"", offset: 10800}]
+[""+3"", {zone: ""+3"", offset: 10800}]
+[""ut"", {zone: ""ut"", offset: 0}]
+[""Ut-03:00"", {zone: ""Ut-03:00"", offset: nil}]
+[""utc+9"", {zone: ""utc+9"", offset: 32400}]
+[""gmt-3.5"", {zone: ""gmt-3.5"", offset: -12600}]
+{zone: ""UT-3"", hour: 10, min: 0, year: 2026, mon: 1, mday: 2, offset: nil}
+(-1/8)
+");
+        }
+
+        /// <summary>
         /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
         /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
         /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's
