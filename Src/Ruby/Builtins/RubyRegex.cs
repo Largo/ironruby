@@ -61,6 +61,11 @@ namespace IronRuby.Builtins {
         // matching with _cachedRegex, which is compiled once it has been used enough.
         private bool _binaryIsPlain;
 
+        // The same for an ISO-8859-1 subject with bytes above 0x7F, which Onigmo matches with its ISO-8859-1 ctype table
+        // (RegexpTransformer.Transform(..., latin1Ctype)).
+        private Tuple<TimeSpan, Regex> _cachedLatin1;
+        private bool _latin1IsPlain;
+
         // The same CLR regex forced to start where the search starts, for the scanning operations
         // that only ever look at the current position (StringScanner#scan, #skip, #check, #match?).
         // Cached against the regex it was derived from, so it follows _cachedRegex's own lifetime.
@@ -341,14 +346,14 @@ namespace IronRuby.Builtins {
         /// This is a regexp-versus-string rule, distinct from the string-versus-string
         /// compatibility MutableString.RequireCompatibleEncoding applies.
         /// </summary>
-        private void RequireMatchableEncoding(MutableString/*!*/ input) {
+        private void RequireMatchableEncoding(MutableString/*!*/ input, bool allowBroken = false) {
             if ((_flags & LiteralPatternFlag) != 0) {
                 // a String pattern (#sub, #gsub, #scan): MRI's rb_enc_check, receiver first
                 input.RequireCompatibleEncoding(_pattern);
                 return;
             }
 
-            if (input.ContainsInvalidCharacters()) {
+            if (!allowBroken && input.ContainsInvalidCharacters()) {
                 throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", input.Encoding.Name);
             }
 
@@ -427,10 +432,10 @@ namespace IronRuby.Builtins {
         /// regex it gets back (MatchWindow, which derives an anchored one from it), so that only
         /// the regex that actually runs works its way up to being compiled.
         /// </summary>
-        private Regex/*!*/ Transform(MutableString/*!*/ input, out string strInput, out bool astral, bool countUse) {
+        private Regex/*!*/ Transform(MutableString/*!*/ input, out string strInput, out bool astral, bool countUse, bool allowBroken = false) {
             ContractUtils.RequiresNotNull(input, "input");
 
-            RequireMatchableEncoding(input);
+            RequireMatchableEncoding(input, allowBroken);
             input.PrepareForCharacterRead();
             strInput = input.ConvertToString();
             // O(1): matching has just validated the input, which works the flags out
@@ -442,6 +447,9 @@ namespace IronRuby.Builtins {
             }
             if (target.UsesAsciiCtype(input)) {
                 return target.TransformBinaryPattern(countUse);
+            }
+            if (input.Encoding.CodePage == 28591 && !input.IsAscii()) {
+                return target.TransformLatin1Pattern(countUse);
             }
             return target.TransformPattern(countUse);
         }
@@ -492,6 +500,34 @@ namespace IronRuby.Builtins {
             }
 
             _cachedBinary = Tuple.Create(timeout, result);
+            return result;
+        }
+
+        private Regex/*!*/ TransformLatin1Pattern(bool countUse) {
+            TimeSpan timeout = EffectiveTimeout;
+            if (_latin1IsPlain) {
+                return TransformPattern(countUse);
+            }
+            var cached = _cachedLatin1;
+            if (cached != null && timeout == cached.Item1) {
+                return cached.Item2;
+            }
+
+            Regex plain = TransformPattern(false);
+            Regex result;
+            try {
+                bool hasGAnchor, applied;
+                string translated = RegexpTransformer.Transform(GetClrPatternSource(), _options, out hasGAnchor, false, false, true, out applied);
+                if (!applied) {
+                    _latin1IsPlain = true;
+                    return plain;
+                }
+                result = new Regex(translated, plain.Options, timeout);
+            } catch (Exception) {
+                result = plain;
+            }
+
+            _cachedLatin1 = Tuple.Create(timeout, result);
             return result;
         }
 
@@ -1636,12 +1672,21 @@ namespace IronRuby.Builtins {
         /// Start is a CLR index into the input's characters.
         /// </summary>
         public MatchData MatchWindow(MutableString/*!*/ input, int start, bool anchored, bool freezeInput) {
+            return MatchWindow(input, start, anchored, freezeInput, false);
+        }
+
+        /// <param name="allowBroken">
+        /// Match a string with broken characters rather than raise: StringScanner's rest from a scan
+        /// pointer inside a character of a subject that is itself valid, which MRI's Onigmo matches
+        /// from there with the split character's bytes as characters of their own.
+        /// </param>
+        public MatchData MatchWindow(MutableString/*!*/ input, int start, bool anchored, bool freezeInput, bool allowBroken) {
             // Convert the whole input, not the part from "start" on: the conversion is the
             // expensive half of a match on a long subject, and converting only the tail means
             // paying for the tail again at every position the scanner stops at.
             string str;
             bool astral;
-            Regex regex = Transform(input, out str, out astral, !anchored);
+            Regex regex = Transform(input, out str, out astral, !anchored, allowBroken);
 
             if (start < 0) {
                 start += str.Length;

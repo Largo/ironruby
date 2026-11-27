@@ -2232,15 +2232,15 @@ namespace IronRuby.Prism {
                         // What mapping it now would have set _usesBlock to the skim has noted.
                         if ((node.BodyContents & PrismLoader.ContentsEager) == 0) {
                             var deferred = new DeferredMethodBody(this, node, scope, span, prologue, _zsuperArguments);
-                            return new MethodDefinition(scope, target, node.Name, parameters, deferred.Materialize, span) {
+                            return NoteUsesBlock(new MethodDefinition(scope, target, node.Name, parameters, deferred.Materialize, span) {
                                 UsesBlock = _usesBlock || (node.BodyContents & PrismLoader.ContentsUsesBlock) != 0
-                            };
+                            });
                         }
                         node.Body = node.DeferredBodyLoader.LoadDeferredBody(node);
                         node.DeferredBodyLoader = null;
                     }
                     var body = DefinitionBody(node.Body, span, prologue, node.EqualLoc != null);
-                    return new MethodDefinition(scope, target, node.Name, parameters, body, span) { UsesBlock = _usesBlock };
+                    return NoteUsesBlock(new MethodDefinition(scope, target, node.Name, parameters, body, span) { UsesBlock = _usesBlock });
                 } finally {
                     _zsuperArguments = enclosingZSuperArguments;
                 }
@@ -2248,6 +2248,15 @@ namespace IronRuby.Prism {
                 _scopes.Pop();
                 _usesBlock = enclosingUsesBlock;
             }
+        }
+
+        // MRI's iseq_set_use_block: a method that uses its block makes a block passed to any method of its name exempt from the
+        // "may be ignored" warning from when the file is compiled - so a def later in the file, or one never run, counts too.
+        private MethodDefinition/*!*/ NoteUsesBlock(MethodDefinition/*!*/ definition) {
+            if (definition.UsesBlock && _sourceUnit != null && _sourceUnit.LanguageContext is RubyContext context) {
+                context.NoteMethodUsingBlock(definition.Name);
+            }
+            return definition;
         }
 
         /// <summary>

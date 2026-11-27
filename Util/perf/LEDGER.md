@@ -1464,11 +1464,11 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
     and the R2R host's JIT. rbconfig.rb no longer uses CLR interop: -0.3 to -0.9% main-thread
     instructions on all five commands. Next leads: the 4,989 CLR member lookups of ruby4.rb in `-e 1`
     (5.9 ms), and eval'd strings in the startup library.
-27. **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
+27. **Closed (perf/crubydiff, third round): `send` frames are hidden.** Was: **`send` with a String name leaves a `Kernel#send` frame in backtraces** that CRuby
     does not show (`[1].send("sum") { raise }`: IronRuby "Array#sum < Kernel#send", CRuby
     "Array#sum < <caller>"); with a Symbol it is right. Found by /perf-core's probes, not a
     speed gap.
-28. **`-w` warns of an unused block where CRuby does not**: `def given; block_given?; end`
+28. **Closed (perf/crubydiff, third round): CRuby registers block-using names per file at compile time, and so does the bridge now.** Was: **`-w` warns of an unused block where CRuby does not**: `def given; block_given?; end`
     called as `given(&b)` from a method that received `b` prints "the block passed to
     'Object#given' ... may be ignored" under `ir -w` on master too; CRuby 4.0 `-w` printed it
     for a three-line file but not inside a longer one. Found while writing
@@ -2354,6 +2354,85 @@ loop of its own): `b.local_variable_set(:x, 1)` 0.1 -> 436, `erb.result_with_has
   (method(:puts).to_proc.source_location; CRuby says nil on both); Kernel#Integer(String) now
   takes the context (one more argument on that fast path); the binder's conversion rule for an
   overridden respond_to? resolves to_xxx and method_missing at build time.
+  Third round (2026-11-27, on claude/happy-gauss-95wm2j + the second): the causes left above, gaps
+  27 and 28. One commit per cause, each with CRuby 4.0's output as a registered IronRuby.Tests case;
+  touched matrices now same: strftime (108 -> 0), converter, io-conversion, marshal, enum (Lazy),
+  encode; regexp-binary-ctype 25 -> 9, strptime 8 -> 1, thread-backtrace 2 -> 1.
+  - `send`/`__send__` frames hidden from backtraces ([RubyStackTraceHidden]; public_send keeps its
+    frame, as in CRuby). Gap 27. Backtrace_SendHidden1.
+  - `-w`'s unused-block warning: CRuby registers every method that uses a block when the file is
+    compiled (iseq_set_use_block), so a later definition of the name silences it; the bridge now
+    does the same (RubyContext.NoteMethodUsingBlock at Def). Gap 28. UnusedBlock_LaterDefinition1.
+  - An ISO-8859-1 subject (not ASCII-only) is matched with Onigmo's ISO-8859-1 ctype table: a
+    Latin1Ctype mode of the translator beside the ASCII one, a third cached translation in RubyRegex.
+    Regex_Latin1Ctype1.
+  - strftime: a colon not before z (and E/O not before what they modify) ends the directive there
+    and the rest is read afresh; a lone % names the whole format. Time_StrftimeColon1. `%Z` of a
+    zoneless time writes nothing, padding included. Time_StrftimeNoZone1.
+  - Date: "UT-3" is no offset (zone_to_diff strips only gmt/utc); _strptime/_parse refuse a
+    non-ASCII-compatible string; _strptime's leftover is a plain String for a subclass; _parse takes
+    the day name before the time ("10:00 sat" was zone "sat"). Four tests.
+  - Transcoding errors (UndefinedConversion, InvalidByteSequence, ConverterNotFound) have binary
+    messages; convpath's decorator names are binary; Module#name/#to_s are US-ASCII for an ASCII
+    name and binary for "#<Class:0x...>" (a temporary name keeps its own). Three tests.
+  - Marshal writes a raised exception's "bt_locations" (a link to "bt", or the raise's strings
+    after #set_backtrace), and "cause" after the ivars #initialize set. Marshal_ExceptionBtLocations1.
+  - IO#write into a UTF-16/32 external encoding goes through UTF-8 first (do_writeconv), so a bad
+    byte is reported on that leg. Io_WriteViaAsciiCompat1.
+  - Thread#backtrace of a thread blocked in Mutex#lock, Queue#pop, SizedQueue#push/#pop,
+    Thread#join/#value, ConditionVariable#wait or Thread.stop shows that method on top (the
+    thread's BlockedLabel, set on the blocking paths only). Thread_BlockedMethodFrame1.
+  - Enumerator::Lazy's #inspect recorders are defined in Lazy around the methods they replace, not
+    in a prepended module. Enumerator_LazyAncestors1.
+  - `frozen << Object.new` (nil, a Float, a Symbol) is FrozenError: an object overload of #<<
+    checks the receiver before converting. String_AppendFrozenAnyArgument1.
+  Left, with the reason: UTF-8's \b/\B without U+00B2 U+00B3 U+00B9 U+00BC-U+00BE and
+  [[:upper:]]/i without U+00B5 (the UTF-8 path's word class, a cost on every \b); Time with a
+  year beyond long (RubyTime keeps it in a long); Method#call / Method#[] frames (a rule dispatches
+  straight to the target; a frame means a trampoline on every call); sort_by/inject's 'Array#each'
+  frame (IronRuby's iterate without #each); library frames in another thread's backtrace
+  (Mutex#synchronize, Array#each: only Ruby frames are recorded, and recording library ones costs
+  every block-taking call); calls on a later line of a multi-line statement report the statement's
+  first line (eval's "(eval at f:41)" for 42, caller, binding: line tracking is per statement);
+  the heredoc part's frame line (needs a node with the part's span and JIT walker support);
+  thread-backtrace's "main, seen by child" row (no GVL: the child reads main before main reaches
+  Queue#pop); a non-ASCII class's singleton "#<Class:Café>", US-ASCII in CRuby, UTF-8 here.
+  For the gate, behaviour that changed outside a message: send frames gone from backtraces;
+  unused-block names registered at parse time (a file's later definitions count); ISO-8859-1
+  regexp matching (new translation, chosen per subject); strftime output for "%:..." and "%E%..."
+  and padded %Z; Date._parse hash order and "10:00 sat"; Date._strptime leftover class and
+  encoding errors; Module#name/#to_s/#inspect encodings (so [Object.name, "a"].join is US-ASCII);
+  transcoding error message encodings; convpath element encodings; Marshal bytes of raised
+  exceptions; IO#write into UTF-16/32 (the same bytes, a different error); Thread#backtrace
+  contents; Lazy.ancestors and Lazy#take & co. owner; String#<< has an object overload.
+  Fourth round (2026-11-27, on claude/happy-gauss-95wm2j 4320d4a + the third): the rows round 5's
+  gate still saw. string-search 115 -> 63 lines, forward-rest -> same.
+  - StringScanner from a scan pointer inside a character matches the rest as a string of its own,
+    as MRI's strscan does (RubyRegex.MatchWindow's allowBroken, for this caller only; a subject
+    broken as a whole still raises). StringScanner_InsideCharacter1.
+  - StringScanner over a subject made shorter than the scan pointer: nil scans, "" rest, nil bol?,
+    charpos past the end. StringScanner_ShorterSubject1.
+  - StringScanner with a String pattern of an incompatible encoding raises (rb_enc_check).
+    StringScanner_LiteralEncoding1.
+  - Kernel#binding through a Method object raises RuntimeError "Cannot create Binding object for
+    non-Ruby caller" ([RequiresRubyCaller], checked when Method#call's rule is built).
+    Method_BindingNonRubyCaller1.
+  Left, with the reason: string-search's last 63 lines are /./ and \A. on a lone split byte (an
+  invalid byte decodes to a lone surrogate, which the translator's '.' excludes: the regexp
+  translator's, not the scanner's); int-matrix's hash values (CRuby seeds them per process), its
+  Integer.instance_methods(false) (#hash, #step, #to_c are C# fast paths defined on Integer, owned by
+  Kernel and Numeric in CRuby) and (2**100).equal? (a Bignum is a boxed BigInteger, compared and
+  identified by value); caller-matrix as in the third round; stdre's URI names (the vendored
+  uri/rfc3986_parser.rb inlines SEG, since .NET has no \g<name>, so CRuby's (?<seg>...){0} is not
+  there); eval-matrix's "character class has duplicated range" (Onigmo's CC_DUP warning is not
+  implemented; a rule that is not exactly Onigmo's would warn where CRuby does not); glob-matrix
+  (the row lists the runtime's own clr-debug-pipe files in /tmp); fiddle's Handle::NEXT (the
+  matrix's own expected difference, and CRuby answers an address); numeric-conversion's "gives
+  NilClass" (pinned wording).
+  For the gate, behaviour that changed outside a message: StringScanner's matches from inside a
+  character, its answers over a shortened subject, and an error for an incompatible String pattern;
+  Kernel#binding through Method#call/bind_call/to_proc raises; RubyRegex.MatchWindow has an
+  allowBroken overload.
 
 - **perf/strsearch4 (2026-11-27) - the ASCII scan's cost of round three found and mostly removed;
   `#byteindex`/`#byterindex` from an offset other than 0 walk from the last search, through a map
